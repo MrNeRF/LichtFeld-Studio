@@ -10,8 +10,9 @@
 
 namespace lfs::core {
     namespace {
-        void copy_scalar_to_cuda(const Tensor& tensor, const size_t element_index,
+        void copy_scalar_to_cuda(Tensor& tensor, const size_t element_index,
                                  const void* const source, const size_t bytes) {
+            internal::preserve_lazy_snapshots_before_write(tensor);
             internal::backend_ops_for(tensor).copy_host_to_device(internal::CopyRequest{
                 .src = internal::raw_storage_ref(const_cast<void*>(source), tensor.dtype()),
                 .dst = internal::offset_storage_ref(

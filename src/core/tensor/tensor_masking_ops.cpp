@@ -139,6 +139,7 @@ namespace lfs::core {
     // mutate_logical_view materialize firewalls before the linear path. Do not
     // add a strided bypass without a matching stride-aware kernel and regression tests.
     Tensor& Tensor::and_live_(const Tensor& live_mask) {
+        preserve_lazy_snapshots_before_write();
         tensor_contract::require_valid(
             *this, "and_live_", "mask", LFS_SOURCE_SITE_CURRENT());
         tensor_contract::require_valid(
@@ -268,6 +269,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::masked_fill_(const Tensor& mask, float value) {
+
+        preserve_lazy_snapshots_before_write();
         tensor_contract::require_valid(
             *this, "masked_fill_", "destination", LFS_SOURCE_SITE_CURRENT());
         tensor_contract::require_valid(
@@ -396,6 +399,8 @@ namespace lfs::core {
     }
 
     void Tensor::index_select_into(Tensor& out, int dim, const Tensor& indices, BoundaryMode mode) const {
+
+        out.preserve_lazy_snapshots_before_write();
         const_cast<Tensor*>(this)->materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && out.is_valid() && indices.is_valid(),
                        "index_select_into requires valid tensors");
@@ -753,6 +758,7 @@ namespace lfs::core {
 
     // Scatter Operations
     Tensor& Tensor::scatter_(int dim, const Tensor& idx, const Tensor& src, ScatterMode mode) {
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && idx.is_valid() && src.is_valid(),
                        "scatter_ requires valid tensors");
@@ -985,6 +991,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::scatter_(int dim, const Tensor& idx, float val, ScatterMode mode) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid() && idx.is_valid(),
                        "scalar scatter_ requires valid tensors");
         const int resolved_dim = resolve_dim(dim);
@@ -998,10 +1006,14 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_fill_(int dim, const Tensor& idx, float val) {
+
+        preserve_lazy_snapshots_before_write();
         return scatter_(dim, idx, val, ScatterMode::None);
     }
 
     Tensor& Tensor::index_copy_(int dim, const Tensor& idx, const Tensor& src) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && idx.is_valid() && src.is_valid(),
                        "index_copy_ requires valid tensors");
@@ -1113,6 +1125,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_add_(int dim, const Tensor& idx, const Tensor& src) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && idx.is_valid() && src.is_valid(),
                        "index_add_ requires valid tensors");
@@ -1383,6 +1397,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_put_(const Tensor& idx, const Tensor& vals) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && idx.is_valid() && vals.is_valid(),
                        "index_put_ requires valid tensors");
@@ -1604,6 +1620,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_put_(const std::vector<Tensor>& indices, const Tensor& vals) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && vals.is_valid(),
                        "multi-index index_put_ requires valid tensors");
@@ -2135,6 +2153,8 @@ namespace lfs::core {
     }
 
     void Tensor::set_bool(std::initializer_list<size_t> indices, bool value) {
+
+        preserve_lazy_snapshots_before_write();
         set_bool(std::span<const size_t>(indices.begin(), indices.size()), value);
     }
 
@@ -2146,6 +2166,8 @@ namespace lfs::core {
     // grep -C 3 "bool Tensor::get_bool"
 
     void Tensor::set_bool(std::span<const size_t> indices, bool value) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "set_bool requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Bool,
@@ -2213,6 +2235,7 @@ namespace lfs::core {
     void MaskedTensorProxy::operator=(const Tensor& other) {
         LFS_ASSERT_MSG(tensor_ != nullptr && tensor_->is_valid() && other.is_valid(),
                        "masked assignment requires valid tensors");
+        const_cast<Tensor*>(tensor_)->preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(tensor_->dtype() == other.dtype(),
                        "masked assignment tensors must have the same dtype");
         LFS_ASSERT_MSG(tensor_->device() == other.device(),
@@ -2351,6 +2374,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::append_gather(const Tensor& indices) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && indices.is_valid(),
                        "append_gather requires valid tensors");
@@ -2476,6 +2501,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::append_zeros(size_t n_rows) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LOG_DEBUG("append_zeros: n_rows={}", n_rows);
         LFS_ASSERT_MSG(is_valid(),

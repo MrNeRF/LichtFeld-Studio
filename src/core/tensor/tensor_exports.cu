@@ -1,12 +1,11 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Explicit template instantiations for DLL export on Windows.
-// When consumer .cpp files evaluate tensor expressions (e.g. tensor * 2.0f),
-// the expression template evaluator calls launch_unary_op_generic / launch_binary_op_generic.
-// These are template functions defined in tensor_generic_ops.cuh — NVCC compiles them
-// but without explicit instantiations they won't appear in the DLL export table on Windows.
-// On Linux this also guarantees visibility under -fvisibility=hidden.
+// Explicit template instantiations of the generic pointwise launchers.
+// Since the backend facade, only the CUDA adapters under backend/cuda/ call
+// launch_unary_op_generic / launch_binary_op_generic; consumer translation
+// units dispatch through the facade. The instantiations still have to exist
+// in a CUDA translation unit because the templates live in tensor_generic_ops.cuh.
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"

@@ -131,6 +131,7 @@ namespace lfs::core {
         };
 
         inline constexpr uint32_t STORAGE_REF_DIRECT_ALLOCATION = 1U << 0;
+        inline constexpr uint32_t STORAGE_REF_HOST_MEMORY = 1U << 1;
 
         struct StridedLayout {
             size_t rank = 0;
@@ -213,6 +214,7 @@ namespace lfs::core {
             size_t bytes = 0;
             bool synchronous = false;
             ExecContext context{};
+            const char* operation = "tensor.copy";
         };
 
         struct FillRequest {
@@ -221,6 +223,7 @@ namespace lfs::core {
             uint8_t value = 0;
             bool synchronous = false;
             ExecContext context{};
+            const char* operation = "tensor.fill";
         };
 
         struct SyncToken {
@@ -256,6 +259,19 @@ namespace lfs::core {
                                           const DataType dtype = DataType::UInt8) {
             return StorageRef{
                 .backend = GpuBackend::CUDA,
+                .data = pointer,
+                .byte_offset = 0,
+                .dtype = dtype,
+                .meta = nullptr,
+                .flags = STORAGE_REF_HOST_MEMORY,
+            };
+        }
+
+        inline StorageRef raw_device_storage_ref(void* const pointer,
+                                                 const GpuBackend backend,
+                                                 const DataType dtype = DataType::UInt8) {
+            return StorageRef{
+                .backend = backend,
                 .data = pointer,
                 .byte_offset = 0,
                 .dtype = dtype,

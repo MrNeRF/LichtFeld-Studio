@@ -438,8 +438,10 @@ namespace lfs::core {
                 }
 
                 // Record tensor allocation for profiling
-                backend_ops.record_tensor_allocation(
-                    internal::storage_ref(result), internal::strided_layout(result), bytes);
+                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
+                    backend_ops.record_tensor_allocation(
+                        internal::storage_ref(result), internal::strided_layout(result), bytes);
+                }
             } else {
                 // CPU tensor allocation - choose between pinned and regular memory
                 void* ptr = nullptr;
@@ -683,8 +685,10 @@ namespace lfs::core {
                     record_storage_allocation(StorageAccountingKind::VulkanOwned, bytes);
                 }
 
-                backend_ops.record_tensor_allocation(
-                    internal::storage_ref(result), internal::strided_layout(result), bytes);
+                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
+                    backend_ops.record_tensor_allocation(
+                        internal::storage_ref(result), internal::strided_layout(result), bytes);
+                }
 
                 if (result.dtype_ == DataType::Float32) {
                     std::vector<float> data(count);

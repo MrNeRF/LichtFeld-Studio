@@ -123,6 +123,7 @@ namespace lfs::core {
                     .byte_offset = 0,
                     .dtype = DataType::UInt8,
                     .meta = nullptr,
+                    .flags = internal::STORAGE_REF_HOST_MEMORY,
                 },
                 .dst = internal::StorageRef{
                     .backend = GpuBackend::CUDA,
@@ -157,6 +158,7 @@ namespace lfs::core {
                     .byte_offset = 0,
                     .dtype = DataType::UInt8,
                     .meta = nullptr,
+                    .flags = internal::STORAGE_REF_HOST_MEMORY,
                 },
                 .bytes = count * sizeof(T),
                 .synchronous = true,

@@ -481,6 +481,8 @@ namespace lfs::core {
     // ========== _out variants that write into pre-allocated output tensors ==========
 
     void Tensor::conv1x1_bias_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "conv1x1_bias_out",
                                    {{"weight", &weight}, {"bias", &bias}, {"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
@@ -557,6 +559,8 @@ namespace lfs::core {
     }
 
     void Tensor::relu_out(Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "relu_out", {{"output", &output}});
         LFS_ASSERT_MSG(numel() == output.numel(),
                        std::format("relu_out output element count must match input "
@@ -573,6 +577,8 @@ namespace lfs::core {
     }
 
     void Tensor::conv1x1_bias_relu_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "conv1x1_bias_relu_out",
                                    {{"weight", &weight}, {"bias", &bias}, {"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
@@ -656,6 +662,8 @@ namespace lfs::core {
     }
 
     void Tensor::max_pool2d_out(int kernel_size, int stride, int padding, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "max_pool2d_out", {{"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
                        std::format("max_pool2d_out input must be 4D [N,C,H,W] "
@@ -714,6 +722,8 @@ namespace lfs::core {
     }
 
     void Tensor::adaptive_avg_pool2d_out(int output_h, int output_w, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "adaptive_avg_pool2d_out", {{"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
                        std::format("adaptive_avg_pool2d_out input must be 4D [N,C,H,W] "
@@ -759,6 +769,8 @@ namespace lfs::core {
     }
 
     void Tensor::linear_bias_relu_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "linear_bias_relu_out",
                                    {{"weight", &weight}, {"bias", &bias}, {"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() >= 1,
@@ -839,6 +851,8 @@ namespace lfs::core {
     }
 
     void Tensor::linear_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "linear_out",
                                    {{"weight", &weight}, {"output", &output}});
         if (bias.is_valid()) {

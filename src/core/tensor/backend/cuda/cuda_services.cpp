@@ -72,20 +72,57 @@ namespace lfs::core {
                 return cuda_address(storage);
             }
 
+            void require_host(const StorageRef storage, const char* const role) {
+                LFS_ASSERT_MSG((storage.flags & STORAGE_REF_HOST_MEMORY) != 0,
+                               std::string("CUDA copy expects host memory for the ") + role);
+            }
+
+            void require_device(const StorageRef storage, const char* const role) {
+                LFS_ASSERT_MSG((storage.flags & STORAGE_REF_HOST_MEMORY) == 0,
+                               std::string("CUDA copy expects device memory for the ") + role);
+            }
+
             void copy_cuda(const CopyRequest& request, const cudaMemcpyKind kind) {
                 if (request.bytes == 0) {
                     return;
                 }
+                switch (kind) {
+                case cudaMemcpyHostToDevice:
+                    require_host(request.src, "source");
+                    require_device(request.dst, "destination");
+                    break;
+                case cudaMemcpyDeviceToHost:
+                    require_device(request.src, "source");
+                    require_host(request.dst, "destination");
+                    break;
+                default:
+                    require_device(request.src, "source");
+                    require_device(request.dst, "destination");
+                    break;
+                }
                 void* const destination = cuda_address(request.dst);
                 const void* const source = cuda_const_address(request.src);
                 if (request.synchronous && request.context.cuda_stream == nullptr) {
-                    LFS_CUDA_CHECK(cudaMemcpy(destination, source, request.bytes, kind));
+                    LFS_CUDA_CHECK_MSG_ARGS(
+                        cudaMemcpy(destination, source, request.bytes, kind),
+                        reinterpret_cast<uintptr_t>(destination),
+                        reinterpret_cast<uintptr_t>(source), request.bytes,
+                        "{} (kind={}, dtype={})", request.operation, static_cast<int>(kind),
+                        dtype_name(request.src.dtype));
                     return;
                 }
-                LFS_CUDA_CHECK(cudaMemcpyAsync(destination, source, request.bytes, kind,
-                                               request.context.cuda_stream));
+                LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+                    cudaMemcpyAsync(destination, source, request.bytes, kind,
+                                    request.context.cuda_stream),
+                    request.context.cuda_stream,
+                    reinterpret_cast<uintptr_t>(destination),
+                    reinterpret_cast<uintptr_t>(source), request.bytes,
+                    "{} (kind={}, dtype={})", request.operation, static_cast<int>(kind),
+                    dtype_name(request.src.dtype));
                 if (request.synchronous) {
-                    LFS_CUDA_CHECK(cudaStreamSynchronize(request.context.cuda_stream));
+                    LFS_CUDA_CHECK_MSG_STREAM(
+                        cudaStreamSynchronize(request.context.cuda_stream),
+                        request.context.cuda_stream, "{} synchronize", request.operation);
                 }
             }
         } // namespace
@@ -171,9 +208,15 @@ namespace lfs::core {
 
         void CudaBackendOps::record_tensor_allocation(
             const StorageRef storage, const StridedLayout& layout, const size_t bytes) {
-            std::vector<size_t> shape(layout.dims.begin(), layout.dims.begin() + layout.rank);
-            CudaMemoryPool::instance().record_tensor(
-                storage.data, shape, bytes, dtype_name(storage.dtype));
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
+                std::vector<size_t> shape(layout.dims.begin(), layout.dims.begin() + layout.rank);
+                CudaMemoryPool::instance().record_tensor(
+                    storage.data, shape, bytes, dtype_name(storage.dtype));
+            } else {
+                (void)storage;
+                (void)layout;
+                (void)bytes;
+            }
         }
 
         void CudaBackendOps::copy_host_to_device(const CopyRequest& request) {
@@ -194,13 +237,22 @@ namespace lfs::core {
             }
             void* const destination = cuda_address(request.dst);
             if (request.synchronous && request.context.cuda_stream == nullptr) {
-                LFS_CUDA_CHECK(cudaMemset(destination, request.value, request.bytes));
+                LFS_CUDA_CHECK_MSG_ARGS(
+                    cudaMemset(destination, request.value, request.bytes),
+                    reinterpret_cast<uintptr_t>(destination), request.value, request.bytes,
+                    "{}", request.operation);
                 return;
             }
-            LFS_CUDA_CHECK(cudaMemsetAsync(destination, request.value, request.bytes,
-                                           request.context.cuda_stream));
+            LFS_CUDA_CHECK_MSG_STREAM_ARGS(
+                cudaMemsetAsync(destination, request.value, request.bytes,
+                                request.context.cuda_stream),
+                request.context.cuda_stream,
+                reinterpret_cast<uintptr_t>(destination), request.value, request.bytes,
+                "{}", request.operation);
             if (request.synchronous) {
-                LFS_CUDA_CHECK(cudaStreamSynchronize(request.context.cuda_stream));
+                LFS_CUDA_CHECK_MSG_STREAM(
+                    cudaStreamSynchronize(request.context.cuda_stream),
+                    request.context.cuda_stream, "{} synchronize", request.operation);
             }
         }
 

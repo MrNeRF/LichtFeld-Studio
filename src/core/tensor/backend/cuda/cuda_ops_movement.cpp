@@ -75,16 +75,18 @@ namespace lfs::core::internal {
             LFS_ASSERT_MSG(device_shape.valid() && device_strides.valid(),
                            "failed to allocate CUDA shape/stride metadata");
             auto& backend = backend_ops(GpuBackend::CUDA);
+            // Pageable source: cudaMemcpyAsync stages the bytes synchronously, so the
+            // caller's stack layout may go out of scope after this call returns.
             backend.copy_host_to_device(CopyRequest{
                 .src = raw_storage_ref(const_cast<size_t*>(layout.dims.data())),
-                .dst = raw_storage_ref(device_shape.get()),
+                .dst = raw_device_storage_ref(device_shape.get(), GpuBackend::CUDA),
                 .bytes = layout.rank * sizeof(size_t),
                 .synchronous = false,
                 .context = context,
             });
             backend.copy_host_to_device(CopyRequest{
                 .src = raw_storage_ref(const_cast<size_t*>(layout.strides.data())),
-                .dst = raw_storage_ref(device_strides.get()),
+                .dst = raw_device_storage_ref(device_strides.get(), GpuBackend::CUDA),
                 .bytes = layout.rank * sizeof(size_t),
                 .synchronous = false,
                 .context = context,

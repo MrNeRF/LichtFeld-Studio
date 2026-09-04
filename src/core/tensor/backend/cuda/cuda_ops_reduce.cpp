@@ -28,8 +28,11 @@ namespace lfs::core::internal {
         }
 
         void prime_stream_polling(const ExecContext context) {
-            // Keep blocking scalar reductions on the active polling path without
-            // rediscovering pointer ownership for every internal launch.
+            // Runtime scheduling side effect, not useful work: a query on the stream
+            // keeps the following blocking synchronization on the CUDA runtime's
+            // active polling path. Measured on driver 580.173 (RTX 4090): without it
+            // the seven-element direct reductions take 15.4 us instead of 7.6 us.
+            // Re-measure before removing (tensor_backend_corpus --time --only direct_).
             const cudaError_t status = cudaStreamQuery(context.cuda_stream);
             if (status != cudaSuccess && status != cudaErrorNotReady) {
                 LFS_CUDA_CHECK(status);

@@ -283,20 +283,16 @@ namespace lfs::core {
             return source.to(Device::CPU).to(Device::CUDA);
         }
 
-        void require_same_gpu_backend(const Tensor& reference,
-                                      const Tensor& other,
-                                      const std::string_view operation) {
+        void throw_gpu_backend_mismatch(const Tensor& reference,
+                                        const Tensor& other,
+                                        const std::string_view operation) {
             const auto reference_backend = gpu_backend_of(reference);
             const auto other_backend = gpu_backend_of(other);
-            if (!reference_backend || !other_backend || *reference_backend == *other_backend) {
-                return;
-            }
-            LFS_ASSERT_MSG(
-                false,
-                std::format(
-                    "{} requires matching GPU backends, got {} and {}",
-                    operation, gpu_backend_name(*reference_backend),
-                    gpu_backend_name(*other_backend)));
+            throw TensorError(std::format(
+                "{} requires matching GPU backends, got {} and {}",
+                operation,
+                reference_backend ? gpu_backend_name(*reference_backend) : "CPU",
+                other_backend ? gpu_backend_name(*other_backend) : "CPU"));
         }
 
         LFS_CORE_API void gpu_backend_reset_for_testing() {

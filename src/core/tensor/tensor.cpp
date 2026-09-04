@@ -294,6 +294,8 @@ namespace lfs::core {
         case StorageAccountingKind::CudaDirect:
             add_counter(state.cuda_direct, bytes);
             break;
+        case StorageAccountingKind::CudaExternal:
+            break;
         case StorageAccountingKind::VulkanOwned:
             add_counter(state.vulkan_owned, bytes);
             break;
@@ -309,6 +311,8 @@ namespace lfs::core {
         switch (kind) {
         case StorageAccountingKind::CudaDirect:
             subtract_counter(state.cuda_direct, bytes);
+            break;
+        case StorageAccountingKind::CudaExternal:
             break;
         case StorageAccountingKind::VulkanOwned:
             subtract_counter(state.vulkan_owned, bytes);
@@ -1099,11 +1103,19 @@ namespace lfs::core {
     }
 
     namespace internal {
+        void preserve_lazy_snapshots_before_write(Tensor& tensor) {
+            tensor.preserve_lazy_snapshots_before_write();
+        }
+
         void read_scalar(const Tensor& tensor, const size_t element_index,
                          void* const output, const size_t bytes) {
             LFS_ASSERT_MSG(tensor.is_valid(), "read_scalar requires a valid tensor");
             LFS_ASSERT_MSG(output != nullptr, "read_scalar requires output storage");
-            LFS_ASSERT_MSG(element_index < tensor.numel(),
+            size_t physical_extent = tensor.numel() == 0 ? 0 : 1;
+            for (size_t dim = 0; dim < tensor.ndim(); ++dim) {
+                physical_extent += (tensor.shape()[dim] - 1) * tensor.stride(dim);
+            }
+            LFS_ASSERT_MSG(element_index < physical_extent,
                            "read_scalar element index is out of bounds");
             LFS_ASSERT_MSG(bytes == dtype_size(tensor.dtype()),
                            "read_scalar byte count must match the tensor dtype");
@@ -1119,6 +1131,8 @@ namespace lfs::core {
             GpuBackendOps& ops = backend_ops_for(tensor);
             if (tensor.stream() != nullptr) {
                 ops.synchronize_stream(ExecContext{tensor.stream()});
+            } else {
+                ops.synchronize_device();
             }
             ops.copy_device_to_host(CopyRequest{
                 .src = offset_storage_ref(storage_ref(tensor), element_index * bytes),
@@ -2252,6 +2266,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::copy_from(const Tensor& other) {
+
+        preserve_lazy_snapshots_before_write();
         materialize_if_deferred();
         LFS_ASSERT_MSG(is_valid() && other.is_valid(),
                        "copy_from requires valid tensors");
@@ -2509,6 +2525,8 @@ namespace lfs::core {
     // ============= Clamp Operations =============
 
     Tensor& Tensor::clamp_(float min_val, float max_val) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "clamp_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
@@ -2579,10 +2597,14 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::clamp_min_(float min) {
+
+        preserve_lazy_snapshots_before_write();
         return clamp_(min, std::numeric_limits<float>::max());
     }
 
     Tensor& Tensor::clamp_max_(float max) {
+
+        preserve_lazy_snapshots_before_write();
         return clamp_(std::numeric_limits<float>::lowest(), max);
     }
 
@@ -3592,7 +3614,7 @@ namespace lfs::core {
             internal::ExecContext{
                 .cuda_stream = nullptr,
                 .allocation_class = internal::AllocationClass::Direct,
-                .allocation_label = "cudaMalloc\x28zeros_direct)",
+                .allocation_label = "zeros_direct storage allocation",
                 .allocation_operation = "tensor.zeros_direct",
             });
         storage.dtype = dtype;

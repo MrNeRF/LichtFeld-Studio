@@ -91,7 +91,7 @@ namespace lfs::core {
             t.storage_meta_->backend = GpuBackend::CUDA;
             t.storage_meta_->gpu_descriptor.byte_size = allocation_bytes;
             t.storage_meta_->gpu_descriptor.accounting_kind =
-                StorageAccountingKind::VulkanExternal;
+                StorageAccountingKind::CudaExternal;
         }
         t.storage_meta_->external_kind = std::move(external_kind);
         t.storage_meta_->external_owner = std::move(external_owner);

@@ -125,6 +125,8 @@ namespace lfs::core {
     // ============= In-place Random Operations =============
 
     Tensor& Tensor::uniform_(float low, float high) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "uniform_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
@@ -173,6 +175,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::normal_(float mean, float std) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "normal_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,

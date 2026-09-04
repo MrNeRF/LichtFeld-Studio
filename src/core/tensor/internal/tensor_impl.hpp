@@ -472,6 +472,7 @@ namespace lfs::core {
 
     enum class StorageAccountingKind : uint8_t {
         CudaDirect,
+        CudaExternal,
         VulkanOwned,
         VulkanExternal,
     };
@@ -528,11 +529,15 @@ namespace lfs::core {
                                                 const TensorShape& shape,
                                                 DataType dtype);
         LFS_CORE_API Tensor copy_to_backend(const Tensor& source, GpuBackend target);
-        LFS_CORE_API void require_same_gpu_backend(const Tensor& reference,
-                                                   const Tensor& other,
-                                                   std::string_view operation);
+        [[noreturn]] LFS_CORE_API void throw_gpu_backend_mismatch(const Tensor& reference,
+                                                                  const Tensor& other,
+                                                                  std::string_view operation);
+        inline void require_same_gpu_backend(const Tensor& reference,
+                                             const Tensor& other,
+                                             std::string_view operation);
         LFS_CORE_API void read_scalar(const Tensor& tensor, size_t element_index,
                                       void* output, size_t bytes);
+        LFS_CORE_API void preserve_lazy_snapshots_before_write(Tensor& tensor);
     } // namespace internal
 
 } // namespace lfs::core
@@ -552,6 +557,10 @@ namespace lfs::core {
         friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
         friend std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
         friend internal::StorageRef internal::storage_ref(const Tensor& tensor);
+        friend void internal::require_same_gpu_backend(const Tensor& reference,
+                                                       const Tensor& other,
+                                                       std::string_view operation);
+        friend void internal::preserve_lazy_snapshots_before_write(Tensor& tensor);
 
         struct TensorState {
             // Capacity management for in-place growth (like std::vector)
@@ -918,6 +927,7 @@ namespace lfs::core {
         // Generic functor-based in-place scalar operation (zero enum overhead)
         template <typename Op>
         Tensor& scalar_op_inplace_generic(float scalar, Op op) {
+            preserve_lazy_snapshots_before_write();
             validate_unary_op();
             tensor_contract::require_dtype(
                 *this, DataType::Float32, "in-place scalar operation", "input",
@@ -952,6 +962,7 @@ namespace lfs::core {
         // Generic functor-based in-place binary operation (zero enum overhead)
         template <typename SrcT = float, typename Op>
         Tensor& binary_op_inplace_generic(const Tensor& other, Op op) {
+            preserve_lazy_snapshots_before_write();
             // CRITICAL: In-place operations MUST have matching shapes - throw on mismatch!
             if (!is_valid() || !other.is_valid()) {
                 throw std::runtime_error("In-place binary op on invalid tensor");
@@ -1819,14 +1830,12 @@ namespace lfs::core {
             preserve_lazy_snapshots_before_write();
             tensor_contract::require_valid(
                 *this, "storage_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
-            assert_device_storage_matches_tag();
             return data_;
         }
         const void* storage_ptr() const {
             materialize_if_deferred();
             tensor_contract::require_valid(
                 *this, "storage_ptr", "tensor", LFS_SOURCE_SITE_CURRENT());
-            assert_device_storage_matches_tag();
             return data_;
         }
 
@@ -3366,11 +3375,27 @@ namespace lfs::core {
 
     namespace internal {
 
+        inline void require_same_gpu_backend(const Tensor& reference,
+                                             const Tensor& other,
+                                             const std::string_view operation) {
+            if (reference.device_ != Device::CUDA || other.device_ != Device::CUDA) {
+                return;
+            }
+            const GpuBackend lhs = reference.storage_meta_ ? reference.storage_meta_->backend
+                                                           : GpuBackend::CUDA;
+            const GpuBackend rhs = other.storage_meta_ ? other.storage_meta_->backend
+                                                       : GpuBackend::CUDA;
+            if (lhs != rhs) {
+                throw_gpu_backend_mismatch(reference, other, operation);
+            }
+        }
+
         inline StorageRef storage_ref(const Tensor& tensor) {
             // Facade callers replace ptr<T>() raw-pointer escapes. Preserve its
             // deferred-materialization boundary before reading the storage base.
             tensor.materialize_if_deferred();
             LFS_ASSERT_MSG(tensor.is_valid(), "storage_ref requires a valid tensor");
+            tensor.assert_view_not_stale();
             LFS_ASSERT_MSG(tensor.device_ == Device::CUDA,
                            "storage_ref requires GPU storage");
             LFS_ASSERT_MSG(tensor.data_ != nullptr || tensor.numel() == 0,
