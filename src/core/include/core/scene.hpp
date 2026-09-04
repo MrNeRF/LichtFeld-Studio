@@ -59,6 +59,20 @@ namespace lfs::core {
         PLY_SEQUENCE    // Container for ordered PLY sequence frames
     };
 
+    [[nodiscard]] inline bool isSceneNodeParentCompatible(const NodeType parent,
+                                                          const NodeType child) {
+        const bool group_like = parent == NodeType::GROUP ||
+                                parent == NodeType::DATASET ||
+                                parent == NodeType::CAMERA_GROUP ||
+                                parent == NodeType::IMAGE_GROUP ||
+                                parent == NodeType::KEYFRAME_GROUP ||
+                                parent == NodeType::PLY_SEQUENCE;
+        if (group_like)
+            return true;
+        return (parent == NodeType::SPLAT || parent == NodeType::POINTCLOUD) &&
+               (child == NodeType::CROPBOX || child == NodeType::ELLIPSOID);
+    }
+
     enum class SelectionDomain : uint8_t {
         Splat = 1,
         PointCloud = 2,
@@ -197,6 +211,7 @@ namespace lfs::core {
 
         struct RestoreNodeDesc {
             Uuid uuid;
+            NodeId preferred_id = NULL_NODE;
             NodeType type = NodeType::GROUP;
             std::string name;
             NodeId parent = NULL_NODE;
@@ -689,7 +704,8 @@ namespace lfs::core {
         void rebuildConsolidatedTransformIndices() const;
         [[nodiscard]] NodeId insertNode(
             std::unique_ptr<SceneNode> node,
-            bool allow_duplicate_name = false);
+            bool allow_duplicate_name = false,
+            std::optional<NodeId> preferred_id = std::nullopt);
         mutable std::shared_ptr<lfs::core::SplatData> cached_combined_;
         mutable bool cached_combined_includes_hidden_ = false;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
@@ -770,6 +786,7 @@ namespace lfs::core {
         void rebuildModelCacheIfNeeded() const;
         void rebuildModelCacheIfNeeded(bool include_hidden_splats) const;
         void pollCombinedModelBuild() const;
+        void waitForCombinedModelBuild() const;
         void requestCombinedModelBuildIfNeeded(bool include_hidden_splats = false) const;
         [[nodiscard]] std::shared_ptr<const lfs::core::SplatData>
         borrowCombinedModel(const lfs::core::SplatData* model) const;

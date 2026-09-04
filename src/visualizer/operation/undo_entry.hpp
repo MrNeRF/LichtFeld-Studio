@@ -430,6 +430,7 @@ namespace lfs::vis::op {
         SceneGraphCaptureMode mode = SceneGraphCaptureMode::FULL;
         bool include_selected_nodes = true;
         bool include_scene_context = true;
+        bool preserve_node_ids = false;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -465,6 +466,7 @@ namespace lfs::vis::op {
         ~SceneGraphNodeSnapshot();
 
         lfs::core::Uuid uuid;
+        lfs::core::NodeId id = lfs::core::NULL_NODE;
         lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
@@ -476,6 +478,7 @@ namespace lfs::vis::op {
         bool payload_diverged = false;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
+        int order_index = -1;
         lfs::core::Device payload_device = lfs::core::Device::CUDA;
         lfs::core::Device selection_slice_device = lfs::core::Device::CUDA;
         std::optional<std::filesystem::path> source_path;
@@ -499,6 +502,7 @@ namespace lfs::vis::op {
 
     struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
+        bool preserve_node_ids = false;
         std::optional<std::vector<lfs::core::Uuid>> selected_node_uuids;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;

@@ -343,7 +343,8 @@ namespace lfs::core {
 
     NodeId Scene::insertNode(
         std::unique_ptr<SceneNode> node,
-        const bool allow_duplicate_name) {
+        const bool allow_duplicate_name,
+        const std::optional<NodeId> preferred_id) {
         if (!node) {
             LOG_WARN("Cannot add null scene node");
             return NULL_NODE;
@@ -359,6 +360,13 @@ namespace lfs::core {
         if (node->parent_id != NULL_NODE && !getNodeById(node->parent_id)) {
             LOG_WARN("Cannot add node '{}': parent id {} does not exist", node->name, node->parent_id);
             return NULL_NODE;
+        }
+        if (node->parent_id != NULL_NODE) {
+            const auto* parent = getNodeById(node->parent_id);
+            if (!parent || !isSceneNodeParentCompatible(parent->type, node->type)) {
+                LOG_WARN("Cannot add node '{}': parent is incompatible", node->name);
+                return NULL_NODE;
+            }
         }
 
         const bool minted_uuid = node->uuid.is_nil();
@@ -382,7 +390,11 @@ namespace lfs::core {
             single_node_model_ = nullptr;
         }
 
-        const NodeId id = next_node_id_++;
+        const NodeId id = preferred_id && *preferred_id >= 0 && !id_to_index_.contains(*preferred_id)
+                              ? *preferred_id
+                              : next_node_id_++;
+        if (id >= next_node_id_)
+            next_node_id_ = id + 1;
         node->id = id;
         const NodeId parent_id = node->parent_id;
         const std::string name = node->name;
@@ -724,9 +736,11 @@ namespace lfs::core {
 
     void Scene::setNodeTransform(const NodeId id, const glm::mat4& transform) {
         auto* node = getNodeById(id);
-        if (node) {
+        if (node && !static_cast<bool>(node->locked)) {
             node->local_transform.set(transform, false);
             invalidateTransformCache();
+        } else if (node) {
+            LOG_WARN("Cannot transform '{}': node is locked", node->name);
         }
     }
 
@@ -856,6 +870,12 @@ namespace lfs::core {
                 // load both are null, so this intentionally returns null rather
                 // than rebuilding synchronously on the render thread.
                 return single_node_model_ ? single_node_model_ : cached_combined_.get();
+            }
+            if (visible_node_count < 2) {
+                // A stale multi-node worker must be drained before the
+                // synchronous single-node cache is installed. Otherwise the
+                // worker remains pending after the scene has become small.
+                waitForCombinedModelBuild();
             }
         }
         rebuildModelCacheIfNeeded();
@@ -1198,6 +1218,13 @@ namespace lfs::core {
         // The scope above destroys the completed build, releasing its input
         // aliases. Only now may models parked by a mutation be destroyed.
         combined_model_lifetime_->releaseRetiredAfterJoin();
+    }
+
+    void Scene::waitForCombinedModelBuild() const {
+        if (combined_model_build_thread_ && combined_model_build_thread_->joinable()) {
+            combined_model_build_thread_->join();
+        }
+        pollCombinedModelBuild();
     }
 
     void Scene::requestCombinedModelBuild(bool include_hidden_splats) const {
@@ -3126,6 +3153,54 @@ namespace lfs::core {
     }
 
     size_t Scene::applyDeleted() {
+        // SplatData::apply_deleted() restores one model when its own gather
+        // fails. Validate every model first as well, so a later invalid mask
+        // cannot leave earlier models compacted.
+        for (const auto& node : nodes_) {
+            if (!node->model || !node->model->has_deleted_mask())
+                continue;
+
+            const auto& model = *node->model;
+            const auto& mask = model.deleted();
+            const auto& means = model.means_raw();
+            const auto& sh0 = model.sh0();
+            const auto& scaling = model.scaling_raw();
+            const auto& rotation = model.rotation_raw();
+            const auto& opacity = model.opacity_raw();
+            const auto& shN = model.shN();
+            if (!means.is_valid() || means.ndim() == 0) {
+                LOG_ERROR("applyDeleted: invalid means for node '{}', aborting", node->name);
+                return 0;
+            }
+            const size_t model_size = static_cast<size_t>(model.size());
+            if (!sh0.is_valid() || sh0.ndim() == 0 || !scaling.is_valid() || scaling.ndim() == 0 ||
+                !rotation.is_valid() || rotation.ndim() == 0 || !opacity.is_valid() || opacity.ndim() == 0 ||
+                mask.ndim() != 1 ||
+                static_cast<size_t>(mask.numel()) != model_size ||
+                mask.dtype() != DataType::Bool ||
+                mask.device() != means.device() || sh0.size(0) != model_size ||
+                scaling.size(0) != model_size || rotation.size(0) != model_size ||
+                opacity.size(0) != model_size ||
+                (shN.is_valid() && shN.device() != means.device())) {
+                LOG_ERROR("applyDeleted: invalid deletion state for node '{}', aborting", node->name);
+                return 0;
+            }
+
+            try {
+                const auto keep_mask = mask.logical_not();
+                if (keep_mask.sum_scalar() == 0) {
+                    LOG_WARN("applyDeleted: node '{}' would lose all gaussians, aborting", node->name);
+                    return 0;
+                }
+            } catch (const std::exception& error) {
+                LOG_ERROR("applyDeleted: cannot validate node '{}': {}, aborting", node->name, error.what());
+                return 0;
+            } catch (...) {
+                LOG_ERROR("applyDeleted: cannot validate node '{}', aborting", node->name);
+                return 0;
+            }
+        }
+
         size_t total_removed = 0;
 
         for (auto& node : nodes_) {
@@ -3389,6 +3464,11 @@ namespace lfs::core {
     }
 
     NodeId Scene::addGroup(const std::string& name, const NodeId parent) {
+        if (parent != NULL_NODE) {
+            const auto* parent_node = getNodeById(parent);
+            if (!parent_node || !isSceneNodeParentCompatible(parent_node->type, NodeType::GROUP))
+                return NULL_NODE;
+        }
         auto node = std::make_unique<SceneNode>();
         node->parent_id = parent;
         node->type = NodeType::GROUP;
@@ -3414,6 +3494,11 @@ namespace lfs::core {
     }
 
     NodeId Scene::addSplatPlaceholder(const std::string& name, const NodeId parent) {
+        if (parent != NULL_NODE) {
+            const auto* parent_node = getNodeById(parent);
+            if (!parent_node || !isSceneNodeParentCompatible(parent_node->type, NodeType::SPLAT))
+                return NULL_NODE;
+        }
         auto node = std::make_unique<SceneNode>();
         node->parent_id = parent;
         node->type = NodeType::SPLAT;
@@ -3431,6 +3516,12 @@ namespace lfs::core {
         if (!model) {
             LOG_WARN("Cannot add splat node '{}': model is null", name);
             return NULL_NODE;
+        }
+
+        if (parent != NULL_NODE) {
+            const auto* parent_node = getNodeById(parent);
+            if (!parent_node || !isSceneNodeParentCompatible(parent_node->type, NodeType::SPLAT))
+                return NULL_NODE;
         }
 
         if (getNodeIdByName(name) != NULL_NODE) {
@@ -3460,6 +3551,11 @@ namespace lfs::core {
         if (!point_cloud) {
             LOG_WARN("Cannot add point cloud node '{}': point cloud is null", name);
             return NULL_NODE;
+        }
+        if (parent != NULL_NODE) {
+            const auto* parent_node = getNodeById(parent);
+            if (!parent_node || !isSceneNodeParentCompatible(parent_node->type, NodeType::POINTCLOUD))
+                return NULL_NODE;
         }
 
         const size_t point_count = point_cloud->size();
@@ -3496,6 +3592,11 @@ namespace lfs::core {
         if (!mesh_data) {
             LOG_WARN("Cannot add mesh node '{}': mesh data is null", name);
             return NULL_NODE;
+        }
+        if (parent != NULL_NODE) {
+            const auto* parent_node = getNodeById(parent);
+            if (!parent_node || !isSceneNodeParentCompatible(parent_node->type, NodeType::MESH))
+                return NULL_NODE;
         }
 
         const std::string unique_name = makeUniqueNodeName(name_to_id_, name);
@@ -3538,6 +3639,10 @@ namespace lfs::core {
             LOG_WARN("Cannot add cropbox '{}': parent id {} does not exist", name, parent_id);
             return NULL_NODE;
         }
+        if (!isSceneNodeParentCompatible(parent->type, NodeType::CROPBOX)) {
+            LOG_WARN("Cannot add cropbox '{}': parent is incompatible", name);
+            return NULL_NODE;
+        }
         for (const NodeId child_id : parent->children) {
             const auto* child = getNodeById(child_id);
             if (child && child->type == NodeType::CROPBOX) {
@@ -3574,6 +3679,10 @@ namespace lfs::core {
         const auto* parent = getNodeById(parent_id);
         if (!parent) {
             LOG_WARN("Cannot add ellipsoid '{}': parent id {} does not exist", name, parent_id);
+            return NULL_NODE;
+        }
+        if (!isSceneNodeParentCompatible(parent->type, NodeType::ELLIPSOID)) {
+            LOG_WARN("Cannot add ellipsoid '{}': parent is incompatible", name);
             return NULL_NODE;
         }
         for (const NodeId child_id : parent->children) {
@@ -3691,9 +3800,16 @@ namespace lfs::core {
             LOG_ERROR("Cannot restore node with UUID {}: name is empty", desc.uuid.to_string());
             return NULL_NODE;
         }
-        if (desc.parent != NULL_NODE && !getNodeById(desc.parent)) {
-            LOG_ERROR("Cannot restore node '{}': parent id {} does not exist", desc.name, desc.parent);
-            return NULL_NODE;
+        if (desc.parent != NULL_NODE) {
+            const auto* parent = getNodeById(desc.parent);
+            if (!parent) {
+                LOG_ERROR("Cannot restore node '{}': parent id {} does not exist", desc.name, desc.parent);
+                return NULL_NODE;
+            }
+            if (!isSceneNodeParentCompatible(parent->type, desc.type)) {
+                LOG_ERROR("Cannot restore node '{}': parent is incompatible", desc.name);
+                return NULL_NODE;
+            }
         }
 
         auto node = std::make_unique<SceneNode>();
@@ -3786,7 +3902,7 @@ namespace lfs::core {
 
         const std::string restored_name = node->name;
         const Uuid restored_uuid = node->uuid;
-        const NodeId id = insertNode(std::move(node), true);
+        const NodeId id = insertNode(std::move(node), true, desc.preferred_id);
         if (id != NULL_NODE) {
             LOG_TRACE("Restored node '{}' (id={}, uuid={})",
                       restored_name,
@@ -4099,6 +4215,10 @@ namespace lfs::core {
             if (!current) {
                 continue;
             }
+            if (static_cast<bool>(current->locked)) {
+                LOG_WARN("Cannot duplicate '{}': node is locked", current->name);
+                return "";
+            }
             if (current->type == NodeType::SPLAT &&
                 current->gaussian_count.load(std::memory_order_acquire) > 0) {
                 duplicates_splat_range = true;
@@ -4184,9 +4304,9 @@ namespace lfs::core {
             }
 
             if (auto* new_node = getNodeById(new_id)) {
-                new_node->local_transform = src_transform;
-                new_node->visible = src_visible;
-                new_node->locked = src_locked;
+                new_node->local_transform.setQuiet(src_transform);
+                new_node->visible.setQuiet(src_visible);
+                new_node->locked.setQuiet(src_locked);
                 new_node->transform_dirty = true;
             }
 
@@ -4248,12 +4368,15 @@ namespace lfs::core {
             return "";
         }
 
+        const bool group_visible = group_node->visible;
+        bool contains_locked_node = false;
         std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>> splats;
         const std::function<void(NodeId)> collect = [&](const NodeId id) {
             const auto* const node = getNodeById(id);
             if (!node)
                 return;
-            if (node->type == NodeType::SPLAT && node->model && isNodeEffectivelyVisible(node->id)) {
+            contains_locked_node = contains_locked_node || static_cast<bool>(node->locked);
+            if (node->type == NodeType::SPLAT && node->model) {
                 splats.emplace_back(node->model.get(), getWorldTransform(id));
             }
             for (const NodeId cid : node->children)
@@ -4262,6 +4385,10 @@ namespace lfs::core {
 
         const NodeId parent_id = group_node->parent_id;
         collect(group_id);
+        if (contains_locked_node) {
+            LOG_WARN("Cannot merge '{}': node is locked", group_name);
+            return "";
+        }
 
         auto merged = mergeSplatsWithTransforms(splats);
         if (!merged) {
@@ -4275,6 +4402,8 @@ namespace lfs::core {
             LOG_ERROR("Failed to add merged group '{}'", group_name);
             return "";
         }
+        if (auto* merged_node = getNodeById(merged_id))
+            merged_node->visible.setQuiet(group_visible);
         assert(getNodeIdByName(group_name) == merged_id);
         markPayloadDiverged(merged_id);
 
@@ -4628,8 +4757,17 @@ namespace lfs::core {
         auto* node = getNodeById(node_id);
         if (!node)
             return false;
+        if (static_cast<bool>(node->locked)) {
+            LOG_WARN("Cannot reparent '{}': node is locked", node->name);
+            return false;
+        }
 
         if (new_parent != NULL_NODE) {
+            const auto* parent = getNodeById(new_parent);
+            if (!parent || !isSceneNodeParentCompatible(parent->type, node->type)) {
+                LOG_WARN("Cannot reparent: destination is not a group");
+                return false;
+            }
             NodeId check = new_parent;
             while (check != NULL_NODE) {
                 if (check == node_id) {
@@ -4683,8 +4821,17 @@ namespace lfs::core {
         auto* node = getNodeById(node_id);
         if (!node)
             return false;
+        if (static_cast<bool>(node->locked)) {
+            LOG_WARN("Cannot move '{}': node is locked", node->name);
+            return false;
+        }
 
         if (new_parent != NULL_NODE) {
+            const auto* parent = getNodeById(new_parent);
+            if (!parent || !isSceneNodeParentCompatible(parent->type, node->type)) {
+                LOG_WARN("Cannot move: destination is not a group");
+                return false;
+            }
             NodeId check = new_parent;
             while (check != NULL_NODE) {
                 if (check == node_id) {

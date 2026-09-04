@@ -30,6 +30,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/Input.h>
 #include <SDL3/SDL_keyboard.h>
@@ -320,8 +321,10 @@ namespace lfs::vis::gui {
                    !parent_is_dataset;
         }
 
-        [[nodiscard]] bool canDrag(const core::NodeType type, const bool parent_is_dataset) {
-            if (parent_is_dataset)
+        [[nodiscard]] bool canDrag(const core::NodeType type,
+                                   const bool parent_is_dataset,
+                                   const bool locked) {
+            if (parent_is_dataset || locked)
                 return false;
             switch (type) {
             case core::NodeType::SPLAT:
@@ -913,6 +916,7 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
+            snapshot.locked = static_cast<bool>(node->locked);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.camera_uid = node->camera_uid;
@@ -1010,9 +1014,11 @@ namespace lfs::vis::gui {
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
-            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset);
+            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked);
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
-            snapshot.delete_enabled = snapshot.can_delete && !delete_blocked_ids.contains(id);
+            snapshot.delete_enabled = snapshot.can_delete &&
+                                      !snapshot.locked &&
+                                      !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
             snapshot.rename_enabled = snapshot.can_rename;
             snapshot.can_toggle_training =
@@ -1509,8 +1515,11 @@ namespace lfs::vis::gui {
             if (rename_buffer_.empty())
                 rename_buffer_ = snapshot.name;
             setCachedAttribute(slot.rename_input, "value", rename_buffer_);
-            if (rename_focus_pending_ && slot.rename_input->Focus())
+            if (rename_focus_pending_ && slot.rename_input->Focus()) {
+                if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(slot.rename_input))
+                    input->Select();
                 rename_focus_pending_ = false;
+            }
         }
 
         slot.bound_id = row.id;
@@ -2638,6 +2647,10 @@ namespace lfs::vis::gui {
         for (const core::NodeId node_id : node_ids) {
             const auto snapshot_it = node_snapshots_.find(node_id);
             const auto* node = scene.getNodeById(node_id);
+            if (node && static_cast<bool>(node->locked)) {
+                LOG_WARN("Scene node deletion request aborted: node is locked");
+                return;
+            }
             if (!node || snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled) {
                 LOG_WARN("Scene node deletion request aborted: the complete selection is no longer removable");
                 return;
@@ -2766,10 +2779,7 @@ namespace lfs::vis::gui {
                                        prefixedAction("select_hierarchy")));
             const auto groupable_selection = selectedDraggableNodeIds();
             if (node_snapshots_.contains(node_id) && node_snapshots_.at(node_id).draggable &&
-                groupable_selection.size() >= 2 &&
-                std::ranges::all_of(groupable_selection, [this](const core::NodeId id) {
-                    return node_snapshots_.at(id).type != core::NodeType::GROUP;
-                })) {
+                groupable_selection.size() >= 2) {
                 items.push_back(makeAction(tr("scene.group_selected"),
                                            prefixedAction("group_selected"), true));
             }
@@ -2915,7 +2925,8 @@ namespace lfs::vis::gui {
 
             if (node->type != core::NodeType::CAMERA &&
                 node->type != core::NodeType::CROPBOX &&
-                node->type != core::NodeType::ELLIPSOID) {
+                node->type != core::NodeType::ELLIPSOID &&
+                !node_snapshots_.at(node_id).locked) {
                 items.push_back(makeAction(
                     tr("scene.duplicate"),
                     prefixedAction(std::format("duplicate:{}", node_id))));
@@ -2971,8 +2982,7 @@ namespace lfs::vis::gui {
         core::NodeId parent_id = core::NULL_NODE;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
-            if (it == node_snapshots_.end() || !it->second.draggable ||
-                it->second.type == core::NodeType::GROUP)
+            if (it == node_snapshots_.end() || !it->second.draggable)
                 return;
             if (ids.empty())
                 parent_id = it->second.parent_id;

@@ -115,6 +115,7 @@ namespace lfs::vis::gui {
             size_t training_total_count = 0;
             bool can_toggle_training = false;
             std::string label;
+            bool locked = false;
             bool draggable = false;
             bool has_mask = false;
             bool can_delete = false;

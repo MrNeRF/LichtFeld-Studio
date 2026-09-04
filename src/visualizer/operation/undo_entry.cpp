@@ -825,6 +825,7 @@ namespace lfs::vis::op {
                                                    const lfs::core::Scene::PerNodeSelectionSlices& selection_slices) {
             SceneGraphNodeSnapshot snapshot;
             snapshot.uuid = node.uuid;
+            snapshot.id = node.id;
             snapshot.name = node.name;
             snapshot.type = node.type;
             snapshot.local_transform = node.local_transform.get();
@@ -839,7 +840,15 @@ namespace lfs::vis::op {
                 if (const auto* parent = scene_manager.getScene().getNodeById(node.parent_id)) {
                     snapshot.parent_uuid = parent->uuid;
                     snapshot.parent_name = parent->name;
+                    const auto it = std::ranges::find(parent->children, node.id);
+                    if (it != parent->children.end())
+                        snapshot.order_index = static_cast<int>(std::distance(parent->children.begin(), it));
                 }
+            } else {
+                const auto roots = scene_manager.getScene().getRootNodes();
+                const auto it = std::ranges::find(roots, node.id);
+                if (it != roots.end())
+                    snapshot.order_index = static_cast<int>(std::distance(roots.begin(), it));
             }
 
             if (auto path = scene_manager.getPlyPath(node.uuid); path) {
@@ -890,11 +899,13 @@ namespace lfs::vis::op {
         struct SnapshotTraversalNode {
             const SceneGraphNodeSnapshot* snapshot = nullptr;
             const SceneGraphNodeSnapshot* tree_parent = nullptr;
+            int order_index = -1;
         };
 
         struct PreparedRestoreNode {
             const SceneGraphNodeSnapshot* snapshot = nullptr;
             lfs::core::Uuid parent_uuid;
+            int order_index = -1;
             lfs::core::Scene::RestoreNodeDesc desc;
         };
 
@@ -906,20 +917,22 @@ namespace lfs::vis::op {
 
         void flattenSnapshotTree(const SceneGraphNodeSnapshot& snapshot,
                                  const SceneGraphNodeSnapshot* tree_parent,
+                                 const int order_index,
                                  std::vector<SnapshotTraversalNode>& result) {
             result.push_back(SnapshotTraversalNode{
                 .snapshot = &snapshot,
                 .tree_parent = tree_parent,
+                .order_index = snapshot.order_index >= 0 ? snapshot.order_index : order_index,
             });
-            for (const auto& child : snapshot.children) {
-                flattenSnapshotTree(child, &snapshot, result);
+            for (size_t i = 0; i < snapshot.children.size(); ++i) {
+                flattenSnapshotTree(snapshot.children[i], &snapshot, static_cast<int>(i), result);
             }
         }
 
         std::vector<SnapshotTraversalNode> flattenSnapshotState(const SceneGraphStateSnapshot& state) {
             std::vector<SnapshotTraversalNode> result;
-            for (const auto& root : state.roots) {
-                flattenSnapshotTree(root, nullptr, result);
+            for (size_t i = 0; i < state.roots.size(); ++i) {
+                flattenSnapshotTree(state.roots[i], nullptr, static_cast<int>(i), result);
             }
             return result;
         }
@@ -939,6 +952,56 @@ namespace lfs::vis::op {
             });
         }
 
+        void validateSnapshotPayload(const SceneGraphNodeSnapshot& snapshot) {
+            switch (snapshot.type) {
+            case lfs::core::NodeType::POINTCLOUD:
+                if (!snapshot.point_cloud) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::MESH:
+                if (!snapshot.mesh) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::CROPBOX:
+                if (!snapshot.cropbox) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore crop-box node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::ELLIPSOID:
+                if (!snapshot.ellipsoid) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore ellipsoid node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::CAMERA:
+                if (!snapshot.camera) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore camera node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::KEYFRAME:
+                if (!snapshot.keyframe) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore keyframe node '" + snapshot.name + "': payload is missing");
+                }
+                break;
+            case lfs::core::NodeType::SPLAT:
+            case lfs::core::NodeType::GROUP:
+            case lfs::core::NodeType::DATASET:
+            case lfs::core::NodeType::CAMERA_GROUP:
+            case lfs::core::NodeType::IMAGE_GROUP:
+            case lfs::core::NodeType::IMAGE:
+            case lfs::core::NodeType::KEYFRAME_GROUP:
+            case lfs::core::NodeType::PLY_SEQUENCE:
+                break;
+            }
+        }
+
         void collectSnapshotUuids(const SceneGraphNodeSnapshot& snapshot,
                                   std::unordered_set<lfs::core::Uuid>& result) {
             if (!snapshot.uuid.is_nil()) {
@@ -952,13 +1015,17 @@ namespace lfs::vis::op {
         std::unordered_set<lfs::core::Uuid> uuidsToRemove(
             const SceneGraphStateSnapshot& desired,
             const SceneGraphStateSnapshot& current) {
+            std::unordered_set<lfs::core::Uuid> desired_uuids;
+            for (const auto& root : desired.roots)
+                collectSnapshotUuids(root, desired_uuids);
+
             std::unordered_set<lfs::core::Uuid> result;
-            for (const auto& root : desired.roots) {
-                collectSnapshotUuids(root, result);
-            }
             for (const auto& root : current.roots) {
                 collectSnapshotUuids(root, result);
             }
+            std::erase_if(result, [&](const lfs::core::Uuid& uuid) {
+                return desired_uuids.contains(uuid);
+            });
             return result;
         }
 
@@ -1023,19 +1090,7 @@ namespace lfs::vis::op {
                         resolved_parent_uuid.to_string() + " is not resolvable in restore order");
                 }
 
-                const std::string restored_name =
-                    lfs::core::makeUniqueNodeName(reserved_names, snapshot.name);
-                if (restored_name.empty() || reserved_names.contains(restored_name)) {
-                    throw HistoryCorruptionError(
-                        "Cannot restore scene node '" + snapshot.name + "': display name is not insertable");
-                }
-                reserved_names.insert(restored_name);
-
-                lfs::core::Scene::RestoreNodeDesc desc;
-                desc.uuid = snapshot.uuid;
-                desc.type = snapshot.type;
-                desc.name = restored_name;
-                desc.gaussian_count = snapshot.gaussian_count;
+                validateSnapshotPayload(snapshot);
 
                 if (snapshot.selection_slice) {
                     if (snapshot.type != lfs::core::NodeType::SPLAT) {
@@ -1065,6 +1120,31 @@ namespace lfs::vis::op {
                             "': " + error.what());
                     }
                 }
+
+                if (scene.getNodeByUuid(snapshot.uuid)) {
+                    plan.nodes.push_back(PreparedRestoreNode{
+                        .snapshot = &snapshot,
+                        .parent_uuid = resolved_parent_uuid,
+                        .order_index = item.order_index,
+                        .desc = {},
+                    });
+                    continue;
+                }
+
+                const std::string restored_name =
+                    lfs::core::makeUniqueNodeName(reserved_names, snapshot.name);
+                if (restored_name.empty() || reserved_names.contains(restored_name)) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore scene node '" + snapshot.name + "': display name is not insertable");
+                }
+                reserved_names.insert(restored_name);
+
+                lfs::core::Scene::RestoreNodeDesc desc;
+                desc.uuid = snapshot.uuid;
+                desc.preferred_id = desired.preserve_node_ids ? snapshot.id : lfs::core::NULL_NODE;
+                desc.type = snapshot.type;
+                desc.name = restored_name;
+                desc.gaussian_count = snapshot.gaussian_count;
 
                 try {
                     switch (snapshot.type) {
@@ -1139,6 +1219,7 @@ namespace lfs::vis::op {
                 plan.nodes.push_back(PreparedRestoreNode{
                     .snapshot = &snapshot,
                     .parent_uuid = resolved_parent_uuid,
+                    .order_index = item.order_index,
                     .desc = std::move(desc),
                 });
             }
@@ -1376,17 +1457,136 @@ namespace lfs::vis::op {
             }
         }
 
+        void restorePreparedPayload(lfs::core::Scene& scene,
+                                    lfs::core::SceneNode& node,
+                                    const SceneGraphNodeSnapshot& snapshot) {
+            switch (snapshot.type) {
+            case lfs::core::NodeType::SPLAT:
+                if (snapshot.model) {
+                    auto allocator = makeViewerSplatTensorAllocator();
+                    auto model = cloneRendererReadySplatData(*snapshot.model, allocator);
+                    if (allocator) {
+                        scene.setCombinedModelAllocator(std::move(allocator));
+                    }
+                    scene.replaceNodeModel(node.name, std::move(model));
+                }
+                break;
+            case lfs::core::NodeType::POINTCLOUD:
+                if (!snapshot.point_cloud) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore point-cloud node '" + snapshot.name + "': payload is missing");
+                }
+                node.point_cloud = clonePointCloud(*snapshot.point_cloud);
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
+            case lfs::core::NodeType::MESH:
+                if (!snapshot.mesh) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore mesh node '" + snapshot.name + "': payload is missing");
+                }
+                node.mesh = cloneMeshData(*snapshot.mesh);
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
+            case lfs::core::NodeType::CROPBOX:
+                if (!snapshot.cropbox) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore crop-box node '" + snapshot.name + "': payload is missing");
+                }
+                node.cropbox = std::make_unique<lfs::core::CropBoxData>(*snapshot.cropbox);
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
+            case lfs::core::NodeType::ELLIPSOID:
+                if (!snapshot.ellipsoid) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore ellipsoid node '" + snapshot.name + "': payload is missing");
+                }
+                node.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*snapshot.ellipsoid);
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
+            case lfs::core::NodeType::CAMERA:
+                if (!snapshot.camera) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore camera node '" + snapshot.name + "': payload is missing");
+                }
+                node.camera = restoreCamera(*snapshot.camera);
+                node.camera_uid = node.camera->uid();
+                node.image_path = lfs::core::path_to_utf8(node.camera->image_path());
+                node.mask_path = lfs::core::path_to_utf8(node.camera->mask_path());
+                node.depth_path = lfs::core::path_to_utf8(node.camera->depth_path());
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
+            case lfs::core::NodeType::KEYFRAME:
+                if (!snapshot.keyframe) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore keyframe node '" + snapshot.name + "': payload is missing");
+                }
+                node.keyframe = std::make_unique<lfs::core::KeyframeData>(*snapshot.keyframe);
+                scene.notifyMutation(lfs::core::Scene::MutationType::MODEL_CHANGED);
+                break;
+            case lfs::core::NodeType::GROUP:
+            case lfs::core::NodeType::DATASET:
+            case lfs::core::NodeType::CAMERA_GROUP:
+            case lfs::core::NodeType::IMAGE_GROUP:
+            case lfs::core::NodeType::IMAGE:
+            case lfs::core::NodeType::KEYFRAME_GROUP:
+            case lfs::core::NodeType::PLY_SEQUENCE:
+                break;
+            }
+        }
+
         void restorePreparedNode(SceneManager& scene_manager, PreparedRestoreNode& prepared) {
             auto& scene = scene_manager.getScene();
             const auto& snapshot = *prepared.snapshot;
+            lfs::core::NodeId desired_parent = lfs::core::NULL_NODE;
             if (!prepared.parent_uuid.is_nil()) {
-                prepared.desc.parent = scene.getNodeIdByUuid(prepared.parent_uuid);
-                const lfs::core::NodeId parent_id = prepared.desc.parent;
-                if (parent_id == lfs::core::NULL_NODE) {
+                desired_parent = scene.getNodeIdByUuid(prepared.parent_uuid);
+                if (desired_parent == lfs::core::NULL_NODE) {
                     throw HistoryCorruptionError(
                         "Prevalidated parent UUID disappeared while restoring node '" + snapshot.name + "'");
                 }
             }
+
+            if (auto* existing = scene.getNodeByUuid(snapshot.uuid)) {
+                if (existing->type != snapshot.type) {
+                    existing->type = snapshot.type;
+                    existing->model.reset();
+                    existing->point_cloud.reset();
+                    existing->mesh.reset();
+                    existing->cropbox.reset();
+                    existing->ellipsoid.reset();
+                    existing->camera.reset();
+                    existing->keyframe.reset();
+                    existing->camera_uid = -1;
+                    existing->image_path.clear();
+                    existing->mask_path.clear();
+                    existing->depth_path.clear();
+                }
+                if (existing->parent_id != desired_parent) {
+                    const bool was_locked = existing->locked;
+                    existing->locked.setQuiet(false);
+                    (void)scene.moveNode(existing->id, desired_parent, -1);
+                    existing->locked.setQuiet(was_locked);
+                    existing = scene.getNodeByUuid(snapshot.uuid);
+                    if (!existing || existing->parent_id != desired_parent) {
+                        throw HistoryCorruptionError(
+                            "Failed to reparent existing scene node '" + snapshot.name + "'");
+                    }
+                }
+
+                existing->local_transform.setQuiet(snapshot.local_transform);
+                existing->visible.setQuiet(snapshot.visible);
+                existing->locked.setQuiet(snapshot.locked);
+                existing->training_enabled = snapshot.training_enabled;
+                existing->payload_diverged = snapshot.payload_diverged;
+                existing->gaussian_count.store(snapshot.gaussian_count, std::memory_order_release);
+                existing->centroid = snapshot.centroid;
+                existing->transform_dirty = true;
+                restorePreparedPayload(scene, *existing, snapshot);
+                restorePlyPathForSnapshot(scene_manager, snapshot.uuid, snapshot.source_path);
+                return;
+            }
+
+            prepared.desc.parent = desired_parent;
 
             const std::string restored_name = prepared.desc.name;
             const lfs::core::NodeId node_id = scene.restoreNodeWithUuid(std::move(prepared.desc));
@@ -1415,6 +1615,86 @@ namespace lfs::vis::op {
                 LOG_WARN("Restored node '{}' as '{}' because its display label was already in use",
                          snapshot.name,
                          restored_name);
+            }
+        }
+
+        void restoreSnapshotOrder(lfs::core::Scene& scene,
+                                  const SceneGraphStateSnapshot& desired) {
+            const auto moveForRestore = [&](const lfs::core::Uuid& uuid,
+                                            const lfs::core::NodeId parent_id,
+                                            const int order_index) {
+                auto* node = scene.getNodeByUuid(uuid);
+                if (!node) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore order for missing scene node " + uuid.to_string());
+                }
+
+                const bool was_locked = node->locked;
+                node->locked.setQuiet(false);
+                (void)scene.moveNode(node->id, parent_id, order_index);
+                node = scene.getNodeByUuid(uuid);
+                if (node) {
+                    node->locked.setQuiet(was_locked);
+                }
+                if (!node || node->parent_id != parent_id) {
+                    throw HistoryCorruptionError(
+                        "Failed to restore order for scene node " + uuid.to_string());
+                }
+            };
+
+            const auto restoreChildren = [&](const auto& self,
+                                             const SceneGraphNodeSnapshot& snapshot) -> void {
+                const auto* parent = scene.getNodeByUuid(snapshot.uuid);
+                if (!parent) {
+                    throw HistoryCorruptionError(
+                        "Cannot restore children for missing scene node " + snapshot.uuid.to_string());
+                }
+                for (size_t i = 0; i < snapshot.children.size(); ++i) {
+                    moveForRestore(snapshot.children[i].uuid, parent->id, static_cast<int>(i));
+                }
+                for (const auto& child : snapshot.children) {
+                    self(self, child);
+                }
+            };
+
+            const auto live_roots = scene.getRootNodes();
+            std::unordered_set<lfs::core::Uuid> desired_root_uuids;
+            desired_root_uuids.reserve(desired.roots.size());
+            const bool has_complete_root_order =
+                desired.roots.size() == live_roots.size() &&
+                std::ranges::all_of(desired.roots, [&](const auto& root) {
+                    return root.parent_uuid.is_nil() && desired_root_uuids.insert(root.uuid).second;
+                }) &&
+                std::ranges::all_of(live_roots, [&](const auto id) {
+                    const auto* node = scene.getNodeById(id);
+                    return node && desired_root_uuids.contains(node->uuid);
+                });
+
+            // A snapshot may intentionally cover only one root of a larger
+            // scene. Its root order_index is relative to the captured roots,
+            // not a command to reorder unrelated live roots. Child lists are
+            // complete for every captured parent and remain safe to restore.
+            // ID-preserving replacement snapshots (currently merge and batch
+            // deletion) also carry an explicit scene-root position for their
+            // replacement subtree, even when the snapshot is scoped to that
+            // subtree.
+            if (has_complete_root_order || desired.preserve_node_ids) {
+                for (size_t i = 0; i < desired.roots.size(); ++i) {
+                    const auto& root = desired.roots[i];
+                    const auto parent_id = root.parent_uuid.is_nil()
+                                               ? lfs::core::NULL_NODE
+                                               : scene.getNodeIdByUuid(root.parent_uuid);
+                    if (!root.parent_uuid.is_nil() && parent_id == lfs::core::NULL_NODE) {
+                        throw HistoryCorruptionError(
+                            "Cannot restore order for missing parent " + root.parent_uuid.to_string());
+                    }
+                    moveForRestore(root.uuid,
+                                   parent_id,
+                                   root.order_index >= 0 ? root.order_index : static_cast<int>(i));
+                }
+            }
+            for (const auto& root : desired.roots) {
+                restoreChildren(restoreChildren, root);
             }
         }
 
@@ -1565,6 +1845,7 @@ namespace lfs::vis::op {
 
     SceneGraphNodeSnapshot::SceneGraphNodeSnapshot(const SceneGraphNodeSnapshot& other)
         : uuid(other.uuid),
+          id(other.id),
           parent_uuid(other.parent_uuid),
           name(other.name),
           parent_name(other.parent_name),
@@ -1576,6 +1857,7 @@ namespace lfs::vis::op {
           payload_diverged(other.payload_diverged),
           gaussian_count(other.gaussian_count),
           centroid(other.centroid),
+          order_index(other.order_index),
           payload_device(other.payload_device),
           selection_slice_device(other.selection_slice_device),
           source_path(other.source_path),
@@ -2877,6 +3159,7 @@ namespace lfs::vis::op {
                                                                     const std::vector<lfs::core::NodeId>& root_ids,
                                                                     const SceneGraphCaptureOptions options) {
         SceneGraphStateSnapshot snapshot;
+        snapshot.preserve_node_ids = options.preserve_node_ids;
         if (options.include_selected_nodes) {
             const auto selected_node_ids = scene_manager.getSelectedNodeIds();
             std::vector<std::string> selected_node_names;
@@ -2993,6 +3276,9 @@ namespace lfs::vis::op {
         // replace the live tree.
         auto restore_plan = prepareRestorePlan(scene_, desired, uuids_to_remove);
         const auto removal_roots = removalRoots(scene, uuids_to_remove);
+        std::unordered_set<lfs::core::Uuid> desired_uuids;
+        for (const auto& root : desired.roots)
+            collectSnapshotUuids(root, desired_uuids);
         const bool translates_selection =
             snapshotStateContainsSplat(desired) || snapshotStateContainsSplat(current);
         lfs::core::Scene::PerNodeSelectionSlices selection_slices;
@@ -3013,19 +3299,58 @@ namespace lfs::vis::op {
                 scene.setCombinedModelAllocator(std::move(restore_plan.combined_model_allocator));
             }
 
+            const auto subtree_contains_desired = [&](const auto& self, const lfs::core::NodeId id) -> bool {
+                const auto* node = scene.getNodeById(id);
+                if (!node)
+                    return false;
+                if (desired_uuids.contains(node->uuid))
+                    return true;
+                return std::ranges::any_of(node->children, [&](const lfs::core::NodeId child_id) {
+                    return self(self, child_id);
+                });
+            };
+            const auto remove_exclusive_children = [&](const auto& self, const lfs::core::NodeId id) -> void {
+                const auto* node = scene.getNodeById(id);
+                if (!node)
+                    return;
+                const auto children = node->children;
+                for (const auto child_id : children) {
+                    const auto* child = scene.getNodeById(child_id);
+                    if (!child)
+                        continue;
+                    if (desired_uuids.contains(child->uuid)) {
+                        self(self, child_id);
+                    } else if (uuids_to_remove.contains(child->uuid)) {
+                        if (subtree_contains_desired(subtree_contains_desired, child_id)) {
+                            self(self, child_id);
+                            scene.removeNodeById(child_id, true);
+                        } else {
+                            clearPlyPathsForSubtree(scene_, child_id);
+                            scene.removeNodeById(child_id, false);
+                        }
+                    }
+                }
+            };
+
             for (const auto id : removal_roots) {
-                clearPlyPathsForSubtree(scene_, id);
-                scene.removeNodeById(id, false);
+                const bool keeps_desired_descendants = subtree_contains_desired(subtree_contains_desired, id);
+                if (keeps_desired_descendants)
+                    remove_exclusive_children(remove_exclusive_children, id);
+                if (!keeps_desired_descendants)
+                    clearPlyPathsForSubtree(scene_, id);
+                scene.removeNodeById(id, keeps_desired_descendants);
             }
 
             for (auto& prepared : restore_plan.nodes) {
                 restorePreparedNode(scene_, prepared);
             }
+            restoreSnapshotOrder(scene, desired);
 
             if (translates_selection) {
                 scene.applyPerNodeSelectionSlices(selection_slices);
             }
         }
+        scene.invalidateTransformCache();
 
         for (const auto& root : current.roots) {
             emitRemovedEvents(root);

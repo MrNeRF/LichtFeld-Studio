@@ -222,6 +222,7 @@ namespace lfs::python {
 
         // Transform (special matrix conversion)
         void set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform);
+        nb::tuple local_transform() const;
         nb::tuple world_transform() const;
 
         // Metadata (read-only)
@@ -317,7 +318,7 @@ namespace lfs::python {
         nb::list python_dir() const {
             nb::list result;
             for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
-                                     "world_transform", "set_local_transform",
+                                     "local_transform", "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
                                      "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "keyframe_data",
                                      "camera_uid", "image_path", "mask_path", "depth_path", "has_camera",
