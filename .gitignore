@@ -41,7 +41,6 @@ tests/data/nn/*
 !tests/python/**/*.py
 !docs/plugins/examples/**/*.py
 !tools/*.py
-!tools/nn_export/
 !tools/nn_export/export_lpips_weights.py
 .venv/
 *.png

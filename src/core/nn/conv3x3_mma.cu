@@ -7,9 +7,11 @@
 #include "nn_kernels.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <mutex>
 
 // Implicit-GEMM 3x3 convolution on tensor cores (sm_80+), NCHW fp16 in/out,
 // fp32 accumulate. C^T = W x X^T: A = weights [Cout][Cin] per tap, B = a
@@ -408,13 +410,14 @@ namespace lfs::core::nn::kernels {
     } // namespace
 
     bool conv3x3_mma_available() {
-        static int cached[16] = {};
+        static std::once_flag cached_once[16];
+        static std::atomic<int> cached[16] = {};
         int device = 0;
         LFS_CUDA_CHECK(cudaGetDevice(&device));
         if (device < 0 || device >= 16) {
             return false;
         }
-        if (cached[device] == 0) {
+        std::call_once(cached_once[device], [&] {
             int major = 0;
             LFS_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
             int compiled = 0;
@@ -423,9 +426,10 @@ namespace lfs::core::nn::kernels {
                 LFS_CUDA_CHECK(cudaGetLastError());
                 LFS_CUDA_CHECK(cudaMemcpyFromSymbol(&compiled, g_compiled_arch, sizeof(int)));
             }
-            cached[device] = (major >= 8 && compiled >= 800) ? 1 : -1;
-        }
-        return cached[device] > 0;
+            cached[device].store((major >= 8 && compiled >= 800) ? 1 : -1,
+                                 std::memory_order_relaxed);
+        });
+        return cached[device].load(std::memory_order_relaxed) > 0;
     }
 
     void conv3x3_weight_taps(const void* weight, void* weight_taps, const int cout, const int cin,

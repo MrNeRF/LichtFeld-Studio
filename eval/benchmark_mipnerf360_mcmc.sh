@@ -21,7 +21,7 @@ run_child() {
 }
 
 SCENE_DIR="data"
-RESULT_DIR="${RESULT_DIR:-results/benchmark_mcmc}"
+RESULT_DIR="results/benchmark_mcmc"
 STRATEGY_NAME="MCMC"
 SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 

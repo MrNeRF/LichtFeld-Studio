@@ -21,9 +21,9 @@ run_child() {
 }
 
 SCENE_DIR="data"
-RESULT_DIR="${RESULT_DIR:-results/mrnf}"
+RESULT_DIR="results/mrnf"
 STRATEGY_NAME="MRNF"
-SCENE_LIST="${SCENE_LIST:-garden bicycle stump bonsai counter kitchen room}" # treehill flowers
+SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 
 # Check if results directory exists and prompt for deletion
 if [ -d "$RESULT_DIR" ]; then
@@ -39,7 +39,6 @@ if [ -d "$RESULT_DIR" ]; then
     echo
 fi
 
-if [ "${SUMMARY_ONLY:-0}" != "1" ]; then
 for SCENE in $SCENE_LIST;
 do
     # Determine data factor based on scene type
@@ -72,7 +71,6 @@ do
     echo "Completed $SCENE (training: ${scene_elapsed}s)"
     echo
 done
-fi
 
 # Function to format numbers to specified decimal places
 format_number() {

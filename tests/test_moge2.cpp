@@ -168,9 +168,6 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     const int w = ishape[3].get<int>();
     const std::int64_t num_tokens = fixture.value("num_tokens", 400);
     auto image = make_test_image(h, w, lfs::core::DataType::Float32);
-    ASSERT_TRUE(fixture["full"].contains("normal"));
-    const auto& full = fixture["full"]["normal"];
-    const auto& vals = full.at("values");
     auto ran = model->forward_with_taps(image, num_tokens);
     ASSERT_TRUE(ran.has_value()) << std::string(ran.error().detail());
     auto& [out, taps] = *ran;
@@ -211,7 +208,10 @@ TEST(Moge2Test, FullModelParityIsOptIn) {
     maybe("mask", out.mask);
     maybe("metric_scale", out.metric_scale);
 
+    ASSERT_TRUE(fixture["full"].contains("normal"));
+    const auto& full = fixture["full"]["normal"];
     const auto got_n = host_f32(out.normal);
+    const auto& vals = full.at("values");
     ASSERT_EQ(got_n.size(), vals.size());
     float linf = 0.0f;
     for (std::size_t i = 0; i < got_n.size(); ++i) {

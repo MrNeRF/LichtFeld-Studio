@@ -534,9 +534,13 @@ namespace lfs::training {
         for (const auto& m : all_metrics_) {
             report_file << std::setw(10) << m.iteration
                         << std::setw(10) << std::fixed << std::setprecision(4) << m.psnr
-                        << std::setw(10) << m.ssim
-                        << std::setw(10) << (m.lpips ? *m.lpips : 0.0f)
-                        << std::setw(15) << m.elapsed_time
+                        << std::setw(10) << m.ssim;
+            if (m.lpips && std::isfinite(*m.lpips)) {
+                report_file << std::setw(10) << *m.lpips;
+            } else {
+                report_file << std::setw(10) << "";
+            }
+            report_file << std::setw(15) << m.elapsed_time
                         << std::setw(15) << m.num_gaussians << "\n";
         }
 
@@ -776,8 +780,8 @@ namespace lfs::training {
                                  _lpips_metric->tile_size_for(image_height, image_width), required,
                                  free_bytes, shortfall);
                     } else {
-                        LOG_INFO("Eval: LPIPS preflight passed; tile={} required={} free={} bytes",
-                                 _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
+                        LOG_DEBUG("Eval: LPIPS preflight passed; tile={} required={} free={} bytes",
+                                  _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
                     }
                 }
             }
@@ -1033,8 +1037,8 @@ namespace lfs::training {
         if (lpips_stop_event != nullptr)
             cudaEventDestroy(lpips_stop_event);
         if (lpips_timed_images > 0) {
-            LOG_INFO("Eval: LPIPS-only {:.3f} ms/image over {} images",
-                     lpips_elapsed_ms / static_cast<double>(lpips_timed_images), lpips_timed_images);
+            LOG_DEBUG("Eval: LPIPS-only {:.3f} ms/image over {} images",
+                      lpips_elapsed_ms / static_cast<double>(lpips_timed_images), lpips_timed_images);
         }
 
         if (_lpips_metric) {
@@ -1082,7 +1086,7 @@ namespace lfs::training {
             .iteration = result.iteration,
             .psnr = result.psnr,
             .ssim = result.ssim,
-            .lpips = result.lpips.value_or(0.0f),
+            .lpips = result.lpips,
             .elapsed_time = result.elapsed_time,
             .num_gaussians = result.num_gaussians}
             .emit();

@@ -227,7 +227,7 @@ namespace lfs::core {
                   int iteration;
                   float psnr;
                   float ssim;
-                  float lpips;
+                  std::optional<float> lpips;
                   float elapsed_time;
                   int num_gaussians;);
 

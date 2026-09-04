@@ -9,6 +9,7 @@
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -16,6 +17,7 @@
 #include <cuda_runtime.h>
 #include <float.h>
 #include <mma.h>
+#include <mutex>
 
 namespace lfs::core::nn::kernels {
     namespace {
@@ -791,9 +793,10 @@ namespace lfs::core::nn::kernels {
         int major = 0;
         LFS_CUDA_CHECK(cudaGetDevice(&device));
         LFS_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-        static int auto_choice[16] = {};
+        static std::once_flag auto_once[16];
+        static std::atomic<int> auto_choice[16] = {};
         if (!force_wmma && !force_mma && (auto75 || major < 8) && device >= 0 && device < 16) {
-            if (auto_choice[device] == 0) {
+            std::call_once(auto_once[device], [&] {
                 cudaEvent_t begin = nullptr;
                 cudaEvent_t wmma_done = nullptr;
                 cudaEvent_t simt_done = nullptr;
@@ -810,14 +813,14 @@ namespace lfs::core::nn::kernels {
                 float simt_ms = 0.0f;
                 LFS_CUDA_CHECK(cudaEventElapsedTime(&wmma_ms, begin, wmma_done));
                 LFS_CUDA_CHECK(cudaEventElapsedTime(&simt_ms, wmma_done, simt_done));
-                auto_choice[device] = wmma_ms <= simt_ms ? 1 : 2;
-                LOG_INFO("NN FP16 conv dispatch device=%d: %s (WMMA %.3f ms, SIMT %.3f ms)",
-                         device, auto_choice[device] == 1 ? "wmma" : "simt", wmma_ms, simt_ms);
+                auto_choice[device].store(wmma_ms <= simt_ms ? 1 : 2, std::memory_order_relaxed);
+                LOG_DEBUG("NN FP16 conv dispatch device=%d: %s (WMMA %.3f ms, SIMT %.3f ms)",
+                          device, auto_choice[device].load(std::memory_order_relaxed) == 1 ? "wmma" : "simt", wmma_ms, simt_ms);
                 LFS_CUDA_CHECK(cudaEventDestroy(begin));
                 LFS_CUDA_CHECK(cudaEventDestroy(wmma_done));
                 LFS_CUDA_CHECK(cudaEventDestroy(simt_done));
-            }
-            if (auto_choice[device] == 2) {
+            });
+            if (auto_choice[device].load(std::memory_order_relaxed) == 2) {
                 launch_simt();
             } else {
                 launch_wmma();

@@ -131,8 +131,8 @@ namespace lfs::app {
         }
 
         [[nodiscard]] lfs::vis::TrainerManager::EvaluationWeightsPreparer
-        make_lpips_weights_preparer(const bool allow_download) {
-            return [allow_download](const bool) -> std::optional<std::filesystem::path> {
+        make_lpips_weights_preparer() {
+            return [](const bool allow_download) -> std::optional<std::filesystem::path> {
                 if (const char* env_path = std::getenv("LFS_LPIPS_WEIGHTS"); env_path && env_path[0])
                     return std::nullopt;
                 if (auto result = lfs::preprocessing::ensure_lpips_weights(allow_download); result)
@@ -502,7 +502,7 @@ namespace lfs::app {
 
                 auto manager = std::make_shared<vis::TrainerManager>();
                 manager->set_evaluation_weights_preparer(
-                    make_lpips_weights_preparer(!params->no_download));
+                    make_lpips_weights_preparer());
                 {
                     const auto& effective_params =
                         checkpoint_params
@@ -1305,7 +1305,7 @@ namespace lfs::app {
 
             viewer->setParameters(*params);
             viewer->set_evaluation_weights_preparer(
-                make_lpips_weights_preparer(!params->no_download));
+                make_lpips_weights_preparer());
 
             for (const auto& vp : params->view_paths) {
                 if (!std::filesystem::exists(vp)) {

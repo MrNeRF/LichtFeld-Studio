@@ -473,6 +473,7 @@ namespace lfs::core::nn::models {
             img = img.sub(mean).div(stdv);
             img = as_compute(std::move(img), compute_);
         }
+
         Tensor tokens;
         {
             NvtxRange nvtx("moge2/patch_embed");
@@ -508,6 +509,7 @@ namespace lfs::core::nn::models {
             auto pe = interpolate_pos_embed(batch, token_h, token_w, compute_, img.stream());
             x = x.add(pe);
         }
+
         std::array<Tensor, 12> block_out{};
         for (int i = 0; i < kBlocks; ++i) {
             char mark_name[16];
@@ -519,6 +521,7 @@ namespace lfs::core::nn::models {
                 capture_tap(taps->blocks[static_cast<std::size_t>(i)], x);
             }
         }
+
         Tensor feat;
         Tensor cls_tok;
         {
@@ -617,6 +620,7 @@ namespace lfs::core::nn::models {
                 }
             }
         }
+
         const std::size_t after_neck = arena_.mark();
         int persist_i = 0;
         auto persist_and_rewind = [&](Tensor t) {
@@ -732,6 +736,7 @@ namespace lfs::core::nn::models {
             }
             scale = scale.exp();
         }
+
         profile.mark("end");
         profile.dump();
         if (profile.enabled()) {

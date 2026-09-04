@@ -21,7 +21,7 @@ run_child() {
 }
 
 SCENE_DIR="data"
-RESULT_DIR="${RESULT_DIR:-results/benchmark_improved_gs_plus}"
+RESULT_DIR="results/benchmark_improved_gs_plus"
 STRATEGY_NAME="ImprovedGSPlus"
 SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 

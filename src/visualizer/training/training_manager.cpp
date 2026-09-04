@@ -2370,8 +2370,7 @@ namespace lfs::vis {
         // Listen for evaluation completed events - update PSNR buffer
         state::EvaluationCompleted::when([this](const auto& event) {
             updateEvaluationMetrics(event.iteration, event.psnr, event.ssim,
-                                    event.lpips > 0.0f ? std::optional<float>{event.lpips}
-                                                       : std::optional<float>{});
+                                    event.lpips);
         });
     }
 

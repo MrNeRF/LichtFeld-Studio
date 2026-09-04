@@ -13,6 +13,7 @@ namespace lfs::core::nn {
         thread_local ActivationArena* t_current = nullptr;
 
         constexpr std::size_t kAlign = 256;
+
         std::size_t align_up(const std::size_t bytes) {
             return (bytes + (kAlign - 1)) & ~(kAlign - 1);
         }
@@ -41,13 +42,13 @@ namespace lfs::core::nn {
             high_water_ = used_;
         }
         if (high_water_ > cap_ && high_water_ > 0) {
-            CudaMemoryPool::instance().trim();
+            lfs::core::CudaMemoryPool::instance().trim();
             commit();
         }
     }
 
     void ActivationArena::commit() {
-        const std::size_t bytes = align_up(high_water_ < kAlign ? kAlign : high_water_);
+        std::size_t bytes = align_up(high_water_ < kAlign ? kAlign : high_water_);
         void* ptr = allocate_cuda_storage(bytes, stream_);
         LFS_ASSERT_MSG(ptr != nullptr, "activation arena failed to allocate");
         const cudaStream_t s = stream_;

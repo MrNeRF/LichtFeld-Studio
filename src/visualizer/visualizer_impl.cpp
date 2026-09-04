@@ -1930,8 +1930,7 @@ namespace lfs::vis {
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.eval_psnr.set(event.psnr);
             store.eval_ssim.set(event.ssim);
-            store.eval_lpips.set(event.lpips > 0.0f ? std::optional<float>{event.lpips}
-                                                    : std::optional<float>{});
+            store.eval_lpips.set(event.lpips);
         });
 
         state::SceneLoaded::when([](const auto& event) {
