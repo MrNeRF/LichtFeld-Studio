@@ -32,6 +32,8 @@
 #include <variant>
 #include <vector>
 
+#include "../backend/gpu_backend_ops.hpp"
+#include "../backend/pointwise_lowering.hpp"
 #include "cuda_stream_context.hpp"
 #include "lazy_config.hpp"
 #include "lazy_executor.hpp"
@@ -545,6 +547,7 @@ namespace lfs::core {
             const Tensor& source);
         friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
         friend std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
+        friend internal::StorageRef internal::storage_ref(const Tensor& tensor);
 
         struct TensorState {
             // Capacity management for in-place growth (like std::vector)
@@ -811,9 +814,11 @@ namespace lfs::core {
                 // Element-wise operation without broadcasting
                 if (device_ == Device::CUDA) {
                     pin_operands({this, &other});
-                    tensor_ops::launch_binary_op_generic(
-                        ptr<SrcT>(), other.ptr<SrcT>(), result.ptr<OutT>(),
-                        result.numel(), op, result.stream());
+                    internal::backend_ops_for(*this).binary(
+                        internal::pointwise_program(dtype_, out_dtype, op),
+                        internal::storage_ref(*this), internal::storage_ref(other),
+                        internal::storage_ref(result), result.numel(),
+                        internal::ExecContext{result.stream()});
                     // No sync - tensor operation
                 } else {
                     pin_operands({this, &other});
@@ -823,16 +828,14 @@ namespace lfs::core {
             } else {
                 // Broadcasting needed
                 pin_operands({this, &other});
-                auto a_shape = shape_.dims();
-                auto b_shape = other.shape().dims();
-                auto c_shape = broadcast_shape.dims();
 
                 if (device_ == Device::CUDA) {
-                    tensor_ops::launch_broadcast_binary(
-                        ptr<SrcT>(), other.ptr<SrcT>(), result.ptr<OutT>(),
-                        a_shape.data(), b_shape.data(), c_shape.data(),
-                        a_shape.size(), b_shape.size(), c_shape.size(),
-                        result.numel(), op, result.stream());
+                    internal::backend_ops_for(*this).broadcast_binary(
+                        internal::pointwise_program(dtype_, out_dtype, op),
+                        internal::storage_ref(*this), internal::strided_layout(*this),
+                        internal::storage_ref(other), internal::strided_layout(other),
+                        internal::storage_ref(result), internal::strided_layout(result),
+                        internal::ExecContext{result.stream()});
                     // No sync - tensor operation
                 } else {
                     // CPU broadcasting: expand may return zero-stride views;
@@ -866,29 +869,13 @@ namespace lfs::core {
             auto result = internal::allocate_like(*this, shape_, out_dtype);
 
             if (device_ == Device::CUDA) {
-                // Handle different input tensor dtypes
-                if (dtype_ == DataType::Int32) {
-                    int scalar_int = static_cast<int>(scalar);
-                    if (out_dtype == DataType::Bool) {
-                        tensor_ops::launch_scalar_op_generic(
-                            ptr<int>(), scalar_int, result.ptr<unsigned char>(),
-                            numel(), op, result.stream());
-                    } else if (out_dtype == DataType::Int32) {
-                        tensor_ops::launch_scalar_op_generic(
-                            ptr<int>(), scalar_int, result.ptr<int>(),
-                            numel(), op, result.stream());
-                    }
-                } else { // Float32
-                    if (out_dtype == DataType::Bool) {
-                        tensor_ops::launch_scalar_op_generic(
-                            ptr<float>(), scalar, result.ptr<unsigned char>(),
-                            numel(), op, result.stream());
-                    } else {
-                        tensor_ops::launch_scalar_op_generic(
-                            ptr<float>(), scalar, result.ptr<float>(),
-                            numel(), op, result.stream());
-                    }
-                }
+                auto program = internal::pointwise_program(dtype_, out_dtype, op);
+                program.scalar = dtype_ == DataType::Int32
+                                     ? internal::scalar_operand(static_cast<int32_t>(scalar))
+                                     : internal::scalar_operand(scalar);
+                internal::backend_ops_for(*this).scalar(
+                    program, internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // No sync needed - operations are async
             } else {
                 // CPU implementation
@@ -940,9 +927,11 @@ namespace lfs::core {
             }
 
             if (device_ == Device::CUDA) {
-                tensor_ops::launch_scalar_op_generic(
-                    ptr<float>(), scalar, ptr<float>(),
-                    numel(), op, stream());
+                auto program = internal::pointwise_program(dtype_, dtype_, op);
+                program.scalar = internal::scalar_operand(scalar);
+                internal::backend_ops_for(*this).scalar(
+                    program, internal::storage_ref(*this), internal::storage_ref(*this),
+                    numel(), internal::ExecContext{stream()});
                 // No sync - tensor operation
             } else {
                 // CPU implementation
@@ -995,9 +984,11 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 pin_operands({this, &other_dense});
-                tensor_ops::launch_binary_op_generic(
-                    ptr<SrcT>(), other_dense.ptr<SrcT>(), ptr<SrcT>(),
-                    numel(), op, stream());
+                internal::backend_ops_for(*this).binary(
+                    internal::pointwise_program(dtype_, dtype_, op),
+                    internal::storage_ref(*this), internal::storage_ref(other_dense),
+                    internal::storage_ref(*this), numel(),
+                    internal::ExecContext{stream()});
                 // No sync - tensor operation
             } else {
                 // CPU implementation
@@ -1043,15 +1034,15 @@ namespace lfs::core {
         // Map add/sub/mul/div functors to LazyPointwiseOpKind tensor-binary stages.
         // Returns nullopt for ops that are not fusable (pow, maximum, ...).
         template <typename Op>
-        static std::optional<internal::LazyPointwiseOpKind> tensor_binary_fusion_kind() {
+        static std::optional<internal::PointwiseOp> tensor_binary_fusion_kind() {
             if constexpr (std::is_same_v<Op, ops::add_op>) {
-                return internal::LazyPointwiseOpKind::AddTensor;
+                return internal::PointwiseOp::AddTensor;
             } else if constexpr (std::is_same_v<Op, ops::sub_op>) {
-                return internal::LazyPointwiseOpKind::SubTensor;
+                return internal::PointwiseOp::SubTensor;
             } else if constexpr (std::is_same_v<Op, ops::mul_op>) {
-                return internal::LazyPointwiseOpKind::MulTensor;
+                return internal::PointwiseOp::MulTensor;
             } else if constexpr (std::is_same_v<Op, ops::div_op>) {
-                return internal::LazyPointwiseOpKind::DivTensor;
+                return internal::PointwiseOp::DivTensor;
             } else {
                 return std::nullopt;
             }
@@ -1125,9 +1116,7 @@ namespace lfs::core {
                             lhs_source, shp, DataType::Float32);
                         if (dev == Device::CUDA) {
                             pin_operands({&lhs_source, &rhs_operand});
-                            tensor_ops::launch_float_binary_with_numeric_policy(
-                                lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
-                                out.ptr<float>(), out.numel(), op, out.stream());
+                            internal::backend_ops_for(lhs_source).binary(internal::pointwise_program(DataType::Float32, DataType::Float32, op), internal::storage_ref(lhs_source), internal::storage_ref(rhs_operand), internal::storage_ref(out), out.numel(), internal::ExecContext{out.stream()});
                             tensor_ops::record_tensor_kernel_launch(1);
                         } else {
                             apply_binary_cpu(lhs_source.ptr<float>(), rhs_operand.ptr<float>(),
@@ -1183,30 +1172,22 @@ namespace lfs::core {
                     if (device_ == Device::CUDA) {
                         switch (result_dtype) {
                         case DataType::Float32:
-                            tensor_ops::launch_float_binary_with_numeric_policy(
-                                ptr<float>(), other.ptr<float>(), result.ptr<float>(),
-                                result.numel(), op, result.stream());
+                            internal::backend_ops_for(*this).binary(
+                                internal::pointwise_program(dtype_, result_dtype, op),
+                                internal::storage_ref(*this), internal::storage_ref(other),
+                                internal::storage_ref(result), result.numel(),
+                                internal::ExecContext{result.stream()});
                             tensor_ops::record_tensor_kernel_launch(1);
                             break;
                         case DataType::Float16:
-                            tensor_ops::launch_binary_op_generic(
-                                ptr<__half>(), other.ptr<__half>(), result.ptr<__half>(),
-                                result.numel(), op, result.stream());
-                            break;
                         case DataType::Int32:
-                            tensor_ops::launch_binary_op_generic(
-                                ptr<int>(), other.ptr<int>(), result.ptr<int>(),
-                                result.numel(), op, result.stream());
-                            break;
                         case DataType::Int64:
-                            tensor_ops::launch_binary_op_generic(
-                                ptr<int64_t>(), other.ptr<int64_t>(), result.ptr<int64_t>(),
-                                result.numel(), op, result.stream());
-                            break;
                         case DataType::UInt8:
-                            tensor_ops::launch_binary_op_generic(
-                                ptr<uint8_t>(), other.ptr<uint8_t>(), result.ptr<uint8_t>(),
-                                result.numel(), op, result.stream());
+                            internal::backend_ops_for(*this).binary(
+                                internal::pointwise_program(dtype_, result_dtype, op),
+                                internal::storage_ref(*this), internal::storage_ref(other),
+                                internal::storage_ref(result), result.numel(),
+                                internal::ExecContext{result.stream()});
                             break;
                         default:
                             break; // unreachable given can_fast_path dtype filter
@@ -3432,6 +3413,73 @@ namespace lfs::core {
     private:
         std::string tensor_info_;
     };
+
+    namespace internal {
+
+        inline StorageRef storage_ref(const Tensor& tensor) {
+            // Facade callers replace ptr<T>() raw-pointer escapes. Preserve its
+            // deferred-materialization boundary before reading the storage base.
+            tensor.materialize_if_deferred();
+            LFS_ASSERT_MSG(tensor.is_valid(), "storage_ref requires a valid tensor");
+            LFS_ASSERT_MSG(tensor.device_ == Device::CUDA,
+                           "storage_ref requires GPU storage");
+            LFS_ASSERT_MSG(tensor.data_ != nullptr || tensor.numel() == 0,
+                           "storage_ref found null storage for a non-empty tensor");
+            return StorageRef{
+                .backend = tensor.storage_meta_ ? tensor.storage_meta_->backend
+                                                : GpuBackend::CUDA,
+                .data = tensor.data_,
+                .byte_offset = tensor.storage_offset_ * dtype_size(tensor.dtype_),
+                .dtype = tensor.dtype_,
+                .meta = tensor.storage_meta_.get(),
+            };
+        }
+
+        inline StridedLayout strided_layout(const Tensor& tensor) {
+            LFS_ASSERT_MSG(tensor.is_valid(), "strided_layout requires a valid tensor");
+            LFS_ASSERT_MSG(tensor.ndim() <= MAX_TENSOR_RANK,
+                           "strided layout rank exceeds MAX_TENSOR_RANK");
+            StridedLayout layout{};
+            layout.rank = tensor.ndim();
+            layout.element_count = tensor.numel();
+            for (size_t i = 0; i < layout.rank; ++i) {
+                layout.dims[i] = tensor.shape()[i];
+                layout.strides[i] = tensor.stride(i);
+            }
+            return layout;
+        }
+
+        template <class Functor>
+        inline void run_pointwise_unary(const Tensor& input, const Tensor& output,
+                                        const Functor& functor,
+                                        const ExecContext context) {
+            backend_ops_for(input).unary(
+                pointwise_program(input.dtype(), output.dtype(), functor),
+                storage_ref(input), storage_ref(output), output.numel(), context);
+        }
+
+        template <class Functor>
+        inline void run_pointwise_binary(const Tensor& lhs, const Tensor& rhs,
+                                         const Tensor& output, const Functor& functor,
+                                         const ExecContext context) {
+            backend_ops_for(lhs).binary(
+                pointwise_program(lhs.dtype(), output.dtype(), functor),
+                storage_ref(lhs), storage_ref(rhs), storage_ref(output),
+                output.numel(), context);
+        }
+
+        template <class Functor>
+        inline void run_pointwise_broadcast(
+            const Tensor& lhs, const Tensor& rhs, const Tensor& output,
+            const Functor& functor, const ExecContext context) {
+            backend_ops_for(lhs).broadcast_binary(
+                pointwise_program(lhs.dtype(), output.dtype(), functor),
+                storage_ref(lhs), strided_layout(lhs),
+                storage_ref(rhs), strided_layout(rhs),
+                storage_ref(output), strided_layout(output), context);
+        }
+
+    } // namespace internal
 
     // Memory info
     class LFS_CORE_API MemoryInfo {

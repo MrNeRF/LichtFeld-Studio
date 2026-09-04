@@ -31,6 +31,8 @@ set(TENSOR_SOURCES
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/tensor_backend.cpp
+        tensor/backend/backend_registry.cpp
+        tensor/backend/cuda/cuda_ops_pointwise.cpp
         tensor/tensor.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp

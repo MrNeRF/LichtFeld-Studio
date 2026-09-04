@@ -479,7 +479,9 @@ namespace lfs::core::internal {
                     source, source.shape(), DataType::Float32);
                 float* out_ptr = out.ptr<float>();
                 assert(out_ptr != nullptr);
-                tensor_ops::launch_fused_pointwise_chain(in_ptr, out_ptr, n, chain, out.stream());
+                backend_ops_for(source).fused_pointwise_chain(
+                    storage_ref(source), storage_ref(out), n, chain,
+                    ExecContext{out.stream()});
                 materialized = std::move(out);
                 return true;
             }

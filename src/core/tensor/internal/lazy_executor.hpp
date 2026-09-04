@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "../backend/descriptors.hpp"
 #include "core/export.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -19,33 +20,7 @@ namespace lfs::core {
 
     namespace internal {
 
-        enum class LazyPointwiseOpKind : uint8_t {
-            AddScalar = 0,
-            SubScalar = 1,
-            MulScalar = 2,
-            DivScalar = 3,
-            // 4-7: same-shape tensor binary stages (second operand via LazyPointwiseOp::rhs)
-            AddTensor = 4,
-            SubTensor = 5,
-            MulTensor = 6,
-            DivTensor = 7,
-            // 8-9 reserved
-            Abs = 10,
-            Neg = 11,
-            Exp = 12,
-            Log = 13,
-            Sqrt = 14,
-            Sigmoid = 15,
-            Relu = 16,
-            Square = 17,
-            Tanh = 18,
-            Rsqrt = 19,
-            Sign = 20,
-            Reciprocal = 21,
-            Floor = 22,
-            Ceil = 23,
-            Round = 24
-        };
+        using LazyPointwiseOpKind = PointwiseOp;
 
         struct LazyPointwiseOp {
             LazyPointwiseOpKind kind = LazyPointwiseOpKind::AddScalar;

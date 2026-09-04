@@ -100,10 +100,9 @@ namespace lfs::core {
                     if constexpr (ops::supports_int32_v<UnaryOp>) {
                         // Int32 -> Int32 operations (abs, neg, sign, etc.)
                         if (device == Device::CUDA) {
-                            tensor_ops::launch_unary_op_generic(
-                                input_tensor.template ptr<int>(),
-                                result.template ptr<int>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_unary(
+                                input_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             // CPU fallback
                             const int* in_ptr = input_tensor.template ptr<int>();
@@ -121,17 +120,15 @@ namespace lfs::core {
                             if (dtype == DataType::Int32) {
                                 Tensor tmp_f = internal::allocate_like(
                                     input_f, shape, DataType::Float32);
-                                tensor_ops::launch_unary_op_generic(
-                                    input_f.template ptr<float>(),
-                                    tmp_f.template ptr<float>(),
-                                    tmp_f.numel(), op, tmp_f.stream());
+                                internal::run_pointwise_unary(
+                                    input_f, tmp_f, op,
+                                    internal::ExecContext{tmp_f.stream()});
                                 result = tmp_f.to(DataType::Int32);
                             } else {
                                 // Expected Float32 output.
-                                tensor_ops::launch_unary_op_generic(
-                                    input_f.template ptr<float>(),
-                                    result.template ptr<float>(),
-                                    result.numel(), op, result.stream());
+                                internal::run_pointwise_unary(
+                                    input_f, result, op,
+                                    internal::ExecContext{result.stream()});
                             }
                         } else {
                             // CPU fallback: cast element-wise to avoid instantiating op(int).
@@ -153,10 +150,9 @@ namespace lfs::core {
                 } else {
                     // Float -> Float operations (default case)
                     if (device == Device::CUDA) {
-                        tensor_ops::launch_float_unary_with_numeric_policy(
-                            input_tensor.template ptr<float>(),
-                            result.template ptr<float>(),
-                            result.numel(), op, result.stream());
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
                     } else {
                         // CPU fallback: apply operation element-wise
                         const float* in_ptr = input_tensor.template ptr<float>();
@@ -196,10 +192,9 @@ namespace lfs::core {
                 if (input_tensor.dtype() == DataType::Bool) {
                     // Bool input -> Bool output (e.g., logical_not on Bool tensor)
                     if (device == Device::CUDA) {
-                        tensor_ops::launch_unary_op_generic(
-                            input_tensor.template ptr<unsigned char>(),
-                            result.template ptr<unsigned char>(),
-                            result.numel(), op, result.stream());
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
                     } else {
                         // CPU fallback
                         const unsigned char* in_ptr = input_tensor.template ptr<unsigned char>();
@@ -212,10 +207,9 @@ namespace lfs::core {
                 } else if (input_tensor.dtype() == DataType::UInt8) {
                     // UInt8 input -> Bool output (e.g., comparisons on UInt8 tensor)
                     if (device == Device::CUDA) {
-                        tensor_ops::launch_unary_op_generic(
-                            input_tensor.template ptr<uint8_t>(),
-                            result.template ptr<unsigned char>(),
-                            result.numel(), op, result.stream());
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
                     } else {
                         const uint8_t* in_ptr = input_tensor.template ptr<uint8_t>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -227,10 +221,9 @@ namespace lfs::core {
                 } else if (input_tensor.dtype() == DataType::Int32) {
                     // Int32 input -> Bool output (e.g., comparisons on Int32 tensor)
                     if (device == Device::CUDA) {
-                        tensor_ops::launch_unary_op_generic(
-                            input_tensor.template ptr<int>(),
-                            result.template ptr<unsigned char>(),
-                            result.numel(), op, result.stream());
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
                     } else {
                         const int* in_ptr = input_tensor.template ptr<int>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -242,10 +235,9 @@ namespace lfs::core {
                 } else {
                     // Float input -> Bool output (e.g., isnan, isinf, isfinite)
                     if (device == Device::CUDA) {
-                        tensor_ops::launch_unary_op_generic(
-                            input_tensor.template ptr<float>(),
-                            result.template ptr<unsigned char>(),
-                            result.numel(), op, result.stream());
+                        internal::run_pointwise_unary(
+                            input_tensor, result, op,
+                            internal::ExecContext{result.stream()});
                     } else {
                         // CPU fallback
                         const float* in_ptr = input_tensor.template ptr<float>();
@@ -298,10 +290,20 @@ namespace lfs::core {
 
         // Apply fused operation in a single pass!
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_unary_op_generic(
-                base.template ptr<float>(),
-                result.template ptr<float>(),
-                result.numel(), fused_op, result.stream());
+            if constexpr (internal::pointwise_composition_is_fused_v<InnerOp, OuterOp>) {
+                internal::run_pointwise_unary(
+                    base, result, fused_op,
+                    internal::ExecContext{result.stream()});
+            } else {
+                Tensor intermediate = internal::allocate_like(
+                    base, shape_, DataType::Float32);
+                internal::run_pointwise_unary(
+                    base, intermediate, inner_op,
+                    internal::ExecContext{intermediate.stream()});
+                internal::run_pointwise_unary(
+                    intermediate, result, outer_op_,
+                    internal::ExecContext{result.stream()});
+            }
         } else {
             // CPU fallback: apply fused operation element-wise
             const float* in_ptr = base.template ptr<float>();
@@ -353,22 +355,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<__half>(),
-                                right_tensor.template ptr<__half>(),
-                                result.template ptr<__half>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<__half>(),
-                                right_tensor.template ptr<__half>(),
-                                result.template ptr<__half>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -409,22 +403,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<int64_t>(),
-                                right_tensor.template ptr<int64_t>(),
-                                result.template ptr<int64_t>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<int64_t>(),
-                                right_tensor.template ptr<int64_t>(),
-                                result.template ptr<int64_t>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -461,22 +447,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<uint8_t>(),
-                                right_tensor.template ptr<uint8_t>(),
-                                result.template ptr<uint8_t>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<uint8_t>(),
-                                right_tensor.template ptr<uint8_t>(),
-                                result.template ptr<uint8_t>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -513,22 +491,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<int>(),
-                                right_tensor.template ptr<int>(),
-                                result.template ptr<int>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<int>(),
-                                right_tensor.template ptr<int>(),
-                                result.template ptr<int>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -566,23 +536,15 @@ namespace lfs::core {
                         if (needs_broadcast) {
                             // Use broadcast binary kernel
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_float_broadcast_with_numeric_policy(
-                                left_tensor.template ptr<float>(),
-                                right_tensor.template ptr<float>(),
-                                result.template ptr<float>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             // Element-wise binary operation (no broadcasting)
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_float_binary_with_numeric_policy(
-                                left_tensor.template ptr<float>(),
-                                right_tensor.template ptr<float>(),
-                                result.template ptr<float>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback: apply operation element-wise
@@ -655,22 +617,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<unsigned char>(),
-                                right_tensor.template ptr<unsigned char>(),
-                                result.template ptr<unsigned char>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<unsigned char>(),
-                                right_tensor.template ptr<unsigned char>(),
-                                result.template ptr<unsigned char>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -707,22 +661,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<__half>(),
-                                right_tensor.template ptr<__half>(),
-                                result.template ptr<unsigned char>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<__half>(),
-                                right_tensor.template ptr<__half>(),
-                                result.template ptr<unsigned char>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -763,22 +709,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<int64_t>(),
-                                right_tensor.template ptr<int64_t>(),
-                                result.template ptr<unsigned char>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<int64_t>(),
-                                right_tensor.template ptr<int64_t>(),
-                                result.template ptr<unsigned char>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -815,22 +753,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<int>(),
-                                right_tensor.template ptr<int>(),
-                                result.template ptr<unsigned char>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<int>(),
-                                right_tensor.template ptr<int>(),
-                                result.template ptr<unsigned char>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -867,22 +797,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<uint8_t>(),
-                                right_tensor.template ptr<uint8_t>(),
-                                result.template ptr<unsigned char>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<uint8_t>(),
-                                right_tensor.template ptr<uint8_t>(),
-                                result.template ptr<unsigned char>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -919,22 +841,14 @@ namespace lfs::core {
                     if (device == Device::CUDA) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_broadcast_binary(
-                                left_tensor.template ptr<float>(),
-                                right_tensor.template ptr<float>(),
-                                result.template ptr<unsigned char>(),
-                                left_tensor.shape().dims().data(),
-                                right_tensor.shape().dims().data(),
-                                shape.dims().data(),
-                                left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_broadcast(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         } else {
                             pin_operands({&left_tensor, &right_tensor});
-                            tensor_ops::launch_binary_op_generic(
-                                left_tensor.template ptr<float>(),
-                                right_tensor.template ptr<float>(),
-                                result.template ptr<unsigned char>(),
-                                result.numel(), op, result.stream());
+                            internal::run_pointwise_binary(
+                                left_tensor, right_tensor, result, op,
+                                internal::ExecContext{result.stream()});
                         }
                     } else {
                         // CPU fallback
@@ -999,10 +913,9 @@ namespace lfs::core {
         Tensor result = internal::allocate_like(input_tensor, shape_, dtype_);
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_unary_op_generic(
-                input_tensor.template ptr<float>(),
-                result.template ptr<float>(),
-                result.numel(), op_, result.stream());
+            internal::run_pointwise_unary(
+                input_tensor, result, op_,
+                internal::ExecContext{result.stream()});
         } else {
             // CPU fallback: apply scalar operation element-wise
             const float* in_ptr = input_tensor.template ptr<float>();

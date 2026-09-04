@@ -502,14 +502,10 @@ namespace lfs::core {
                                                            result.stream()),
                                            "constant Float32 CUDA memset");
                     } else {
-                        tensor_ops::launch_load_op(
-                            result.data_,
-                            result.shape_.dims().data(),
-                            result.shape_.rank(),
-                            LoadOp::Const,
-                            &value,
-                            result.dtype_,
-                            result.stream());
+                        internal::backend_ops_for(result).load_fill(
+                            internal::storage_ref(result), result.numel(),
+                            internal::scalar_operand(value),
+                            internal::ExecContext{result.stream()});
                         // No sync - tensor operation
                     }
                 } else if (result.dtype_ == DataType::Float16) {
@@ -2709,12 +2705,10 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {
-                // Single-pass: read from source, write clamped to destination
-                const float* src = ptr<float>();
-                float* dst = result.ptr<float>();
-
-                // Use our optimized kernel
-                tensor_ops::launch_clamp_fused(src, dst, min_val, max_val, numel(), result.stream());
+                internal::backend_ops_for(*this).clamp_fused(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    internal::scalar_operand(min_val), internal::scalar_operand(max_val),
+                    numel(), internal::ExecContext{result.stream()});
             } else if (dtype_ == DataType::Int32) {
                 // Fallback: copy then clamp for int
                 LFS_CUDA_CHECK_MSG(
@@ -2726,9 +2720,10 @@ namespace lfs::core {
                 const int max_int = max_val == std::numeric_limits<float>::infinity()
                                         ? std::numeric_limits<int>::max()
                                         : static_cast<int>(max_val);
-                tensor_ops::launch_clamp_scalar_int(result.ptr<int>(),
-                                                    min_int, max_int,
-                                                    numel(), result.stream());
+                internal::backend_ops_for(result).clamp_scalar_int(
+                    internal::storage_ref(result), internal::scalar_operand(min_int),
+                    internal::scalar_operand(max_int), numel(),
+                    internal::ExecContext{result.stream()});
             }
         } else {
             // CPU: simple loop

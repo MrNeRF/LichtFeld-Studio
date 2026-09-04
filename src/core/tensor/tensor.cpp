@@ -1726,28 +1726,29 @@ namespace lfs::core {
         }
 
 // Macro for type conversions using launch_convert_type
-#define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)                \
-    if (dtype_ == FROM_DTYPE && dtype == TO_DTYPE) {                                \
-        auto result = internal::allocate_like(*this, shape_, TO_DTYPE);             \
-        if (numel() == 0)                                                           \
-            return result;                                                          \
-        if (device_ == Device::CUDA) {                                              \
-            tensor_ops::launch_convert_type<FROM_TYPE, TO_TYPE>(                    \
-                ptr<FROM_TYPE>(), result.ptr<TO_TYPE>(), numel(), result.stream()); \
-            /* No sync - tensor-to-tensor operation */                              \
-            return result;                                                          \
-        }                                                                           \
-        /* CPU fallback */                                                          \
-        const FROM_TYPE* src = ptr<FROM_TYPE>();                                    \
-        TO_TYPE* dst = result.ptr<TO_TYPE>();                                       \
-        for (size_t i = 0; i < numel(); ++i) {                                      \
-            if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                       \
-                dst[i] = detail::torch_uint8_cast(src[i]);                          \
-            } else {                                                                \
-                dst[i] = static_cast<TO_TYPE>(src[i]);                              \
-            }                                                                       \
-        }                                                                           \
-        return result;                                                              \
+#define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)         \
+    if (dtype_ == FROM_DTYPE && dtype == TO_DTYPE) {                         \
+        auto result = internal::allocate_like(*this, shape_, TO_DTYPE);      \
+        if (numel() == 0)                                                    \
+            return result;                                                   \
+        if (device_ == Device::CUDA) {                                       \
+            internal::backend_ops_for(*this).convert_type(                   \
+                internal::storage_ref(*this), internal::storage_ref(result), \
+                numel(), internal::ExecContext{result.stream()});            \
+            /* No sync - tensor-to-tensor operation */                       \
+            return result;                                                   \
+        }                                                                    \
+        /* CPU fallback */                                                   \
+        const FROM_TYPE* src = ptr<FROM_TYPE>();                             \
+        TO_TYPE* dst = result.ptr<TO_TYPE>();                                \
+        for (size_t i = 0; i < numel(); ++i) {                               \
+            if constexpr (std::is_same_v<TO_TYPE, uint8_t>) {                \
+                dst[i] = detail::torch_uint8_cast(src[i]);                   \
+            } else {                                                         \
+                dst[i] = static_cast<TO_TYPE>(src[i]);                       \
+            }                                                                \
+        }                                                                    \
+        return result;                                                       \
     }
 
         // Bool <-> Float32 (manual - can't use launch_convert_type due to uint8_t conflict)
@@ -1758,8 +1759,9 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 // Use generic conversion (unsigned char -> float)
-                tensor_ops::launch_convert_type<unsigned char, float>(
-                    ptr<unsigned char>(), result.ptr<float>(), numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
@@ -1826,8 +1828,9 @@ namespace lfs::core {
                 return result;
 
             if (device_ == Device::CUDA) {
-                tensor_ops::launch_convert_type<float, int>(
-                    ptr<float>(), result.ptr<int>(), numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // No sync - tensor-to-tensor GPU operation
             } else {
                 const float* src = ptr<float>();
@@ -1885,8 +1888,9 @@ namespace lfs::core {
                 return result;
 
             if (device_ == Device::CUDA) {
-                tensor_ops::launch_convert_type<uint8_t, bool>(
-                    ptr<uint8_t>(), result.ptr<bool>(), numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
             } else {
                 const uint8_t* src = ptr<uint8_t>();
                 uint8_t* dst = result.ptr<uint8_t>();
@@ -1954,8 +1958,9 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 // Use generic conversion (unsigned char -> int)
-                tensor_ops::launch_convert_type<unsigned char, int>(
-                    ptr<unsigned char>(), result.ptr<int>(), numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
@@ -1975,8 +1980,9 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 // Use generic conversion (unsigned char -> int64_t)
-                tensor_ops::launch_convert_type<unsigned char, int64_t>(
-                    ptr<unsigned char>(), result.ptr<int64_t>(), numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
@@ -2049,8 +2055,9 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 // Use generic conversion (unsigned char -> __half)
-                tensor_ops::launch_convert_type<unsigned char, __half>(
-                    ptr<unsigned char>(), result.ptr<__half>(), numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
@@ -2144,8 +2151,9 @@ namespace lfs::core {
                 const int64_t* const source = ptr<int64_t>();
                 int* const destination = result.ptr<int>();
                 const size_t conversion_bytes = bytes();
-                tensor_ops::launch_convert_type<int64_t, int>(
-                    source, destination, numel(), result.stream());
+                internal::backend_ops_for(*this).convert_type(
+                    internal::storage_ref(*this), internal::storage_ref(result),
+                    numel(), internal::ExecContext{result.stream()});
                 // CRITICAL: Sync to ensure conversion completes before item() reads
                 LFS_CUDA_CHECK_MSG_ARGS(
                     cudaDeviceSynchronize(),
@@ -2235,16 +2243,19 @@ namespace lfs::core {
             if (device_ == Device::CUDA) {
                 // Use CUDA kernel for strided fill (much faster than element-by-element cudaMemcpy)
                 if (dtype_ == DataType::Float32) {
-                    tensor_ops::launch_fill_strided<float>(
-                        static_cast<float*>(data_), value, shape_.dims(), strides_, storage_offset_, n, stream());
+                    internal::backend_ops_for(*this).fill_strided(
+                        internal::storage_ref(*this), internal::strided_layout(*this),
+                        internal::scalar_operand(value), internal::ExecContext{stream()});
                 } else if (dtype_ == DataType::Int32) {
                     int int_val = static_cast<int>(value);
-                    tensor_ops::launch_fill_strided<int>(
-                        static_cast<int*>(data_), int_val, shape_.dims(), strides_, storage_offset_, n, stream());
+                    internal::backend_ops_for(*this).fill_strided(
+                        internal::storage_ref(*this), internal::strided_layout(*this),
+                        internal::scalar_operand(int_val), internal::ExecContext{stream()});
                 } else if (dtype_ == DataType::Bool) {
-                    unsigned char bool_val = (value != 0.0f) ? 1 : 0;
-                    tensor_ops::launch_fill_strided<unsigned char>(
-                        static_cast<unsigned char*>(data_), bool_val, shape_.dims(), strides_, storage_offset_, n, stream());
+                    const bool bool_val = value != 0.0f;
+                    internal::backend_ops_for(*this).fill_strided(
+                        internal::storage_ref(*this), internal::strided_layout(*this),
+                        internal::scalar_operand(bool_val), internal::ExecContext{stream()});
                 }
                 // Sync for the no-stream overload (maintains original behavior)
                 LFS_CUDA_CHECK(cudaDeviceSynchronize());
@@ -2342,16 +2353,19 @@ namespace lfs::core {
         // Non-contiguous tensors: use strided kernel with stream
         if (!is_contiguous()) {
             if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_fill_strided<float>(
-                    static_cast<float*>(data_), value, shape_.dims(), strides_, storage_offset_, n, stream);
+                internal::backend_ops_for(*this).fill_strided(
+                    internal::storage_ref(*this), internal::strided_layout(*this),
+                    internal::scalar_operand(value), internal::ExecContext{stream});
             } else if (dtype_ == DataType::Int32) {
                 int int_val = static_cast<int>(value);
-                tensor_ops::launch_fill_strided<int>(
-                    static_cast<int*>(data_), int_val, shape_.dims(), strides_, storage_offset_, n, stream);
+                internal::backend_ops_for(*this).fill_strided(
+                    internal::storage_ref(*this), internal::strided_layout(*this),
+                    internal::scalar_operand(int_val), internal::ExecContext{stream});
             } else if (dtype_ == DataType::Bool) {
-                unsigned char bool_val = (value != 0.0f) ? 1 : 0;
-                tensor_ops::launch_fill_strided<unsigned char>(
-                    static_cast<unsigned char*>(data_), bool_val, shape_.dims(), strides_, storage_offset_, n, stream);
+                const bool bool_val = value != 0.0f;
+                internal::backend_ops_for(*this).fill_strided(
+                    internal::storage_ref(*this), internal::strided_layout(*this),
+                    internal::scalar_operand(bool_val), internal::ExecContext{stream});
             }
             return *this;
         }
@@ -2364,18 +2378,25 @@ namespace lfs::core {
             LFS_CUDA_CHECK(cudaMemsetAsync(dest, 0, bytes(), stream));
         } else {
             // Non-zero fill: use kernel (treat as 1D strided with stride=1)
-            std::vector<size_t> shape_1d = {n};
-            std::vector<size_t> strides_1d = {1};
+            internal::StridedLayout layout{};
+            layout.rank = 1;
+            layout.dims[0] = n;
+            layout.strides[0] = 1;
+            layout.element_count = n;
             if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_fill_strided<float>(
-                    static_cast<float*>(dest), value, shape_1d, strides_1d, 0, n, stream);
+                internal::backend_ops_for(*this).fill_strided(
+                    internal::storage_ref(*this), layout,
+                    internal::scalar_operand(value), internal::ExecContext{stream});
             } else if (dtype_ == DataType::Int32) {
-                tensor_ops::launch_fill_strided<int>(
-                    static_cast<int*>(dest), static_cast<int>(value), shape_1d, strides_1d, 0, n, stream);
+                internal::backend_ops_for(*this).fill_strided(
+                    internal::storage_ref(*this), layout,
+                    internal::scalar_operand(static_cast<int>(value)),
+                    internal::ExecContext{stream});
             } else if (dtype_ == DataType::Bool) {
-                tensor_ops::launch_fill_strided<unsigned char>(
-                    static_cast<unsigned char*>(dest), (value != 0.0f) ? (unsigned char)1 : (unsigned char)0,
-                    shape_1d, strides_1d, 0, n, stream);
+                internal::backend_ops_for(*this).fill_strided(
+                    internal::storage_ref(*this), layout,
+                    internal::scalar_operand(value != 0.0f),
+                    internal::ExecContext{stream});
             }
         }
 
@@ -2660,7 +2681,10 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_clamp_scalar(ptr<float>(), min_val, max_val, numel(), stream());
+                internal::backend_ops_for(*this).clamp_scalar(
+                    internal::storage_ref(*this), internal::scalar_operand(min_val),
+                    internal::scalar_operand(max_val), numel(),
+                    internal::ExecContext{stream()});
             } else if (dtype_ == DataType::Int32) {
                 const int min_int = min_val == -std::numeric_limits<float>::infinity()
                                         ? std::numeric_limits<int>::lowest()
@@ -2668,9 +2692,10 @@ namespace lfs::core {
                 const int max_int = max_val == std::numeric_limits<float>::infinity()
                                         ? std::numeric_limits<int>::max()
                                         : static_cast<int>(max_val);
-                tensor_ops::launch_clamp_scalar_int(ptr<int>(),
-                                                    min_int, max_int,
-                                                    numel(), stream());
+                internal::backend_ops_for(*this).clamp_scalar_int(
+                    internal::storage_ref(*this), internal::scalar_operand(min_int),
+                    internal::scalar_operand(max_int), numel(),
+                    internal::ExecContext{stream()});
             }
         } else {
             if (dtype_ == DataType::Float32) {

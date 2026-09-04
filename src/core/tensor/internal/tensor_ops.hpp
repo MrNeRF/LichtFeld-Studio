@@ -270,49 +270,7 @@ namespace lfs::core::tensor_ops {
         size_t lhs_rank, size_t rhs_rank, size_t output_rank, size_t output_elements,
         cudaStream_t stream);
 
-    template <typename UnaryOp>
-    void launch_float_unary_with_numeric_policy(const float* input, float* output,
-                                                size_t n, UnaryOp op, cudaStream_t stream) {
-        if constexpr (std::is_same_v<UnaryOp, ops::round_op>) {
-            launch_ieee_round_float(input, output, n, stream);
-        } else {
-            launch_unary_op_generic(input, output, n, op, stream);
-        }
-    }
-
-    template <typename BinaryOp>
-    void launch_float_binary_with_numeric_policy(const float* lhs, const float* rhs,
-                                                 float* output, size_t n, BinaryOp op,
-                                                 cudaStream_t stream) {
-        if constexpr (std::is_same_v<BinaryOp, ops::maximum_op>) {
-            launch_ieee_maximum_float(lhs, rhs, output, n, stream);
-        } else if constexpr (std::is_same_v<BinaryOp, ops::minimum_op>) {
-            launch_ieee_minimum_float(lhs, rhs, output, n, stream);
-        } else {
-            launch_binary_op_generic(lhs, rhs, output, n, op, stream);
-        }
-    }
-
-    template <typename BinaryOp>
-    void launch_float_broadcast_with_numeric_policy(
-        const float* lhs, const float* rhs, float* output,
-        const size_t* lhs_shape, const size_t* rhs_shape, const size_t* output_shape,
-        size_t lhs_rank, size_t rhs_rank, size_t output_rank, size_t output_elements,
-        BinaryOp op, cudaStream_t stream) {
-        if constexpr (std::is_same_v<BinaryOp, ops::maximum_op>) {
-            launch_ieee_maximum_float_broadcast(
-                lhs, rhs, output, lhs_shape, rhs_shape, output_shape,
-                lhs_rank, rhs_rank, output_rank, output_elements, stream);
-        } else if constexpr (std::is_same_v<BinaryOp, ops::minimum_op>) {
-            launch_ieee_minimum_float_broadcast(
-                lhs, rhs, output, lhs_shape, rhs_shape, output_shape,
-                lhs_rank, rhs_rank, output_rank, output_elements, stream);
-        } else {
-            launch_broadcast_binary(
-                lhs, rhs, output, lhs_shape, rhs_shape, output_shape,
-                lhs_rank, rhs_rank, output_rank, output_elements, op, stream);
-        }
-    }
+    // IEEE round, maximum and minimum policy selection lives in CudaBackendOps.
 
     // ============= Matrix Operations =============
     LFS_CORE_API void launch_matmul(const float* a, const float* b, float* c,
