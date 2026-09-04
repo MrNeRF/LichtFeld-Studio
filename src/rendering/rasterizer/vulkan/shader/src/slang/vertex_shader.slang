@@ -718,9 +718,8 @@ layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 
 // Output buffers
 #if !LFS_PROJECTION_SURVIVORS
-// The macro chain derives coverage from the rect + ellipse; tiles_touched and
-// radii are legacy-chain outputs only and their bindings are absent in the
-// survivor variant.
+// The macro chain derives coverage from the rect + ellipse; tiles_touched is
+// a legacy-chain output only. Binding 8 (write-only radii) was retired.
 layout(binding=6) RWStructuredBuffer<int> out_tiles_touched;
 #endif
 #if USE_EMULATED_INT64
@@ -728,14 +727,11 @@ layout(binding=7) RWStructuredBuffer<int32_t> out_rect_tile_space;
 #else
 layout(binding=7) RWStructuredBuffer<int64_t> out_rect_tile_space;
 #endif
-#if !LFS_PROJECTION_SURVIVORS
-layout(binding=8) RWStructuredBuffer<int> out_radii;
-#endif
 layout(binding=9) RWStructuredBuffer<float2> out_xy_vs;
 layout(binding=10) RWStructuredBuffer<float> out_depths;
 layout(binding=11) RWStructuredBuffer<float4> out_inv_cov_vs;
 layout(binding=12) RWStructuredBuffer<float> out_rgb;
-layout(binding=13) RWStructuredBuffer<uint> out_overlay_flags;
+layout(binding=13) RWByteAddressBuffer out_overlay_flags;
 layout(binding=14) ByteAddressBuffer transform_indices;
 layout(binding=15) ByteAddressBuffer node_mask;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
@@ -791,9 +787,8 @@ layout(binding=24) StructuredBuffer<float2> shN_bounds;
 // Legacy N-wide variant only: the survivor-list variant never clears, because
 // rejected splats simply do not append a compact slot.
 [ForceInline]
-void clear_forward_projection_output(uint out_idx, uint overlay_flags) {
-    out_overlay_flags[out_idx] = overlay_flags;
-    out_radii[out_idx] = 0;
+void clear_forward_projection_output(uint out_idx, uint overlay_flags, uint lod_enabled) {
+    write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, lod_enabled);
     out_tiles_touched[out_idx] = 0;
   #if USE_EMULATED_INT64
     out_rect_tile_space[2*out_idx+0] = 0;
@@ -882,7 +877,7 @@ void main(
         if ((uniforms.lod_enabled & 32u) != 0u) {
             const uint valid = min(lod_counts[0], uniforms.lod_count);
             if (render_idx >= valid) {
-                clear_forward_projection_output(out_idx, 0u);
+                clear_forward_projection_output(out_idx, 0u, uniforms.lod_enabled);
                 return;
             }
         }
@@ -890,7 +885,7 @@ void main(
         g_idx = lod_indices[render_idx];
         if (g_idx == 0xffffffffu || g_idx >= uniforms.model_num_splats) {
           #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
-            clear_forward_projection_output(out_idx, 0u);
+            clear_forward_projection_output(out_idx, 0u, uniforms.lod_enabled);
           #endif
             return;
         }
@@ -992,7 +987,7 @@ void main(
       #if LFS_PROJECTION_SURVIVORS
         return;
       #else
-        clear_forward_projection_output(out_idx, overlay_flags);
+        clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
         return;
       #endif
     }
@@ -1055,7 +1050,7 @@ void main(
         splat.det <= 0.0
     ) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
-            clear_forward_projection_output(out_idx, overlay_flags);
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
         #endif
         return;
     }
@@ -1083,7 +1078,7 @@ void main(
     int32_t n_tiles = int32_t(rect_tile_space.max_x - rect_tile_space.min_x) * int32_t(rect_tile_space.max_y - rect_tile_space.min_y);
     if (n_tiles == 0) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
-            clear_forward_projection_output(out_idx, overlay_flags);
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
         #endif
         return;
     }
@@ -1133,8 +1128,6 @@ void main(
     out_sort_ids[out_idx] = int32_t(out_idx);
     out_orig_ids[out_idx] = int32_t(logical_idx);
 #else
-    // out_radii[g_idx] = (uint32_t)radius;  // inria
-    out_radii[out_idx] = (uint32_t)ceil(max(radii.x, radii.y));  // gsplat, only used in densification
     out_tiles_touched[out_idx] = n_tiles;
   #if USE_EMULATED_INT64
     out_rect_tile_space[2*out_idx+0] = (int32_t)rect_tile_space.min_x | ((int32_t)rect_tile_space.min_y << 16);
@@ -1144,7 +1137,7 @@ void main(
   #endif
 
     if (n_tiles == 0) {
-        out_overlay_flags[out_idx] = overlay_flags;
+        write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, uniforms.lod_enabled);
         return;
     }
 
@@ -1173,7 +1166,7 @@ void main(
     out_depths[out_idx] = splat.xyz_vs.z;
     out_inv_cov_vs[out_idx] = splat.inv_cov_vs_opac;
     write_t3_float3(splat.rgb, out_idx, out_rgb);
-    out_overlay_flags[out_idx] = overlay_flags;
+    write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, uniforms.lod_enabled);
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
 

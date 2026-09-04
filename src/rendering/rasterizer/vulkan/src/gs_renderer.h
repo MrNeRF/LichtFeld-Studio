@@ -2,6 +2,7 @@
 
 #include "gs_pipeline.h"
 
+#include "../shader/src/slang/overlay_flags.inc"
 #include "indirect_layout.h"
 #include "perf_timer.h"
 
@@ -56,8 +57,8 @@
 }
 
 // lod_enabled bit 6: projection writes overlay_flags. Clear when the bound
-// buffer is the 1-element dummy (raster overlays idle).
-constexpr uint32_t kLodEnabledWriteOverlayFlags = 64u;
+// buffer is the one-word dummy (raster overlays idle).
+constexpr uint32_t kLodEnabledWriteOverlayFlags = LFS_VK_OVERLAY_WRITE_BIT;
 
 PACK_STRUCT(struct VulkanGSRendererUniforms {
     uint32_t image_height;
@@ -385,6 +386,12 @@ public:
                                    VulkanGSPipelineBuffers& buffers);
 
 protected:
+    // Projection ORs individual bytes into zeroed words. Raster-only overlay
+    // refreshes retain these flags and must not clear them.
+    _VulkanBuffer& prepareOverlayFlags(VulkanGSPipelineBuffers& buffers,
+                                       size_t num_splats,
+                                       bool write_overlay_flags);
+
     // Export W_rec can exceed the interactive wave budget. Callers disable
     // timestamps after W_MAX so fixed-size query rings remain bounded while all
     // scan work is still recorded and executed.

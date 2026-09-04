@@ -3341,7 +3341,7 @@ namespace lfs::vis {
         add_count(per_visible, sizeof(float));        // depths
         add_count(4 * per_visible, sizeof(float));    // inv_cov_vs_opacity
         add_count(3 * per_visible, sizeof(float));    // rgb
-        add_count(per_visible, sizeof(std::int32_t)); // overlay_flags
+        add_count(per_visible, sizeof(std::uint8_t)); // overlay_flags (region alignment pads the last word)
         if (macro_chain) {
             add_count(per_visible, sizeof(std::int32_t)); // orig_ids
         }
