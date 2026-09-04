@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <any>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
@@ -3012,6 +3013,51 @@ TEST_F(UndoHistoryTest, RapidVisibilityChangesMergeIntoSingleUndoStep) {
 
     lfs::vis::op::undoHistory().redo();
     EXPECT_FALSE(static_cast<bool>(node->visible));
+}
+
+TEST_F(UndoHistoryTest, RapidVisibilityCommandsMergeIntoSingleUndoStep) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    const auto node_id = scene_manager->getScene().addSplat(
+        "model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = false}
+        .emit();
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = true}
+        .emit();
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = false}
+        .emit();
+
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoName(), "Set Visibility");
+}
+
+TEST_F(UndoHistoryTest, VisibilityCommandsOutsideMergeWindowStaySeparate) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    const auto node_id = scene_manager->getScene().addSplat(
+        "model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = false}
+        .emit();
+    std::this_thread::sleep_for(std::chrono::milliseconds(650));
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = true}
+        .emit();
+
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
 }
 
 TEST_F(UndoHistoryTest, RapidLockChangesMergeIntoSingleUndoStep) {

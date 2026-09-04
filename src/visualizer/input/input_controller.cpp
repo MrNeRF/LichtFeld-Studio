@@ -1683,6 +1683,14 @@ namespace lfs::vis {
             bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
         }
 
+        const bool gui_keyboard_focus = input_router_
+                                            ? input_router_->keyboardFocus() == input::InputTarget::Gui
+                                            : gui::guiFocusState().want_capture_keyboard;
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
+            gui_keyboard_focus) {
+            return;
+        }
+
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
@@ -1727,7 +1735,6 @@ namespace lfs::vis {
         const bool modal_open = input_router_
                                     ? input_router_->isModalOpen()
                                     : (gui && gui->isModalWindowOpen());
-
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
 

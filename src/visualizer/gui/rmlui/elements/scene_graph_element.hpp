@@ -211,6 +211,7 @@ namespace lfs::vis::gui {
         void handlePrimaryClick(core::NodeId node_id);
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
+        bool selectKeyboardRow(size_t row_index, bool extend, bool toggle);
         bool moveSelectionCursor(int delta, bool extend, bool toggle);
         std::vector<core::NodeId> rangeSelectionIds(core::NodeId a, core::NodeId b) const;
         core::NodeId selectionCursor() const;
