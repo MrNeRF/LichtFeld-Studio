@@ -98,6 +98,13 @@ use `--headless --resume project.licht`; a complete autosave newer than the
 master head is recovered automatically. Ambiguous recovery candidates remain
 an error.
 
+A project saved before any training carries no checkpoint and is a dataset
+source instead: `--headless --data-path project.licht --output-path <dir>` trains
+it from scratch with the dataset options stored in `PRMS`, reading images from
+the dataset folder recorded in `REFS` or, when that folder is not reachable, from
+the embedded dataset copy extracted to the per-user cache. A project that already
+holds a checkpoint is rejected there and must be continued with `--resume`.
+
 The current grammar is **1.1** on this development branch. Version 1.1 makes CKPT history
 explicit: SCNG binds exactly one resumable checkpoint when a training node exists, while
 additional live CKPT chapters are historical and are copied by compaction. The existing

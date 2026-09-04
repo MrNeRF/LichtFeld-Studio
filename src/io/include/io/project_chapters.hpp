@@ -479,7 +479,31 @@ namespace lfs::io::project {
         ReferenceBindings mrnf_current_references;
         ReferenceBindings igs_current_references;
         lfs::core::param::DatasetConfig dataset;
+
+        // The pending parameters of the strategy selected in the project.
+        [[nodiscard]] const lfs::core::param::OptimizationParameters&
+        active_optimization() const noexcept {
+            const auto strategy =
+                lfs::core::param::canonical_strategy_name(active_strategy);
+            if (strategy == lfs::core::param::kStrategyMCMC)
+                return mcmc_current;
+            if (strategy == lfs::core::param::kStrategyIGSPlus)
+                return igs_current;
+            return mrnf_current;
+        }
     };
+
+    // Merge an untrained project's PRMS snapshot into the launch parameters
+    // of a headless run. Stored dataset and active-strategy optimization
+    // values replace the CLI defaults, the headless/auto_train/no_splash
+    // process flags stay with the command line, and explicit CLI flags win
+    // over stored values, as on --resume. dataset_root and images_folder
+    // are the resolved locations that replace the project's logical dataset.
+    LFS_IO_API void adopt_project_training_parameters(
+        lfs::core::param::TrainingParameters& params,
+        ParameterManagerSnapshot snapshot,
+        std::filesystem::path dataset_root,
+        std::string images_folder);
 
     class LFS_IO_API ParametersChapter {
     public:

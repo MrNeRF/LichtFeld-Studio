@@ -560,6 +560,10 @@ namespace lfs::core {
                 (resume_checkpoint || resume_project)) {
                 return "A project path and --resume are mutually exclusive";
             }
+            if (dataset_project &&
+                (resume_checkpoint || resume_project)) {
+                return "--data-path project.licht and --resume are mutually exclusive";
+            }
             if (project_path) {
                 auto extension = project_path->extension().string();
                 std::ranges::transform(
