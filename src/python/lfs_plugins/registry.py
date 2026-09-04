@@ -160,7 +160,7 @@ class RegistryClient:
 
         if cache_path.exists() and self._cache_is_fresh(cache_path):
             try:
-                with open(cache_path) as f:
+                with open(cache_path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception as exc:
                 _log.debug("Ignoring invalid registry cache '%s': %s", cache_path, exc)
@@ -179,7 +179,7 @@ class RegistryClient:
         # offline or GitHub/registry infrastructure is rate-limiting requests.
         if cache_path.exists():
             try:
-                with open(cache_path) as f:
+                with open(cache_path, encoding="utf-8") as f:
                     stale = json.load(f)
                 _log.warning("Using stale registry detail cache for '%s': %s", plugin_id, last_error)
                 return stale
@@ -304,7 +304,7 @@ class RegistryClient:
         if cache_path.exists() and timestamp_path.exists():
             if datetime.now() - datetime.fromtimestamp(timestamp_path.stat().st_mtime) < cache_ttl:
                 try:
-                    with open(cache_path) as f:
+                    with open(cache_path, encoding="utf-8") as f:
                         self._index = json.load(f)
                     self._index_loaded_at = time.monotonic()
                     return self._index
@@ -322,7 +322,7 @@ class RegistryClient:
         except Exception:
             if cache_path.exists():
                 _log.debug("Registry offline, using cached index")
-                with open(cache_path) as f:
+                with open(cache_path, encoding="utf-8") as f:
                     self._index = json.load(f)
                     self._index_loaded_at = time.monotonic()
                     return self._index
@@ -334,7 +334,7 @@ class RegistryClient:
 
         req = urllib.request.Request(url, headers={"User-Agent": "LichtFeld-PluginManager/1.0"})
         with urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
-            return json.loads(resp.read().decode())
+            return json.loads(resp.read().decode("utf-8"))
 
     def _fetch_json_with_fallback(self, urls: List[str]) -> Dict:
         last_error: Exception | None = None
@@ -362,7 +362,7 @@ class RegistryClient:
                 prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
             )
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(data, stream)
+                json.dump(data, stream, ensure_ascii=False)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary_path, path)

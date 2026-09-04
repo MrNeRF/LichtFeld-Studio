@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Tests for the plugin registry system."""
 
+import builtins
 import json
+import locale
+import os
 import pytest
 import sys
 import tempfile
@@ -86,6 +89,56 @@ def mock_plugin_detail():
 
 class TestRegistryClient:
     """Tests for RegistryClient."""
+
+    def test_cache_is_utf8_when_locale_default_is_cp932(
+        self, registry_cache_dir, monkeypatch
+    ):
+        """Registry caches must not depend on the process text encoding."""
+        scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        from lfs_plugins.registry import RegistryClient
+
+        monkeypatch.setattr(
+            locale, "getpreferredencoding", lambda do_setlocale=True: "cp932"
+        )
+        real_open = builtins.open
+
+        def locale_default_open(file, mode="r", *args, **kwargs):
+            if "b" not in mode and "encoding" not in kwargs and not args:
+                kwargs["encoding"] = locale.getpreferredencoding(False)
+            return real_open(file, mode, *args, **kwargs)
+
+        # Make an encoding-less open behave like the affected Windows locale even
+        # when this test is running on a UTF-8 host.
+        monkeypatch.setattr(builtins, "open", locale_default_open)
+
+        detail = {
+            "name": "日本語",
+            "namespace": "community",
+            "display_name": "日本語プラグイン",
+            "repository": "https://example.test/日本語",
+            "versions": {},
+        }
+        client = RegistryClient(cache_dir=registry_cache_dir)
+        cache_path = client._plugin_cache_path("community", "日本語")
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_bytes(json.dumps(detail, ensure_ascii=False).encode("utf-8"))
+
+        with patch.object(
+            client, "_fetch_json", side_effect=AssertionError("cache should be used")
+        ):
+            assert client.get_plugin("community:日本語") == detail
+
+        cache_path.unlink()
+        with patch.object(client, "_fetch_json", return_value=detail):
+            assert client.get_plugin("community:日本語") == detail
+        assert "日本語" in cache_path.read_bytes().decode("utf-8")
+
+        os.utime(cache_path, (0, 0))
+        with patch.object(client, "_fetch_json", side_effect=RuntimeError("offline")):
+            assert client.get_plugin("community:日本語") == detail
 
     def test_search_by_name(self, registry_cache_dir, mock_registry_index):
         """Should find plugins by name."""

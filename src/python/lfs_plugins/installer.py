@@ -278,7 +278,7 @@ def write_plugin_source_metadata(plugin_dir: Path, info: PluginSourceInfo) -> No
     """Persist install-source metadata next to an installed plugin."""
     path = plugin_source_metadata_path(plugin_dir)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(info.to_dict(), f, indent=2)
+        json.dump(info.to_dict(), f, indent=2, ensure_ascii=False)
 
 
 def is_git_available() -> bool:

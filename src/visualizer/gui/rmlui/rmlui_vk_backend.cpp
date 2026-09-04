@@ -1035,7 +1035,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         try {
             const auto path = lfs::vis::getAssetPath(asset_name);
             if (std::filesystem::exists(path))
-                return load_with_stbi(path.string());
+                return load_with_stbi(lfs::core::path_to_utf8(path));
         } catch (...) {
         }
         return 0;
