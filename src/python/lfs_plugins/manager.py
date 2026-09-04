@@ -39,7 +39,7 @@ from .installer import (
     write_plugin_source_metadata,
 )
 from .plugin import PluginInfo, PluginInstance, PluginState, iter_plugin_watch_files, validate_plugin_name
-from .plugin_localization import PluginCatalogError, read_plugin_catalogs
+from .plugin_localization import PluginCatalogError, owner_collision_errors, read_plugin_catalogs
 from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
 from .watcher import PluginWatcher
 
@@ -380,6 +380,13 @@ class PluginManager:
                     plugins.append(self._parse_manifest(entry))
                 except Exception as e:
                     _log.warning("Skipping plugin '%s': invalid manifest. %s", entry.name, e)
+        conflicts = owner_collision_errors(info.name for info in plugins)
+        messages = {
+            conflicts[info.name] for info in plugins
+            if info.name in conflicts and (info.path / "locales").exists()
+        }
+        for message in sorted(messages):
+            _log.warning("Plugin discovery: %s", message)
         return plugins
 
     def pre_register(self, discovered: List[PluginInfo]) -> None:
@@ -690,6 +697,18 @@ class PluginManager:
 
         if not bundle.catalogs:
             return
+
+        # Discovery also covers unloaded plugins; the managed snapshot includes
+        # installs still in a private staging directory. Do not hold the manager
+        # lock across filesystem reads or native registration callbacks.
+        discovered_names = [info.name for info in self.discover()]
+        with self._plugins_lock:
+            managed_names = list(self._plugins)
+        conflicts = owner_collision_errors(
+            [plugin.info.name, *discovered_names, *managed_names]
+        )
+        if plugin.info.name in conflicts:
+            raise PluginError(conflicts[plugin.info.name])
 
         try:
             import lichtfeld as lf

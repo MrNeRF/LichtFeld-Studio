@@ -206,7 +206,9 @@ Run the existing local checker before loading or publishing:
 LichtFeld-Studio plugin check my_plugin
 ```
 
-It validates namespace normalization, UTF-8/JSON shape, language filenames, duplicate or colliding keys, placeholder parity, and catalog limits without loading plugin code. Use `lf.ui.tr()` for catalog strings; `lf.ui.loc_set()` is only the legacy global runtime override and does not provide plugin ownership.
+It validates namespace normalization and collisions with adjacent plugin manifests, UTF-8/JSON shape, supported host language filenames, duplicate or colliding keys, placeholder parity, and catalog limits without loading plugin code. Catalog paths must stay inside the plugin directory after resolving symlinks. NUL characters, lone Unicode surrogates, and mixed automatic/manual positional placeholders are rejected with validation errors.
+
+Use distinct project names: `my_plugin` and `my.plugin` both reserve `plugins.my-plugin`, so their catalogs cannot coexist. Discovery reports the conflict and the host rejects catalog loading before import; plugins without catalogs remain compatible. Use `lf.ui.tr()` for catalog strings; `lf.ui.loc_set()` is only the legacy global runtime override and does not provide plugin ownership.
 
 ## Dependencies
 

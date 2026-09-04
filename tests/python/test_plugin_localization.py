@@ -14,9 +14,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
-def _source_python_path(monkeypatch):
+def _source_python_path(monkeypatch, tmp_path):
     monkeypatch.syspath_prepend(str(PROJECT_ROOT / "src" / "python"))
     monkeypatch.setitem(sys.modules, "lichtfeld", _runtime_stub(_LocalizationUiStub()))
+    monkeypatch.setenv("LFS_RESOLVED_PLUGIN_DIR", str(tmp_path / "installed_plugins"))
 
 
 def _write_catalog(plugin_dir: Path, language: str, document: dict) -> Path:
@@ -399,3 +400,253 @@ def test_native_catalog_binding_round_trip(lf):
         assert lf.ui._loc_unregister_catalog(token)
 
     assert lf.ui.tr(key) == key
+
+
+def test_supported_languages_match_host_locale_index():
+    from lfs_plugins.plugin_localization import SUPPORTED_LANGUAGES
+
+    index = PROJECT_ROOT / "src/visualizer/gui/resources/locale_index.json"
+    languages = json.loads(index.read_text(encoding="utf-8"))["languages"]
+    assert SUPPORTED_LANGUAGES == {entry["code"] for entry in languages}
+
+
+@pytest.mark.parametrize("language", ["zh-hans", "zz", "eng"])
+def test_unknown_host_languages_are_rejected(tmp_path, language):
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    _write_catalog(tmp_path, "en", {"message": "Hello"})
+    _write_catalog(tmp_path, language, {"message": "Translation"})
+    errors = validate_plugin_catalogs(tmp_path, "example_plugin")
+    assert len(errors) == 1
+    assert "unsupported host language" in errors[0]
+
+
+@pytest.mark.parametrize("language", ["en", "de", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"])
+def test_every_shipped_language_is_accepted(tmp_path, language):
+    from lfs_plugins.plugin_localization import read_plugin_catalogs
+
+    _write_catalog(tmp_path, "en", {"message": "Hello"})
+    _write_catalog(tmp_path, language, {"message": "Translation"})
+    assert language in read_plugin_catalogs(tmp_path, "example_plugin").catalogs
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        (r'{"message":"\ud800"}', "invalid Unicode surrogate"),
+        (r'{"message":"\udfff"}', "invalid Unicode surrogate"),
+        (r'{"message":"A\u0000B"}', "NUL characters"),
+        (r'{"message":"\ufffd"}', "replacement characters"),
+        (r'{"\ud800":"Value"}', "invalid relative localization key"),
+        (r'{"\ud800":"One","\ud800":"Two"}', "duplicate JSON key"),
+    ],
+)
+def test_checker_reports_invalid_unicode_without_traceback(tmp_path, contents, message):
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    path = _write_catalog(tmp_path, "en", {"message": "Hello"})
+    path.write_text(contents, encoding="utf-8")
+    errors = validate_plugin_catalogs(tmp_path, "example_plugin")
+    assert len(errors) == 1
+    assert message in errors[0]
+    errors[0].encode("utf-8")  # The diagnostic itself must be printable by plugin check.
+
+
+def test_escaped_unicode_pair_is_valid(tmp_path):
+    from lfs_plugins.plugin_localization import read_plugin_catalogs
+
+    path = _write_catalog(tmp_path, "en", {"message": "Hello"})
+    path.write_text(r'{"message":"\ud83d\ude00"}', encoding="utf-8")
+    assert read_plugin_catalogs(tmp_path, "example_plugin").catalogs["en"]["message"] == "\U0001f600"
+
+
+@pytest.mark.parametrize("value", ["{0} {}", "{} {0}", "{name:{}} {0}", "{0:{}}", "{name!z}"])
+def test_invalid_placeholder_numbering_and_conversion_are_rejected(tmp_path, value):
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    _write_catalog(tmp_path, "en", {"message": value})
+    assert "malformed format placeholder" in validate_plugin_catalogs(tmp_path, "example_plugin")[0]
+
+
+@pytest.mark.parametrize("value", ["{} {}", "{0} {1}", "{name} {}", "{0:{1}}", "{value:{width:02}}", "{{literal}} {name!r}"])
+def test_valid_placeholder_forms_remain_supported(tmp_path, value):
+    from lfs_plugins.plugin_localization import read_plugin_catalogs
+
+    _write_catalog(tmp_path, "en", {"message": value})
+    _write_catalog(tmp_path, "it", {"message": value})
+    assert read_plugin_catalogs(tmp_path, "example_plugin").catalogs["it"]["message"] == value
+
+
+def _symlink_or_skip(link: Path, target: Path, *, directory=False):
+    try:
+        link.symlink_to(target, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"Symlinks are unavailable on this system: {exc}")
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_catalog_symlinks_cannot_escape_plugin_root(tmp_path, directory):
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    external = _write_catalog(tmp_path / "external", "en", {"message": "External"})
+    if directory:
+        _symlink_or_skip(plugin_dir / "locales", external.parent, directory=True)
+    else:
+        (plugin_dir / "locales").mkdir()
+        _symlink_or_skip(plugin_dir / "locales/en.json", external)
+    assert "must stay inside the plugin directory" in validate_plugin_catalogs(plugin_dir, "example_plugin")[0]
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_catalog_symlinks_inside_plugin_root_are_supported(tmp_path, directory):
+    from lfs_plugins.plugin_localization import read_plugin_catalogs
+
+    target = _write_catalog(tmp_path / "resources", "en", {"message": "Internal"})
+    if directory:
+        _symlink_or_skip(tmp_path / "locales", target.parent, directory=True)
+    else:
+        (tmp_path / "locales").mkdir()
+        _symlink_or_skip(tmp_path / "locales/en.json", target)
+    assert read_plugin_catalogs(tmp_path, "example_plugin").catalogs["en"]["message"] == "Internal"
+
+
+def test_broken_catalog_symlink_is_not_treated_as_absent(tmp_path):
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    _symlink_or_skip(tmp_path / "locales", tmp_path / "missing", directory=True)
+    assert "cannot resolve catalog path" in validate_plugin_catalogs(tmp_path, "example_plugin")[0]
+
+
+def _write_manifest(plugin_dir, name):
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    (plugin_dir / "pyproject.toml").write_text(
+        f'[project]\nname = "{name}"\nversion = "1.0.0"\ndescription = "Test"\n'
+        '[tool.lichtfeld]\nhot_reload = true\nplugin_api = ">=1,<2"\n'
+        'lichtfeld_version = ">=0.4.2"\nrequired_features = []\n',
+        encoding="utf-8",
+    )
+
+
+def test_owner_collision_detection_keeps_exact_project_names_distinct():
+    from lfs_plugins.plugin_localization import owner_collision_errors
+
+    names = ["my_plugin", "my.plugin", "My-Plugin", "my__plugin"]
+    errors = owner_collision_errors([*names, "unrelated", names[0]])
+    assert set(errors) == set(names)
+    assert len(set(errors.values())) == 1
+    assert "plugins.my-plugin" in errors[names[0]]
+    assert owner_collision_errors(["my_plugin", "my_plugin"]) == {}
+
+
+def test_discovery_and_checker_report_collisions_before_import(tmp_path, caplog):
+    from lfs_plugins.errors import PluginError
+    from lfs_plugins.manager import PluginManager
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    manager = PluginManager()
+    manager._plugins_dir = tmp_path
+    names = ["my_plugin", "my.plugin", "My-Plugin", "my__plugin"]
+    for name in names:
+        path = tmp_path / name
+        _write_manifest(path, name)
+        _write_catalog(path, "en", {name.lower().replace(".", "_"): name})
+    discovered = manager.discover()
+    assert {info.name for info in discovered} == set(names)  # Still visible in the UI.
+    assert "localization owner 'plugins.my-plugin' collides" in caplog.text
+    manager.pre_register(discovered)
+    for name in names:
+        plugin = manager._plugins[name]
+        with pytest.raises(PluginError, match="collides between projects"):
+            manager._register_localization_catalogs(plugin)
+        assert not plugin.localization_tokens
+        assert "collides between projects" in validate_plugin_catalogs(plugin.info.path, name)[0]
+
+
+def test_catalog_free_legacy_plugin_is_not_blocked_by_owner_collision(tmp_path):
+    from lfs_plugins.manager import PluginManager
+    from lfs_plugins.plugin_localization import validate_plugin_catalogs
+
+    manager = PluginManager()
+    manager._plugins_dir = tmp_path
+    for name in ["my_plugin", "my.plugin"]:
+        _write_manifest(tmp_path / name, name)
+    manager.pre_register(manager.discover())
+    for name, plugin in manager._plugins.items():
+        manager._register_localization_catalogs(plugin)
+        assert plugin.localization_tokens == []
+        assert validate_plugin_catalogs(plugin.info.path, name) == []
+
+
+def test_staged_managed_plugin_reserves_its_owner(tmp_path):
+    from lfs_plugins.errors import PluginError
+    from lfs_plugins.manager import PluginManager
+    from lfs_plugins.plugin import PluginInfo, PluginInstance
+
+    manager = PluginManager()
+    manager._plugins_dir = tmp_path / "installed"
+    first = PluginInstance(PluginInfo("my_plugin", "1.0", tmp_path / ".staging"))
+    second = PluginInstance(PluginInfo("my.plugin", "1.0", tmp_path / "another"))
+    manager._plugins = {first.info.name: first, second.info.name: second}
+    _write_catalog(second.info.path, "en", {"different_key": "Second"})
+    with pytest.raises(PluginError, match="collides between projects"):
+        manager._register_localization_catalogs(second)
+    assert second.localization_tokens == []
+
+
+def test_load_rejects_new_owner_collision_without_mutating_active_catalog(tmp_path, monkeypatch):
+    from lfs_plugins.installer import PluginInstaller
+    from lfs_plugins.manager import PluginManager
+    from lfs_plugins.plugin import PluginInfo, PluginInstance, PluginState
+
+    ui = _LocalizationUiStub()
+    monkeypatch.setitem(sys.modules, "lichtfeld", _runtime_stub(ui))
+    manager = PluginManager()
+    manager._plugins_dir = tmp_path / "installed"
+    first = PluginInstance(PluginInfo(
+        "my_plugin", "1.0", tmp_path / "first",
+        plugin_api=">=1,<2", lichtfeld_version=">=0.4.2",
+    ))
+    manager._plugins[first.info.name] = first
+    _write_catalog(first.info.path, "en", {"title": "First"})
+    loaded_names = []
+
+    def load_module(plugin):
+        loaded_names.append(plugin.info.name)
+        plugin.module = SimpleNamespace(on_load=lambda: None, on_unload=lambda: None)
+
+    monkeypatch.setattr(manager, "_load_module", load_module)
+    monkeypatch.setattr(PluginInstaller, "ensure_venv", lambda *_args: True)
+    monkeypatch.setattr(PluginInstaller, "install_dependencies", lambda *_args: True)
+    assert manager.load(first.info.name)
+    original_tokens = dict(ui.catalogs)
+
+    second = PluginInstance(PluginInfo(
+        "my.plugin", "1.0", tmp_path / "second",
+        plugin_api=">=1,<2", lichtfeld_version=">=0.4.2",
+    ))
+    manager._plugins[second.info.name] = second
+    _write_catalog(second.info.path, "en", {"unrelated_key": "Second"})
+    assert not manager.load(second.info.name)
+    assert second.state == PluginState.ERROR
+    assert "collides between projects" in second.error
+    assert second.localization_tokens == []
+    assert loaded_names == [first.info.name]
+    assert ui.catalogs == original_tokens
+    assert manager.unload(first.info.name)
+    assert ui.catalogs == {}
+
+
+def test_containment_uses_path_components_not_string_prefixes(tmp_path):
+    from lfs_plugins.plugin_localization import PluginCatalogError, _contained_path
+
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    internal = plugin_root / "locales"
+    internal.mkdir()
+    external = tmp_path / "plugin-other"
+    external.mkdir()
+    assert _contained_path(internal, plugin_root.resolve()) == internal.resolve()
+    with pytest.raises(PluginCatalogError, match="must stay inside"):
+        _contained_path(external, plugin_root.resolve())

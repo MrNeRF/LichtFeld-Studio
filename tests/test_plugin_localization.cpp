@@ -17,13 +17,19 @@ namespace {
     protected:
         void SetUp() override {
             static std::atomic_uint64_t sequence{0};
-            locale_directory_ = std::filesystem::temp_directory_path() /
-                                ("lfs_plugin_localization_" +
-                                 std::to_string(
-                                     std::chrono::steady_clock::now().time_since_epoch().count()) +
-                                 "_" +
-                                 std::to_string(sequence.fetch_add(1)));
+            test_directory_ = std::filesystem::temp_directory_path() /
+                              ("lfs_plugin_localization_" +
+                               std::to_string(
+                                   std::chrono::steady_clock::now().time_since_epoch().count()) +
+                               "_" +
+                               std::to_string(sequence.fetch_add(1)));
+            locale_directory_ = test_directory_ / "locales";
             std::filesystem::create_directories(locale_directory_);
+            {
+                std::ofstream index(test_directory_ / "locale_index.json");
+                index << R"({"languages":[{"code":"en","name":"English"},{"code":"it","name":"Italiano"}]})";
+                ASSERT_TRUE(index.good());
+            }
             writeLocale("en", R"({"_language_name":"English","core":{"label":"Core"}})");
             writeLocale("it", R"({"_language_name":"Italiano","core":{"label":"Nucleo"}})");
 
@@ -35,7 +41,7 @@ namespace {
         void TearDown() override {
             lfs::event::LocalizationManager::getInstance().reset();
             std::error_code error;
-            std::filesystem::remove_all(locale_directory_, error);
+            std::filesystem::remove_all(test_directory_, error);
         }
 
         void writeLocale(const std::string& language, const std::string& contents) const {
@@ -43,6 +49,7 @@ namespace {
             stream << contents;
         }
 
+        std::filesystem::path test_directory_;
         std::filesystem::path locale_directory_;
     };
 
@@ -126,7 +133,44 @@ TEST_F(PluginLocalizationTest, RejectsInvalidCatalogBoundariesWithoutMutation) {
     EXPECT_EQ(localization.registerPluginCatalog(
                   "example-plugin", "en", TranslationMap{{"panel.title", ""}}),
               0);
+    EXPECT_EQ(localization.registerPluginCatalog(
+                  "example-plugin", "en", TranslationMap{{"panel.title", std::string("A\0B", 3)}}),
+              0);
     EXPECT_FALSE(localization.hasKey("plugins.example-plugin.panel.title"));
+}
+
+TEST_F(PluginLocalizationTest, NativeMutationsPublishGenerationButNoOpsDoNot) {
+    auto& localization = lfs::event::LocalizationManager::getInstance();
+    using TranslationMap = lfs::event::LocalizationManager::TranslationMap;
+
+    const auto initial = localization.getCurrentLanguageGeneration();
+    const auto english = localization.registerPluginCatalog(
+        "example-plugin", "en", TranslationMap{{"panel.title", "Title"}});
+    ASSERT_NE(english, 0);
+    const auto registered = localization.getCurrentLanguageGeneration();
+    EXPECT_GT(registered, initial);
+    EXPECT_EQ(localization.registerPluginCatalog(
+                  "example-plugin", "en", TranslationMap{{"panel.title", "Duplicate"}}),
+              0);
+    EXPECT_FALSE(localization.unregisterPluginCatalog(0));
+    EXPECT_EQ(localization.unregisterPluginCatalogs("missing-plugin"), 0);
+    EXPECT_EQ(localization.getCurrentLanguageGeneration(), registered);
+
+    ASSERT_TRUE(localization.unregisterPluginCatalog(english));
+    const auto removed = localization.getCurrentLanguageGeneration();
+    EXPECT_GT(removed, registered);
+    EXPECT_FALSE(localization.unregisterPluginCatalog(english));
+    EXPECT_EQ(localization.getCurrentLanguageGeneration(), removed);
+
+    ASSERT_NE(localization.registerPluginCatalog(
+                  "example-plugin", "en", TranslationMap{{"panel.title", "Title"}}),
+              0);
+    ASSERT_NE(localization.registerPluginCatalog(
+                  "example-plugin", "it", TranslationMap{{"panel.title", "Titolo"}}),
+              0);
+    const auto before_bulk_remove = localization.getCurrentLanguageGeneration();
+    EXPECT_EQ(localization.unregisterPluginCatalogs("example-plugin"), 2);
+    EXPECT_GT(localization.getCurrentLanguageGeneration(), before_bulk_remove);
 }
 
 TEST_F(PluginLocalizationTest, ResetInvalidatesCatalogsWithoutReusingTokens) {

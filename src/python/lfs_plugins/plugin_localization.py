@@ -8,8 +8,14 @@ import json
 import re
 import string
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
 
 
 MAX_CATALOG_BYTES = 1024 * 1024
@@ -18,6 +24,10 @@ MAX_KEY_LENGTH = 256
 MAX_NESTING_DEPTH = 32
 MAX_OWNER_LENGTH = 128
 MAX_VALUE_BYTES = 16 * 1024
+
+# Keep the standalone checker independent of the native UI. A regression test
+# requires this set to match the host's locale_index.json exactly.
+SUPPORTED_LANGUAGES = frozenset({"de", "en", "es", "fr", "it", "ja", "ko", "nl", "pl", "zh"})
 
 _LANGUAGE_RE = re.compile(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*\Z")
 _OWNER_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -48,11 +58,63 @@ def canonical_plugin_id(project_name: str) -> str:
     return owner_id
 
 
+def owner_collision_errors(project_names: Iterable[str]) -> dict[str, str]:
+    """Reserve one canonical namespace per distinct discovered project name."""
+    owners: dict[str, set[str]] = {}
+    for name in project_names:
+        try:
+            owner = canonical_plugin_id(name)
+        except PluginCatalogError:
+            continue  # Legacy plugins without catalogs need no localization id.
+        owners.setdefault(owner, set()).add(name)
+    return {
+        name: f"localization owner 'plugins.{owner}' collides between projects "
+        f"{', '.join(repr(item) for item in sorted(names))}; use distinct project names"
+        for owner, names in owners.items() if len(names) > 1
+        for name in names
+    }
+
+
+def _neighbor_plugin_names(plugin_dir: Path) -> list[str]:
+    """Read only sibling manifests for the standalone installed-plugin checker."""
+    names = []
+    for entry in plugin_dir.parent.iterdir():
+        if entry.name.startswith(".") or not entry.is_dir():
+            continue
+        manifest = entry / "pyproject.toml"
+        if not manifest.is_file():
+            continue
+        try:
+            with manifest.open("rb") as stream:
+                raw = stream.read(MAX_CATALOG_BYTES + 1)
+            if len(raw) > MAX_CATALOG_BYTES:
+                continue
+            data = tomllib.loads(raw.decode("utf-8"))
+            name = data.get("project", {}).get("name")
+            if isinstance(name, str) and "lichtfeld" in data.get("tool", {}):
+                names.append(name)
+        except (OSError, UnicodeError, ValueError, AttributeError, TypeError):
+            continue  # Malformed neighboring manifests are handled by discovery.
+    return names
+
+
+def _contained_path(path: Path, plugin_root: Path) -> Path:
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise PluginCatalogError(f"{path.name!r}: cannot resolve catalog path") from exc
+    if not resolved.is_relative_to(plugin_root):
+        raise PluginCatalogError(f"{path.name!r}: catalog path must stay inside the plugin directory")
+    return resolved
+
+
 def read_plugin_catalogs(plugin_dir: str | Path, project_name: str) -> PluginCatalogBundle:
     """Read and validate optional ``locales/*.json`` plugin catalogs."""
     locales_dir = Path(plugin_dir) / "locales"
-    if not locales_dir.exists():
+    if not locales_dir.exists() and not locales_dir.is_symlink():
         return PluginCatalogBundle(owner_id="", catalogs={})
+    plugin_root = Path(plugin_dir).resolve(strict=True)
+    locales_dir = _contained_path(locales_dir, plugin_root)
     if not locales_dir.is_dir():
         raise PluginCatalogError("locales must be a directory")
 
@@ -60,7 +122,7 @@ def read_plugin_catalogs(plugin_dir: str | Path, project_name: str) -> PluginCat
         (
             path
             for path in locales_dir.iterdir()
-            if path.is_file() and path.suffix.lower() == ".json"
+            if path.suffix.lower() == ".json"
         ),
         key=lambda path: path.name,
     )
@@ -86,6 +148,14 @@ def read_plugin_catalogs(plugin_dir: str | Path, project_name: str) -> PluginCat
                 f"locales/{seen_languages[normalized_language]}"
             )
         seen_languages[normalized_language] = path.name
+        if language not in SUPPORTED_LANGUAGES:
+            raise PluginCatalogError(
+                f"locales/{path.name}: unsupported host language; expected one of "
+                f"{', '.join(sorted(SUPPORTED_LANGUAGES))}"
+            )
+        resolved = _contained_path(path, plugin_root)
+        if not resolved.is_file():
+            raise PluginCatalogError(f"locales/{path.name}: catalog must be a regular file")
         catalogs[language] = _read_catalog(path)
 
     if "en" not in catalogs:
@@ -118,7 +188,13 @@ def read_plugin_catalogs(plugin_dir: str | Path, project_name: str) -> PluginCat
 def validate_plugin_catalogs(plugin_dir: str | Path, project_name: str) -> list[str]:
     """Return actionable catalog errors for the local plugin checker."""
     try:
-        read_plugin_catalogs(plugin_dir, project_name)
+        bundle = read_plugin_catalogs(plugin_dir, project_name)
+        if bundle.catalogs:
+            conflicts = owner_collision_errors(
+                [project_name, *_neighbor_plugin_names(Path(plugin_dir).resolve())]
+            )
+            if project_name in conflicts:
+                raise PluginCatalogError(conflicts[project_name])
     except (OSError, PluginCatalogError) as exc:
         return [f"plugin localization: {exc}"]
     return []
@@ -180,7 +256,7 @@ def _object_without_duplicate_keys(path: Path, pairs: list[tuple[str, object]]) 
     result = {}
     for key, value in pairs:
         if key in result:
-            raise PluginCatalogError(f"locales/{path.name}: duplicate JSON key '{key}'")
+            raise PluginCatalogError(f"locales/{path.name}: duplicate JSON key {key!r}")
         result[key] = value
     return result
 
@@ -202,7 +278,7 @@ def _flatten_catalog(
             or _RELATIVE_KEY_RE.fullmatch(key) is None
         ):
             raise PluginCatalogError(
-                f"locales/{path.name}:{key}: invalid relative localization key"
+                f"locales/{path.name}:{key!r}: invalid relative localization key"
             )
 
         if isinstance(child, dict):
@@ -214,7 +290,19 @@ def _flatten_catalog(
             )
         if not child.strip():
             raise PluginCatalogError(f"locales/{path.name}:{key}: value must not be blank")
-        if len(child.encode("utf-8")) > MAX_VALUE_BYTES:
+        if "\0" in child:
+            raise PluginCatalogError(f"locales/{path.name}:{key}: NUL characters are not allowed")
+        if "\ufffd" in child:
+            raise PluginCatalogError(
+                f"locales/{path.name}:{key}: Unicode replacement characters are not allowed"
+            )
+        try:
+            encoded = child.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise PluginCatalogError(
+                f"locales/{path.name}:{key}: value contains an invalid Unicode surrogate"
+            ) from exc
+        if len(encoded) > MAX_VALUE_BYTES:
             raise PluginCatalogError(
                 f"locales/{path.name}:{key}: value exceeds the 16 KiB limit"
             )
@@ -226,12 +314,30 @@ def _flatten_catalog(
 
 
 def _placeholder_signature(value: str, location: str) -> Counter:
+    fields = Counter()
+    numbering = set()
+
+    def parse(text: str, depth: int = 0) -> None:
+        for _, field_name, format_spec, conversion in string.Formatter().parse(text):
+            if field_name is None:
+                continue
+            if depth > 1:
+                raise ValueError("format placeholders are nested too deeply")
+            argument = re.split(r"[.\[]", field_name, maxsplit=1)[0]
+            if not argument:
+                numbering.add("automatic")
+            elif argument.isdecimal():
+                numbering.add("manual")
+            if len(numbering) > 1:
+                raise ValueError("cannot mix automatic and manual argument numbering")
+            if conversion not in (None, "s", "r", "a"):
+                raise ValueError("unsupported format conversion")
+            fields[(field_name, conversion or "", format_spec or "")] += 1
+            if format_spec:
+                parse(format_spec, depth + 1)
+
     try:
-        fields = (
-            (field_name, conversion or "", format_spec or "")
-            for _, field_name, format_spec, conversion in string.Formatter().parse(value)
-            if field_name is not None
-        )
-        return Counter(fields)
+        parse(value)
+        return fields
     except ValueError as exc:
-        raise PluginCatalogError(f"{location}: malformed format placeholder") from exc
+        raise PluginCatalogError(f"{location}: malformed format placeholder: {exc}") from exc

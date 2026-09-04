@@ -330,6 +330,8 @@ namespace lfs::event {
                 return fail("Invalid relative plugin localization key: " + key);
             if (value.empty())
                 return fail("Plugin localization value must not be empty: " + key);
+            if (value.find('\0') != std::string::npos)
+                return fail("Plugin localization value must not contain NUL characters: " + key);
             if (value.size() > MAX_PLUGIN_VALUE_LENGTH)
                 return fail("Plugin localization value exceeds the 16 KiB limit: " + key);
             normalized_entries.emplace_back(namespace_prefix + key, value);
@@ -358,6 +360,7 @@ namespace lfs::event {
             language_entries.emplace(std::move(key), PluginStringEntry{token, std::move(value)});
         }
         plugin_catalogs_.emplace(token, std::move(record));
+        language_generation_.fetch_add(1, std::memory_order_release);
         if (error)
             error->clear();
         return token;
@@ -390,6 +393,7 @@ namespace lfs::event {
         }
 
         plugin_catalogs_.erase(catalog_it);
+        language_generation_.fetch_add(1, std::memory_order_release);
         return true;
     }
 

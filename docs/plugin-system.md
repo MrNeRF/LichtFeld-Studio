@@ -130,6 +130,8 @@ The runtime exposes the current host contract through:
 
 A plugin can ship optional JSON catalogs directly in `locales/`. Catalog keys are relative to the plugin; the host derives a stable owner id from `project.name` by lowercasing it and collapsing `.`, `_`, and `-` runs to `-`, then prefixes every key with `plugins.<owner-id>.`. For example, `project.name = "my_plugin"` and `panel.title` resolve to `plugins.my-plugin.panel.title`.
 
+Distinct installed project names must not normalize to the same owner. For example, `my_plugin`, `my.plugin`, `My-Plugin`, and `my__plugin` conflict. Discovery reports the ambiguity while keeping the plugins visible; catalog loading rejects it before plugin import, including for managed installs still in staging. The local checker also checks adjacent plugin manifests without importing them. Choose distinct project names to resolve the conflict. Plugins without catalogs remain loadable even when their names normalize alike.
+
 ```json
 {
   "panel": {
@@ -151,11 +153,12 @@ The host registers catalogs before importing the plugin module and removes exact
 
 Catalog validation is deliberately strict:
 
-- filenames use lowercase language codes; currently shipped examples include `en`, `it`, and `de`
+- filenames use the host's supported lowercase language codes (for example, `en`, `it`, or `de`; use `zh`, not `zh-hans`)
+- the `locales/` directory and each catalog must resolve inside the plugin directory; internal symlinks are allowed, external or broken links are rejected
 - JSON is UTF-8 without BOM, with an object root and string leaves
 - relative keys use lowercase ASCII letters, digits, `_`, `-`, and dot-separated segments; authors must not include the `plugins.` prefix
-- placeholders, conversions, and format specifications match the English value
-- duplicate JSON keys, flattened-key collisions, blank strings, and extra non-English keys are rejected
+- placeholders, conversions, and format specifications match the English value; automatic (`{}`) and manual (`{0}`) positional numbering cannot be mixed, including in nested format specifications
+- duplicate JSON keys, flattened-key collisions, blank strings, NUL characters, invalid Unicode surrogates, and extra non-English keys are rejected
 - each file is at most 1 MiB, with at most 4096 flattened entries, 256 characters per key, and 16 KiB per UTF-8 value
 
 `lf.ui.loc_set()` remains available as the existing global runtime override. It is not a catalog API and should not be used to install plugin translations.

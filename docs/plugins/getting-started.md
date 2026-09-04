@@ -1483,7 +1483,11 @@ Validate locally before loading or publishing:
 LichtFeld-Studio plugin check my_plugin
 ```
 
-The checker rejects invalid UTF-8/JSON, non-lowercase language filenames, duplicate or colliding keys, blank/non-string values, mismatched placeholders, and oversized catalogs. Catalog files use relative keys; do not write the `plugins.` prefix in JSON and do not use the legacy global `lf.ui.loc_set()` override to install translations.
+The checker rejects invalid UTF-8/JSON, unsupported host language filenames, duplicate or colliding keys, blank/non-string values, NUL characters, lone Unicode surrogates, mismatched placeholders, mixed automatic/manual positional numbering, and oversized catalogs. Use host language codes such as `en`, `it`, and `de` (`zh` for Chinese). Catalog directories and files must resolve inside the plugin directory; internal symlinks are allowed.
+
+Project names must normalize to distinct owners: `my_plugin` and `my.plugin` cannot both load catalogs under `plugins.my-plugin`. Discovery reports collisions, and the checker checks adjacent plugin manifests without importing plugin code. Choose a distinct project name to resolve the conflict. This restriction does not prevent loading existing plugins without catalogs.
+
+Catalog files use relative keys; do not write the `plugins.` prefix in JSON and do not use the legacy global `lf.ui.loc_set()` override to install translations.
 
 ---
 
