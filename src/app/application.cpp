@@ -205,16 +205,9 @@ namespace lfs::app {
                     LFS_SOURCE_SITE_CURRENT()));
             }
 
-            // Adopt the stored dataset options; machine-specific paths and
-            // loading resources stay with the command line.
-            auto dataset = std::move(snapshot->dataset);
-            dataset.data_path = std::move(*dataset_root);
-            dataset.images = std::move(images_folder);
-            dataset.output_path = params.dataset.output_path;
-            dataset.output_path_explicit = params.dataset.output_path_explicit;
-            dataset.output_name = params.dataset.output_name;
-            dataset.loading_params = params.dataset.loading_params;
-            params.dataset = std::move(dataset);
+            io::project::adopt_project_training_parameters(
+                params, std::move(*snapshot), std::move(*dataset_root),
+                std::move(images_folder));
             // From here on this is an ordinary --data-path run.
             params.dataset_project.reset();
             LOG_INFO(

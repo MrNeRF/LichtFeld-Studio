@@ -91,22 +91,6 @@ namespace lfs::vis::project {
         using lfs::io::project::ProjectSessionChapters;
         using lfs::io::project::TrainingFinishReason;
 
-        [[nodiscard]] const lfs::core::param::OptimizationParameters&
-        currentOptimizationParams(
-            const lfs::io::project::ParameterManagerSnapshot&
-                snapshot) {
-            const auto strategy =
-                lfs::core::param::canonical_strategy_name(
-                    snapshot.active_strategy);
-            if (strategy == lfs::core::param::kStrategyMCMC) {
-                return snapshot.mcmc_current;
-            }
-            if (strategy == lfs::core::param::kStrategyIGSPlus) {
-                return snapshot.igs_current;
-            }
-            return snapshot.mrnf_current;
-        }
-
         [[nodiscard]] bool storedSessionCompleted(
             const int iteration,
             const int max_iterations,
@@ -1039,8 +1023,7 @@ namespace lfs::vis::project {
             training_session_error_.clear();
         }
         const auto fill_facts = [&] {
-            const auto& params = currentOptimizationParams(
-                report.pending_parameters);
+            const auto& params = report.pending_parameters.active_optimization();
             std::string strategy(
                 lfs::core::param::canonical_strategy_name(
                     report.pending_parameters.active_strategy));
