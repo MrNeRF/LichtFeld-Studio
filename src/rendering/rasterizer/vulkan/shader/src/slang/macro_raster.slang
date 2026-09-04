@@ -78,7 +78,7 @@ layout(binding=7) RWStructuredBuffer<uint32_t> macro_batch_active_mask;
 layout(binding=8) ByteAddressBuffer selection_mask;
 layout(binding=9) ByteAddressBuffer preview_mask;
 layout(binding=10) StructuredBuffer<float4> selection_colors;
-layout(binding=11) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=11) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=12) StructuredBuffer<float4> overlay_params;
 layout(binding=13) StructuredBuffer<int32_t> orig_ids;
 #endif
@@ -206,7 +206,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             // Selection masks are indexed by original gaussian id, not the
             // macro-sorted slot (LOD may rematerialize).
             const uint sel_splat_id = uint(orig_ids[slot]);
-            const uint flags = gaussian_overlay_flags[slot];
+            const uint flags = read_byte(gaussian_overlay_flags, slot);
             const uint selection_byte = overlay_state.selection_mask_enabled
                 ? read_byte(selection_mask, sel_splat_id) : 0u;
             const uint preview_byte = overlay_state.preview_mask_enabled
