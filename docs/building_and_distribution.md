@@ -67,6 +67,35 @@ cmake --build build -j 16
 ./build/LichtFeld-Studio -d /path/to/data -o /path/to/output
 ```
 
+#### Release-only dependencies (optional)
+
+Native x64 Windows and Linux builds can use these presets to build only the
+Release variants of vcpkg dependencies, including host tools:
+
+| Platform | Release application | Optimized application with debug information |
+| --- | --- | --- |
+| Windows x64 | `windows-release` | `windows-relwithdebinfo` |
+| Linux x64 | `linux-release` | `linux-relwithdebinfo` |
+
+For example, from an initialized Windows x64 MSVC/CUDA development shell:
+
+```sh
+cmake --preset windows-release
+cmake --build --preset windows-release
+```
+
+Each preset uses its own build directory. Release and RelWithDebInfo on the
+same platform share the dependency recipe and can reuse compatible binary
+cache entries; the first Release-only install may rebuild packages. The
+standard `build` and `debug` presets remain available, with tests opt-in.
+
+See the [developer build guide](docs/development/build.md#release-only-dependency-profiles)
+for all commands, cache behavior and dependency-symbol coverage. To keep an
+existing `cmake --build build ...` command, follow the
+[existing Ninja directory migration](docs/development/build.md#keeping-an-existing-ninja-build-directory),
+including `-B build` and `-DBUILD_TESTS=ON` when building `lichtfeld_tests`.
+The [test prerequisites](#tests) still apply.
+
 ### 2. Portable Build (Distribution)
 
 Creates a self-contained package that works on any machine with an NVIDIA driver.
