@@ -497,13 +497,14 @@ configure_file(
         @ONLY
 )
 
-# App/core ABI tripwire. Recompute it before ABI consumers build, rather than
-# making every core source/header a configure dependency. Define this after the
-# effective CUDA architecture selection so the stamp represents the actual
+# App/core ABI tripwire. Seed headers for IDEs and syntax checks at configure
+# time, then refresh before ABI consumers build without making core source/header
+# edits configure dependencies. Define this after the effective CUDA architecture
+# selection so the stamp represents the actual
 # target configuration. Each multi-config configuration gets its own header so
 # Debug and Release cannot race or overwrite each other.
-set(LFS_CORE_ABI_INCLUDE_DIR "${CMAKE_BINARY_DIR}/include/$<CONFIG>")
-set(LFS_CORE_ABI_HEADER "${LFS_CORE_ABI_INCLUDE_DIR}/lfs_core_abi_stamp.h")
+include(cmake/InitializeCoreAbiStamp.cmake)
+lfs_initialize_core_abi_stamps()
 add_custom_target(lfs_core_abi_stamp ALL
     BYPRODUCTS "${LFS_CORE_ABI_HEADER}"
     COMMAND ${CMAKE_COMMAND}
@@ -596,12 +597,10 @@ add_executable(${PROJECT_NAME}
     resources/lichtfeld-studio.manifest
 )
 
-foreach(_lfs_core_abi_consumer IN ITEMS ${PROJECT_NAME} lfs_core)
-    add_dependencies(${_lfs_core_abi_consumer} lfs_core_abi_stamp)
-    target_include_directories(${_lfs_core_abi_consumer} BEFORE PRIVATE
-        "${LFS_CORE_ABI_INCLUDE_DIR}"
-    )
-endforeach()
+add_dependencies(${PROJECT_NAME} lfs_core_abi_stamp)
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
+    "${LFS_CORE_ABI_INCLUDE_DIR}"
+)
 
 # The binary only carries code for these architectures; the app refuses to start on anything
 # lower instead of dying inside the first kernel launch (#1540).

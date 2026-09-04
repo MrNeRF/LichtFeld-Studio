@@ -25,8 +25,8 @@ if(NOT EXISTS "${LFS_CORE_ABI_TEMPLATE}")
     message(FATAL_ERROR "LFS core ABI template does not exist: ${LFS_CORE_ABI_TEMPLATE}")
 endif()
 
-# This scan intentionally happens at build time. Source/header content changes
-# must update the ABI tripwire without making CMake regenerate the whole graph.
+# Seeded at configure time and refreshed at build time. Source/header content
+# changes update the ABI tripwire without making CMake regenerate the whole graph.
 file(GLOB_RECURSE LFS_CORE_BUILD_INPUTS LIST_DIRECTORIES FALSE
     "${LFS_SOURCE_DIR}/src/core/*.cpp"
     "${LFS_SOURCE_DIR}/src/core/*.cu"
