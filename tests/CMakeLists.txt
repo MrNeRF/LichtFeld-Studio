@@ -961,6 +961,7 @@ set(LFS_PYTHON_SLOW_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_signals.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_toolbar_hooks.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_orthographic_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_overlay_storage.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_output_lifetime_regressions.py
 )
 
