@@ -2683,7 +2683,8 @@ namespace lfs::core {
         // Scalar reduce operations - use direct CUB path for CUDA Float32 contiguous tensors
         float sum_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_sum_scalar(ptr<float>(), numel(), stream());
+                return internal::backend_ops_for(*this).sum_scalar(
+                    internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
             auto result = sum();
             if (dtype_ == DataType::Bool) {
@@ -2694,21 +2695,24 @@ namespace lfs::core {
 
         float mean_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_mean_scalar(ptr<float>(), numel(), stream());
+                return internal::backend_ops_for(*this).mean_scalar(
+                    internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
             return mean().item();
         }
 
         float min_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_min_scalar(ptr<float>(), numel(), stream());
+                return internal::backend_ops_for(*this).min_scalar(
+                    internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
             return min().item();
         }
 
         float max_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_max_scalar(ptr<float>(), numel(), stream());
+                return internal::backend_ops_for(*this).max_scalar(
+                    internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
             return max().item();
         }

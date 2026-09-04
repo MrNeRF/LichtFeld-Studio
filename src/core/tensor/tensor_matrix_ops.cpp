@@ -57,8 +57,11 @@ namespace lfs::core {
             pin_operands({&a, &b});
             auto result = internal::allocate_like(*this, TensorShape{m, n}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
-            tensor_ops::launch_sgemm(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
-                                     m, n, k, result.stream());
+            internal::backend_ops_for(a).sgemm(
+                internal::storage_ref(a), internal::storage_ref(b),
+                internal::storage_ref(result),
+                internal::GemmProgram{.m = m, .n = n, .k = k},
+                internal::ExecContext{result.stream()});
             return result;
         }
 
@@ -101,8 +104,11 @@ namespace lfs::core {
             auto result = internal::allocate_like(
                 *this, TensorShape{batch_size, m, n}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
-            tensor_ops::launch_sgemm_batched(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
-                                             batch_size, m, n, k, result.stream());
+            internal::backend_ops_for(a).sgemm_batched(
+                internal::storage_ref(a), internal::storage_ref(b),
+                internal::storage_ref(result),
+                internal::GemmProgram{.batch = batch_size, .m = m, .n = n, .k = k},
+                internal::ExecContext{result.stream()});
             return result;
         }
 
@@ -256,12 +262,10 @@ namespace lfs::core {
             pin_operands({&a, &b});
             auto result = internal::allocate_like(*this, TensorShape{}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
-            tensor_ops::launch_dot_product(
-                a.ptr<float>(),
-                b.ptr<float>(),
-                result.ptr<float>(),
-                n,
-                result.stream());
+            internal::backend_ops_for(a).dot_product(
+                internal::storage_ref(a), internal::storage_ref(b),
+                internal::storage_ref(result), n,
+                internal::ExecContext{result.stream()});
             return result;
         }
 

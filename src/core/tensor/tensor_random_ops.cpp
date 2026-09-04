@@ -147,7 +147,15 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             // Use kernel-based generation with advancing seed
             uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
-            tensor_ops::launch_uniform(ptr<float>(), n, low, high, seed, stream());
+            internal::backend_ops_for(*this).uniform(
+                internal::storage_ref(*this),
+                internal::RandomProgram{
+                    .count = n,
+                    .first = low,
+                    .second = high,
+                    .seed = seed,
+                },
+                internal::ExecContext{stream()});
             // No sync - in-place operation returns *this
         } else {
             // CPU uses stateful generator
@@ -189,20 +197,18 @@ namespace lfs::core {
         size_t n = numel();
 
         if (device_ == Device::CUDA) {
-            // curandGenerateNormal requires even number of elements
             if (n % 2 == 1) {
-                // Generate into an n+1 scratch allocation. Writing n+1 values into
-                // the n-element destination was a one-float buffer overflow.
                 auto scratch = internal::allocate_like(
                     *this, TensorShape{n + 1}, DataType::Float32);
-                RandomGenerator::instance().generate_cuda_normal(
-                    scratch.ptr<float>(), n + 1, mean, std, stream());
-                LFS_CUDA_CHECK(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
-                                               cudaMemcpyDeviceToDevice, stream()));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
+                internal::backend_ops_for(*this).normal(
+                    internal::storage_ref(*this), internal::storage_ref(scratch),
+                    internal::RandomProgram{.count = n, .first = mean, .second = std},
+                    internal::ExecContext{stream()});
             } else {
-                RandomGenerator::instance().generate_cuda_normal(
-                    ptr<float>(), n, mean, std, stream());
+                internal::backend_ops_for(*this).normal(
+                    internal::storage_ref(*this), internal::storage_ref(*this),
+                    internal::RandomProgram{.count = n, .first = mean, .second = std},
+                    internal::ExecContext{stream()});
             }
         } else {
             // CPU uses stateful generator

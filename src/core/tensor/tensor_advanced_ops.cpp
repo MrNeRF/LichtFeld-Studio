@@ -41,8 +41,10 @@ namespace lfs::core {
             pin_operands({&lhs, &rhs});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&lhs, &rhs}, result.stream());
-            tensor_ops::launch_cdist(lhs.ptr<float>(), rhs.ptr<float>(),
-                                     result.ptr<float>(), N, M, D, p, execution_stream);
+            internal::backend_ops_for(lhs).cdist(
+                internal::storage_ref(lhs), internal::storage_ref(rhs),
+                internal::storage_ref(result), N, M, D, p,
+                internal::ExecContext{execution_stream});
             // No sync - returns tensor
         } else {
             pin_operands({&lhs, &rhs});
@@ -243,9 +245,10 @@ namespace lfs::core {
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
             if (device_ == Device::CUDA) {
-                tensor_ops::launch_sort_1d(sorted.ptr<float>(),
-                                           reinterpret_cast<int64_t*>(indices.data_ptr()),
-                                           numel(), descending, 0);
+                internal::backend_ops_for(source).sort_1d(
+                    internal::storage_ref(sorted), internal::storage_ref(indices), numel(),
+                    internal::SortProgram{.dim_size = numel(), .descending = descending},
+                    internal::ExecContext{nullptr});
                 // No sync - returns tensors
             } else {
                 // CPU fallback
@@ -290,10 +293,16 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_sort_2d(sorted.ptr<float>(),
-                                       reinterpret_cast<int64_t*>(indices.data_ptr()),
-                                       outer_size, dim_size, inner_size,
-                                       dim, descending, 0);
+            internal::backend_ops_for(source).sort_2d(
+                internal::storage_ref(sorted), internal::storage_ref(indices),
+                internal::SortProgram{
+                    .outer_size = outer_size,
+                    .dim_size = dim_size,
+                    .inner_size = inner_size,
+                    .dim = dim,
+                    .descending = descending,
+                },
+                internal::ExecContext{nullptr});
             // No sync - returns tensors
         } else {
             // CPU implementation

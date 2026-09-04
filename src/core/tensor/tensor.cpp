@@ -2748,8 +2748,9 @@ namespace lfs::core {
         auto result = clone();
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_cumsum(result.data_ptr(), shape_.dims().data(),
-                                      shape_.rank(), dim, dtype_, result.stream());
+            internal::backend_ops_for(result).cumsum(
+                internal::storage_ref(result), internal::strided_layout(result), dim,
+                internal::ExecContext{result.stream()});
             // No sync - returns tensor, not API boundary
         } else {
             if (dtype_ == DataType::Float32) {
@@ -3384,7 +3385,8 @@ namespace lfs::core {
 
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_nan_gpu(ptr<float>(), numel(), stream());
+            return internal::backend_ops_for(*this).has_nan(
+                internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
 
         // CPU fallback
@@ -3408,7 +3410,8 @@ namespace lfs::core {
 
         // Use fast GPU check for CUDA tensors (only transfers 1 int back)
         if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
-            return tensor_ops::has_inf_gpu(ptr<float>(), numel(), stream());
+            return internal::backend_ops_for(*this).has_inf(
+                internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
         }
 
         // CPU fallback

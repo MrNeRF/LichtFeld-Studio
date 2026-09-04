@@ -71,7 +71,7 @@ namespace lfs::core {
         if (diagonal.device() == Device::CUDA) {
             prepare_inputs_for_stream({&dense_diagonal}, result.stream());
             LFS_CUDA_CHECK(cudaGetLastError());
-            tensor_ops::launch_diag(dense_diagonal.ptr<float>(), result.ptr<float>(), n, result.stream());
+            internal::backend_ops_for(dense_diagonal).diag(internal::storage_ref(dense_diagonal), internal::storage_ref(result), n, internal::ExecContext{result.stream()});
             LFS_CUDA_CHECK(cudaGetLastError());
             // No sync - returns tensor
         } else {

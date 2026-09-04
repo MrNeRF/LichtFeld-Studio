@@ -1848,28 +1848,17 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            // Use CUDA kernel for counting. Route the 8-byte counter through the
-            // slab pool so we never touch the untracked classic cudaMalloc heap.
-            size_t count = 0;
-            cudaStream_t s = stream();
-            size_t* d_count = static_cast<size_t*>(
-                CudaMemoryPool::instance().allocate(sizeof(size_t), s));
-            LFS_ASSERT_MSG(d_count != nullptr,
-                           "count_nonzero failed to allocate pooled d_count");
-            LFS_CUDA_CHECK(cudaMemsetAsync(d_count, 0, sizeof(size_t), s));
-
             if (is_bool_like(dtype_)) {
-                tensor_ops::launch_count_nonzero_bool(ptr<unsigned char>(), d_count, numel(), s);
+                return internal::backend_ops_for(*this).count_nonzero_bool(
+                    internal::storage_ref(*this), numel(),
+                    internal::ExecContext{stream()});
             } else if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_count_nonzero_float(ptr<float>(), d_count, numel(), s);
+                return internal::backend_ops_for(*this).count_nonzero_float(
+                    internal::storage_ref(*this), numel(),
+                    internal::ExecContext{stream()});
             }
-
-            // API BOUNDARY: Sync before reading result from GPU
-            LFS_CUDA_CHECK(cudaStreamSynchronize(s));
-            LFS_CUDA_CHECK(cudaMemcpy(&count, d_count, sizeof(size_t), cudaMemcpyDeviceToHost));
-            CudaMemoryPool::instance().deallocate(d_count, s);
-
-            return count;
+            LFS_ASSERT_MSG(false, "count_nonzero reached an unsupported CUDA dtype");
+            return 0;
         } else {
             // CPU implementation
             size_t count = 0;

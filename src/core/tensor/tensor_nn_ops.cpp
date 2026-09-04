@@ -204,15 +204,14 @@ namespace lfs::core {
             auto output = internal::allocate_like(
                 *this, TensorShape{N, C_out, H, W}, dtype_);
 
-            tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                     output.ptr<float>(), C_out, S, C_in, stream());
+            internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
 
             if (bias.is_valid()) {
                 const int total = static_cast<int>(N * C_out * H * W);
-                tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                            output.ptr<float>(), total,
-                                            static_cast<int>(C_out), static_cast<int>(S),
-                                            stream());
+                internal::backend_ops_for(output).bias_add(
+                    internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                    internal::storage_ref(output), total, static_cast<int>(C_out),
+                    static_cast<int>(S), internal::ExecContext{stream()});
             }
 
             return output;
@@ -225,18 +224,19 @@ namespace lfs::core {
                 *this, TensorShape{N, C_out, H, W}, dtype_);
 
             for (size_t n = 0; n < N; ++n) {
-                const float* in_ptr = input_cont.ptr<float>() + n * C_in * S;
-                float* out_ptr = output.ptr<float>() + n * C_out * S;
-                tensor_ops::launch_sgemm(weight_cont.ptr<float>(), in_ptr, out_ptr,
-                                         C_out, S, C_in, stream());
+                auto input_batch = internal::storage_ref(input_cont);
+                input_batch.byte_offset += n * C_in * S * sizeof(float);
+                auto output_batch = internal::storage_ref(output);
+                output_batch.byte_offset += n * C_out * S * sizeof(float);
+                internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), input_batch, output_batch, internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
             }
 
             if (bias.is_valid()) {
                 const int total = static_cast<int>(N * C_out * H * W);
-                tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                            output.ptr<float>(), total,
-                                            static_cast<int>(C_out), static_cast<int>(S),
-                                            stream());
+                internal::backend_ops_for(output).bias_add(
+                    internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                    internal::storage_ref(output), total, static_cast<int>(C_out),
+                    static_cast<int>(S), internal::ExecContext{stream()});
             }
 
             return output;
@@ -319,9 +319,18 @@ namespace lfs::core {
             dtype_);
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                          N, C, H_in, W_in, H_out, W_out,
-                                          kernel_size, stride, padding, stream());
+            const internal::PoolProgram program{
+                .batch = N,
+                .channels = C,
+                .input_height = H_in,
+                .input_width = W_in,
+                .output_height = H_out,
+                .output_width = W_out,
+                .kernel_size = kernel_size,
+                .stride = stride,
+                .padding = padding,
+            };
+            internal::backend_ops_for(input_cont).max_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
         } else {
             cpu_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
                            N, C, H_in, W_in, H_out, W_out,
@@ -359,8 +368,15 @@ namespace lfs::core {
             dtype_);
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                                   N, C, H_in, W_in, output_h, output_w, stream());
+            const internal::PoolProgram program{
+                .batch = N,
+                .channels = C,
+                .input_height = H_in,
+                .input_width = W_in,
+                .output_height = output_h,
+                .output_width = output_w,
+            };
+            internal::backend_ops_for(input_cont).adaptive_avg_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
         } else {
             cpu_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
                                     N, C, H_in, W_in, output_h, output_w);
@@ -420,16 +436,20 @@ namespace lfs::core {
             auto output = internal::allocate_like(
                 *this, TensorShape{batch_size, out_features}, dtype_);
 
-            tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
-                                        output.ptr<float>(), batch_size, out_features, in_features,
-                                        stream());
+            internal::backend_ops_for(input_cont).sgemm_tn(internal::storage_ref(input_cont), internal::storage_ref(weight_cont), internal::storage_ref(output), internal::GemmProgram{
+                                                                                                                                                                     .m = batch_size,
+                                                                                                                                                                     .n = out_features,
+                                                                                                                                                                     .k = in_features,
+                                                                                                                                                                 },
+                                                           internal::ExecContext{stream()});
 
             if (bias.is_valid()) {
                 const int total = static_cast<int>(batch_size * out_features);
-                tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                            output.ptr<float>(), total,
-                                            static_cast<int>(out_features), 1,
-                                            stream());
+                internal::backend_ops_for(output).bias_add(
+                    internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                    internal::storage_ref(output), total,
+                    static_cast<int>(out_features), 1,
+                    internal::ExecContext{stream()});
             }
 
             std::vector<int> output_shape;
@@ -527,14 +547,13 @@ namespace lfs::core {
         const Tensor& bias_cont = bias.contiguous_read(bias_materialized);
 
         pin_operands({&weight_cont, &input_cont});
-        tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                 output.ptr<float>(), C_out, S, C_in, stream());
+        internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
 
         const int total = static_cast<int>(N * C_out * H * W);
-        tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont.ptr<float>(),
-                                    output.ptr<float>(), total,
-                                    static_cast<int>(C_out), static_cast<int>(S),
-                                    stream());
+        internal::backend_ops_for(output).bias_add(
+            internal::storage_ref(output), internal::storage_ref(bias_cont),
+            internal::storage_ref(output), total, static_cast<int>(C_out),
+            static_cast<int>(S), internal::ExecContext{stream()});
     }
 
     void Tensor::relu_out(Tensor& output) const {
@@ -550,8 +569,7 @@ namespace lfs::core {
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
         pin_operands({&input_cont, &output});
-        tensor_ops::launch_relu(input_cont.ptr<float>(), output.ptr<float>(),
-                                static_cast<int>(numel()), stream());
+        internal::backend_ops_for(input_cont).relu(internal::storage_ref(input_cont), internal::storage_ref(output), static_cast<int>(numel()), internal::ExecContext{stream()});
     }
 
     void Tensor::conv1x1_bias_relu_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
@@ -624,19 +642,16 @@ namespace lfs::core {
         if (output_size >= 500000) {
             // Large outputs: use fused kernel to save memory bandwidth
             pin_operands({&weight_cont, &input_cont, &bias_cont});
-            tensor_ops::launch_sgemm_bias_relu(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                               bias_cont.ptr<float>(), output.ptr<float>(),
-                                               C_out, S, C_in, stream());
+            internal::backend_ops_for(input_cont).sgemm_bias_relu(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(bias_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
         } else {
             // Small outputs: separate kernels have less overhead
             pin_operands({&weight_cont, &input_cont, &bias_cont});
-            tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                     output.ptr<float>(), C_out, S, C_in, stream());
+            internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
             const int total = static_cast<int>(N * C_out * H * W);
-            tensor_ops::launch_bias_relu(output.ptr<float>(), bias_cont.ptr<float>(),
-                                         output.ptr<float>(), total,
-                                         static_cast<int>(C_out), static_cast<int>(S),
-                                         stream());
+            internal::backend_ops_for(output).bias_relu(
+                internal::storage_ref(output), internal::storage_ref(bias_cont),
+                internal::storage_ref(output), total, static_cast<int>(C_out),
+                static_cast<int>(S), internal::ExecContext{stream()});
         }
     }
 
@@ -684,9 +699,18 @@ namespace lfs::core {
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
         pin_operands({&input_cont, &output});
-        tensor_ops::launch_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                      N, C, H_in, W_in, H_out, W_out,
-                                      kernel_size, stride, padding, stream());
+        const internal::PoolProgram program{
+            .batch = N,
+            .channels = C,
+            .input_height = H_in,
+            .input_width = W_in,
+            .output_height = H_out,
+            .output_width = W_out,
+            .kernel_size = kernel_size,
+            .stride = stride,
+            .padding = padding,
+        };
+        internal::backend_ops_for(input_cont).max_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
     }
 
     void Tensor::adaptive_avg_pool2d_out(int output_h, int output_w, Tensor& output) const {
@@ -723,8 +747,15 @@ namespace lfs::core {
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
         pin_operands({&input_cont, &output});
-        tensor_ops::launch_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                               N, C, H_in, W_in, output_h, output_w, stream());
+        const internal::PoolProgram program{
+            .batch = N,
+            .channels = C,
+            .input_height = H_in,
+            .input_width = W_in,
+            .output_height = output_h,
+            .output_width = output_w,
+        };
+        internal::backend_ops_for(input_cont).adaptive_avg_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
     }
 
     void Tensor::linear_bias_relu_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
@@ -792,15 +823,19 @@ namespace lfs::core {
                                       : &bias;
 
         pin_operands({&input_cont, &weight_cont});
-        tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
-                                    output.ptr<float>(), batch_size, out_features, in_features,
-                                    stream());
+        internal::backend_ops_for(input_cont).sgemm_tn(internal::storage_ref(input_cont), internal::storage_ref(weight_cont), internal::storage_ref(output), internal::GemmProgram{
+                                                                                                                                                                 .m = batch_size,
+                                                                                                                                                                 .n = out_features,
+                                                                                                                                                                 .k = in_features,
+                                                                                                                                                             },
+                                                       internal::ExecContext{stream()});
 
         const int total = static_cast<int>(batch_size * out_features);
-        tensor_ops::launch_bias_relu(output.ptr<float>(), bias_cont->ptr<float>(),
-                                     output.ptr<float>(), total,
-                                     static_cast<int>(out_features), 1,
-                                     stream());
+        internal::backend_ops_for(output).bias_relu(
+            internal::storage_ref(output), internal::storage_ref(*bias_cont),
+            internal::storage_ref(output), total,
+            static_cast<int>(out_features), 1,
+            internal::ExecContext{stream()});
     }
 
     void Tensor::linear_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
@@ -873,16 +908,20 @@ namespace lfs::core {
                                       : &bias;
 
         pin_operands({&input_cont, &weight_cont});
-        tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
-                                    output.ptr<float>(), batch_size, out_features, in_features,
-                                    stream());
+        internal::backend_ops_for(input_cont).sgemm_tn(internal::storage_ref(input_cont), internal::storage_ref(weight_cont), internal::storage_ref(output), internal::GemmProgram{
+                                                                                                                                                                 .m = batch_size,
+                                                                                                                                                                 .n = out_features,
+                                                                                                                                                                 .k = in_features,
+                                                                                                                                                             },
+                                                       internal::ExecContext{stream()});
 
         if (bias.is_valid()) {
             const int total = static_cast<int>(batch_size * out_features);
-            tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                        output.ptr<float>(), total,
-                                        static_cast<int>(out_features), 1,
-                                        stream());
+            internal::backend_ops_for(output).bias_add(
+                internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                internal::storage_ref(output), total,
+                static_cast<int>(out_features), 1,
+                internal::ExecContext{stream()});
         }
     }
 

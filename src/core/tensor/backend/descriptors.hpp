@@ -12,6 +12,7 @@
 
 namespace lfs::core {
     class Tensor;
+    enum class ReduceOp : uint8_t;
     struct StorageMeta;
 
     namespace ops {
@@ -134,11 +135,62 @@ namespace lfs::core {
             ScalarOperand scalar;
         };
 
+        struct ReduceProgram {
+            ReduceOp op;
+            std::array<int, MAX_TENSOR_RANK> axes{};
+            size_t axis_count = 0;
+            bool keepdim = false;
+            DataType result_dtype;
+        };
+
+        struct SortProgram {
+            size_t outer_size = 1;
+            size_t dim_size = 0;
+            size_t inner_size = 1;
+            int dim = 0;
+            bool descending = false;
+        };
+
+        struct GemmProgram {
+            size_t batch = 1;
+            size_t m = 0;
+            size_t n = 0;
+            size_t k = 0;
+        };
+
+        struct PoolProgram {
+            int batch = 0;
+            int channels = 0;
+            int input_height = 0;
+            int input_width = 0;
+            int output_height = 0;
+            int output_width = 0;
+            int kernel_size = 0;
+            int stride = 0;
+            int padding = 0;
+        };
+
+        struct RandomProgram {
+            size_t count = 0;
+            size_t sample_count = 0;
+            float first = 0.0f;
+            float second = 1.0f;
+            int low = 0;
+            int high = 0;
+            uint64_t seed = 0;
+            bool replacement = false;
+        };
+
         static_assert(std::is_trivially_copyable_v<ScalarOperand>);
         static_assert(std::is_trivially_copyable_v<StorageRef>);
         static_assert(std::is_trivially_copyable_v<ExecContext>);
         static_assert(std::is_trivially_copyable_v<StridedLayout>);
         static_assert(std::is_trivially_copyable_v<PointwiseProgram>);
+        static_assert(std::is_trivially_copyable_v<ReduceProgram>);
+        static_assert(std::is_trivially_copyable_v<SortProgram>);
+        static_assert(std::is_trivially_copyable_v<GemmProgram>);
+        static_assert(std::is_trivially_copyable_v<PoolProgram>);
+        static_assert(std::is_trivially_copyable_v<RandomProgram>);
 
         inline StorageRef storage_ref(const Tensor& tensor);
         inline StridedLayout strided_layout(const Tensor& tensor);

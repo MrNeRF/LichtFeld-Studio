@@ -723,13 +723,26 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 const cudaStream_t stream = result.stream();
                 if (result.dtype_ == DataType::Float32) {
-                    tensor_ops::launch_uniform(result.ptr<float>(), result.numel(), low, high,
-                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    internal::backend_ops_for(result).uniform(
+                        internal::storage_ref(result),
+                        internal::RandomProgram{
+                            .count = result.numel(),
+                            .first = low,
+                            .second = high,
+                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        },
+                        internal::ExecContext{stream});
                     // No sync - tensor operation
                 } else if (result.dtype_ == DataType::Int32) {
-                    tensor_ops::launch_randint(result.ptr<int>(), result.numel(),
-                                               static_cast<int>(low), static_cast<int>(high),
-                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    internal::backend_ops_for(result).randint(
+                        internal::storage_ref(result),
+                        internal::RandomProgram{
+                            .count = result.numel(),
+                            .low = static_cast<int>(low),
+                            .high = static_cast<int>(high),
+                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        },
+                        internal::ExecContext{stream});
                     // No sync - tensor operation
                 }
             } else {
@@ -776,18 +789,15 @@ namespace lfs::core {
                 if (n % 2 == 1) {
                     auto scratch = internal::allocate_like(
                         result, TensorShape{n + 1}, DataType::Float32);
-                    RandomGenerator::instance().generate_cuda_normal(
-                        scratch.ptr<float>(), n + 1, mean, std, result.stream());
-                    LFS_CUDA_CHECK_MSG(
-                        cudaMemcpyAsync(result.ptr<float>(), scratch.ptr<float>(),
-                                        n * sizeof(float), cudaMemcpyDeviceToDevice,
-                                        result.stream()),
-                        "normal/randn scratch copy (bytes={}, requested_count={})",
-                        n * sizeof(float), n);
-                    LFS_CUDA_CHECK(cudaStreamSynchronize(result.stream()));
+                    internal::backend_ops_for(result).normal(
+                        internal::storage_ref(result), internal::storage_ref(scratch),
+                        internal::RandomProgram{.count = n, .first = mean, .second = std},
+                        internal::ExecContext{result.stream()});
                 } else {
-                    RandomGenerator::instance().generate_cuda_normal(
-                        result.ptr<float>(), n, mean, std, result.stream());
+                    internal::backend_ops_for(result).normal(
+                        internal::storage_ref(result), internal::storage_ref(result),
+                        internal::RandomProgram{.count = n, .first = mean, .second = std},
+                        internal::ExecContext{result.stream()});
                 }
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
@@ -819,16 +829,36 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 const cudaStream_t stream = result.stream();
                 if (result.dtype_ == DataType::Int32) {
-                    tensor_ops::launch_randint(result.ptr<int>(), result.numel(), low, high,
-                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    internal::backend_ops_for(result).randint(
+                        internal::storage_ref(result),
+                        internal::RandomProgram{
+                            .count = result.numel(),
+                            .low = low,
+                            .high = high,
+                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        },
+                        internal::ExecContext{stream});
                     // No sync - tensor operation
                 } else if (result.dtype_ == DataType::Float32) {
                     int* temp_buffer = static_cast<int*>(
                         CudaMemoryPool::instance().allocate(result.numel() * sizeof(int), stream));
                     LFS_ASSERT_MSG(temp_buffer != nullptr,
                                    "randint failed to allocate its Float32 CUDA conversion buffer");
-                    tensor_ops::launch_randint(temp_buffer, result.numel(), low, high,
-                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    internal::backend_ops_for(result).randint(
+                        internal::StorageRef{
+                            .backend = GpuBackend::CUDA,
+                            .data = temp_buffer,
+                            .byte_offset = 0,
+                            .dtype = DataType::Int32,
+                            .meta = nullptr,
+                        },
+                        internal::RandomProgram{
+                            .count = result.numel(),
+                            .low = low,
+                            .high = high,
+                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        },
+                        internal::ExecContext{stream});
 
                     tensor_ops::launch_convert_type<int, float>(temp_buffer, result.ptr<float>(),
                                                                 result.numel(), stream);
@@ -840,8 +870,21 @@ namespace lfs::core {
                         CudaMemoryPool::instance().allocate(result.numel() * sizeof(int), stream));
                     LFS_ASSERT_MSG(temp_buffer != nullptr,
                                    "randint failed to allocate its UInt8 CUDA conversion buffer");
-                    tensor_ops::launch_randint(temp_buffer, result.numel(), low, high,
-                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    internal::backend_ops_for(result).randint(
+                        internal::StorageRef{
+                            .backend = GpuBackend::CUDA,
+                            .data = temp_buffer,
+                            .byte_offset = 0,
+                            .dtype = DataType::Int32,
+                            .meta = nullptr,
+                        },
+                        internal::RandomProgram{
+                            .count = result.numel(),
+                            .low = low,
+                            .high = high,
+                            .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        },
+                        internal::ExecContext{stream});
 
                     tensor_ops::launch_convert_type<int, uint8_t>(temp_buffer, result.ptr<uint8_t>(),
                                                                   result.numel(), stream);
@@ -887,8 +930,14 @@ namespace lfs::core {
                 return result;
 
             if (result.device_ == Device::CUDA) {
-                tensor_ops::launch_bernoulli(result.ptr<float>(), result.numel(), p,
-                                             RandomGenerator::instance().get_next_cuda_seed(), result.stream());
+                internal::backend_ops_for(result).bernoulli(
+                    internal::storage_ref(result),
+                    internal::RandomProgram{
+                        .count = result.numel(),
+                        .first = p,
+                        .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                    },
+                    internal::ExecContext{result.stream()});
                 // No sync - tensor operation
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
@@ -933,9 +982,15 @@ namespace lfs::core {
 
             if (weights->device() == Device::CUDA) {
                 prepare_inputs_for_stream({weights}, result.stream());
-                tensor_ops::launch_multinomial(weights->ptr<float>(), result.ptr<int64_t>(),
-                                               n, num_samples, replacement,
-                                               RandomGenerator::instance().get_next_cuda_seed(), result.stream());
+                internal::backend_ops_for(*weights).multinomial(
+                    internal::storage_ref(*weights), internal::storage_ref(result),
+                    internal::RandomProgram{
+                        .count = n,
+                        .sample_count = num_samples,
+                        .seed = RandomGenerator::instance().get_next_cuda_seed(),
+                        .replacement = replacement,
+                    },
+                    internal::ExecContext{result.stream()});
                 // No sync - tensor operation
             } else {
                 auto weights_data = weights->to_vector();
@@ -1007,7 +1062,9 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 LFS_CUDA_CHECK_MSG(cudaGetLastError(),
                                    "eye pending CUDA state check");
-                tensor_ops::launch_eye(result.ptr<float>(), m, n, result.stream());
+                internal::backend_ops_for(result).eye(
+                    internal::storage_ref(result), m, n,
+                    internal::ExecContext{result.stream()});
                 LFS_CUDA_CHECK_MSG(cudaGetLastError(),
                                    "eye CUDA kernel launch");
                 // No sync - tensor operation
@@ -1292,9 +1349,15 @@ namespace lfs::core {
                                                 : std::vector<size_t>{}),
                                 DataType::Float32);
                             result.set_stream(execution_stream);
-                            tensor_ops::launch_fused_transform_reduce(
-                                std::as_const(fused_source).ptr<float>(), result.ptr<float>(), n,
-                                chain, op, execution_stream);
+                            internal::ReduceProgram program{
+                                .op = op,
+                                .axis_count = fused_source.ndim(),
+                                .keepdim = args.keepdim,
+                                .result_dtype = DataType::Float32,
+                            };
+                            std::iota(program.axes.begin(),
+                                      program.axes.begin() + program.axis_count, 0);
+                            internal::backend_ops_for(fused_source).fused_transform_reduce(internal::storage_ref(fused_source), internal::storage_ref(result), n, chain, program, internal::ExecContext{execution_stream});
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();
@@ -1430,9 +1493,19 @@ namespace lfs::core {
                             result = internal::allocate_like(
                                 fused_source, TensorShape(out_shape), DataType::Float32);
                             result.set_stream(execution_stream);
-                            tensor_ops::launch_fused_segmented_transform_reduce(
-                                std::as_const(fused_source).ptr<float>(), result.ptr<float>(),
-                                num_segments, segment_size, chain, op, execution_stream);
+                            internal::ReduceProgram program{
+                                .op = op,
+                                .axis_count = 1,
+                                .keepdim = args.keepdim,
+                                .result_dtype = DataType::Float32,
+                            };
+                            program.axes[0] = static_cast<int>(fused_source.ndim()) - 1;
+                            internal::backend_ops_for(fused_source)
+                                .fused_segmented_transform_reduce(
+                                    internal::storage_ref(fused_source),
+                                    internal::storage_ref(result), num_segments,
+                                    segment_size, chain, program,
+                                    internal::ExecContext{execution_stream});
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();
@@ -1472,8 +1545,16 @@ namespace lfs::core {
                     auto result =
                         empty_on_tensor_stream(TensorShape(out_shape), device_, dtype_, *this);
 
-                    tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op,
-                                                     result.stream());
+                    internal::ReduceProgram program{
+                        .op = op,
+                        .axis_count = 1,
+                        .keepdim = args.keepdim,
+                        .result_dtype = dtype_,
+                    };
+                    program.axes[0] = 0;
+                    internal::backend_ops_for(*this).column_reduce(
+                        internal::storage_ref(*this), internal::storage_ref(result),
+                        M, N, program, internal::ExecContext{result.stream()});
                     tensor_ops::set_reduce_last_path_for_testing(RP::Column);
                     internal::lazy_ir_record_reduce(*this, result, op_name);
                     return result;
@@ -1529,9 +1610,17 @@ namespace lfs::core {
                         }
                         auto result = empty_on_tensor_stream(
                             TensorShape(out_dims), device_, dtype_, *this);
-                        tensor_ops::launch_strided_reduce_fast(
-                            ptr<float>(), result.ptr<float>(),
-                            outer_size, reduce_size, inner_size, op, result.stream());
+                        internal::ReduceProgram program{
+                            .op = op,
+                            .axis_count = 1,
+                            .keepdim = args.keepdim,
+                            .result_dtype = dtype_,
+                        };
+                        program.axes[0] = dim;
+                        internal::backend_ops_for(*this).strided_reduce(
+                            internal::storage_ref(*this), internal::storage_ref(result),
+                            outer_size, reduce_size, inner_size, program,
+                            internal::ExecContext{result.stream()});
                         tensor_ops::set_reduce_last_path_for_testing(RP::StridedFast);
                         internal::lazy_ir_record_reduce(*this, result, op_name);
                         return result;
@@ -1638,12 +1727,19 @@ namespace lfs::core {
 
         if (input->device_ == Device::CUDA) {
             pin_operands({input});
-            tensor_ops::launch_reduce_op(
-                input->data_ptr(), result.data_ptr(),
-                input->shape_.dims().data(), input->shape_.rank(),
-                axes.data(), axes.size(),
-                args.keepdim, op,
-                input->dtype_, out_dtype, result.stream());
+            LFS_ASSERT_MSG(axes.size() <= MAX_TENSOR_RANK,
+                           "reduction axis count exceeds MAX_TENSOR_RANK");
+            internal::ReduceProgram program{
+                .op = op,
+                .axis_count = axes.size(),
+                .keepdim = args.keepdim,
+                .result_dtype = out_dtype,
+            };
+            std::copy(axes.begin(), axes.end(), program.axes.begin());
+            internal::backend_ops_for(*input).reduce(
+                internal::storage_ref(*input), internal::storage_ref(result),
+                internal::strided_layout(*input), program,
+                internal::ExecContext{result.stream()});
             // No sync - tensor operation
         } else {
             // CPU implementation
