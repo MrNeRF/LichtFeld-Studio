@@ -110,6 +110,8 @@ set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Video encoding library (FFmpeg + CUDA for GPU-accelerated encoding)
 find_package(PkgConfig REQUIRED)
+# vcpkg swaps FFmpeg's codec between master (x264) and dev (openh264); do not reuse FindPkgConfig's cached library list.
+unset(__pkg_config_checked_FFMPEG CACHE)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libavcodec
         libavformat
