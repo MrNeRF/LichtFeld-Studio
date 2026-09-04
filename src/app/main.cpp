@@ -24,6 +24,8 @@
 #include <cuda_runtime.h>
 #include <filesystem>
 #include <print>
+#include <string>
+#include <vector>
 
 namespace {
     // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
@@ -185,7 +187,24 @@ namespace {
 
 } // namespace
 
+#ifdef _WIN32
+int wmain(int argc, wchar_t* wide_argv[]) {
+    // The parser expects UTF-8. Narrow CRT argv uses the Windows ANSI code page,
+    // which can lose characters in paths opened from Explorer or the command line.
+    std::vector<std::string> utf8_args;
+    utf8_args.reserve(argc);
+    for (int i = 0; i < argc; ++i)
+        utf8_args.push_back(lfs::core::wstring_to_utf8(wide_argv[i]));
+
+    std::vector<const char*> utf8_argv;
+    utf8_argv.reserve(argc + 1);
+    for (const auto& arg : utf8_args)
+        utf8_argv.push_back(arg.c_str());
+    utf8_argv.push_back(nullptr);
+    const auto* argv = utf8_argv.data();
+#else
 int main(int argc, char* argv[]) {
+#endif
     const char* const loaded_core_stamp = lfs_core_abi_stamp();
     if (loaded_core_stamp == nullptr || !lfs_core_abi_matches(LFS_CORE_ABI_STAMP)) {
         std::println(stderr,
