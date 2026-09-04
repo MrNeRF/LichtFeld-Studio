@@ -121,6 +121,29 @@ TEST(LoggerTest, ScopedTimerThresholdKeepsZeroThresholdCompatible) {
     EXPECT_NE(messages.front().find("logger.threshold.compat took"), std::string::npos);
 }
 
+TEST(LoggerTest, ScopedTimerDisabledPathDoesNotEmit) {
+    auto& logger = lfs::core::Logger::get();
+    const auto previous_level = logger.level();
+    logger.set_level(lfs::core::LogLevel::Info);
+
+    std::vector<std::string> messages;
+    LogHandlerGuard guard([&messages](lfs::core::LogLevel level,
+                                      const lfs::core::SourceSite&,
+                                      std::string_view message) {
+        if (level == lfs::core::LogLevel::Performance)
+            messages.emplace_back(message);
+    });
+
+    {
+        lfs::core::ScopedTimer timer(
+            "logger.disabled", lfs::core::LogLevel::Performance,
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    logger.set_level(previous_level);
+    EXPECT_TRUE(messages.empty());
+}
+
 TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
     const std::filesystem::path resolved(lfs::core::Logger::default_log_file_path());
 
@@ -129,6 +152,53 @@ TEST(LoggerTest, DefaultLogFilePathResolvesUnderPerUserDirectory) {
     EXPECT_EQ(resolved.parent_path().filename(), "logs");
     ASSERT_TRUE(resolved.parent_path().has_parent_path());
     EXPECT_EQ(resolved.parent_path().parent_path().filename(), ".lichtfeld");
+}
+
+TEST(LoggerTest, BufferedLogsSinceReturnsBoundedMonotonicRingTail) {
+    LoggerInitGuard reset_guard;
+    const auto temp_root = unique_temp_dir("incremental");
+    auto& logger = lfs::core::Logger::get();
+    logger.init(lfs::core::LogLevel::Info, "", "", false, temp_root.string());
+
+    const auto initial_generation = logger.buffered_log_generation();
+    LOG_INFO("incremental-first");
+    LOG_INFO("incremental-second");
+    LOG_INFO("incremental-third");
+
+    const auto first_tail = logger.buffered_logs_since(initial_generation, 2);
+    ASSERT_EQ(first_tail.size(), 2u);
+    EXPECT_EQ(first_tail[0].message, "incremental-second");
+    EXPECT_EQ(first_tail[1].message, "incremental-third");
+    EXPECT_LT(first_tail[0].sequence, first_tail[1].sequence);
+
+    const auto seen_generation = logger.buffered_log_generation();
+    LOG_INFO("incremental-fourth");
+    const auto second_tail = logger.buffered_logs_since(seen_generation, 10);
+    ASSERT_EQ(second_tail.size(), 1u);
+    EXPECT_GT(second_tail.front().sequence, seen_generation);
+
+    for (size_t index = 0; index < 5005; ++index)
+        LOG_INFO("incremental-ring-{}", index);
+
+    const auto retained = logger.buffered_logs();
+    ASSERT_EQ(retained.size(), 5000u);
+    ASSERT_GT(retained.front().sequence, initial_generation);
+    const auto older_than_oldest = retained.front().sequence - 1;
+    const auto ring_tail = logger.buffered_logs_since(older_than_oldest, 5000);
+    ASSERT_EQ(ring_tail.size(), 5000u);
+    EXPECT_EQ(ring_tail.front().message, "incremental-ring-5");
+    EXPECT_EQ(ring_tail.back().message, "incremental-ring-5004");
+    for (size_t index = 1; index < ring_tail.size(); ++index)
+        EXPECT_LT(ring_tail[index - 1].sequence, ring_tail[index].sequence);
+
+    const auto bounded_ring_tail = logger.buffered_logs_since(older_than_oldest, 2);
+    ASSERT_EQ(bounded_ring_tail.size(), 2u);
+    EXPECT_EQ(bounded_ring_tail[0].message, "incremental-ring-5003");
+    EXPECT_EQ(bounded_ring_tail[1].message, "incremental-ring-5004");
+    EXPECT_LT(bounded_ring_tail[0].sequence, bounded_ring_tail[1].sequence);
+
+    std::error_code error;
+    std::filesystem::remove_all(temp_root, error);
 }
 
 TEST(LoggerTest, DefaultLogFilePathHonorsExplicitOverride) {

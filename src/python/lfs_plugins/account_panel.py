@@ -12,6 +12,7 @@ import lichtfeld as lf
 
 from .portal_account import get_portal_account_service
 from .types import Panel
+from .panels import panel_class
 from .ui.store import PanelStateBinding, RuntimeState, invalidate_panel
 
 __lfs_panel_classes__ = ["AccountPanel"]
@@ -51,17 +52,9 @@ def _format_connected_since(value: str) -> str:
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+@panel_class("account")
 class AccountPanel(Panel):
     """Floating panel for the LichtFeld portal account."""
-
-    id = "lfs.account"
-    label = "Account"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 95
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/account_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (440, 0)
 
     def __init__(self):
         super().__init__()

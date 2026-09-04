@@ -9,16 +9,11 @@ import logging
 import math
 import os
 import platform as platform_module
-import secrets
 import threading
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Iterator, Mapping, Optional
 
@@ -158,6 +153,8 @@ class _Credentials:
 
 
 def _canonical_portal_origin(raw_url: str) -> str:
+    import urllib.parse
+
     value = raw_url.strip()
     parsed = urllib.parse.urlsplit(value)
     scheme = parsed.scheme.lower()
@@ -229,6 +226,8 @@ def _error_response(raw: bytes) -> tuple[str, Optional[dict[str, object]]]:
 
 
 def _retry_after_seconds(headers: object) -> Optional[float]:
+    from email.utils import parsedate_to_datetime
+
     if headers is None:
         return None
     try:
@@ -303,6 +302,8 @@ class PortalAccountService:
         timeout: float = HTTP_TIMEOUT_SEC,
         waiter: Optional[Callable[[float], bool]] = None,
     ) -> None:
+        import urllib.parse
+
         configured_url = base_url if base_url is not None else os.environ.get(PORTAL_URL_ENV, DEFAULT_PORTAL_URL)
         self.base_url = _canonical_portal_origin(configured_url)
         self.portal_host = urllib.parse.urlsplit(self.base_url).netloc
@@ -749,6 +750,9 @@ class PortalAccountService:
         *,
         timeout: Optional[float] = None,
     ) -> dict[str, object]:
+        import urllib.error
+        import urllib.request
+
         request_headers = {"Accept": "application/json"}
         data = None
         if body is not None:
@@ -880,6 +884,8 @@ class PortalAccountService:
         self._set_current_credentials(credentials)
 
     def _write_credentials_file(self, credentials: _Credentials) -> None:
+        import secrets
+
         directory = self.credentials_path.parent
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         temp_path = directory / (

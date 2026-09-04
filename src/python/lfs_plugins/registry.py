@@ -6,14 +6,14 @@ import hashlib
 import json
 import logging
 import os
-import urllib.request
+import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .environment import value as environment_value
-from urllib.parse import quote
 
 from .compat import (
     LICHTFELD_VERSION,
@@ -85,6 +85,7 @@ class RegistryClient:
         )
         self._cache_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict] = None
+        self._index_loaded_at: Optional[float] = None
         override = environment_value("LFS_PLUGIN_REGISTRY_URL")
         self._registry_urls: Tuple[str, ...] = ((override,) if override else DEFAULT_REGISTRY_URLS)
 
@@ -101,17 +102,36 @@ class RegistryClient:
         query_lower = query.lower()
         results = []
 
-        for entry in index.get("plugins", []):
-            searchable = f"{entry.get('name', '')} {entry.get('summary', '')} {' '.join(entry.get('keywords', []))}".lower()
-            if query_lower in searchable:
+        for index_position, entry in enumerate(index.get("plugins", [])):
+            try:
+                if not isinstance(entry, dict):
+                    raise ValueError("entry is not an object")
+                name = entry.get("name")
+                latest_version = entry.get("latest_version")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("missing name")
+                if not isinstance(latest_version, str) or not latest_version.strip():
+                    raise ValueError("missing latest_version")
+                raw_keywords = entry.get("keywords", [])
+                if not isinstance(raw_keywords, (list, tuple)) or not all(
+                    isinstance(keyword, str) for keyword in raw_keywords
+                ):
+                    raise ValueError("keywords must be a list of strings")
+
+                searchable = (
+                    f"{name} {entry.get('summary', '')} {' '.join(raw_keywords)}"
+                ).lower()
+                if query_lower not in searchable:
+                    continue
+
                 info = RegistryPluginInfo(
-                    name=entry["name"],
+                    name=name,
                     namespace=entry.get("namespace", "community"),
-                    display_name=entry.get("display_name", entry["name"]),
+                    display_name=entry.get("display_name", name),
                     description=entry.get("summary", ""),
                     author=entry.get("author", ""),
-                    latest_version=entry.get("latest_version", "0.0.0"),
-                    keywords=tuple(entry.get("keywords", [])),
+                    latest_version=latest_version,
+                    keywords=tuple(raw_keywords),
                     downloads=entry.get("downloads", 0),
                     repository=entry.get("repository"),
                 )
@@ -129,6 +149,8 @@ class RegistryClient:
                     except VersionNotFoundError:
                         continue
                 results.append(info)
+            except Exception as exc:
+                _log.warning("Skipping malformed registry entry %d: %s", index_position, exc)
         return results
 
     def get_plugin(self, plugin_id: str) -> Dict:
@@ -136,9 +158,9 @@ class RegistryClient:
         namespace, name = self._parse_id(plugin_id)
         cache_path = self._plugin_cache_path(namespace, name)
 
-        if cache_path.exists():
+        if cache_path.exists() and self._cache_is_fresh(cache_path):
             try:
-                with open(cache_path) as f:
+                with open(cache_path, encoding="utf-8") as f:
                     return json.load(f)
             except Exception as exc:
                 _log.debug("Ignoring invalid registry cache '%s': %s", cache_path, exc)
@@ -148,12 +170,21 @@ class RegistryClient:
         for url in self._plugin_detail_urls(namespace, name):
             try:
                 data = self._fetch_json(url)
-                with open(cache_path, "w") as f:
-                    json.dump(data, f)
+                self._atomic_write_json(cache_path, data)
                 return data
             except Exception as exc:
                 last_error = exc
 
+        # A stale but valid detail record is still useful when the registry is
+        # offline or GitHub/registry infrastructure is rate-limiting requests.
+        if cache_path.exists():
+            try:
+                with open(cache_path, encoding="utf-8") as f:
+                    stale = json.load(f)
+                _log.warning("Using stale registry detail cache for '%s': %s", plugin_id, last_error)
+                return stale
+            except Exception:
+                pass
         raise PluginNotFoundError(f"Plugin '{plugin_id}' not found: {last_error}") from last_error
 
     def resolve_version(
@@ -260,8 +291,11 @@ class RegistryClient:
 
     def _get_index(self) -> Dict:
         """Get index from cache or fetch from registry."""
-        if self._index:
-            return self._index
+        if self._index is not None and self._index_loaded_at is not None:
+            if time.monotonic() - self._index_loaded_at < CACHE_TTL_HOURS * 3600:
+                return self._index
+            self._index = None
+            self._index_loaded_at = None
 
         cache_path = self._cache_dir / "index.json"
         timestamp_path = self._cache_dir / "last_update"
@@ -269,31 +303,38 @@ class RegistryClient:
 
         if cache_path.exists() and timestamp_path.exists():
             if datetime.now() - datetime.fromtimestamp(timestamp_path.stat().st_mtime) < cache_ttl:
-                with open(cache_path) as f:
-                    self._index = json.load(f)
+                try:
+                    with open(cache_path, encoding="utf-8") as f:
+                        self._index = json.load(f)
+                    self._index_loaded_at = time.monotonic()
                     return self._index
+                except Exception as exc:
+                    _log.warning("Ignoring invalid registry index cache '%s': %s", cache_path, exc)
 
         try:
             self._index = self._fetch_json_with_fallback(
                 [f"{base_url}/index.json" for base_url in self._registry_urls]
             )
-            with open(cache_path, "w") as f:
-                json.dump(self._index, f)
+            self._atomic_write_json(cache_path, self._index)
             timestamp_path.touch()
+            self._index_loaded_at = time.monotonic()
             return self._index
         except Exception:
             if cache_path.exists():
                 _log.debug("Registry offline, using cached index")
-                with open(cache_path) as f:
+                with open(cache_path, encoding="utf-8") as f:
                     self._index = json.load(f)
+                    self._index_loaded_at = time.monotonic()
                     return self._index
             raise RegistryOfflineError("Cannot reach registry and no cache available")
 
     def _fetch_json(self, url: str) -> Dict:
         """Fetch JSON from URL."""
+        import urllib.request
+
         req = urllib.request.Request(url, headers={"User-Agent": "LichtFeld-PluginManager/1.0"})
         with urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
-            return json.loads(resp.read().decode())
+            return json.loads(resp.read().decode("utf-8"))
 
     def _fetch_json_with_fallback(self, urls: List[str]) -> Dict:
         last_error: Exception | None = None
@@ -305,12 +346,42 @@ class RegistryClient:
         assert last_error is not None
         raise last_error
 
+    @staticmethod
+    def _cache_is_fresh(path: Path) -> bool:
+        try:
+            return time.time() - path.stat().st_mtime < CACHE_TTL_HOURS * 3600
+        except OSError:
+            return False
+
+    @staticmethod
+    def _atomic_write_json(path: Path, data: Dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = None
+        try:
+            fd, temporary_path = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(data, stream, ensure_ascii=False)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, path)
+            temporary_path = None
+        finally:
+            if temporary_path:
+                try:
+                    os.unlink(temporary_path)
+                except OSError:
+                    pass
+
     def _plugin_cache_path(self, namespace: str, name: str) -> Path:
         safe_namespace = self._safe_cache_component(namespace)
         safe_name = self._safe_cache_component(name)
         return self._cache_dir / "plugins" / safe_namespace / f"{safe_name}.json"
 
     def _plugin_detail_urls(self, namespace: str, name: str) -> Tuple[str, ...]:
+        from urllib.parse import quote
+
         namespace_q = quote(namespace, safe="")
         name_q = quote(name, safe="")
         full_id_q = quote(f"{namespace}:{name}", safe="")

@@ -478,6 +478,8 @@ namespace lfs::io {
         }
 
         void synchronize_async_upload_before_free(cudaStream_t stream, const char* context) {
+            // A null stream means the legacy default stream. Synchronizing it
+            // here would impose a device-wide barrier on unrelated callers.
             if (!stream) {
                 return;
             }
@@ -994,7 +996,7 @@ namespace lfs::io {
 
             try {
                 auto nvcodec = acquire_nvcodec_loader(config_.decoder_pool_size);
-                auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_data, params, false);
+                auto tensor = decode_cached_rgb_tensor(nvcodec, jpeg_data, params, needs_requested_processing);
                 if (tensor.is_valid() && tensor.numel() > 0)
                     return tensor;
             } catch (...) {}
@@ -1028,7 +1030,7 @@ namespace lfs::io {
                               describe_current_exception("non-standard nvImageCodec exception"));
                 }
             }
-        } else if (!config_.use_16bit_color) {
+        } else if (!config_.use_16bit_color && !needs_requested_processing) {
             const std::string path_str = lfs::core::path_to_utf8(path);
             int w = 0, h = 0, ch = 0;
             unsigned char* img_data = stbi_load(path_str.c_str(), &w, &h, &ch, 3);
@@ -1161,8 +1163,29 @@ namespace lfs::io {
         using lfs::core::Tensor;
         using lfs::core::TensorShape;
 
+        {
+            std::lock_guard<std::mutex> stats_lock(stats_mutex_);
+            ++stats_.cpu_decode_calls;
+        }
+
         Tensor decoded;
         Tensor gpu_staging;
+        cudaStream_t stream = params.cuda_stream
+                                  ? static_cast<cudaStream_t>(params.cuda_stream)
+                                  : nullptr;
+        if (!stream) {
+            std::lock_guard stream_lock(decode_stream_mutex_);
+            if (!decode_stream_) {
+                if (const cudaError_t err =
+                        cudaStreamCreateWithFlags(&decode_stream_, cudaStreamNonBlocking);
+                    err != cudaSuccess) {
+                    throw std::runtime_error(
+                        std::string("Failed to create image decode stream: ") +
+                        cudaGetErrorString(err));
+                }
+            }
+            stream = decode_stream_;
+        }
         if (config_.use_16bit_color) {
             auto [img_data, width, height, channels] = lfs::core::load_image_u16(
                 path, params.resize_factor, params.max_width);
@@ -1176,20 +1199,21 @@ namespace lfs::io {
             // Float16 is only a 2-byte container for the uint16 samples (no UInt16 dtype).
             auto cpu_tensor = Tensor::from_blob(
                 img_data, TensorShape({H, W, C}), Device::CPU, DataType::Float16);
-            gpu_staging = cpu_tensor.to(Device::CUDA);
-            lfs::core::free_image(img_data);
+            gpu_staging = cpu_tensor.to(Device::CUDA, stream);
 
             if (params.output_uint8) {
                 decoded = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
                 cuda::launch_uint16_hwc_to_uint8_chw(
                     reinterpret_cast<const uint16_t*>(gpu_staging.data_ptr()),
-                    decoded.ptr<uint8_t>(), H, W, C, nullptr);
+                    decoded.ptr<uint8_t>(), H, W, C, stream);
             } else {
                 decoded = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
                 cuda::launch_uint16_hwc_to_float32_chw(
                     reinterpret_cast<const uint16_t*>(gpu_staging.data_ptr()),
-                    decoded.ptr<float>(), H, W, C, nullptr);
+                    decoded.ptr<float>(), H, W, C, stream);
             }
+            synchronize_async_upload_before_free(stream, "image");
+            lfs::core::free_image(img_data);
         } else {
             auto [img_data, width, height, channels] = lfs::core::load_image(
                 path, params.resize_factor, params.max_width);
@@ -1202,23 +1226,21 @@ namespace lfs::io {
 
             auto cpu_tensor = Tensor::from_blob(
                 img_data, TensorShape({H, W, C}), Device::CPU, DataType::UInt8);
-            gpu_staging = cpu_tensor.to(Device::CUDA);
-            lfs::core::free_image(img_data);
+            gpu_staging = cpu_tensor.to(Device::CUDA, stream);
 
             if (params.output_uint8) {
                 decoded = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
                 cuda::launch_uint8_hwc_to_uint8_chw(
-                    gpu_staging.ptr<uint8_t>(), decoded.ptr<uint8_t>(), H, W, C, nullptr);
+                    gpu_staging.ptr<uint8_t>(), decoded.ptr<uint8_t>(), H, W, C, stream);
             } else {
                 decoded = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
                 cuda::launch_uint8_hwc_to_float32_chw(
-                    gpu_staging.ptr<uint8_t>(), decoded.ptr<float>(), H, W, C, nullptr);
+                    gpu_staging.ptr<uint8_t>(), decoded.ptr<float>(), H, W, C, stream);
             }
+            synchronize_async_upload_before_free(stream, "image");
+            lfs::core::free_image(img_data);
         }
 
-        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-        }
         return decoded;
     }
 
@@ -2750,7 +2772,7 @@ namespace lfs::io {
                             auto cpu_tensor = lfs::core::Tensor::from_blob(
                                 gray16, shape, lfs::core::Device::CPU, lfs::core::DataType::Float16);
                             auto gpu_staging = cpu_tensor.to(lfs::core::Device::CUDA, aux_stream);
-                            synchronize_async_upload_before_free(aux_stream, "depth");
+                            synchronize_async_upload_before_free(gpu_staging.stream(), "depth");
                             stbi_image_free(gray16);
                             gpu_gray = lfs::core::Tensor::empty(
                                 shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
@@ -2881,7 +2903,7 @@ namespace lfs::io {
                                 {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3}),
                             lfs::core::Device::CPU, lfs::core::DataType::Float16);
                         gpu_staging = cpu_tensor.to(lfs::core::Device::CUDA, sidecar_stream);
-                        synchronize_async_upload_before_free(sidecar_stream, "normal");
+                        synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
                         stbi_image_free(rgb16);
                     } else {
                         stbi_uc* const rgb8 = stbi_load(path_utf8.c_str(), &src_w, &src_h, &channels, 3);
@@ -2893,7 +2915,7 @@ namespace lfs::io {
                                 {static_cast<size_t>(src_h), static_cast<size_t>(src_w), 3}),
                             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
                         gpu_staging = cpu_tensor.to(lfs::core::Device::CUDA, sidecar_stream);
-                        synchronize_async_upload_before_free(sidecar_stream, "normal");
+                        synchronize_async_upload_before_free(gpu_staging.stream(), "normal");
                         stbi_image_free(rgb8);
                     }
 

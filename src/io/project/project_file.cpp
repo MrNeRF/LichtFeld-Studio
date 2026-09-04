@@ -845,10 +845,14 @@ namespace lfs::io::project::detail {
             std::format(".{}.{}.{}.{}.tmp", tag, ticks, process_id,
                         counter.fetch_add(1, std::memory_order_relaxed));
         if (destination.has_extension()) {
-            return destination.parent_path() /
-                   (destination.stem().string() + suffix + destination.extension().string());
+            auto temp_name = destination.stem();
+            temp_name += suffix;
+            temp_name += destination.extension();
+            return destination.parent_path() / temp_name;
         }
-        return std::filesystem::path(destination.string() + suffix);
+        auto temporary = destination;
+        temporary += suffix;
+        return temporary;
     }
 
     lfs::Result<void> ensure_parent_directory(const std::filesystem::path& path) {

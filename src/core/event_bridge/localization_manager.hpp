@@ -6,6 +6,7 @@
 #include "event_bridge.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -39,6 +40,9 @@ namespace lfs::event {
         std::vector<std::string> getAvailableLanguageNames() const;
         bool setLanguage(const std::string& language_code);
         std::string getCurrentLanguage() const;
+        [[nodiscard]] std::uint64_t getCurrentLanguageGeneration() const noexcept {
+            return language_generation_.load(std::memory_order_acquire);
+        }
         std::string getCurrentLanguageName() const;
         bool reload();
 
@@ -91,6 +95,7 @@ namespace lfs::event {
             plugin_strings_by_language_;
         std::unordered_map<PluginCatalogToken, PluginCatalogRecord> plugin_catalogs_;
         PluginCatalogToken next_plugin_catalog_token_ = 1;
+        std::atomic<std::uint64_t> language_generation_{0};
     };
 
     template <typename... Args>

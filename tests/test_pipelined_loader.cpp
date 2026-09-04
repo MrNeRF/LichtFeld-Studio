@@ -142,6 +142,22 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_LE(ready.mask->max().item<float>(), 1.0f);
 }
 
+TEST_F(PipelinedImageLoaderTest, PngMaxWidthUsesOneDecode) {
+    PipelinedImageLoader loader(config());
+    const auto before = loader.get_stats().cpu_decode_calls;
+
+    LoadParams params;
+    params.max_width = 16;
+    params.output_uint8 = true;
+    const auto tensor = loader.load_image_immediate(mask_path_, params);
+
+    const auto after = loader.get_stats().cpu_decode_calls;
+    EXPECT_EQ(after - before, 1U);
+    ASSERT_TRUE(tensor.is_valid());
+    ASSERT_EQ(tensor.shape().rank(), 3U);
+    EXPECT_LE(std::max(tensor.shape()[1], tensor.shape()[2]), 16U);
+}
+
 TEST_F(PipelinedImageLoaderTest, ResizeAndMaxWidthKeepImageAndMaskAligned) {
     PipelinedImageLoader loader(config());
     loader.prefetch({request(1, 256)});

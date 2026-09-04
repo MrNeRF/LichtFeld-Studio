@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 namespace lfs::core {
@@ -42,6 +43,17 @@ namespace lfs::vis::gui {
                                         int width,
                                         int height,
                                         int channels);
+        struct Region {
+            const std::uint8_t* pixels = nullptr;
+            int texture_width = 0;
+            int texture_height = 0;
+            int x = 0;
+            int y = 0;
+            int width = 0;
+            int height = 0;
+            int channels = 0;
+        };
+        [[nodiscard]] bool uploadRegions(std::span<const Region> regions);
         // flip_y: vertically mirror the image during upload. Set when the source tensor uses the
         // rasterizer's OpenGL (bottom-left origin) convention but the Vulkan view samples
         // top-left, e.g., the sequencer's RmlUi-bound preview textures.

@@ -30,6 +30,7 @@
 #include <exception>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -61,6 +62,7 @@ namespace lfs::vis {
 
     class LFS_VIS_API VisualizerImpl : public Visualizer {
         friend class gui::GuiManager;
+        friend class gui::AsyncTaskManager;
 
     public:
         explicit VisualizerImpl(const ViewerOptions& options);
@@ -79,6 +81,7 @@ namespace lfs::vis {
             return scene_manager_->getScene();
         }
         bool postWork(WorkItem work) override;
+        bool pumpPostedWorkForProjectWrite() override;
         bool postRenderWork(WorkItem work);
         [[nodiscard]] bool isOnViewerThread() const override {
             return std::this_thread::get_id() == viewer_thread_id_;
@@ -285,6 +288,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_RestoreThenTrainWritesNewCheckpoint_Test;
         friend class VisualizerImplResetTest_HeadlessOpenPrintsHydrationStagesWhenBenchPathSet_Test;
         friend class VisualizerImplResetTest_ResetTrainingPreservesExplicitInitPath_Test;
+        friend class VisualizerImplResetTest_ResetTrainingStopsTrainerDuringStarting_Test;
         friend class VisualizerImplResetTest_DirtyProjectSwitchRequiresExplicitDiscardAuthorization_Test;
         friend class VisualizerImplResetTest_NewProjectDirtyGateRunsBelowEveryCommandEntry_Test;
         friend class VisualizerImplResetTest_NewProjectWhileTrainingPromptsInsteadOfErroring_Test;
@@ -307,6 +311,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
         friend class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
         friend class VisualizerImplResetTest_AutosaveStartsAfterFirstSaveAsWithoutReopen_Test;
+        friend class VisualizerImplResetTest_AsyncCaptureKeepsNewerSceneDirty_Test;
         friend class VisualizerImplResetTest_AutosaveSkipsWhileManualProjectWriteJobIsRunning_Test;
         friend class VisualizerImplResetTest_RecoveredProjectSwitchDeletesTempOnlyAfterReplacement_Test;
         friend class VisualizerImplResetTest_FailedNewProjectKeepsRecoveredSessionTemp_Test;
@@ -346,6 +351,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
         friend class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -518,7 +524,8 @@ namespace lfs::vis {
         void setupViewContextBridge();
         void beginShutdown(std::string_view reason = "Viewer is shutting down");
         void processRenderWorkQueue();
-        [[nodiscard]] bool hasPendingRenderWork();
+        [[nodiscard]] bool hasPendingWork() const;
+        [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool inputFrameRequestsRender() const;
 
         struct FrameDemand {
@@ -563,6 +570,8 @@ namespace lfs::vis {
         [[nodiscard]] FrameDemand collectFrameDemand(bool viewport_export_locked,
                                                      bool drained_store_dirty = false,
                                                      bool consume_python_redraw = true);
+        [[nodiscard]] bool isMotionOnlyWake() const;
+        [[nodiscard]] double guiAnimationFrameInterval() const;
         void waitForNextEvent(bool is_training);
 
         class CallbackCleanup {
@@ -624,6 +633,8 @@ namespace lfs::vis {
         // State tracking
         bool fully_initialized_ = false;
         bool window_initialized_ = false;
+        mutable std::chrono::steady_clock::time_point display_refresh_queried_at_{};
+        mutable double gui_animation_frame_interval_ = 1.0 / 60.0;
         bool gui_initialized_ = false;
         bool tools_initialized_ = false;
         bool view_context_bridge_initialized_ = false;
@@ -654,6 +665,13 @@ namespace lfs::vis {
             pending_load_files_;
         int pending_training_completion_refresh_frames_ = 0;
         bool gui_frame_rendered_ = false;
+        bool motion_only_wake_skipped_ = false;
+        std::string last_wake_reason_ = "startup";
+        std::string last_wake_timeout_source_ = "none";
+        FrameDemand last_frame_demand_{};
+        bool has_last_frame_demand_ = false;
+        std::optional<std::chrono::steady_clock::time_point> pipeline_cache_flush_due_;
+        std::future<void> vksplat_spirv_preload_future_;
         bool startup_plugin_preload_started_ = false;
         bool startup_project_open_attempted_ = false;
         bool close_save_notice_posted_ = false;

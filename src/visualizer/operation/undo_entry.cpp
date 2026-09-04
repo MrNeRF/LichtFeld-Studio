@@ -473,6 +473,11 @@ namespace lfs::vis::op {
             if (sparse_bytes < dense_bytes) {
                 storage.mode = TensorSwapStorageMode::SPARSE;
                 storage.indices = std::move(indices_int32);
+                const auto max_index = storage.indices.max().item<int32_t>();
+                if (max_index < 0) {
+                    throw std::runtime_error("Cannot capture sparse tensor history with negative index");
+                }
+                storage.max_index = static_cast<size_t>(max_index);
                 storage.stored_values = before_tensor.index_select(0, storage.indices).contiguous();
             } else {
                 storage.mode = TensorSwapStorageMode::DENSE;
@@ -539,19 +544,12 @@ namespace lfs::vis::op {
                     throw std::runtime_error("Cannot replay sparse tensor history with invalid stored values");
                 }
 
-                const auto max_index = storage.indices.max().item<int32_t>();
-                if (max_index < 0 || static_cast<size_t>(max_index) >= live_tensor.numel()) {
+                if (!storage.max_index || *storage.max_index >= live_tensor.numel()) {
                     throw std::runtime_error("Cannot replay sparse tensor history: indices out of bounds");
                 }
 
                 auto current_values = live_tensor.index_select(0, storage.indices).contiguous();
                 live_tensor.scatter_(0, storage.indices, storage.stored_values);
-                if (live_tensor.is_valid() && live_tensor.device() == lfs::core::Device::CUDA) {
-                    if (const cudaError_t err = cudaStreamSynchronize(live_tensor.stream()); err != cudaSuccess) {
-                        LOG_ERROR("Failed to synchronize sparse tensor swap replay: {}",
-                                  cudaGetErrorString(err));
-                    }
-                }
                 storage.stored_values = std::move(current_values);
                 return;
             }
@@ -1741,10 +1739,12 @@ namespace lfs::vis::op {
         captured_ = captured_ | ModifiesFlag::TOPOLOGY;
     }
 
-    void SceneSnapshot::compactSelection() {
-        selection_after_metadata_ = scene_.getScene().captureSelectionStateMetadata();
+    void SceneSnapshot::compactSelection(const std::shared_ptr<lfs::core::Tensor>& after_mask) {
+        if (!after_mask) {
+            selection_after_metadata_ = scene_.getScene().captureSelectionStateMetadata();
+        }
 
-        const auto selection_after = scene_.getScene().getSelectionMask();
+        const auto selection_after = after_mask ? after_mask : scene_.getScene().getSelectionMask();
         const size_t total_size = std::max({scene_.getScene().getTotalGaussianCount(),
                                             tensorNumel(selection_before_.mask),
                                             tensorNumel(selection_after)});
@@ -1869,6 +1869,18 @@ namespace lfs::vis::op {
         expected_topology_ =
             captureTopologyProof(
                 scene_.getScene());
+    }
+
+    void SceneSnapshot::captureAfterSelection(
+        std::shared_ptr<lfs::core::Tensor> mask,
+        lfs::core::Scene::SelectionStateMetadata metadata) {
+        selection_after_metadata_ = std::move(metadata);
+        compactSelection(mask);
+        expected_topology_ = captureTopologyProof(scene_.getScene());
+    }
+
+    void SceneSnapshot::completePendingSelectionCounts() {
+        scene_.completePendingSelectionCounts();
     }
 
     bool SceneSnapshot::hasChanges() const {
@@ -2128,7 +2140,11 @@ namespace lfs::vis::op {
     }
 
     bool pushSceneSnapshotIfChanged(std::unique_ptr<SceneSnapshot> snapshot) {
-        if (!snapshot || !snapshot->hasChanges()) {
+        if (!snapshot) {
+            return false;
+        }
+        snapshot->completePendingSelectionCounts();
+        if (!snapshot->hasChanges()) {
             return false;
         }
         undoHistory().push(std::move(snapshot));
@@ -2279,6 +2295,15 @@ namespace lfs::vis::op {
         } else if (indices_.is_valid()) {
             preferred_device_ = indices_.device();
         }
+        if (indices_.is_valid() && indices_.numel() > 0) {
+            const auto indices_cpu = indices_.cpu().contiguous();
+            const auto* const indices_data = indices_cpu.ptr<int>();
+            if (!indices_data || indices_data[0] < 0) {
+                throw std::runtime_error("Cannot capture shN history with invalid indices");
+            }
+            max_index_ = static_cast<size_t>(
+                *std::max_element(indices_data, indices_data + indices_cpu.numel()));
+        }
     }
 
     size_t ShNCanonicalRowsUndoEntry::estimatedBytes() const {
@@ -2332,14 +2357,9 @@ namespace lfs::vis::op {
         if (!indices_.is_valid()) {
             throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
         }
-        const auto idx_cpu = indices_.cpu().contiguous();
-        const int* const idx_ptr = idx_cpu.ptr<int>();
-        const size_t n_idx = idx_cpu.numel();
         const size_t model_size = model.size();
-        for (size_t i = 0; i < n_idx; ++i) {
-            if (static_cast<size_t>(idx_ptr[i]) >= model_size) {
-                throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
-            }
+        if (!max_index_ || *max_index_ >= model_size) {
+            throw std::runtime_error("Incompatible tensor target for undo entry '" + node_name_ + ".shN'");
         }
 
         lfs::core::Tensor canon = model.shN_canonical();

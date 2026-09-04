@@ -247,7 +247,9 @@ def prepare_training_from_scene() -> None:
     """Initialize trainer from existing scene cameras and point cloud"""
 
 def start_training() -> None:
-    """Start training with current parameters"""
+    """
+    Start training with current parameters; waits for off-thread initialization
+    """
 
 def training_start_overwrite_conflict() -> int | None:
     """Return the blocking training-start overwrite conflict, if any"""
@@ -276,7 +278,7 @@ def reset_training() -> None:
     """Reset training state to initial"""
 
 def is_training_active() -> bool:
-    """Whether training is running or paused"""
+    """Whether training is starting, running, or paused"""
 
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""

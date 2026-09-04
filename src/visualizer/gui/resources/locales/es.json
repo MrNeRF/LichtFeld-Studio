@@ -45,6 +45,7 @@
     "tools.plugin_marketplace": "Marketplace de Plugins",
     "view": "Ver",
     "view.theme": "Tema",
+    "view.theme.auto": "Automático",
     "view.theme.dark": "Oscuro",
     "view.theme.light": "Claro",
     "view.theme.gruvbox": "Gruvbox",
@@ -74,12 +75,12 @@
     "title": "Primeros Pasos",
     "description": "Aprenda a preparar datasets y comenzar con LichtFeld Studio:",
     "wiki_section": "WIKI & PREGUNTAS FRECUENTES",
+    "video_overview": "Todo lo que LichtFeld Studio puede hacer hoy",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Entrenamiento con Imágenes Equirectangulares 360",
     "video_latest": "LichtFeld v0.3.0 Resumen de Funciones",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutorial COLMAP",
-    "video_lichtfeld": "Tutorial LichtFeld",
     "video_masks": "Tutorial de Máscaras"
   },
   "about": {
@@ -578,6 +579,8 @@
     "add_group": "Añadir Grupo",
     "add_group_ellipsis": "Añadir Grupo...",
     "new_group_name": "Nuevo grupo",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Exportar...",
     "delete": "Eliminar",
     "rename": "Renombrar",
@@ -772,6 +775,15 @@
     "progress_bar_style": "Barra de progreso",
     "progress_bar_classic": "Clásico",
     "progress_bar_miner": "Miner",
+    "viewport_chrome_style": "Controles de la vista",
+    "viewport_chrome_solid": "Sólidos",
+    "viewport_chrome_translucent": "Translúcidos",
+    "viewport_chrome_frosted": "Vidrio esmerilado",
+    "viewport_toolbar_position": "Posición de la barra de herramientas",
+    "viewport_toolbar_position_top": "Arriba",
+    "viewport_toolbar_position_centered": "Centrada",
+    "viewport_toolbar_position_free": "Libre",
+    "viewport_toolbar_drag": "Arrastrar la barra de herramientas",
     "scene_rendering": "Renderizado de la escena",
     "scene_reconstruction": "Reconstrucción de la escena",
     "scene_reconstruction_off": "Desactivada",
@@ -787,6 +799,10 @@
     "key_bindings": "Asignaciones de teclas",
     "camera_navigation": "Navegación de cámara",
     "navigation_mode": "Modo de navegación",
+    "zoom_speed": "Zoom speed",
+    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
+    "navigation_speed": "Navigation speed",
+    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
     "camera_view_snap": "Ajustar vistas de ejes",
     "enable_axis_view_snap": "Activar ajuste de vistas de ejes",
     "remember_camera_navigation": "Recordar navegación de cámara",
@@ -1956,6 +1972,9 @@
     "downloads": "Descargas",
     "invalid_link": "Enlace no válido",
     "button.install": "Instalar",
+    "cancel": "Cancelar",
+    "cancelling": "Cancelando...",
+    "installation_cancelled": "Instalación cancelada",
     "local_install": "Instalación local",
     "install_as_git_checkout": "Instalar como checkout de git",
     "confirm_uninstall_message": "¿Seguro que quieres desinstalar \"{name}\"?",
@@ -1969,7 +1988,8 @@
     "registry_loaded.other": "Registro cargado: {count} plugins en el catálogo del marketplace.",
     "registry_unavailable.one": "Registro no disponible: mostrando {count} plugin de respaldo.",
     "registry_unavailable.few": "Registro no disponible: mostrando {count} plugins de respaldo.",
-    "registry_unavailable.other": "Registro no disponible: mostrando {count} plugins de respaldo."
+    "registry_unavailable.other": "Registro no disponible: mostrando {count} plugins de respaldo.",
+    "popularity_unavailable": "Datos de popularidad no disponibles."
   },
   "sequencer": {
     "edit_focal_length": "Editar la Longitud Focal...",
@@ -2104,6 +2124,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Calculando el histograma…",
+      "message": "La distribución aparecerá en cuanto los datos estén listos."
+    },
     "delete_failed": {
       "title": "Error al eliminar",
       "status": "Error al eliminar: {message}",
@@ -2127,6 +2151,10 @@
       "metric_unavailable": {
         "title": "Métrica no disponible",
         "message": "No se pudo leer la métrica seleccionada del modelo combinado de gaussianas."
+      },
+      "compute_failed": {
+        "title": "Error del histograma",
+        "message": "Error al calcular el histograma: {error}"
       },
       "no_visible_values": {
         "title": "No hay valores visibles",

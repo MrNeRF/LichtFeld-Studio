@@ -21,8 +21,6 @@ import tempfile
 import threading
 import time
 from typing import Optional, Callable, Tuple
-from urllib.parse import quote, urlparse
-import urllib.request
 import zipfile
 
 logger = logging.getLogger(__name__)
@@ -42,6 +40,17 @@ HTTP_USER_AGENT = "LichtFeld-PluginInstaller/1.0"
 PROCESS_POLL_SECONDS = 0.05
 PROCESS_TERMINATE_GRACE_SECONDS = 0.5
 PROCESS_OUTPUT_TAIL_LINES = 100
+
+
+def __getattr__(name):
+    """Keep the historical lazy ``installer.urllib`` patch surface."""
+    if name == "urllib":
+        import urllib
+        import urllib.error
+        import urllib.request
+
+        return urllib
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _localized_progress(key: str, fallback: str, **values: object) -> str:
@@ -269,7 +278,7 @@ def write_plugin_source_metadata(plugin_dir: Path, info: PluginSourceInfo) -> No
     """Persist install-source metadata next to an installed plugin."""
     path = plugin_source_metadata_path(plugin_dir)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(info.to_dict(), f, indent=2)
+        json.dump(info.to_dict(), f, indent=2, ensure_ascii=False)
 
 
 def is_git_available() -> bool:
@@ -284,6 +293,8 @@ def github_repo_url(owner: str, repo: str) -> str:
 
 def github_archive_url(owner: str, repo: str, ref: Optional[str] = None) -> str:
     """Return the GitHub API tarball URL for a repo/ref."""
+    from urllib.parse import quote
+
     base = f"{GITHUB_API_URL}/{owner}/{repo}/tarball"
     if ref:
         return f"{base}/{quote(ref, safe='')}"
@@ -295,8 +306,11 @@ def _download_url_to_temp(
     *,
     on_progress: Optional[Callable[[str], None]] = None,
     headers: Optional[dict] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
     """Download a URL to a temporary file and return its path."""
+    import urllib.request
+
     req_headers = {"User-Agent": HTTP_USER_AGENT}
     if headers:
         req_headers.update(headers)
@@ -305,15 +319,29 @@ def _download_url_to_temp(
     if on_progress:
         on_progress(_localized_progress("plugin_marketplace.progress.download_url", "Downloading {url}...", url=url))
 
-    with urlopen(req, timeout=60) as resp:
-        with tempfile.NamedTemporaryFile(suffix=".archive", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-            try:
-                shutil.copyfileobj(resp, tmp)
-            except Exception:
-                tmp_path.unlink(missing_ok=True)
-                raise
-            return tmp_path
+    tmp_path: Optional[Path] = None
+    try:
+        if _cancel_requested(should_cancel):
+            raise PluginLoadCancelled("Plugin installation cancelled before download")
+        with urlopen(req, timeout=60) as resp:
+            with tempfile.NamedTemporaryFile(suffix=".archive", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+                class _CancellableResponse:
+                    def read(self, size=-1):
+                        if _cancel_requested(should_cancel):
+                            raise PluginLoadCancelled("Plugin installation cancelled during download")
+                        try:
+                            return resp.read(size)
+                        except TypeError:
+                            return resp.read()
+
+                shutil.copyfileobj(_CancellableResponse(), tmp, length=1024 * 1024)
+        return tmp_path
+    except BaseException:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+        raise
 
 
 def _sanitize_archive_path(name: str) -> Optional[Path]:
@@ -340,7 +368,11 @@ def _strip_common_prefix(paths: list[Path]) -> Optional[str]:
     return None
 
 
-def _extract_zip_archive(src: Path, dest: Path) -> None:
+def _extract_zip_archive(
+    src: Path,
+    dest: Path,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> None:
     with zipfile.ZipFile(src) as archive:
         members: list[tuple[zipfile.ZipInfo, Path]] = []
         for member in archive.infolist():
@@ -351,6 +383,8 @@ def _extract_zip_archive(src: Path, dest: Path) -> None:
 
         prefix = _strip_common_prefix([path for _, path in members])
         for member, rel_path in members:
+            if _cancel_requested(should_cancel):
+                raise PluginLoadCancelled("Plugin installation cancelled during extraction")
             if prefix and rel_path.parts and rel_path.parts[0] == prefix:
                 rel_path = Path(*rel_path.parts[1:])
             if not rel_path.parts:
@@ -364,7 +398,11 @@ def _extract_zip_archive(src: Path, dest: Path) -> None:
                 shutil.copyfileobj(in_file, out_file)
 
 
-def _extract_tar_archive(src: Path, dest: Path) -> None:
+def _extract_tar_archive(
+    src: Path,
+    dest: Path,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> None:
     with tarfile.open(src, "r:*") as archive:
         members: list[tuple[tarfile.TarInfo, Path]] = []
         for member in archive.getmembers():
@@ -375,6 +413,8 @@ def _extract_tar_archive(src: Path, dest: Path) -> None:
 
         prefix = _strip_common_prefix([path for _, path in members])
         for member, rel_path in members:
+            if _cancel_requested(should_cancel):
+                raise PluginLoadCancelled("Plugin installation cancelled during extraction")
             if prefix and rel_path.parts and rel_path.parts[0] == prefix:
                 rel_path = Path(*rel_path.parts[1:])
             if not rel_path.parts:
@@ -395,13 +435,19 @@ def _extract_tar_archive(src: Path, dest: Path) -> None:
                 shutil.copyfileobj(extracted, out_file)
 
 
-def extract_archive(src: Path, dest: Path) -> None:
+def extract_archive(
+    src: Path,
+    dest: Path,
+    should_cancel: Optional[Callable[[], bool]] = None,
+) -> None:
     """Extract a plugin archive into dest with path sanitization."""
+    if _cancel_requested(should_cancel):
+        raise PluginLoadCancelled("Plugin installation cancelled before extraction")
     if zipfile.is_zipfile(src):
-        _extract_zip_archive(src, dest)
+        _extract_zip_archive(src, dest, should_cancel)
         return
     if tarfile.is_tarfile(src):
-        _extract_tar_archive(src, dest)
+        _extract_tar_archive(src, dest, should_cancel)
         return
     raise PluginError(f"Unsupported plugin archive format: {src}")
 
@@ -414,30 +460,39 @@ def prepare_archive_from_download_url(
     on_progress: Optional[Callable[[str], None]] = None,
     request_headers: Optional[dict] = None,
     archive_validator: Optional[Callable[[Path], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
     """Download and extract an archive into a staging directory."""
-    archive_path = _download_url_to_temp(
-        download_url,
-        on_progress=on_progress,
-        headers=request_headers,
-    )
-    staging_dir = Path(tempfile.mkdtemp(prefix=temp_prefix, dir=staging_parent))
+    archive_path: Optional[Path] = None
+    staging_dir: Optional[Path] = None
     try:
+        archive_path = _download_url_to_temp(
+            download_url,
+            on_progress=on_progress,
+            headers=request_headers,
+            should_cancel=should_cancel,
+        )
+        if _cancel_requested(should_cancel):
+            raise PluginLoadCancelled("Plugin installation cancelled before staging")
+        staging_dir = Path(tempfile.mkdtemp(prefix=temp_prefix, dir=staging_parent))
         if archive_validator is not None:
             archive_validator(archive_path)
-        extract_archive(archive_path, staging_dir)
+        extract_archive(archive_path, staging_dir, should_cancel)
         return staging_dir
-    except Exception:
-        shutil.rmtree(staging_dir, ignore_errors=True)
+    except BaseException:
+        if staging_dir is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
         raise
     finally:
-        archive_path.unlink(missing_ok=True)
+        if archive_path is not None:
+            archive_path.unlink(missing_ok=True)
 
 
 def prepare_github_archive(
     url: str,
     staging_parent: Path,
     on_progress: Optional[Callable[[str], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> tuple[Path, PluginSourceInfo]:
     """Download a GitHub repository archive into a staging directory."""
     owner, repo, ref = parse_github_url(url)
@@ -458,6 +513,7 @@ def prepare_github_archive(
         staging_parent,
         temp_prefix=f".{repo}-",
         request_headers={"Accept": "application/vnd.github+json"},
+        should_cancel=should_cancel,
     )
     return staging_dir, PluginSourceInfo(
         transport="archive",
@@ -943,6 +999,8 @@ def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:
         - github:owner/repo@branch
         - owner/repo (assumes GitHub)
     """
+    from urllib.parse import urlparse
+
     url = url.strip()
     branch = None
 
@@ -1008,6 +1066,7 @@ def clone_from_url(
     url: str,
     plugins_dir: Path,
     on_progress: Optional[Callable[[str], None]] = None,
+    should_cancel: Optional[Callable[[], bool]] = None,
 ) -> Path:
     """Clone a plugin from GitHub URL.
 
@@ -1022,66 +1081,64 @@ def clone_from_url(
     owner, repo, branch = parse_github_url(url)
     clone_url = f"https://github.com/{owner}/{repo}.git"
 
-    plugin_name = normalize_repo_name(repo)
-
+    if _cancel_requested(should_cancel):
+        raise PluginLoadCancelled("Plugin installation cancelled before git clone")
     plugins_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=f".{repo}-", dir=plugins_dir))
+    keep_staging = False
+    try:
+        if on_progress:
+            on_progress(_localized_progress(
+                "plugin_marketplace.progress.cloning",
+                "Cloning {owner}/{repo}...",
+                owner=owner,
+                repo=repo,
+            ))
 
-    if on_progress:
-        on_progress(_localized_progress(
-            "plugin_marketplace.progress.cloning",
-            "Cloning {owner}/{repo}...",
-            owner=owner,
-            repo=repo,
-        ))
+        git = shutil.which("git")
+        if not git:
+            raise PluginError("git not found in PATH")
 
-    # Check if git is available
-    git = shutil.which("git")
-    if not git:
-        raise PluginError("git not found in PATH")
+        cmd = [git, "clone"]
+        if branch:
+            cmd.extend(["--branch", branch])
+        cmd.extend([clone_url, str(temp_dir)])
 
-    cmd = [git, "clone"]
-    if branch:
-        cmd.extend(["--branch", branch])
-    cmd.extend([clone_url, str(temp_dir)])
+        result = _run_cancellable_process(
+            cmd,
+            on_output=on_progress,
+            should_cancel=should_cancel,
+        )
+        if result.returncode != 0:
+            raise PluginError(f"Failed to clone repository: {result.stdout or 'no error output'}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+        manifest_path = temp_dir / "pyproject.toml"
+        if not manifest_path.exists():
+            raise PluginError("Repository is not a valid plugin (missing pyproject.toml)")
 
-    if result.returncode != 0:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise PluginError(f"Failed to clone repository: {result.stderr}")
+        with open(manifest_path, "rb") as f:
+            data = tomllib.load(f)
+        lf_section = data.get("tool", {}).get("lichtfeld", {})
+        if not lf_section:
+            raise PluginError("Repository is not a valid plugin (missing [tool.lichtfeld])")
+        manifest_name = str(data.get("project", {}).get("name", "")).strip()
+        if not manifest_name:
+            raise PluginError("Repository is not a valid plugin (missing project.name)")
+        target_dir = plugins_dir / manifest_name
+        if target_dir.exists():
+            raise PluginError(f"Plugin directory already exists: {target_dir}")
 
-    # Verify it's a valid plugin
-    manifest_path = temp_dir / "pyproject.toml"
-    if not manifest_path.exists():
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise PluginError(f"Repository is not a valid plugin (missing pyproject.toml)")
-
-    with open(manifest_path, "rb") as f:
-        data = tomllib.load(f)
-    lf_section = data.get("tool", {}).get("lichtfeld", {})
-    if not lf_section:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise PluginError("Repository is not a valid plugin (missing [tool.lichtfeld])")
-    manifest_name = str(data.get("project", {}).get("name", "")).strip()
-    final_name = manifest_name or plugin_name
-    target_dir = plugins_dir / final_name
-
-    if target_dir.exists():
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise PluginError(f"Plugin directory already exists: {target_dir}")
-
-    if temp_dir != target_dir:
-        temp_dir.replace(target_dir)
-
-    if on_progress:
-        on_progress(_localized_progress(
-            "plugin_marketplace.progress.cloned",
-            "Cloned {name}",
-            name=final_name,
-        ))
-
-    return target_dir
+        if on_progress:
+            on_progress(_localized_progress(
+                "plugin_marketplace.progress.cloned",
+                "Cloned {name}",
+                name=manifest_name,
+            ))
+        keep_staging = True
+        return temp_dir
+    finally:
+        if not keep_staging:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def update_plugin(

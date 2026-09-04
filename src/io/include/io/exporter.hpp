@@ -100,9 +100,12 @@ namespace lfs::io {
     // SPZ Export (Niantic compressed format)
     // ============================================================================
 
+    inline constexpr int kSpzExportZstdLevel = 9;
+
     struct SpzSaveOptions {
         std::filesystem::path output_path;
-        int version = 4; // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
+        int version = 4;                             // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
+        int compression_level = kSpzExportZstdLevel; // zstd compression level for SPZ v4
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };

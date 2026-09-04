@@ -599,6 +599,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
+    resources/lichtfeld-studio.manifest
 )
 if(TARGET lfs_scene_upscaler_nvidia_dlss)
     add_dependencies(${PROJECT_NAME} lfs_scene_upscaler_nvidia_dlss)
@@ -1025,6 +1026,9 @@ add_custom_target(copy_locale_files
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales"
         "${RESOURCE_DIR}/locales"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
+        "${RESOURCE_DIR}/locale_index.json"
     COMMENT "Syncing locale files"
 )
 add_dependencies(${PROJECT_NAME} copy_locale_files)
@@ -1271,6 +1275,8 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo.png" D
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
+        DESTINATION "${INSTALL_RESOURCE_DIR}")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 # Plugin development documentation

@@ -191,10 +191,11 @@ struct VulkanGSPipelineBuffers {
     Buffer<float> depths;             // (N, 1)
     Buffer<float> inv_cov_vs_opacity; // (N, 4)
     Buffer<float> rgb;                // (N, 3)
-    // 3-bit payload (DIM|NONSELECTABLE|FLASH). Allocated N-wide only while
-    // raster overlays are active; otherwise a 1-element dummy is bound and
-    // projection skips the store (lod_enabled bit 6).
-    Buffer<uint8_t> overlay_flags; // (N,) or (1,) dummy
+    // 3-bit payload (DIM|NONSELECTABLE|FLASH), one byte per splat. Byte-address
+    // access rounds the descriptor up to a whole 32-bit word. Projection clears
+    // the words before atomically ORing each byte; raster-only refreshes reuse
+    // them. With writes disabled, bit 6 is clear and a one-word dummy is bound.
+    Buffer<uint8_t> overlay_flags; // round_up(N, 4) bytes, minimum 4
 
     // Two-stage sort (Splatshop): visible primitives are compacted and sorted by
     // radial distance (depth), then tile instances are emitted in depth order and

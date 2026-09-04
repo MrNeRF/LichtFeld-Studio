@@ -193,6 +193,8 @@ namespace lfs::app {
                 return "idle";
             case vis::TrainingState::Ready:
                 return "ready";
+            case vis::TrainingState::Starting:
+                return "starting";
             case vis::TrainingState::Running:
                 return "running";
             case vis::TrainingState::Paused:
@@ -840,6 +842,10 @@ namespace lfs::app {
                     [this](const std::string& type, json payload) {
                         publish(type, std::move(payload));
                     });
+            }
+
+            ~RuntimeEventJournal() {
+                handlers_ = event::ScopedHandler{};
             }
 
             void publish(const std::string& type, json payload) {

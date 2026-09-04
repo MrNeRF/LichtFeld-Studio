@@ -103,13 +103,15 @@ if(TARGET zstd::libzstd)
 else()
     set(_spz_zstd_target zstd::libzstd_static)
 endif()
-target_link_libraries(spz_lib PRIVATE ZLIB::ZLIB ${_spz_zstd_target})
+target_link_libraries(spz_lib PRIVATE ZLIB::ZLIB ${_spz_zstd_target} TBB::tbb)
 target_compile_definitions(spz_lib PUBLIC SPZ_BUILD_EXTENSIONS)
 target_compile_features(spz_lib PUBLIC cxx_std_17)
 set_target_properties(spz_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Video encoding library (FFmpeg + CUDA for GPU-accelerated encoding)
 find_package(PkgConfig REQUIRED)
+# vcpkg swaps FFmpeg's codec between master (x264) and dev (openh264); do not reuse FindPkgConfig's cached library list.
+unset(__pkg_config_checked_FFMPEG CACHE)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
         libavcodec
         libavformat

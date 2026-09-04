@@ -61,10 +61,12 @@ namespace lfs::vis {
             float grip[4];                // spacing, half_w, half_l, line_count
             float left_uv_scale_clamp[4]; // xy scale, zw clamp
             float right_uv_scale_clamp[4];
+            float left_texcoord_scale_offset[4];
+            float right_texcoord_scale_offset[4];
         };
-        // 144 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
+        // 176 bytes exceeds the 128-byte Vulkan minimum for maxPushConstantsSize.
         // Acceptable only because CUDA requires NVIDIA hardware (reports 256).
-        static_assert(sizeof(SplitPush) == 9 * 16);
+        static_assert(sizeof(SplitPush) == 11 * 16);
         static_assert(sizeof(SplitPush) <= 256);
 
         // Convert a CHW float [0,1] tensor (CUDA or CPU) into a tightly packed RGBA8
@@ -1223,6 +1225,14 @@ namespace lfs::vis {
             push.right_uv_scale_clamp[1] = params.right.uv_scale.y;
             push.right_uv_scale_clamp[2] = params.right.uv_clamp_max.x;
             push.right_uv_scale_clamp[3] = params.right.uv_clamp_max.y;
+            push.left_texcoord_scale_offset[0] = params.left.texcoord_scale.x;
+            push.left_texcoord_scale_offset[1] = params.left.texcoord_scale.y;
+            push.left_texcoord_scale_offset[2] = params.left.texcoord_offset.x;
+            push.left_texcoord_scale_offset[3] = params.left.texcoord_offset.y;
+            push.right_texcoord_scale_offset[0] = params.right.texcoord_scale.x;
+            push.right_texcoord_scale_offset[1] = params.right.texcoord_scale.y;
+            push.right_texcoord_scale_offset[2] = params.right.texcoord_offset.x;
+            push.right_texcoord_scale_offset[3] = params.right.texcoord_offset.y;
 
             vkCmdPushConstants(cb, pipeline_layout, VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, sizeof(push), &push);

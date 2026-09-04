@@ -5,25 +5,17 @@
 import lichtfeld as lf
 
 from .keymap_bindings import KeymapBindingsSection
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .panels import panel_class
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
 
 
+@panel_class("preferences")
 class PreferencesPanel(Panel):
     """Floating home for application-level preferences."""
-
-    id = "lfs.preferences"
-    label = "Preferences"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 100
-    template = "rmlui/preferences.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (780, 440)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "interval"
-    update_interval_ms = 50
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),
@@ -46,6 +38,23 @@ class PreferencesPanel(Panel):
         ("miner", "preferences.progress_bar_miner"),
     )
 
+    VIEWPORT_CHROME_OPTIONS = (
+        ("solid", "preferences.viewport_chrome_solid"),
+        ("translucent", "preferences.viewport_chrome_translucent"),
+        ("frosted", "preferences.viewport_chrome_frosted"),
+    )
+
+    VIEWPORT_TOOLBAR_POSITION_OPTIONS = (
+        ("top", "preferences.viewport_toolbar_position_top"),
+        ("centered", "preferences.viewport_toolbar_position_centered"),
+        ("free", "preferences.viewport_toolbar_position_free"),
+    )
+
+    SPEED_SCRUB_FIELD_DEFS = {
+        "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+        "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+    }
+
     EXPANDABLE_SECTIONS = (
         "language",
         "project_location",
@@ -66,6 +75,7 @@ class PreferencesPanel(Panel):
         self._scene_upscaler_presets = {}
         self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
+        self._theme_families = []
         self._language_catalog = []
         self._last_state = None
         self._section = "general"
@@ -81,6 +91,17 @@ class PreferencesPanel(Panel):
         self._applied_project_location = ""
         self._document = None
         self._file_associations = []
+        self._mount_count = 0
+        self._scrub_fields = ScrubFieldController(
+            self.SPEED_SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
+
+    @property
+    def mount_count(self):
+        """Number of RML document mounts; closing retains the current mount."""
+        return self._mount_count
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
@@ -104,8 +125,19 @@ class PreferencesPanel(Panel):
                 f"{section}_expanded",
                 lambda section=section: section in self._expanded_sections,
             )
-        model.bind("theme_idx", self._theme_index, self._set_theme_index)
+        model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
+        model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
+        model.bind(
+            "viewport_chrome_idx",
+            self._viewport_chrome_index,
+            self._set_viewport_chrome_index,
+        )
+        model.bind(
+            "viewport_toolbar_position_idx",
+            self._viewport_toolbar_position_index,
+            self._set_viewport_toolbar_position_index,
+        )
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
             "scene_upscaler_idx",
@@ -123,6 +155,12 @@ class PreferencesPanel(Panel):
         )
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
+        model.bind("zoom_speed", lf.ui.get_zoom_speed_preference, self._set_zoom_speed)
+        model.bind(
+            "navigation_speed",
+            lf.ui.get_navigation_speed_preference,
+            self._set_navigation_speed,
+        )
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
@@ -168,8 +206,12 @@ class PreferencesPanel(Panel):
         model.bind_event("use_default_project_location", self._on_use_default_project_location)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
-        model.bind_record_list("themes")
+        model.bind_event("set_theme_variant", self._set_theme_variant)
+        model.bind_record_list("theme_families")
+        model.bind_record_list("theme_variants")
         model.bind_record_list("progress_bar_styles")
+        model.bind_record_list("viewport_chrome_styles")
+        model.bind_record_list("viewport_toolbar_positions")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
@@ -190,6 +232,7 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        self._mount_count += 1
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
         self._rebuild_records()
@@ -198,8 +241,14 @@ class PreferencesPanel(Panel):
         self._last_state = self._state()
         self._refresh_selection()
         self._keymap.on_mount(doc)
+        self._ensure_keymap_rows_if_visible()
+        if callable(getattr(doc, "query_selector_all", None)) and callable(
+            getattr(doc, "add_event_listener", None)
+        ):
+            self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._scrub_fields.unmount()
         self._keymap.on_unmount()
         self._document = None
         self._handle = None
@@ -208,23 +257,36 @@ class PreferencesPanel(Panel):
     def on_update(self, doc):
         self._consume_section_request()
         self._sync_mcp_runtime()
+        self._ensure_keymap_rows_if_visible()
         state = self._state()
         if state != self._last_state:
             self._last_state = state
             self._sync_scene_upscaler_preset_records()
+            self._sync_theme_variant_records()
             self._dirty_selection()
             self._dirty_mcp()
+        self._scrub_fields.sync_all()
         self._keymap.on_update(doc)
+
+    def _ensure_keymap_rows_if_visible(self):
+        if self._section == "input" and "key_bindings" in self._expanded_sections:
+            self._keymap.ensure_binding_rows()
 
     def _state(self):
         return (
             lf.ui.get_theme(),
+            lf.ui.get_theme_family(),
+            lf.ui.get_theme_mode(),
             lf.ui.get_progress_bar_style(),
+            lf.ui.get_viewport_chrome_style(),
+            lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
+            float(lf.ui.get_zoom_speed_preference()),
+            float(lf.ui.get_navigation_speed_preference()),
             lf.get_camera_view_snap_enabled(),
             getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.ui.remember_camera_navigation(),
@@ -238,24 +300,58 @@ class PreferencesPanel(Panel):
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
         )
+        families = {}
+        for theme in self._theme_catalog:
+            family_id = theme.get("family_id") or theme["id"]
+            family = families.setdefault(
+                family_id,
+                {
+                    "id": family_id,
+                    "name": theme.get("family_name") or theme.get("name") or family_id,
+                    "order": theme.get("order", 0),
+                    "variants": [],
+                },
+            )
+            family["order"] = min(family["order"], theme.get("order", 0))
+            family["variants"].append(theme)
+        self._theme_families = sorted(
+            families.values(), key=lambda family: (family["order"], family["name"])
+        )
         self._language_catalog = list(lf.ui.get_languages())
         if not self._handle:
             return
         self._handle.update_record_list(
-            "themes",
+            "theme_families",
             [
                 {
                     "index": str(index),
-                    "label": lf.ui.tr(theme.get("label_key") or theme.get("name") or theme["id"]),
+                    "label": family["name"],
                 }
-                for index, theme in enumerate(self._theme_catalog)
+                for index, family in enumerate(self._theme_families)
             ],
         )
+        self._sync_theme_variant_records()
         self._handle.update_record_list(
             "progress_bar_styles",
             [
                 {"index": str(index), "label": lf.ui.tr(label)}
                 for index, (_style, label) in enumerate(self.PROGRESS_BAR_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "viewport_chrome_styles",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_style, label) in enumerate(self.VIEWPORT_CHROME_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "viewport_toolbar_positions",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_position, label) in enumerate(
+                    self.VIEWPORT_TOOLBAR_POSITION_OPTIONS
+                )
             ],
         )
         self._handle.update_record_list(
@@ -292,20 +388,82 @@ class PreferencesPanel(Panel):
         )
         self._reload_file_associations()
 
-    def _theme_index(self):
-        current = lf.ui.get_theme()
-        for index, theme in enumerate(self._theme_catalog):
-            if theme["id"] == current:
+    def _theme_family_index(self):
+        current = lf.ui.get_theme_family()
+        for index, family in enumerate(self._theme_families):
+            if family["id"] == current:
                 return str(index)
         return "0"
 
-    def _set_theme_index(self, value):
+    def _set_theme_family_index(self, value):
         try:
             index = int(value)
         except (TypeError, ValueError):
             return
-        if 0 <= index < len(self._theme_catalog):
-            lf.ui.set_theme(self._theme_catalog[index]["id"])
+        if 0 <= index < len(self._theme_families):
+            family = self._theme_families[index]
+            variants = family["variants"]
+            available_modes = {variant["mode"] for variant in variants}
+            mode = lf.ui.get_theme_mode()
+            if len(variants) == 1:
+                mode = variants[0]["mode"]
+            elif mode != "auto" and mode not in available_modes:
+                mode = "dark" if "dark" in available_modes else "light"
+            lf.ui.set_theme_family(family["id"], mode)
+            self._sync_theme_variant_records()
+            self._refresh_selection()
+
+    def _selected_theme_family(self):
+        current = lf.ui.get_theme_family()
+        return next(
+            (family for family in self._theme_families if family["id"] == current),
+            None,
+        )
+
+    def _theme_has_variants(self):
+        family = self._selected_theme_family()
+        return bool(family and len(family["variants"]) > 1)
+
+    def _sync_theme_variant_records(self):
+        if not self._handle:
+            return
+        family = self._selected_theme_family()
+        selection_mode = lf.ui.get_theme_mode()
+        records = []
+        if family and len(family["variants"]) > 1:
+            variants = sorted(
+                family["variants"],
+                key=lambda variant: (variant.get("order", 0), variant.get("mode", "")),
+            )
+            for variant in variants:
+                records.append(
+                    {
+                        "mode": variant["mode"],
+                        "label": variant.get("variant_name") or variant.get("name") or variant["mode"],
+                        "selected": selection_mode == variant["mode"],
+                    }
+                )
+            modes = {variant["mode"] for variant in variants}
+            if {"dark", "light"}.issubset(modes) and lf.ui.supports_system_theme():
+                records.append(
+                    {
+                        "mode": "auto",
+                        "label": lf.ui.tr("menu.view.theme.auto"),
+                        "selected": selection_mode == "auto",
+                    }
+                )
+        self._handle.update_record_list("theme_variants", records)
+        self._handle.dirty("theme_has_variants")
+
+    def _set_theme_variant(self, _handle, _event, args):
+        if not args:
+            return
+        mode = str(args[0])
+        family = self._selected_theme_family()
+        if not family:
+            return
+        if lf.ui.set_theme_family(family["id"], mode):
+            self._sync_theme_variant_records()
             self._refresh_selection()
 
     def _progress_bar_index(self):
@@ -322,6 +480,40 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self.PROGRESS_BAR_OPTIONS):
             lf.ui.set_progress_bar_style(self.PROGRESS_BAR_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _viewport_chrome_index(self):
+        current = lf.ui.get_viewport_chrome_style()
+        for index, (style, _label) in enumerate(self.VIEWPORT_CHROME_OPTIONS):
+            if style == current:
+                return str(index)
+        return "1"
+
+    def _set_viewport_chrome_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.VIEWPORT_CHROME_OPTIONS):
+            lf.ui.set_viewport_chrome_style(self.VIEWPORT_CHROME_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _viewport_toolbar_position_index(self):
+        current = lf.ui.get_viewport_toolbar_position()
+        for index, (position, _label) in enumerate(self.VIEWPORT_TOOLBAR_POSITION_OPTIONS):
+            if position == current:
+                return str(index)
+        return "1"
+
+    def _set_viewport_toolbar_position_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.VIEWPORT_TOOLBAR_POSITION_OPTIONS):
+            lf.ui.set_viewport_toolbar_position(
+                self.VIEWPORT_TOOLBAR_POSITION_OPTIONS[index][0]
+            )
             self._refresh_selection()
 
     def _scale_index(self):
@@ -495,6 +687,27 @@ class PreferencesPanel(Panel):
         if 0 <= index < len(self.NAVIGATION_OPTIONS):
             lf.set_camera_navigation_mode(self.NAVIGATION_OPTIONS[index][0])
             self._refresh_selection()
+
+    def _set_zoom_speed(self, value):
+        lf.ui.set_zoom_speed_preference(float(value))
+        self._refresh_selection()
+
+    def _set_navigation_speed(self, value):
+        lf.ui.set_navigation_speed_preference(float(value))
+        self._refresh_selection()
+
+    def _get_scrub_value(self, prop):
+        if prop == "zoom_speed":
+            return float(lf.ui.get_zoom_speed_preference())
+        if prop == "navigation_speed":
+            return float(lf.ui.get_navigation_speed_preference())
+        return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
+
+    def _set_scrub_value(self, prop, value):
+        if prop == "zoom_speed":
+            self._set_zoom_speed(value)
+        elif prop == "navigation_speed":
+            self._set_navigation_speed(value)
 
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
@@ -870,10 +1083,14 @@ class PreferencesPanel(Panel):
     def _on_close(self, _handle, _event, _args):
         # The floating-window title bar is cancellation: discard an unconfirmed
         # port draft while preserving settings that were already applied live.
+        mcp_draft_changed = self._mcp_port != str(self._mcp_applied_port)
+        project_draft_changed = self._project_location != self._applied_project_location
         self._mcp_port = str(self._mcp_applied_port)
         self._project_location = self._applied_project_location
-        self._dirty_mcp()
-        self._dirty_project_location()
+        if mcp_draft_changed:
+            self._dirty_mcp()
+        if project_draft_changed:
+            self._dirty_project_location()
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_accept_and_close(self, _handle, _event, _args):
@@ -887,6 +1104,7 @@ class PreferencesPanel(Panel):
         if self._section == section:
             return
         self._section = section
+        self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
                 "show_general",
@@ -913,6 +1131,7 @@ class PreferencesPanel(Panel):
             self._expanded_sections.add(section)
         if self._handle:
             self._handle.dirty(f"{section}_expanded")
+        self._ensure_keymap_rows_if_visible()
 
     def _dirty_expanded_sections(self):
         if not self._handle:
@@ -991,11 +1210,15 @@ class PreferencesPanel(Panel):
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
+            lf.ui.set_viewport_chrome_style("translucent")
+            lf.ui.set_viewport_toolbar_position("centered")
             lf.ui.set_ui_scale(0.0)
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
+            lf.ui.set_zoom_speed_preference(11.0)
+            lf.ui.set_navigation_speed_preference(8.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1013,18 +1236,24 @@ class PreferencesPanel(Panel):
 
     def _refresh_selection(self):
         self._last_state = self._state()
+        self._sync_theme_variant_records()
         self._dirty_selection()
 
     def _dirty_selection(self):
         if self._handle:
-            self._handle.dirty("theme_idx")
+            self._handle.dirty("theme_family_idx")
+            self._handle.dirty("theme_has_variants")
             self._handle.dirty("progress_bar_idx")
+            self._handle.dirty("viewport_chrome_idx")
+            self._handle.dirty("viewport_toolbar_position_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")
             self._handle.dirty("scene_upscaler_has_preset")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
+            self._handle.dirty("zoom_speed")
+            self._handle.dirty("navigation_speed")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")

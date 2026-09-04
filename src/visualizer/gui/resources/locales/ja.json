@@ -45,6 +45,7 @@
     "tools.plugin_marketplace": "プラグインマーケットプレイス",
     "view": "表示",
     "view.theme": "テーマ",
+    "view.theme.auto": "自動",
     "view.theme.dark": "ダーク",
     "view.theme.light": "ライト",
     "view.theme.gruvbox": "Gruvbox",
@@ -74,12 +75,12 @@
     "title": "はじめに",
     "description": "データセットの準備方法とLichtFeld Studioの使い方を学びましょう:",
     "wiki_section": "Wiki & よくある質問",
+    "video_overview": "LichtFeld Studioで現在できることのすべて",
     "video_automotive": "自動車マーケティング向け 3DGS",
     "video_intro": "360°正距円筒図法画像でのトレーニング",
     "video_latest": "LichtFeld v0.3.0 機能概要",
     "video_reality_scan": "Reality Scanデータセット",
     "video_colmap": "COLMAPチュートリアル",
-    "video_lichtfeld": "LichtFeldチュートリアル",
     "video_masks": "マスクチュートリアル"
   },
   "about": {
@@ -578,6 +579,8 @@
     "add_group": "グループを追加",
     "add_group_ellipsis": "グループを追加...",
     "new_group_name": "新しいグループ",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "エクスポート...",
     "delete": "削除",
     "rename": "名前を変更",
@@ -772,6 +775,15 @@
     "progress_bar_style": "進捗バー",
     "progress_bar_classic": "クラシック",
     "progress_bar_miner": "Miner",
+    "viewport_chrome_style": "ビューポート操作",
+    "viewport_chrome_solid": "不透明",
+    "viewport_chrome_translucent": "半透明",
+    "viewport_chrome_frosted": "フロストガラス",
+    "viewport_toolbar_position": "ツールバーの位置",
+    "viewport_toolbar_position_top": "上",
+    "viewport_toolbar_position_centered": "中央",
+    "viewport_toolbar_position_free": "自由",
+    "viewport_toolbar_drag": "ツールバーを移動",
     "scene_rendering": "シーンレンダリング",
     "scene_reconstruction": "シーン再構成",
     "scene_reconstruction_off": "オフ",
@@ -787,6 +799,10 @@
     "key_bindings": "キー割り当て",
     "camera_navigation": "カメラ操作",
     "navigation_mode": "ナビゲーションモード",
+    "zoom_speed": "Zoom speed",
+    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
+    "navigation_speed": "Navigation speed",
+    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
     "camera_view_snap": "軸ビューにスナップ",
     "enable_axis_view_snap": "軸ビュースナップを有効化",
     "remember_camera_navigation": "カメラ操作を記憶",
@@ -1956,6 +1972,9 @@
     "downloads": "ダウンロード",
     "invalid_link": "無効なリンク",
     "button.install": "インストール",
+    "cancel": "キャンセル",
+    "cancelling": "キャンセル中...",
+    "installation_cancelled": "インストールをキャンセルしました",
     "local_install": "ローカルインストール",
     "install_as_git_checkout": "Git チェックアウトとしてインストール",
     "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",
@@ -1969,7 +1988,8 @@
     "registry_loaded.other": "レジストリを読み込みました: マーケットプレイスカタログに {count} 件のプラグインがあります。",
     "registry_unavailable.one": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
     "registry_unavailable.few": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
-    "registry_unavailable.other": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。"
+    "registry_unavailable.other": "レジストリを利用できません: {count} 件のフォールバックプラグインを表示しています。",
+    "popularity_unavailable": "人気データを利用できません。"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",
@@ -2104,6 +2124,10 @@
         }
       }
     },
+    "computing": {
+      "title": "ヒストグラムを計算中…",
+      "message": "データの準備ができ次第、分布が表示されます。"
+    },
     "delete_failed": {
       "title": "削除に失敗しました",
       "status": "削除に失敗しました: {message}",
@@ -2127,6 +2151,10 @@
       "metric_unavailable": {
         "title": "メトリックを利用できません",
         "message": "選択したメトリックを結合したガウシアンモデルから読み取れませんでした。"
+      },
+      "compute_failed": {
+        "title": "ヒストグラムに失敗しました",
+        "message": "ヒストグラムの計算に失敗しました: {error}"
       },
       "no_visible_values": {
         "title": "表示可能な値がありません",

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression checks for retained RmlUI menu bar resources."""
 
+import json
+import re
 from pathlib import Path
 
 
@@ -44,6 +46,9 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     assert 'data-class-open="item.submenu_open"' in rml
     assert 'data-attr-data-root-index="item.index"' in rml
     assert 'data-class-active="item.submenu_open"' in rml
+    assert 'data-class-open="child.submenu_open"' in rml
+    assert 'data-attr-data-child-index="child.index"' in rml
+    assert 'data-for="leaf : child.children"' in rml
     assert 'id="dropdown-popup"' in rml
     assert "#dropdown-overlay" in rcss
     assert "#dropdown-container" in rcss
@@ -61,7 +66,7 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     submenu_rule = _rule_body(rcss, ".submenu-popup")
     assert "min-width: 200dp;" in submenu_rule
     assert "max-width: 420dp;" in submenu_rule
-    assert "overflow: hidden;" in submenu_rule
+    assert "overflow: visible;" in submenu_rule
     menu_item_rule = _rule_body(rcss, ".menu-item")
     assert "flex-shrink: 0;" in menu_item_rule
     assert "white-space: nowrap;" in menu_item_rule
@@ -91,6 +96,108 @@ def test_menubar_submenus_are_stacked_above_overlay_and_hit_testable():
     )
     toolbar_button_rule = _rule_body(rcss, ".menu-toolbar-btn")
     assert "transition: none;" in toolbar_button_rule
+
+
+def test_toolbar_icons_use_contrast_aware_theme_tokens():
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    menubar_theme = (resources / "menubar.theme.rcss").read_text(encoding="utf-8")
+    viewport_theme = (resources / "viewport_overlay.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    viewport_layout = (resources / "viewport_overlay.rcss").read_text(
+        encoding="utf-8"
+    )
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "readableIconColor" in rml_theme_cpp
+    assert "MIN_ICON_CONTRAST = 4.5f" in rml_theme_cpp
+    assert "const std::array backgrounds" in rml_theme_cpp
+    assert "const float VIEWPORT_GIZMO_OPACITY = viewport_chrome_solid" in rml_theme_cpp
+    assert "? (is_light ? 0.48f : 0.42f)" in rml_theme_cpp
+    assert ": 0.64f;" in rml_theme_cpp
+    assert 'colorToRmlAlpha(viewport_toolbar_icon, 0.70f)' in rml_theme_cpp
+    for token in (
+        "menu.toolbar_icon",
+        "menu.toolbar_selected_decor",
+        "menu.toolbar_selected_icon",
+        "viewport.toolbar_glass_decor",
+        "viewport.toolbar_text",
+        "viewport.toolbar_selected_decor",
+        "viewport.toolbar_selected_icon",
+        "viewport.gizmo_decor",
+        "viewport.gizmo_icon",
+        "viewport.gizmo_hover_decor",
+        "viewport.gizmo_hover_icon",
+        "viewport.gizmo_disabled_icon",
+        "viewport.gizmo_selected_decor",
+        "viewport.gizmo_selected_icon",
+        "viewport.gizmo_selected_hover_decor",
+        "viewport.gizmo_selected_hover_icon",
+    ):
+        assert f'{{"{token}"' in rml_theme_cpp
+
+    assert "image-color: @{menu.toolbar_icon};" in menubar_theme
+    assert "@{menu.toolbar_selected_decor};" in menubar_theme
+    assert "image-color: @{menu.toolbar_selected_icon};" in menubar_theme
+    assert "@{viewport.toolbar_glass_decor};" in viewport_theme
+    assert "@{viewport.toolbar_selected_decor};" in viewport_theme
+    assert "image-color: @{viewport.toolbar_selected_icon};" in viewport_theme
+    assert "@{viewport.gizmo_decor};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_icon};" in viewport_theme
+    assert "@{viewport.gizmo_hover_decor};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_hover_icon};" in viewport_theme
+    assert "@{viewport.gizmo_selected_decor};" in viewport_theme
+    assert "image-color: @{viewport.gizmo_selected_icon};" in viewport_theme
+    assert "width: 27dp;" in viewport_layout
+    assert "height: 27dp;" in viewport_layout
+    assert "width: 18dp;" in viewport_layout
+    assert "height: 18dp;" in viewport_layout
+
+
+def test_optional_gradients_style_the_primary_application_chrome():
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+    consumers = {
+        "chrome.menu_decor": ("shell.theme.rcss", "menubar.theme.rcss"),
+        "chrome.status_decor": ("shell.theme.rcss", "statusbar.theme.rcss"),
+        "chrome.right_panel_decor": ("right_panel.theme.rcss",),
+        "chrome.right_panel_edge_shape": ("right_panel.theme.rcss",),
+        "chrome.right_panel_separator_decor": ("right_panel.theme.rcss",),
+        "chrome.toolbar_decor": ("viewport_overlay.theme.rcss",),
+        "controls.selected_decor": ("viewport_overlay.theme.rcss",),
+        "controls.selected_icon": ("viewport_overlay.theme.rcss",),
+    }
+    for token, filenames in consumers.items():
+        assert f'{{"{token}"' in rml_theme_cpp
+        for filename in filenames:
+            resource = (resources / filename).read_text(encoding="utf-8")
+            assert f"@{{{token}}}" in resource
+
+    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    assert '{"panel.host_body_decor"' in rml_theme_cpp
+    assert '"decorator: none; background-color: transparent"' in rml_theme_cpp
+    assert "@{panel.host_body_decor}" in panel_host_theme
+    assert '"width: 1dp; height: 100%' in rml_theme_cpp
 
 
 def test_rml_tooltips_request_only_pending_animation_frames():
@@ -152,7 +259,9 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert "Rml::Element* dropdownElementAtPoint(float x, float y) const" in menu_bar_header
     assert "RmlMenuBar::dropdownElementAtPoint" in menu_bar_cpp
     assert "GetAbsoluteOffset(Rml::BoxArea::Border)" in menu_bar_cpp
-    assert "setOpenSubmenu(submenuIndexForElement(hit_element))" in menu_bar_cpp
+    assert "setOpenSubmenu(" in menu_bar_cpp
+    assert "submenuIndexForElement(hit_element)," in menu_bar_cpp
+    assert "childSubmenuIndexForElement(hit_element)" in menu_bar_cpp
     assert "tooltip_.setHover(resolveRmlTooltip(hit_element), hit_element)" in menu_bar_cpp
     assert "void sizeOpenDropdowns();" in menu_bar_header
     assert "RmlMenuBar::sizeOpenDropdowns" in menu_bar_cpp
@@ -167,6 +276,270 @@ def test_menu_bar_uses_retained_bounds_for_submenu_hover():
     assert 'action == "set_camera_navigation_mode"' in menu_bar_cpp
     assert "setCameraNavigationMode" in menu_bar_cpp
     assert "std::vector<MenuToolbarButtonView> camera_buttons_" in menu_bar_header
+
+
+def test_theme_auto_visibility_and_variant_button_width_are_capability_driven():
+    preferences_panel = (
+        PROJECT_ROOT / "src" / "python" / "lfs_plugins" / "preferences_panel.py"
+    ).read_text(encoding="utf-8")
+    preferences_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "preferences.rcss"
+    ).read_text(encoding="utf-8")
+    theme_cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert '{"dark", "light"}.issubset(modes) and lf.ui.supports_system_theme()' in preferences_panel
+    variants_rule = _rule_body(preferences_rcss, ".preferences-theme-variants")
+    assert "display: flex;" in variants_rule
+    assert "flex: 0 0 200dp;" in variants_rule
+    variant_rule = _rule_body(preferences_rcss, ".preferences-theme-variant")
+    assert "flex: 1 1 0;" in variant_rule
+    assert "min-width: 0;" in variant_rule
+
+    assert "#elif defined(__linux__)" in theme_cpp
+    assert "SDL_GetSystemTheme()" in theme_cpp
+    assert "SDL_SYSTEM_THEME_LIGHT" in theme_cpp
+    assert "SDL_SYSTEM_THEME_DARK" in theme_cpp
+
+
+def test_all_optional_theme_gradients_reach_rml_consumers():
+    theme_cpp = (
+        PROJECT_ROOT / "src" / "visualizer" / "theme" / "theme.cpp"
+    ).read_text(encoding="utf-8")
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    signal = json.loads(
+        (
+            PROJECT_ROOT
+            / "src"
+            / "visualizer"
+            / "gui"
+            / "assets"
+            / "themes"
+            / "signal.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    gradient_tokens = {
+        "window_body": ("window.body_decor", "components.theme.rcss"),
+        "panel_body": ("panel.body_decor", "shell.theme.rcss"),
+        "window_title": ("window.title_decor", "components.theme.rcss"),
+        "section_header": ("components.header_decor", "components.theme.rcss"),
+        "section_header_hover": (
+            "components.header_hover_decor",
+            "components.theme.rcss",
+        ),
+        "progress": ("components.progress_fill_decor", "components.theme.rcss"),
+        "scrubber_track": ("components.scrub_bg_decor", "components.theme.rcss"),
+        "scrubber_fill": ("components.scrub_fill_decor", "components.theme.rcss"),
+        "histogram_header": (
+            "panel.histogram_hero_decor",
+            "histogram_panel.theme.rcss",
+        ),
+        "histogram_fill": (
+            "panel.histogram_fill_decor",
+            "histogram_panel.theme.rcss",
+        ),
+        "histogram_selection": (
+            "panel.histogram_fill_selected_decor",
+            "histogram_panel.theme.rcss",
+        ),
+    }
+
+    for mode in ("dark", "light"):
+        defined = {
+            key
+            for key in signal["variants"][mode]["gradients"]
+            if not key.startswith("_")
+        }
+        assert defined == set(gradient_tokens)
+
+    for gradient, (token, resource_name) in gradient_tokens.items():
+        assert f'apply_gradient("{gradient}", t.gradients.{gradient})' in theme_cpp
+        assert f"hashGradient(seed, gradients.{gradient})" in rml_theme_cpp
+        assert f"t.gradients.{gradient}" in rml_theme_cpp
+        resource = (resources / resource_name).read_text(encoding="utf-8")
+        assert f"@{{{token}}}" in resource
+
+
+def test_histogram_history_icons_follow_theme_contrast():
+    resources = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    )
+    histogram_theme = (resources / "histogram_panel.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    rml_theme_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        ".histogram-history-icon {\n"
+        "    image-color: @{text};\n"
+        "}"
+        in histogram_theme
+    )
+    assert (
+        ".histogram-history-btn:hover .histogram-history-icon {\n"
+        "    image-color: @{primary};\n"
+        "}"
+        in histogram_theme
+    )
+    assert (
+        ".histogram-history-btn:disabled .histogram-history-icon {\n"
+        "    image-color: @{panel.histogram_history_icon_disabled};\n"
+        "}"
+        in histogram_theme
+    )
+    assert (
+        '{"panel.histogram_history_icon_disabled", '
+        "colorToRmlAlpha(p.text_dim, is_light ? 0.68f : 0.52f)}"
+        in rml_theme_cpp
+    )
+
+
+def test_signal_family_keeps_a_distinct_visual_language():
+    themes = (
+        PROJECT_ROOT / "src" / "visualizer" / "gui" / "assets" / "themes"
+    )
+    signal = json.loads((themes / "signal.json").read_text(encoding="utf-8"))
+    lichtfeld = json.loads((themes / "lichtfeld.json").read_text(encoding="utf-8"))
+
+    for mode in ("dark", "light"):
+        variant = signal["variants"][mode]
+        palette = variant["palette"]
+        progress = variant["gradients"]["progress"]
+        assert progress["start"] == palette["primary"]
+        assert progress["end"] == palette["secondary"]
+        assert variant["sizes"]["window_rounding"] >= 12.0
+        assert variant["sizes"]["frame_rounding"] >= 7.0
+
+    signal_day = signal["variants"]["light"]
+    lichtfeld_light = lichtfeld["variants"]["light"]
+    canvas_distance = sum(
+        abs(a - b)
+        for a, b in zip(
+            signal_day["palette"]["background"][:3],
+            lichtfeld_light["palette"]["background"][:3],
+        )
+    )
+    assert canvas_distance >= 0.10
+    assert signal_day["sizes"]["window_rounding"] >= (
+        lichtfeld_light["sizes"]["window_rounding"] + 4.0
+    )
+
+
+def test_sequencer_quality_scrubber_uses_shared_theme_gradients():
+    sequencer_rml = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "sequencer.rml"
+    ).read_text(encoding="utf-8")
+    sequencer_rcss = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "sequencer.rcss"
+    ).read_text(encoding="utf-8")
+    sequencer_theme = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+        / "sequencer.theme.rcss"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="quality-scrub" class="scrub-field"' in sequencer_rml
+    assert 'id="quality-fill" class="scrub-field-fill"' in sequencer_rml
+    quality_scrubber = sequencer_rcss.split("/* ── Quality Scrub Field", 1)[1].split(
+        "#btn-equirect", 1
+    )[0]
+    assert "decorator: vertical-gradient" not in quality_scrubber
+    assert "decorator: horizontal-gradient" not in quality_scrubber
+    assert "color: #cdd6f4;" not in quality_scrubber
+    assert sequencer_theme.count("@{panel.body_decor}") == 2
+    assert "@{components.header_decor}" in sequencer_theme
+
+    assert "@media (max-width: 1620dp)" not in sequencer_rcss
+    responsive_rules = sequencer_rcss.split("@media", 1)[1]
+    assert ".quality-group" not in responsive_rules
+    assert "#quality-scrub" not in responsive_rules
+    assert ".speed-text" not in responsive_rules
+    assert "#btn-speed" not in responsive_rules
+    assert "#sequence-fps-field" not in responsive_rules
+    assert "#resolution-field" not in responsive_rules
+
+
+def test_asset_manager_palette_is_fully_theme_driven():
+    resources = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "rmlui"
+        / "resources"
+    )
+    base_rcss = (resources / "asset_manager.rcss").read_text(encoding="utf-8")
+    theme_rcss = (resources / "asset_manager.theme.rcss").read_text(encoding="utf-8")
+    rml = (resources / "asset_manager.rml").read_text(encoding="utf-8")
+
+    # Layout resources must not smuggle in a dark fallback palette. Entity
+    # references such as &#215; are not color literals.
+    assert re.search(r"(?<!&)#[0-9a-fA-F]{3,8}\b", base_rcss) is None
+    assert re.search(r"\brgba?\s*\(", base_rcss) is None
+    assert re.search(r"(?<!&)#[0-9a-fA-F]{3,8}\b", rml) is None
+
+    required_theme_rules = {
+        "#asset-popup": ("@{panel.body_decor}", "@{text}", "@{border}"),
+        ".asset-button": ("@{surface_bright}", "@{border}", "@{text}"),
+        ".asset-import-button": ("@{blend(surface,primary,button.tint_normal)}",),
+        ".asset-icon-grid > span,\n.asset-icon-list > span": ("@{text}",),
+        ".asset-refresh-button img,\n.asset-folder-menu img,\n.asset-card-menu img": (
+            "@{alpha(text,0.90)}",
+        ),
+        "#asset-sidebar": ("@{alpha(background,0.32)}", "@{border}"),
+        ".asset-card": ("@{surface_bright}", "@{border}"),
+        ".asset-list-row": ("@{surface_bright}", "@{border}", "@{text}"),
+        "#asset-info-panel": ("@{alpha(background,0.32)}", "@{border}"),
+        ".asset-info-warning": ("@{alpha(error,0.10)}", "@{error}"),
+    }
+    for selector, expected_tokens in required_theme_rules.items():
+        body = theme_rcss.split(f"{selector} {{", 1)[1].split("\n}", 1)[0]
+        for token in expected_tokens:
+            assert token in body
+
+    assert 'class="asset-add-folder-glyph"' in rml
+    assert "stroke=" not in rml
 
 
 def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing():
@@ -185,6 +558,51 @@ def test_open_menu_requests_passive_mouse_render_and_blocks_viewport_hit_testing
         "        }"
     ) in gui_manager_cpp
     assert "if (!ui_hidden_ && rml_menu_bar_.isOpen())" not in gui_manager_cpp
+
+
+def test_menu_pointer_input_is_not_replayed_into_underlay_panels():
+    gui_manager_cpp = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+    gui_manager_header = (
+        PROJECT_ROOT
+        / "src"
+        / "visualizer"
+        / "gui"
+        / "gui_manager.hpp"
+    ).read_text(encoding="utf-8")
+
+    assert "bool menu_pointer_capture_active_ = false;" in gui_manager_header
+    assert "const bool menu_was_open = rml_menu_bar_.isOpen();" in gui_manager_cpp
+    assert (
+        "menu_was_open || rml_menu_bar_.isOpen() || rml_menu_bar_.wantsInput()"
+        in gui_manager_cpp
+    )
+    assert "menu_blocks_underlay_pointer = menu_owns_pointer ||" in gui_manager_cpp
+    assert "menu_pointer_capture_active_;" in gui_manager_cpp
+    assert (
+        "else if (menu_blocks_underlay_pointer)\n"
+        "                frame_input = maskPointerInputForUnderlay(std::move(frame_input));"
+        in gui_manager_cpp
+    )
+
+    menu_dispatch = gui_manager_cpp.index("rml_menu_bar_.processInput(menu_input);")
+    underlay_mask = gui_manager_cpp.index(
+        "frame_input = maskPointerInputForUnderlay(std::move(frame_input));"
+    )
+    underlay_route = gui_manager_cpp.index("PanelInputState panel_input = frame_input;")
+    assert menu_dispatch < underlay_mask < underlay_route
+
+    pointer_mask = gui_manager_cpp.split(
+        "PanelInputState maskPointerInputForUnderlay", 1
+    )[1].split("PanelInputState maskInputForBlockedUi", 1)[0]
+    assert "input.key_ctrl" not in pointer_mask
+    assert "input.keys_pressed" not in pointer_mask
+    assert "input.text_inputs" not in pointer_mask
 
 
 def test_viewport_overlay_toolbar_origin_tracks_viewport_content_offset():
@@ -275,7 +693,7 @@ def test_scene_tree_aligns_hierarchy_and_keeps_row_actions_trailing():
         'training_toggle_icon->SetAttribute("data-action", "toggle-training")'
     )
     delete = scene_graph_cpp.index('trash_icon->SetAttribute("data-action", "delete")')
-    assert checkbox < expand < name < visibility < training_toggle < delete
+    assert checkbox < expand < name < training_toggle < visibility < delete
     assert 'actions->SetClass("row-actions", true)' in scene_graph_cpp
     assert scene_graph_cpp.count('SetClass("row-action-slot", true)') == 3
     row_actions_rule = _rule_body(scene_rcss, ".row-actions")
@@ -512,8 +930,10 @@ def test_scene_tree_multi_selection_actions_are_fixed_below_the_scroll_view():
     count_pos = scene_rml.index('id="selection-action-count"')
     clear_pos = scene_rml.index('id="selection-clear"')
     spacer_pos = scene_rml.index('class="selection-action-spacer"')
+    training_pos = scene_rml.index('id="selection-training"')
     visibility_pos = scene_rml.index('id="selection-visibility"')
-    assert count_pos < clear_pos < spacer_pos < visibility_pos
+    delete_pos = scene_rml.index('id="selection-delete"')
+    assert count_pos < clear_pos < spacer_pos < training_pos < visibility_pos < delete_pos
     action_rule = _rule_body(scene_rcss, ".selection-action-bar")
     assert "flex-shrink: 0;" in action_rule
     assert "height: 27dp;" in action_rule

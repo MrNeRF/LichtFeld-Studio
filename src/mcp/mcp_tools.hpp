@@ -22,6 +22,8 @@ namespace lfs::mcp {
     public:
         using ToolHandler = std::function<json(const json& params)>;
 
+        ToolRegistry() = default;
+
         static ToolRegistry& instance();
 
         void register_tool(McpTool tool, ToolHandler handler);
@@ -32,9 +34,10 @@ namespace lfs::mcp {
                        lfs::OperationId operation_id = {});
 
         void generate_from_command_center();
+        void set_lazy_initializer(std::function<void()> initializer);
 
     private:
-        ToolRegistry() = default;
+        void ensure_initialized() const;
 
         McpTool operation_to_tool(const training::OperationInfo& op) const;
         json arg_type_to_json_schema(training::ArgType type) const;
@@ -51,6 +54,8 @@ namespace lfs::mcp {
 
         std::unordered_map<std::string, RegisteredTool> tools_;
         mutable std::mutex mutex_;
+        mutable std::once_flag initialization_once_;
+        std::function<void()> lazy_initializer_;
     };
 
     class LFS_MCP_API ResourceRegistry {
@@ -66,9 +71,12 @@ namespace lfs::mcp {
 
         std::vector<McpResource> list_resources() const;
         std::expected<std::vector<McpResourceContent>, std::string> read_resource(const std::string& uri) const;
+        void set_lazy_initializer(std::function<void()> initializer);
 
     private:
         ResourceRegistry() = default;
+
+        void ensure_initialized() const;
 
         struct RegisteredResource {
             McpResource resource;
@@ -78,6 +86,8 @@ namespace lfs::mcp {
         std::unordered_map<std::string, RegisteredResource> resources_;
         std::unordered_map<std::string, ResourceHandler> prefix_handlers_;
         mutable std::mutex mutex_;
+        mutable std::once_flag initialization_once_;
+        std::function<void()> lazy_initializer_;
     };
 
     LFS_MCP_API void register_core_tools();

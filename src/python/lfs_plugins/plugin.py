@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, List, Optional
 from enum import Enum
+import re
 
 
 class PluginState(Enum):
@@ -17,6 +18,21 @@ class PluginState(Enum):
     ACTIVE = "active"
     ERROR = "error"
     DISABLED = "disabled"
+
+
+_PLUGIN_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+
+
+def validate_plugin_name(name: str) -> str:
+    """Validate a plugin name before it is used as a filesystem component."""
+    if not isinstance(name, str) or not name:
+        raise ValueError("Invalid plugin name: project.name must be a non-empty string")
+    if name in {".", ".."} or not _PLUGIN_NAME_RE.fullmatch(name):
+        raise ValueError(
+            f"Invalid plugin name {name!r}: use one safe path component "
+            "(ASCII letters, numbers, '.', '_' or '-') of at most 128 characters"
+        )
+    return name
 
 
 @dataclass

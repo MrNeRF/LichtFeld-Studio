@@ -92,10 +92,19 @@ def _directory_is_pruned(name: str) -> bool:
     return name.startswith(".") or name.casefold() in _PRUNED_DIRECTORY_NAMES
 
 
+def _entry_is_dir(entry: Any) -> bool:
+    """Support both real DirEntry objects and lightweight test doubles."""
+    try:
+        return entry.is_dir(follow_symlinks=False)
+    except TypeError:
+        return entry.is_dir()
+
+
 def iter_licht_projects(
     directory: str,
     cancel_event: threading.Event | None = None,
     progress: AssetFolderScanProgress | None = None,
+    directory_mtimes: dict[str, int] | None = None,
 ) -> Iterator[str]:
     """Yield .licht files beneath one Asset Manager folder as they are found."""
     root = Path(directory).expanduser()
@@ -103,22 +112,24 @@ def iter_licht_projects(
         _log.warning("Asset Manager folder is unavailable: %s", root)
         return
 
-    pruned_user_directories: set[Path] = set()
+    pruned_user_directories: set[str] = set()
     try:
         import lichtfeld as lf
 
         getter = getattr(getattr(lf, "ui", None), "get_default_project_location", None)
         if callable(getter):
-            user_root = Path(str(getter() or "")).expanduser().parent.resolve()
+            user_root = os.path.normcase(
+                os.path.dirname(os.path.abspath(str(getter() or "")))
+            )
             pruned_user_directories = {
-                (user_root / "tmp").resolve(),
-                (user_root / "recovery").resolve(),
+                os.path.join(user_root, "tmp"),
+                os.path.join(user_root, "recovery"),
             }
     except (OSError, RuntimeError, TypeError, ValueError):
         pass
 
     try:
-        if root.resolve() in pruned_user_directories:
+        if os.path.normcase(os.path.abspath(str(root))) in pruned_user_directories:
             return
     except OSError:
         pass
@@ -130,14 +141,17 @@ def iter_licht_projects(
     def _on_error(exc: OSError) -> None:
         _log.warning("Could not scan Asset Manager folder: %s", exc)
 
-    for current_root, directory_names, filenames in os.walk(
-        root,
-        topdown=True,
-        onerror=_on_error,
-        followlinks=False,
-    ):
+    pending = [root]
+    while pending:
+        current = pending.pop()
         if cancel_event is not None and cancel_event.is_set():
             return
+        try:
+            stat = current.stat()
+        except OSError as exc:
+            _on_error(exc)
+            continue
+        current_text = os.path.normcase(os.path.abspath(str(current)))
         visited_directories += 1
         if progress is not None:
             progress.add_directory()
@@ -146,32 +160,48 @@ def iter_licht_projects(
                 "Asset folder %s is very large (>10000 directories); consider a smaller folder",
                 root,
             )
+        if directory_mtimes is not None:
+            directory_mtimes[current_text] = int(stat.st_mtime_ns)
         kept_directories = []
-        for name in directory_names:
-            if _directory_is_pruned(name):
-                continue
-            if pruned_user_directories:
-                try:
-                    if (Path(current_root) / name).resolve() in pruned_user_directories:
+        try:
+            entries = os.scandir(current)
+        except OSError as exc:
+            _on_error(exc)
+            continue
+        with entries:
+            for entry in entries:
+                name = entry.name
+                if _entry_is_dir(entry):
+                    if _directory_is_pruned(name):
                         continue
-                except OSError:
-                    pass
-            kept_directories.append(name)
-        directory_names[:] = sorted(kept_directories)
-        for filename in sorted(filenames):
-            if cancel_event is not None and cancel_event.is_set():
-                return
-            path = Path(current_root) / filename
-            if not is_supported_asset_path(str(path)):
-                continue
-            try:
-                if path.is_file():
-                    resolved = str(path.resolve())
+                    child_text = os.path.normcase(
+                        os.path.abspath(os.path.join(current_text, name))
+                    )
+                    if any(
+                        child_text == prune or child_text.startswith(prune + os.sep)
+                        for prune in pruned_user_directories
+                    ):
+                        continue
+                    kept_directories.append(Path(entry.path))
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                # The directory cache records scan metadata, but discovery
+                # still runs so missing/unreadable rows can find a repair
+                # candidate. Healthy unchanged rows skip inspection below.
+                path = Path(entry.path)
+                if not is_supported_asset_path(str(path)):
+                    continue
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+                try:
+                    resolved = os.path.abspath(str(path))
                     if progress is not None:
                         progress.add_project()
                     yield resolved
-            except OSError as exc:
-                _log.warning("Could not inspect Asset Manager path %s: %s", path, exc)
+                except OSError as exc:
+                    _log.warning("Could not inspect Asset Manager path %s: %s", path, exc)
+        pending.extend(reversed(kept_directories))
 
 
 def discover_licht_projects(
@@ -195,15 +225,24 @@ def scan_asset_folder(
         return AssetFolderScanResult(cancelled=True)
     if progress is not None:
         progress.report(current_root=directory)
-    return _register_discovered_streaming(
+    directory_mtimes = getattr(index, "_directory_mtimes", None)
+    before_mtimes = dict(directory_mtimes) if isinstance(directory_mtimes, dict) else None
+    result = _register_discovered_streaming(
         index,
         (
             (path, folder_id)
-            for path in iter_licht_projects(directory, cancel_event, progress)
+            for path in iter_licht_projects(
+                directory, cancel_event, progress, directory_mtimes
+            )
         ),
         cancel_event,
         progress,
     )
+    if isinstance(directory_mtimes, dict) and directory_mtimes != before_mtimes:
+        save = getattr(index, "save", None)
+        if callable(save) and not save():
+            _log.error("Failed to persist Asset Manager directory scan cache")
+    return result
 
 
 def scan_all_asset_folders(
@@ -244,7 +283,10 @@ def scan_all_asset_folders(
                 return
             if progress is not None:
                 progress.report(current_root=str(root))
-            for path in iter_licht_projects(str(root), cancel_event, progress):
+            directory_mtimes = getattr(index, "_directory_mtimes", None)
+            for path in iter_licht_projects(
+                str(root), cancel_event, progress, directory_mtimes
+            ):
                 path_key = os.path.normcase(path)
                 if path_key in seen_paths:
                     continue
@@ -253,13 +295,21 @@ def scan_all_asset_folders(
 
     if cancel_event is not None and cancel_event.is_set():
         return AssetFolderScanResult(cancelled=True)
-    return _register_discovered_streaming(index, _iter_all(), cancel_event, progress)
+    directory_mtimes = getattr(index, "_directory_mtimes", None)
+    before_mtimes = dict(directory_mtimes) if isinstance(directory_mtimes, dict) else None
+    result = _register_discovered_streaming(index, _iter_all(), cancel_event, progress)
+    if isinstance(directory_mtimes, dict) and directory_mtimes != before_mtimes:
+        save = getattr(index, "save", None)
+        if callable(save) and not save():
+            _log.error("Failed to persist Asset Manager directory scan cache")
+    return result
 
 
 def verify_catalog_projects(
     index: Any,
     cancel_event: threading.Event | None = None,
     *,
+    visible_asset_ids: Iterable[str] | None = None,
     batch_size: int = SCAN_BATCH_SIZE,
     interval_s: float = SCAN_BATCH_INTERVAL_S,
 ) -> int:
@@ -274,11 +324,18 @@ def verify_catalog_projects(
         for project in list_projects()
     ]
     asset_ids = [asset_id for asset_id in asset_ids if asset_id]
+    if visible_asset_ids is not None:
+        visible = [str(asset_id) for asset_id in visible_asset_ids]
+        visible_set = set(visible)
+        asset_ids = [
+            *[asset_id for asset_id in visible if asset_id in asset_ids],
+            *[asset_id for asset_id in asset_ids if asset_id not in visible_set],
+        ]
     verified = 0
     batch: list[str] = []
     last_flush = time.monotonic()
 
-    def flush() -> bool:
+    def flush(*, pause: bool = True) -> bool:
         nonlocal batch, verified, last_flush
         if not batch:
             return False
@@ -296,6 +353,9 @@ def verify_catalog_projects(
             return True
         batch = []
         last_flush = time.monotonic()
+        if pause and interval_s > 0 and cancel_event is not None:
+            cancel_event.wait(interval_s)
+            last_flush = time.monotonic()
         return False
 
     for asset_id in asset_ids:
@@ -307,7 +367,7 @@ def verify_catalog_projects(
         ):
             if flush():
                 return verified
-    flush()
+    flush(pause=False)
     return verified
 
 
@@ -337,6 +397,9 @@ def _register_discovered_streaming(
         nonlocal batch, added, already_cataloged, failed, last_flush
         if not batch:
             return False
+        # os.walk sorted filenames before yielding them. Keep that stable
+        # locator choice while retaining streaming between registration batches.
+        batch.sort(key=lambda item: os.path.normcase(item[0]))
         batch_added, batch_already, batch_failed, was_cancelled = (
             _commit_registration_batch(index, batch, cancel_event)
         )
@@ -395,6 +458,22 @@ def _existing_skips_inspection(existing: Any) -> bool:
     }
 
 
+def _known_path_is_unchanged(index: Any, existing: Any, path: str) -> bool:
+    if getattr(existing, "status", "AVAILABLE") in {
+        "MISSING", "UNREADABLE", "UNVERIFIED"
+    }:
+        return False
+    size = getattr(existing, "path_size_bytes", None)
+    mtime_ns = getattr(existing, "path_mtime_ns", None)
+    if size is None or mtime_ns is None or (not size and not mtime_ns):
+        return True
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return False
+    return (int(stat.st_size), int(stat.st_mtime_ns)) == (int(size), int(mtime_ns))
+
+
 def _commit_registration_batch(
     index: Any,
     batch: list[tuple[str, str]],
@@ -420,7 +499,7 @@ def _commit_registration_batch(
         try:
             if callable(find_by_path):
                 existing = find_by_path(path)
-                if existing is not None and _existing_skips_inspection(existing):
+                if existing is not None and _known_path_is_unchanged(index, existing, path):
                     already_cataloged += 1
                     continue
             prepared.append((path, folder_id, inspect(path)))

@@ -3,8 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "window_manager.hpp"
+#include "core/environment.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -122,22 +124,22 @@ namespace lfs::vis {
             constexpr char path_separator = ':';
 #endif
             std::string layer_path = LFS_VULKAN_VALIDATION_LAYER_DIR;
-            if (const char* const existing_path = std::getenv("VK_ADD_LAYER_PATH");
-                existing_path && *existing_path) {
+            if (const auto existing_path = lfs::core::environment::value("VK_ADD_LAYER_PATH")) {
                 layer_path += path_separator;
-                layer_path += existing_path;
+                layer_path += *existing_path;
             }
 
 #ifdef _WIN32
-            const bool configured = _putenv_s("VK_ADD_LAYER_PATH", layer_path.c_str()) == 0;
+            const bool configured = SetEnvironmentVariableW(
+                                        L"VK_ADD_LAYER_PATH",
+                                        lfs::core::utf8_to_wstring(layer_path).c_str()) != 0;
 #else
             const bool configured = ::setenv("VK_ADD_LAYER_PATH", layer_path.c_str(), 1) == 0;
 #endif
             if (!configured) {
                 LOG_WARN("Failed to configure the pinned Vulkan validation layer path");
-            } else if (const char* const override_path = std::getenv("VK_LAYER_PATH");
-                       override_path && *override_path) {
-                LOG_WARN("VK_LAYER_PATH overrides the pinned Vulkan validation layer path: {}", override_path);
+            } else if (const auto override_path = lfs::core::environment::value("VK_LAYER_PATH")) {
+                LOG_WARN("VK_LAYER_PATH overrides the pinned Vulkan validation layer path: {}", *override_path);
             } else {
                 LOG_INFO("Vulkan validation layer path: {}", LFS_VULKAN_VALIDATION_LAYER_DIR);
             }
@@ -1142,6 +1144,8 @@ namespace lfs::vis {
         }
 
         case SDL_EVENT_DROP_FILE:
+            LOG_DEBUG("SDL drop file: window={} data={}", event.drop.windowID,
+                      event.drop.data ? event.drop.data : "(null)");
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             if (event.drop.data) {
@@ -1149,7 +1153,20 @@ namespace lfs::vis {
             }
             break;
 
+        case SDL_EVENT_DROP_TEXT:
+            // A file drag that reached us as text (e.g. an X11 source offering
+            // text/plain ahead of text/uri-list) carries no usable file list.
+            LOG_DEBUG("SDL drop text ignored: window={} text={}", event.drop.windowID,
+                      event.drop.data ? event.drop.data : "(null)");
+            break;
+
+        case SDL_EVENT_DROP_BEGIN:
+            LOG_DEBUG("SDL drop begin: window={}", event.drop.windowID);
+            break;
+
         case SDL_EVENT_DROP_COMPLETE:
+            LOG_DEBUG("SDL drop complete: window={} pending_files={}", event.drop.windowID,
+                      pending_drop_files_.size());
             if (!eventTargetsWindow(event, main_window_id))
                 break;
             if (input_controller_ && !pending_drop_files_.empty()) {
@@ -1474,6 +1491,8 @@ namespace lfs::vis {
         frame_input_.mouse_released[1] = false;
         frame_input_.mouse_released[2] = false;
         frame_input_.mouse_wheel = 0.0f;
+        frame_input_.mouse_wheel_x = 0.0f;
+        frame_input_.mouse_button_events.clear();
         frame_input_.mouse_moved = false;
     }
 

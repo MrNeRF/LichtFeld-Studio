@@ -291,10 +291,21 @@ namespace lfs::vis {
 
     } // namespace
 
+    lfs::rendering::ViewportRenderRequest buildViewportRenderRequest(
+        const FrameContext& ctx,
+        const glm::ivec2 render_size,
+        const Viewport* const source_viewport,
+        const std::optional<SplitViewPanelId> render_panel) {
+        return buildViewportRenderRequest(
+            ctx, render_size, source_viewport, render_panel, {0, 0}, {0, 0});
+    }
+
     lfs::rendering::ViewportRenderRequest buildViewportRenderRequest(const FrameContext& ctx,
                                                                      const glm::ivec2 render_size,
                                                                      const Viewport* const source_viewport,
-                                                                     const std::optional<SplitViewPanelId> render_panel) {
+                                                                     const std::optional<SplitViewPanelId> render_panel,
+                                                                     const glm::ivec2 subregion_origin,
+                                                                     const glm::ivec2 subregion_full_size) {
         const Viewport& viewport = source_viewport ? *source_viewport : ctx.viewport;
         const auto frame_view = applySceneViewJitter(
             ctx.makeFrameView(viewport, render_size), ctx.scene_jitter_pixels);
@@ -364,6 +375,8 @@ namespace lfs::vis {
         applyGaussianCropBox(request.filters, ctx);
         applyGaussianEllipsoid(request.filters, ctx);
         applyGaussianViewVolume(request.filters, ctx);
+        request.frame_view.subregion_origin = subregion_origin;
+        request.frame_view.subregion_full_size = subregion_full_size;
         return request;
     }
 

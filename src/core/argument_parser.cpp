@@ -316,8 +316,9 @@ namespace {
                 std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
         }
 
-        constexpr std::array<std::string_view, 13> SUPPORTED_EXTENSIONS = {
+        constexpr std::array<std::string_view, 17> SUPPORTED_EXTENSIONS = {
             ".ply", ".sog", ".spz", ".rad", ".resume",
+            ".usd", ".usda", ".usdc", ".usdz",
             ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
         const auto is_supported = [&](const std::filesystem::path& p) {
             auto ext = p.extension().string();

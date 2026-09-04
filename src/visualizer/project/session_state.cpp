@@ -1624,6 +1624,7 @@ namespace lfs::vis::project {
                     optional_field("bottom_dock_height", &gui::PanelLayoutProjectState::bottom_dock_height),
                     optional_field("left_dock_width", &gui::PanelLayoutProjectState::left_dock_width),
                     optional_field("sequencer_visible", &gui::PanelLayoutProjectState::show_sequencer),
+                    optional_field("bottom_dock_active_tab", &gui::PanelLayoutProjectState::bottom_dock_active_tab_id),
                     optional_field("tab_scroll_offset", &gui::PanelLayoutProjectState::tab_scroll_offset),
                 };
             return fields;
@@ -2560,18 +2561,16 @@ namespace lfs::vis::project {
                                 absolute
                                     .lexically_relative(
                                         root);
+                            const auto relative_text =
+                                lfs::core::path_to_generic_utf8(relative);
+                            const auto first = relative.begin();
                             if (!relative.empty() &&
                                 relative != "." &&
-                                !relative
-                                     .generic_string()
-                                     .starts_with(
-                                         "..")) {
+                                (first == relative.end() ||
+                                 *first != std::filesystem::path(".."))) {
                                 saved_clip
                                     ["directory_hint"] =
-                                        lfs::core::
-                                            path_to_utf8(
-                                                relative
-                                                    .generic_string());
+                                        relative_text;
                             }
                         }
                     }

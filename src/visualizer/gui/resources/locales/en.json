@@ -45,6 +45,7 @@
     "tools.plugin_marketplace": "Plugin Marketplace",
     "view": "View",
     "view.theme": "Theme",
+    "view.theme.auto": "Auto",
     "view.theme.dark": "Dark",
     "view.theme.light": "Light",
     "view.theme.gruvbox": "Gruvbox",
@@ -74,12 +75,12 @@
     "title": "Getting Started",
     "description": "Learn how to prepare datasets and get started with LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Everything LichtFeld Studio can do today",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training on 360 Equirectangular Images",
     "video_latest": "LichtFeld v0.3.0 Feature Overview",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
-    "video_lichtfeld": "LichtFeld Tutorial",
     "video_masks": "Masks Tutorial"
   },
   "about": {
@@ -578,6 +579,8 @@
     "add_group": "Add Group",
     "add_group_ellipsis": "Add Group...",
     "new_group_name": "New Group",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Export...",
     "delete": "Delete",
     "rename": "Rename",
@@ -772,6 +775,15 @@
     "progress_bar_style": "Progress bar",
     "progress_bar_classic": "Classic",
     "progress_bar_miner": "Miner",
+    "viewport_chrome_style": "Viewport controls",
+    "viewport_chrome_solid": "Solid",
+    "viewport_chrome_translucent": "Translucent",
+    "viewport_chrome_frosted": "Frosted glass",
+    "viewport_toolbar_position": "Toolbar position",
+    "viewport_toolbar_position_top": "Top",
+    "viewport_toolbar_position_centered": "Centered",
+    "viewport_toolbar_position_free": "Free",
+    "viewport_toolbar_drag": "Drag toolbar",
     "scene_rendering": "Scene Rendering",
     "scene_reconstruction": "Scene Reconstruction",
     "scene_reconstruction_off": "Off",
@@ -787,6 +799,10 @@
     "key_bindings": "Key Bindings",
     "camera_navigation": "Camera Navigation",
     "navigation_mode": "Navigation Mode",
+    "zoom_speed": "Zoom speed",
+    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
+    "navigation_speed": "Navigation speed",
+    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
     "camera_view_snap": "Snap Axis Views",
     "enable_axis_view_snap": "Enable Axis View Snap",
     "remember_camera_navigation": "Remember Camera Navigation",
@@ -1956,6 +1972,9 @@
     "downloads": "Downloads",
     "invalid_link": "Invalid link",
     "button.install": "Install",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling...",
+    "installation_cancelled": "Installation cancelled",
     "local_install": "Local Installation",
     "install_as_git_checkout": "Install as git checkout",
     "confirm_uninstall_message": "Are you sure you want to uninstall \"{name}\"?",
@@ -1969,7 +1988,8 @@
     "registry_loaded.other": "Registry loaded: {count} plugins in the marketplace catalog.",
     "registry_unavailable.one": "Registry unavailable: showing {count} fallback plugin.",
     "registry_unavailable.few": "Registry unavailable: showing {count} fallback plugins.",
-    "registry_unavailable.other": "Registry unavailable: showing {count} fallback plugins."
+    "registry_unavailable.other": "Registry unavailable: showing {count} fallback plugins.",
+    "popularity_unavailable": "Popularity data unavailable."
   },
   "sequencer": {
     "edit_focal_length": "Edit Focal Length...",
@@ -2104,6 +2124,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Computing histogram…",
+      "message": "The distribution will appear as soon as the data is ready."
+    },
     "delete_failed": {
       "title": "Delete Failed",
       "status": "Delete failed: {message}",
@@ -2127,6 +2151,10 @@
       "metric_unavailable": {
         "title": "Metric unavailable",
         "message": "The selected metric could not be read from the combined Gaussian model."
+      },
+      "compute_failed": {
+        "title": "Histogram failed",
+        "message": "Histogram computation failed: {error}"
       },
       "no_visible_values": {
         "title": "No visible values",

@@ -423,7 +423,7 @@ namespace lfs::vis::project {
             if (!input) {
                 return lifecycleError(
                     lfs::ErrorCode::PermissionDenied,
-                    "A dataset file could not be opened.", path.string(),
+                    "A dataset file could not be opened.", lfs::core::path_to_utf8(path),
                     "project.dataset_embed");
             }
             lfs::io::project::Hash128Stream hasher;
@@ -439,14 +439,14 @@ namespace lfs::vis::project {
                         static_cast<std::size_t>(count)))) {
                     return lifecycleError(
                         lfs::ErrorCode::DataLoss,
-                        "A dataset file could not be hashed.", path.string(),
+                        "A dataset file could not be hashed.", lfs::core::path_to_utf8(path),
                         "project.dataset_embed");
                 }
             }
             if (!input.eof() || !hasher.valid()) {
                 return lifecycleError(
                     lfs::ErrorCode::DataLoss,
-                    "A dataset file could not be hashed.", path.string(),
+                    "A dataset file could not be hashed.", lfs::core::path_to_utf8(path),
                     "project.dataset_embed");
             }
             return hasher.digest();
@@ -473,7 +473,7 @@ namespace lfs::vis::project {
         discoverDatasetFiles(const std::filesystem::path& root,
                              std::string& images_folder) {
             const auto info = lfs::io::detect_dataset_info(root);
-            images_folder = info.images_path.lexically_relative(root).generic_string();
+            images_folder = lfs::core::path_to_generic_utf8(info.images_path.lexically_relative(root));
             std::vector<std::pair<std::filesystem::path, std::string>> result;
             const auto append = [&](const auto& directory, const std::string_view kind) {
                 auto files = datasetFiles(directory, kind);
@@ -498,11 +498,11 @@ namespace lfs::vis::project {
             std::set<std::string> seen_paths;
             std::erase_if(result, [&](const auto& item) {
                 return !seen_paths.insert(
-                                      item.first.lexically_relative(root).generic_string())
+                                      lfs::core::path_to_generic_utf8(item.first.lexically_relative(root)))
                             .second;
             });
             std::ranges::sort(result, {}, [&](const auto& item) {
-                return item.first.lexically_relative(root).generic_string();
+                return lfs::core::path_to_generic_utf8(item.first.lexically_relative(root));
             });
             return result;
         }
@@ -569,7 +569,7 @@ namespace lfs::vis::project {
                         "The project-open job requested cancellation",
                         "project.dataset_embed");
                 }
-                const auto relative = std::filesystem::path(entry.rel_path);
+                const auto relative = lfs::core::utf8_to_path(entry.rel_path);
                 if (relative.empty() || relative.is_absolute() ||
                     relative.lexically_normal() != relative) {
                     return lifecycleError(
@@ -617,13 +617,16 @@ namespace lfs::vis::project {
                         "The embedded dataset cache could not be created.",
                         error.message(), "project.dataset_embed");
                 }
-                const auto temporary = destination.string() + ".part";
-                std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+                auto temporary = destination;
+                temporary += ".part";
+                std::ofstream output;
+                lfs::core::open_file_for_write(
+                    temporary, std::ios::binary | std::ios::trunc, output);
                 if (!output) {
                     return lifecycleError(
                         lfs::ErrorCode::PermissionDenied,
                         "An embedded dataset file could not be extracted.",
-                        destination.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(destination), "project.dataset_embed");
                 }
                 lfs::io::project::Hash128Stream hasher;
                 auto copied = source->visit_stream(
@@ -645,7 +648,7 @@ namespace lfs::vis::project {
                                 return lfs::Result<void>::failure(lifecycleError(
                                     lfs::ErrorCode::DataLoss,
                                     "An embedded dataset file could not be extracted.",
-                                    destination.string(), "project.dataset_embed"));
+                                    lfs::core::path_to_utf8(destination), "project.dataset_embed"));
                             }
                             output.write(buffer.data(), count);
                             copied_bytes += static_cast<std::uint64_t>(count);
@@ -654,7 +657,7 @@ namespace lfs::vis::project {
                             return lfs::Result<void>::failure(lifecycleError(
                                 lfs::ErrorCode::DataLoss,
                                 "An embedded dataset file could not be extracted.",
-                                destination.string(), "project.dataset_embed"));
+                                lfs::core::path_to_utf8(destination), "project.dataset_embed"));
                         }
                         return {};
                     });
@@ -664,7 +667,7 @@ namespace lfs::vis::project {
                     return copied ? lifecycleError(
                                         lfs::ErrorCode::DataLoss,
                                         "The embedded dataset file failed hash verification.",
-                                        destination.string(), "project.dataset_embed")
+                                        lfs::core::path_to_utf8(destination), "project.dataset_embed")
                                   : std::move(copied).error();
                 }
                 std::filesystem::rename(temporary, destination, error);
@@ -691,7 +694,7 @@ namespace lfs::vis::project {
                 return lifecycleError(
                     lfs::ErrorCode::PermissionDenied,
                     "The embedded dataset cache could not be finalized.",
-                    marker.string(), "project.dataset_embed");
+                    lfs::core::path_to_utf8(marker), "project.dataset_embed");
             }
             LOG_INFO(
                 "Embedded dataset extraction completed: {} files extracted, {} files reused, cache {}",
@@ -1868,7 +1871,7 @@ namespace lfs::vis::project {
                     lfs::ErrorCode::InvalidArgument,
                     "A project path must end in .licht.",
                     std::format(
-                        "received '{}'", path.string()),
+                        "received '{}'", lfs::core::path_to_utf8(path)),
                     "project.path");
             }
             std::error_code error;
@@ -1898,7 +1901,7 @@ namespace lfs::vis::project {
                         unpublishedLichtUserMessage(
                             path),
                     std::format(
-                        "received '{}'", path.string()),
+                        "received '{}'", lfs::core::path_to_utf8(path)),
                     "project.path");
             }
             return resolved;
@@ -2232,7 +2235,7 @@ namespace lfs::vis::project {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::PermissionDenied,
                     "Project lifecycle settings could not be opened.",
-                    path.string(), "settings.path");
+                    lfs::core::path_to_utf8(path), "settings.path");
             }
             const Json json = Json::parse(stream);
             if (!json.is_object()) {
@@ -2617,6 +2620,7 @@ namespace lfs::vis::project {
                 std::make_shared<ProjectDocument>(
                     std::move(*created));
             last_captured_selection_serial_.reset();
+            captured_splat_serials_.clear();
         } else {
             LOG_ERROR(
                 "Cannot create initial project document: {}",
@@ -2734,8 +2738,7 @@ namespace lfs::vis::project {
                 "Project switching is blocked until the close save finishes",
                 "project.save");
         }
-        if (viewer_.jobs().anyRunning(
-                JobType::ProjectWrite) ||
+        if (viewer_.jobs().anyRunning(JobType::ProjectWrite) ||
             viewer_.jobs().anyRunning(JobType::DatasetEmbed)) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
@@ -3364,8 +3367,9 @@ namespace lfs::vis::project {
         if (project_write_purpose_ !=
                 ProjectWritePurpose::Autosave &&
             project_write_purpose_ !=
-                ProjectWritePurpose::
-                    TrainingAutosave) {
+                ProjectWritePurpose::TrainingAutosave &&
+            project_write_purpose_ !=
+                ProjectWritePurpose::GeometryCapture) {
             return fail<void>(
                 lfs::ErrorCode::FailedPrecondition,
                 "A project write is already in progress.",
@@ -3375,7 +3379,18 @@ namespace lfs::vis::project {
         // Autosave occupies the exclusive ProjectWrite
         // slot. Join and settle it so a user Save / Save
         // As never loses the slot to a background write.
+        const bool geometry_capture =
+            project_write_purpose_ ==
+            ProjectWritePurpose::GeometryCapture;
         joinPendingWrite();
+        if (geometry_capture &&
+            !last_project_write_error_.empty()) {
+            return fail<void>(
+                last_project_write_error_code_.value_or(
+                    lfs::ErrorCode::Unavailable),
+                "The geometry snapshot could not be captured.",
+                last_project_write_error_, "project.capture");
+        }
         return {};
     }
 
@@ -3386,14 +3401,55 @@ namespace lfs::vis::project {
         if (!trainer) {
             return {};
         }
-        for (;;) {
-            trainer->join_finished_project_writer();
-            if (!trainer->get_project_snapshot_metrics()
-                     .writer_in_flight) {
-                return {};
-            }
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds(5));
+        trainer->join_finished_project_writer();
+        if (trainer->get_project_snapshot_metrics().writer_in_flight) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The project save is waiting for the training snapshot.",
+                "The trainer project writer is still in flight",
+                "project.training_snapshot");
+        }
+        return {};
+    }
+
+    bool ProjectLifecycle::queueExplicitSaveIfTrainerWriterInFlight(
+        const bool regenerate_preview) {
+        auto* const trainer = viewer_.getTrainer();
+        if (!trainer) {
+            return false;
+        }
+        trainer->join_finished_project_writer();
+        if (!trainer->get_project_snapshot_metrics().writer_in_flight) {
+            return false;
+        }
+        if (!pending_explicit_save_regenerate_preview_) {
+            pending_explicit_save_regenerate_preview_ = regenerate_preview;
+            LOG_INFO("Project save queued until the training snapshot writer finishes");
+        } else {
+            LOG_DEBUG("Ignoring duplicate project save while a training snapshot save is queued");
+        }
+        return true;
+    }
+
+    void ProjectLifecycle::processPendingExplicitSave() {
+        if (!pending_explicit_save_regenerate_preview_ ||
+            viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
+            return;
+        }
+        auto* const trainer = viewer_.getTrainer();
+        if (!trainer) {
+            pending_explicit_save_regenerate_preview_.reset();
+            return;
+        }
+        trainer->join_finished_project_writer();
+        if (trainer->get_project_snapshot_metrics().writer_in_flight) {
+            return;
+        }
+
+        const bool regenerate_preview = *pending_explicit_save_regenerate_preview_;
+        pending_explicit_save_regenerate_preview_.reset();
+        if (auto saved = save(regenerate_preview); !saved) {
+            LOG_ERROR("Queued project save failed: {}", developerError(saved.error()));
         }
     }
 
@@ -3422,6 +3478,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
         clearStoredTrainingSession();
@@ -3747,7 +3804,101 @@ namespace lfs::vis::project {
             std::chrono::duration<double, std::milli>(
                 start_write_finished - start_write_started)
                 .count(),
-            project_write_destination_.string());
+            lfs::core::path_to_utf8(project_write_destination_));
+        return {};
+    }
+
+    lfs::Result<void>
+    ProjectLifecycle::startAsyncSplatCaptures(
+        std::vector<PendingSplatCapture> captures,
+        const std::uint64_t scene_serial) {
+        auto& jobs = viewer_.jobs();
+        auto handle = jobs.init(
+            JobType::ProjectWrite, "Preparing geometry snapshot");
+        if (!handle) {
+            return fail<void>(
+                lfs::ErrorCode::FailedPrecondition,
+                "Another project write is already running.",
+                "Geometry snapshot capture shares the project-write job slot",
+                "project.job");
+        }
+        if (project_write_thread_.joinable()) {
+            project_write_thread_.join();
+        }
+        project_write_job_ = *handle;
+        project_write_purpose_ = ProjectWritePurpose::GeometryCapture;
+        project_write_scene_serial_ = scene_serial;
+        project_write_parameter_serial_ =
+            viewer_.getParameterManager()
+                ? viewer_.getParameterManager()->dirtySerial()
+                : 0;
+        project_write_destination_.clear();
+        last_project_write_error_.clear();
+        last_project_write_error_code_.reset();
+        last_project_write_typed_error_.reset();
+        {
+            const std::lock_guard lock(pending_splat_capture_mutex_);
+            completed_splat_captures_.clear();
+        }
+        try {
+            project_write_thread_ = std::jthread(
+                [this, handle = *handle,
+                 captures = std::move(captures)](
+                    const std::stop_token stop) mutable {
+                    auto& registry = viewer_.jobs();
+                    registry.work(handle);
+                    std::vector<CompletedSplatCapture> completed;
+                    completed.reserve(captures.size());
+                    std::string error;
+                    std::optional<lfs::ErrorCode> error_code;
+                    std::optional<lfs::Error> typed_error;
+                    for (std::size_t i = 0; i < captures.size(); ++i) {
+                        if (stop.stop_requested() ||
+                            registry.cancelRequested(handle)) {
+                            break;
+                        }
+                        registry.report(
+                            handle,
+                            0.05F + 0.90F *
+                                        static_cast<float>(i) /
+                                        static_cast<float>(captures.size()),
+                            "Downloading geometry snapshot");
+                        auto payload = captures[i].capture->complete();
+                        if (!payload) {
+                            error_code = payload.error().code();
+                            typed_error = payload.error();
+                            error = developerError(payload.error());
+                            break;
+                        }
+                        completed.push_back({
+                            .uuid = captures[i].uuid,
+                            .scene_serial = captures[i].scene_serial,
+                            .payload = std::move(*payload),
+                        });
+                    }
+                    {
+                        const std::lock_guard lock(
+                            pending_splat_capture_mutex_);
+                        completed_splat_captures_ = std::move(completed);
+                    }
+                    registry.finishWork(
+                        handle,
+                        stop.stop_requested() ||
+                            registry.cancelRequested(handle),
+                        std::move(error), error_code,
+                        std::move(typed_error));
+                    queueProjectWriteSettlement(handle);
+                });
+        } catch (const std::exception& error) {
+            jobs.failed(*handle, error.what());
+            jobs.free(*handle);
+            project_write_job_.reset();
+            project_write_purpose_ = ProjectWritePurpose::None;
+            return fail<void>(
+                lfs::ErrorCode::Unavailable,
+                "The geometry snapshot worker could not start.",
+                error.what(), "project.job");
+        }
         return {};
     }
 
@@ -3870,7 +4021,7 @@ namespace lfs::vis::project {
                             fail_worker(lifecycleError(
                                 lfs::ErrorCode::DataLoss,
                                 "A dataset file could not be inspected.",
-                                std::format("{}: {}", path.string(), error.message()),
+                                std::format("{}: {}", lfs::core::path_to_utf8(path), error.message()),
                                 "project.dataset_embed"));
                             return;
                         }
@@ -3884,7 +4035,7 @@ namespace lfs::vis::project {
                             fail_worker(previous.error());
                             return;
                         }
-                        const auto rel = path.lexically_relative(root).generic_string();
+                        const auto rel = lfs::core::path_to_generic_utf8(path.lexically_relative(root));
                         const EmbeddedDatasetEntry* old = nullptr;
                         if (previous->has_value()) {
                             const auto old_it = std::ranges::find_if(
@@ -4295,7 +4446,7 @@ namespace lfs::vis::project {
                     "project.project_location");
             }
             const auto stem = sanitizedProjectFileStem(
-                dataset.data_path.filename().string());
+                lfs::core::path_to_utf8(dataset.data_path.filename()));
             lfs::Error last_error = lifecycleError(
                 lfs::ErrorCode::Unavailable,
                 "The training project could not be created.",
@@ -4309,12 +4460,12 @@ namespace lfs::vis::project {
                         : std::format("-{}", attempt + 1);
                 const auto candidate =
                     location / (stem + suffix + ".licht");
+                auto lock_path = candidate;
+                lock_path += ".lock";
                 std::error_code exists_error;
                 const bool exists =
                     std::filesystem::exists(candidate, exists_error) ||
-                    std::filesystem::exists(
-                        std::filesystem::path(candidate.string() + ".lock"),
-                        exists_error);
+                    std::filesystem::exists(lock_path, exists_error);
                 if (exists_error) {
                     return fail<void>(
                         lfs::ErrorCode::PermissionDenied,
@@ -4603,6 +4754,13 @@ namespace lfs::vis::project {
                               Autosave);
             !synchronized) {
             return synchronized;
+        }
+        // Synchronization may queue an asynchronous geometry capture in the
+        // same exclusive ProjectWrite slot. Autosave can continue only after
+        // that capture has settled; do not attempt the document write in the
+        // same tick and turn the expected overlap into an error.
+        if (viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
+            return {};
         }
         const bool untitled_crash_dirty =
             untitled &&
@@ -4959,6 +5117,10 @@ namespace lfs::vis::project {
         if (project_write_thread_.joinable()) {
             project_write_thread_.join();
         }
+        // The worker queues its viewer-side publication through postWork. Give
+        // explicit Save/Save As callers the same ownership boundary as a
+        // regular frame before falling back to direct settlement for shutdown.
+        viewer_.pumpPostedWorkForProjectWrite();
         settleProjectWrite();
     }
 
@@ -5009,6 +5171,47 @@ namespace lfs::vis::project {
                 error,
                 "Project write worker reported cancellation",
                 "project.job");
+        }
+        if (project_write_purpose_ ==
+            ProjectWritePurpose::GeometryCapture) {
+            if (error.empty()) {
+                std::vector<CompletedSplatCapture> completed;
+                {
+                    const std::lock_guard lock(
+                        pending_splat_capture_mutex_);
+                    completed = std::move(completed_splat_captures_);
+                }
+                const std::lock_guard document_lock(
+                    document_access_mutex_);
+                for (auto& item : completed) {
+                    if (auto set = document_->set_splat(
+                            item.uuid, std::move(item.payload));
+                        !set) {
+                        last_project_write_error_code_ = set.error().code();
+                        last_project_write_typed_error_ = set.error();
+                        error = developerError(set.error());
+                        break;
+                    }
+                    captured_splat_serials_[item.uuid] = item.scene_serial;
+                }
+            }
+            if (error.empty()) {
+                jobs.completed(*project_write_job_);
+            } else if (snapshot->worker_canceled) {
+                jobs.canceled(*project_write_job_);
+            } else {
+                jobs.failed(*project_write_job_, error);
+            }
+            if (!error.empty()) {
+                last_project_write_error_ = error;
+            }
+            jobs.free(*project_write_job_);
+            project_write_job_.reset();
+            project_write_purpose_ = ProjectWritePurpose::None;
+            project_write_destination_.clear();
+            project_write_automatic_ = false;
+            cached_project_info_.reset();
+            return;
         }
         if (!error.empty() &&
             project_write_purpose_ ==
@@ -5160,6 +5363,7 @@ namespace lfs::vis::project {
                         ProjectDocument>(
                         std::move(*reopened));
                 last_captured_selection_serial_.reset();
+                captured_splat_serials_.clear();
                 cached_bound_checkpoint_iteration_
                     .reset();
             }
@@ -5380,6 +5584,7 @@ namespace lfs::vis::project {
     void ProjectLifecycle::updateMaintenance() {
         applyStartupRecoveryScan();
         settleProjectWrite();
+        processPendingExplicitSave();
         if (!viewer_.jobs().anyRunning(
                 JobType::ProjectWrite)) {
             if (auto adopted =
@@ -5687,6 +5892,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*opened));
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         cached_project_info_.reset();
         cached_bound_checkpoint_iteration_.reset();
         clearStoredTrainingSession();
@@ -5810,6 +6016,8 @@ namespace lfs::vis::project {
     ProjectLifecycle::synchronizeDocumentFromViewer(
         const DocumentSyncMode mode) {
         const auto sync_started = std::chrono::steady_clock::now();
+        const auto sync_scene_serial = scene_mutation_serial_.load(
+            std::memory_order_acquire);
         auto scene_capture_finished = sync_started;
         auto payload_capture_finished = sync_started;
         auto selection_capture_finished = sync_started;
@@ -5929,13 +6137,21 @@ namespace lfs::vis::project {
                 captured_scene_uuids.insert(node.uuid);
             }
         }
+        const auto old_training_uuid =
+            document_->scene_graph().training_model_uuid();
+        if (!old_training_uuid) {
+            return lfs::Status::failure(
+                std::move(old_training_uuid).error());
+        }
+        const bool drops_training_binding =
+            training_uuid.is_nil() && old_training_uuid->has_value();
         const auto old_scene_bytes =
             document_->scene_graph().to_bytes();
         const auto new_scene_bytes =
             captured_scene->to_bytes();
         scene_capture_finished = std::chrono::steady_clock::now();
-        if (!sameBytes(
-                old_scene_bytes, new_scene_bytes)) {
+        if (drops_training_binding ||
+            !sameBytes(old_scene_bytes, new_scene_bytes)) {
             document_->edit_scene_graph() =
                 std::move(*captured_scene);
         }
@@ -5964,6 +6180,91 @@ namespace lfs::vis::project {
             payload_dirty_.load(
                 std::memory_order_acquire) ||
             !document_->source_path();
+
+        std::vector<PendingSplatCapture> async_captures;
+        if (!viewer_.jobs().anyRunning(
+                JobType::ProjectWrite)) {
+            for (const auto* node : scene.getNodes()) {
+                if (!node || node->type != lfs::core::NodeType::SPLAT ||
+                    node->payload_hydration !=
+                        lfs::core::PayloadHydrationState::Loaded) {
+                    continue;
+                }
+                const auto binding = bindings.find(node->uuid);
+                if (binding == bindings.end() ||
+                    binding->second.fourcc != "SPLT") {
+                    continue;
+                }
+                const bool already_present =
+                    document_->find_splat(node->uuid) ||
+                    std::ranges::any_of(
+                        document_->payload_states(),
+                        [&](const auto& state) {
+                            return state.instance_uuid == node->uuid &&
+                                   state.fourcc.to_string() == "SPLT";
+                        });
+                if (already_present && !capture_payloads) {
+                    continue;
+                }
+                const auto captured = captured_splat_serials_.find(node->uuid);
+                if (captured != captured_splat_serials_.end() &&
+                    captured->second >= sync_scene_serial) {
+                    continue;
+                }
+
+                std::unique_ptr<lfs::core::SplatData> extracted_model;
+                const lfs::core::SplatData* model = node->model.get();
+                if (!model) {
+                    extracted_model = scene.extractConsolidatedNodeModel(
+                        node->uuid);
+                    model = extracted_model.get();
+                }
+                if (!model) {
+                    return fail<void>(
+                        lfs::ErrorCode::DataLoss,
+                        "A loaded splat node has no model.",
+                        node->uuid.to_string(), "SPLT");
+                }
+                auto async = lfs::io::project::SplatChapterPayload::
+                    start_async_capture(
+                        *model,
+                        lfs::io::project::SplatSourceKind::Generated,
+                        false);
+                if (!async) {
+                    return lfs::Status::failure(std::move(async).error());
+                } else if (*async) {
+                    async_captures.push_back({
+                        .uuid = node->uuid,
+                        .scene_serial = sync_scene_serial,
+                        .capture = std::move(*async),
+                    });
+                }
+            }
+        }
+        if (!async_captures.empty()) {
+            if (auto started = startAsyncSplatCaptures(
+                    std::move(async_captures), sync_scene_serial);
+                !started) {
+                return started;
+            }
+            // Autosave resumes on the next viewer maintenance tick after the
+            // posted worker settlement. Explicit callers join the same worker
+            // below and then repeat synchronization.
+            if (mode == DocumentSyncMode::Autosave ||
+                mode == DocumentSyncMode::LightTrainingAutosave) {
+                return {};
+            }
+            joinPendingWrite();
+            if (!last_project_write_error_.empty()) {
+                return fail<void>(
+                    last_project_write_error_code_.value_or(
+                        lfs::ErrorCode::Unavailable),
+                    "The geometry snapshot could not be captured.",
+                    last_project_write_error_, "project.capture");
+            }
+            return synchronizeDocumentFromViewer(mode);
+        }
+
         for (const auto* node : scene.getNodes()) {
             if (!node) {
                 continue;
@@ -5975,6 +6276,11 @@ namespace lfs::vis::project {
             }
             const auto& fourcc =
                 binding->second.fourcc;
+            const auto captured_splat = captured_splat_serials_.find(node->uuid);
+            const bool splat_already_captured =
+                fourcc == "SPLT" &&
+                captured_splat != captured_splat_serials_.end() &&
+                captured_splat->second >= sync_scene_serial;
             if (fourcc == "SPLT") {
                 live_splats.insert(node->uuid);
             } else if (fourcc == "PCLD") {
@@ -6000,7 +6306,11 @@ namespace lfs::vis::project {
                                state.fourcc.to_string() ==
                                    fourcc;
                     });
-            if (already_present && !capture_payloads) {
+            // An async capture has already installed the SPLT bytes, but its
+            // provenance is still registered by this synchronization pass.
+            // Do not let the clean-payload fast path skip that metadata.
+            if (already_present && !capture_payloads &&
+                !splat_already_captured) {
                 continue;
             }
             if (node->payload_hydration !=
@@ -6017,7 +6327,9 @@ namespace lfs::vis::project {
                 continue;
             }
 
-            if (fourcc == "SPLT") {
+            if (splat_already_captured) {
+                // The payload was installed by the posted capture settlement.
+            } else if (fourcc == "SPLT") {
                 std::unique_ptr<lfs::core::SplatData>
                     extracted_model;
                 const lfs::core::SplatData* model =
@@ -6453,10 +6765,14 @@ namespace lfs::vis::project {
                 std::move(staged_references);
         }
 
+        const auto sync_scene_serial_end = scene_mutation_serial_.load(
+            std::memory_order_acquire);
         scene_dirty_.store(
-            false, std::memory_order_release);
+            sync_scene_serial_end != sync_scene_serial,
+            std::memory_order_release);
         payload_dirty_.store(
-            false, std::memory_order_release);
+            sync_scene_serial_end != sync_scene_serial,
+            std::memory_order_release);
         const auto sync_finished = std::chrono::steady_clock::now();
         LOG_DEBUG(
             "Project document synchronization stages: mode={} scene_capture={:.3f} ms payload_capture={:.3f} ms selection_capture={:.3f} ms metadata_capture={:.3f} ms total={:.3f} ms",
@@ -6619,14 +6935,8 @@ namespace lfs::vis::project {
                 "Only one project save may run at a time",
                 "project.save");
         }
-        if (auto waited =
-                waitOutBackgroundAutosaveForExplicitSave();
-            !waited) {
-            return waited;
-        }
-        if (auto rebased = rebaseOntoCurrentMasterHead();
-            !rebased) {
-            return rebased;
+        if (pending_explicit_save_regenerate_preview_) {
+            return {};
         }
         if (!document_ ||
             !document_->source_path() ||
@@ -6636,6 +6946,21 @@ namespace lfs::vis::project {
                 "This project has no path; use Save As.",
                 "An untitled project cannot be appended in place",
                 "project.path");
+        }
+        if (queueExplicitSaveIfTrainerWriterInFlight(regenerate_preview)) {
+            return {};
+        }
+        if (auto waited =
+                waitOutBackgroundAutosaveForExplicitSave();
+            !waited) {
+            return waited;
+        }
+        if (auto rebased = rebaseOntoCurrentMasterHead();
+            !rebased) {
+            if (queueExplicitSaveIfTrainerWriterInFlight(regenerate_preview)) {
+                return {};
+            }
+            return rebased;
         }
         if (auto* trainer = viewer_.getTrainer();
             trainer &&
@@ -7345,6 +7670,7 @@ namespace lfs::vis::project {
         clearStoredTrainingSession();
         document_ = candidate;
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         bindTrainerSnapshotTarget();
         cleanupRecoverySession();
         // Removal runs only after the replacement
@@ -8047,6 +8373,7 @@ namespace lfs::vis::project {
             std::make_shared<ProjectDocument>(
                 std::move(*created));
         last_captured_selection_serial_.reset();
+        captured_splat_serials_.clear();
         cleanupRecoverySession();
         if (discard_master) {
             removeDiscardedAutosaveArtifacts(
@@ -8323,6 +8650,10 @@ namespace lfs::vis::project {
             break;
         }
 
+        if (pending_explicit_save_regenerate_preview_) {
+            return CloseSaveStatus::Saving;
+        }
+
         if (!hasDirtyProject()) {
             // Window-close X / File-Exit of a clean session: Skip any
             // unanswered recovery offer and drop the untitled scratch.
@@ -8514,7 +8845,7 @@ namespace lfs::vis::project {
             !removed) {
             LOG_WARN(
                 "Discarded autosave cleanup failed for {}: {}",
-                master.string(),
+                lfs::core::path_to_utf8(master),
                 developerError(removed.error()));
         }
     }
@@ -8560,6 +8891,7 @@ namespace lfs::vis::project {
     ProjectWritePoll ProjectLifecycle::pollWrite() {
         settleProjectWrite();
         ProjectWritePoll poll;
+        poll.running = pending_explicit_save_regenerate_preview_.has_value();
         if (project_write_job_) {
             const auto job = viewer_.jobs().peek(
                 *project_write_job_);
@@ -8601,18 +8933,21 @@ namespace lfs::vis::project {
             close_save_state_.load(
                 std::memory_order_acquire) ==
             CloseSaveState::Saving;
-        if (close_save_running || project_write_job_) {
+        if (close_save_running || project_write_job_ ||
+            pending_explicit_save_regenerate_preview_) {
             auto result =
                 cached_project_info_
                     .value_or(ProjectInfo{});
-            const auto job =
-                viewer_.jobs().peek(
-                    *project_write_job_);
+            const auto job = project_write_job_
+                                 ? viewer_.jobs().peek(*project_write_job_)
+                                 : std::nullopt;
             result.project_write_running =
                 true;
-            result.project_write_stage =
-                job ? job->stage
-                    : std::string{};
+            result.project_write_stage = job
+                                             ? job->stage
+                                             : (pending_explicit_save_regenerate_preview_
+                                                    ? "Waiting for training snapshot"
+                                                    : std::string{});
             result.project_write_progress =
                 job ? job->progress : 0.0F;
             result.project_write_error =
@@ -8879,24 +9214,31 @@ namespace lfs::vis::project {
                         entry.last_known_path));
             }
         }
-        lfs::io::project::
-            sweep_stale_licht_artifacts_for_known_masters(
-                known);
-        lfs::io::project::sweep_stale_scratch_autosaves(
-            temp_project_directory_, {.verify_payloads = false});
-        if (!legacy_recovery_directory_.empty() &&
-            freezeNormalizedPath(legacy_recovery_directory_) !=
-                freezeNormalizedPath(temp_project_directory_)) {
+        if (explicit_path) {
+            // Explicit startup projects must not pay the directory-sweep cost
+            // before the first frame. Reuse the same worker used by the
+            // deferred no-path recovery scan; opening the requested project
+            // remains synchronous below so its ordering is unchanged.
+            startup_recovery_scan_pending_ = true;
+            runStartupRecoveryScan();
+        } else {
+            lfs::io::project::sweep_stale_licht_artifacts_for_known_masters(known);
             lfs::io::project::sweep_stale_scratch_autosaves(
-                legacy_recovery_directory_, {.verify_payloads = false});
-        }
-        if (!legacy_working_tmp_directory_.empty() &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(temp_project_directory_) &&
-            freezeNormalizedPath(legacy_working_tmp_directory_) !=
-                freezeNormalizedPath(legacy_recovery_directory_)) {
-            lfs::io::project::sweep_stale_scratch_autosaves(
-                legacy_working_tmp_directory_, {.verify_payloads = false});
+                temp_project_directory_, {.verify_payloads = false});
+            if (!legacy_recovery_directory_.empty() &&
+                freezeNormalizedPath(legacy_recovery_directory_) !=
+                    freezeNormalizedPath(temp_project_directory_)) {
+                lfs::io::project::sweep_stale_scratch_autosaves(
+                    legacy_recovery_directory_, {.verify_payloads = false});
+            }
+            if (!legacy_working_tmp_directory_.empty() &&
+                freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                    freezeNormalizedPath(temp_project_directory_) &&
+                freezeNormalizedPath(legacy_working_tmp_directory_) !=
+                    freezeNormalizedPath(legacy_recovery_directory_)) {
+                lfs::io::project::sweep_stale_scratch_autosaves(
+                    legacy_working_tmp_directory_, {.verify_payloads = false});
+            }
         }
 
         // Never auto-restore from MRU. Startup without an
@@ -9221,8 +9563,8 @@ namespace lfs::vis::project {
                     return lhs.wallclock_unix_ns <
                            rhs.wallclock_unix_ns;
                 }
-                return lhs.selected_path.generic_string() <
-                       rhs.selected_path.generic_string();
+                return lfs::core::path_to_generic_utf8(lhs.selected_path) <
+                       lfs::core::path_to_generic_utf8(rhs.selected_path);
             });
     }
 
@@ -9244,7 +9586,7 @@ namespace lfs::vis::project {
         const auto display_name =
             candidate.untitled_scratch
                 ? std::string(LOC(Keys::UNSAVED_SESSION))
-                : candidate.master_path.stem().string();
+                : lfs::core::path_to_utf8(candidate.master_path.stem());
         const auto saved_at = formatRecoverySavedTime(
             candidate.wallclock_unix_ns,
             candidate.selected_path);

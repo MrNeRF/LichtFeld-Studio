@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from copy import deepcopy
+from copy import copy
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -23,9 +23,38 @@ _log = logging.getLogger(__name__)
 _T = TypeVar("_T")
 _ASSET_INDEX_LOCK = threading.RLock()
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SUPPORTED_ASSET_EXTENSION = ".licht"
 DEFAULT_FOLDER_ID = "default"
+
+_PROJECT_STORAGE_FIELDS = frozenset(
+    {
+        "name",
+        "path",
+        "folder_id",
+        "size",
+        "mtime_ns",
+        "fallback_preview_path",
+        "file_uuid",
+        "commit_uuid",
+        "generation",
+        "created_at_unix_ns",
+        "saved_at_unix_ns",
+        "file_size_bytes",
+        "role",
+        "open_state",
+        "has_preview",
+        "status",
+    }
+)
+_INSPECTION_STORAGE_FIELDS = _PROJECT_STORAGE_FIELDS - {
+    "name",
+    "path",
+    "folder_id",
+    "size",
+    "mtime_ns",
+    "fallback_preview_path",
+}
 
 
 def _normalize_path(path: str) -> str:
@@ -238,17 +267,40 @@ class Project:
     error: str = ""
     relocation_candidate: str = ""
     fallback_preview_path: str = ""
+    path_size_bytes: int = 0
+    path_mtime_ns: int = 0
+    inspection_verified: bool = False
+    inspection_restored: bool = False
 
     @property
     def id(self) -> str:
         return self.project_uuid
 
     def to_storage_dict(self) -> Dict[str, Any]:
-        return {
+        record = {
             "name": self.name,
             "path": self.path,
             "folder_id": self.folder_id,
+            "size": self.path_size_bytes,
+            "mtime_ns": self.path_mtime_ns,
+            "fallback_preview_path": self.fallback_preview_path,
         }
+        if self.inspection_verified or self.inspection_restored:
+            record.update(
+                {
+                    "file_uuid": self.file_uuid,
+                    "commit_uuid": self.commit_uuid,
+                    "generation": self.generation,
+                    "created_at_unix_ns": self.created_at_unix_ns,
+                    "saved_at_unix_ns": self.saved_at_unix_ns,
+                    "file_size_bytes": self.file_size_bytes,
+                    "role": self.role,
+                    "open_state": self.open_state,
+                    "has_preview": self.has_preview,
+                    "status": self.status,
+                }
+            )
+        return record
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -269,7 +321,6 @@ class Project:
             "status": self.status,
             "error": self.error,
             "relocation_candidate": self.relocation_candidate,
-            "fallback_preview_path": self.fallback_preview_path,
         }
 
 
@@ -305,6 +356,9 @@ class AssetIndex:
         self._projects: Dict[str, Project] = {}
         self._project_by_path: Dict[str, str] = {}
         self._catalog_epoch = 0
+        self._assets_snapshot_epoch: Optional[int] = None
+        self._assets_snapshot: Optional[Dict[str, Dict[str, Any]]] = None
+        self._directory_mtimes: Dict[str, int] = {}
         self.load_issues: List[str] = []
 
     @property
@@ -319,10 +373,26 @@ class AssetIndex:
     @property
     @_synchronized
     def assets(self) -> Dict[str, Dict[str, Any]]:
-        return {
-            project_uuid: project.to_dict()
-            for project_uuid, project in self._projects.items()
-        }
+        if self._assets_snapshot_epoch != self._catalog_epoch:
+            self._assets_snapshot = {
+                project_uuid: project.to_dict()
+                for project_uuid, project in self._projects.items()
+            }
+            self._assets_snapshot_epoch = self._catalog_epoch
+        return self._assets_snapshot or {}
+
+    @_synchronized
+    def get_asset_dict(self, asset_id: str) -> Optional[Dict[str, Any]]:
+        project = self._projects.get(str(asset_id))
+        return project.to_dict() if project is not None else None
+
+    @_synchronized
+    def iter_project_ids(self) -> List[str]:
+        return list(self._projects)
+
+    @_synchronized
+    def count(self) -> int:
+        return len(self._projects)
 
     @staticmethod
     def _path_key(path: str) -> str:
@@ -333,17 +403,45 @@ class AssetIndex:
         return _enum_name(inspection.role) == "MASTER"
 
     @staticmethod
+    def _set_inspection_runtime_state(project: Project) -> None:
+        project.exists = True
+        project.available = (
+            project.role == "MASTER" and project.open_state == "OPEN"
+        )
+        if project.available:
+            project.status = "AVAILABLE"
+        elif project.open_state == "REPAIR_ONLY":
+            project.status = "REPAIR_ONLY"
+        elif project.open_state == "UNSUPPORTED_NEWER":
+            project.status = "UNSUPPORTED_NEWER"
+        else:
+            project.status = "UNSUPPORTED"
+        project.error = ""
+
+    @staticmethod
     def _inspection_name(path: str) -> str:
         return Path(path).stem
 
     @staticmethod
-    def _inspect_path(path: str) -> Any:
+    def _inspect_path(path: str, resolve_fallback: bool = True) -> Any:
         import lichtfeld as lf
 
-        return lf.io.inspect_project(path)
+        if resolve_fallback:
+            return lf.io.inspect_project(path)
+        return lf.io.inspect_project(path, resolve_preview_fallback=False)
+
+    @staticmethod
+    def _path_stat(path: str) -> Optional[Tuple[int, int]]:
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return None
+        return int(stat.st_size), int(stat.st_mtime_ns)
 
     def _touch_catalog(self) -> None:
         self._catalog_epoch += 1
+        self._assets_snapshot_epoch = None
+        self._assets_snapshot = None
 
     @_synchronized
     def catalog_epoch(self) -> int:
@@ -362,18 +460,36 @@ class AssetIndex:
         project.fallback_preview_path = str(
             getattr(inspection, "fallback_preview_path", "") or ""
         )
-        project.exists = True
-        project.available = project.role == "MASTER" and project.open_state == "OPEN"
-        if project.available:
-            project.status = "AVAILABLE"
-        elif project.open_state == "REPAIR_ONLY":
-            project.status = "REPAIR_ONLY"
-        elif project.open_state == "UNSUPPORTED_NEWER":
-            project.status = "UNSUPPORTED_NEWER"
-        else:
-            project.status = "UNSUPPORTED"
-        project.error = ""
+        self._set_inspection_runtime_state(project)
+        project.inspection_verified = True
+        project.inspection_restored = False
+        metadata = self._path_stat(project.path)
+        if metadata is not None:
+            project.path_size_bytes, project.path_mtime_ns = metadata
         self._touch_catalog()
+
+    @staticmethod
+    def _has_persisted_inspection(value: Dict[str, Any]) -> bool:
+        return {
+            "size",
+            "mtime_ns",
+            "fallback_preview_path",
+        }.issubset(value) and _INSPECTION_STORAGE_FIELDS.issubset(value)
+
+    def _restore_inspection(self, project: Project, value: Dict[str, Any]) -> None:
+        project.file_uuid = str(value["file_uuid"] or "")
+        project.commit_uuid = str(value["commit_uuid"] or "")
+        project.generation = int(value["generation"])
+        project.created_at_unix_ns = int(value["created_at_unix_ns"])
+        project.saved_at_unix_ns = int(value["saved_at_unix_ns"])
+        project.file_size_bytes = int(value["file_size_bytes"])
+        project.role = str(value["role"] or "")
+        project.open_state = str(value["open_state"] or "")
+        project.has_preview = bool(value["has_preview"])
+        project.status = str(value["status"] or "UNVERIFIED")
+        self._set_inspection_runtime_state(project)
+        project.inspection_verified = False
+        project.inspection_restored = True
 
     def _clear_runtime(self, project: Project, status: str, error: str = "") -> None:
         project.file_uuid = ""
@@ -390,13 +506,35 @@ class AssetIndex:
         project.available = False
         project.status = status
         project.error = error
+        project.path_size_bytes = 0
+        project.path_mtime_ns = 0
+        project.inspection_verified = True
+        project.inspection_restored = False
         self._touch_catalog()
 
-    def _read_project_runtime(self, path: str, expected_uuid: str) -> Tuple[str, Any]:
-        if not Path(path).is_file():
+    def _read_project_runtime(
+        self,
+        path: str,
+        expected_uuid: str,
+        *,
+        resolve_fallback: bool = False,
+        known_metadata: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[str, Any]:
+        metadata = self._path_stat(path)
+        if metadata is None:
             return "MISSING", None
+        if known_metadata is not None and metadata == known_metadata:
+            return "UNCHANGED", metadata
         try:
-            inspection = self._inspect_path(path)
+            if resolve_fallback:
+                inspection = self._inspect_path(path)
+            else:
+                try:
+                    inspection = self._inspect_path(path, False)
+                except TypeError:
+                    # Test doubles and older native bindings have the old
+                    # one-argument shape; bulk verification remains correct.
+                    inspection = self._inspect_path(path)
         except Exception as exc:
             return "UNREADABLE", str(exc)
         if str(inspection.project_uuid) != expected_uuid:
@@ -416,7 +554,9 @@ class AssetIndex:
         self._clear_runtime(project, kind, str(payload or ""))
 
     def _refresh_project(self, project: Project) -> None:
-        kind, payload = self._read_project_runtime(project.path, project.project_uuid)
+        kind, payload = self._read_project_runtime(
+            project.path, project.project_uuid, resolve_fallback=True
+        )
         self._apply_runtime_result(project, kind, payload)
 
     def _rebuild_path_lookup(self) -> None:
@@ -462,14 +602,26 @@ class AssetIndex:
 
     def _snapshot_state(
         self,
+        project_ids: Optional[List[str]] = None,
+        folder_ids: Optional[List[str]] = None,
     ) -> Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]]:
-        return deepcopy((self._folders, self._projects, self._project_by_path))
+        """Capture only records a mutation may edit for save rollback."""
+        folders = self._folders.copy()
+        for folder_id in folder_ids or []:
+            if folder_id in folders:
+                folders[folder_id] = copy(folders[folder_id])
+        projects = self._projects.copy()
+        for project_id in project_ids or []:
+            if project_id in projects:
+                projects[project_id] = copy(projects[project_id])
+        return folders, projects, self._project_by_path.copy()
 
     def _restore_state(
         self,
         state: Tuple[Dict[str, Folder], Dict[str, Project], Dict[str, str]],
     ) -> None:
         self._folders, self._projects, self._project_by_path = state
+        self._touch_catalog()
 
     def _ensure_default_folder(self) -> bool:
         folder = self._folders.get(DEFAULT_FOLDER_ID)
@@ -488,18 +640,33 @@ class AssetIndex:
         self._folders = {}
         self._projects = {}
         self._project_by_path = {}
+        self._directory_mtimes = {}
         self._ensure_default_folder()
+        self._touch_catalog()
 
     def _load_v3(self, data: Dict[str, Any]) -> bool:
         folders_data = data.get("folders")
         projects_data = data.get("projects")
         if not isinstance(folders_data, dict) or not isinstance(projects_data, dict):
             raise ValueError("Asset Manager schema v3 requires folders and projects objects")
-        normalized = set(data) != {"schema_version", "folders", "projects"}
-
         self._folders = {}
         self._projects = {}
         self._project_by_path = {}
+        self._directory_mtimes = {}
+        normalized = set(data) != {
+            "schema_version", "folders", "projects", "directory_mtimes"
+        }
+        raw_directory_mtimes = data.get("directory_mtimes", {})
+        if isinstance(raw_directory_mtimes, dict):
+            self._directory_mtimes = {
+                self._path_key(str(path)): int(mtime)
+                for path, mtime in raw_directory_mtimes.items()
+                if isinstance(path, str) and isinstance(mtime, int)
+            }
+        else:
+            self._directory_mtimes = {}
+            normalized = True
+
         stored_default_path = ""
         for folder_id, value in folders_data.items():
             if not isinstance(folder_id, str) or not isinstance(value, dict):
@@ -570,7 +737,7 @@ class AssetIndex:
                 continue
             seen_paths.add(path_key)
 
-            normalized = normalized or set(value) != {"name", "path", "folder_id"}
+            normalized = normalized or set(value) != _PROJECT_STORAGE_FIELDS
             normalized = normalized or path != stored_path
             stored_folder_id = str(value.get("folder_id") or DEFAULT_FOLDER_ID)
             folder_id = self._folder_id_for_path(path)
@@ -586,7 +753,12 @@ class AssetIndex:
                 folder_id=folder_id,
                 exists=True,
                 status="UNVERIFIED",
+                path_size_bytes=int(value.get("size") or 0),
+                path_mtime_ns=int(value.get("mtime_ns") or 0),
+                fallback_preview_path=str(value.get("fallback_preview_path") or ""),
             )
+            if self._has_persisted_inspection(value):
+                self._restore_inspection(project, value)
             self._projects[canonical_uuid] = project
             self._project_by_path[path_key] = canonical_uuid
         if self._projects:
@@ -786,7 +958,7 @@ class AssetIndex:
             if not isinstance(data, dict):
                 raise ValueError("Asset Manager catalog root must be an object")
 
-            is_current = data.get("schema_version") == SCHEMA_VERSION
+            is_current = data.get("schema_version") in (SCHEMA_VERSION, 3)
             if is_current and not migrating_legacy_location:
                 if self._load_v3(data) and not self.save():
                     self._restore_state(previous_state)
@@ -826,6 +998,7 @@ class AssetIndex:
                     project_uuid: project.to_storage_dict()
                     for project_uuid, project in self._projects.items()
                 },
+                "directory_mtimes": dict(self._directory_mtimes),
             }
             self._library_path.parent.mkdir(parents=True, exist_ok=True)
             fd, temp_name = tempfile.mkstemp(
@@ -849,6 +1022,7 @@ class AssetIndex:
                 finally:
                     backup_temp.unlink(missing_ok=True)
             os.replace(temp_path, self._library_path)
+            self._touch_catalog()
             return True
         except Exception as exc:
             _log.error("Failed to save Asset Manager library %s: %s", self._library_path, exc)
@@ -860,6 +1034,16 @@ class AssetIndex:
     @_synchronized
     def ensure_default_catalog(self) -> None:
         self._initialize_empty()
+
+    @_synchronized
+    def directory_mtime(self, directory: str) -> Optional[int]:
+        return self._directory_mtimes.get(self._path_key(directory))
+
+    @_synchronized
+    def set_directory_mtime(self, directory: str, mtime_ns: int) -> None:
+        key = self._path_key(directory)
+        if self._directory_mtimes.get(key) != int(mtime_ns):
+            self._directory_mtimes[key] = int(mtime_ns)
 
     @_synchronized
     def add_folder(self, directory: str) -> Optional[Folder]:
@@ -888,7 +1072,9 @@ class AssetIndex:
         folder = self._folders.get(folder_id)
         if folder is None or folder_id == DEFAULT_FOLDER_ID:
             return False
-        previous_state = self._snapshot_state()
+        previous_state = self._snapshot_state(
+            project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
+        )
         del self._folders[folder_id]
         self._projects = {
             project_uuid: project
@@ -919,7 +1105,9 @@ class AssetIndex:
         folder = self._folders.get(DEFAULT_FOLDER_ID)
         if folder is not None and self._path_key(folder.path) == self._path_key(normalized):
             return True
-        previous_state = self._snapshot_state()
+        previous_state = self._snapshot_state(
+            project_ids=list(self._projects), folder_ids=[DEFAULT_FOLDER_ID]
+        )
         previous_default_path = self._default_folder_path
         old_path = folder.path if folder is not None else ""
         new_path_key = self._path_key(normalized)
@@ -965,7 +1153,9 @@ class AssetIndex:
         project = self._projects.get(asset_id)
         if project is None:
             return None
-        previous_state = self._snapshot_state() if save else None
+        previous_state = (
+            self._snapshot_state(project_ids=[asset_id]) if save else None
+        )
         if "folder_id" in kwargs:
             target = self._folders.get(str(kwargs["folder_id"]))
             resolved_folder_id = self._folder_id_for_path(project.path)
@@ -974,6 +1164,8 @@ class AssetIndex:
             project.folder_id = target.id
         if "name" in kwargs:
             project.name = str(kwargs["name"])
+        if not save:
+            self._touch_catalog()
         if save and not self.save():
             assert previous_state is not None
             self._restore_state(previous_state)
@@ -1031,7 +1223,9 @@ class AssetIndex:
         uuid.UUID(project_uuid)
 
         with self._lock:
-            previous_state = self._snapshot_state() if save else None
+            previous_state = (
+                self._snapshot_state(project_ids=[project_uuid]) if save else None
+            )
             target_folder_id = self._folder_id_for_path(path)
             if target_folder_id is None:
                 target_folder_id = self._add_folder_record(str(Path(path).parent)).id
@@ -1090,14 +1284,25 @@ class AssetIndex:
                 return None
             path = project.path
             expected_uuid = project.project_uuid
-        kind, payload = self._read_project_runtime(path, expected_uuid)
+            known_metadata = None
+            if project.inspection_verified or project.inspection_restored:
+                known_metadata = (project.path_size_bytes, project.path_mtime_ns)
+        kind, payload = self._read_project_runtime(
+            path, expected_uuid, resolve_fallback=True,
+            known_metadata=known_metadata
+        )
         with self._lock:
             project = self._projects.get(asset_id)
             if project is None:
                 return None
             if project.path != path or project.project_uuid != expected_uuid:
                 return project
-            self._apply_runtime_result(project, kind, payload)
+            if kind == "UNCHANGED":
+                project.inspection_verified = True
+                project.inspection_restored = False
+            else:
+                self._apply_runtime_result(project, kind, payload)
+                self.save()
             return project
 
     @_synchronized
@@ -1117,7 +1322,7 @@ class AssetIndex:
         conflicting_uuid = self._project_by_path.get(path_key)
         if conflicting_uuid is not None and conflicting_uuid != asset_id:
             return False
-        previous_state = self._snapshot_state()
+        previous_state = self._snapshot_state(project_ids=[asset_id])
         folder_id = self._folder_id_for_path(path)
         if folder_id is None:
             folder_id = self._add_folder_record(str(Path(path).parent)).id
@@ -1133,11 +1338,57 @@ class AssetIndex:
         return False
 
     def verify_projects_batch(self, asset_ids: List[str]) -> int:
-        verified = 0
-        for asset_id in asset_ids:
-            if self.verify_asset(asset_id) is not None:
+        with self._lock:
+            work = []
+            for asset_id in dict.fromkeys(asset_ids):
+                project = self._projects.get(asset_id)
+                if project is not None:
+                    work.append(
+                        (
+                            asset_id,
+                            project.path,
+                            project.project_uuid,
+                            (
+                                (project.path_size_bytes, project.path_mtime_ns)
+                                if project.inspection_verified
+                                or project.inspection_restored
+                                else None
+                            ),
+                        )
+                    )
+        results = []
+        for asset_id, path, expected_uuid, metadata in work:
+            results.append(
+                (
+                    asset_id,
+                    path,
+                    expected_uuid,
+                    self._read_project_runtime(
+                        path, expected_uuid, known_metadata=metadata
+                    ),
+                )
+            )
+        with self._lock:
+            verified = 0
+            changed = False
+            for asset_id, path, expected_uuid, (kind, payload) in results:
+                project = self._projects.get(asset_id)
+                if (
+                    project is None
+                    or project.path != path
+                    or project.project_uuid != expected_uuid
+                ):
+                    continue
+                if kind == "UNCHANGED":
+                    project.inspection_verified = True
+                    project.inspection_restored = False
+                else:
+                    self._apply_runtime_result(project, kind, payload)
+                    changed = True
                 verified += 1
-        return verified
+            if changed:
+                self.save()
+            return verified
 
     def verify_projects(self) -> Tuple[int, int]:
         with self._lock:

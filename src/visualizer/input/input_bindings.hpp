@@ -30,6 +30,12 @@ namespace lfs::vis::input {
         CROP_BOX = 7,
     };
 
+    enum class SelectionOp : uint8_t {
+        Add,
+        Remove,
+        Intersect,
+    };
+
     // Highest persisted ToolMode value plus one. Value 2 was the removed brush tool mode.
     inline constexpr size_t kToolModeCount = 8;
     inline constexpr std::array<ToolMode, 7> kAllToolModes = {
@@ -141,6 +147,8 @@ namespace lfs::vis::input {
         TOGGLE_SCENE_SELECTION_TRAINING,
         DEPTH_ADJUST_SIZE,
         DEPTH_WINDOW_DRAG,
+        GROUP_SELECTED_SCENE_NODES,
+        UNGROUP_SELECTED_SCENE_NODE,
 
     };
 
@@ -379,6 +387,11 @@ namespace lfs::vis::input {
     LFS_VIS_API std::string getKeyName(int key);
     LFS_VIS_API std::string getMouseButtonName(MouseButton button);
     LFS_VIS_API std::string getModifierString(int modifiers);
+    [[nodiscard]] LFS_VIS_API std::optional<SelectionOp> selectionOpForModifiers(
+        const InputBindings& bindings,
+        ToolMode mode,
+        int modifiers,
+        const std::vector<int>& held_keys = {});
     [[nodiscard]] LFS_VIS_API ShortcutScope shortcutScopeForAction(Action action);
 
     [[nodiscard]] LFS_VIS_API std::string_view actionNameKey(Action action);

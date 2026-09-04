@@ -117,30 +117,32 @@ namespace lfs::event {
         fallback_strings_.clear();
         warned_missing_keys_.clear();
 
-        for (fs::directory_iterator it(locales_dir_, fs::directory_options::skip_permission_denied, ec), end;
-             !ec && it != end; it.increment(ec)) {
-            std::error_code entry_ec;
-            const auto& entry = *it;
-            if (!entry.is_regular_file(entry_ec) || entry_ec || entry.path().extension() != ".json")
-                continue;
-
-            const std::string lang_code = entry.path().stem().string();
-            std::unordered_map<std::string, std::string> test_strings;
-
-            if (!parseLocaleFile(lfs::core::path_to_utf8(entry.path()), test_strings))
-                continue;
-
-            available_languages_.push_back(lang_code);
-
-            const auto name_it = test_strings.find(LANGUAGE_NAME_KEY);
-            language_names_[lang_code] = (name_it != test_strings.end()) ? name_it->second : lang_code;
-            if (lang_code == DEFAULT_LANGUAGE)
-                fallback_strings_ = std::move(test_strings);
-        }
-        if (ec) {
-            LOG_ERROR("Failed to scan locales directory '{}': {}", locales_dir_, ec.message());
+        const fs::path index_path = fs::path(locales_dir_).parent_path() / "locale_index.json";
+        std::ifstream index_file;
+        if (!lfs::core::open_file_for_read(index_path, index_file)) {
+            LOG_ERROR("Locale index not found: {}", lfs::core::path_to_utf8(index_path));
             return false;
         }
+
+        try {
+            json index;
+            index_file >> index;
+            const auto languages = index.at("languages");
+            if (!languages.is_array())
+                throw std::runtime_error("languages is not an array");
+            for (const auto& entry : languages) {
+                const std::string code = entry.at("code").get<std::string>();
+                available_languages_.push_back(code);
+                language_names_[code] = entry.value("name", code);
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Invalid locale index '{}': {}", lfs::core::path_to_utf8(index_path), error.what());
+            return false;
+        }
+
+        const fs::path fallback_path = fs::path(locales_dir_) / (std::string(DEFAULT_LANGUAGE) + ".json");
+        if (!parseLocaleFile(lfs::core::path_to_utf8(fallback_path), fallback_strings_))
+            return false;
 
         if (available_languages_.empty()) {
             LOG_ERROR("No valid locale files found in: {}", locales_dir_);
@@ -157,6 +159,7 @@ namespace lfs::event {
             return false;
 
         current_language_ = initial_language;
+        language_generation_.fetch_add(1, std::memory_order_release);
         LOG_INFO("Language set to: {}", initial_language);
         return true;
     }
@@ -173,6 +176,7 @@ namespace lfs::event {
         overrides_.clear();
         plugin_strings_by_language_.clear();
         plugin_catalogs_.clear();
+        language_generation_.fetch_add(1, std::memory_order_release);
     }
 
     const char* LocalizationManager::get(std::string_view key) const {
@@ -432,6 +436,7 @@ namespace lfs::event {
             return false;
 
         current_language_ = language_code;
+        language_generation_.fetch_add(1, std::memory_order_release);
         LOG_INFO("Language set to: {}", language_code);
         return true;
     }
