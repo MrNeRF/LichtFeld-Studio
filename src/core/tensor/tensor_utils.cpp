@@ -62,7 +62,8 @@ namespace lfs::core {
         }
 
         size_t n = diagonal.numel();
-        auto result = Tensor::zeros({n, n}, diagonal.device());
+        auto result = internal::allocate_zeros_like(
+            diagonal, TensorShape{n, n}, diagonal.dtype());
         if (n == 0) {
             return result;
         }
@@ -132,7 +133,7 @@ namespace lfs::core::functional {
                        "functional::map currently supports only Float32");
         LFS_ASSERT_MSG(static_cast<bool>(func),
                        "functional::map requires a callable");
-        auto result = Tensor::empty(input.shape(), input.device());
+        auto result = internal::allocate_like(input, input.shape(), input.dtype());
 
         if (input.device() == Device::CUDA) {
             auto cpu_input = input.to(Device::CPU);
@@ -185,7 +186,7 @@ namespace lfs::core::functional {
                        "functional::filter currently supports only Float32");
         LFS_ASSERT_MSG(static_cast<bool>(predicate),
                        "functional::filter requires a callable");
-        auto result = Tensor::empty(input.shape(), input.device());
+        auto result = internal::allocate_like(input, input.shape(), input.dtype());
 
         if (input.device() == Device::CUDA) {
             auto cpu_input = input.to(Device::CPU);

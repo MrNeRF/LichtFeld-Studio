@@ -225,6 +225,8 @@ namespace lfs::core {
                        "TensorRowProxy assignment requires a valid source tensor");
         LFS_ASSERT_MSG(other.dtype() == tensor_->dtype(),
                        "TensorRowProxy assignment requires matching dtypes");
+        internal::require_same_gpu_backend(
+            *tensor_, other, "TensorRowProxy assignment");
         flush_cuda_staging();
 
         if (tensor_->shape().rank() > 1) {
@@ -245,9 +247,15 @@ namespace lfs::core {
                                other.shape() == row_slice.shape(),
                            "TensorRowProxy assignment source shape does not match the row");
 
-            auto other_copy = (other.device() == tensor_->device())
-                                  ? other.clone()
-                                  : other.to(tensor_->device());
+            Tensor other_copy;
+            if (other.device() == tensor_->device()) {
+                other_copy = other.clone();
+            } else if (tensor_->device() == Device::CUDA) {
+                other_copy = internal::copy_to_backend(
+                    other, gpu_backend_of(*tensor_).value());
+            } else {
+                other_copy = other.to(Device::CPU);
+            }
             LFS_ASSERT_MSG(other_copy.is_valid(),
                            "TensorRowProxy failed to convert its assignment source");
 

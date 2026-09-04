@@ -222,10 +222,11 @@ namespace lfs::core {
                   numel(), output_size, output_size);
 
         if (output_size == 0) {
-            return empty({0}, device_, dtype_);
+            return internal::allocate_like(*this, TensorShape{0}, dtype_);
         }
 
-        auto result = empty({output_size}, device_, dtype_);
+        auto result = internal::allocate_like(
+            *this, TensorShape{output_size}, dtype_);
 
         if (device_ == Device::CUDA) {
             pin_operands({this, &mask});
@@ -396,6 +397,7 @@ namespace lfs::core {
                        "index_select requires rank-1 indices");
         LFS_ASSERT_MSG(indices.device() == device_,
                        "index_select indices must be on the input device");
+        internal::require_same_gpu_backend(*this, indices, "index_select");
 
         Tensor input_materialized;
         Tensor indices_materialized;
@@ -417,14 +419,15 @@ namespace lfs::core {
             if (idx.numel() == 0) {
                 auto dims = shape_.dims();
                 dims[dim] = 0;
-                return empty(TensorShape(dims), device_, dtype_);
+                return internal::allocate_like(*this, TensorShape(dims), dtype_);
             }
             return index_select(dim, idx, mode);
         }
 
         auto dims = shape_.dims();
         dims[dim] = indices.numel();
-        auto result = zeros(TensorShape(dims), device_, dtype_);
+        auto result = internal::allocate_zeros_like(
+            *this, TensorShape(dims), dtype_);
         index_select_into(result, dim, indices, mode);
         return result;
     }
@@ -442,6 +445,8 @@ namespace lfs::core {
                        "index_select_into dimension is out of range");
         LFS_ASSERT_MSG(out.device() == device_ && indices.device() == device_,
                        "index_select_into tensors must be on the same device");
+        internal::require_same_gpu_backend(*this, out, "index_select_into");
+        internal::require_same_gpu_backend(*this, indices, "index_select_into");
         LFS_ASSERT_MSG(out.dtype() == dtype_,
                        "index_select_into output dtype must match the input");
         auto expected_shape = shape_.dims();
@@ -475,7 +480,8 @@ namespace lfs::core {
         }
 
         if (!out.is_contiguous()) {
-            Tensor materialized_output = empty(out.shape(), out.device(), out.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                out, out.shape(), out.dtype());
             index_select_into(materialized_output, dim, indices, mode);
             out.copy_from(materialized_output);
             return;
@@ -633,6 +639,7 @@ namespace lfs::core {
                        "gather requires valid tensors");
         LFS_ASSERT_MSG(indices.device() == device_,
                        "gather indices must be on the input device");
+        internal::require_same_gpu_backend(*this, indices, "gather");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int64,
                        "gather currently supports only Float32 and Int64 inputs");
 
@@ -668,9 +675,11 @@ namespace lfs::core {
             const cudaStream_t allocation_stream =
                 prepare_inputs_for_stream({this, &indices});
             CUDAStreamGuard guard(allocation_stream);
-            result = zeros(indices.shape(), device_, dtype_);
+            result = internal::allocate_zeros_like(
+                *this, indices.shape(), dtype_);
         } else {
-            result = zeros(indices.shape(), device_, dtype_);
+            result = internal::allocate_zeros_like(
+                *this, indices.shape(), dtype_);
         }
         auto indices_same_device = ensure_same_device(indices);
         const bool is_int64 = indices_same_device.dtype() == DataType::Int64;
@@ -761,6 +770,7 @@ namespace lfs::core {
                        "take currently supports only Float32 input");
         LFS_ASSERT_MSG(indices.device() == device_,
                        "take indices must be on the input device");
+        internal::require_same_gpu_backend(*this, indices, "take");
         assert_index_tensor(indices, numel(), "take", true, true);
 
         auto indices_same_device = ensure_same_device(indices);
@@ -776,13 +786,13 @@ namespace lfs::core {
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &indices_int32});
             CUDAStreamGuard guard(execution_stream);
-            result = empty(indices.shape(), device_, dtype_);
+            result = internal::allocate_like(*this, indices.shape(), dtype_);
             tensor_ops::launch_take(flat.ptr<float>(), indices_int32.ptr<int>(),
                                     result.ptr<float>(), flat.numel(), indices_int32.numel(), result.stream());
             // No sync - tensor operation
         } else {
             pin_operands({&flat, &indices_int32});
-            result = empty(indices.shape(), device_, dtype_);
+            result = internal::allocate_like(*this, indices.shape(), dtype_);
             const float* src = flat.ptr<float>();
             float* dst = result.ptr<float>();
             const int* idx = indices_int32.ptr<int>();
@@ -820,6 +830,8 @@ namespace lfs::core {
                        "scatter_ currently requires rank-1 indices");
         LFS_ASSERT_MSG(idx.device() == device_ && src.device() == device_,
                        "scatter_ tensors must be on the same device");
+        internal::require_same_gpu_backend(*this, idx, "scatter_");
+        internal::require_same_gpu_backend(*this, src, "scatter_");
         LFS_ASSERT_MSG(src.dtype() == dtype_,
                        "scatter_ source dtype must match the destination");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||
@@ -1063,7 +1075,8 @@ namespace lfs::core {
                        "scalar scatter_ dimension is out of range");
         std::vector<size_t> src_shape = shape_.dims();
         src_shape[resolved_dim] = idx.numel();
-        auto src = full(TensorShape(src_shape), val, device_, dtype_);
+        auto src = internal::allocate_like(
+            *this, TensorShape(src_shape), dtype_, val);
         return scatter_(dim, idx, src, mode);
     }
 
@@ -1079,6 +1092,8 @@ namespace lfs::core {
                        "index_copy_ requires rank-1 indices");
         LFS_ASSERT_MSG(idx.device() == device_ && src.device() == device_,
                        "index_copy_ tensors must be on the same device");
+        internal::require_same_gpu_backend(*this, idx, "index_copy_");
+        internal::require_same_gpu_backend(*this, src, "index_copy_");
         LFS_ASSERT_MSG(src.dtype() == dtype_,
                        "index_copy_ source dtype must match the destination");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||
@@ -1197,6 +1212,8 @@ namespace lfs::core {
                        "index_add_ requires rank-1 indices");
         LFS_ASSERT_MSG(idx.device() == device_ && src.device() == device_,
                        "index_add_ tensors must be on the same device");
+        internal::require_same_gpu_backend(*this, idx, "index_add_");
+        internal::require_same_gpu_backend(*this, src, "index_add_");
         LFS_ASSERT_MSG(src.dtype() == dtype_,
                        "index_add_ source dtype must match the destination");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
@@ -1475,6 +1492,8 @@ namespace lfs::core {
                        "index_put_ requires rank-1 indices");
         LFS_ASSERT_MSG(idx.device() == device_ && vals.device() == device_,
                        "index_put_ tensors must be on the same device");
+        internal::require_same_gpu_backend(*this, idx, "index_put_");
+        internal::require_same_gpu_backend(*this, vals, "index_put_");
         LFS_ASSERT_MSG(vals.dtype() == dtype_,
                        "index_put_ value dtype must match the destination");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Bool ||
@@ -1587,7 +1606,8 @@ namespace lfs::core {
                 }
 
                 // Copy back preserving capacity
-                auto result = cpu_tensor.to(device_);
+                auto result = internal::copy_to_backend(
+                    cpu_tensor, gpu_backend_of(*this).value());
                 const size_t bytes = numel() * dtype_size(dtype_);
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &result}, stream());
@@ -1681,6 +1701,7 @@ namespace lfs::core {
                        "multi-index index_put_ requires at least one index tensor");
         LFS_ASSERT_MSG(vals.device() == device_,
                        "multi-index index_put_ values must be on the destination device");
+        internal::require_same_gpu_backend(*this, vals, "multi-index index_put_");
 
         // No-op for zero-element tensors
         if (vals.numel() == 0)
@@ -1695,6 +1716,10 @@ namespace lfs::core {
                            "multi-index index_put_ requires valid index tensors");
             LFS_ASSERT_MSG(indices[0].device() == device_ && indices[1].device() == device_,
                            "multi-index index_put_ tensors must be on the same device");
+            internal::require_same_gpu_backend(
+                *this, indices[0], "multi-index index_put_");
+            internal::require_same_gpu_backend(
+                *this, indices[1], "multi-index index_put_");
             LFS_ASSERT_MSG(dtype_ == DataType::Float32 && vals.dtype() == DataType::Float32,
                            "multi-index index_put_ currently supports Float32 values only");
 
@@ -1887,13 +1912,15 @@ namespace lfs::core {
         }
 
         if (numel() == 0) {
-            return empty({0, ndim()}, device_, DataType::Int64);
+            return internal::allocate_like(
+                *this, TensorShape{0, ndim()}, DataType::Int64);
         }
 
         size_t count = count_nonzero();
 
         if (count == 0) {
-            return empty({0, ndim()}, device_, DataType::Int64);
+            return internal::allocate_like(
+                *this, TensorShape{0, ndim()}, DataType::Int64);
         }
 
         size_t n_dims = ndim();
@@ -1901,7 +1928,8 @@ namespace lfs::core {
         // Special case for 1D tensors
         if (n_dims == 1) {
             // Allocate MAXIMUM size to prevent buffer overflow from Thrust/CUB mismatch
-            auto temp = empty({numel()}, device_, DataType::Int64);
+            auto temp = internal::allocate_like(
+                *this, TensorShape{numel()}, DataType::Int64);
             size_t actual_count = count; // Start with Thrust's count
 
             if (device_ == Device::CUDA) {
@@ -1926,7 +1954,8 @@ namespace lfs::core {
                     if (actual_count > 0) {
                         temp = temp.slice(0, 0, actual_count);
                     } else {
-                        temp = empty({0}, device_, DataType::Int64);
+                        temp = internal::allocate_like(
+                            *this, TensorShape{0}, DataType::Int64);
                     }
                 }
                 // No sync - tensor operation
@@ -1966,7 +1995,8 @@ namespace lfs::core {
                 if (actual_count > 0) {
                     temp = temp.slice(0, 0, actual_count);
                 } else {
-                    temp = empty({0}, device_, DataType::Int64);
+                    temp = internal::allocate_like(
+                        *this, TensorShape{0}, DataType::Int64);
                 }
             }
 
@@ -1975,12 +2005,16 @@ namespace lfs::core {
         }
 
         // Multi-dimensional case
-        auto result = empty({static_cast<size_t>(count), static_cast<size_t>(n_dims)}, device_, DataType::Int64);
+        auto result = internal::allocate_like(
+            *this,
+            TensorShape{static_cast<size_t>(count), static_cast<size_t>(n_dims)},
+            DataType::Int64);
 
         if (device_ == Device::CUDA) {
             auto cpu_tensor = to(Device::CPU);
             auto cpu_result = cpu_tensor.nonzero();
-            result = cpu_result.to(Device::CUDA);
+            result = internal::copy_to_backend(
+                cpu_result, gpu_backend_of(*this).value());
         } else {
             int64_t* indices = reinterpret_cast<int64_t*>(result.data_ptr());
             size_t write_idx = 0;
@@ -2049,6 +2083,7 @@ namespace lfs::core {
                        "tensor indexing requires valid tensors");
         LFS_ASSERT_MSG(idx.device() == device_,
                        "tensor indices must be on the indexed tensor device");
+        internal::require_same_gpu_backend(*this, idx, "tensor indexing");
         LFS_ASSERT_MSG(is_bool_like(idx.dtype()) || is_integer_index_dtype(idx.dtype()),
                        "tensor indices must be Bool, UInt8, Int32, or Int64");
         std::vector<Tensor> indices;
@@ -2066,6 +2101,7 @@ namespace lfs::core {
                        "tensor indexing requires a valid index tensor");
         LFS_ASSERT_MSG(idx.front().device() == device_,
                        "tensor indices must be on the indexed tensor device");
+        internal::require_same_gpu_backend(*this, idx.front(), "tensor indexing");
         LFS_ASSERT_MSG(is_bool_like(idx.front().dtype()) ||
                            is_integer_index_dtype(idx.front().dtype()),
                        "tensor indices must be Bool, UInt8, Int32, or Int64");
@@ -2083,6 +2119,7 @@ namespace lfs::core {
                        "masked indexing requires a Bool or UInt8 mask");
         LFS_ASSERT_MSG(mask.device() == device_,
                        "masked indexing requires mask and tensor on the same device");
+        internal::require_same_gpu_backend(*this, mask, "masked indexing");
         return MaskedTensorProxy(this, mask.clone());
     }
 
@@ -2272,6 +2309,8 @@ namespace lfs::core {
                        "masked assignment tensors must have the same dtype");
         LFS_ASSERT_MSG(tensor_->device() == other.device(),
                        "masked assignment tensors must be on the same device");
+        internal::require_same_gpu_backend(*tensor_, other, "masked assignment");
+        internal::require_same_gpu_backend(*tensor_, mask_, "masked assignment");
 
         Tensor mask_materialized;
         const Tensor* effective_mask = &mask_.contiguous_read(mask_materialized);
@@ -2377,6 +2416,8 @@ namespace lfs::core {
                        "masked tensor conversion requires a Bool or UInt8 mask");
         LFS_ASSERT_MSG(mask_.device() == tensor_->device(),
                        "masked tensor conversion requires mask and tensor on the same device");
+        internal::require_same_gpu_backend(
+            *tensor_, mask_, "masked tensor conversion");
         if (mask_.shape() == tensor_->shape()) {
             return tensor_->masked_select(mask_);
         }
@@ -2430,6 +2471,7 @@ namespace lfs::core {
                        "append_gather requires rank-1 indices");
         LFS_ASSERT_MSG(indices.device() == device_,
                        "append_gather indices must be on the tensor device");
+        internal::require_same_gpu_backend(*this, indices, "append_gather");
         LFS_ASSERT_MSG(state_->capacity > 0,
                        "append_gather requires reserved capacity");
         LFS_ASSERT_MSG(ndim() > 0,

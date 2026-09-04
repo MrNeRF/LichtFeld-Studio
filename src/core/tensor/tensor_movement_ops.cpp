@@ -323,6 +323,7 @@ namespace lfs::core {
                                "cat movement tensor ranks must match");
                 LFS_ASSERT_MSG(device_ == other.device(),
                                "cat movement tensors must share a device");
+                internal::require_same_gpu_backend(*this, other, "cat movement");
                 LFS_ASSERT_MSG(dtype_ == other.dtype(),
                                "cat movement tensor dtypes must match");
 
@@ -339,7 +340,8 @@ namespace lfs::core {
                 std::vector<size_t> result_dims = shape_.dims();
                 result_dims[dim] = shape_[dim] + other.shape()[dim];
 
-                auto result = empty(TensorShape(result_dims), device_, dtype_);
+                auto result = internal::allocate_like(
+                    *this, TensorShape(result_dims), dtype_);
 
                 size_t self_bytes = bytes();
                 size_t other_bytes = other.bytes();
@@ -402,7 +404,8 @@ namespace lfs::core {
                     new_shape[i] += pad_before[i] + pad_after[i];
                 }
 
-                auto result = zeros(TensorShape(new_shape), device_, dtype_);
+                auto result = internal::allocate_zeros_like(
+                    *this, TensorShape(new_shape), dtype_);
 
                 if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
                     pin_operands({this});

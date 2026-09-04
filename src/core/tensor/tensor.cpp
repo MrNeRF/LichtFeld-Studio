@@ -73,6 +73,7 @@ namespace lfs::core {
 
         struct StorageAccountingState {
             StorageAccountingCounter cuda_direct;
+            StorageAccountingCounter vulkan_owned;
             StorageAccountingCounter vulkan_external;
         };
 
@@ -202,6 +203,7 @@ namespace lfs::core {
                         {{reference_role, &reference}, {other_role, &other}}),
                     location);
             }
+            internal::require_same_gpu_backend(reference, other, operation);
         }
 
         void require_dtype(const Tensor& tensor,
@@ -292,6 +294,9 @@ namespace lfs::core {
         case StorageAccountingKind::CudaDirect:
             add_counter(state.cuda_direct, bytes);
             break;
+        case StorageAccountingKind::VulkanOwned:
+            add_counter(state.vulkan_owned, bytes);
+            break;
         case StorageAccountingKind::VulkanExternal:
             add_counter(state.vulkan_external, bytes);
             break;
@@ -304,6 +309,9 @@ namespace lfs::core {
         switch (kind) {
         case StorageAccountingKind::CudaDirect:
             subtract_counter(state.cuda_direct, bytes);
+            break;
+        case StorageAccountingKind::VulkanOwned:
+            subtract_counter(state.vulkan_owned, bytes);
             break;
         case StorageAccountingKind::VulkanExternal:
             subtract_counter(state.vulkan_external, bytes);
@@ -664,6 +672,10 @@ namespace lfs::core {
         }
         state_->stream = home_stream;
         init_storage_meta();
+        if (device_ == Device::CUDA) {
+            storage_meta_->backend = GpuBackend::CUDA;
+            storage_meta_->gpu_descriptor.byte_size = bytes();
+        }
         compute_alignment();
 
         if (profiling_enabled_) {
@@ -1017,7 +1029,7 @@ namespace lfs::core {
 
         if (numel() == 0) {
             // Return empty tensor with same shape and properties
-            return empty(shape_, device_, dtype_);
+            return internal::allocate_like(*this, shape_, dtype_);
         }
 
         // If not contiguous, materialize first then clone
@@ -1026,7 +1038,7 @@ namespace lfs::core {
         }
 
         // Create new tensor with same properties
-        auto result = empty(shape_, device_, dtype_);
+        auto result = internal::allocate_like(*this, shape_, dtype_);
 
         // Copy data using data_ptr() which accounts for storage_offset
         const size_t num_bytes = this->bytes();
@@ -1163,7 +1175,7 @@ namespace lfs::core {
         }
 
         // Need to materialize strided view into contiguous layout
-        auto result = empty(shape_, device_, dtype_);
+        auto result = internal::allocate_like(*this, shape_, dtype_);
 
         if (numel() == 0) {
             return result;
@@ -1716,7 +1728,7 @@ namespace lfs::core {
 // Macro for type conversions using launch_convert_type
 #define CONVERT_DTYPE_CUDA(FROM_TYPE, TO_TYPE, FROM_DTYPE, TO_DTYPE)                \
     if (dtype_ == FROM_DTYPE && dtype == TO_DTYPE) {                                \
-        auto result = empty(shape_, device_, TO_DTYPE);                             \
+        auto result = internal::allocate_like(*this, shape_, TO_DTYPE);             \
         if (numel() == 0)                                                           \
             return result;                                                          \
         if (device_ == Device::CUDA) {                                              \
@@ -1740,7 +1752,7 @@ namespace lfs::core {
 
         // Bool <-> Float32 (manual - can't use launch_convert_type due to uint8_t conflict)
         if (dtype_ == DataType::Bool && dtype == DataType::Float32) {
-            auto result = empty(shape_, device_, DataType::Float32);
+            auto result = internal::allocate_like(*this, shape_, DataType::Float32);
             if (numel() == 0)
                 return result;
 
@@ -1760,7 +1772,7 @@ namespace lfs::core {
         }
 
         if (dtype_ == DataType::Float32 && dtype == DataType::Bool) {
-            auto result = empty(shape_, device_, DataType::Bool);
+            auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
@@ -1809,7 +1821,7 @@ namespace lfs::core {
 
         // Float32 <-> Int32
         if (dtype_ == DataType::Float32 && dtype == DataType::Int32) {
-            auto result = empty(shape_, device_, DataType::Int32);
+            auto result = internal::allocate_like(*this, shape_, DataType::Int32);
             if (numel() == 0)
                 return result;
 
@@ -1840,7 +1852,7 @@ namespace lfs::core {
 
         // Bool -> UInt8: Bool storage is already normalized to 0 or 1.
         if (dtype_ == DataType::Bool && dtype == DataType::UInt8) {
-            auto result = empty(shape_, device_, dtype);
+            auto result = internal::allocate_like(*this, shape_, dtype);
             if (numel() > 0) {
                 if (device_ == Device::CUDA) {
                     void* const destination = result.data_ptr();
@@ -1868,7 +1880,7 @@ namespace lfs::core {
         // UInt8 -> Bool follows Torch's nonzero semantics rather than merely
         // reinterpreting the byte storage.
         if (dtype_ == DataType::UInt8 && dtype == DataType::Bool) {
-            auto result = empty(shape_, device_, DataType::Bool);
+            auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
@@ -1887,7 +1899,7 @@ namespace lfs::core {
 
         // Bool <-> Int32: Manual conversion (bool != 0 logic)
         if (dtype_ == DataType::Int32 && dtype == DataType::Bool) {
-            auto result = empty(shape_, device_, DataType::Bool);
+            auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
@@ -1936,7 +1948,7 @@ namespace lfs::core {
         }
 
         if (dtype_ == DataType::Bool && dtype == DataType::Int32) {
-            auto result = empty(shape_, device_, DataType::Int32);
+            auto result = internal::allocate_like(*this, shape_, DataType::Int32);
             if (numel() == 0)
                 return result;
 
@@ -1957,7 +1969,7 @@ namespace lfs::core {
 
         // Bool -> Int64
         if (dtype_ == DataType::Bool && dtype == DataType::Int64) {
-            auto result = empty(shape_, device_, DataType::Int64);
+            auto result = internal::allocate_like(*this, shape_, DataType::Int64);
             if (numel() == 0)
                 return result;
 
@@ -1978,7 +1990,7 @@ namespace lfs::core {
 
         // Int64 -> Bool
         if (dtype_ == DataType::Int64 && dtype == DataType::Bool) {
-            auto result = empty(shape_, device_, DataType::Bool);
+            auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
@@ -2031,7 +2043,7 @@ namespace lfs::core {
 
         // Bool -> Float16
         if (dtype_ == DataType::Bool && dtype == DataType::Float16) {
-            auto result = empty(shape_, device_, DataType::Float16);
+            auto result = internal::allocate_like(*this, shape_, DataType::Float16);
             if (numel() == 0)
                 return result;
 
@@ -2052,7 +2064,7 @@ namespace lfs::core {
 
         // Float16 -> Bool
         if (dtype_ == DataType::Float16 && dtype == DataType::Bool) {
-            auto result = empty(shape_, device_, DataType::Bool);
+            auto result = internal::allocate_like(*this, shape_, DataType::Bool);
             if (numel() == 0)
                 return result;
 
@@ -2124,7 +2136,7 @@ namespace lfs::core {
         // Int64 -> Int32: CRITICAL SYNCHRONIZATION for item() reads
         // Without sync, item<int>() may read before conversion completes, getting garbage
         if (dtype_ == DataType::Int64 && dtype == DataType::Int32) {
-            auto result = empty(shape_, device_, DataType::Int32);
+            auto result = internal::allocate_like(*this, shape_, DataType::Int32);
             if (numel() == 0)
                 return result;
 
@@ -2376,6 +2388,7 @@ namespace lfs::core {
                        "copy_from requires valid tensors");
         LFS_ASSERT_MSG(shape_ == other.shape_,
                        std::format("copy_from shape mismatch: {} vs {}", shape_.str(), other.shape_.str()));
+        internal::require_same_gpu_backend(*this, other, "copy_from");
 
         if (this == &other) {
             return *this;
@@ -2473,7 +2486,11 @@ namespace lfs::core {
 
         // Strided destination, contiguous source (cross-device: move src to dst device first)
         if (!dst_contig && src_contig && device_ != src.device_) {
-            return copy_from(src.to(device_));
+            if (device_ == Device::CUDA) {
+                return copy_from(internal::copy_to_backend(
+                    src, gpu_backend_of(*this).value()));
+            }
+            return copy_from(src.to(Device::CPU));
         }
 
         if (!dst_contig && src_contig && device_ == Device::CPU && src.device_ == Device::CPU) {
@@ -2583,7 +2600,8 @@ namespace lfs::core {
                        "logit epsilon must be finite and in (0, 0.5)");
 
         auto x_clamped = clamp(eps, 1.0f - eps);
-        auto one_minus_x = full(shape_, 1.0f, device_, dtype_).sub(x_clamped);
+        auto one_minus_x = internal::allocate_like(*this, shape_, dtype_, 1.0f)
+                               .sub(x_clamped);
         return x_clamped.div(one_minus_x).log();
     }
 
@@ -2606,6 +2624,7 @@ namespace lfs::core {
                        "bitwise OR requires Bool tensors");
         LFS_ASSERT_MSG(device_ == other.device(),
                        "bitwise OR requires tensors on the same device");
+        internal::require_same_gpu_backend(*this, other, "bitwise OR");
 
         return logical_or(other);
     }
@@ -3381,6 +3400,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(std::isfinite(rtol) && std::isfinite(atol) &&
                            rtol >= 0.0f && atol >= 0.0f,
                        "all_close tolerances must be finite and non-negative");
+        internal::require_same_gpu_backend(*this, other, "all_close");
 
         if (shape_ != other.shape_ || dtype_ != other.dtype_) {
             return false;
@@ -3556,6 +3576,11 @@ namespace lfs::core {
         }
         auto new_storage_meta = std::make_shared<StorageMeta>();
         if (device_ == Device::CUDA) {
+            new_storage_meta->backend = storage_meta_ ? storage_meta_->backend
+                                                      : GpuBackend::CUDA;
+            new_storage_meta->gpu_descriptor.byte_size = new_bytes;
+            new_storage_meta->gpu_descriptor.accounting_kind =
+                StorageAccountingKind::CudaDirect;
             new_storage_meta->external_kind = "cuda.direct";
         }
 
@@ -3611,6 +3636,7 @@ namespace lfs::core {
                        "zeros_direct received an invalid dtype");
         LFS_ASSERT_MSG(shape.rank() > 0,
                        "zeros_direct requires at least one dimension");
+        const GpuBackend backend = internal::resolve_new_gpu_storage_backend();
 
         const size_t current_size = shape[0];
         LFS_ASSERT_MSG(capacity >= current_size,
@@ -3642,6 +3668,7 @@ namespace lfs::core {
             t.state_->logical_size = current_size;
             t.id_ = next_id_++;
             t.init_storage_meta();
+            t.storage_meta_->backend = backend;
             t.storage_meta_->external_kind = "cuda.direct";
             return t;
         }
@@ -3696,6 +3723,10 @@ namespace lfs::core {
         t.state_->logical_size = current_size;
         t.id_ = next_id_++;
         t.init_storage_meta();
+        t.storage_meta_->backend = backend;
+        t.storage_meta_->gpu_descriptor.byte_size = total_bytes;
+        t.storage_meta_->gpu_descriptor.accounting_kind =
+            StorageAccountingKind::CudaDirect;
         t.storage_meta_->external_kind = "cuda.direct";
 
         return t;

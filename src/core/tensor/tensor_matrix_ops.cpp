@@ -55,7 +55,7 @@ namespace lfs::core {
         // GPU: use tiled CUDA sgemm kernel
         if (device_ == Device::CUDA) {
             pin_operands({&a, &b});
-            auto result = empty({m, n}, Device::CUDA, dtype_);
+            auto result = internal::allocate_like(*this, TensorShape{m, n}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
                                      m, n, k, result.stream());
@@ -63,7 +63,7 @@ namespace lfs::core {
         }
 
         pin_operands({&a, &b});
-        auto result = empty({m, n}, Device::CPU, dtype_);
+        auto result = internal::allocate_like(*this, TensorShape{m, n}, dtype_);
         cpu_matmul(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(), m, k, n);
         return result;
     }
@@ -98,7 +98,8 @@ namespace lfs::core {
         // GPU: use tiled CUDA batched sgemm kernel
         if (device_ == Device::CUDA) {
             pin_operands({&a, &b});
-            auto result = empty({batch_size, m, n}, Device::CUDA, dtype_);
+            auto result = internal::allocate_like(
+                *this, TensorShape{batch_size, m, n}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_sgemm_batched(a.ptr<float>(), b.ptr<float>(), result.ptr<float>(),
                                              batch_size, m, n, k, result.stream());
@@ -106,7 +107,8 @@ namespace lfs::core {
         }
 
         pin_operands({&a, &b});
-        auto result = empty({batch_size, m, n}, Device::CPU, dtype_);
+        auto result = internal::allocate_like(
+            *this, TensorShape{batch_size, m, n}, dtype_);
 
         const float* a_data = a.ptr<float>();
         const float* b_data = b.ptr<float>();
@@ -136,6 +138,7 @@ namespace lfs::core {
                        "matmul currently supports only Float32 tensors");
         LFS_ASSERT_MSG(device_ == other.device_,
                        "matmul requires tensors on the same device");
+        internal::require_same_gpu_backend(*this, other, "matmul");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
@@ -242,6 +245,7 @@ namespace lfs::core {
                        "dot vector dimensions must match");
         LFS_ASSERT_MSG(device_ == other.device_,
                        "dot requires tensors on the same device");
+        internal::require_same_gpu_backend(*this, other, "dot");
 
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
@@ -250,7 +254,7 @@ namespace lfs::core {
         // GPU: Use optimized CUDA kernel
         if (device_ == Device::CUDA) {
             pin_operands({&a, &b});
-            auto result = empty({}, Device::CUDA, dtype_);
+            auto result = internal::allocate_like(*this, TensorShape{}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
             tensor_ops::launch_dot_product(
                 a.ptr<float>(),
@@ -268,7 +272,7 @@ namespace lfs::core {
             sum += a.ptr<float>()[i] * b.ptr<float>()[i];
         }
 
-        auto result = empty({1}, Device::CPU, dtype_);
+        auto result = internal::allocate_like(*this, TensorShape{1}, dtype_);
         *result.ptr<float>() = sum;
 
         // Return as scalar (rank-0 view)

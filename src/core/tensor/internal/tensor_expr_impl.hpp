@@ -91,7 +91,7 @@ namespace lfs::core {
                 }
 
                 // Create result tensor (needs Tensor::empty)
-                Tensor result = Tensor::empty(shape, device, dtype);
+                Tensor result = internal::allocate_like(input_tensor, shape, dtype);
 
                 // Check dtype to determine correct template instantiation.
                 // Important: keep integer-only instantiations out of float-only ops to avoid
@@ -119,7 +119,8 @@ namespace lfs::core {
                             Tensor input_f = input_tensor.to(DataType::Float32);
 
                             if (dtype == DataType::Int32) {
-                                Tensor tmp_f = Tensor::empty(shape, device, DataType::Float32);
+                                Tensor tmp_f = internal::allocate_like(
+                                    input_f, shape, DataType::Float32);
                                 tensor_ops::launch_unary_op_generic(
                                     input_f.template ptr<float>(),
                                     tmp_f.template ptr<float>(),
@@ -189,7 +190,7 @@ namespace lfs::core {
                 }
 
                 // Create result tensor (Bool dtype)
-                Tensor result = Tensor::empty(shape, device, dtype);
+                Tensor result = internal::allocate_like(input_tensor, shape, dtype);
 
                 // Check input dtype to determine correct template instantiation
                 if (input_tensor.dtype() == DataType::Bool) {
@@ -293,7 +294,7 @@ namespace lfs::core {
         }
 
         // Create result tensor
-        Tensor result = Tensor::empty(shape_, device_, dtype_);
+        Tensor result = internal::allocate_like(base, shape_, dtype_);
 
         // Apply fused operation in a single pass!
         if (device_ == Device::CUDA) {
@@ -331,6 +332,8 @@ namespace lfs::core {
                 // Evaluate both sides
                 Tensor left_tensor = left.eval();
                 Tensor right_tensor = right.eval();
+                internal::require_same_gpu_backend(
+                    left_tensor, right_tensor, "binary expression evaluation");
 
                 std::optional<CUDAStreamGuard> execution_guard;
                 if (device == Device::CUDA) {
@@ -338,7 +341,7 @@ namespace lfs::core {
                 }
 
                 // Create result tensor
-                Tensor result = Tensor::empty(shape, device, dtype);
+                Tensor result = internal::allocate_like(left_tensor, shape, dtype);
 
                 // Determine if broadcasting is needed
                 bool needs_broadcast = (left_tensor.shape() != shape) ||
@@ -631,6 +634,8 @@ namespace lfs::core {
                 // Evaluate both sides
                 Tensor left_tensor = left.eval();
                 Tensor right_tensor = right.eval();
+                internal::require_same_gpu_backend(
+                    left_tensor, right_tensor, "binary expression evaluation");
 
                 std::optional<CUDAStreamGuard> execution_guard;
                 if (device == Device::CUDA) {
@@ -638,7 +643,7 @@ namespace lfs::core {
                 }
 
                 // Create result tensor (Bool dtype)
-                Tensor result = Tensor::empty(shape, device, dtype);
+                Tensor result = internal::allocate_like(left_tensor, shape, dtype);
 
                 // Determine if broadcasting is needed
                 bool needs_broadcast = (left_tensor.shape() != shape) ||
@@ -991,7 +996,7 @@ namespace lfs::core {
             execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
         }
 
-        Tensor result = Tensor::empty(shape_, device_, dtype_);
+        Tensor result = internal::allocate_like(input_tensor, shape_, dtype_);
 
         if (device_ == Device::CUDA) {
             tensor_ops::launch_unary_op_generic(
@@ -1052,6 +1057,8 @@ namespace lfs::core {
         }
 
         detail::validate_permutation_indices(input_tensor, indices_tensor);
+        internal::require_same_gpu_backend(
+            input_tensor, indices_tensor, "permutation expression evaluation");
 
         // Flatten input for gather
         Tensor flat_input = input_tensor.flatten();
@@ -1062,7 +1069,7 @@ namespace lfs::core {
         }
 
         // Create result tensor
-        Tensor result = Tensor::empty(shape_, device_, dtype_);
+        Tensor result = internal::allocate_like(flat_input, shape_, dtype_);
 
         // OPTIMIZATION: Use fused gather+unary kernel!
         if (device_ == Device::CUDA) {

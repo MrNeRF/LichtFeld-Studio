@@ -193,7 +193,8 @@ namespace lfs::core {
             if (n % 2 == 1) {
                 // Generate into an n+1 scratch allocation. Writing n+1 values into
                 // the n-element destination was a one-float buffer overflow.
-                auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
+                auto scratch = internal::allocate_like(
+                    *this, TensorShape{n + 1}, DataType::Float32);
                 RandomGenerator::instance().generate_cuda_normal(
                     scratch.ptr<float>(), n + 1, mean, std, stream());
                 LFS_CUDA_CHECK(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),

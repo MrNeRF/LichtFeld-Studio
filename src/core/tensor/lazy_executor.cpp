@@ -436,12 +436,16 @@ namespace lfs::core::internal {
                     return false;
                 }
                 Tensor rhs = *op.rhs;
-                const float* rhs_probe = rhs.ptr<float>();
-                if (rhs_probe == nullptr ||
-                    rhs.dtype() != DataType::Float32 ||
+                if (rhs.dtype() != DataType::Float32 ||
                     !rhs.is_contiguous() ||
                     rhs.shape() != source.shape() ||
                     rhs.device() != source.device()) {
+                    return false;
+                }
+                internal::require_same_gpu_backend(
+                    source, rhs, "lazy pointwise fusion");
+                const float* rhs_probe = rhs.ptr<float>();
+                if (rhs_probe == nullptr) {
                     return false;
                 }
                 rhs_storage.push_back(std::move(rhs));
@@ -471,7 +475,8 @@ namespace lfs::core::internal {
                     execution_stream = prepare_inputs_for_stream({&r}, execution_stream);
                 }
                 CUDAStreamGuard guard(execution_stream);
-                Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
+                Tensor out = internal::allocate_like(
+                    source, source.shape(), DataType::Float32);
                 float* out_ptr = out.ptr<float>();
                 assert(out_ptr != nullptr);
                 tensor_ops::launch_fused_pointwise_chain(in_ptr, out_ptr, n, chain, out.stream());
@@ -482,7 +487,8 @@ namespace lfs::core::internal {
             const float* in_ptr = source.ptr<float>();
             if (in_ptr == nullptr)
                 return false;
-            Tensor out = Tensor::empty(source.shape(), Device::CPU, DataType::Float32);
+            Tensor out = internal::allocate_like(
+                source, source.shape(), DataType::Float32);
             float* out_ptr = out.ptr<float>();
             if (out_ptr == nullptr)
                 return false;

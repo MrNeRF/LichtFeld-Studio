@@ -201,7 +201,8 @@ namespace lfs::core {
         // GPU path: Output[C_out, S] = Weight[C_out, C_in] @ Input[C_in, S]
         if (device_ == Device::CUDA && N == 1) {
             pin_operands({&weight_cont, &input_cont});
-            auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
+            auto output = internal::allocate_like(
+                *this, TensorShape{N, C_out, H, W}, dtype_);
 
             tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
                                      output.ptr<float>(), C_out, S, C_in, stream());
@@ -220,7 +221,8 @@ namespace lfs::core {
         // Batched GPU path for N > 1: process each batch
         if (device_ == Device::CUDA) {
             pin_operands({&weight_cont, &input_cont});
-            auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
+            auto output = internal::allocate_like(
+                *this, TensorShape{N, C_out, H, W}, dtype_);
 
             for (size_t n = 0; n < N; ++n) {
                 const float* in_ptr = input_cont.ptr<float>() + n * C_in * S;
@@ -310,9 +312,11 @@ namespace lfs::core {
                        "max_pool2d output has too many elements for its CUDA launch metadata");
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
-        auto output = empty({static_cast<size_t>(N), static_cast<size_t>(C),
-                             static_cast<size_t>(H_out), static_cast<size_t>(W_out)},
-                            device_, dtype_);
+        auto output = internal::allocate_like(
+            *this,
+            TensorShape{static_cast<size_t>(N), static_cast<size_t>(C),
+                        static_cast<size_t>(H_out), static_cast<size_t>(W_out)},
+            dtype_);
 
         if (device_ == Device::CUDA) {
             tensor_ops::launch_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
@@ -348,9 +352,11 @@ namespace lfs::core {
         const int W_in = static_cast<int>(shape_[3]);
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
-        auto output = empty({static_cast<size_t>(N), static_cast<size_t>(C),
-                             static_cast<size_t>(output_h), static_cast<size_t>(output_w)},
-                            device_, dtype_);
+        auto output = internal::allocate_like(
+            *this,
+            TensorShape{static_cast<size_t>(N), static_cast<size_t>(C),
+                        static_cast<size_t>(output_h), static_cast<size_t>(output_w)},
+            dtype_);
 
         if (device_ == Device::CUDA) {
             tensor_ops::launch_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
@@ -411,7 +417,8 @@ namespace lfs::core {
         // GPU path: Output[batch, out] = Input[batch, in] @ Weight^T[in, out]
         if (device_ == Device::CUDA) {
             pin_operands({&input_cont, &weight_cont});
-            auto output = empty({batch_size, out_features}, Device::CUDA, dtype_);
+            auto output = internal::allocate_like(
+                *this, TensorShape{batch_size, out_features}, dtype_);
 
             tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
                                         output.ptr<float>(), batch_size, out_features, in_features,
@@ -505,7 +512,8 @@ namespace lfs::core {
                        "conv1x1_bias_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             conv1x1_bias_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -598,7 +606,8 @@ namespace lfs::core {
                        "conv1x1_bias_relu_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             conv1x1_bias_relu_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -766,7 +775,8 @@ namespace lfs::core {
                        "linear_bias_relu_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             linear_bias_relu_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -846,7 +856,8 @@ namespace lfs::core {
                        "linear_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             linear_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;

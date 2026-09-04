@@ -73,6 +73,19 @@ namespace lfs::core {
     cudaStream_t prepare_inputs_for_stream(
         const std::initializer_list<const Tensor*> inputs,
         const std::optional<cudaStream_t> requested_stream) {
+        const Tensor* backend_reference = nullptr;
+        for (const Tensor* input : inputs) {
+            if (input == nullptr || input->device() != Device::CUDA) {
+                continue;
+            }
+            if (backend_reference == nullptr) {
+                backend_reference = input;
+            } else {
+                internal::require_same_gpu_backend(
+                    *backend_reference, *input, "prepare_inputs_for_stream");
+            }
+        }
+
         cudaStream_t execution_stream = requested_stream.has_value()
                                             ? *requested_stream
                                             : getCurrentCUDAStream();

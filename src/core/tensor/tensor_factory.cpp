@@ -87,6 +87,12 @@ namespace lfs::core {
         t.id_ = next_id_++;
         t.compute_alignment();
         t.init_storage_meta();
+        if (device == Device::CUDA) {
+            t.storage_meta_->backend = GpuBackend::CUDA;
+            t.storage_meta_->gpu_descriptor.byte_size = allocation_bytes;
+            t.storage_meta_->gpu_descriptor.accounting_kind =
+                StorageAccountingKind::VulkanExternal;
+        }
         t.storage_meta_->external_kind = std::move(external_kind);
         t.storage_meta_->external_owner = std::move(external_owner);
         return t;

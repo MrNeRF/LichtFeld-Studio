@@ -32,12 +32,12 @@ namespace lfs::core {
     namespace {
         Tensor empty_on_tensor_stream(const TensorShape& shape, Device device, DataType dtype, const Tensor& tensor) {
             if (device != Device::CUDA) {
-                return Tensor::empty(shape, device, dtype);
+                return internal::allocate_like(tensor, shape, dtype);
             }
 
             const cudaStream_t execution_stream = prepare_inputs_for_stream({&tensor});
             CUDAStreamGuard guard(execution_stream);
-            return Tensor::empty(shape, device, dtype);
+            return internal::allocate_like(tensor, shape, dtype);
         }
 
         std::optional<std::vector<Tensor>> promote_tensor_list(
@@ -144,12 +144,12 @@ namespace lfs::core {
             return plan;
         }
 
-        Tensor make_empty_reduction_result(const ReductionPlan& plan,
-                                           const Device device,
+        Tensor make_empty_reduction_result(const Tensor& input,
+                                           const ReductionPlan& plan,
                                            const ReduceOp op) {
             const TensorShape output_shape(plan.output_shape);
             if (output_shape.elements() == 0) {
-                return Tensor::empty(output_shape, device, plan.result_dtype);
+                return internal::allocate_like(input, output_shape, plan.result_dtype);
             }
 
             float value = 0.0f;
@@ -176,7 +176,8 @@ namespace lfs::core {
                 LFS_ASSERT_MSG(false,
                                "empty reduction encountered an unsupported operation");
             }
-            return Tensor::full(output_shape, value, device, plan.result_dtype);
+            return internal::allocate_like(
+                input, output_shape, plan.result_dtype, value);
         }
 
         void reduce_int32_cpu(const int32_t* input,
@@ -354,6 +355,10 @@ namespace lfs::core {
 
         switch (op) {
         case LoadOp::Empty: {
+            const std::optional<GpuBackend> gpu_backend =
+                args.device == Device::CUDA
+                    ? std::optional{internal::resolve_new_gpu_storage_backend()}
+                    : std::nullopt;
             result.shape_ = args.shape;
             result.strides_ = args.shape.strides();
             result.storage_offset_ = 0;
@@ -380,6 +385,9 @@ namespace lfs::core {
                 result.data_owner_ =
                     std::shared_ptr<void>(&empty_owner_sentinel, [](void*) {});
                 result.init_storage_meta();
+                if (gpu_backend) {
+                    result.storage_meta_->backend = *gpu_backend;
+                }
                 return result;
             }
 
@@ -393,6 +401,8 @@ namespace lfs::core {
                         result.compute_alignment();
                         result.storage_meta_->external_kind = "nn.arena";
                         result.storage_meta_->external_owner = std::move(owner);
+                        result.storage_meta_->backend = *gpu_backend;
+                        result.storage_meta_->gpu_descriptor.byte_size = bytes;
                         return result;
                     }
                 }
@@ -406,6 +416,8 @@ namespace lfs::core {
                 });
                 result.data_ = result.data_owner_.get();
                 result.compute_alignment(); // Compute alignment flags once
+                result.storage_meta_->backend = *gpu_backend;
+                result.storage_meta_->gpu_descriptor.byte_size = bytes;
 
                 // Record tensor allocation for profiling
                 CudaMemoryPool::instance().record_tensor(
@@ -610,6 +622,11 @@ namespace lfs::core {
                 return load(LoadOp::Empty, empty_args);
             }
 
+            const std::optional<GpuBackend> gpu_backend =
+                args.device == Device::CUDA
+                    ? std::optional{internal::resolve_new_gpu_storage_backend()}
+                    : std::nullopt;
+
             result.shape_ = TensorShape{count};
             result.strides_ = result.shape_.strides(); // Initialize to contiguous strides
             result.storage_offset_ = 0;
@@ -630,6 +647,9 @@ namespace lfs::core {
                     safe_cuda_pool_deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
+                result.init_storage_meta();
+                result.storage_meta_->backend = *gpu_backend;
+                result.storage_meta_->gpu_descriptor.byte_size = bytes;
 
                 CudaMemoryPool::instance().record_tensor(
                     result.data_,
@@ -758,7 +778,8 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 size_t n = result.numel();
                 if (n % 2 == 1) {
-                    auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
+                    auto scratch = internal::allocate_like(
+                        result, TensorShape{n + 1}, DataType::Float32);
                     RandomGenerator::instance().generate_cuda_normal(
                         scratch.ptr<float>(), n + 1, mean, std, result.stream());
                     LFS_CUDA_CHECK_MSG(
@@ -910,7 +931,7 @@ namespace lfs::core {
             LFS_ASSERT_MSG(replacement || num_samples <= n,
                            "multinomial sample count exceeds weights without replacement");
 
-            result = load(LoadOp::Empty, args);
+            result = internal::allocate_like(*weights, args.shape, args.dtype);
             if (!result.is_valid())
                 return result;
 
@@ -1155,7 +1176,7 @@ namespace lfs::core {
                            "Float32 any/all reductions are unsupported");
         }
         if (numel() == 0) {
-            return make_empty_reduction_result(reduction, device_, op);
+            return make_empty_reduction_result(*this, reduction, op);
         }
         if (dtype_ == DataType::Bool && device_ == Device::CPU &&
             !args.axes.empty() && args.axes.size() != shape_.rank()) {
@@ -1233,6 +1254,8 @@ namespace lfs::core {
                             rhs_ok = false;
                             break;
                         }
+                        internal::require_same_gpu_backend(
+                            fused_source, rhs, "fused transform reduce");
                         rhs_storage.push_back(std::move(rhs));
                     }
                     if (rhs_ok) {
@@ -1266,11 +1289,12 @@ namespace lfs::core {
                                     prepare_inputs_for_stream({&r}, execution_stream);
                             }
                             CUDAStreamGuard guard(execution_stream);
-                            result = Tensor::empty(
+                            result = internal::allocate_like(
+                                fused_source,
                                 TensorShape(args.keepdim
                                                 ? std::vector<size_t>(shape_.rank(), 1)
                                                 : std::vector<size_t>{}),
-                                Device::CUDA, DataType::Float32);
+                                DataType::Float32);
                             result.set_stream(execution_stream);
                             tensor_ops::launch_fused_transform_reduce(
                                 std::as_const(fused_source).ptr<float>(), result.ptr<float>(), n,
@@ -1335,6 +1359,8 @@ namespace lfs::core {
                             rhs_ok = false;
                             break;
                         }
+                        internal::require_same_gpu_backend(
+                            fused_source, rhs, "fused segmented transform reduce");
                         rhs_storage.push_back(std::move(rhs));
                     }
                     if (rhs_ok) {
@@ -1405,7 +1431,8 @@ namespace lfs::core {
                                     prepare_inputs_for_stream({&r}, execution_stream);
                             }
                             CUDAStreamGuard guard(execution_stream);
-                            result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
+                            result = internal::allocate_like(
+                                fused_source, TensorShape(out_shape), DataType::Float32);
                             result.set_stream(execution_stream);
                             tensor_ops::launch_fused_segmented_transform_reduce(
                                 std::as_const(fused_source).ptr<float>(), result.ptr<float>(),
@@ -1610,7 +1637,8 @@ namespace lfs::core {
             execution_guard.emplace(execution_stream);
         }
 
-        auto result = Tensor::empty(TensorShape(out_shape), input->device_, out_dtype);
+        auto result = internal::allocate_like(
+            *input, TensorShape(out_shape), out_dtype);
 
         if (input->device_ == Device::CUDA) {
             pin_operands({input});
@@ -2003,7 +2031,8 @@ namespace lfs::core {
                            "where inputs have incompatible broadcast shapes");
 
             DataType out_dtype = promote_types(b.dtype(), c.dtype());
-            return empty(TensorShape(shape_abc_vec), device_, out_dtype);
+            return internal::allocate_like(
+                *this, TensorShape(shape_abc_vec), out_dtype);
         }
 
         LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), b.shape().dims()),
@@ -2050,7 +2079,7 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
             pin_operands({&a_broadcast, &b_cast, &c_cast});
-            auto result = Tensor::empty(shape_abc, device_, out_dtype);
+            auto result = internal::allocate_like(*this, shape_abc, out_dtype);
             prepare_inputs_for_stream(
                 {&a_broadcast, &b_cast, &c_cast}, result.stream());
             tensor_ops::launch_where(
@@ -2093,7 +2122,8 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            return result_cpu.to(Device::CUDA);
+            return internal::copy_to_backend(
+                result_cpu, gpu_backend_of(*this).value());
         }
         return result_cpu;
     }
@@ -2185,6 +2215,7 @@ namespace lfs::core {
                        "broadcast requires valid tensors");
         LFS_ASSERT_MSG(device_ == other.device(),
                        "broadcast operands must be on the same device");
+        internal::require_same_gpu_backend(*this, other, "broadcast");
 
         auto bcast_shape = this->broadcast_shape(other.shape());
         LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
@@ -2307,6 +2338,7 @@ namespace lfs::core {
                     "cat() device mismatch: tensor 0 is on device {}, tensor {} is on device {}",
                     static_cast<int>(first_device), i, static_cast<int>(tensors[i].device())));
             }
+            internal::require_same_gpu_backend(tensors[0], tensors[i], "cat");
 
             if (tensors[i].dtype() != first_dtype) {
                 throw std::invalid_argument(std::format(
@@ -2430,7 +2462,8 @@ namespace lfs::core {
 
         // ============= FALLBACK: Standard allocation path =============
         LOG_DEBUG("  → SLOW PATH: Allocating new buffer");
-        auto result = Tensor::empty(TensorShape(result_dims), first_device, first_dtype);
+        auto result = internal::allocate_like(
+            tensors[0], TensorShape(result_dims), first_dtype);
         LOG_DEBUG("  Created new tensor: id={}, data_ptr={}, capacity={}",
                   result.id_, result.data_ptr(), result.capacity());
 
@@ -2611,7 +2644,8 @@ namespace lfs::core {
         // Insert new dimension of size tensors.size() at position 'dim'
         new_dims.insert(new_dims.begin() + dim, tensors.size());
 
-        auto result = Tensor::empty(TensorShape(new_dims), first_device, first_dtype);
+        auto result = internal::allocate_like(
+            tensors[0], TensorShape(new_dims), first_dtype);
 
         size_t elements_per_tensor = first_shape.elements();
         size_t bytes_per_tensor = elements_per_tensor * dtype_size(first_dtype);
@@ -2667,11 +2701,11 @@ namespace lfs::core {
         }
 
         if (numel() == 0) {
-            return empty(shape_, device_, dtype_);
+            return internal::allocate_like(*this, shape_, dtype_);
         }
 
         // FUSED VERSION: Allocate output + clamp in one pass (avoids separate clone)
-        auto result = empty(shape_, device_, dtype_);
+        auto result = internal::allocate_like(*this, shape_, dtype_);
 
         if (device_ == Device::CUDA) {
             if (dtype_ == DataType::Float32) {

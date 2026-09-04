@@ -9,6 +9,7 @@
 // On Linux this also guarantees visibility under -fvisibility=hidden.
 
 #include "core/export.hpp"
+#include "core/tensor.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_generic_ops.cuh"
 #include <cuda_fp16.h>

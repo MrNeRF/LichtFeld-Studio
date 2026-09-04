@@ -18,6 +18,7 @@ namespace lfs::core {
                        "cdist currently supports only Float32 tensors");
         LFS_ASSERT_MSG(device_ == other.device(),
                        "cdist requires tensors on the same device");
+        internal::require_same_gpu_backend(*this, other, "cdist");
         LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2,
                        "cdist requires rank-2 tensors");
         LFS_ASSERT_MSG(size(1) == other.size(1),
@@ -34,7 +35,7 @@ namespace lfs::core {
         size_t M = other.size(0);
         size_t D = size(1);
 
-        auto result = empty({N, M}, device_, dtype_);
+        auto result = internal::allocate_like(*this, TensorShape{N, M}, dtype_);
 
         if (device_ == Device::CUDA) {
             pin_operands({&lhs, &rhs});
@@ -196,7 +197,9 @@ namespace lfs::core {
             }
 
             if (input.device() == Device::CUDA) {
-                return {values.to(Device::CUDA), indices.to(Device::CUDA)};
+                const GpuBackend backend = gpu_backend_of(input).value();
+                return {internal::copy_to_backend(values, backend),
+                        internal::copy_to_backend(indices, backend)};
             }
             return {values, indices};
         }
@@ -219,7 +222,9 @@ namespace lfs::core {
         if (ndim() == 0) {
             LFS_ASSERT_MSG(dim == 0 || dim == -1,
                            "scalar sort dimension is out of range");
-            return {clone(), Tensor::zeros(TensorShape{}, device_, DataType::Int64)};
+            Tensor indices = internal::allocate_zeros_like(
+                *this, TensorShape{}, DataType::Int64);
+            return {clone(), std::move(indices)};
         }
 
         dim = resolve_dim(dim);
@@ -231,7 +236,7 @@ namespace lfs::core {
 
         // Create output tensors on same device
         auto sorted = source.clone();
-        auto indices = Tensor::empty(shape_, device_, DataType::Int64);
+        auto indices = internal::allocate_like(*this, shape_, DataType::Int64);
         if (numel() == 0)
             return {sorted, indices};
 

@@ -30,6 +30,7 @@ set(TENSOR_SOURCES
         tensor/lazy_config.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
+        tensor/tensor_backend.cpp
         tensor/tensor.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
