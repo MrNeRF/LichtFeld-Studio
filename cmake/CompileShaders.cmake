@@ -40,5 +40,11 @@ function(compile_shader target source output symbol)
 
     add_custom_target("${_shader_target}" DEPENDS "${_output}")
     add_dependencies("${target}" "${_shader_target}")
+    # Expose the existing code-generation graph to syntax-only callers without
+    # building the visualizer. Keep target knowledge in CMake, not in the checker.
+    if(NOT TARGET lfs_shader_headers)
+        add_custom_target(lfs_shader_headers)
+    endif()
+    add_dependencies(lfs_shader_headers "${_shader_target}")
     target_sources("${target}" PRIVATE "${_output}")
 endfunction()

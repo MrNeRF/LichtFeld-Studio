@@ -147,6 +147,10 @@ cmake --list-presets=all
 cmake -P tests/cmake/test_vcpkg_profiles.cmake
 ```
 
+With `BUILD_TESTS=ON`, these checks are also registered as
+`lichtfeld.cmake.vcpkg_profiles` and run with `ctest --test-dir build -L fast`.
+They do not need application binaries or a vcpkg installation.
+
 For build validation, build and launch both profiles on the target OS, then
 switch back without deleting either directory. Check the vcpkg install log for
 reuse; exercise Python imports and Vulkan validation in the RelWithDebInfo
@@ -260,3 +264,8 @@ Tests remain opt-in, keeping test-only package restore and target generation
 out of the normal application loop without changing any shipped feature. The
 canonical [source build guide](../../building_and_distribution.md#tests)
 documents the test build targets, CTest tiers, and required real-data layout.
+
+Before a complete MSVC build, use the
+[Windows build preflight](windows-build-preflight) to check Windows-specific
+source contracts and replay affected configured C/C++ translation units without
+code generation or linking.

@@ -929,6 +929,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_shader_header_target.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_splat_lod_hierarchy.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
@@ -941,6 +942,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_undo.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_viewport_overlay_hooks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_windows_build_preflight.py
 )
 
 set(LFS_PYTHON_SLOW_TESTS
@@ -979,6 +981,15 @@ set(LFS_PYTHON_NIGHTLY_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scene_validity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_tensor_pytorch_interop.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_unicode_path_bindings.py
+)
+
+add_test(NAME lichtfeld.cmake.vcpkg_profiles
+    COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_vcpkg_profiles.cmake"
+)
+set_tests_properties(lichtfeld.cmake.vcpkg_profiles PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS "fast"
+    TIMEOUT 60
 )
 
 add_test(NAME lichtfeld.python.fast
