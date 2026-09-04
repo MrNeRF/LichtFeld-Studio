@@ -91,6 +91,8 @@ namespace lfs::app {
                 const HeadlessPluginSignalGuard&) = delete;
         };
 
+        // Headless runs train into the project they were started from unless
+        // -o redirects the result to a fresh project.licht.
         [[nodiscard]] std::filesystem::path headless_project_save_destination(
             const core::param::TrainingParameters& cli_params,
             const std::filesystem::path& source) {
@@ -98,9 +100,18 @@ namespace lfs::app {
                 return source;
 
             const auto destination = cli_params.dataset.output_path / "project.licht";
-            LOG_INFO("Headless resume project destination: {}",
+            LOG_INFO("Headless project destination: {}",
                      core::path_to_utf8(destination));
             return destination;
+        }
+
+        // Empty for a plain dataset-folder run, which keeps the default
+        // output_path/project.licht destination.
+        [[nodiscard]] std::filesystem::path headless_dataset_project_destination(
+            const core::param::TrainingParameters& params) {
+            if (!params.dataset_project)
+                return {};
+            return headless_project_save_destination(params, *params.dataset_project);
         }
 
         [[nodiscard]] lfs::Error training_project_error(
@@ -119,7 +130,8 @@ namespace lfs::app {
 
         // --data-path may name an untrained .licht. Resolve its dataset, the
         // external folder recorded in REFS or else the embedded copy extracted
-        // to the per-user cache, and continue as a plain dataset-folder run.
+        // to the per-user cache, and continue as a dataset-folder run that
+        // trains into the project unless -o redirects the result.
         [[nodiscard]] lfs::Result<void> adoptDatasetProject(
             core::param::TrainingParameters& params) {
             const auto path = *params.dataset_project;
@@ -205,11 +217,14 @@ namespace lfs::app {
                     LFS_SOURCE_SITE_CURRENT()));
             }
 
+            // Without -o, exports land beside the project.
+            if (!params.dataset.output_path_explicit)
+                params.dataset.output_path = path.parent_path();
             io::project::adopt_project_training_parameters(
                 params, std::move(*snapshot), std::move(*dataset_root),
                 std::move(images_folder));
-            // From here on this is an ordinary --data-path run.
-            params.dataset_project.reset();
+            // dataset_project stays set: it is the save destination unless
+            // -o redirects the result, exactly like --resume.
             LOG_INFO(
                 "Training from project {}; dataset resolved to {}",
                 core::path_to_utf8(path),
@@ -640,7 +655,8 @@ namespace lfs::app {
                         }
                         trainer->setParams(effective_params);
                         training::grant_headless_project_saves(
-                            *trainer, effective_params);
+                            *trainer, effective_params,
+                            headless_dataset_project_destination(effective_params));
                         manager->setTrainer(std::move(trainer));
                     }
                 }
@@ -950,7 +966,8 @@ namespace lfs::app {
                         return 1;
                     }
                     training::grant_headless_project_saves(
-                        *trainer, *params);
+                        *trainer, *params,
+                        headless_dataset_project_destination(*params));
 
                     core::Tensor::trim_memory_pool();
 
