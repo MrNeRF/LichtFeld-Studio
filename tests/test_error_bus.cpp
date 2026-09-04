@@ -15,6 +15,7 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/rml_toast_overlay.hpp"
 #include "gui/string_keys.hpp"
+#include "io/video/video_reconstruction.hpp"
 
 #include <gtest/gtest.h>
 
@@ -317,6 +318,31 @@ TEST(ErrorEventBridgeTest, CudaVersionUnsupportedMapsToToast) {
     ASSERT_TRUE(notification.has_value());
     EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
     EXPECT_TRUE(notification->actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, VideoReconstructionFallbackIsVisibleButNativeExportIsQuiet) {
+    using namespace lfs::io::video;
+    auto plan = resolveVideoReconstructionPlan({.output_width = 1920, .output_height = 1080});
+    ASSERT_TRUE(plan);
+    EXPECT_FALSE(lfs::vis::gui::videoReconstructionFallbackNotification(*plan));
+    plan = resolveVideoReconstructionPlan({.selection = {.backend_id = "missing", .preset_id = "quality", .fallback = VideoReconstructionFallback::Native},
+                                           .output_width = 1920,
+                                           .output_height = 1080});
+    ASSERT_TRUE(plan);
+    const auto notification = lfs::vis::gui::videoReconstructionFallbackNotification(*plan);
+    ASSERT_TRUE(notification);
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(notification->error.severity(), lfs::Severity::Warning);
+    EXPECT_EQ(notification->error.code(), lfs::ErrorCode::Unavailable);
+    EXPECT_TRUE(notification->actions.empty());
+}
+
+TEST(ErrorEventBridgeTest, FutureVideoReconstructionVersionIsNonBlockingWarning) {
+    const auto notification = lfs::vis::gui::unsupportedVideoReconstructionVersionNotification();
+    EXPECT_EQ(notification.surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(notification.error.severity(), lfs::Severity::Warning);
+    EXPECT_EQ(notification.error.code(), lfs::ErrorCode::Unsupported);
+    EXPECT_TRUE(notification.actions.empty());
 }
 
 namespace {

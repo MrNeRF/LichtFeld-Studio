@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/video/video_reconstruction.hpp"
+#include "io/video/video_output_extent.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -170,11 +171,20 @@ namespace lfs::io::video {
                 .message = valid.error().message,
             });
         }
-        if (request.output_width <= 0 || request.output_height <= 0 ||
-            (request.output_width & 1) != 0 || (request.output_height & 1) != 0) {
+        if (const auto error = videoOutputExtentError(request.output_width, request.output_height)) {
             return std::unexpected(VideoReconstructionResolutionError{
                 .issue = VideoReconstructionResolutionIssue::InvalidOutputExtent,
-                .message = "Video reconstruction output dimensions must be positive and even",
+                .message = std::string(*error),
+            });
+        }
+        switch (request.projection) {
+        case VideoReconstructionProjection::Perspective:
+        case VideoReconstructionProjection::Equirectangular:
+            break;
+        default:
+            return std::unexpected(VideoReconstructionResolutionError{
+                .issue = VideoReconstructionResolutionIssue::InvalidProjection,
+                .message = "Video reconstruction projection is invalid",
             });
         }
 
@@ -280,10 +290,15 @@ namespace lfs::io::video {
                 descriptor->unavailable_reason_id);
         }
 
-        const bool projection_supported =
-            request.projection == VideoReconstructionProjection::Perspective
-                ? descriptor->supports_perspective
-                : descriptor->supports_equirectangular;
+        bool projection_supported = false;
+        switch (request.projection) {
+        case VideoReconstructionProjection::Perspective:
+            projection_supported = descriptor->supports_perspective;
+            break;
+        case VideoReconstructionProjection::Equirectangular:
+            projection_supported = descriptor->supports_equirectangular;
+            break;
+        }
         if (!projection_supported) {
             return fail_or_use_native(
                 &*descriptor,
@@ -350,13 +365,21 @@ namespace lfs::io::video {
                 });
             }
             const auto version = json.find("version");
-            const bool supported_version =
-                version != json.end() &&
-                ((version->is_number_unsigned() &&
-                  version->get<std::uint64_t>() == VIDEO_RECONSTRUCTION_SELECTION_VERSION) ||
-                 (version->is_number_integer() &&
-                  version->get<std::int64_t>() == VIDEO_RECONSTRUCTION_SELECTION_VERSION));
-            if (!supported_version) {
+            if (version == json.end()) {
+                return std::unexpected(VideoReconstructionSelectionError{
+                    .issue = VideoReconstructionSelectionIssue::MissingField,
+                    .message = "Video reconstruction selection requires a version",
+                });
+            }
+            if (!version->is_number_integer() ||
+                (version->is_number_unsigned() ? version->get<std::uint64_t>() == 0
+                                               : version->get<std::int64_t>() <= 0)) {
+                return std::unexpected(VideoReconstructionSelectionError{
+                    .issue = VideoReconstructionSelectionIssue::InvalidVersion,
+                    .message = "Video reconstruction selection version must be a positive integer",
+                });
+            }
+            if (version->get<std::uint64_t>() != VIDEO_RECONSTRUCTION_SELECTION_VERSION) {
                 return std::unexpected(VideoReconstructionSelectionError{
                     .issue = VideoReconstructionSelectionIssue::UnsupportedVersion,
                     .message = "Unsupported video reconstruction selection version",
@@ -439,6 +462,8 @@ namespace lfs::io::video {
             return "preset_not_found";
         case VideoReconstructionResolutionIssue::InvalidDescriptor:
             return "invalid_descriptor";
+        case VideoReconstructionResolutionIssue::InvalidProjection:
+            return "invalid_projection";
         }
         return "unknown";
     }
@@ -464,6 +489,8 @@ namespace lfs::io::video {
             return "unsupported_version";
         case VideoReconstructionSelectionIssue::MissingField:
             return "missing_field";
+        case VideoReconstructionSelectionIssue::InvalidVersion:
+            return "invalid_version";
         }
         return "unknown";
     }

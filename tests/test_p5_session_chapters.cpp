@@ -4,6 +4,7 @@
  */
 
 #include "core/camera.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
@@ -15,6 +16,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/scene_tree_session.hpp"
 #include "gui/sequencer_ui_state.hpp"
+#include "input/input_controller.hpp"
 #include "io/project_document.hpp"
 #include "io/video/video_export_options.hpp"
 #include "licht_matrix_test_data.hpp"
@@ -38,6 +40,7 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ranges>
 #include <set>
@@ -49,6 +52,21 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+
+namespace lfs::vis {
+
+    class P5SessionCaptureTestAccess {
+    public:
+        static void initializeInputController(VisualizerImpl& viewer) {
+            // The constructor creates GUI/render owners, but input normally
+            // arrives during initialize(). Capture needs its real state, not
+            // a window, an event loop, or GPU initialization.
+            viewer.input_controller_ = std::make_unique<InputController>(
+                nullptr, viewer.getViewport());
+        }
+    };
+
+} // namespace lfs::vis
 
 namespace {
 
@@ -2376,22 +2394,107 @@ namespace {
         EXPECT_EQ(ui.reconstruction, lfs::io::video::VideoReconstructionSelection{});
     }
 
-    TEST(P5SessionChapterTest, InvalidVideoReconstructionSelectionFailsBeforeApply) {
+    TEST(P5SessionChapterTest, FutureVideoReconstructionVersionOpensWithNativeWarningAndResaves) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        lfs::vis::P5SessionCaptureTestAccess::initializeInputController(viewer);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        ASSERT_NE(viewer.getRenderingManager(), nullptr);
+        ASSERT_NE(viewer.getInputController(), nullptr);
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        ui.reconstruction = {.backend_id = "previous", .preset_id = "quality"};
+
+        struct WarningConsumer final : lfs::NativeErrorConsumer {
+            int warnings = 0;
+            void on_error(const lfs::ErrorNotification& notification, const lfs::ErrorDeliveryInfo&) noexcept override {
+                if (notification.error.code() == lfs::ErrorCode::Unsupported &&
+                    notification.error.severity() == lfs::Severity::Warning &&
+                    notification.surface == lfs::ErrorSurface::Toast)
+                    ++warnings;
+            }
+        } consumer;
+        auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
         auto session = make_populated_session_chapters();
         auto seq = json_root(session.sequencer.dom());
         seq["preferences"]["reconstruction"] = {
             {"version", 2},
-            {"backend_id", "native"},
-            {"preset_id", "native"},
-            {"fallback", "abort"},
+            {"future_schema", true},
         };
+        seq["preferences"]["quality"] = 22;
+        seq["preferences"]["vendor_other_preference"] = "preserve";
         session.sequencer = require_result(
             SequencerSessionChapter::parse(seq.dump()));
+        const auto prepared = require_result(prepareGuiSessionRestore(session));
+        EXPECT_EQ(consumer.warnings, 0); // Validation alone must not publish UI notifications.
+        std::vector<CameraBookmarkProjectState> bookmarks;
+        applyGuiSession(viewer, prepared, bookmarks);
+        EXPECT_EQ(ui.reconstruction, lfs::io::video::VideoReconstructionSelection{});
+        EXPECT_EQ(ui.quality, 22);
+        EXPECT_EQ(consumer.warnings, 1);
 
-        const auto prepared = prepareGuiSessionRestore(std::move(session));
+        const auto saved = require_result(captureGuiSession(viewer, session, bookmarks));
+        const auto canonical = lfs::io::video::serializeVideoReconstructionSelection({});
+        ASSERT_TRUE(canonical);
+        EXPECT_EQ(json_root(saved.sequencer.dom())["preferences"]["reconstruction"], Json::parse(*canonical));
+        EXPECT_EQ(json_root(saved.sequencer.dom())["preferences"]["vendor_other_preference"], "preserve");
+        EXPECT_TRUE(prepareGuiSessionRestore(saved));
+        EXPECT_EQ(consumer.warnings, 1); // Re-saving does not repeat the warning.
+    }
 
-        ASSERT_FALSE(prepared);
-        EXPECT_EQ(prepared.error().code(), lfs::ErrorCode::DataLoss);
+    TEST(P5SessionChapterTest, CorruptVideoReconstructionSelectionStillFailsBeforeApply) {
+        for (const auto& reconstruction : std::vector<Json>{
+                 Json::array(),
+                 Json::object(),
+                 {{"version", 0}},
+                 {{"version", -1}},
+                 {{"version", "2"}},
+                 {{"version", 2.0}},
+                 {{"version", true}},
+                 {{"version", 1}, {"backend_id", "native"}, {"preset_id", "native"}, {"fallback", "unknown"}},
+                 {{"version", 1}, {"backend_id", "native"}, {"preset_id", "quality"}, {"fallback", "abort"}},
+                 {{"version", 1}, {"backend_id", "INVALID"}, {"preset_id", "quality"}, {"fallback", "native"}}}) {
+            SCOPED_TRACE(reconstruction.dump());
+            auto session = make_populated_session_chapters();
+            require_status(session.sequencer.dom().set_json("preferences.reconstruction", reconstruction));
+            const auto prepared = prepareGuiSessionRestore(std::move(session));
+            ASSERT_FALSE(prepared);
+            EXPECT_EQ(prepared.error().code(), lfs::ErrorCode::DataLoss);
+        }
+    }
+
+    TEST(P5SessionChapterTest, CaptureValidatesAndUsesCanonicalVideoReconstructionSerializer) {
+        lfs::vis::ViewerOptions options;
+        options.show_startup_overlay = false;
+        lfs::vis::VisualizerImpl viewer(options);
+        lfs::vis::P5SessionCaptureTestAccess::initializeInputController(viewer);
+        ASSERT_NE(viewer.getGuiManager(), nullptr);
+        ASSERT_NE(viewer.getRenderingManager(), nullptr);
+        ASSERT_NE(viewer.getInputController(), nullptr);
+        auto& ui = viewer.getGuiManager()->getSequencerUIState();
+        auto session = make_populated_session_chapters();
+        ui.reconstruction.fallback = static_cast<lfs::io::video::VideoReconstructionFallback>(255);
+        const auto invalid = captureGuiSession(viewer, session, {});
+        ASSERT_FALSE(invalid);
+        EXPECT_EQ(invalid.error().code(), lfs::ErrorCode::InvalidArgument);
+
+        ui.reconstruction = {.backend_id = "example", .preset_id = "quality", .fallback = lfs::io::video::VideoReconstructionFallback::Native};
+        const auto saved = require_result(captureGuiSession(viewer, session, {}));
+        const auto canonical = lfs::io::video::serializeVideoReconstructionSelection(ui.reconstruction);
+        ASSERT_TRUE(canonical);
+        EXPECT_EQ(json_root(saved.sequencer.dom())["preferences"]["reconstruction"], Json::parse(*canonical));
+        EXPECT_TRUE(prepareGuiSessionRestore(saved));
+
+        auto retained_selection = Json::parse(*canonical);
+        retained_selection["vendor_extra"] = {{"keep", true}};
+        require_status(session.sequencer.dom().set_json("preferences.reconstruction", retained_selection));
+        ui.reconstruction = {};
+        const auto resaved = require_result(captureGuiSession(viewer, session, {}));
+        const auto resaved_selection = json_root(resaved.sequencer.dom())["preferences"]["reconstruction"];
+        EXPECT_EQ(resaved_selection["backend_id"], "native");
+        EXPECT_EQ(resaved_selection["preset_id"], "native");
+        EXPECT_EQ(resaved_selection["fallback"], "abort");
+        EXPECT_EQ(resaved_selection["vendor_extra"], retained_selection["vendor_extra"]);
     }
 
     TEST(P5SessionChapterTest, SnapshotAbsolutizesRelativeDatasetPath) {

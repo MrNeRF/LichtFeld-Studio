@@ -2466,9 +2466,22 @@ def clear_keyframes() -> None:
 def set_playback_speed(speed: float) -> None:
     """Set sequencer playback speed"""
 
+def get_video_reconstruction_selection() -> dict[str, str]:
+    """Return the saved backend_id, preset_id and fallback. Raises RuntimeError if the viewer is unavailable."""
+
+def set_video_reconstruction_selection(backend_id: str, preset_id: str, fallback: str = 'abort') -> None:
+    """Set the saved selection for both export entry points, without loading a backend.
+
+    Invalid metadata raises ValueError without changing the previous selection.
+    Raises RuntimeError if the viewer is unavailable.
+    """
+
+def reset_video_reconstruction_selection() -> None:
+    """Restore native/native with abort policy. Raises RuntimeError if the viewer is unavailable."""
+
 def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True) -> None:
     """
-    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
+    Export video with specified settings and the saved reconstruction selection, as does the Sequencer button. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded. Raises RuntimeError if the viewer is unavailable.
     """
 
 def add_keyframe() -> None:

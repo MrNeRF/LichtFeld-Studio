@@ -122,6 +122,7 @@ add_library(lfs_video STATIC
         include/io/video/video_encoder_interface.hpp
         include/io/video/video_export_options.hpp
         include/io/video/video_extensions.hpp
+        include/io/video/video_output_extent.hpp
         include/io/video/video_reconstruction.hpp
         video/video_encoder.hpp
         video/video_encoder.cpp

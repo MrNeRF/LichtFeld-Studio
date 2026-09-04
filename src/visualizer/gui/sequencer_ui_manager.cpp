@@ -1349,16 +1349,9 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeExportRequest() && controller_.timeline().realKeyframeCount() > 0) {
-            lfs::core::events::cmd::SequencerExportVideo{
-                .width = ui_state_.outputWidth(),
-                .height = ui_state_.outputHeight(),
-                .framerate = ui_state_.framerate,
-                .crf = ui_state_.quality,
-                .reconstruction_backend_id = ui_state_.reconstruction.backend_id,
-                .reconstruction_preset_id = ui_state_.reconstruction.preset_id,
-                .reconstruction_fallback = std::string(
-                    lfs::io::video::videoReconstructionFallbackId(
-                        ui_state_.reconstruction.fallback))}
+            ui_state_.videoExportRequest(
+                         ui_state_.outputWidth(), ui_state_.outputHeight(),
+                         ui_state_.framerate, ui_state_.quality)
                 .emit();
         }
 

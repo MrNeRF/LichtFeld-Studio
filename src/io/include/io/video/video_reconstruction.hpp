@@ -61,6 +61,7 @@ namespace lfs::io::video {
         InvalidShape,
         UnsupportedVersion,
         MissingField,
+        InvalidVersion,
     };
 
     struct VideoReconstructionSelectionError {
@@ -124,6 +125,7 @@ namespace lfs::io::video {
         ProjectionUnsupported,
         PresetNotFound,
         InvalidDescriptor,
+        InvalidProjection,
     };
 
     struct VideoReconstructionResolutionError {

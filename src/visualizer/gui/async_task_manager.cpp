@@ -2548,6 +2548,8 @@ namespace lfs::vis::gui {
             reconstruction_plan->provenance().effective_preset_id);
 
         const auto job = video_export_state_.job;
+        if (auto notification = videoReconstructionFallbackNotification(*reconstruction_plan))
+            lfs::ErrorBus::instance().publish(std::move(*notification));
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings, start_time, time_step,
