@@ -296,6 +296,7 @@ TEST_F(SceneConsolidationExtractTest, WorkerBuildMatchesSynchronousCombinedModel
               lfs::core::NULL_NODE);
     ASSERT_NE(synchronous.addSplat("second", std::make_unique<SplatData>(second->clone())),
               lfs::core::NULL_NODE);
+    ASSERT_EQ(synchronous.consolidateNodeModels(), 2u);
     const auto* expected = synchronous.getCombinedModel();
     ASSERT_NE(expected, nullptr);
 
@@ -304,7 +305,7 @@ TEST_F(SceneConsolidationExtractTest, WorkerBuildMatchesSynchronousCombinedModel
     EXPECT_EQ(worker_build->model->scaling_raw().to_vector(), expected->scaling_raw().to_vector());
     EXPECT_EQ(worker_build->model->rotation_raw().to_vector(), expected->rotation_raw().to_vector());
     EXPECT_EQ(worker_build->model->opacity_raw().to_vector(), expected->opacity_raw().to_vector());
-    EXPECT_EQ(worker_build->model->shN_raw().to_vector(), expected->shN_raw().to_vector());
+    expect_shN_q16(worker_build->model->shN_canonical().to_vector(), expected->shN_canonical().to_vector());
 }
 
 TEST_F(SceneConsolidationExtractTest, SceneDestructionJoinsCombinedModelWorker) {
@@ -446,6 +447,10 @@ TEST_F(SceneConsolidationExtractTest, ReplacingNodeModelRetiresPreviousUntilWork
     // rejected.
     scene.removeNodeById(second_id);
     EXPECT_EQ(scene.getCombinedModel(), replaced->model.get());
+    while (scene.combinedModelBuildPending()) {
+        std::this_thread::yield();
+        static_cast<void>(scene.getCombinedModel());
+    }
     EXPECT_FALSE(scene.combinedModelBuildPending());
 }
 
