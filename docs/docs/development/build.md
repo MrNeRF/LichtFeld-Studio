@@ -147,6 +147,10 @@ cmake --list-presets=all
 cmake -P tests/cmake/test_vcpkg_profiles.cmake
 ```
 
+With `BUILD_TESTS=ON`, these checks are also registered as
+`lichtfeld.cmake.vcpkg_profiles` and run with `ctest --test-dir build -L fast`.
+They do not need application binaries or a vcpkg installation.
+
 For build validation, build and launch both profiles on the target OS, then
 switch back without deleting either directory. Check the vcpkg install log for
 reuse; exercise Python imports and Vulkan validation in the RelWithDebInfo

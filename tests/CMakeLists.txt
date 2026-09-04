@@ -983,6 +983,15 @@ set(LFS_PYTHON_NIGHTLY_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_unicode_path_bindings.py
 )
 
+add_test(NAME lichtfeld.cmake.vcpkg_profiles
+    COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_vcpkg_profiles.cmake"
+)
+set_tests_properties(lichtfeld.cmake.vcpkg_profiles PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS "fast"
+    TIMEOUT 60
+)
+
 add_test(NAME lichtfeld.python.fast
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m "not gpu and not slow and not integration"
