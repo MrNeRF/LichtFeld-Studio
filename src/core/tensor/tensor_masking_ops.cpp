@@ -1931,47 +1931,42 @@ namespace lfs::core {
             int64_t* indices = reinterpret_cast<int64_t*>(result.data_ptr());
             size_t write_idx = 0;
 
-            auto strides = shape_.strides();
+            const auto write_coordinates = [&]<typename T>(const T* data) {
+                if (n_dims == 2) {
+                    const size_t rows = shape_[0];
+                    const size_t columns = shape_[1];
+                    for (size_t row = 0; row < rows; ++row) {
+                        for (size_t column = 0; column < columns; ++column) {
+                            if (data[row * columns + column] != T{}) {
+                                indices[write_idx * 2] = static_cast<int64_t>(row);
+                                indices[write_idx * 2 + 1] = static_cast<int64_t>(column);
+                                ++write_idx;
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                const auto strides = shape_.strides();
+                for (size_t i = 0; i < numel(); ++i) {
+                    if (data[i] != T{}) {
+                        size_t temp = i;
+                        for (size_t dim = 0; dim < n_dims; ++dim) {
+                            const size_t coord = temp / strides[dim];
+                            temp %= strides[dim];
+                            indices[write_idx * n_dims + dim] = static_cast<int64_t>(coord);
+                        }
+                        ++write_idx;
+                    }
+                }
+            };
 
             if (is_bool_like(dtype_)) {
-                const unsigned char* data = ptr<unsigned char>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    if (data[i]) {
-                        size_t temp = i;
-                        for (size_t dim = 0; dim < n_dims; ++dim) {
-                            size_t coord = temp / strides[dim];
-                            temp %= strides[dim];
-                            indices[write_idx * n_dims + dim] = static_cast<int64_t>(coord);
-                        }
-                        write_idx++;
-                    }
-                }
+                write_coordinates(ptr<unsigned char>());
             } else if (dtype_ == DataType::Float32) {
-                const float* data = ptr<float>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    if (data[i] != 0.0f) {
-                        size_t temp = i;
-                        for (size_t dim = 0; dim < n_dims; ++dim) {
-                            size_t coord = temp / strides[dim];
-                            temp %= strides[dim];
-                            indices[write_idx * n_dims + dim] = static_cast<int64_t>(coord);
-                        }
-                        write_idx++;
-                    }
-                }
+                write_coordinates(ptr<float>());
             } else if (dtype_ == DataType::Int32) {
-                const int* data = ptr<int>();
-                for (size_t i = 0; i < numel(); ++i) {
-                    if (data[i] != 0) {
-                        size_t temp = i;
-                        for (size_t dim = 0; dim < n_dims; ++dim) {
-                            size_t coord = temp / strides[dim];
-                            temp %= strides[dim];
-                            indices[write_idx * n_dims + dim] = static_cast<int64_t>(coord);
-                        }
-                        write_idx++;
-                    }
-                }
+                write_coordinates(ptr<int>());
             }
         }
 

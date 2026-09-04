@@ -871,6 +871,7 @@ namespace {
     struct Options {
         std::filesystem::path output;
         GpuBackend backend = GpuBackend::CUDA;
+        std::string only;
         bool dump = false;
         bool time = false;
     };
@@ -884,12 +885,16 @@ namespace {
                 backend = argv[++i];
             else if (arg == "--out" && i + 1 < argc)
                 options.output = argv[++i];
+            else if (arg == "--only" && i + 1 < argc)
+                options.only = argv[++i];
             else if (arg == "--dump")
                 options.dump = true;
             else if (arg == "--time")
                 options.time = true;
             else
-                throw std::runtime_error("usage: tensor_backend_corpus --backend cuda|vulkan --out DIR [--dump] [--time]");
+                throw std::runtime_error(
+                    "usage: tensor_backend_corpus --backend cuda|vulkan --out DIR [--dump] "
+                    "[--time] [--only LAUNCHER_SUBSTRING]");
         }
         if (backend == "vulkan")
             options.backend = GpuBackend::Vulkan;
@@ -978,6 +983,8 @@ namespace {
         size_t case_index = 0;
         for (size_t entry_index = 0; entry_index < kEntries.size(); ++entry_index) {
             const auto& entry = kEntries[entry_index];
+            if (!options.only.empty() && entry.launcher.find(options.only) == std::string_view::npos)
+                continue;
             std::vector<std::pair<Profile, bool>> variants;
             for (const auto& profile : kProfiles)
                 variants.emplace_back(profile, false);

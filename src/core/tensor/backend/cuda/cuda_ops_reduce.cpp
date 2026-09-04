@@ -27,6 +27,15 @@ namespace lfs::core::internal {
             return cuda_pointer<const T>(storage);
         }
 
+        void prime_stream_polling(const ExecContext context) {
+            // Keep blocking scalar reductions on the active polling path without
+            // rediscovering pointer ownership for every internal launch.
+            const cudaError_t status = cudaStreamQuery(context.cuda_stream);
+            if (status != cudaSuccess && status != cudaErrorNotReady) {
+                LFS_CUDA_CHECK(status);
+            }
+        }
+
         template <class T>
         size_t count_nonzero(const StorageRef input, const size_t count,
                              const ExecContext context) {
@@ -56,24 +65,28 @@ namespace lfs::core::internal {
 
     float CudaBackendOps::sum_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        prime_stream_polling(context);
         return tensor_ops::direct_sum_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
 
     float CudaBackendOps::mean_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        prime_stream_polling(context);
         return tensor_ops::direct_mean_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
 
     float CudaBackendOps::max_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        prime_stream_polling(context);
         return tensor_ops::direct_max_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
 
     float CudaBackendOps::min_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        prime_stream_polling(context);
         return tensor_ops::direct_min_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
@@ -141,12 +154,14 @@ namespace lfs::core::internal {
 
     bool CudaBackendOps::has_nan(
         const StorageRef input, const size_t count, const ExecContext context) {
+        prime_stream_polling(context);
         return tensor_ops::has_nan_gpu(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
 
     bool CudaBackendOps::has_inf(
         const StorageRef input, const size_t count, const ExecContext context) {
+        prime_stream_polling(context);
         return tensor_ops::has_inf_gpu(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
