@@ -30,6 +30,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/Input.h>
 #include <SDL3/SDL_keyboard.h>
@@ -320,8 +321,10 @@ namespace lfs::vis::gui {
                    !parent_is_dataset;
         }
 
-        [[nodiscard]] bool canDrag(const core::NodeType type, const bool parent_is_dataset) {
-            if (parent_is_dataset)
+        [[nodiscard]] bool canDrag(const core::NodeType type,
+                                   const bool parent_is_dataset,
+                                   const bool locked) {
+            if (parent_is_dataset || locked)
                 return false;
             switch (type) {
             case core::NodeType::SPLAT:
@@ -478,7 +481,9 @@ namespace lfs::vis::gui {
 
     } // namespace
 
-    SceneGraphElement::SceneGraphElement(const Rml::String& tag) : Rml::Element(tag) {}
+    SceneGraphElement::SceneGraphElement(const Rml::String& tag) : Rml::Element(tag) {
+        SetAttribute("tab-index", "0");
+    }
 
     bool SceneGraphElement::ownsContextMenuAction(const std::string_view action) {
         return action.starts_with(kContextActionPrefix);
@@ -600,10 +605,10 @@ namespace lfs::vis::gui {
         if (!owner)
             return;
         auto* target = event.GetTargetElement();
+        const auto type = event.GetType();
         if (owner->rename_node_id_ == core::NULL_NODE || !owner->isTextInputTarget(target))
             return;
 
-        const auto type = event.GetType();
         if (type == "input" || type == "change") {
             owner->captureRenameBuffer();
             event.StopPropagation();
@@ -806,6 +811,7 @@ namespace lfs::vis::gui {
         collapsed_ids_.clear();
         selected_ids_.clear();
         click_anchor_id_ = core::NULL_NODE;
+        keyboard_cursor_id_ = core::NULL_NODE;
         rename_node_id_ = core::NULL_NODE;
         rename_buffer_.clear();
         rename_conflict_modal_pending_ = false;
@@ -913,6 +919,7 @@ namespace lfs::vis::gui {
             snapshot.type = node->type;
             snapshot.name = node->name;
             snapshot.visible = static_cast<bool>(node->visible);
+            snapshot.locked = static_cast<bool>(node->locked);
             snapshot.has_children = !node->children.empty();
             snapshot.training_enabled = node->training_enabled;
             snapshot.camera_uid = node->camera_uid;
@@ -1010,9 +1017,11 @@ namespace lfs::vis::gui {
             const auto parent_it = snapshots.find(snapshot.parent_id);
             const bool parent_is_dataset =
                 parent_it != snapshots.end() && parent_it->second.type == core::NodeType::DATASET;
-            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset);
+            snapshot.draggable = canDrag(snapshot.type, parent_is_dataset, snapshot.locked);
             snapshot.can_delete = isDeletable(snapshot.type, parent_is_dataset);
-            snapshot.delete_enabled = snapshot.can_delete && !delete_blocked_ids.contains(id);
+            snapshot.delete_enabled = snapshot.can_delete &&
+                                      !snapshot.locked &&
+                                      !delete_blocked_ids.contains(id);
             snapshot.can_rename = isRenamable(snapshot.type, parent_is_dataset);
             snapshot.rename_enabled = snapshot.can_rename;
             snapshot.can_toggle_training =
@@ -1509,8 +1518,11 @@ namespace lfs::vis::gui {
             if (rename_buffer_.empty())
                 rename_buffer_ = snapshot.name;
             setCachedAttribute(slot.rename_input, "value", rename_buffer_);
-            if (rename_focus_pending_ && slot.rename_input->Focus())
+            if (rename_focus_pending_ && slot.rename_input->Focus()) {
+                if (auto* input = dynamic_cast<Rml::ElementFormControlInput*>(slot.rename_input))
+                    input->Select();
                 rename_focus_pending_ = false;
+            }
         }
 
         slot.bound_id = row.id;
@@ -1678,8 +1690,10 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::focusTree() {
-        if (rename_node_id_ == core::NULL_NODE)
+        if (rename_node_id_ == core::NULL_NODE) {
+            SetProperty("tab-index", "0");
             Focus();
+        }
     }
 
     void SceneGraphElement::beginRename(const core::NodeId node_id) {
@@ -2082,17 +2096,26 @@ namespace lfs::vis::gui {
             return false;
 
         const core::NodeId current = selectionCursor();
-        core::NodeId target = core::NULL_NODE;
+        size_t target_index = 0;
         if (current == core::NULL_NODE) {
-            target = delta > 0 ? flat_rows_.front().id : flat_rows_.back().id;
+            target_index = delta > 0 ? 0 : flat_rows_.size() - 1;
         } else {
             const size_t index = flat_index_by_id_.contains(current) ? flat_index_by_id_.at(current) : 0;
-            const size_t target_index = std::clamp<int>(
-                static_cast<int>(index) + delta, 0, static_cast<int>(flat_rows_.size()) - 1);
-            target = flat_rows_[target_index].id;
+            target_index = static_cast<size_t>(std::clamp<int>(
+                static_cast<int>(index) + delta, 0, static_cast<int>(flat_rows_.size()) - 1));
         }
-        if (target == core::NULL_NODE)
+        return selectKeyboardRow(target_index, extend, toggle);
+    }
+
+    bool SceneGraphElement::selectKeyboardRow(const size_t target_index,
+                                              const bool extend,
+                                              const bool toggle) {
+        auto* scene_manager = services().sceneOrNull();
+        if (!scene_manager || target_index >= flat_rows_.size())
             return false;
+
+        const core::NodeId current = selectionCursor();
+        const core::NodeId target = flat_rows_[target_index].id;
 
         if (extend) {
             const core::NodeId anchor = click_anchor_id_ != core::NULL_NODE
@@ -2119,6 +2142,11 @@ namespace lfs::vis::gui {
                 selected_ids_.insert(toggled);
             scene_manager->selectNodesById(
                 std::vector<core::NodeId>(selected_ids_.begin(), selected_ids_.end()));
+        } else {
+            scene_manager->selectNode(target);
+            selected_ids_.clear();
+            selected_ids_.insert(target);
+            click_anchor_id_ = target;
         }
         keyboard_cursor_id_ = target;
         if (camera_preview_navigation_active_ &&
@@ -2610,9 +2638,32 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::requestDeleteSelection() {
-        if (!selectionActionState().all_delete_enabled)
+        if (selected_ids_.empty())
             return;
-        deleteSelectedNodes();
+
+        std::vector<core::NodeId> node_ids;
+        node_ids.reserve(selected_ids_.size());
+        for (const core::NodeId id : selected_ids_) {
+            const auto it = node_snapshots_.find(id);
+            if (it == node_snapshots_.end())
+                continue;
+
+            bool covered_by_selected_ancestor = false;
+            for (core::NodeId parent_id = it->second.parent_id;
+                 parent_id != core::NULL_NODE;) {
+                if (selected_ids_.contains(parent_id)) {
+                    covered_by_selected_ancestor = true;
+                    break;
+                }
+                const auto parent_it = node_snapshots_.find(parent_id);
+                if (parent_it == node_snapshots_.end())
+                    break;
+                parent_id = parent_it->second.parent_id;
+            }
+            if (!covered_by_selected_ancestor)
+                node_ids.push_back(id);
+        }
+        requestDeleteNodes(node_ids);
     }
 
     void SceneGraphElement::clearSelectedNodes() {
@@ -2638,6 +2689,10 @@ namespace lfs::vis::gui {
         for (const core::NodeId node_id : node_ids) {
             const auto snapshot_it = node_snapshots_.find(node_id);
             const auto* node = scene.getNodeById(node_id);
+            if (node && static_cast<bool>(node->locked)) {
+                LOG_WARN("Scene node deletion request aborted: node is locked");
+                return;
+            }
             if (!node || snapshot_it == node_snapshots_.end() || !snapshot_it->second.delete_enabled) {
                 LOG_WARN("Scene node deletion request aborted: the complete selection is no longer removable");
                 return;
@@ -2766,10 +2821,7 @@ namespace lfs::vis::gui {
                                        prefixedAction("select_hierarchy")));
             const auto groupable_selection = selectedDraggableNodeIds();
             if (node_snapshots_.contains(node_id) && node_snapshots_.at(node_id).draggable &&
-                groupable_selection.size() >= 2 &&
-                std::ranges::all_of(groupable_selection, [this](const core::NodeId id) {
-                    return node_snapshots_.at(id).type != core::NodeType::GROUP;
-                })) {
+                groupable_selection.size() >= 2) {
                 items.push_back(makeAction(tr("scene.group_selected"),
                                            prefixedAction("group_selected"), true));
             }
@@ -2915,7 +2967,8 @@ namespace lfs::vis::gui {
 
             if (node->type != core::NodeType::CAMERA &&
                 node->type != core::NodeType::CROPBOX &&
-                node->type != core::NodeType::ELLIPSOID) {
+                node->type != core::NodeType::ELLIPSOID &&
+                !node_snapshots_.at(node_id).locked) {
                 items.push_back(makeAction(
                     tr("scene.duplicate"),
                     prefixedAction(std::format("duplicate:{}", node_id))));
@@ -2971,8 +3024,7 @@ namespace lfs::vis::gui {
         core::NodeId parent_id = core::NULL_NODE;
         for (const core::NodeId id : selected_ids_) {
             const auto it = node_snapshots_.find(id);
-            if (it == node_snapshots_.end() || !it->second.draggable ||
-                it->second.type == core::NodeType::GROUP)
+            if (it == node_snapshots_.end() || !it->second.draggable)
                 return;
             if (ids.empty())
                 parent_id = it->second.parent_id;
@@ -3299,6 +3351,8 @@ namespace lfs::vis::gui {
         } else if (type == "keydown") {
             const auto key =
                 static_cast<Rml::Input::KeyIdentifier>(event.GetParameter("key_identifier", 0));
+            const bool event_ctrl = event.GetParameter<int>("ctrl_key", 0) != 0 || ctrlDown();
+            const bool event_shift = event.GetParameter<int>("shift_key", 0) != 0 || shiftDown();
 
             if (key == Rml::Input::KI_ESCAPE && drag_source_id_ != core::NULL_NODE) {
                 cancelDrag();
@@ -3311,11 +3365,33 @@ namespace lfs::vis::gui {
 
             switch (key) {
             case Rml::Input::KI_UP:
-                if (moveSelectionCursor(-1, shiftDown(), ctrlDown() && !shiftDown()))
+                if (moveSelectionCursor(-1, event_shift, event_ctrl && !event_shift))
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_DOWN:
-                if (moveSelectionCursor(1, shiftDown(), ctrlDown() && !shiftDown()))
+                if (moveSelectionCursor(1, event_shift, event_ctrl && !event_shift))
+                    event.StopPropagation();
+                break;
+            case Rml::Input::KI_LEFT:
+            case Rml::Input::KI_RIGHT: {
+                const core::NodeId node_id = selectionCursor();
+                const auto node_it = node_snapshots_.find(node_id);
+                if (node_it != node_snapshots_.end() && node_it->second.has_children) {
+                    const bool collapsed = collapsed_ids_.contains(node_id);
+                    const bool should_toggle = key == Rml::Input::KI_LEFT ? !collapsed : collapsed;
+                    if (should_toggle)
+                        toggleExpand(node_id);
+                    event.StopPropagation();
+                }
+                break;
+            }
+            case Rml::Input::KI_HOME:
+                if (selectKeyboardRow(0, event_shift, false))
+                    event.StopPropagation();
+                break;
+            case Rml::Input::KI_END:
+                if (!flat_rows_.empty() &&
+                    selectKeyboardRow(flat_rows_.size() - 1, event_shift, false))
                     event.StopPropagation();
                 break;
             case Rml::Input::KI_RETURN: {

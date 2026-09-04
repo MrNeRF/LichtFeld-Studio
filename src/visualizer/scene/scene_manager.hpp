@@ -166,7 +166,7 @@ namespace lfs::vis {
             const glm::ivec2& viewport_size) const;
 
         // Node transforms
-        void setNodeTransform(const std::string& name, const glm::mat4& transform);
+        bool setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
 
         // Full transform for selected node (includes rotation and scale)
@@ -317,6 +317,8 @@ namespace lfs::vis {
     private:
         enum class HistoryMode : uint8_t {
             Record,
+            RecordFull,
+            RecordPreserveIds,
             Skip,
         };
 
@@ -398,9 +400,14 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::MeshData> mesh;
             glm::mat4 transform{1.0f};
             struct HierarchyNode {
+                std::string name;
                 core::NodeType type = core::NodeType::SPLAT;
                 glm::mat4 local_transform{1.0f};
+                bool visible = true;
+                bool locked = false;
+                std::unique_ptr<lfs::core::SplatData> data;
                 std::unique_ptr<core::CropBoxData> cropbox;
+                std::unique_ptr<core::EllipsoidData> ellipsoid;
                 std::vector<HierarchyNode> children;
             };
             std::optional<HierarchyNode> hierarchy;
