@@ -5,9 +5,12 @@
 import json
 import logging
 import os
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from .plugin import validate_plugin_name
 
 _log = logging.getLogger(__name__)
 
@@ -19,8 +22,8 @@ class PluginSettings:
     """
 
     def __init__(self, plugin_name: str, settings_dir: Path):
-        self._plugin_name = plugin_name
-        self._file = settings_dir / plugin_name / "settings.json"
+        self._plugin_name = validate_plugin_name(plugin_name)
+        self._file = settings_dir / self._plugin_name / "settings.json"
         self._data: Dict[str, Any] = {}
         self._loaded = False
         self._lock = threading.Lock()
@@ -44,12 +47,31 @@ class PluginSettings:
     def _save(self) -> None:
         with self._lock:
             self._file.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = None
             try:
-                with open(self._file, "w", encoding="utf-8") as f:
-                    json.dump(self._data, f, indent=2)
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=self._file.parent,
+                    prefix=f".{self._file.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as f:
+                    temp_path = Path(f.name)
+                    json.dump(self._data, f, indent=2, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(temp_path, self._file)
+                temp_path = None
                 _log.debug("Saved settings for %s to %s", self._plugin_name, self._file)
             except Exception as e:
                 _log.error("Failed to save settings for %s: %s", self._plugin_name, e)
+            finally:
+                if temp_path is not None:
+                    try:
+                        temp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a setting value with optional default."""
@@ -76,8 +98,12 @@ class PluginSettings:
         with self._lock:
             if key in self._data:
                 del self._data[key]
-                self._save()
-                return True
+                existed = True
+            else:
+                existed = False
+        if existed:
+            self._save()
+            return True
         return False
 
     def clear(self) -> None:
@@ -127,6 +153,7 @@ class SettingsManager:
 
     def get(self, plugin_name: str) -> PluginSettings:
         """Get settings object for a plugin."""
+        validate_plugin_name(plugin_name)
         with self._cache_lock:
             if plugin_name not in self._cache:
                 self._cache[plugin_name] = PluginSettings(plugin_name, self._settings_dir)

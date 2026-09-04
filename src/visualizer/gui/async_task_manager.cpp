@@ -23,6 +23,7 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
@@ -884,6 +885,17 @@ namespace lfs::vis::gui {
                 import_state_.thread->join();
             import_state_.thread.reset();
         }
+
+        if (splat_load_state_.thread) {
+            if (const auto state = jobs_.update(splat_load_state_.job); state && state->running())
+                jobs_.requestCancel(splat_load_state_.job);
+            splat_load_state_.thread->request_stop();
+            if (splat_load_state_.thread->joinable())
+                splat_load_state_.thread->join();
+            splat_load_state_.thread.reset();
+            if (const auto state = jobs_.update(splat_load_state_.job); state && state->running())
+                jobs_.canceled(splat_load_state_.job);
+        }
         cancelImportCompletionDismiss();
 
         mesh2splat_state_.pending.store(false);
@@ -897,6 +909,249 @@ namespace lfs::vis::gui {
             splat_simplify_state_.thread->join();
         splat_simplify_state_.thread.reset();
         settlePendingJobs();
+    }
+
+    bool AsyncTaskManager::startSplatLoad(std::vector<std::filesystem::path> paths,
+                                          const bool replace_first,
+                                          std::vector<std::string> name_hints,
+                                          std::vector<bool> visibility) {
+        if (paths.empty()) {
+            LOG_WARN("Splat load requested without paths");
+            return false;
+        }
+        if (replace_first && (!viewer_->getSceneManager() ||
+                              !viewer_->getSceneManager()->canClearScene())) {
+            LOG_WARN("Splat load would replace a scene that cannot be cleared");
+            return false;
+        }
+        if (jobs_.anyRunning(JobType::Import)) {
+            LOG_WARN("Import already in progress; rejecting splat load");
+            return false;
+        }
+        if (splat_load_state_.job) {
+            jobs_.free(splat_load_state_.job);
+            splat_load_state_.job = {};
+        }
+
+        const auto created = jobs_.init(JobType::Import,
+                                        LOC(lichtfeld::Strings::Runtime::TASK_INITIALIZING));
+        if (!created)
+            return false;
+
+        splat_load_state_.job = *created;
+        splat_load_state_.replace_first = replace_first;
+        splat_load_state_.worker_complete.store(false, std::memory_order_release);
+        {
+            const std::lock_guard lock(splat_load_state_.mutex);
+            splat_load_state_.completions.clear();
+            splat_load_state_.requests.clear();
+            splat_load_state_.loaded_count = 0;
+            splat_load_state_.failed_count = 0;
+            splat_load_state_.consolidation_pending = false;
+            for (size_t index = 0; index < paths.size(); ++index) {
+                splat_load_state_.requests.push_back(SplatLoadRequest{
+                    .path = std::move(paths[index]),
+                    .name_hint = index < name_hints.size() ? std::move(name_hints[index]) : std::string{},
+                    .is_visible = index >= visibility.size() || visibility[index],
+                    .replace_scene = replace_first && index == 0});
+            }
+        }
+
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.path = splat_load_state_.requests.front().path;
+            import_state_.dataset_type = "Splat";
+            import_state_.num_images = 0;
+            import_state_.num_points = 0;
+            import_state_.success = false;
+            import_state_.is_mesh = false;
+            import_state_.load_result.reset();
+        }
+        import_state_.job = splat_load_state_.job;
+        import_state_.show_completion.store(false, std::memory_order_release);
+        PanelRegistry::instance().invalidate_poll_cache();
+        publishImportOverlayState();
+
+        const auto job = splat_load_state_.job;
+        splat_load_state_.thread.emplace(
+            [this, job](const std::stop_token stop_token) noexcept {
+                jobs_.work(job);
+                std::vector<SplatLoadRequest> requests;
+                {
+                    const std::lock_guard lock(splat_load_state_.mutex);
+                    requests = splat_load_state_.requests;
+                }
+
+                bool canceled = false;
+                for (size_t index = 0; index < requests.size(); ++index) {
+                    const auto& request = requests[index];
+                    if (stop_token.stop_requested() || jobs_.cancelRequested(job)) {
+                        canceled = true;
+                        break;
+                    }
+                    const auto stage_started_at = std::chrono::steady_clock::now();
+                    auto result = viewer_->getSceneManager()->stageSplatFile(
+                        request.path,
+                        [this, job, index, total = requests.size()](const float pct,
+                                                                    const std::string& stage) {
+                            jobs_.report(job,
+                                         (static_cast<float>(index) + pct / 100.0F) /
+                                             static_cast<float>(total),
+                                         stage);
+                            publishImportOverlayState();
+                            wakeMainThreadForAsyncWork();
+                        },
+                        [this, job, &stop_token]() {
+                            return stop_token.stop_requested() || jobs_.cancelRequested(job);
+                        });
+
+                    SplatLoadCompletion completion{
+                        .request = request,
+                        .result = result ? std::optional<lfs::io::LoadResult>(std::move(*result)) : std::nullopt,
+                        .error = result ? std::string{} : result.error(),
+                        .stage_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - stage_started_at)};
+                    {
+                        const std::lock_guard lock(splat_load_state_.mutex);
+                        splat_load_state_.completions.push_back(std::move(completion));
+                    }
+                    wakeMainThreadForAsyncWork();
+                    if (!result && (stop_token.stop_requested() || jobs_.cancelRequested(job))) {
+                        canceled = true;
+                        break;
+                    }
+                }
+
+                jobs_.finishWork(job, canceled || stop_token.stop_requested());
+                splat_load_state_.worker_complete.store(true, std::memory_order_release);
+                wakeMainThreadForAsyncWork();
+            });
+        return true;
+    }
+
+    void AsyncTaskManager::checkAsyncSplatLoadCompletion() {
+        std::deque<SplatLoadCompletion> completions;
+        {
+            const std::lock_guard lock(splat_load_state_.mutex);
+            completions.swap(splat_load_state_.completions);
+        }
+
+        auto* const scene_manager = viewer_->getSceneManager();
+        for (auto& completion : completions) {
+            if (!completion.error.empty()) {
+                ++splat_load_state_.failed_count;
+                lfs::core::events::state::SplatFileLoadFailed{
+                    .path = completion.request.path,
+                    .error = completion.error}
+                    .emit();
+                continue;
+            }
+            if (!completion.result || !scene_manager)
+                continue;
+
+            try {
+                jobs_.report(splat_load_state_.job, std::nullopt,
+                             LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+                const auto attach_started_at = std::chrono::steady_clock::now();
+                std::string node_name;
+                if (splat_load_state_.replace_first && splat_load_state_.loaded_count == 0) {
+                    // A replace-first batch replaces the scene with its first
+                    // file that succeeds, including a later request when
+                    // earlier requests failed.
+                    completion.request.replace_scene = true;
+                }
+                if (completion.request.replace_scene && splat_load_state_.loaded_count == 0) {
+                    node_name = scene_manager->attachLoadedSplatFile(
+                        completion.request.path,
+                        completion.request.name_hint,
+                        completion.request.is_visible,
+                        std::move(*completion.result), true);
+                } else {
+                    node_name = scene_manager->attachLoadedSplatNode(
+                        completion.request.path,
+                        completion.request.name_hint,
+                        completion.request.is_visible,
+                        std::move(*completion.result));
+                }
+                const auto attach_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - attach_started_at);
+                LOG_INFO("Loaded splat '{}' from '{}' (stage={}ms, attach={}ms, total={}ms)",
+                         node_name,
+                         lfs::core::path_to_utf8(completion.request.path),
+                         completion.stage_elapsed.count(),
+                         attach_elapsed.count(),
+                         completion.stage_elapsed.count() + attach_elapsed.count());
+                ++splat_load_state_.loaded_count;
+            } catch (const std::exception& error) {
+                ++splat_load_state_.failed_count;
+                lfs::core::events::state::SplatFileLoadFailed{
+                    .path = completion.request.path,
+                    .error = error.what()}
+                    .emit();
+            }
+        }
+
+        if (!splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
+            publishImportOverlayState();
+            return;
+        }
+
+        if (splat_load_state_.thread && splat_load_state_.thread->joinable()) {
+            splat_load_state_.thread->join();
+            splat_load_state_.thread.reset();
+        }
+        const auto state = jobs_.update(splat_load_state_.job);
+        if (!state || state->status == JobStatus::Canceled) {
+            std::lock_guard lock(splat_load_state_.mutex);
+            splat_load_state_.completions.clear();
+            return;
+        }
+        if (state->worker_canceled) {
+            jobs_.canceled(splat_load_state_.job);
+            std::lock_guard lock(splat_load_state_.mutex);
+            splat_load_state_.completions.clear();
+            splat_load_state_.worker_complete.store(false, std::memory_order_release);
+            return;
+        }
+
+        if (scene_manager && splat_load_state_.loaded_count > 1 &&
+            !splat_load_state_.consolidation_pending) {
+            jobs_.report(splat_load_state_.job, 0.98F,
+                         LOC(lichtfeld::Strings::Runtime::TASK_APPLYING));
+            scene_manager->getScene().requestCombinedModelBuild(true);
+            splat_load_state_.consolidation_pending = true;
+        }
+        if (scene_manager && splat_load_state_.consolidation_pending) {
+            // Polling getCombinedModel only swaps a completed worker cache;
+            // it never performs the large build on this thread.
+            static_cast<void>(scene_manager->getScene().getCombinedModel());
+            if (scene_manager->getScene().combinedModelBuildPending()) {
+                publishImportOverlayState();
+                return;
+            }
+            scene_manager->consolidateNodeModels();
+            splat_load_state_.consolidation_pending = false;
+        }
+        const bool success = splat_load_state_.loaded_count > 0;
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.success = success;
+            import_state_.num_points = scene_manager ? scene_manager->getScene().getTotalGaussianCount() : 0;
+            import_state_.completion_time = std::chrono::steady_clock::now();
+        }
+        if (success) {
+            jobs_.report(splat_load_state_.job, 1.0F,
+                         LOC(lichtfeld::Strings::Runtime::TASK_COMPLETE));
+            jobs_.completed(splat_load_state_.job);
+        } else {
+            jobs_.failed(splat_load_state_.job, "No splat files could be loaded");
+        }
+        import_state_.show_completion.store(true, std::memory_order_release);
+        if (success)
+            scheduleImportCompletionDismiss();
+        publishImportOverlayState();
+        splat_load_state_.worker_complete.store(false, std::memory_order_release);
+        viewer_->schedulePendingTrainingAction();
     }
 
     void AsyncTaskManager::setupEvents() {
@@ -1015,6 +1270,7 @@ namespace lfs::vis::gui {
             if (e.success)
                 scheduleImportCompletionDismiss();
             publishImportOverlayState();
+            viewer_->schedulePendingTrainingAction();
         });
 
         cmd::SequencerExportVideo::when([this](const auto& evt) {
@@ -1054,12 +1310,18 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::pollImportCompletion() {
+        checkAsyncSplatLoadCompletion();
         checkAsyncImportCompletion();
         settlePendingJobs();
     }
 
     bool AsyncTaskManager::hasPendingMainThreadCompletions() const {
         return import_state_.load_complete.load(std::memory_order_acquire) ||
+               splat_load_state_.worker_complete.load(std::memory_order_acquire) ||
+               [&] {
+                   const std::lock_guard lock(splat_load_state_.mutex);
+                   return !splat_load_state_.completions.empty();
+               }() ||
                mesh2splat_state_.pending.load(std::memory_order_acquire) ||
                splat_simplify_state_.apply_pending.load(std::memory_order_acquire) ||
                splat_simplify_state_.completed.load(std::memory_order_acquire) ||
@@ -1649,6 +1911,11 @@ namespace lfs::vis::gui {
             }
         }
         lfs::vis::app_store().import_overlay_state.set(std::move(state));
+        // Store notifications wake the event loop, but do not necessarily mark
+        // the cached viewport frame dirty.  This is especially important for
+        // the delayed completion dismissal, which runs after the import loop
+        // has gone idle.
+        lfs::python::request_redraw();
     }
 
     void AsyncTaskManager::setImportNumImages(const size_t num_images) {
@@ -1758,9 +2025,12 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::cancelImport() {
+        const auto splat_job = splat_load_state_.job;
+        const auto import_job = import_state_.job;
         const bool had_activity = isImporting() ||
                                   import_state_.show_completion.load() ||
-                                  import_state_.thread.has_value();
+                                  import_state_.thread.has_value() ||
+                                  splat_load_state_.thread.has_value();
         if (!had_activity) {
             return;
         }
@@ -1778,14 +2048,27 @@ namespace lfs::vis::gui {
             }
             import_state_.thread.reset();
         }
-
-        if (const auto state =
-                jobs_.update(import_state_.job);
-            state && state->running()) {
-            jobs_.canceled(import_state_.job);
+        if (splat_load_state_.thread) {
+            splat_load_state_.thread->request_stop();
+            if (splat_load_state_.thread->joinable())
+                splat_load_state_.thread->join();
+            splat_load_state_.thread.reset();
         }
+
+        const auto cancel_if_running = [this](const JobHandle handle) {
+            if (const auto state = jobs_.update(handle); state && state->running())
+                jobs_.canceled(handle);
+        };
+        cancel_if_running(import_job);
+        if (splat_job && splat_job != import_job)
+            cancel_if_running(splat_job);
+        if (splat_job)
+            jobs_.free(splat_job);
+        if (import_job && import_job != splat_job)
+            jobs_.free(import_job);
         import_state_.load_complete.store(false);
         import_state_.show_completion.store(false);
+        splat_load_state_.worker_complete.store(false, std::memory_order_release);
         {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.path.clear();
@@ -1797,6 +2080,14 @@ namespace lfs::vis::gui {
             import_state_.load_result.reset();
             import_state_.params = {};
         }
+        {
+            const std::lock_guard lock(splat_load_state_.mutex);
+            splat_load_state_.completions.clear();
+            splat_load_state_.requests.clear();
+        }
+        splat_load_state_.replace_first = false;
+        splat_load_state_.job = {};
+        import_state_.job = {};
         PanelRegistry::instance().invalidate_poll_cache();
         publishImportOverlayState();
     }
@@ -2005,6 +2296,7 @@ namespace lfs::vis::gui {
             import_state_.thread->join();
             import_state_.thread.reset();
         }
+        viewer_->schedulePendingTrainingAction();
     }
 
     void AsyncTaskManager::applyLoadedDataToScene() {

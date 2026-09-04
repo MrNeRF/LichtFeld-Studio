@@ -45,6 +45,7 @@
     "tools.plugin_marketplace": "플러그인 마켓플레이스",
     "view": "보기",
     "view.theme": "테마",
+    "view.theme.auto": "자동",
     "view.theme.dark": "다크",
     "view.theme.light": "라이트",
     "view.theme.gruvbox": "Gruvbox",
@@ -74,12 +75,12 @@
     "title": "시작하기",
     "description": "데이터셋 준비 방법과 LichtFeld Studio 사용법을 배워보세요:",
     "wiki_section": "위키 & 자주 묻는 질문",
+    "video_overview": "오늘날 LichtFeld Studio로 할 수 있는 모든 것",
     "video_automotive": "자동차 마케팅용 3DGS",
     "video_intro": "360 정방형 이미지 트레이닝",
     "video_latest": "LichtFeld v0.3.0 기능 개요",
     "video_reality_scan": "Reality Scan 데이터셋",
     "video_colmap": "COLMAP 튜토리얼",
-    "video_lichtfeld": "LichtFeld 튜토리얼",
     "video_masks": "마스크 튜토리얼"
   },
   "about": {
@@ -578,6 +579,8 @@
     "add_group": "그룹 추가",
     "add_group_ellipsis": "그룹 추가...",
     "new_group_name": "새 그룹",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "내보내기...",
     "delete": "삭제",
     "rename": "이름 변경",
@@ -772,6 +775,15 @@
     "progress_bar_style": "진행 표시줄",
     "progress_bar_classic": "클래식",
     "progress_bar_miner": "Miner",
+    "viewport_chrome_style": "뷰포트 컨트롤",
+    "viewport_chrome_solid": "불투명",
+    "viewport_chrome_translucent": "반투명",
+    "viewport_chrome_frosted": "프로스트 글래스",
+    "viewport_toolbar_position": "도구 모음 위치",
+    "viewport_toolbar_position_top": "위쪽",
+    "viewport_toolbar_position_centered": "가운데",
+    "viewport_toolbar_position_free": "자유",
+    "viewport_toolbar_drag": "도구 모음 이동",
     "scene_rendering": "장면 렌더링",
     "scene_reconstruction": "장면 재구성",
     "scene_reconstruction_off": "끄기",
@@ -787,6 +799,10 @@
     "key_bindings": "키 바인딩",
     "camera_navigation": "카메라 탐색",
     "navigation_mode": "탐색 모드",
+    "zoom_speed": "Zoom speed",
+    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
+    "navigation_speed": "Navigation speed",
+    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
     "camera_view_snap": "축 보기 스냅",
     "enable_axis_view_snap": "축 보기 스냅 활성화",
     "remember_camera_navigation": "카메라 탐색 기억",
@@ -1956,6 +1972,9 @@
     "downloads": "다운로드",
     "invalid_link": "유효하지 않은 링크",
     "button.install": "설치",
+    "cancel": "취소",
+    "cancelling": "취소 중...",
+    "installation_cancelled": "설치가 취소되었습니다",
     "local_install": "로컬 설치",
     "install_as_git_checkout": "Git 체크아웃으로 설치",
     "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",
@@ -1969,7 +1988,8 @@
     "registry_loaded.other": "레지스트리를 불러왔습니다: 마켓플레이스 카탈로그에 플러그인 {count}개가 있습니다.",
     "registry_unavailable.one": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
     "registry_unavailable.few": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
-    "registry_unavailable.other": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다."
+    "registry_unavailable.other": "레지스트리를 사용할 수 없습니다: 대체 플러그인 {count}개를 표시합니다.",
+    "popularity_unavailable": "인기도 데이터를 사용할 수 없습니다."
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",
@@ -2104,6 +2124,10 @@
         }
       }
     },
+    "computing": {
+      "title": "히스토그램 계산 중…",
+      "message": "데이터가 준비되는 즉시 분포가 표시됩니다."
+    },
     "delete_failed": {
       "title": "삭제 실패",
       "status": "삭제 실패: {message}",
@@ -2127,6 +2151,10 @@
       "metric_unavailable": {
         "title": "메트릭을 사용할 수 없습니다",
         "message": "선택한 메트릭을 결합된 가우시안 모델에서 읽을 수 없습니다."
+      },
+      "compute_failed": {
+        "title": "히스토그램 계산 실패",
+        "message": "히스토그램 계산에 실패했습니다: {error}"
       },
       "no_visible_values": {
         "title": "표시 가능한 값이 없습니다",

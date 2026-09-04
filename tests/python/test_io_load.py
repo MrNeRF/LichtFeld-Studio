@@ -157,6 +157,8 @@ class TestLoadProgress:
             progress=on_progress,
         )
 
+        # Reaching the return value proves the released load completed.
+        assert result.loader_used
         # Progress callback should have been called
         assert len(progress_calls) > 0
 

@@ -22,6 +22,7 @@
 #include "gui/utils/file_association.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 #include "gui/vulkan_ui_texture.hpp"
+#include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "mcp/mcp_http_server.hpp"
@@ -43,6 +44,7 @@
 #include "rendering/render_constants.hpp"
 #include "rendering/scene_upscaler_registry.hpp"
 #include "rendering/screen_overlay_renderer.hpp"
+#include "rml_python_panel_adapter.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
@@ -57,6 +59,7 @@
 #include "visualizer/theme/theme.hpp"
 #include "visualizer/tools/unified_tool_registry.hpp"
 #include "visualizer/training/training_manager.hpp"
+#include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/Core.h>
 #include <typeinfo>
 
@@ -76,6 +79,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <future>
 #include <glm/glm.hpp>
 #include <memory>
@@ -2757,6 +2761,25 @@ namespace lfs::python {
         register_rml_bindings(m);
 
         m.def(
+            "get_panel_object",
+            [](const std::string& panel_id) {
+                return invoke_on_viewer(
+                    [panel_id]() -> nb::object {
+                        const nb::gil_scoped_acquire acquire;
+                        const auto panel = vis::gui::PanelRegistry::instance().get_panel_instance(panel_id);
+                        const auto retained_panel =
+                            std::dynamic_pointer_cast<vis::gui::RmlPythonPanelAdapter>(panel);
+                        if (!retained_panel)
+                            return nb::none();
+
+                        return retained_panel->panelInstance();
+                    },
+                    nb::none());
+            },
+            nb::arg("panel_id"),
+            "Get the Python object for a retained Python panel, or None if unavailable");
+
+        m.def(
             "begin_drag_payload",
             [](std::string type, std::string data, std::string label) {
                 auto* const manager = static_cast<lfs::vis::gui::RmlUIManager*>(
@@ -4178,7 +4201,7 @@ namespace lfs::python {
                 auto* rm = lfs::python::get_rendering_manager();
                 if (!rm)
                     return "rgb";
-                switch (rm->getSettings().gt_comparison_mode) {
+                switch (rm->getGTComparisonMode()) {
                 case vis::GTComparisonMode::Normal: return "normal";
                 case vis::GTComparisonMode::Depth: return "depth";
                 case vis::GTComparisonMode::Loss: return "loss";
@@ -4481,7 +4504,7 @@ namespace lfs::python {
             "load_thumbnail",
             [](const std::string& path, int max_size) -> nb::tuple {
                 try {
-                    auto [data, w, h, channels] = lfs::core::load_image(lfs::core::utf8_to_path(path), -1, max_size);
+                    auto [data, w, h, channels] = lfs::core::load_image_thumbnail(lfs::core::utf8_to_path(path), max_size);
                     if (!data)
                         return nb::make_tuple(0, 0, 0);
 
@@ -4944,10 +4967,11 @@ namespace lfs::python {
         // Theme control (for Python-driven View menu)
         m.def(
             "set_theme",
-            [](const std::string& name) {
-                if (vis::setThemeByName(name)) {
-                    vis::saveThemePreferenceName(name);
-                }
+            [](std::string name) {
+                invoke_on_viewer([name = std::move(name)]() {
+                    if (vis::setThemeByName(name))
+                        vis::saveThemePreferenceName(name);
+                });
             },
             nb::arg("name"), "Set theme by stable theme id");
 
@@ -4955,6 +4979,34 @@ namespace lfs::python {
             "get_theme",
             []() -> std::string { return vis::currentThemeId(); },
             "Get current stable theme id");
+
+        m.def(
+            "set_theme_family",
+            [](std::string family_id, std::string mode) {
+                return invoke_on_viewer(
+                    [family_id = std::move(family_id), mode = std::move(mode)]() {
+                        return vis::setThemeFamilySelection(family_id, mode);
+                    },
+                    false);
+            },
+            nb::arg("family_id"),
+            nb::arg("mode"),
+            "Select a theme family using dark, light, or automatic system mode");
+
+        m.def(
+            "get_theme_family",
+            []() -> std::string { return vis::currentThemeFamilyId(); },
+            "Get the selected theme family id");
+
+        m.def(
+            "get_theme_mode",
+            []() -> std::string { return vis::currentThemeSelectionMode(); },
+            "Get the selected family mode: dark, light, or auto");
+
+        m.def(
+            "supports_system_theme",
+            []() { return vis::supportsSystemThemePreference(); },
+            "Return whether automatic OS light/dark detection is available in this session");
 
         m.def(
             "themes",
@@ -4966,6 +5018,9 @@ namespace lfs::python {
                     item["name"] = info.name;
                     item["label_key"] = info.label_key;
                     item["mode"] = info.mode;
+                    item["family_id"] = info.family_id;
+                    item["family_name"] = info.family_name;
+                    item["variant_name"] = info.variant_name;
                     item["order"] = info.order;
                     themes.append(item);
                 });
@@ -4990,6 +5045,42 @@ namespace lfs::python {
             "get_ui_scale_preference",
             []() -> float { return vis::loadUiScalePreference(); },
             "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "set_zoom_speed_preference",
+            [](const float speed) {
+                vis::saveZoomSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default camera zoom speed (1-100)");
+
+        m.def(
+            "get_zoom_speed_preference",
+            []() -> float { return vis::loadZoomSpeedPreference(); },
+            "Get the default camera zoom speed");
+
+        m.def(
+            "set_navigation_speed_preference",
+            [](const float speed) {
+                vis::saveNavigationSpeedPreference(speed);
+                const float zoom_speed = vis::loadZoomSpeedPreference();
+                const float navigation_speed = vis::loadNavigationSpeedPreference();
+                invoke_on_viewer([zoom_speed, navigation_speed] {
+                    if (auto* const controller = vis::InputController::instance())
+                        controller->applyNavigationSpeedPreferences(zoom_speed, navigation_speed);
+                });
+            },
+            nb::arg("speed"), "Set the default WASD navigation speed (1-100)");
+
+        m.def(
+            "get_navigation_speed_preference",
+            []() -> float { return vis::loadNavigationSpeedPreference(); },
+            "Get the default WASD navigation speed");
 
         m.def(
             "get_scene_reconstruction_options",
@@ -5676,7 +5767,7 @@ namespace lfs::python {
                 auto* rm = get_rendering_manager();
                 if (!rm)
                     return "none";
-                switch (rm->getSettings().split_view_mode) {
+                switch (rm->getSplitViewMode()) {
                 case vis::SplitViewMode::GTComparison: return "gt_comparison";
                 case vis::SplitViewMode::PLYComparison: return "ply_comparison";
                 case vis::SplitViewMode::IndependentDual: return "independent_dual";

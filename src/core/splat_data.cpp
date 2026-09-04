@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <cuda_runtime.h>
 #include <exception>
 #include <expected>
@@ -654,7 +655,7 @@ namespace {
         const size_t n,
         const size_t k) {
         using namespace lfs::core;
-        Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
         auto* const dst = out.ptr<float>();
         const size_t active_floats = k * SH_CHANNELS;
         tbb::parallel_for(
@@ -685,7 +686,8 @@ namespace {
         const size_t n,
         const size_t k) {
         using namespace lfs::core;
-        Tensor out = Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+        out.zero_();
         auto* const dst = out.ptr<float>();
         const std::uint32_t n_cells =
             sh_value_quant::n_value_cells_per_prim(static_cast<std::uint32_t>(k));
@@ -721,20 +723,27 @@ namespace {
         const size_t k) {
         using namespace lfs::core;
         if (n == 0 || k == 0) {
-            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+            out.zero_();
+            return out;
         }
-        const Tensor codes_cpu = shN.cpu().contiguous();
+        const Tensor codes_cpu = shN.to_pageable_host().contiguous();
         if (bounds.is_valid() && bounds.numel() > 0) {
-            const Tensor bounds_cpu = bounds.cpu().contiguous();
+            const Tensor bounds_cpu = bounds.to_pageable_host().contiguous();
             return dequant_q16_to_canonical_cpu(
                 reinterpret_cast<const std::uint16_t*>(codes_cpu.data_ptr()),
                 bounds_cpu.ptr<float>(),
                 n,
                 k);
         }
-        const Tensor fp32_swizzled = codes_cpu.to(DataType::Float32);
+        Tensor fp32_swizzled = Tensor::empty_pageable_host(codes_cpu.shape(), DataType::Float32);
+        const auto* const codes = codes_cpu.ptr<__half>();
+        auto* const fp32 = fp32_swizzled.ptr<float>();
+        for (size_t i = 0; i < static_cast<size_t>(codes_cpu.numel()); ++i) {
+            fp32[i] = static_cast<float>(codes[i]);
+        }
         if (!fp32_swizzled.is_valid() || fp32_swizzled.numel() == 0) {
-            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
             out.zero_();
             return out;
         }
@@ -743,6 +752,124 @@ namespace {
             static_cast<size_t>(fp32_swizzled.numel()),
             n,
             k);
+    }
+
+    // CUDA decode into canonical [N, K, 3] host output. This is the SPZ counterpart
+    // to the PLY banded decoder; SPZ does not need PLY's channel-major permutation.
+    [[nodiscard]] lfs::core::Tensor canonical_shN_from_f16_gpu(
+        const lfs::core::Tensor& shN,
+        const lfs::core::Tensor& bounds,
+        const size_t n,
+        const size_t k) {
+        using namespace lfs::core;
+        constexpr size_t kStagingBudgetBytes = size_t{128} * 1024 * 1024;
+        constexpr size_t kDecodeBuffers = 1;
+        const bool quantized = bounds.is_valid() && bounds.numel() > 0;
+        const size_t floats_per_row = k * SH_CHANNELS;
+        const size_t bytes_per_row = floats_per_row * sizeof(float);
+        size_t band_prims = kStagingBudgetBytes /
+                            (kDecodeBuffers * std::max<size_t>(bytes_per_row, 1));
+        band_prims = (band_prims / kShReorderSize) * kShReorderSize;
+        band_prims = std::max<size_t>(band_prims, 1);
+        band_prims = std::min(band_prims, n);
+
+        struct StreamOwner {
+            cudaStream_t stream = nullptr;
+
+            StreamOwner() {
+                const cudaError_t status =
+                    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+                if (status != cudaSuccess) {
+                    throw TensorError(std::format(
+                        "Failed to create SPZ SH decode stream: {}",
+                        cudaGetErrorString(status)));
+                }
+            }
+
+            ~StreamOwner() noexcept {
+                if (stream) {
+                    CudaMemoryPool::instance().release_stream(stream);
+                    (void)cudaStreamDestroy(stream);
+                }
+            }
+
+            StreamOwner(const StreamOwner&) = delete;
+            StreamOwner& operator=(const StreamOwner&) = delete;
+        } stream_owner;
+
+        Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+#ifdef __linux__
+        (void)::madvise(out.data_ptr(), out.numel() * sizeof(float), MADV_HUGEPAGE);
+#endif
+        prefault_pageable_host_memory(out.data_ptr(), out.bytes());
+
+        Tensor device_staging = Tensor::empty(
+            {band_prims, k, SH_CHANNELS}, Device::CUDA, DataType::Float32);
+        Tensor host_staging = Tensor::empty(
+            {band_prims, k, SH_CHANNELS}, Device::CPU, DataType::Float32, true);
+        if (!PinnedMemoryAllocator::instance().is_cuda_host_allocation(
+                host_staging.data_ptr())) {
+            throw TensorError(
+                "SPZ SH decode requires cudaHostAlloc-backed host staging memory");
+        }
+
+        shN.sync_to_stream(stream_owner.stream);
+        if (quantized)
+            bounds.sync_to_stream(stream_owner.stream);
+        device_staging.record_stream(stream_owner.stream);
+        host_staging.record_stream(stream_owner.stream);
+
+        const auto* const source = reinterpret_cast<const std::uint16_t*>(
+            resolve_exportable_device_ptr(shN));
+        const auto* const bounds_ptr = quantized
+                                           ? static_cast<const float*>(
+                                                 resolve_exportable_device_ptr(bounds))
+                                           : nullptr;
+        const size_t band_count = (n + band_prims - 1) / band_prims;
+        for (size_t band = 0; band < band_count; ++band) {
+            const size_t begin = band * band_prims;
+            const size_t count = std::min(band_prims, n - begin);
+            const size_t band_bytes = count * bytes_per_row;
+
+            if (quantized) {
+                sh_value_quant::decode_shN_u16_range_to_canonical(
+                    source,
+                    bounds_ptr,
+                    device_staging.ptr<float>(),
+                    static_cast<std::uint64_t>(begin * floats_per_row),
+                    static_cast<std::uint64_t>(count * floats_per_row),
+                    n,
+                    static_cast<std::uint32_t>(k),
+                    static_cast<std::uint32_t>(k),
+                    stream_owner.stream);
+            } else {
+                sh_value_quant::decode_shN_f16_range_to_canonical(
+                    source,
+                    device_staging.ptr<float>(),
+                    static_cast<std::uint64_t>(begin * floats_per_row),
+                    static_cast<std::uint64_t>(count * floats_per_row),
+                    n,
+                    static_cast<std::uint32_t>(k),
+                    static_cast<std::uint32_t>(k),
+                    stream_owner.stream);
+            }
+            LFS_CUDA_CHECK_MSG_STREAM(
+                cudaMemcpyAsync(host_staging.data_ptr(),
+                                device_staging.data_ptr(),
+                                band_bytes,
+                                cudaMemcpyDeviceToHost,
+                                stream_owner.stream),
+                stream_owner.stream,
+                "while copying SPZ SH decode band to host");
+            LFS_CUDA_CHECK_MSG_STREAM(
+                cudaStreamSynchronize(stream_owner.stream),
+                stream_owner.stream,
+                "while completing SPZ SH decode band");
+            std::memcpy(out.ptr<float>() + begin * floats_per_row,
+                        host_staging.ptr<float>(),
+                        band_bytes);
+        }
+        return out;
     }
 
 } // anonymous namespace
@@ -873,6 +1000,52 @@ namespace lfs::core {
             copy._shN.capacity() < copy._shN.shape()[0]) {
             copy._shN.reserve(copy._shN.shape()[0]);
         }
+        return copy;
+    }
+
+    SplatData SplatData::clone_async(const cudaStream_t stream) const {
+        const auto clone_tensor = [stream](const Tensor& source) {
+            if (!source.is_valid()) {
+                return Tensor{};
+            }
+            const Tensor contiguous = source.contiguous();
+            if (contiguous.device() != Device::CUDA || stream == nullptr) {
+                return contiguous.clone();
+            }
+            Tensor result = Tensor::empty(
+                contiguous.shape(), Device::CUDA, contiguous.dtype());
+            contiguous.sync_to_stream(stream);
+            result.set_stream(stream);
+            if (contiguous.bytes() != 0) {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(
+                    result.data_ptr(), contiguous.data_ptr(),
+                    contiguous.bytes(), cudaMemcpyDeviceToDevice, stream));
+            }
+            result.record_stream(stream);
+            return result;
+        };
+
+        SplatData copy;
+        copy._max_sh_degree = _max_sh_degree;
+        copy._active_sh_degree = _active_sh_degree;
+        copy._scene_scale = _scene_scale;
+        copy._means = clone_tensor(_means);
+        copy._sh0 = clone_tensor(_sh0);
+        copy._shN = clone_tensor(_shN);
+        copy._shN_value_bounds = clone_tensor(_shN_value_bounds);
+        copy._scaling = clone_tensor(_scaling);
+        copy._rotation = clone_tensor(_rotation);
+        copy._opacity = clone_tensor(_opacity);
+        copy._densification_info = clone_tensor(_densification_info);
+        copy._max_screen_share = clone_tensor(_max_screen_share);
+        copy._deleted = clone_tensor(_deleted);
+        copy._deleted_count.store(
+            _deleted_count.load(std::memory_order_relaxed),
+            std::memory_order_relaxed);
+        copy._deleted_mask_version.store(
+            _deleted_mask_version.load(std::memory_order_relaxed),
+            std::memory_order_relaxed);
+        copy._frozen_ranges = _frozen_ranges;
         return copy;
     }
 
@@ -1079,7 +1252,9 @@ namespace lfs::core {
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
         if (n == 0 || k == 0) {
-            return Tensor::zeros({n, k, SH_CHANNELS}, Device::CPU);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+            out.zero_();
+            return out;
         }
 
         // Quantized / IEEE-f16 path: host dequant to [N,K,3] on CPU (export/checkpoint
@@ -1089,17 +1264,36 @@ namespace lfs::core {
         }
 
         if (!_shN.is_valid() || _shN.numel() == 0) {
-            Tensor out = Tensor::empty({n, k, SH_CHANNELS}, Device::CPU, DataType::Float32);
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
             out.zero_();
             return out;
         }
 
-        const Tensor shN_cpu = _shN.cpu().contiguous();
+        const Tensor shN_cpu = _shN.to_pageable_host().contiguous();
         return unpack_swizzled_floats_to_canonical_cpu(
             shN_cpu.ptr<float>(),
             static_cast<size_t>(shN_cpu.numel()),
             n,
             k);
+    }
+
+    Tensor SplatData::shN_canonical_cpu_gpu_decoded() const {
+        const size_t n = static_cast<size_t>(size());
+        const size_t k = max_sh_coeffs_rest();
+        if (n == 0 || k == 0) {
+            Tensor out = Tensor::empty_pageable_host({n, k, SH_CHANNELS}, DataType::Float32);
+            out.zero_();
+            return out;
+        }
+
+        const bool bounds_are_gpu_compatible =
+            !_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0 ||
+            _shN_value_bounds.device() == Device::CUDA;
+        if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
+            _shN.device() == Device::CUDA && bounds_are_gpu_compatible) {
+            return canonical_shN_from_f16_gpu(_shN, _shN_value_bounds, n, k);
+        }
+        return shN_canonical_cpu();
     }
 
     Tensor SplatData::shN_ply_rest_cpu() const {

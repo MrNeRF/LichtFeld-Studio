@@ -23,6 +23,10 @@
 #include "rendering/vulkan_result.hpp"
 #include "rendering/vulkan_wait.hpp"
 
+// Read generated VkSplat shader blobs ahead of renderer construction. The
+// cache is process-local and also serves the normal loadSpirv path.
+void preloadSpirvFiles(const std::vector<std::string>& paths);
+
 class VulkanGSPipeline {
 public:
     using TimerCallback = std::function<void(const std::vector<std::pair<size_t, double>>&)>;
@@ -259,6 +263,8 @@ protected:
         VkPipeline pipeline;
         std::vector<int> buffer_layouts;
         std::string diagnostic_name;
+        bool compatible_subgroup_size = true;
+        uint32_t expected_workgroup_size_x = 0;
 
         _ComputePipeline(
             std::vector<int> buffer_layouts) : shader(VK_NULL_HANDLE),
@@ -287,6 +293,7 @@ protected:
     };
 
     std::vector<_ComputePipeline*> all_compute_pipelines;
+    std::vector<_ComputePipeline*> pending_compute_pipelines;
 
     uint32_t queue_family_index;
 
@@ -319,6 +326,7 @@ protected:
                                const std::string& spirv_path,
                                bool compatible_subgroup_size = true,
                                uint32_t expected_workgroup_size_x = 0);
+    void createPendingComputePipelines();
     void executeCompute(
         std::vector<std::pair<size_t, size_t>> dims,
         const void* uniformsPtr, size_t uniformSize,

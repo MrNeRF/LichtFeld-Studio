@@ -16,30 +16,6 @@
     min-height: 0;
 }
 
-.dock-drag-handle {
-    flex: 0 0 auto;
-    height: 8dp;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding-top: 3dp;
-}
-
-.dock-drag-handle-bar {
-    width: 36dp;
-    height: 3dp;
-    background-color: rgba(108, 112, 134, 160);
-    border-radius: 2dp;
-}
-
-.dock-drag-handle:hover .dock-drag-handle-bar {
-    background-color: rgba(137, 180, 250, 220);
-}
-
-.dock-drag-handle.hidden {
-    display: none;
-}
-
 #histogram-shell {
     flex: 1;
     padding: 8dp 10dp 12dp;
@@ -82,6 +58,9 @@
 }
 
 .histogram-panel-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-width: 64dp;
 }
 
@@ -491,6 +470,9 @@
 }
 
 .range-reset {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-width: 56dp;
     margin-left: 4dp;
 }
@@ -798,6 +780,9 @@
 }
 
 .histogram-history-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 30dp;
     height: 30dp;
     min-width: 30dp;
@@ -809,7 +794,7 @@
     display: block;
     width: 16dp;
     height: 16dp;
-    margin: 6dp auto 0;
+    margin: 0;
     image-color: rgba(236, 241, 255, 235);
 }
 
@@ -818,6 +803,9 @@
 }
 
 .footer-text-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-width: 78dp;
 }
 

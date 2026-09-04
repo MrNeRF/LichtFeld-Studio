@@ -117,6 +117,7 @@ def _install_lf_stub(monkeypatch):
         VIEWPORT_OVERLAY="VIEWPORT_OVERLAY",
         MAIN_PANEL_TAB="MAIN_PANEL_TAB",
         SCENE_HEADER="SCENE_HEADER",
+        BOTTOM_DOCK="BOTTOM_DOCK",
         STATUS_BAR="STATUS_BAR",
     )
     panel_height_mode = SimpleNamespace(FILL="fill", CONTENT="content")
@@ -254,6 +255,12 @@ def _install_lf_stub(monkeypatch):
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
+        get_panel=lambda _panel_id: SimpleNamespace(space=panel_space.BOTTOM_DOCK),
+        get_bottom_dock_active_tab=lambda: "",
+        set_bottom_dock_active_tab=lambda _panel_id: None,
+        set_sequencer_visible=lambda _visible: None,
+        is_sequencer_visible=lambda: False,
+        set_panel_enabled=lambda _panel_id, _enabled: None,
         tr=tr,
         get_current_language=lambda: state.language[0],
         request_redraw=lambda: None,
@@ -269,13 +276,23 @@ def _install_lf_stub(monkeypatch):
         themes=lambda: [],
         get_languages=lambda: [("en", "English")],
         get_theme=lambda: "dark",
+        get_theme_family=lambda: "lichtfeld",
+        get_theme_mode=lambda: "dark",
         get_ui_scale_preference=lambda: 0.0,
+        get_zoom_speed_preference=lambda: 0.0,
+        set_zoom_speed_preference=lambda _speed: None,
+        get_navigation_speed_preference=lambda: 0.0,
+        set_navigation_speed_preference=lambda _speed: None,
         remember_camera_navigation=lambda: False,
         remember_camera_view_snap=lambda: False,
         scene_graph_selection_markers=lambda: False,
         set_scene_graph_selection_markers=lambda _enabled: None,
         get_progress_bar_style=lambda: "classic",
         set_progress_bar_style=lambda _style: None,
+        get_viewport_chrome_style=lambda: "translucent",
+        set_viewport_chrome_style=lambda _style: None,
+        get_viewport_toolbar_position=lambda: "centered",
+        set_viewport_toolbar_position=lambda _position: None,
         get_scene_reconstruction_options=lambda: [
             {
                 "id": "native",
@@ -529,6 +546,26 @@ def test_keymap_builds_binding_rows_with_capture_state(keymap_bindings_module):
     assert pan_row["button_class"] == "btn--primary"
 
 
+def test_keymap_ensure_rows_does_not_rebuild_on_first_update(keymap_bindings_module):
+    prefs, _state = keymap_bindings_module
+    _panel, model = _bind_panel(prefs)
+    section = _panel._keymap
+    binding_rows_calls = []
+    original_update_record_list = model.handle.update_record_list
+
+    def update_record_list(name, rows):
+        if name == "binding_rows":
+            binding_rows_calls.append(rows)
+        original_update_record_list(name, rows)
+
+    model.handle.update_record_list = update_record_list
+
+    section.ensure_binding_rows()
+    section.on_update(_DocStub())
+
+    assert len(binding_rows_calls) == 1
+
+
 def test_keymap_marks_conflicting_binding_rows(keymap_bindings_module):
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
@@ -555,6 +592,7 @@ def test_keymap_capture_conflict_prompts_to_replace(keymap_bindings_module):
     panel, _model = _bind_panel(prefs)
     section = panel._keymap
     doc = _DocStub(with_conflict_overlay=True)
+    section.ensure_binding_rows()
 
     old_trigger = {"type": "drag", "button": 2, "modifiers": 0}
     state.triggers[(prefs.lf.keymap.ToolMode.GLOBAL, prefs.lf.keymap.Action.CAMERA_ORBIT)] = old_trigger
@@ -618,6 +656,7 @@ def test_keymap_language_change_rebuilds_and_dirties_all(keymap_bindings_module)
     prefs, state = keymap_bindings_module
     panel, _model = _bind_panel(prefs)
     section = panel._keymap
+    section.ensure_binding_rows()
     section._last_profiles = list(state.profiles)
     section._last_lang = "en"
     section._last_current_profile = "Default"

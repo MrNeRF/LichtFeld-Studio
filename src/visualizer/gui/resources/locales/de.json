@@ -45,6 +45,7 @@
     "tools.plugin_marketplace": "Plugin-Marktplatz",
     "view": "Ansicht",
     "view.theme": "Design",
+    "view.theme.auto": "Automatisch",
     "view.theme.dark": "Dunkel",
     "view.theme.light": "Hell",
     "view.theme.gruvbox": "Gruvbox",
@@ -74,12 +75,12 @@
     "title": "Erste Schritte",
     "description": "Erfahren Sie, wie Sie Datensätze vorbereiten und mit LichtFeld Studio beginnen:",
     "wiki_section": "WIKI & FAQ",
+    "video_overview": "Alles, was LichtFeld Studio heute kann",
     "video_automotive": "3dgs for automotive marketing",
     "video_intro": "Training mit 360° Equirectangular-Bildern",
     "video_latest": "LichtFeld v0.3.0 Funktionsübersicht",
     "video_reality_scan": "Reality Scan Datensatz",
     "video_colmap": "COLMAP Tutorial",
-    "video_lichtfeld": "LichtFeld Tutorial",
     "video_masks": "Masken Tutorial"
   },
   "about": {
@@ -578,6 +579,8 @@
     "add_group": "Gruppe hinzufügen",
     "add_group_ellipsis": "Gruppe hinzufügen...",
     "new_group_name": "Neue Gruppe",
+    "group_selected": "Group Selected",
+    "ungroup": "Ungroup",
     "export": "Exportieren...",
     "delete": "Löschen",
     "rename": "Umbenennen",
@@ -772,6 +775,15 @@
     "progress_bar_style": "Fortschrittsbalken",
     "progress_bar_classic": "Klassisch",
     "progress_bar_miner": "Miner",
+    "viewport_chrome_style": "Viewport-Steuerelemente",
+    "viewport_chrome_solid": "Undurchsichtig",
+    "viewport_chrome_translucent": "Durchscheinend",
+    "viewport_chrome_frosted": "Milchglas",
+    "viewport_toolbar_position": "Position der Werkzeugleiste",
+    "viewport_toolbar_position_top": "Oben",
+    "viewport_toolbar_position_centered": "Zentriert",
+    "viewport_toolbar_position_free": "Frei",
+    "viewport_toolbar_drag": "Werkzeugleiste verschieben",
     "scene_rendering": "Szenen-Rendering",
     "scene_reconstruction": "Szenenrekonstruktion",
     "scene_reconstruction_off": "Aus",
@@ -787,6 +799,10 @@
     "key_bindings": "Tastenbelegung",
     "camera_navigation": "Kameranavigation",
     "navigation_mode": "Navigationsmodus",
+    "zoom_speed": "Zoom speed",
+    "zoom_speed_tooltip": "Default speed for zooming the camera with the mouse wheel.",
+    "navigation_speed": "Navigation speed",
+    "navigation_speed_tooltip": "Default speed for moving the camera with WASD.",
     "camera_view_snap": "Ansichten an Achsen ausrichten",
     "enable_axis_view_snap": "Achsansichtsausrichtung aktivieren",
     "remember_camera_navigation": "Kameranavigation merken",
@@ -1956,6 +1972,9 @@
     "downloads": "Downloads",
     "invalid_link": "Ungültiger Link",
     "button.install": "Installieren",
+    "cancel": "Abbrechen",
+    "cancelling": "Wird abgebrochen...",
+    "installation_cancelled": "Installation abgebrochen",
     "local_install": "Lokale Installation",
     "install_as_git_checkout": "Als Git-Checkout installieren",
     "confirm_uninstall_message": "Möchten Sie \"{name}\" wirklich deinstallieren?",
@@ -1969,7 +1988,8 @@
     "registry_loaded.other": "Registry geladen: {count} Plugins im Marketplace-Katalog.",
     "registry_unavailable.one": "Registry nicht verfügbar: {count} Fallback-Plugin wird angezeigt.",
     "registry_unavailable.few": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
-    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt."
+    "registry_unavailable.other": "Registry nicht verfügbar: {count} Fallback-Plugins werden angezeigt.",
+    "popularity_unavailable": "Beliebtheitsdaten nicht verfügbar."
   },
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",
@@ -2104,6 +2124,10 @@
         }
       }
     },
+    "computing": {
+      "title": "Histogramm wird berechnet…",
+      "message": "Die Verteilung wird angezeigt, sobald die Daten bereit sind."
+    },
     "delete_failed": {
       "title": "Löschen fehlgeschlagen",
       "status": "Löschen fehlgeschlagen: {message}",
@@ -2127,6 +2151,10 @@
       "metric_unavailable": {
         "title": "Metrik nicht verfügbar",
         "message": "Die ausgewählte Metrik konnte nicht aus dem kombinierten Gauß-Modell gelesen werden."
+      },
+      "compute_failed": {
+        "title": "Histogramm fehlgeschlagen",
+        "message": "Histogrammberechnung fehlgeschlagen: {error}"
       },
       "no_visible_values": {
         "title": "Keine sichtbaren Werte",

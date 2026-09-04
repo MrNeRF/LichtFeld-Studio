@@ -44,6 +44,9 @@ namespace lfs::vis::op {
     }
 
     OperatorResult UndoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            scene_manager->completePendingSelectionCounts();
+        }
         const auto result = undoHistory().undo();
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::ALL);
@@ -68,6 +71,9 @@ namespace lfs::vis::op {
     }
 
     OperatorResult RedoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            scene_manager->completePendingSelectionCounts();
+        }
         const auto result = undoHistory().redo();
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::ALL);

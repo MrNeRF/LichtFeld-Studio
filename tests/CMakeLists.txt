@@ -38,18 +38,26 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path test without CUDA
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
+        ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp
     )
 
     target_include_directories(unicode_path_test PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/core/include
+        ${CMAKE_SOURCE_DIR}/src/io/include
+        ${CMAKE_SOURCE_DIR}/external
     )
 
     target_link_libraries(unicode_path_test PRIVATE
         GTest::gtest
         GTest::gtest_main
     )
+    target_compile_definitions(unicode_path_test PRIVATE
+        LFS_CORE_EXPORTS
+        LFS_UNICODE_TEST_STANDALONE)
 
     # C++23 standard
     set_target_properties(unicode_path_test PROPERTIES
@@ -302,6 +310,7 @@ set(TEST_FILES
     test_device_fault.cpp
     device_fault_cuda_utils.cu
     test_selection_ops.cpp
+    test_selection_cursor.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
@@ -531,6 +540,7 @@ set(TEST_FILES
     test_metrics_evaluator_appearance.cpp
     test_export_env_composite.cpp
     test_image_io.cpp
+    test_camera_thumbnail_policy.cpp
     test_undistort.cpp
     test_viewport_region_utils.cpp
     test_viewport_interop_decision.cpp
@@ -545,6 +555,7 @@ set(TEST_FILES
     test_colmap_binary_parallel_parse.cpp
     test_splat_simplify.cpp
     test_rml_text_input_handler.cpp
+    test_scene_graph_dnd.cpp
     test_rml_im_mode_layout.cpp
     test_rml_python_listener_lifetime.cpp
     test_status_bar_fit.cpp
@@ -1040,6 +1051,7 @@ set(LFS_PYTHON_SLOW_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_signals.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_toolbar_hooks.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_orthographic_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_overlay_storage.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_output_lifetime_regressions.py
 )
 

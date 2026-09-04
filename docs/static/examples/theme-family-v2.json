@@ -1,0 +1,210 @@
+{
+  "schema_version": 2,
+  "id": "custom_example",
+  "name": "Custom Example",
+  "_description": "Complete theme family v2 template. Rename the ids and adjust only the properties you need.",
+
+  "shared": {
+    "_description": "Shared values are applied to both variants before their own overrides.",
+
+    "fonts": {
+      "_description": "Optional packaged font paths and UI sizes.",
+      "regular_path": "Inter-Regular.ttf",
+      "bold_path": "Inter-SemiBold.ttf",
+      "base_size": 12.0,
+      "small_size": 12.0,
+      "large_size": 16.0,
+      "heading_size": 18.0,
+      "section_size": 13.0
+    },
+
+    "sizes": {
+      "_description": "Geometry and spacing in UI pixels.",
+      "window_rounding": 8.0,
+      "frame_rounding": 5.0,
+      "popup_rounding": 6.0,
+      "scrollbar_rounding": 6.0,
+      "grab_rounding": 4.0,
+      "tab_rounding": 5.0,
+      "border_size": 0.0,
+      "child_border_size": 1.0,
+      "popup_border_size": 1.0,
+      "window_padding": [8.0, 8.0],
+      "frame_padding": [6.0, 4.0],
+      "item_spacing": [8.0, 5.0],
+      "item_inner_spacing": [5.0, 4.0],
+      "indent_spacing": 21.0,
+      "scrollbar_size": 13.0,
+      "grab_min_size": 16.0,
+      "toolbar_button_size": 24.0,
+      "toolbar_padding": 6.0,
+      "toolbar_spacing": 4.0
+    },
+
+    "menu": {
+      "_description": "Top menu and popup-menu derivation controls.",
+      "bg_lighten": 0.025,
+      "hover_lighten": 0.070,
+      "active_alpha": 0.35,
+      "popup_lighten": 0.015,
+      "popup_rounding": 7.0,
+      "popup_border_size": 1.0,
+      "border_alpha": 0.70,
+      "bottom_border_darken": 0.060,
+      "frame_padding": [12.0, 8.0],
+      "item_spacing": [12.0, 6.0],
+      "popup_padding": [8.0, 8.0]
+    },
+
+    "context_menu": {
+      "_description": "Context-menu geometry and section emphasis.",
+      "rounding": 7.0,
+      "header_alpha": 0.36,
+      "header_hover_alpha": 0.54,
+      "header_active_alpha": 0.72,
+      "padding": [14.0, 10.0],
+      "item_spacing": [10.0, 8.0]
+    },
+
+    "viewport": {
+      "_description": "Viewport frame geometry and border derivation.",
+      "corner_radius": 8.0,
+      "border_size": 2.0,
+      "border_alpha": 0.45,
+      "border_darken": 0.10
+    },
+
+    "shadows": {
+      "_description": "Shared floating-surface elevation.",
+      "enabled": true,
+      "offset": [0.0, 7.0],
+      "blur": 16.0,
+      "alpha": 0.30
+    },
+
+    "vignette": {
+      "_description": "Optional viewport vignette defaults.",
+      "enabled": true,
+      "intensity": 0.16,
+      "radius": 0.78,
+      "softness": 0.50
+    },
+
+    "button": {
+      "_description": "Theme-derived button tint strengths.",
+      "tint_normal": 0.30,
+      "tint_hover": 0.44,
+      "tint_active": 0.58
+    }
+  },
+
+  "variants": {
+    "dark": {
+      "id": "custom_example_night",
+      "name": "Night",
+      "label_key": "menu.view.theme.dark",
+      "fallback": "dark",
+      "_description": "Semantic dark variant. Missing properties inherit from the built-in dark theme.",
+
+      "palette": {
+        "_description": "Colors are [red, green, blue, alpha], each from 0.0 to 1.0.",
+        "background": [0.035, 0.043, 0.067, 1.0],
+        "surface": [0.075, 0.090, 0.130, 1.0],
+        "surface_bright": [0.120, 0.145, 0.205, 1.0],
+        "primary": [0.250, 0.580, 0.960, 1.0],
+        "primary_dim": [0.200, 0.410, 0.760, 1.0],
+        "secondary": [0.600, 0.430, 0.920, 1.0],
+        "text": [0.950, 0.965, 0.985, 1.0],
+        "text_dim": [0.650, 0.690, 0.750, 1.0],
+        "border": [0.240, 0.290, 0.400, 1.0],
+        "success": [0.250, 0.800, 0.560, 1.0],
+        "warning": [0.960, 0.680, 0.260, 1.0],
+        "error": [0.940, 0.360, 0.430, 1.0],
+        "info": [0.320, 0.720, 0.900, 1.0],
+        "row_even": [1.000, 1.000, 1.000, 0.035],
+        "row_odd": [0.000, 0.000, 0.000, 0.110]
+      },
+
+      "gradients": {
+        "_description": "All gradients are optional. Remove this section for a palette-derived flat theme.",
+        "window_body": { "start": [0.100, 0.120, 0.190, 1.0], "end": [0.050, 0.055, 0.090, 1.0] },
+        "panel_body": { "start": [0.095, 0.115, 0.180, 1.0], "end": [0.055, 0.065, 0.105, 1.0] },
+        "window_title": { "start": [0.150, 0.250, 0.500, 1.0], "end": [0.260, 0.120, 0.410, 1.0] },
+        "section_header": { "start": [0.130, 0.220, 0.430, 1.0], "end": [0.220, 0.110, 0.350, 1.0] },
+        "section_header_hover": { "start": [0.200, 0.340, 0.650, 1.0], "end": [0.320, 0.160, 0.520, 1.0] },
+        "progress": { "start": [0.250, 0.580, 0.960, 1.0], "end": [0.600, 0.430, 0.920, 1.0] },
+        "scrubber_track": { "start": [0.130, 0.155, 0.220, 1.0], "end": [0.055, 0.065, 0.105, 1.0] },
+        "scrubber_fill": { "start": [0.250, 0.580, 0.960, 0.70], "end": [0.600, 0.430, 0.920, 0.84] },
+        "histogram_header": { "start": [0.145, 0.210, 0.390, 1.0], "end": [0.070, 0.095, 0.180, 1.0] },
+        "histogram_fill": { "start": [0.250, 0.580, 0.960, 1.0], "end": [0.600, 0.430, 0.920, 1.0] },
+        "histogram_selection": { "start": [0.780, 0.520, 0.230, 1.0], "end": [0.960, 0.680, 0.260, 1.0] }
+      },
+
+      "overlay": {
+        "_description": "Viewport overlay and gizmo semantic colors.",
+        "background": [0.075, 0.090, 0.130, 1.0],
+        "text": [0.950, 0.965, 0.985, 1.0],
+        "text_dim": [0.650, 0.690, 0.750, 1.0],
+        "border": [0.250, 0.580, 0.960, 1.0],
+        "icon": [0.390, 0.680, 1.000, 1.0],
+        "highlight": [0.200, 0.410, 0.760, 1.0],
+        "selection": [0.160, 0.340, 0.690, 1.0],
+        "selection_flash": [0.600, 0.430, 0.920, 1.0]
+      }
+    },
+
+    "light": {
+      "id": "custom_example_day",
+      "name": "Day",
+      "label_key": "menu.view.theme.light",
+      "fallback": "light",
+      "_description": "Semantic light variant. Missing properties inherit from the built-in light theme.",
+
+      "palette": {
+        "_description": "Colors are [red, green, blue, alpha], each from 0.0 to 1.0.",
+        "background": [0.880, 0.910, 0.955, 1.0],
+        "surface": [0.965, 0.978, 0.995, 1.0],
+        "surface_bright": [1.000, 1.000, 1.000, 1.0],
+        "primary": [0.050, 0.330, 0.790, 1.0],
+        "primary_dim": [0.190, 0.430, 0.810, 1.0],
+        "secondary": [0.460, 0.230, 0.780, 1.0],
+        "text": [0.045, 0.070, 0.125, 1.0],
+        "text_dim": [0.250, 0.300, 0.390, 1.0],
+        "border": [0.470, 0.550, 0.680, 1.0],
+        "success": [0.030, 0.470, 0.290, 1.0],
+        "warning": [0.720, 0.310, 0.040, 1.0],
+        "error": [0.720, 0.150, 0.110, 1.0],
+        "info": [0.050, 0.330, 0.790, 1.0],
+        "row_even": [1.000, 1.000, 1.000, 0.70],
+        "row_odd": [0.470, 0.550, 0.680, 0.13]
+      },
+
+      "gradients": {
+        "_description": "Light gradients keep dark text readable over every state.",
+        "window_body": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.900, 0.885, 0.975, 1.0] },
+        "panel_body": { "start": [0.985, 0.993, 1.000, 1.0], "end": [0.850, 0.865, 0.975, 1.0] },
+        "window_title": { "start": [0.840, 0.915, 1.000, 1.0], "end": [0.820, 0.730, 0.965, 1.0] },
+        "section_header": { "start": [0.910, 0.955, 1.000, 1.0], "end": [0.840, 0.770, 0.970, 1.0] },
+        "section_header_hover": { "start": [0.800, 0.890, 1.000, 1.0], "end": [0.760, 0.640, 0.945, 1.0] },
+        "progress": { "start": [0.050, 0.330, 0.790, 1.0], "end": [0.460, 0.230, 0.780, 1.0] },
+        "scrubber_track": { "start": [1.000, 1.000, 1.000, 1.0], "end": [0.800, 0.860, 0.940, 1.0] },
+        "scrubber_fill": { "start": [0.050, 0.330, 0.790, 0.58], "end": [0.460, 0.230, 0.780, 0.72] },
+        "histogram_header": { "start": [0.910, 0.950, 1.000, 1.0], "end": [0.730, 0.840, 0.970, 1.0] },
+        "histogram_fill": { "start": [0.050, 0.330, 0.790, 1.0], "end": [0.460, 0.230, 0.780, 1.0] },
+        "histogram_selection": { "start": [0.720, 0.310, 0.040, 1.0], "end": [0.950, 0.520, 0.130, 1.0] }
+      },
+
+      "overlay": {
+        "_description": "Viewport overlay and gizmo semantic colors.",
+        "background": [0.965, 0.978, 0.995, 1.0],
+        "text": [0.045, 0.070, 0.125, 1.0],
+        "text_dim": [0.250, 0.300, 0.390, 1.0],
+        "border": [0.050, 0.330, 0.790, 1.0],
+        "icon": [0.190, 0.430, 0.810, 1.0],
+        "highlight": [0.760, 0.850, 0.980, 1.0],
+        "selection": [0.630, 0.750, 0.950, 1.0],
+        "selection_flash": [0.460, 0.230, 0.780, 1.0]
+      }
+    }
+  }
+}

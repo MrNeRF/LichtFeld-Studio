@@ -24,7 +24,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.ui = SimpleNamespace(
         Panel=_Panel,
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
-        PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),
+        PanelHeightMode=SimpleNamespace(FILL="FILL", CONTENT="CONTENT"),
         PanelOption=SimpleNamespace(DEFAULT_CLOSED="DEFAULT_CLOSED"),
         tr=lambda key: key,
         open_url=lambda _url: None,
@@ -143,6 +143,10 @@ def test_image_preview_mask_decorator_escapes_paths(panel_modules, tmp_path):
 
     panel._image_paths = [image_path]
     panel._mask_paths = [mask_path]
+    panel._path_stat_cache = {
+        str(image_path): (True, image_path.stat().st_mtime_ns, image_path.stat().st_size),
+        str(mask_path): (True, mask_path.stat().st_mtime_ns, mask_path.stat().st_size),
+    }
     panel._camera_uids = [7]
     panel._show_overlay = True
     panel._prev_image_index = -1
@@ -185,12 +189,29 @@ def test_getting_started_panel_escapes_thumbnail_paths(panel_modules, tmp_path):
 def test_getting_started_panel_uses_dirty_update_policy(panel_modules):
     _, getting_started = panel_modules
     assert getting_started.GettingStartedPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in getting_started.GettingStartedPanel.__dict__
+    assert getting_started.GettingStartedPanel.update_interval_ms == 100
 
 
 def test_image_preview_uses_dirty_update_policy(panel_modules):
     image_preview, _ = panel_modules
     assert image_preview.ImagePreviewPanel.update_policy == "dirty"
+
+
+def test_about_panel_is_dirty_driven_without_idle_redraw(panel_modules):
+    _image_preview, _getting_started = panel_modules
+    about = import_module("lfs_plugins.about_panel")
+    source = (
+        Path(__file__).parent.parent.parent
+        / "src"
+        / "python"
+        / "lfs_plugins"
+        / "about_panel.py"
+    ).read_text(encoding="utf-8")
+
+    assert about.AboutPanel.update_policy == "dirty"
+    assert "on_update" not in about.AboutPanel.__dict__
+    assert "def on_update" not in source
+    assert "request_redraw" not in source
 
 
 def test_image_preview_dirty_request_schedules_update(panel_modules):

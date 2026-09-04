@@ -1,0 +1,13 @@
+<!-- SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+     SPDX-License-Identifier: GPL-3.0-or-later
+
+     Pointer outline derived from the Tabler Icons "pointer" icon.
+     Tabler Icons are MIT licensed; see ../../LICENSE. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <g transform="translate(-3 -3) scale(1.25)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563" stroke="#1F2329" stroke-width="4"/>
+    <path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563" stroke="#FFFFFF" stroke-width="2"/>
+  </g>
+  <circle cx="24" cy="24" r="7" fill="#1F2329" stroke="#FFFFFF" stroke-width="1.5"/>
+  <path d="M21 24h6M24 21v6" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round"/>
+</svg>

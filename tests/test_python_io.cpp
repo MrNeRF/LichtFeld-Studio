@@ -25,6 +25,7 @@
 #include "core/camera_types.h"
 #include "core/error.hpp"
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
@@ -655,6 +656,225 @@ TEST_F(PythonIOTest, RejectsMalformedTransformsCameraContractsBeforeCameraConstr
     invalid = valid;
     invalid["frames"][0]["transform_matrix"][3] = nlohmann::json::array({0.0, 0.0, 1.0, 1.0});
     expect_rejected(std::move(invalid));
+}
+
+class TransformsMaskTest : public PythonIOTest {
+protected:
+    void write_dataset(const fs::path& root, nlohmann::json frames) const {
+        const nlohmann::json identity = {
+            {1, 0, 0, 0},
+            {0, 1, 0, 0},
+            {0, 0, 1, 0},
+            {0, 0, 0, 1}};
+        for (auto& frame : frames)
+            frame["transform_matrix"] = identity;
+        write_text_file(root / "transforms.json", nlohmann::json{
+                                                      {"w", 2},
+                                                      {"h", 2},
+                                                      {"fl_x", 2},
+                                                      {"fl_y", 2},
+                                                      {"frames", std::move(frames)}}
+                                                      .dump());
+        // Avoid random initialization so the fixture has only two known points.
+        write_text_file(root / "pointcloud.ply",
+                        "ply\nformat ascii 1.0\nelement vertex 2\n"
+                        "property float x\nproperty float y\nproperty float z\n"
+                        "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+                        "end_header\n0 0 -2 255 0 0\n1 0 -2 0 255 0\n");
+    }
+};
+
+TEST_F(TransformsMaskTest, ExplicitPathsOverrideDiscoveryForFolderAndJson) {
+    const auto root = temp_dir / "explicit_masks";
+    write_dataset(root, {{{"file_path", "images/front/000001.png"}, {"mask_path", "labels/front.png"}},
+                         {{"file_path", "images/back/000001.png"}, {"mask_path", "labels/back.png"}}});
+    for (const auto* side : {"front", "back"}) {
+        write_png(root / "images" / side / "000001.png", 2, 2);
+        write_png(root / "labels" / (std::string(side) + ".png"), 2, 2);
+        // A guessed mask must not win over explicit metadata or fail dimension validation.
+        write_png(root / "masks" / side / "000001.png", 1, 1);
+    }
+    auto loader = Loader::create();
+    for (const auto& source : {root, root / "transforms.json"}) {
+        SCOPED_TRACE(lfs::core::path_to_utf8(source));
+        auto result = loader->load(source, {.load_masks = true});
+        ASSERT_TRUE(result) << result.error().format();
+        const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+        ASSERT_EQ(cameras.size(), 2u);
+        EXPECT_EQ(cameras[0]->mask_path(), root / "labels/front.png");
+        EXPECT_EQ(cameras[1]->mask_path(), root / "labels/back.png");
+        EXPECT_EQ(cameras[0]->image_name(), "000001.png");
+    }
+}
+
+TEST_F(TransformsMaskTest, ImplicitMasksRetainCameraSubdirectories) {
+    const auto root = temp_dir / "implicit_masks";
+    write_dataset(root, {{{"file_path", "./images/front/000001.png"}},
+                         {{"file_path", "images/back/000001.png"}}});
+    for (const auto* side : {"front", "back"}) {
+        write_png(root / "images" / side / "000001.png", 2, 2);
+        write_png(root / "masks" / side / "000001.png", 2, 2);
+    }
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->mask_path(), root / "masks/front/000001.png");
+    EXPECT_EQ(cameras[1]->mask_path(), root / "masks/back/000001.png");
+}
+
+TEST_F(TransformsMaskTest, AbsoluteImagePathRetainsRelativeMaskLookup) {
+    const auto root = temp_dir / "absolute_image";
+    const auto image = root / "images/front/000001.png";
+    write_dataset(root, {{{"file_path", lfs::core::path_to_utf8(image)}}});
+    write_png(image, 2, 2);
+    write_png(root / "masks/front/000001.png", 2, 2);
+    write_png(root / "masks/back/000001.png", 1, 1);
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->mask_path(), root / "masks/front/000001.png");
+}
+
+TEST_F(TransformsMaskTest, ExtensionlessBlenderImageKeepsUniqueBasenameFallback) {
+    const auto root = temp_dir / "blender_masks";
+    write_dataset(root, {{{"file_path", "./train/r_0"}}});
+    write_png(root / "train/r_0.png", 2, 2);
+    write_png(root / "masks/r_0.png", 2, 2);
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->mask_path(), root / "masks/r_0.png");
+}
+
+TEST_F(TransformsMaskTest, ExplicitAndImplicitMasksCanBeMixed) {
+    const auto root = temp_dir / "mixed_masks";
+    write_dataset(root, {{{"file_path", "images/front/000001.png"}, {"mask_path", "labels/front.png"}},
+                         {{"file_path", "images/back/000001.png"}}});
+    write_png(root / "images/front/000001.png", 2, 2);
+    write_png(root / "images/back/000001.png", 2, 2);
+    write_png(root / "labels/front.png", 2, 2);
+    write_png(root / "masks/back/000001.png", 2, 2);
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_EQ(cameras[0]->mask_path(), root / "labels/front.png");
+    EXPECT_EQ(cameras[1]->mask_path(), root / "masks/back/000001.png");
+}
+
+TEST_F(TransformsMaskTest, ExplicitMaskPathsResolveFromJsonAndAllowAbsolutePaths) {
+    const auto root = temp_dir / "json_location";
+    const auto mask = temp_dir / "shared_masks/mask.png";
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(mask, 2, 2);
+    for (const auto& mask_text : {std::string("../shared_masks/mask.png"), lfs::core::path_to_utf8(mask)}) {
+        SCOPED_TRACE(mask_text);
+        write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", mask_text}}});
+        auto result = Loader::create()->load(root / "transforms.json", {.load_masks = true});
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_TRUE(fs::equivalent(std::get<LoadedScene>(result->data).cameras.front()->mask_path(), mask));
+    }
+}
+
+TEST_F(TransformsMaskTest, UnicodePathsWorkForExplicitAndImplicitMasks) {
+    const auto root = temp_dir / fs::path(u8"dataset \u00e8 \u6d4b\u8bd5");
+    const auto relative_image = fs::path(u8"images/cam \u00e8/frame \u6d4b\u8bd5.png");
+    const auto relative_mask = fs::path(u8"masks/cam \u00e8/frame \u6d4b\u8bd5.png");
+    write_png(root / relative_image, 2, 2);
+    write_png(root / relative_mask, 2, 2);
+    for (const bool explicit_path : {true, false}) {
+        nlohmann::json frame = {{"file_path", lfs::core::path_to_utf8(relative_image)}};
+        if (explicit_path)
+            frame["mask_path"] = lfs::core::path_to_utf8(relative_mask);
+        write_dataset(root, nlohmann::json::array({frame}));
+        auto result = Loader::create()->load(root, {.load_masks = true});
+        ASSERT_TRUE(result) << result.error().format();
+        EXPECT_EQ(std::get<LoadedScene>(result->data).cameras.front()->mask_path(), root / relative_mask);
+    }
+}
+
+TEST_F(TransformsMaskTest, MissingExplicitMaskNeverFallsBackToGuessedMask) {
+    const auto root = temp_dir / "missing_explicit_mask";
+    write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels/missing.png"}}});
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(root / "masks/frame.png", 2, 2);
+    auto loader = Loader::create();
+    auto enabled = loader->load(root, {.load_masks = true});
+    ASSERT_FALSE(enabled);
+    EXPECT_EQ(enabled.error().code, ErrorCode::MISSING_REQUIRED_FILES);
+    EXPECT_EQ(enabled.error().path, root / "labels/missing.png");
+
+    auto disabled = loader->load(root, {.load_masks = false});
+    ASSERT_TRUE(disabled) << disabled.error().format();
+    const auto& camera = std::get<LoadedScene>(disabled->data).cameras.front();
+    EXPECT_EQ(camera->mask_path(), root / "labels/missing.png");
+    EXPECT_FALSE(camera->has_mask());
+}
+
+TEST_F(TransformsMaskTest, ExplicitMaskDimensionsAreCheckedOnlyWhenEnabled) {
+    const auto root = temp_dir / "mask_dimensions";
+    write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels/mask.png"}}});
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(root / "labels/mask.png", 1, 1);
+    auto loader = Loader::create();
+    auto enabled = loader->load(root, {.load_masks = true});
+    ASSERT_FALSE(enabled);
+    EXPECT_EQ(enabled.error().code, ErrorCode::MASK_SIZE_MISMATCH);
+    auto disabled = loader->load(root, {.load_masks = false});
+    ASSERT_TRUE(disabled) << disabled.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(disabled->data).cameras.front()->mask_path(), root / "labels/mask.png");
+}
+
+TEST_F(TransformsMaskTest, BrokenExplicitMaskIsValidatedOnlyWhenEnabled) {
+    const auto root = temp_dir / "broken_explicit_mask";
+    write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", "labels/mask.png"}}});
+    write_png(root / "images/frame.png", 2, 2);
+    write_text_file(root / "labels/mask.png", "not an image");
+    auto loader = Loader::create();
+    auto enabled = loader->load(root, {.load_masks = true});
+    EXPECT_FALSE(enabled);
+    auto disabled = loader->load(root, {.load_masks = false});
+    ASSERT_TRUE(disabled) << disabled.error().format();
+    EXPECT_EQ(std::get<LoadedScene>(disabled->data).cameras.front()->mask_path(), root / "labels/mask.png");
+}
+
+TEST_F(TransformsMaskTest, MissingImageDoesNotRequireItsExplicitMask) {
+    const auto root = temp_dir / "missing_image_mask";
+    write_dataset(root, {{{"file_path", "images/present.png"}},
+                         {{"file_path", "images/missing.png"}, {"mask_path", "labels/missing.png"}}});
+    write_png(root / "images/present.png", 2, 2);
+    auto result = Loader::create()->load(root, {.load_masks = true});
+    ASSERT_TRUE(result) << result.error().format();
+    const auto& cameras = std::get<LoadedScene>(result->data).cameras;
+    ASSERT_EQ(cameras.size(), 2u);
+    EXPECT_FALSE(cameras[1]->has_image());
+    EXPECT_EQ(cameras[1]->mask_path(), root / "labels/missing.png");
+}
+
+TEST_F(TransformsMaskTest, AmbiguousImplicitMasksRemainAnErrorWhenEnabled) {
+    const auto root = temp_dir / "ambiguous_masks";
+    write_dataset(root, {{{"file_path", "images/frame.png"}}});
+    write_png(root / "images/frame.png", 2, 2);
+    write_png(root / "masks/front/frame.png", 2, 2);
+    write_png(root / "masks/back/frame.png", 2, 2);
+    auto loader = Loader::create();
+    auto enabled = loader->load(root, {.load_masks = true});
+    ASSERT_FALSE(enabled);
+    EXPECT_EQ(enabled.error().code, ErrorCode::INVALID_DATASET);
+    auto disabled = loader->load(root, {.load_masks = false});
+    ASSERT_TRUE(disabled) << disabled.error().format();
+    EXPECT_TRUE(std::get<LoadedScene>(disabled->data).cameras.front()->mask_path().empty());
+}
+
+TEST_F(TransformsMaskTest, InvalidMaskMetadataIsRejectedBeforeCameraAssembly) {
+    const auto root = temp_dir / "invalid_mask_metadata";
+    const std::vector<nlohmann::json> invalid = {
+        nullptr, 42, true, nlohmann::json::array({"mask.png"}), nlohmann::json::object(),
+        "", std::string(4097, 'x'), std::string("mask\0.png", 9)};
+    for (const auto& mask_path : invalid) {
+        SCOPED_TRACE(mask_path.dump());
+        write_dataset(root, {{{"file_path", "images/frame.png"}, {"mask_path", mask_path}}});
+        EXPECT_THROW((void)read_transforms_cameras_and_images(root / "transforms.json"), std::runtime_error);
+    }
 }
 
 TEST_F(PythonIOTest, LoadTransformsPerFrameIntrinsics) {

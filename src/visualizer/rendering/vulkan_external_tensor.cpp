@@ -19,6 +19,15 @@
 namespace lfs::vis {
 
     namespace {
+        [[nodiscard]] lfs::Error interop_error(lfs::ErrorCode code, std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::Vulkan,
+                .user_message = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            });
+        }
+
         [[nodiscard]] std::size_t rowSize(const lfs::core::TensorShape& shape) {
             if (shape.rank() == 0) {
                 return 1;
@@ -250,22 +259,27 @@ namespace lfs::vis {
             "vulkan_external_buffer");
     }
 
-    std::expected<lfs::core::SplatTensorAllocator, std::string>
+    lfs::Result<lfs::core::SplatTensorAllocator>
     makeSplatExportableInteropAllocator(VulkanContext& context,
                                         const lfs::core::SplatExportableStorage& storage,
                                         std::shared_ptr<VulkanExternalTensorStorage>* parent_keep) {
         if (!context.externalMemoryInteropEnabled()) {
-            return std::unexpected(
-                "Vulkan external-memory interop is not enabled; cannot import exportable block");
+            return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "Vulkan external-memory interop is not enabled; cannot import exportable block"));
         }
         if (!storage.valid()) {
-            return std::unexpected("SplatExportableStorage is empty; nothing to import");
+            return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "SplatExportableStorage is empty; nothing to import"));
         }
         if (storage.block->device_ptr == nullptr || storage.block->reserved_bytes == 0) {
-            return std::unexpected(std::format(
-                "SplatExportableStorage block must expose non-null CUDA storage (device_pointer={:#x}, reserved_bytes={})",
-                reinterpret_cast<std::uintptr_t>(storage.block->device_ptr),
-                storage.block->reserved_bytes));
+            return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                lfs::ErrorCode::FailedPrecondition,
+                std::format(
+                    "SplatExportableStorage block must expose non-null CUDA storage (device_pointer={:#x}, reserved_bytes={})",
+                    reinterpret_cast<std::uintptr_t>(storage.block->device_ptr),
+                    storage.block->reserved_bytes)));
         }
         for (std::size_t i = 0; i < lfs::core::SplatExportableStorage::Count; ++i) {
             const std::size_t offset = storage.region_offsets[i];
@@ -275,12 +289,14 @@ namespace lfs::vis {
                 continue;
             if (offset > storage.block->reserved_bytes ||
                 bytes > storage.block->reserved_bytes - offset) {
-                return std::unexpected(std::format(
-                    "SplatExportableStorage region must fit inside the reserved Vulkan/CUDA block (region={}, offset={}, bytes={}, reserved_bytes={})",
-                    i,
-                    offset,
-                    bytes,
-                    storage.block->reserved_bytes));
+                return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    std::format(
+                        "SplatExportableStorage region must fit inside the reserved Vulkan/CUDA block (region={}, offset={}, bytes={}, reserved_bytes={})",
+                        i,
+                        offset,
+                        bytes,
+                        storage.block->reserved_bytes)));
             }
         }
 
@@ -288,9 +304,10 @@ namespace lfs::vis {
         if (parent_keep && *parent_keep) {
             parent = *parent_keep;
             if (!parent->bindNewExportableChunks(*storage.block)) {
-                return std::unexpected(std::format(
-                    "Vulkan bind of new exportable chunks failed: {}",
-                    context.lastError()));
+                return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                    lfs::ErrorCode::Internal,
+                    std::format("Vulkan bind of new exportable chunks failed: {}",
+                                context.lastError())));
             }
         } else {
             VulkanContext::ExternalBuffer imported{};
@@ -302,9 +319,10 @@ namespace lfs::vis {
                                                imported,
                                                "vulkan.external_tensor.alias",
                                                "exportable_splat_block")) {
-                return std::unexpected(std::format(
-                    "Vulkan import of CUDA-exported splat block failed: {}",
-                    context.lastError()));
+                return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                    lfs::ErrorCode::Internal,
+                    std::format("Vulkan import of CUDA-exported splat block failed: {}",
+                                context.lastError())));
             }
 
             parent = std::make_shared<VulkanExternalTensorStorage>(
@@ -322,9 +340,10 @@ namespace lfs::vis {
         // grow(). Sub-views pin the stable VkBuffer; bindNewChunks appends.
         auto ctrl = storage.control();
         if (!ctrl) {
-            return std::unexpected(
+            return lfs::Result<lfs::core::SplatTensorAllocator>(interop_error(
+                lfs::ErrorCode::FailedPrecondition,
                 "SplatExportableStorage control block missing; refuse by-value "
-                "interop snapshot allocator");
+                "interop snapshot allocator"));
         }
 
         // Live-control sub-views: bytes() re-resolves on every query. Offsets

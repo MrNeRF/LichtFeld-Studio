@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <format>
 #include <nanobind/stl/string.h>
 
 namespace lfs::vis::gui {
@@ -171,6 +172,7 @@ namespace lfs::vis::gui {
         assert(rml_ctx);
         try {
             auto py_ctx = lfs::python::PyRmlContext(rml_ctx);
+            LOG_TIMER_THRESHOLD(context_name_ + ".on_bind_model", 2.0);
             panel_instance_.attr("on_bind_model")(py_ctx);
             setLifecycleState(LifecycleState::ModelBound);
         } catch (const std::exception& e) {
@@ -204,6 +206,7 @@ namespace lfs::vis::gui {
         lfs::python::RmlDocumentRegistry::instance().register_document(context_name_, doc);
         try {
             auto py_doc = lfs::python::PyRmlDocument(doc);
+            LOG_TIMER_THRESHOLD(context_name_ + ".on_mount", 2.0);
             panel_instance_.attr("on_mount")(py_doc);
             content_dirty_ = true;
             setLifecycleState(LifecycleState::Mounted);
@@ -233,6 +236,8 @@ namespace lfs::vis::gui {
 
         if (isMounted() && last_language_.empty())
             last_language_ = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        last_language_generation_ =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
 
         return doc;
     }
@@ -381,7 +386,8 @@ namespace lfs::vis::gui {
         if (frame_serial != 0 && last_prepare_frame_ == frame_serial)
             return doc;
 
-        bool pending_dirty = content_dirty_ || lfs::python::consume_document_dirty(doc);
+        const bool was_content_dirty = content_dirty_;
+        bool pending_dirty = was_content_dirty || lfs::python::consume_document_dirty(doc);
         bool update_requested = lfs::python::consume_document_update_request(doc);
         const bool scene_changed = ctx && ctx->scene && ctx->scene_generation != last_scene_gen_;
         const auto now = std::chrono::steady_clock::now();
@@ -433,7 +439,14 @@ namespace lfs::vis::gui {
         if (pending_dirty && ops.mark_content_dirty)
             ops.mark_content_dirty(host_);
 
-        drawImmediateLayout(doc, ctx);
+        // A retained panel is clean when neither its host nor its Python model
+        // requested work in this frame. In that state the cached Rml surface is
+        // already authoritative, so avoid reacquiring the GIL and calling draw().
+        const bool draw_required = was_content_dirty || pending_dirty ||
+                                   update_requested || should_run_update ||
+                                   last_prepare_frame_ == 0;
+        if (draw_required)
+            drawImmediateLayout(doc, ctx);
 
         if (frame_serial != 0)
             last_prepare_frame_ = frame_serial;
@@ -549,20 +562,42 @@ namespace lfs::vis::gui {
 
     bool RmlPythonPanelAdapter::poll(const PanelDrawContext& ctx) {
         (void)ctx;
-        if (!has_poll_)
+        if (!has_poll_) {
+            poll_visible_ = true;
             return true;
-        if (!lfs::python::can_acquire_gil())
+        }
+        if (!lfs::python::can_acquire_gil()) {
+            poll_visible_ = false;
             return false;
+        }
         if (lfs::python::bridge().prepare_ui)
             lfs::python::bridge().prepare_ui();
 
         const lfs::python::GilAcquire gil;
         try {
-            return nb::cast<bool>(panel_instance_.attr("poll")(lfs::python::get_app_context()));
+            const bool result =
+                nb::cast<bool>(panel_instance_.attr("poll")(lfs::python::get_app_context()));
+            poll_visible_ = result;
+            return result;
         } catch (const std::exception& e) {
             LOG_ERROR("Panel poll error: {}", e.what());
+            poll_visible_ = false;
             return false;
         }
+    }
+
+    void RmlPythonPanelAdapter::setPollVisibility(const bool visible) {
+        poll_visible_ = visible;
+    }
+
+    bool RmlPythonPanelAdapter::isVisibleForAnimation() const {
+        return enabled_visible_ && poll_visible_;
+    }
+
+    void RmlPythonPanelAdapter::on_visibility_changed(const bool visible) {
+        enabled_visible_ = visible;
+        if (visible)
+            content_dirty_ = true;
     }
 
     void RmlPythonPanelAdapter::preload(const PanelDrawContext& ctx) {
@@ -636,9 +671,9 @@ namespace lfs::vis::gui {
         if (!host_)
             return false;
 
-        const std::string current_language =
-            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
-        if (!current_language.empty() && current_language != last_language_)
+        const auto language_generation =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
+        if (language_generation != last_language_generation_)
             return true;
 
         if (!dirty_driven_updates_) {
@@ -652,12 +687,68 @@ namespace lfs::vis::gui {
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         if (ops.get_document) {
             auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
-            if (lfs::python::is_document_dirty(doc) ||
-                lfs::python::is_document_update_requested(doc))
+            if (isVisibleForAnimation() &&
+                (lfs::python::is_document_dirty(doc) ||
+                 lfs::python::is_document_update_requested(doc)))
                 return true;
         }
 
         return ops.needs_animation ? ops.needs_animation(host_) : false;
+    }
+
+    std::string RmlPythonPanelAdapter::animationDemandDescription() const {
+        std::string result = dirty_driven_updates_
+                                 ? "policy=dirty"
+                                 : std::format("policy=interval,{}ms", update_interval_ms_);
+
+        const auto append_reason = [&result](const char* reason) {
+            result += ',';
+            result += reason;
+        };
+        if (content_dirty_)
+            append_reason("content_dirty");
+
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            const auto language_generation =
+                lfs::event::LocalizationManager::getInstance().getCurrentLanguageGeneration();
+            if (language_generation != last_language_generation_)
+                append_reason("language");
+
+            if (!dirty_driven_updates_) {
+                const auto now = std::chrono::steady_clock::now();
+                if (next_update_at_ == std::chrono::steady_clock::time_point{} ||
+                    now >= next_update_at_)
+                    append_reason("interval");
+            }
+
+            if (ops.get_document) {
+                auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+                if (lfs::python::is_document_dirty(doc))
+                    append_reason("doc_dirty");
+                if (lfs::python::is_document_update_requested(doc))
+                    append_reason("update_requested");
+            }
+
+            if (ops.needs_animation && ops.needs_animation(host_))
+                append_reason("rml_animation");
+
+            if (ops.animation_demand_description) {
+                const auto document = ops.animation_demand_description(host_);
+                if (!document.empty()) {
+                    result += ',';
+                    result += document;
+                }
+            }
+        }
+        return result;
+    }
+
+    bool RmlPythonPanelAdapter::needsImmediateAnimationFrame() const {
+        if (!host_)
+            return false;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        return ops.needs_immediate_animation && ops.needs_immediate_animation(host_);
     }
 
     std::optional<double> RmlPythonPanelAdapter::nextScheduledAnimationDelay() const {

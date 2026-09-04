@@ -102,6 +102,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/startup_overlay.cpp
         gui/rml_menu_bar.cpp
         gui/rml_right_panel.cpp
+        gui/rml_bottom_dock.cpp
         gui/rml_shell_frame.cpp
         gui/rml_viewport_overlay.cpp
         gui/vram_hud_overlay.cpp
@@ -119,6 +120,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
+        gui/selection_cursor.cpp
         gui/html_viewer_export.cpp
         gui/scene_panel_native.cpp
         gui/ui_widgets.cpp
@@ -224,11 +226,17 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 # MSVC 14.44 ICEs (C1001 in msc1.cpp:1589) on the sequencer panel TUs under
 # /std:c++latest in both Debug (/Od /RTC1) and Release (/O2 /Ob2). Pin them to
 # /std:c++23 (not "latest") and add /bigobj for the heavy tensor + RmlUI + fmt instantiations.
+# The project lifecycle and GUI manager TUs exceed the COFF section limit in Debug and need /bigobj.
 if(MSVC)
     set_source_files_properties(
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel.cpp
             ${CMAKE_CURRENT_SOURCE_DIR}/sequencer/rml_sequencer_panel_timeline.cpp
             PROPERTIES COMPILE_OPTIONS "/std:c++23;/bigobj"
+    )
+    set_source_files_properties(
+            ${CMAKE_CURRENT_SOURCE_DIR}/project/project_lifecycle.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/gui/gui_manager.cpp
+            PROPERTIES COMPILE_OPTIONS "/bigobj"
     )
 endif()
 
@@ -304,6 +312,8 @@ find_package(glslang CONFIG REQUIRED)
 add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL
         tools/shader_compiler.cpp)
 target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
+target_include_directories(lfs_shader_compiler PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(lfs_shader_compiler
         PRIVATE
         glslang::glslang
@@ -511,15 +521,25 @@ endforeach ()
 # Copy RmlUI resources (re-copy on every build so edits are picked up)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
 file(GLOB RMLUI_RESOURCE_FILES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
+set(RMLUI_ASSET_FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/rmlui/soft_shadow.png"
+)
 foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
+endforeach ()
+foreach (RMLUI_ASSET_FILE ${RMLUI_ASSET_FILES})
+    if (EXISTS ${RMLUI_ASSET_FILE} AND NOT IS_DIRECTORY ${RMLUI_ASSET_FILE})
+        get_filename_component(RMLUI_ASSET_NAME ${RMLUI_ASSET_FILE} NAME)
+        configure_file(${RMLUI_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_ASSET_NAME}" COPYONLY)
+    endif ()
 endforeach ()
 add_custom_target(copy_rmlui_resources ALL
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         ${RMLUI_RESOURCE_FILES}
+        ${RMLUI_ASSET_FILES}
         "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"
     COMMENT "Syncing RmlUI resources"
 )
@@ -532,6 +552,8 @@ foreach (LOCALE_FILE ${LOCALE_FILES})
     get_filename_component(LOCALE_NAME ${LOCALE_FILE} NAME)
     configure_file(${LOCALE_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/locales/${LOCALE_NAME}" COPYONLY)
 endforeach ()
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+        "${VISUALIZER_BUILD_RESOURCE_DIR}/locale_index.json" COPYONLY)
 
 set(LFS_VISUALIZER_DEV_RESOURCE_DEFINITIONS)
 if(LFS_DEV_IMPORT_SOURCE_RESOURCES AND NOT BUILD_PORTABLE)
@@ -578,6 +600,7 @@ if (WIN32)
             _USE_MATH_DEFINES
     )
     target_link_libraries(lfs_visualizer PRIVATE
+            Advapi32    # Read the Windows application light/dark preference
             Ole32       # OLE drag-drop (IDropTarget)
             Shell32     # SHChangeNotify (file association)
             dxgi        # DXGI per-process VRAM query
@@ -609,6 +632,9 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
         DESTINATION share/LichtFeld-Studio/locales
         FILES_MATCHING
         PATTERN "*.json"
+)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locale_index.json
+        DESTINATION share/LichtFeld-Studio
 )
 
 # Add custom target for resource files (makes them show up in IDEs)

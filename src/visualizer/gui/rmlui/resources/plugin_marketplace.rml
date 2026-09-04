@@ -86,7 +86,7 @@
 
   <!-- Uninstall confirmation overlay -->
   <div id="confirm-overlay" class="confirm-overlay hidden">
-    <div class="confirm-dialog">
+    <div id="confirm-dialog" class="confirm-dialog" tabindex="-1">
       <span class="confirm-title">@tr:plugin_manager.button.uninstall</span>
       <span id="confirm-message" class="confirm-message"></span>
       <div class="separator"></div>

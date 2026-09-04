@@ -1116,6 +1116,7 @@ void VulkanGSRenderer::initializeExternal(const std::map<std::string, std::strin
             create_optional(pipeline_macro_compose_overlays[i], "macro_compose_overlays");
         }
     }
+    createPendingComputePipelines();
 }
 
 void VulkanGSRenderer::executeMapLodIndices(const std::uint32_t lod_count,
@@ -1234,6 +1235,25 @@ void VulkanGSRenderer::executeSelectLodThreshold(const VulkanGSLodSelectUniforms
     recordLodSelectionReadback(buffers, uniforms.output_capacity);
 }
 
+_VulkanBuffer& VulkanGSRenderer::prepareOverlayFlags(
+    VulkanGSPipelineBuffers& buffers,
+    const size_t num_splats,
+    const bool write_overlay_flags) {
+    constexpr size_t kWordBytes = LFS_VK_OVERLAY_WORD_BYTES;
+    if (!write_overlay_flags) {
+        return resizeDeviceBuffer(buffers.overlay_flags, kWordBytes);
+    }
+    if (num_splats > std::numeric_limits<size_t>::max() - (kWordBytes - 1)) {
+        lfs::rendering::throw_renderer_contract(
+            "VkSplat overlay flag byte count overflows word alignment",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    // ByteAddressBuffer loads and atomic OR stores access complete words,
+    // including the final partial word and the non-empty dummy for N == 0.
+    const size_t bytes = std::max(kWordBytes, (num_splats + kWordBytes - 1) & ~(kWordBytes - 1));
+    return clearDeviceBuffer(buffers.overlay_flags, bytes);
+}
+
 void VulkanGSRenderer::executeProjectionForward(
     const VulkanGSRendererUniforms& uniforms,
     VulkanGSPipelineBuffers& buffers,
@@ -1299,8 +1319,7 @@ void VulkanGSRenderer::executeProjectionForward(
     auto& depths = resizeDeviceBuffer(buffers.depths, alloc_size);
     auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * alloc_size);
     auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * alloc_size);
-    auto& overlay_flags = resizeDeviceBuffer(
-        buffers.overlay_flags, write_overlay_flags ? alloc_size : size_t{1});
+    auto& overlay_flags = prepareOverlayFlags(buffers, alloc_size, write_overlay_flags);
     // A2: keys die after compact (L4); sort indices are born at the post-radix
     // copy (L6). Same int32 allocation, existing L5 barrier between them.
     aliasDeviceView(buffers.primitive_sort_indices.deviceBuffer, primitive_depth_keys);
@@ -1327,7 +1346,7 @@ void VulkanGSRenderer::executeProjectionForward(
         {depths, BufferUse::ComputeWrite},
         {inv_cov, BufferUse::ComputeWrite},
         {rgb, BufferUse::ComputeWrite},
-        {overlay_flags, write_overlay_flags ? BufferUse::ComputeWrite : BufferUse::ComputeRead},
+        {overlay_flags, write_overlay_flags ? BufferUse::ComputeReadWrite : BufferUse::ComputeRead},
         {transform_indices, BufferUse::ComputeRead},
         {node_mask, BufferUse::ComputeRead},
         {overlay_params, BufferUse::ComputeRead},
@@ -2650,8 +2669,7 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
     auto& depths = resizeDeviceBuffer(buffers.depths, visible_capacity);
     auto& inv_cov = resizeDeviceBuffer(buffers.inv_cov_vs_opacity, 4 * visible_capacity);
     auto& rgb = resizeDeviceBuffer(buffers.rgb, 3 * visible_capacity);
-    auto& overlay_flags = resizeDeviceBuffer(
-        buffers.overlay_flags, write_overlay_flags ? visible_capacity : size_t{1});
+    auto& overlay_flags = prepareOverlayFlags(buffers, visible_capacity, write_overlay_flags);
     auto& orig_ids = resizeDeviceBuffer(buffers.orig_ids, visible_capacity);
 
     const _VulkanBuffer lod_indices_binding =
@@ -2682,7 +2700,7 @@ void VulkanGSRenderer::executeProjectionForwardSurvivors(
         {depths, BufferUse::ComputeWrite},                          // 10
         {inv_cov, BufferUse::ComputeWrite},                         // 11
         {rgb, BufferUse::ComputeWrite},                             // 12
-        {overlay_flags, write_overlay_flags ? BufferUse::ComputeWrite
+        {overlay_flags, write_overlay_flags ? BufferUse::ComputeReadWrite
                                             : BufferUse::ComputeRead},          // 13
         {transform_indices, BufferUse::ComputeRead},                            // 14
         {node_mask, BufferUse::ComputeRead},                                    // 15

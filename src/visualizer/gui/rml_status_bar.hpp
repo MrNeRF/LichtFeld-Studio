@@ -10,6 +10,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
@@ -274,6 +275,8 @@ namespace lfs::vis::gui {
         };
 
         ModelState model_;
+        SplitViewInfo split_info_cache_;
+        std::uint64_t split_info_generation_ = 0;
         std::function<RuntimeServiceStatus()> mcp_status_provider_;
         StatusMessageState status_message_;
         GpuMemoryInfo cached_gpu_mem_;
@@ -281,6 +284,8 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point next_refresh_at_{};
         std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
         bool model_dirty_ = true;
+        bool model_animation_active_ = false;
+        bool rml_animation_active_ = false;
         bool animation_active_ = false;
         bool reactive_fps_available_ = false;
         float reactive_fps_value_ = 0.0f;

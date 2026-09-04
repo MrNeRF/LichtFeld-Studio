@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <functional>
 #include <istream>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -58,6 +59,8 @@ namespace lfs::vis {
     class VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
     class VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+    class VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
+    class VisualizerImplResetTest_TemporaryPauseRequestIsObservedAtNextSafePoint_Test;
     class VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
     class VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
     class VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -137,6 +140,21 @@ namespace lfs::training {
             float psnr = 0.0f;
             std::optional<float> ssim;
             bool used_mask = false;
+        };
+
+        struct CameraMetricsInputCacheEntry {
+            int camera_uid = -1;
+            std::filesystem::path image_path;
+            std::filesystem::path mask_path;
+            GTLoadConfigSnapshot gt_config{};
+            int mask_mode = 0;
+            bool use_alpha_as_mask = false;
+            bool invert_masks = false;
+            float mask_threshold = 0.0f;
+            bool undistort_prepared = false;
+            lfs::core::Tensor gt_image;
+            lfs::core::Tensor mask;
+            std::uint64_t last_used = 0;
         };
 
         struct ProjectSnapshotRuntimeMetrics {
@@ -250,6 +268,7 @@ namespace lfs::training {
         float get_current_loss() const { return current_loss_.load(); }
         bool fillCameraLossColors(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                   std::vector<std::array<float, 3>>& colors) const;
+        [[nodiscard]] std::uint64_t cameraLossColorGeneration() const;
 
         // just for viewer to get model
         const IStrategy& get_strategy() const { return *strategy_; }
@@ -422,6 +441,8 @@ namespace lfs::training {
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhilePausedNoWorkerTrainerCompletes_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveWhileStoppingStillBlocksUntilSnapshotPublished_Test;
+        friend class lfs::vis::VisualizerImplResetTest_SaveWhileTrainerWriterInFlightQueuesUntilCompletion_Test;
+        friend class lfs::vis::VisualizerImplResetTest_TemporaryPauseRequestIsObservedAtNextSafePoint_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsWhilePausedTrainingRoutesThroughLiveTrainer_Test;
         friend class lfs::vis::VisualizerImplResetTest_SaveAsRoutesThroughFailedTerminalSnapshotAftermath_Test;
         friend class lfs::vis::VisualizerImplResetTest_InfoSurvivesFailedTerminalSnapshotAftermath_Test;
@@ -670,6 +691,7 @@ namespace lfs::training {
             lfs::core::Tensor ema_loss_stage_cpu;
             std::vector<std::array<float, 3>> published_colors;
             std::vector<uint8_t> published_valid;
+            std::uint64_t published_generation = 0;
             mutable std::shared_mutex snapshot_mutex;
             cudaStream_t copy_stream = nullptr;
             cudaEvent_t ready_event = nullptr;
@@ -897,6 +919,9 @@ namespace lfs::training {
         mutable std::mutex active_image_loader_mutex_;
         mutable std::mutex camera_loss_heatmap_mutex_;
         mutable std::mutex gt_load_config_mutex_;
+        mutable std::mutex camera_metrics_input_cache_mutex_;
+        std::list<CameraMetricsInputCacheEntry> camera_metrics_input_cache_;
+        std::uint64_t camera_metrics_input_cache_clock_ = 0;
 
         // Control flags for thread communication
         std::atomic<bool> pause_requested_{false};

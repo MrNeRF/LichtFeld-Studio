@@ -120,9 +120,9 @@ namespace lfs::python {
             nb::object callback;
 
             void operator()(float progress, const std::string& message) const {
+                nb::gil_scoped_acquire gil;
                 if (!callback)
                     return;
-                nb::gil_scoped_acquire gil;
                 try {
                     callback(progress, message);
                 } catch (const std::exception& e) {
@@ -135,9 +135,9 @@ namespace lfs::python {
             nb::object callback;
 
             bool operator()(float progress, const std::string& stage) const {
+                nb::gil_scoped_acquire gil;
                 if (!callback)
                     return true;
-                nb::gil_scoped_acquire gil;
                 try {
                     nb::object result = callback(progress, stage);
                     if (nb::isinstance<nb::bool_>(result))
@@ -458,7 +458,7 @@ namespace lfs::python {
 
         m.def(
             "inspect_project",
-            [](const std::filesystem::path& path) {
+            [](const std::filesystem::path& path, const bool resolve_preview_fallback) {
                 project::ReaderOptions options;
                 options.allow_unsupported_inspection = true;
                 std::optional<lfs::Result<project::ProjectReader>> opened;
@@ -466,7 +466,7 @@ namespace lfs::python {
                 {
                     nb::gil_scoped_release release;
                     opened = project::ProjectReader::open(path, options);
-                    if (opened && opened->has_value() &&
+                    if (resolve_preview_fallback && opened && opened->has_value() &&
                         !(**opened).preview().has_value()) {
                         const auto& reader = **opened;
                         const auto project_uuid =
@@ -519,6 +519,7 @@ namespace lfs::python {
                 };
             },
             nb::arg("path"),
+            nb::arg("resolve_preview_fallback") = true,
             "Inspect validated .licht container metadata without reading project payloads.");
 
         nb::class_<PyLoadResult>(m, "LoadResult")
@@ -560,7 +561,11 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = loader->load(path, options);
+                io::Result<io::LoadResult> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = loader->load(path, options);
+                }
                 if (!result) {
                     throw_io_error(result.error(),
                                    std::format("Failed to load '{}'", lfs::core::path_to_utf8(path)));
@@ -591,7 +596,11 @@ namespace lfs::python {
         m.def(
             "load_point_cloud",
             [](const std::filesystem::path& path) -> nb::tuple {
-                const auto result = io::load_ply_point_cloud(path);
+                std::expected<lfs::core::PointCloud, std::string> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = io::load_ply_point_cloud(path);
+                }
                 if (!result)
                     throw lfs::Exception(lfs::make_error({
                         .code = lfs::ErrorCode::Internal,
@@ -623,7 +632,10 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = io::save_ply(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_ply(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save PLY");
             },
@@ -645,7 +657,10 @@ namespace lfs::python {
                 options.extra_attributes = parse_extra_ply_attributes(extra_attributes, path);
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
-                auto result = io::save_ply(*pc.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_ply(*pc.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save point cloud PLY");
             },
@@ -672,7 +687,10 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = io::save_sog(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_sog(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SOG");
             },
@@ -691,7 +709,10 @@ namespace lfs::python {
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
 
-                auto result = io::save_spz(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_spz(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save SPZ");
             },
@@ -709,7 +730,10 @@ namespace lfs::python {
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
 
-                auto result = io::save_usd(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_usd(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save USD");
             },
@@ -726,7 +750,10 @@ namespace lfs::python {
                 options.provenance = include_provenance ? core::make_provenance_stamp()
                                                         : core::make_minimal_provenance_stamp();
 
-                auto result = io::save_nurec_usdz(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::save_nurec_usdz(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to save NuRec USDZ");
             },
@@ -752,7 +779,10 @@ namespace lfs::python {
                     };
                 }
 
-                auto result = io::export_html(*data.data(), options);
+                auto result = [&] {
+                    nb::gil_scoped_release release;
+                    return io::export_html(*data.data(), options);
+                }();
                 if (!result)
                     throw_io_error(result.error(), "Failed to export HTML");
             },
@@ -763,7 +793,10 @@ namespace lfs::python {
 
         m.def(
             "is_dataset_path",
-            [](const std::filesystem::path& path) { return io::Loader::isDatasetPath(path); },
+            [](const std::filesystem::path& path) {
+                nb::gil_scoped_release release;
+                return io::Loader::isDatasetPath(path);
+            },
             nb::arg("path"),
             "Check if path is a dataset directory");
 

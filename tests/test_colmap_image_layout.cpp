@@ -610,6 +610,39 @@ TEST_F(ColmapImageLayoutTest, DepthDirCacheFrameNumberFallbackSkipsAmbiguousMatc
     EXPECT_FALSE(result.ambiguous());
 }
 
+TEST_F(ColmapImageLayoutTest, MaskCachePrefersRelativePathAcrossExtensionsAndRoots) {
+    const auto root = temp_dir_ / "mask_extension_priority";
+    const auto wrong_camera = root / "masks/back/frame.jpg";
+    const auto correct_camera = root / "segmentation/front/frame.png";
+    write_png(wrong_camera);
+    write_png(correct_camera);
+    const lfs::io::MaskDirCache cache(root);
+    const auto result = cache.lookup("front/frame.jpg");
+    ASSERT_TRUE(result.found());
+    EXPECT_EQ(result.path, correct_camera);
+}
+
+TEST_F(ColmapImageLayoutTest, MaskCacheRetainsUniqueBasenameFallback) {
+    const auto root = temp_dir_ / "mask_basename_fallback";
+    const auto mask = root / "masks/frame.png";
+    write_png(mask);
+    const lfs::io::MaskDirCache cache(root);
+    const auto result = cache.lookup("front/frame.jpg");
+    ASSERT_TRUE(result.found());
+    EXPECT_EQ(result.path, mask);
+}
+
+TEST_F(ColmapImageLayoutTest, MaskCachePreservesUnicodeRelativeKeys) {
+    const auto root = temp_dir_ / "unicode_mask_keys";
+    const auto relative = fs::path(u8"cam \u00e8/frame \u6d4b\u8bd5.png");
+    const auto mask = root / "masks" / relative;
+    write_png(mask);
+    const lfs::io::MaskDirCache cache(root);
+    const auto result = cache.lookup(lfs::core::path_to_utf8(relative));
+    ASSERT_TRUE(result.found());
+    EXPECT_EQ(result.path, mask);
+}
+
 TEST_F(ColmapImageLayoutTest, ResolvesDuplicateNestedImagesAndMasksByRelativePath) {
     const fs::path dataset_dir = temp_dir_ / "dataset";
     const fs::path image_a = dataset_dir / "images" / "img1" / "frame_0001.png";

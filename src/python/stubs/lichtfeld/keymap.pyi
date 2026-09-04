@@ -173,6 +173,10 @@ class Action(enum.Enum):
 
     DEPTH_ADJUST_SIZE = 85
 
+    GROUP_SELECTED_SCENE_NODES = 87
+
+    UNGROUP_SELECTED_SCENE_NODE = 88
+
     DEPTH_WINDOW_DRAG = 86
 
 class ToolMode(enum.Enum):

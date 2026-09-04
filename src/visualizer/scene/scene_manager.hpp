@@ -57,6 +57,8 @@ namespace lfs::vis {
             return content_type_ == ContentType::Empty && !scene_.hasNodes();
         }
 
+        [[nodiscard]] bool canClearScene() const;
+
         bool hasDataset() const {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return content_type_ == ContentType::Dataset;
@@ -101,6 +103,19 @@ namespace lfs::vis {
 
         // Operations - Generic splat file loading
         void loadSplatFile(const std::filesystem::path& path);
+        [[nodiscard]] std::expected<lfs::io::LoadResult, std::string> stageSplatFile(
+            const std::filesystem::path& path,
+            lfs::io::ProgressCallback progress = {},
+            lfs::io::CancelCallback cancel_requested = {});
+        [[nodiscard]] std::string attachLoadedSplatFile(const std::filesystem::path& path,
+                                                        const std::string& name_hint,
+                                                        bool is_visible,
+                                                        lfs::io::LoadResult load_result,
+                                                        bool replace_scene);
+        [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
+                                                        const std::string& name_hint,
+                                                        bool is_visible,
+                                                        lfs::io::LoadResult load_result);
         std::string addSplatFile(const std::filesystem::path& path, const std::string& name = "", bool is_visible = true);
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,
@@ -221,6 +236,9 @@ namespace lfs::vis {
         bool reparentNode(std::string node_name, std::string new_parent_name);
         bool reparentNode(core::NodeId node_id, core::NodeId new_parent_id);
         bool moveNode(core::NodeId node_id, core::NodeId new_parent_id, int index);
+        bool moveNodes(const std::vector<core::NodeId>& node_ids, core::NodeId new_parent_id, int index);
+        bool groupNodes(const std::vector<core::NodeId>& node_ids);
+        bool ungroupNode(core::NodeId node_id);
         std::string addGroupNode(const std::string& name, const std::string& parent_name = "");
         std::string addGroupNode(const std::string& name, core::NodeId parent_id);
         std::string addPlySequenceNode(const std::string& name, const std::string& parent_name = "", size_t frame_count = 0);
@@ -278,6 +296,7 @@ namespace lfs::vis {
 
         void initSelectionService();
         [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
+        void completePendingSelectionCounts() const;
 
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
                                 std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
@@ -414,6 +433,14 @@ namespace lfs::vis {
         std::jthread consolidated_compaction_thread_;
         bool consolidated_compaction_running_ = false;
         bool consolidated_compaction_pending_ = false;
+
+        mutable std::shared_ptr<const SceneRenderState> cached_render_state_;
+        mutable std::uint64_t cached_render_scene_generation_ = 0;
+        mutable std::uint64_t cached_render_selection_generation_ = 0;
+        mutable std::uint64_t cached_render_gaussian_selection_generation_ = 0;
+        mutable std::uint64_t cached_render_scene_generation_local_ = 0;
+        mutable const lfs::core::SplatData* cached_render_model_ = nullptr;
+        mutable ContentType cached_render_content_type_ = ContentType::Empty;
     };
 
 } // namespace lfs::vis

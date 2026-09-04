@@ -52,27 +52,36 @@ namespace lfs::vis {
     } // namespace
 
     void RenderingManager::setupEventHandlers() {
-        cmd::ToggleSplitView::when([this](const auto&) { handleToggleSplitView(); });
-        cmd::ToggleIndependentSplitView::when([this](const auto& event) { handleToggleIndependentSplitView(event); });
-        cmd::ToggleGTComparison::when([this](const auto&) { handleToggleGTComparison(); });
-        cmd::GoToCamView::when([this](const auto& event) { handleGoToCamView(event.cam_id); });
-        ui::SplitPositionChanged::when([this](const auto& event) { handleSplitPositionChanged(event.position); });
-        ui::RenderSettingsChanged::when([this](const auto& event) { handleRenderSettingsChanged(event); });
-        ui::WindowResized::when([this](const auto&) { handleWindowResized(); });
-        ui::WindowResizeInteraction::when([this](const auto& event) { setViewportResizeActive(event.active); });
-        ui::GridSettingsChanged::when([this](const auto& event) { handleGridSettingsChanged(event); });
-        ui::NodeSelected::when([this](const auto&) { triggerSelectionFlash(); });
-        state::TrainingStarted::when([this](const auto&) { handleTrainingStarted(); });
-        state::TrainingCompleted::when([this](const auto&) { handleTrainingCompleted(); });
-        state::SceneLoaded::when([this](const auto&) { handleSceneLoaded(); });
-        state::SceneChanged::when([this](const auto& event) { handleSceneChanged(event.mutation_flags); });
-        state::SceneCleared::when([this](const auto&) { handleSceneCleared(); });
-        cmd::SetPLYVisibility::when([this](const auto&) { handlePLYVisibilityChanged(); });
-        state::PLYAdded::when([this](const auto&) { handlePLYAdded(); });
-        state::PLYRemoved::when([this](const auto&) { handlePLYRemoved(); });
-        ui::CropBoxChanged::when([this](const auto& event) { handleCropBoxChanged(event.enabled); });
-        ui::EllipsoidChanged::when([this](const auto& event) { handleEllipsoidChanged(event.enabled); });
-        ui::PointCloudModeChanged::when([this](const auto& event) { handlePointCloudModeChanged(event); });
+        event_handlers_.subscribe<cmd::ToggleSplitView>([this](const auto&) { handleToggleSplitView(); });
+        event_handlers_.subscribe<cmd::ToggleIndependentSplitView>(
+            [this](const auto& event) { handleToggleIndependentSplitView(event); });
+        event_handlers_.subscribe<cmd::ToggleGTComparison>([this](const auto&) { handleToggleGTComparison(); });
+        event_handlers_.subscribe<cmd::GoToCamView>([this](const auto& event) { handleGoToCamView(event.cam_id); });
+        event_handlers_.subscribe<ui::SplitPositionChanged>(
+            [this](const auto& event) { handleSplitPositionChanged(event.position); });
+        event_handlers_.subscribe<ui::RenderSettingsChanged>(
+            [this](const auto& event) { handleRenderSettingsChanged(event); });
+        event_handlers_.subscribe<ui::WindowResized>([this](const auto&) { handleWindowResized(); });
+        event_handlers_.subscribe<ui::WindowResizeInteraction>(
+            [this](const auto& event) { setViewportResizeActive(event.active); });
+        event_handlers_.subscribe<ui::GridSettingsChanged>(
+            [this](const auto& event) { handleGridSettingsChanged(event); });
+        event_handlers_.subscribe<ui::NodeSelected>([this](const auto&) { triggerSelectionFlash(); });
+        event_handlers_.subscribe<state::TrainingStarted>([this](const auto&) { handleTrainingStarted(); });
+        event_handlers_.subscribe<state::TrainingCompleted>([this](const auto&) { handleTrainingCompleted(); });
+        event_handlers_.subscribe<state::SceneLoaded>([this](const auto&) { handleSceneLoaded(); });
+        event_handlers_.subscribe<state::SceneChanged>(
+            [this](const auto& event) { handleSceneChanged(event.mutation_flags); });
+        event_handlers_.subscribe<state::SceneCleared>([this](const auto&) { handleSceneCleared(); });
+        event_handlers_.subscribe<cmd::SetPLYVisibility>([this](const auto&) { handlePLYVisibilityChanged(); });
+        event_handlers_.subscribe<state::PLYAdded>([this](const auto&) { handlePLYAdded(); });
+        event_handlers_.subscribe<state::PLYRemoved>([this](const auto&) { handlePLYRemoved(); });
+        event_handlers_.subscribe<ui::CropBoxChanged>(
+            [this](const auto& event) { handleCropBoxChanged(event.enabled); });
+        event_handlers_.subscribe<ui::EllipsoidChanged>(
+            [this](const auto& event) { handleEllipsoidChanged(event.enabled); });
+        event_handlers_.subscribe<ui::PointCloudModeChanged>(
+            [this](const auto& event) { handlePointCloudModeChanged(event); });
     }
 
     void RenderingManager::handleToggleSplitView() {
@@ -233,6 +242,8 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleTrainingStarted() {
+        // The worker completion handoff only invalidates overlay state. Any
+        // renderer setup is consumed by the next render cadence tick.
         markDirty(DirtyFlag::OVERLAY);
     }
 

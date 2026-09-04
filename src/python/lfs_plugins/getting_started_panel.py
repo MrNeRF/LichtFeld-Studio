@@ -10,6 +10,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .http import urlopen
 from .types import Panel
+from .panels import panel_class
 
 __lfs_panel_classes__ = ["GettingStartedPanel"]
 __lfs_panel_ids__ = ["lfs.getting_started"]
@@ -55,18 +56,9 @@ def _download_thumbnail(video_id, on_done):
         pass
 
 
+@panel_class("getting_started")
 class GettingStartedPanel(Panel):
     """Floating panel displaying tutorial videos and documentation."""
-
-    id = "lfs.getting_started"
-    label = "Getting Started"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 99
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/getting_started.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (560, 0)
-    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None

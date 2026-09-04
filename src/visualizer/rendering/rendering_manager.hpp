@@ -6,6 +6,7 @@
 
 #include "camera_interaction_service.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "dirty_flags.hpp"
@@ -45,11 +46,14 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 #include <vulkan/vulkan.h>
 
 namespace lfs::core {
+    class Camera;
+    class Scene;
     class SplatData;
     class Tensor;
 } // namespace lfs::core
@@ -119,6 +123,7 @@ namespace lfs::vis {
             // (rideshares the existing scene-image interop). When this is set, the
             // gui-side split interop slot uploads it in parallel to the left panel.
             std::shared_ptr<const lfs::core::Tensor> split_right_image{};
+            std::uint64_t split_right_image_generation = 0;
             glm::ivec2 split_right_size{0, 0};
             bool split_right_flip_y = false;
         };
@@ -290,6 +295,7 @@ namespace lfs::vis {
 
         void advanceSplitOffset();
         SplitViewInfo getSplitViewInfo() const;
+        [[nodiscard]] std::optional<SplitViewInfo> getSplitViewInfoIfChanged(std::uint64_t& generation) const;
         [[nodiscard]] bool isSplitViewActive() const;
         [[nodiscard]] bool isGTComparisonActive() const;
         // Internal drag-preview signal for the shader-approximate live reveal; never touches
@@ -297,6 +303,8 @@ namespace lfs::vis {
         void setDepthWindowDragPreview(bool active);
         [[nodiscard]] bool depthWindowDragPreview() const;
         [[nodiscard]] bool isIndependentSplitViewActive() const;
+        [[nodiscard]] GTComparisonMode getGTComparisonMode() const;
+        [[nodiscard]] SplitViewMode getSplitViewMode() const;
         // Project restore may only enter/leave split modes through the service
         // transition path; it must never assign RenderSettings::split_view_mode.
         void restoreSplitViewMode(SplitViewMode mode,
@@ -469,7 +477,7 @@ namespace lfs::vis {
                                    lfs::core::Tensor* selection_tensor = nullptr,
                                    bool saturation_mode = false, float saturation_amount = 0.0f,
                                    std::optional<SplitViewPanelId> panel = std::nullopt,
-                                   int focused_gaussian_id = -1);
+                                   int focused_gaussian_id = -1, bool request_render = true);
         void clearCursorPreviewState();
         [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
         [[nodiscard]] std::optional<SplitViewPanelId> getCursorPreviewPanel() const {
@@ -730,11 +738,16 @@ namespace lfs::vis {
         struct GTComparisonImageJobRequest {
             uint64_t generation = 0;
             int camera_uid = -1;
+            GTComparisonMode mode = GTComparisonMode::RGB;
             std::filesystem::path image_path;
             int preview_max_dimension = 0;
             glm::ivec2 image_size{0, 0};
             bool undistort_requested = false;
             lfs::core::UndistortParams undistort_params{};
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode =
+                lfs::rendering::DepthVisualizationMode::Palette;
+            glm::vec3 background_color{0.0f};
+            std::shared_ptr<lfs::core::Camera> camera;
             std::shared_ptr<lfs::io::PipelinedImageLoader> image_loader;
             std::chrono::steady_clock::time_point queued_at{};
         };
@@ -843,10 +856,17 @@ namespace lfs::vis {
         static constexpr std::uint64_t SPLIT_LEFT_GENERATION_BIT = 1ULL << 63;
         std::uint64_t split_view_image_generation_ = 0;
         std::uint64_t split_left_image_generation_ = 0;
+        std::uint64_t split_right_image_generation_ = 0;
         const lfs::core::Tensor* split_left_source_ = nullptr;
         glm::ivec2 split_left_source_size_{0, 0};
         int split_left_source_camera_uid_ = -1;
         bool split_left_source_undistorted_ = false;
+        glm::ivec2 split_right_source_size_{0, 0};
+        cudaStream_t gt_comparison_worker_stream_ = nullptr;
+        const lfs::core::Scene* gt_camera_index_scene_ = nullptr;
+        std::uint64_t gt_camera_index_generation_ = 0;
+        std::vector<std::shared_ptr<lfs::core::Camera>> gt_camera_index_cameras_;
+        std::unordered_map<int, std::size_t> gt_camera_index_by_uid_;
         std::shared_ptr<lfs::core::Tensor> gt_comparison_cuda_image_;
         const lfs::core::Tensor* gt_comparison_cuda_source_ = nullptr;
         std::uint64_t gt_comparison_cuda_generation_ = 0;
@@ -873,9 +893,13 @@ namespace lfs::vis {
         std::optional<GTPresentedView> vulkan_gt_comparison_selection_view_;
         struct GTComparisonImageCacheEntry {
             int camera_uid = -1;
+            GTComparisonMode mode = GTComparisonMode::RGB;
             bool undistort_requested = false;
             std::filesystem::path image_path;
             glm::ivec2 image_size{0, 0};
+            lfs::rendering::DepthVisualizationMode depth_visualization_mode =
+                lfs::rendering::DepthVisualizationMode::Palette;
+            glm::vec3 background_color{0.0f};
             std::shared_ptr<lfs::core::Tensor> image;
             std::string error;
             std::chrono::steady_clock::time_point failure_time{};
@@ -941,6 +965,11 @@ namespace lfs::vis {
         std::optional<CameraMetricsOverlayState> latest_camera_metrics_;
         std::optional<CameraMetricsJobRequest> pending_camera_metrics_request_;
         std::optional<CameraMetricsJobRequest> active_camera_metrics_request_;
+        struct CameraMetricsCacheEntry {
+            CameraMetricsJobRequest request;
+            CameraMetricsOverlayState metrics;
+        };
+        std::list<CameraMetricsCacheEntry> camera_metrics_cache_;
         std::condition_variable_any camera_metrics_cv_;
         std::jthread camera_metrics_worker_;
         uint64_t camera_metrics_request_generation_ = 0;
@@ -951,6 +980,8 @@ namespace lfs::vis {
         ViewportInteractionContext viewport_interaction_context_;
 
         ViewportOverlayService viewport_overlay_service_;
+
+        lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
         friend class SceneManager;

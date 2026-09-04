@@ -2621,6 +2621,15 @@ namespace lfs::training {
         return true;
     }
 
+    std::uint64_t Trainer::cameraLossColorGeneration() const {
+        const auto heatmap = getCameraLossHeatmap();
+        if (!heatmap) {
+            return 0;
+        }
+        std::shared_lock lock(heatmap->snapshot_mutex);
+        return heatmap->published_generation;
+    }
+
     std::expected<void, std::string> Trainer::initialize_camera_loss_heatmap(
         const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras) {
         setCameraLossHeatmap(nullptr);
@@ -2749,6 +2758,7 @@ namespace lfs::training {
         std::unique_lock lock(heatmap->snapshot_mutex);
         heatmap->published_colors = std::move(colors);
         heatmap->published_valid = std::move(valid);
+        ++heatmap->published_generation;
     }
 
     void Trainer::maybe_publish_camera_loss_heatmap(const int iter, const bool force) {
@@ -3301,18 +3311,76 @@ namespace lfs::training {
             return std::unexpected("trainer is not initialized");
         }
         const auto params = getParams();
+        const auto gt_config = getGTLoadConfigSnapshot();
+        const auto image_loader = getActiveImageLoader();
+        const auto& opt_params = params.optimization;
 
-        auto inputs = load_camera_metrics_inputs(
-            camera,
-            getGTLoadConfigSnapshot(),
-            params.optimization,
-            getActiveImageLoader());
-        if (!inputs) {
-            return std::unexpected(inputs.error());
+        const auto cache_matches = [&camera, &gt_config, &opt_params](
+                                       const CameraMetricsInputCacheEntry& entry) {
+            return entry.camera_uid == camera.uid() &&
+                   entry.image_path == camera.image_path() &&
+                   entry.mask_path == camera.mask_path() &&
+                   entry.gt_config.resize_factor == gt_config.resize_factor &&
+                   entry.gt_config.max_width == gt_config.max_width &&
+                   entry.gt_config.undistort == gt_config.undistort &&
+                   entry.mask_mode == static_cast<int>(opt_params.mask_mode) &&
+                   entry.use_alpha_as_mask == opt_params.use_alpha_as_mask &&
+                   entry.invert_masks == opt_params.invert_masks &&
+                   entry.mask_threshold == opt_params.mask_threshold &&
+                   entry.undistort_prepared == camera.is_undistort_prepared() &&
+                   entry.gt_image.is_valid();
+        };
+
+        lfs::core::Tensor cached_gt_image;
+        lfs::core::Tensor cached_mask;
+        {
+            std::lock_guard lock(camera_metrics_input_cache_mutex_);
+            const auto entry = std::find_if(
+                camera_metrics_input_cache_.begin(),
+                camera_metrics_input_cache_.end(),
+                cache_matches);
+            if (entry != camera_metrics_input_cache_.end()) {
+                entry->last_used = ++camera_metrics_input_cache_clock_;
+                cached_gt_image = entry->gt_image;
+                cached_mask = entry->mask;
+            }
         }
 
-        auto gt_image = std::move(inputs->gt_image);
-        auto mask = std::move(inputs->mask);
+        if (!cached_gt_image.is_valid()) {
+            auto inputs = load_camera_metrics_inputs(
+                camera, gt_config, opt_params, image_loader);
+            if (!inputs) {
+                return std::unexpected(inputs.error());
+            }
+            cached_gt_image = inputs->gt_image;
+            cached_mask = inputs->mask;
+            std::lock_guard lock(camera_metrics_input_cache_mutex_);
+            camera_metrics_input_cache_.push_back(CameraMetricsInputCacheEntry{
+                .camera_uid = camera.uid(),
+                .image_path = camera.image_path(),
+                .mask_path = camera.mask_path(),
+                .gt_config = gt_config,
+                .mask_mode = static_cast<int>(opt_params.mask_mode),
+                .use_alpha_as_mask = opt_params.use_alpha_as_mask,
+                .invert_masks = opt_params.invert_masks,
+                .mask_threshold = opt_params.mask_threshold,
+                .undistort_prepared = camera.is_undistort_prepared(),
+                .gt_image = cached_gt_image,
+                .mask = cached_mask,
+                .last_used = ++camera_metrics_input_cache_clock_});
+            while (camera_metrics_input_cache_.size() > 4) {
+                const auto lru = std::min_element(
+                    camera_metrics_input_cache_.begin(),
+                    camera_metrics_input_cache_.end(),
+                    [](const auto& lhs, const auto& rhs) {
+                        return lhs.last_used < rhs.last_used;
+                    });
+                camera_metrics_input_cache_.erase(lru);
+            }
+        }
+
+        auto gt_image = std::move(cached_gt_image);
+        auto mask = std::move(cached_mask);
 
         if (gt_image.device() != lfs::core::Device::CUDA) {
             gt_image = gt_image.to(lfs::core::Device::CUDA);

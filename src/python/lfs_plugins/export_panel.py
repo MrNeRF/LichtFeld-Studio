@@ -11,6 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["ExportPanel"]
@@ -63,16 +64,8 @@ def _progress_format_name(fmt):
     return EXPORT_PROGRESS_FORMAT_NAMES.get(fmt, "file")
 
 
+@panel_class("export")
 class ExportPanel(Panel):
-    id = "lfs.export"
-    label = "Export"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 10
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/export_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (320, 0)
-    update_policy = "dirty"
 
     def __init__(self):
         self._format = ExportFormat.PLY
