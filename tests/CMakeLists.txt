@@ -567,6 +567,10 @@ list(APPEND TEST_SOURCES
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
 
+# test_assert_hardening.cpp includes the generated ABI header directly. Ensure
+# the build-time tripwire has run before this target starts compiling.
+add_dependencies(lichtfeld_tests lfs_core_abi_stamp)
+
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
 
@@ -581,6 +585,7 @@ set_target_properties(lichtfeld_tests PROPERTIES
 
 # Include directories
 target_include_directories(lichtfeld_tests PRIVATE
+    ${LFS_CORE_ABI_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests
@@ -894,6 +899,7 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
 set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
@@ -984,6 +990,7 @@ set_tests_properties(lichtfeld.python.fast PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "fast"
     TIMEOUT 60
+    ENVIRONMENT_MODIFICATION "CMAKE_COMMAND=set:${CMAKE_COMMAND}"
 )
 
 add_test(NAME lichtfeld.python.slow
