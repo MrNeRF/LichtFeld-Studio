@@ -935,6 +935,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_undo.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_viewport_overlay_hooks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_windows_build_preflight.py
 )
 
 set(LFS_PYTHON_SLOW_TESTS

@@ -16,6 +16,11 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Set up minimum supported Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
       - name: Test the preflight checker
         run: python3 -m unittest tests/python/test_windows_build_preflight.py
 

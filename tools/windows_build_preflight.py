@@ -48,7 +48,7 @@ SKIPPED_COMPONENTS = frozenset(
         "node_modules",
     }
 )
-INCLUDE_RE = re.compile(r'^\s*#\s*include\s*"([^"]+)"', re.MULTILINE)
+INCLUDE_RE = re.compile(r'^\s*#\s*include\s*["<]([^">]+)[">]', re.MULTILINE)
 TYPE_DEFINITION_RE = re.compile(
     r"\b(?:class|struct)\s+(?:LFS_[A-Z_]+_API\s+)?"
     r"(?P<name>[A-Za-z_]\w*)[^;{}]*\{"
@@ -382,18 +382,19 @@ def discover_changed_files(root: Path, base: str | None) -> tuple[set[Path], boo
 
     changed: set[Path] = set()
     if not force_all:
-        diff = _git(root, "diff", "--name-only", "--diff-filter=ACMRT", diff_base, "--")
+        # Treat renames as delete/add so old include spellings remain reachable.
+        diff = _git(root, "diff", "--name-only", "-z", "--no-renames", diff_base, "--")
         if diff.returncode != 0:
             force_all = True
         else:
-            for line in diff.stdout.splitlines():
-                if line.strip():
-                    changed.add((root / line.strip()).resolve())
-            untracked = _git(root, "ls-files", "--others", "--exclude-standard")
+            for path in diff.stdout.split("\0"):
+                if path:
+                    changed.add((root / path).resolve())
+            untracked = _git(root, "ls-files", "-z", "--others", "--exclude-standard")
             if untracked.returncode == 0:
-                for line in untracked.stdout.splitlines():
-                    if line.strip():
-                        changed.add((root / line.strip()).resolve())
+                for path in untracked.stdout.split("\0"):
+                    if path:
+                        changed.add((root / path).resolve())
     return changed, force_all
 
 
@@ -405,7 +406,7 @@ def _lexical_absolute(path: Path, base: Path | None = None) -> Path:
 
 def _iter_local_includes(
     root: Path, project_files: Iterable[Path]
-) -> Iterable[tuple[Path, str]]:
+) -> Iterable[tuple[Path, str, bool]]:
     grep = _git(
         root,
         "grep",
@@ -413,7 +414,7 @@ def _iter_local_includes(
         "-n",
         "-I",
         "-E",
-        r'^[[:space:]]*#[[:space:]]*include[[:space:]]*"[^"]+"',
+        r'^[[:space:]]*#[[:space:]]*include[[:space:]]*["<][^">]+[">]',
         "--",
         "src",
         "include",
@@ -427,33 +428,49 @@ def _iter_local_includes(
             source = (root / parts[0]).resolve()
             match = INCLUDE_RE.search(parts[2])
             if match is not None:
-                yield source, match.group(1)
+                yield source, match.group(1), match.group(0).endswith('"')
         return
 
     # Source archives and unit-test fixtures may have no usable Git index.
     for source in project_files:
         raw = source.read_text(encoding="utf-8", errors="replace")
-        for include in INCLUDE_RE.findall(raw):
-            yield source, include
+        for match in INCLUDE_RE.finditer(raw):
+            yield source, match.group(1), match.group(0).endswith('"')
 
 
 def build_reverse_include_graph(
-    root: Path, extra_dependencies: Iterable[Path] = ()
+    root: Path, extra_dependencies: Iterable[Path] = (), build_dir: Path | None = None
 ) -> dict[Path, set[Path]]:
     project_files = set(_iter_project_files(root, PROJECT_SOURCE_SUFFIXES))
-    dependency_files = project_files | {path.resolve() for path in extra_dependencies}
+    generated_root = (build_dir or root / "build") / "include"
+    generated_files = {
+        path.resolve() for path in generated_root.rglob("*")
+        if path.is_file() and path.suffix.lower() in HEADER_SUFFIXES
+    }
+    dependency_files = project_files | generated_files | {
+        path.resolve() for path in extra_dependencies
+    }
     suffix_index: dict[str, list[Path]] = defaultdict(list)
     for path in dependency_files:
-        relative = path.relative_to(root).as_posix().lower()
+        try:
+            relative = path.relative_to(root).as_posix().lower()
+        except ValueError:
+            # The selected build directory can live outside the checkout.
+            relative = path.relative_to(generated_root).as_posix().lower()
         parts = relative.split("/")
         for index in range(len(parts)):
             suffix_index["/".join(parts[index:])].append(path)
 
     reverse: dict[Path, set[Path]] = defaultdict(set)
-    for source, include in _iter_local_includes(root, project_files):
+    for source, include, quoted in _iter_local_includes(root, project_files):
         include_path = Path(include.replace("\\", "/"))
         direct = _lexical_absolute(source.parent / include_path)
-        resolved: Path | None = direct if direct in dependency_files else None
+        resolved: Path | None = direct if quoted and direct in dependency_files else None
+        # config.h from build/include must not alias Vulkan's private config.h.
+        # Prefer the configured header after a quoted include's local directory.
+        generated = _lexical_absolute(generated_root / include_path)
+        if resolved is None and generated in generated_files:
+            resolved = generated
         if resolved is None:
             matches = suffix_index.get(include.replace("\\", "/").lower(), [])
             if len(matches) == 1:
@@ -468,7 +485,7 @@ def _is_project_compile_command(root: Path, command: CompileCommand) -> bool:
         relative = command.file.relative_to(root)
     except ValueError:
         return False
-    return bool(relative.parts) and relative.parts[0] != "external"
+    return bool(relative.parts) and relative.parts[0] in {"src", "include", "tests"}
 
 
 def select_compile_commands(
@@ -476,6 +493,7 @@ def select_compile_commands(
     commands: Sequence[CompileCommand],
     changed: set[Path],
     force_all: bool,
+    build_dir: Path | None = None,
 ) -> list[CompileCommand]:
     cxx_commands = [
         command
@@ -490,7 +508,7 @@ def select_compile_commands(
     selected_files = {path for path in changed if path in command_files}
     changed_headers = {path for path in changed if path.suffix.lower() in HEADER_SUFFIXES}
     if changed_headers:
-        reverse = build_reverse_include_graph(root, changed_headers)
+        reverse = build_reverse_include_graph(root, changed_headers, build_dir)
         queue = deque(changed_headers)
         visited = set(changed_headers)
         while queue:
@@ -539,6 +557,25 @@ def _is_msvc_command(command: CompileCommand) -> bool:
     )
 
 
+def _windows_command_tokens(command: str) -> list[str]:
+    """Split at unquoted whitespace without unescaping CMake's Windows arguments."""
+    tokens = []
+    start = 0
+    quoted = False
+    backslashes = 0
+    for index, character in enumerate(command):
+        if character == '"' and backslashes % 2 == 0:
+            quoted = not quoted
+        if character.isspace() and not quoted:
+            if start < index:
+                tokens.append(command[start:index])
+            start = index + 1
+        backslashes = backslashes + 1 if character == "\\" else 0
+    if start < len(command):
+        tokens.append(command[start:])
+    return tokens
+
+
 def _msvc_syntax_command(command: str) -> str:
     # A syntax-only invocation creates no object for a compiler cache to store.
     # Bypass a direct sccache launcher and suppress the dependency-list stream,
@@ -551,10 +588,23 @@ def _msvc_syntax_command(command: str) -> str:
         count=1,
         flags=re.IGNORECASE,
     )
-    without_includes = re.sub(
-        r"(?i)(?<!\S)/showIncludes(?=\s|$)", "", without_launcher
-    )
-    return f"{without_includes.rstrip()} /Zs"
+    # Preserve command spelling/quoting. PCH switches can carry an attached or
+    # separate (possibly quoted) filename; a bare switch must not eat /c or /I.
+    kept = []
+    skip_argument = False
+    for argument in _windows_command_tokens(without_launcher):
+        option = argument[1:-1] if argument.startswith('"') and argument.endswith('"') else argument
+        if skip_argument:
+            skip_argument = False
+            if not option.startswith(("/", "-")):
+                continue
+        if option.lower() == "/showincludes":
+            continue
+        if re.match(r"^[-/](?:Yc|Yu|Fp)", option):
+            skip_argument = len(option) == 3
+            continue
+        kept.append(argument)
+    return " ".join([*kept, "/Zs"])
 
 
 def _run_one_syntax_check(command: CompileCommand) -> tuple[CompileCommand, int, str]:
@@ -587,86 +637,6 @@ def run_msvc_syntax_checks(
             if returncode != 0:
                 failures.append((command, returncode, output))
     return sorted(failures, key=lambda item: item[0].file.as_posix().lower())
-
-
-def generated_header_build_commands(root: Path, database: Path) -> list[list[str]]:
-    """Prepare only known header targets present in this configured CMake tree.
-
-    Older trees generate the ABI header at configure time and have no such
-    target. Use CMake's generated target inventory, not the current source, so
-    the command matches the build tree that supplied the compile database.
-    """
-
-    build_dir = database.parent
-    try:
-        cache_text = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
-        target_text = (build_dir / "CMakeFiles" / "TargetDirectories.txt").read_text(
-            encoding="utf-8"
-        )
-    except OSError as error:
-        raise ValueError(
-            "cannot read configured CMake metadata; use compile_commands.json "
-            f"in its original build directory and configure it first: {error}"
-        ) from error
-
-    cache = dict(re.findall(r"^([^#/:\n][^:\n]*):[^=\n]+=(.*)$", cache_text, re.MULTILINE))
-    source_dir = cache.get("CMAKE_HOME_DIRECTORY")
-    if not source_dir or Path(source_dir).resolve() != root.resolve():
-        raise ValueError("compile database belongs to a different CMake source tree")
-
-    targets = {
-        line.strip().replace("\\", "/").rsplit("/", 1)[-1]
-        for line in target_text.splitlines()
-    }
-    if "lfs_core_abi_stamp.dir" not in targets:
-        return []
-
-    cmake = cache.get("CMAKE_COMMAND")
-    generator = cache.get("CMAKE_GENERATOR")
-    if not cmake or not generator:
-        raise ValueError(
-            "CMake cache lacks CMAKE_COMMAND or CMAKE_GENERATOR; configure it again"
-        )
-    if generator == "Ninja Multi-Config":
-        # Its compile database can contain every configuration. Generate each
-        # separate ABI header before replaying any of those commands.
-        configurations = list(dict.fromkeys(
-            value for value in cache.get("CMAKE_CONFIGURATION_TYPES", "").split(";")
-            if value
-        ))
-        if not configurations:
-            raise ValueError(
-                "Ninja Multi-Config cache has no configurations; configure it again"
-            )
-    else:
-        # Dependencies can populate CMAKE_CONFIGURATION_TYPES even with Ninja.
-        configurations = [cache.get("CMAKE_BUILD_TYPE", "")]
-
-    result = []
-    for configuration in configurations:
-        command = [cmake, "--build", str(build_dir), "--target", "lfs_core_abi_stamp"]
-        if configuration:
-            command.extend(["--config", configuration])
-        result.append(command)
-    return result
-
-
-def prepare_generated_headers(commands: Sequence[Sequence[str]]) -> None:
-    for command in commands:
-        print(
-            "MSVC preflight: preparing generated headers: "
-            f"{subprocess.list2cmdline(command)}",
-            flush=True,
-        )
-        try:
-            result = subprocess.run(command, check=False)
-        except OSError as error:
-            raise ValueError(f"cannot prepare generated headers: {error}") from error
-        if result.returncode != 0:
-            raise ValueError(
-                f"generated-header preparation failed (exit {result.returncode}); "
-                "MSVC was not run"
-            )
 
 
 def _print_source_result(findings: Sequence[Finding]) -> None:
@@ -767,49 +737,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         changed, forced_all = discover_changed_files(root, arguments.changed_since)
 
     database = arguments.compile_commands.resolve()
-    headers_prepared = False
-    while True:
-        try:
-            commands = load_compile_commands(database)
-        except ValueError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 2
-        selected = select_compile_commands(root, commands, changed, forced_all)
+    try:
+        commands = load_compile_commands(database)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    selected = select_compile_commands(root, commands, changed, forced_all, database.parent)
 
-        if not selected:
-            print("MSVC preflight: no affected configured C/C++ translation units")
-            return 0
-        if arguments.dry_run:
-            _print_selected_compile_commands(root, selected)
-            return 0
-        if arguments.max_commands and len(selected) > arguments.max_commands:
-            print(
-                "MSVC preflight: configured replay skipped because "
-                f"{len(selected)} commands exceed the {arguments.max_commands}-command "
-                "budget; the full build remains authoritative"
-            )
-            return 0
-        if os.name != "nt":
-            print("error: configured MSVC checks require Windows", file=sys.stderr)
-            return 2
+    if not selected:
+        print("MSVC preflight: no affected configured C/C++ translation units")
+        return 0
+    if arguments.dry_run:
+        _print_selected_compile_commands(root, selected)
+        return 0
+    if arguments.max_commands and len(selected) > arguments.max_commands:
+        annotation = "::warning::" if os.environ.get("GITHUB_ACTIONS") == "true" else "warning: "
+        print(
+            annotation + "MSVC preflight: configured replay skipped because "
+            f"{len(selected)} commands exceed the {arguments.max_commands}-command "
+            "budget; the full build remains authoritative"
+        )
+        return 0
+    if os.name != "nt":
+        print("error: configured MSVC checks require Windows", file=sys.stderr)
+        return 2
 
-        supported = [command for command in selected if _is_msvc_command(command)]
-        if not supported:
-            print("error: no selected compile command invokes MSVC cl.exe", file=sys.stderr)
-            return 2
-        if headers_prepared:
-            break
-        try:
-            header_commands = generated_header_build_commands(root, database)
-            if not header_commands:
-                break
-            prepare_generated_headers(header_commands)
-        except ValueError as error:
-            print(f"error: {error}", file=sys.stderr)
-            return 1
-        # The native build tool may have regenerated CMake. Reload and reselect
-        # commands (including the work budget) before invoking the compiler.
-        headers_prepared = True
+    supported = [command for command in selected if _is_msvc_command(command)]
+    if not supported:
+        print("error: no selected compile command invokes MSVC cl.exe", file=sys.stderr)
+        return 2
 
     for command in selected:
         if not _is_msvc_command(command):
