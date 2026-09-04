@@ -12,3 +12,4 @@ Development docs in this section are organized around execution workflows rather
 - [Developer flags and diagnostics](flags)
 - [Preferences and user storage](preferences-and-user-storage)
 - [Scene reconstruction](scene-reconstruction)
+- [Offline video reconstruction contract](video-reconstruction-contract)

@@ -12,6 +12,7 @@
 #include "core/source_site.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/string_keys.hpp"
+#include "io/video/video_reconstruction.hpp"
 
 #include <algorithm>
 #include <filesystem>
@@ -135,6 +136,24 @@ namespace lfs::vis::gui {
         return makeNotification(lfs::ErrorCode::Internal, lfs::ErrorDomain::IO, lfs::Severity::Error,
                                 LOCF("runtime.video_export_failed", e.error),
                                 error_op::kExportVideo, LFS_SOURCE_SITE_CURRENT());
+    }
+
+    std::optional<lfs::ErrorNotification>
+    videoReconstructionFallbackNotification(const io::video::VideoReconstructionPlan& plan) {
+        if (!plan.fellBack())
+            return std::nullopt;
+        return makeNotification(
+            lfs::ErrorCode::Unavailable, lfs::ErrorDomain::IO, lfs::Severity::Warning,
+            LOCF(lichtfeld::Strings::Runtime::VIDEO_RECONSTRUCTION_NATIVE_FALLBACK,
+                 plan.provenance().requested_backend_id, plan.provenance().requested_preset_id),
+            error_op::kExportVideo, LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Toast, {});
+    }
+
+    lfs::ErrorNotification unsupportedVideoReconstructionVersionNotification() {
+        return makeNotification(
+            lfs::ErrorCode::Unsupported, lfs::ErrorDomain::IO, lfs::Severity::Warning,
+            LOC(lichtfeld::Strings::Runtime::VIDEO_RECONSTRUCTION_VERSION_UNSUPPORTED),
+            error_op::kOpenProject, LFS_SOURCE_SITE_CURRENT(), lfs::ErrorSurface::Toast, {});
     }
 
     std::optional<lfs::ErrorNotification>

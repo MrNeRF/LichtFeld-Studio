@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/sequencer_ui_state.hpp"
 #include "io/video/video_export_options.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
@@ -20,6 +21,30 @@
 #include <nlohmann/json.hpp>
 
 namespace {
+
+    TEST(VideoReconstructionExportRequestTest, SharedRequestSnapshotsSelectionWithoutChangingExportOptions) {
+        lfs::vis::gui::panels::SequencerUIState state;
+        const auto native = state.videoExportRequest(1920, 1080, 30, 18);
+        EXPECT_EQ(native.reconstruction_backend_id, "native");
+        EXPECT_EQ(native.reconstruction_preset_id, "native");
+        EXPECT_EQ(native.reconstruction_fallback, "abort");
+        EXPECT_TRUE(native.path.empty());
+        EXPECT_TRUE(native.include_provenance);
+
+        state.reconstruction = {.backend_id = "missing", .preset_id = "quality", .fallback = lfs::io::video::VideoReconstructionFallback::Native};
+        const auto request = state.videoExportRequest(1280, 720, 48, 22, "export.mp4", false);
+        state.reconstruction = {}; // An already queued export owns its selection snapshot.
+        EXPECT_EQ(request.reconstruction_backend_id, "missing");
+        EXPECT_EQ(request.reconstruction_preset_id, "quality");
+        EXPECT_EQ(request.reconstruction_fallback, "native");
+        EXPECT_EQ(request.width, 1280);
+        EXPECT_EQ(request.height, 720);
+        EXPECT_EQ(request.framerate, 48);
+        EXPECT_EQ(request.crf, 22);
+        EXPECT_EQ(request.path, "export.mp4");
+        EXPECT_FALSE(request.include_provenance);
+        EXPECT_EQ(state.videoExportRequest(1920, 1080, 30, 18).reconstruction_backend_id, "native");
+    }
 
     using lfs::sequencer::AnimationClip;
     using lfs::sequencer::EasingType;

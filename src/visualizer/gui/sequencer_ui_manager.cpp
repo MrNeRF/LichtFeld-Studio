@@ -1349,11 +1349,9 @@ namespace lfs::vis::gui {
         }
 
         if (panel_->consumeExportRequest() && controller_.timeline().realKeyframeCount() > 0) {
-            lfs::core::events::cmd::SequencerExportVideo{
-                .width = ui_state_.outputWidth(),
-                .height = ui_state_.outputHeight(),
-                .framerate = ui_state_.framerate,
-                .crf = ui_state_.quality}
+            ui_state_.videoExportRequest(
+                         ui_state_.outputWidth(), ui_state_.outputHeight(),
+                         ui_state_.framerate, ui_state_.quality)
                 .emit();
         }
 

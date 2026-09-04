@@ -45,10 +45,12 @@
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <functional>
 #include <future>
+#include <limits>
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
@@ -1283,6 +1285,15 @@ namespace lfs::vis::gui {
             options.height = evt.height;
             options.framerate = evt.framerate;
             options.crf = evt.crf;
+            const auto reconstruction_fallback =
+                io::video::videoReconstructionFallbackFromId(evt.reconstruction_fallback);
+            options.reconstruction = {
+                .backend_id = evt.reconstruction_backend_id,
+                .preset_id = evt.reconstruction_preset_id,
+                .fallback = reconstruction_fallback.value_or(
+                    static_cast<io::video::VideoReconstructionFallback>(
+                        std::numeric_limits<std::uint8_t>::max())),
+            };
             if (evt.include_provenance) {
                 if (const auto* const scene_manager = viewer_->getSceneManager()) {
                     options.provenance = make_gui_export_stamp(*scene_manager);
@@ -2458,6 +2469,28 @@ namespace lfs::vis::gui {
             return;
         }
 
+        const auto render_settings = rendering_manager->getSettings();
+        const auto reconstruction_plan = io::video::resolveVideoReconstructionPlan({
+            .selection = validated_options->reconstruction,
+            .output_width = validated_options->width,
+            .output_height = validated_options->height,
+            .projection = render_settings.equirectangular
+                              ? io::video::VideoReconstructionProjection::Equirectangular
+                              : io::video::VideoReconstructionProjection::Perspective,
+        });
+        if (!reconstruction_plan) {
+            LOG_ERROR(
+                "Video reconstruction plan resolution failed: issue={}, detail={}",
+                io::video::videoReconstructionResolutionIssueId(
+                    reconstruction_plan.error().issue),
+                reconstruction_plan.error().message);
+            fail_start(LOCF(
+                lichtfeld::Strings::Runtime::VIDEO_RECONSTRUCTION_SELECTION_UNAVAILABLE,
+                validated_options->reconstruction.backend_id,
+                validated_options->reconstruction.preset_id));
+            return;
+        }
+
         const auto snapshot_result = captureVideoExportSceneSnapshot(*scene_manager);
         if (!snapshot_result) {
             fail_start(snapshot_result.error());
@@ -2471,7 +2504,6 @@ namespace lfs::vis::gui {
         }
 
         const auto export_options = *validated_options;
-        const auto render_settings = rendering_manager->getSettings();
         const float duration = timeline.duration();
         const int total_frames = static_cast<int>(std::ceil(duration * export_options.framerate)) + 1;
         const int width = export_options.width;
@@ -2505,9 +2537,19 @@ namespace lfs::vis::gui {
             video_export_mesh_renderer_state_ = std::make_unique<VideoExportMeshRendererState>();
         }
 
-        LOG_INFO("Starting video export: {} frames at {}x{}", total_frames, width, height);
+        LOG_INFO(
+            "Starting video export: {} frames at {}x{}, reconstruction requested={}/{}, effective={}/{}",
+            total_frames,
+            width,
+            height,
+            reconstruction_plan->provenance().requested_backend_id,
+            reconstruction_plan->provenance().requested_preset_id,
+            reconstruction_plan->provenance().effective_backend_id,
+            reconstruction_plan->provenance().effective_preset_id);
 
         const auto job = video_export_state_.job;
+        if (auto notification = videoReconstructionFallbackNotification(*reconstruction_plan))
+            lfs::ErrorBus::instance().publish(std::move(*notification));
         video_export_state_.thread.emplace(
             [this, job, viewer = viewer_, path, export_options, total_frames, width, height,
              engine, scene_manager, rendering_manager, render_settings, start_time, time_step,

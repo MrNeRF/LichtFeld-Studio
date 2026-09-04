@@ -268,6 +268,7 @@ namespace lfs::vis {
         friend class project::ProjectLifecycle;
         friend class ::DepthWindowDragLifecycleTest;
         friend class DepthWindowGtHookTest;
+        friend class P5SessionCaptureTestAccess;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
