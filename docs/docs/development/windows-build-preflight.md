@@ -51,6 +51,25 @@ object files or link targets. Compiler-specific failures such as invalid use of
 an incomplete type belong to this authoritative configured check, not to a
 lexical Python rule.
 
+Before invoking MSVC, the tool prepares `lfs_core_abi_stamp` if that target is
+present in the configured build tree. This generates the ABI header needed by
+the app, core, and tests even on a clean build where no C++ target has run yet.
+Older configurations that generate this header during CMake configuration do
+not need this preparation step. The tool uses the CMake executable recorded in
+the cache and builds only the header target; it does not request an application
+or test build. CMake may regenerate its build files as part of that command.
+The preflight then reloads the compile database before selecting commands again.
+If preparation fails, it stops before invoking MSVC.
+
+Keep `compile_commands.json` in its original configured build directory,
+alongside `CMakeCache.txt` and `CMakeFiles/TargetDirectories.txt`. The latter is
+CMake's generated target inventory, which lets the preflight detect the ABI
+target without requiring it in older build trees. With Ninja, preparation uses
+`CMAKE_BUILD_TYPE`, including `RelWithDebInfo` and Release-only vcpkg presets.
+With [Ninja Multi-Config](https://cmake.org/cmake/help/latest/generator/Ninja%20Multi-Config.html),
+it prepares the separate ABI header for each configured configuration because
+the compile database can contain commands for all of them.
+
 Build-system-only changes do not replay every translation unit automatically:
 that would duplicate most of a full build and defeat the purpose of a fast
 preflight. Add `--all-commands` when a change to CMake options or compile
@@ -77,9 +96,9 @@ python tools/windows_build_preflight.py `
   --changed-since upstream/master
 ```
 
-Use `--dry-run` to inspect the selected translation units without invoking the
-compiler, or `--all-commands` when a complete configured C/C++ syntax pass is
-needed:
+Use `--dry-run` to inspect the selected translation units without generating
+headers or invoking the compiler, or `--all-commands` when a complete configured
+C/C++ syntax pass is needed:
 
 ```powershell
 python tools/windows_build_preflight.py `
@@ -91,6 +110,11 @@ python tools/windows_build_preflight.py `
   --compile-commands build/compile_commands.json `
   --all-commands
 ```
+
+Header preparation is also skipped for `--source-only`, when no affected
+commands are selected, or when the selected commands exceed `--max-commands`.
+The same preparation is used by local runs and the Windows and nightly CI jobs;
+no extra manual header-generation command is needed.
 
 ## Coverage boundaries
 

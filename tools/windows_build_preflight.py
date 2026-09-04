@@ -589,6 +589,86 @@ def run_msvc_syntax_checks(
     return sorted(failures, key=lambda item: item[0].file.as_posix().lower())
 
 
+def generated_header_build_commands(root: Path, database: Path) -> list[list[str]]:
+    """Prepare only known header targets present in this configured CMake tree.
+
+    Older trees generate the ABI header at configure time and have no such
+    target. Use CMake's generated target inventory, not the current source, so
+    the command matches the build tree that supplied the compile database.
+    """
+
+    build_dir = database.parent
+    try:
+        cache_text = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+        target_text = (build_dir / "CMakeFiles" / "TargetDirectories.txt").read_text(
+            encoding="utf-8"
+        )
+    except OSError as error:
+        raise ValueError(
+            "cannot read configured CMake metadata; use compile_commands.json "
+            f"in its original build directory and configure it first: {error}"
+        ) from error
+
+    cache = dict(re.findall(r"^([^#/:\n][^:\n]*):[^=\n]+=(.*)$", cache_text, re.MULTILINE))
+    source_dir = cache.get("CMAKE_HOME_DIRECTORY")
+    if not source_dir or Path(source_dir).resolve() != root.resolve():
+        raise ValueError("compile database belongs to a different CMake source tree")
+
+    targets = {
+        line.strip().replace("\\", "/").rsplit("/", 1)[-1]
+        for line in target_text.splitlines()
+    }
+    if "lfs_core_abi_stamp.dir" not in targets:
+        return []
+
+    cmake = cache.get("CMAKE_COMMAND")
+    generator = cache.get("CMAKE_GENERATOR")
+    if not cmake or not generator:
+        raise ValueError(
+            "CMake cache lacks CMAKE_COMMAND or CMAKE_GENERATOR; configure it again"
+        )
+    if generator == "Ninja Multi-Config":
+        # Its compile database can contain every configuration. Generate each
+        # separate ABI header before replaying any of those commands.
+        configurations = list(dict.fromkeys(
+            value for value in cache.get("CMAKE_CONFIGURATION_TYPES", "").split(";")
+            if value
+        ))
+        if not configurations:
+            raise ValueError(
+                "Ninja Multi-Config cache has no configurations; configure it again"
+            )
+    else:
+        # Dependencies can populate CMAKE_CONFIGURATION_TYPES even with Ninja.
+        configurations = [cache.get("CMAKE_BUILD_TYPE", "")]
+
+    result = []
+    for configuration in configurations:
+        command = [cmake, "--build", str(build_dir), "--target", "lfs_core_abi_stamp"]
+        if configuration:
+            command.extend(["--config", configuration])
+        result.append(command)
+    return result
+
+
+def prepare_generated_headers(commands: Sequence[Sequence[str]]) -> None:
+    for command in commands:
+        print(
+            "MSVC preflight: preparing generated headers: "
+            f"{subprocess.list2cmdline(command)}",
+            flush=True,
+        )
+        try:
+            result = subprocess.run(command, check=False)
+        except OSError as error:
+            raise ValueError(f"cannot prepare generated headers: {error}") from error
+        if result.returncode != 0:
+            raise ValueError(
+                f"generated-header preparation failed (exit {result.returncode}); "
+                "MSVC was not run"
+            )
+
+
 def _print_source_result(findings: Sequence[Finding]) -> None:
     if findings:
         print("Windows build source preflight failed:", file=sys.stderr)
@@ -681,53 +761,67 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.source_only or arguments.compile_commands is None:
         return 0
 
-    try:
-        commands = load_compile_commands(arguments.compile_commands.resolve())
-    except ValueError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
-
     if arguments.all_commands:
-        selected = select_compile_commands(root, commands, set(), True)
-        forced_all = True
+        changed, forced_all = set(), True
     else:
         changed, forced_all = discover_changed_files(root, arguments.changed_since)
+
+    database = arguments.compile_commands.resolve()
+    headers_prepared = False
+    while True:
+        try:
+            commands = load_compile_commands(database)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
         selected = select_compile_commands(root, commands, changed, forced_all)
 
+        if not selected:
+            print("MSVC preflight: no affected configured C/C++ translation units")
+            return 0
+        if arguments.dry_run:
+            _print_selected_compile_commands(root, selected)
+            return 0
+        if arguments.max_commands and len(selected) > arguments.max_commands:
+            print(
+                "MSVC preflight: configured replay skipped because "
+                f"{len(selected)} commands exceed the {arguments.max_commands}-command "
+                "budget; the full build remains authoritative"
+            )
+            return 0
+        if os.name != "nt":
+            print("error: configured MSVC checks require Windows", file=sys.stderr)
+            return 2
+
+        supported = [command for command in selected if _is_msvc_command(command)]
+        if not supported:
+            print("error: no selected compile command invokes MSVC cl.exe", file=sys.stderr)
+            return 2
+        if headers_prepared:
+            break
+        try:
+            header_commands = generated_header_build_commands(root, database)
+            if not header_commands:
+                break
+            prepare_generated_headers(header_commands)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        # The native build tool may have regenerated CMake. Reload and reselect
+        # commands (including the work budget) before invoking the compiler.
+        headers_prepared = True
+
+    for command in selected:
+        if not _is_msvc_command(command):
+            print(
+                "warning: skipping non-MSVC compile command for "
+                f"{_display_source_path(root, command.file)}",
+                file=sys.stderr,
+            )
     if forced_all:
         print("MSVC preflight: checking all configured C/C++ translation units")
-    elif selected:
-        print(f"MSVC preflight: checking {len(selected)} affected compile command(s)")
     else:
-        print("MSVC preflight: no affected configured C/C++ translation units")
-        return 0
-
-    if arguments.dry_run:
-        _print_selected_compile_commands(root, selected)
-        return 0
-    if arguments.max_commands and len(selected) > arguments.max_commands:
-        print(
-            "MSVC preflight: configured replay skipped because "
-            f"{len(selected)} commands exceed the {arguments.max_commands}-command "
-            "budget; the full build remains authoritative"
-        )
-        return 0
-    if os.name != "nt":
-        print("error: configured MSVC checks require Windows", file=sys.stderr)
-        return 2
-
-    unsupported = [command for command in selected if not _is_msvc_command(command)]
-    for command in unsupported:
-        print(
-            "warning: skipping non-MSVC compile command for "
-            f"{_display_source_path(root, command.file)}",
-            file=sys.stderr,
-        )
-    supported = [command for command in selected if _is_msvc_command(command)]
-    if not supported:
-        print("error: no selected compile command invokes MSVC cl.exe", file=sys.stderr)
-        return 2
-
+        print(f"MSVC preflight: checking {len(selected)} affected compile command(s)")
     _print_selected_compile_commands(root, supported)
     failures = run_msvc_syntax_checks(supported, arguments.jobs)
     if failures:
