@@ -47,6 +47,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager_events.cpp
         rendering/rendering_manager_vulkan.cpp
         rendering/rendering_manager_viewport.cpp
+        rendering/amd_fsr3_plugin.cpp
         rendering/nvidia_dlss_plugin.cpp
         rendering/scene_upscaler_registry.cpp
         rendering/scene_temporal_coordinator.cpp
@@ -70,6 +71,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/passes/vulkan_scene_dlss_depth_pass.cpp
         rendering/passes/vulkan_scene_dlss_pipeline_contract.cpp
         rendering/passes/vulkan_scene_dlss_pipeline.cpp
+        rendering/passes/vulkan_scene_fsr3_pipeline_contract.cpp
+        rendering/passes/vulkan_scene_fsr3_pipeline.cpp
         rendering/passes/vulkan_scene_depth_history_pass.cpp
         rendering/passes/vulkan_scene_temporal_resolve_pass.cpp
         rendering/passes/vulkan_scene_temporal_pipeline_contract.cpp

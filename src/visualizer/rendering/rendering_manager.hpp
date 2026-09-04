@@ -284,6 +284,7 @@ namespace lfs::vis {
         // reconstruction pipeline never receives a reduced-resolution image.
         void reportSceneUpscalerRuntimeSelection(SceneUpscalerSelection selection);
         [[nodiscard]] SceneUpscalerSelection sceneUpscalerRuntimeSelection() const;
+        [[nodiscard]] bool sceneUpscalerModeUnsupported() const;
 
         // Entering computes ortho_scale so the view at the pivot matches the current
         // lens. Leaving ortho keeps the focal length the user set.
@@ -957,6 +958,7 @@ namespace lfs::vis {
         RenderSettings settings_;
         bool depth_window_drag_preview_ = false;
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
+        bool scene_upscaler_mode_unsupported_ = false;
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         mutable std::mutex settings_mutex_;
         mutable std::mutex camera_metrics_mutex_;

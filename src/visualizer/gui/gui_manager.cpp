@@ -5377,6 +5377,8 @@ namespace lfs::vis::gui {
             const auto settings = rendering_manager->getSettings();
             params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
                                         .value_or(SceneUpscalerBackend::Native);
+            params.scene_upscaler_mode_unsupported =
+                rendering_manager->sceneUpscalerModeUnsupported();
             params.background_color = settings.background_color;
             params.grid_enabled =
                 settings.show_grid &&
@@ -5569,6 +5571,22 @@ namespace lfs::vis::gui {
                     if (validVulkanSceneDlssPipelineRequest(dlss_request))
                         params.dlss = dlss_request;
                 }
+                if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3 &&
+                    params.external_scene_image != VK_NULL_HANDLE &&
+                    params.depth_blit.external_image != VK_NULL_HANDLE) {
+                    VulkanSceneFsr3PipelineRequest fsr3_request{
+                        .temporal = *params.temporal,
+                        .color_image = params.external_scene_image,
+                        .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                        .color_generation = params.external_scene_image_generation,
+                        .depth_image = params.depth_blit.external_image,
+                        .depth_format = params.depth_blit.external_image_format,
+                        .depth_generation = params.depth_blit.external_image_generation,
+                        .quality = temporal_frame->quality,
+                    };
+                    if (validVulkanSceneFsr3PipelineRequest(fsr3_request))
+                        params.fsr3 = fsr3_request;
+                }
             }
 
             if (params.split_view.enabled) {
@@ -5686,6 +5704,35 @@ namespace lfs::vis::gui {
                     params.split_dlss[0] = make_split_dlss_request(
                         params.split_view.left, params.split_temporal[0]);
                     params.split_dlss[1] = make_split_dlss_request(
+                        params.split_view.right, params.split_temporal[1]);
+                }
+                if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3) {
+                    const auto make_split_fsr3_request =
+                        [](const VulkanSplitViewPanel& panel,
+                           const std::optional<VulkanSceneTemporalPipelineRequest>& temporal)
+                        -> std::optional<VulkanSceneFsr3PipelineRequest> {
+                        if (!temporal ||
+                            panel.external_image == VK_NULL_HANDLE ||
+                            panel.depth_image == VK_NULL_HANDLE) {
+                            return std::nullopt;
+                        }
+                        VulkanSceneFsr3PipelineRequest request{
+                            .temporal = *temporal,
+                            .color_image = panel.external_image,
+                            .color_format = VK_FORMAT_R8G8B8A8_UNORM,
+                            .color_generation = panel.external_image_generation,
+                            .depth_image = panel.depth_image,
+                            .depth_format = panel.depth_image_format,
+                            .depth_generation = panel.depth_image_generation,
+                            .quality = panel.temporal_quality,
+                        };
+                        if (!validVulkanSceneFsr3PipelineRequest(request))
+                            return std::nullopt;
+                        return request;
+                    };
+                    params.split_fsr3[0] = make_split_fsr3_request(
+                        params.split_view.left, params.split_temporal[0]);
+                    params.split_fsr3[1] = make_split_fsr3_request(
                         params.split_view.right, params.split_temporal[1]);
                 }
             }

@@ -82,7 +82,11 @@ namespace lfs::vis {
     public:
         static constexpr std::uint32_t SAMPLE_COUNT = 8;
 
-        void prepare(bool enabled, bool restart, bool allow_settle = true);
+        void prepare(bool enabled,
+                     bool restart,
+                     bool allow_settle = true,
+                     std::uint32_t settle_sample_count = SAMPLE_COUNT,
+                     std::uint32_t jitter_phase_count = 0);
         [[nodiscard]] glm::vec2 jitter() const;
         [[nodiscard]] bool completeSuccessfulFrame();
         void cancelSettle();
@@ -94,6 +98,8 @@ namespace lfs::vis {
         bool enabled_ = false;
         std::uint64_t sequence_ = 0;
         std::uint32_t remaining_ = 0;
+        std::uint32_t settle_sample_count_ = SAMPLE_COUNT;
+        std::uint32_t jitter_phase_count_ = 0;
     };
 
     struct TemporalFrameState {

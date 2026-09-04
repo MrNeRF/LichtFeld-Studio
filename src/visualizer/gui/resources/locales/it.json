@@ -790,6 +790,7 @@
     "scene_reconstruction_spatial": "Spaziale",
     "scene_reconstruction_temporal": "Temporale",
     "scene_reconstruction_nvidia_dlss": "NVIDIA DLSS",
+    "scene_reconstruction_amd_fsr3": "AMD FSR 3.1",
     "scene_reconstruction_preset": "Preset qualità",
     "scene_reconstruction_quality": "Qualità",
     "scene_reconstruction_balanced": "Bilanciato",

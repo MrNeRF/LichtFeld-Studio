@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "amd_fsr3_plugin.hpp"
 #include "core/camera.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_loader.hpp"
@@ -18,6 +19,7 @@
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering/passes/vulkan_scene_dlss_pipeline.hpp"
+#include "rendering/passes/vulkan_scene_fsr3_pipeline.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene_upscaler_registry.hpp"
@@ -58,6 +60,23 @@ namespace lfs::vis {
             if (output_extent.x <= 0 || output_extent.y <= 0)
                 return std::nullopt;
             const auto optimal = NvidiaDlssPlugin::instance().optimalSettings(
+                static_cast<std::uint32_t>(output_extent.x),
+                static_cast<std::uint32_t>(output_extent.y),
+                quality);
+            if (!optimal || optimal->render_width == 0 || optimal->render_height == 0 ||
+                optimal->render_width > static_cast<std::uint32_t>(output_extent.x) ||
+                optimal->render_height > static_cast<std::uint32_t>(output_extent.y)) {
+                return std::nullopt;
+            }
+            return glm::ivec2{static_cast<int>(optimal->render_width),
+                              static_cast<int>(optimal->render_height)};
+        }
+
+        [[nodiscard]] std::optional<glm::ivec2> amdFsr3OptimalRenderExtent(
+            const glm::ivec2 output_extent, const std::uint32_t quality) {
+            if (output_extent.x <= 0 || output_extent.y <= 0)
+                return std::nullopt;
+            const auto optimal = AmdFsr3Plugin::instance().optimalSettings(
                 static_cast<std::uint32_t>(output_extent.x),
                 static_cast<std::uint32_t>(output_extent.y),
                 quality);
@@ -1878,6 +1897,27 @@ namespace lfs::vis {
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
         const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
                                             .value_or(SceneUpscalerBackend::Native);
+        const bool temporal_split_supported =
+            !split_view_service_.isActive(frame_settings) ||
+            splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
+            splitViewUsesPLYComparison(frame_settings.split_view_mode);
+        const bool temporal_backend_requested =
+            requested_upscaler == SceneUpscalerBackend::Temporal ||
+            requested_upscaler == SceneUpscalerBackend::NvidiaDlss ||
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3;
+        const bool memory_pressure_active =
+            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
+        {
+            const bool fsr3_projection_supported =
+                requested_upscaler != SceneUpscalerBackend::AmdFsr3 ||
+                !frame_settings.orthographic;
+            std::lock_guard lock(settings_mutex_);
+            scene_upscaler_mode_unsupported_ =
+                temporal_backend_requested && !resize_result.use_interactive_render_scale &&
+                !memory_pressure_active &&
+                (!fsr3_projection_supported || frame_settings.equirectangular ||
+                 frame_settings.apply_appearance_correction || !temporal_split_supported);
+        }
         if (!scene_reconstruction_request_logged_ ||
             last_scene_reconstruction_backend_ != frame_settings.scene_upscaler ||
             last_scene_reconstruction_preset_ != frame_settings.scene_upscaler_preset) {
@@ -1914,15 +1954,13 @@ namespace lfs::vis {
         // Under an active VRAM pressure lease, halve the viewer render resolution
         // to shrink per-frame output allocation. Restored automatically once the
         // coordinator observes sustained headroom. Does not affect training.
-        const bool memory_pressure_active =
-            lfs::core::MemoryPressureCoordinator::instance().pressure_active();
         if (memory_pressure_active) {
             scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
         }
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
-        const std::uint32_t nvidia_dlss_quality =
+        const std::uint32_t vendor_quality =
             frame_settings.scene_upscaler_preset == "performance"
                 ? LFS_SCENE_UPSCALER_PLUGIN_PERFORMANCE
             : frame_settings.scene_upscaler_preset == "quality"
@@ -1934,7 +1972,20 @@ namespace lfs::vis {
             !memory_pressure_active;
         if (nvidia_dlss_optimal_query_allowed) {
             if (const auto optimal =
-                    nvidiaDlssOptimalRenderExtent(current_size, nvidia_dlss_quality)) {
+                    nvidiaDlssOptimalRenderExtent(current_size, vendor_quality)) {
+                render_size = *optimal;
+                scale = std::min(static_cast<float>(render_size.x) /
+                                     static_cast<float>(current_size.x),
+                                 static_cast<float>(render_size.y) /
+                                     static_cast<float>(current_size.y));
+            }
+        }
+        const bool amd_fsr3_optimal_query_allowed =
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3 &&
+            reconstruction_runtime_ready && !resize_result.use_interactive_render_scale &&
+            !memory_pressure_active;
+        if (amd_fsr3_optimal_query_allowed) {
+            if (const auto optimal = amdFsr3OptimalRenderExtent(current_size, vendor_quality)) {
                 render_size = *optimal;
                 scale = std::min(static_cast<float>(render_size.x) /
                                      static_cast<float>(current_size.x),
@@ -2127,22 +2178,25 @@ namespace lfs::vis {
         if (lod_transition_active) {
             frame_dirty |= DirtyFlag::CAMERA;
         }
-        const bool temporal_split_supported =
-            !split_view_service_.isActive(frame_settings) ||
-            splitViewUsesIndependentPanels(frame_settings.split_view_mode) ||
-            splitViewUsesPLYComparison(frame_settings.split_view_mode);
-        const bool temporal_backend_requested =
-            requested_upscaler == SceneUpscalerBackend::Temporal ||
-            requested_upscaler == SceneUpscalerBackend::NvidiaDlss;
         const bool dlss_output_extent_supported =
             requested_upscaler != SceneUpscalerBackend::NvidiaDlss ||
             nvidiaDlssSupportsOutputExtent(current_size);
         const bool dlss_interactive_or_pressure =
             requested_upscaler == SceneUpscalerBackend::NvidiaDlss &&
             (resize_result.use_interactive_render_scale || memory_pressure_active);
+        const bool fsr3_output_extent_supported =
+            requested_upscaler != SceneUpscalerBackend::AmdFsr3 ||
+            amdFsr3SupportsOutputExtent(current_size);
+        const bool fsr3_interactive_or_pressure =
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3 &&
+            (resize_result.use_interactive_render_scale || memory_pressure_active);
+        const bool fsr3_projection_supported =
+            requested_upscaler != SceneUpscalerBackend::AmdFsr3 ||
+            !frame_settings.orthographic;
         const bool temporal_eligible =
             temporal_backend_requested && dlss_output_extent_supported &&
-            !dlss_interactive_or_pressure &&
+            fsr3_output_extent_supported && !dlss_interactive_or_pressure &&
+            !fsr3_interactive_or_pressure && fsr3_projection_supported &&
             !frame_settings.equirectangular && !frame_settings.apply_appearance_correction &&
             temporal_split_supported &&
             lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
@@ -2150,10 +2204,39 @@ namespace lfs::vis {
             training_refresh_dirty != 0 && independently_dirty_temporal_sources == 0;
         const bool allow_temporal_settle =
             !training_refresh_only && !lod_results_ready && !lod_transition_active;
+        std::uint32_t fsr3_jitter_phase_count =
+            requested_upscaler == SceneUpscalerBackend::AmdFsr3
+                ? amdFsr3JitterPhaseCount(render_size.x, current_size.x)
+                : 0u;
+        if (amd_fsr3_optimal_query_allowed &&
+            split_view_service_.isIndependentDualActive(frame_settings)) {
+            const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
+            const auto output_layouts =
+                split_view_service_.panelLayouts(frame_settings, current_size.x);
+            if (layouts && output_layouts && render_size.x > 1 && current_size.x > 1) {
+                const auto panel_render_width = [&](const std::size_t index) {
+                    const int proportional_width = std::max((*layouts)[index].width, 1);
+                    const glm::ivec2 panel_output{
+                        std::max((*output_layouts)[index].width, 1), current_size.y};
+                    return amdFsr3OptimalRenderExtent(panel_output, vendor_quality)
+                        .value_or(glm::ivec2{proportional_width, render_size.y})
+                        .x;
+                };
+                fsr3_jitter_phase_count = amdFsr3SplitJitterPhaseCount(
+                    panel_render_width(0),
+                    std::max((*output_layouts)[0].width, 1),
+                    panel_render_width(1),
+                    std::max((*output_layouts)[1].width, 1));
+            }
+        }
         temporal_convergence_.prepare(
             temporal_eligible,
             (frame_dirty & temporal_source_dirty) != 0,
-            allow_temporal_settle);
+            allow_temporal_settle,
+            fsr3_jitter_phase_count > 0
+                ? fsr3_jitter_phase_count
+                : TemporalConvergenceController::SAMPLE_COUNT,
+            fsr3_jitter_phase_count);
         glm::vec2 applied_temporal_jitter_pixels = temporal_convergence_.jitter();
         if (temporal_backend_requested &&
             (reported_upscaler.requested != requested_upscaler ||
@@ -3531,11 +3614,16 @@ namespace lfs::vis {
                     [&](const std::size_t index) -> glm::ivec2 {
                     const glm::ivec2 proportional{std::max((*layouts)[index].width, 1),
                                                   render_size.y};
-                    if (!nvidia_dlss_optimal_query_allowed)
+                    if (!nvidia_dlss_optimal_query_allowed &&
+                        !amd_fsr3_optimal_query_allowed)
                         return proportional;
                     const glm::ivec2 panel_output{std::max((*output_layouts)[index].width, 1),
                                                   current_size.y};
-                    return nvidiaDlssOptimalRenderExtent(panel_output, nvidia_dlss_quality)
+                    if (nvidia_dlss_optimal_query_allowed) {
+                        return nvidiaDlssOptimalRenderExtent(panel_output, vendor_quality)
+                            .value_or(proportional);
+                    }
+                    return amdFsr3OptimalRenderExtent(panel_output, vendor_quality)
                         .value_or(proportional);
                 };
                 auto left = render_panel_image(

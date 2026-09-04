@@ -7,6 +7,7 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/amd_fsr3_plugin.hpp"
 #include "rendering/nvidia_dlss_plugin.hpp"
 #include "rendering/output_image_pool.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -247,6 +248,10 @@ namespace lfs::vis {
         bool dlss_pipeline_initialized = false;
         bool dlss_resources_active = false;
         bool dlss_failure_latched = false;
+        VulkanSceneFsr3Pipeline fsr3_pipeline;
+        bool fsr3_pipeline_initialized = false;
+        bool fsr3_resources_active = false;
+        bool fsr3_failure_latched = false;
 
         VkDescriptorSetLayout grid_descriptor_layout = VK_NULL_HANDLE;
         VkDescriptorPool grid_descriptor_pool = VK_NULL_HANDLE;
@@ -271,6 +276,7 @@ namespace lfs::vis {
         std::optional<SceneUpscalerSelection> logged_scene_upscaler_selection;
         std::string temporal_failure;
         std::string dlss_failure;
+        std::string fsr3_failure;
         VkPipelineLayout vignette_pipeline_layout = VK_NULL_HANDLE;
         VkPipeline vignette_pipeline = VK_NULL_HANDLE;
         VkPipelineLayout grid_pipeline_layout = VK_NULL_HANDLE;
@@ -2047,10 +2053,21 @@ namespace lfs::vis {
             scene_image_uploader.upload(params, frame.scene_descriptor_set);
         }
 
+        [[nodiscard]] SceneUpscalerFallback sceneUpscalerFallback(
+            const VulkanViewportPassParams& params,
+            const bool runtime_failure = false) const noexcept {
+            return params.scene_upscaler_mode_unsupported && !runtime_failure
+                       ? SceneUpscalerFallback::UnsupportedMode
+                       : SceneUpscalerFallback::RuntimeUnavailable;
+        }
+
         void updateSceneUpscalerSelection(const SceneUpscalerBackend requested,
                                           const bool runtime_available,
-                                          const bool log_fallback_transition = true) {
-            scene_upscaler_selection = resolveSceneUpscalerSelection(requested, runtime_available);
+                                          const bool log_fallback_transition = true,
+                                          const SceneUpscalerFallback fallback =
+                                              SceneUpscalerFallback::RuntimeUnavailable) {
+            scene_upscaler_selection = resolveSceneUpscalerSelection(
+                requested, runtime_available, fallback);
             auto& profiler = lfs::diagnostics::VramProfiler::instance();
             profiler.setGauge("viewer.upscaler.requested",
                               static_cast<double>(scene_upscaler_selection.requested));
@@ -2100,6 +2117,20 @@ namespace lfs::vis {
 
         void clearDlssFailure() {
             dlss_failure.clear();
+        }
+
+        void reportFsr3Failure(std::string reason) {
+            const auto plugin_diagnostic = AmdFsr3Plugin::instance().diagnostic();
+            if (!plugin_diagnostic.empty())
+                reason += std::format(": {}", plugin_diagnostic);
+            if (fsr3_failure == reason)
+                return;
+            fsr3_failure = std::move(reason);
+            LOG_WARN("AMD FSR 3.1 reconstruction unavailable: {}", fsr3_failure);
+        }
+
+        void clearFsr3Failure() {
+            fsr3_failure.clear();
         }
 
         [[nodiscard]] static std::string_view temporalStatusName(
@@ -2156,6 +2187,37 @@ namespace lfs::vis {
             return "unknown";
         }
 
+        [[nodiscard]] static std::string_view fsr3StatusName(
+            const VulkanSceneFsr3PipelineStatus status) {
+            switch (status) {
+            case VulkanSceneFsr3PipelineStatus::Inactive:
+                return "inactive";
+            case VulkanSceneFsr3PipelineStatus::Resolved:
+                return "resolved";
+            case VulkanSceneFsr3PipelineStatus::InvalidRequest:
+                return "invalid-request";
+            case VulkanSceneFsr3PipelineStatus::RuntimeUnavailable:
+                return "runtime-unavailable";
+            case VulkanSceneFsr3PipelineStatus::MotionUnavailable:
+                return "motion-unavailable";
+            case VulkanSceneFsr3PipelineStatus::MotionFailure:
+                return "motion-failure";
+            case VulkanSceneFsr3PipelineStatus::DepthUnavailable:
+                return "depth-unavailable";
+            case VulkanSceneFsr3PipelineStatus::DepthFailure:
+                return "depth-failure";
+            case VulkanSceneFsr3PipelineStatus::OutputFailure:
+                return "output-failure";
+            case VulkanSceneFsr3PipelineStatus::FeatureFailure:
+                return "feature-failure";
+            case VulkanSceneFsr3PipelineStatus::EvaluateFailure:
+                return "evaluate-failure";
+            case VulkanSceneFsr3PipelineStatus::CommitFailure:
+                return "commit-failure";
+            }
+            return "unknown";
+        }
+
         [[nodiscard]] bool hasPreRenderWork(const VulkanViewportPassParams& params) const {
             if (params.scene_upscaler == SceneUpscalerBackend::Temporal) {
                 if (params.split_view.enabled) {
@@ -2167,18 +2229,31 @@ namespace lfs::vis {
                 return params.temporal.has_value() &&
                        validVulkanSceneTemporalPipelineRequest(*params.temporal);
             }
-            if (params.scene_upscaler != SceneUpscalerBackend::NvidiaDlss ||
-                dlss_failure_latched) {
-                return false;
+            if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss) {
+                if (dlss_failure_latched)
+                    return false;
+                if (params.split_view.enabled) {
+                    return params.split_dlss[0].has_value() &&
+                           params.split_dlss[1].has_value() &&
+                           validVulkanSceneDlssPipelineRequest(*params.split_dlss[0]) &&
+                           validVulkanSceneDlssPipelineRequest(*params.split_dlss[1]);
+                }
+                return params.dlss.has_value() &&
+                       validVulkanSceneDlssPipelineRequest(*params.dlss);
             }
-            if (params.split_view.enabled) {
-                return params.split_dlss[0].has_value() &&
-                       params.split_dlss[1].has_value() &&
-                       validVulkanSceneDlssPipelineRequest(*params.split_dlss[0]) &&
-                       validVulkanSceneDlssPipelineRequest(*params.split_dlss[1]);
+            if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3) {
+                if (fsr3_failure_latched)
+                    return false;
+                if (params.split_view.enabled) {
+                    return params.split_fsr3[0].has_value() &&
+                           params.split_fsr3[1].has_value() &&
+                           validVulkanSceneFsr3PipelineRequest(*params.split_fsr3[0]) &&
+                           validVulkanSceneFsr3PipelineRequest(*params.split_fsr3[1]);
+                }
+                return params.fsr3.has_value() &&
+                       validVulkanSceneFsr3PipelineRequest(*params.fsr3);
             }
-            return params.dlss.has_value() &&
-                   validVulkanSceneDlssPipelineRequest(*params.dlss);
+            return false;
         }
 
         void releaseTemporalHistory() {
@@ -2208,6 +2283,19 @@ namespace lfs::vis {
             dlss_resources_active = false;
         }
 
+        void releaseFsr3Resources() {
+            if (!fsr3_pipeline_initialized || !fsr3_resources_active)
+                return;
+            if (context != nullptr && !context->waitForSubmittedFrames()) {
+                fsr3_pipeline.resetAll(TemporalResetReason::HistoryDisabled);
+                LOG_WARN("AMD FSR 3.1 resources could not be released after leaving FSR: {}",
+                         context->lastError());
+                return;
+            }
+            fsr3_pipeline.releaseResources();
+            fsr3_resources_active = false;
+        }
+
         [[nodiscard]] bool recordPreRenderWork(const VkCommandBuffer command_buffer,
                                                const VulkanViewportPassParams& params) {
             if (!hasPreRenderWork(params)) {
@@ -2224,12 +2312,35 @@ namespace lfs::vis {
                         reportDlssFailure("request contract is invalid");
                     }
                     updateSceneUpscalerSelection(
-                        params.scene_upscaler, false, invalid_request);
+                        params.scene_upscaler,
+                        false,
+                        invalid_request,
+                        sceneUpscalerFallback(params, invalid_request || dlss_failure_latched));
+                    return false;
+                } else if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3) {
+                    const bool invalid_request = !fsr3_failure_latched &&
+                                                 (params.fsr3.has_value() ||
+                                                  params.split_fsr3[0].has_value() ||
+                                                  params.split_fsr3[1].has_value());
+                    if (invalid_request) {
+                        fsr3_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                        fsr3_failure_latched = true;
+                        reportFsr3Failure("request contract is invalid");
+                    }
+                    updateSceneUpscalerSelection(
+                        params.scene_upscaler,
+                        false,
+                        invalid_request,
+                        sceneUpscalerFallback(params, invalid_request || fsr3_failure_latched));
                     return false;
                 } else {
                     releaseTemporalHistory();
                 }
-                updateSceneUpscalerSelection(params.scene_upscaler, false);
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    true,
+                    sceneUpscalerFallback(params));
                 return false;
             }
 
@@ -2304,6 +2415,77 @@ namespace lfs::vis {
                 return true;
             }
 
+            if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3) {
+                if (!fsr3_pipeline_initialized)
+                    fsr3_pipeline_initialized = fsr3_pipeline.init(*context);
+                if (!fsr3_pipeline_initialized) {
+                    fsr3_failure_latched = true;
+                    reportFsr3Failure("pipeline initialization failed");
+                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                    return false;
+                }
+
+                fsr3_resources_active = true;
+                auto& frame = resourcesForFrame(params.frame_slot);
+                if (params.split_view.enabled) {
+                    const auto left = fsr3_pipeline.record(command_buffer, *params.split_fsr3[0]);
+                    const auto right = fsr3_pipeline.record(command_buffer, *params.split_fsr3[1]);
+                    if (!left.resolved() || !right.resolved()) {
+                        fsr3_pipeline.reset(TemporalViewId::SplitLeft,
+                                            TemporalResetReason::ResolveFailure);
+                        fsr3_pipeline.reset(TemporalViewId::SplitRight,
+                                            TemporalResetReason::ResolveFailure);
+                        fsr3_failure_latched = true;
+                        reportFsr3Failure(std::format(
+                            "split pipeline status left={} right={}",
+                            fsr3StatusName(left.status),
+                            fsr3StatusName(right.status)));
+                        updateSceneUpscalerSelection(params.scene_upscaler, false);
+                        return false;
+                    }
+                    frame.effective_split_view = params.split_view;
+                    frame.effective_split_view.left.external_image_view = left.output_view;
+                    frame.effective_split_view.left.external_image_layout = left.output_layout;
+                    frame.effective_split_view.left.external_image_generation = left.sequence;
+                    frame.effective_split_view.left.uv_scale = {1.0f, 1.0f};
+                    frame.effective_split_view.left.uv_clamp_max = {1.0f, 1.0f};
+                    frame.effective_split_view.left.spatial_filter = false;
+                    frame.effective_split_view.right.external_image_view = right.output_view;
+                    frame.effective_split_view.right.external_image_layout = right.output_layout;
+                    frame.effective_split_view.right.external_image_generation = right.sequence;
+                    frame.effective_split_view.right.uv_scale = {1.0f, 1.0f};
+                    frame.effective_split_view.right.uv_clamp_max = {1.0f, 1.0f};
+                    frame.effective_split_view.right.spatial_filter = false;
+                    split_view_pass.prepare(frame.effective_split_view, params.frame_slot);
+                    frame.temporal_split_presentation = true;
+                    clearFsr3Failure();
+                    updateSceneUpscalerSelection(params.scene_upscaler, true);
+                    return true;
+                }
+
+                const auto result = fsr3_pipeline.record(command_buffer, *params.fsr3);
+                if (!result.resolved()) {
+                    fsr3_failure_latched = true;
+                    reportFsr3Failure(
+                        std::format("pipeline status {}", fsr3StatusName(result.status)));
+                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                    return false;
+                }
+                if (!scene_image_uploader.bindPresentationView(frame.scene_descriptor_set,
+                                                               result.output_view,
+                                                               result.output_layout)) {
+                    fsr3_pipeline.reset(result.view, TemporalResetReason::ResolveFailure);
+                    fsr3_failure_latched = true;
+                    reportFsr3Failure("presentation descriptor bind failed");
+                    updateSceneUpscalerSelection(params.scene_upscaler, false);
+                    return false;
+                }
+                frame.temporal_presentation = true;
+                clearFsr3Failure();
+                updateSceneUpscalerSelection(params.scene_upscaler, true);
+                return true;
+            }
+
             if (!temporal_pipeline_initialized) {
                 temporal_pipeline_initialized = temporal_pipeline.init(*context);
             }
@@ -2374,10 +2556,14 @@ namespace lfs::vis {
                 releaseTemporalHistory();
             if (params.scene_upscaler != SceneUpscalerBackend::NvidiaDlss)
                 releaseDlssResources();
+            if (params.scene_upscaler != SceneUpscalerBackend::AmdFsr3)
+                releaseFsr3Resources();
             if (params.scene_upscaler == SceneUpscalerBackend::Native) {
                 scene_spatial_pipeline_failed = false;
                 dlss_failure_latched = false;
+                fsr3_failure_latched = false;
                 clearDlssFailure();
+                clearFsr3Failure();
             } else if (params.scene_upscaler == SceneUpscalerBackend::Spatial) {
                 static_cast<void>(ensureSpatialScenePipeline());
             }
@@ -2441,7 +2627,11 @@ namespace lfs::vis {
                 // frame (at startup and for one frame after a backend transition). Keep the
                 // effective native fallback observable without reporting expected warm-up as
                 // an unavailable backend. Invalid requests and pipeline failures remain noisy.
-                updateSceneUpscalerSelection(params.scene_upscaler, false, invalid_request);
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request));
                 return;
             }
             if (params.scene_upscaler == SceneUpscalerBackend::NvidiaDlss &&
@@ -2463,7 +2653,35 @@ namespace lfs::vis {
                 // Keep the expected warm-up fallback quiet; malformed requests and runtime
                 // failures are latched until the user explicitly selects Native and retries.
                 updateSceneUpscalerSelection(
-                    params.scene_upscaler, false, invalid_request);
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request || dlss_failure_latched));
+                return;
+            }
+            if (params.scene_upscaler == SceneUpscalerBackend::AmdFsr3 &&
+                !hasPreRenderWork(params)) {
+                const bool invalid_request = !fsr3_failure_latched &&
+                                             (params.split_view.enabled
+                                                  ? ((params.split_fsr3[0] &&
+                                                      !validVulkanSceneFsr3PipelineRequest(*params.split_fsr3[0])) ||
+                                                     (params.split_fsr3[1] &&
+                                                      !validVulkanSceneFsr3PipelineRequest(*params.split_fsr3[1])))
+                                                  : (params.fsr3 &&
+                                                     !validVulkanSceneFsr3PipelineRequest(*params.fsr3)));
+                if (invalid_request) {
+                    fsr3_pipeline.resetAll(TemporalResetReason::InvalidInput);
+                    fsr3_failure_latched = true;
+                    reportFsr3Failure("request contract is invalid");
+                }
+                // Valid FSR selections can also precede the first paired color/depth frame.
+                // Keep warm-up quiet and latch malformed/runtime failures until an explicit
+                // Native -> AMD FSR 3.1 retry.
+                updateSceneUpscalerSelection(
+                    params.scene_upscaler,
+                    false,
+                    invalid_request,
+                    sceneUpscalerFallback(params, invalid_request || fsr3_failure_latched));
                 return;
             }
             const auto runtime_available = [&]() -> std::optional<bool> {
@@ -2476,6 +2694,7 @@ namespace lfs::vis {
                                : scene_spatial_pipeline != VK_NULL_HANDLE;
                 case SceneUpscalerBackend::Temporal:
                 case SceneUpscalerBackend::NvidiaDlss:
+                case SceneUpscalerBackend::AmdFsr3:
                     return std::nullopt;
                 }
                 return false;
@@ -3102,6 +3321,7 @@ namespace lfs::vis {
                 }
                 temporal_pipeline.shutdown();
                 dlss_pipeline.shutdown();
+                fsr3_pipeline.shutdown();
                 scene_image_uploader.shutdown();
                 mesh_pass.shutdown();
                 environment_pass.shutdown();
