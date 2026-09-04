@@ -58,7 +58,7 @@ class PluginSettings:
                     delete=False,
                 ) as f:
                     temp_path = Path(f.name)
-                    json.dump(self._data, f, indent=2)
+                    json.dump(self._data, f, indent=2, ensure_ascii=False)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(temp_path, self._file)

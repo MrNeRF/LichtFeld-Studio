@@ -230,7 +230,7 @@ class SplatLodHierarchy:
         output_path = Path(path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(self.to_dict(), handle, indent=2)
+            json.dump(self.to_dict(), handle, indent=2, ensure_ascii=False)
         return str(output_path)
 
     def save_ply_levels(
