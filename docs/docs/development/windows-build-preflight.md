@@ -32,19 +32,24 @@ In particular, `tests/test_project_lifecycle.cpp` and
 `capturePanelCameraProjectState` is not detected by this source-only rule.
 The Windows link step is still needed to catch that missing export.
 
-Run the checker self-tests after changing its matching rules:
+Run the checker self-tests after changing its matching rules. The shader-target
+regression fixture additionally needs CMake and Ninja. It
+uses a project with no enabled compiler languages and a simulated header
+generator; it does not build LichtFeld or compile C++, CUDA, or GLSL.
 
 ```sh
-python -m unittest tests/python/test_windows_build_preflight.py
+python -m unittest tests/python/test_windows_build_preflight.py tests/python/test_shader_header_target.py
 ```
 
 ## Configured MSVC check
 
 For compiler-level coverage, first configure the normal Ninja/MSVC build so
 that `compile_commands.json` exists. From the same Visual Studio developer
-environment used for the build, run:
+environment used for the build, prepare the generated shader headers and then
+run the checker:
 
 ```powershell
+cmake --build build --target lfs_shader_headers --config Release -j 4
 python tools/windows_build_preflight.py `
   --compile-commands build/compile_commands.json `
   --changed-since upstream/master
@@ -63,11 +68,23 @@ include index also considers headers under that directory's `include/`, so the
 generated `config.h` does not alias Vulkan's private header of the same name.
 Only project and generated headers are resolved; system headers are excluded.
 Deleted headers and both sides of a rename participate in change discovery.
+Changed paths are limited to `src/`, `include/`, and `tests/`, and the selected
+compile database's build directory is excluded, even if it is named `b/` or
+located under a source directory. Generated files remain available to resolve
+includes but do not count as source edits.
 
-Configuration must already have generated headers needed by the selected
-commands, including the ABI stamp for each configuration. The preflight reads
-the compile database and existing headers; it does not configure CMake or run
-build targets. Syntax-only replay bypasses `sccache` and removes `/showIncludes`,
+Configuration provides the ABI stamp and configuration headers. Shader headers
+such as `viewport/frustum.vert.spv.h` are build outputs: `lfs_shader_headers`
+runs their existing CMake dependencies, including the shader compiler helper,
+without building the visualizer or application. Use the configuration matching
+the compile database; for a multi-config database, prepare each configuration
+that will be replayed. The normal Windows and nightly CI workflows run this
+prerequisite before the configured preflight and stop if generation fails.
+An unchanged header is reused by the subsequent full build.
+
+The Python checker itself reads the compile database and existing headers; it
+does not configure CMake, parse its cache, or run build targets. Syntax-only
+replay bypasses `sccache` and removes `/showIncludes`,
 `/Yc`, `/Yu`, and `/Fp` (including PCH filenames). It does not require a PCH build.
 
 Build-system-only changes do not replay every translation unit automatically:
@@ -98,6 +115,7 @@ paths.
 Use the portable build directory to check portable compile definitions:
 
 ```powershell
+cmake --build build-portable --target lfs_shader_headers --config Release -j 4
 python tools/windows_build_preflight.py `
   --compile-commands build-portable/compile_commands.json `
   --changed-since upstream/master

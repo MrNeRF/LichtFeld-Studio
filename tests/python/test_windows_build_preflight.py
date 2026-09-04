@@ -460,7 +460,7 @@ class GitDiscoveryTests(unittest.TestCase):
     def test_pr_merge_base_does_not_replay_new_master_sources(self):
         old_base = self.git("rev-parse", "HEAD")
         self.git("checkout", "-b", "feature")
-        cmake = self.write("CMakeLists.txt", "# PR changes only build files\n")
+        self.write("CMakeLists.txt", "# PR changes only build files\n")
         self.commit("feature build change")
         self.git("checkout", "master")
         self.source.write_text("int added_on_master;\n", encoding="utf-8")
@@ -473,9 +473,101 @@ class GitDiscoveryTests(unittest.TestCase):
                              {"GITHUB_ACTIONS": "true", "LFS_PREFLIGHT_BASE": "HEAD^1"}):
             changed, forced = preflight.discover_changed_files(self.root, None)
         self.assertFalse(forced)
-        self.assertEqual({cmake}, changed)
+        self.assertEqual(set(), changed)
         self.assertEqual([], preflight.select_compile_commands(
             self.root, self.commands, changed, forced))
+
+    def test_ci_build_outputs_do_not_select_unchanged_shader_consumer(self):
+        self.source.write_text(
+            '#include "config.h"\n#include "viewport/frustum.vert.spv.h"\n',
+            encoding="utf-8",
+        )
+        self.commit("unchanged shader consumer")
+        self.git("checkout", "-b", "feature")
+        self.write("CMakeLists.txt", "# PR only changes build files\n")
+        self.commit("build-only PR")
+        self.git("checkout", "master")
+        self.git("merge", "--no-ff", "feature", "-m", "PR merge checkout")
+        # Reproduce the CI binary directory, which is not excluded by build*/.
+        build = self.root / "b"
+        self.write("b/include/config.h", "#define CONFIGURED 1\n")
+        self.write("b/include/git_version.h", "#define VERSION 1\n")
+        self.write("b/include/lfs_core_abi_stamp.h", "#define ABI 1\n")
+        self.write("other-output/include/config.h", "// another build\n")
+        database = self.write("b/compile_commands.json", json.dumps([{
+            "file": str(self.source), "directory": str(build),
+            "command": "cl.exe /c sample.cpp",
+        }]))
+        output = StringIO()
+        with redirect_stdout(output), mock.patch.object(
+            preflight, "run_msvc_syntax_checks"
+        ) as replay:
+            result = preflight.main([
+                "--root", str(self.root), "--skip-source-checks",
+                "--compile-commands", str(database), "--changed-since", "HEAD^1",
+            ])
+        self.assertEqual(0, result)
+        self.assertIn("no affected configured", output.getvalue())
+        replay.assert_not_called()
+
+    def test_untracked_project_sources_survive_build_output_filter(self):
+        added_header = self.write("src/core/include/core/new.hpp", "// new\n")
+        added_source = self.write("src/app/new.cpp", '#include "core/new.hpp"\n')
+        added_test = self.write("tests/new.cpp", '#include "core/new.hpp"\n')
+        self.write("scratch/include/config.h", "// generated\n")
+        changed, forced = preflight.discover_changed_files(
+            self.root, "HEAD", self.root / "scratch"
+        )
+        self.assertFalse(forced)
+        self.assertEqual({added_header, added_source, added_test}, changed)
+        commands = [preflight.CompileCommand(path, self.root, "cl.exe /c file.cpp")
+                    for path in (added_source, added_test)]
+        self.assertEqual(commands, preflight.select_compile_commands(
+            self.root, commands, changed, forced, self.root / "scratch"))
+
+    def test_tracked_changes_outside_project_roots_are_excluded(self):
+        paths = [self.write(path, "// baseline\n") for path in
+                 ("cmake/template.h", "docs/example.hpp", "external/vendor.hpp")]
+        self.commit("tracked non-project headers")
+        for path in paths:
+            path.write_text("// changed\n", encoding="utf-8")
+        self.header.write_text("// project edit\n", encoding="utf-8")
+        changed, forced = preflight.discover_changed_files(self.root, "HEAD", self.root / "b")
+        self.assertFalse(forced)
+        self.assertEqual({self.header}, changed)
+
+    def test_tracked_and_untracked_outputs_under_src_are_excluded(self):
+        build = self.root / "src/configured"
+        generated = self.write("src/configured/include/config.h", "// old\n")
+        self.commit("fixture tracked output")
+        generated.write_text("// new\n", encoding="utf-8")
+        generated_source = self.write("src/configured/generated.cpp", "int generated;\n")
+        self.header.write_text("// real header edit\n", encoding="utf-8")
+        changed, forced = preflight.discover_changed_files(self.root, "HEAD", build)
+        self.assertFalse(forced)
+        self.assertEqual({self.header}, changed)
+        self.assertEqual(self.commands, preflight.select_compile_commands(
+            self.root, self.commands, changed, forced, build))
+        commands = [*self.commands, preflight.CompileCommand(
+            generated_source, build, "cl.exe /c generated.cpp")]
+        self.assertEqual(self.commands, preflight.select_compile_commands(
+            self.root, commands, set(), True, build))
+
+    def test_binary_directory_equal_to_root_does_not_hide_source_edits(self):
+        self.header.write_text("// edit\n", encoding="utf-8")
+        changed, forced = preflight.discover_changed_files(self.root, "HEAD", self.root)
+        self.assertFalse(forced)
+        self.assertEqual({self.header}, changed)
+
+    def test_real_source_edit_is_selected_alongside_fresh_generated_headers(self):
+        build = self.root / "b"
+        self.write("b/include/config.h", "// configured\n")
+        self.source.write_text('#include "config.h"\nint changed;\n', encoding="utf-8")
+        changed, forced = preflight.discover_changed_files(self.root, "HEAD", build)
+        self.assertFalse(forced)
+        self.assertEqual({self.source}, changed)
+        self.assertEqual(self.commands, preflight.select_compile_commands(
+            self.root, self.commands, changed, forced, build))
 
 
 if __name__ == "__main__":

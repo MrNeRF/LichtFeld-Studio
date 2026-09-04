@@ -278,6 +278,13 @@ jobs:
             Start-Sleep -Seconds (15 * $attempt)
           }
 
+      - name: Generate shader headers for preflight
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          set PATH=%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
+          cmake --build %BUILD_DIR% --target lfs_shader_headers --config Release -j 4
+
       - name: Run configured MSVC preflight
         shell: cmd
         env:

@@ -22,7 +22,7 @@ jobs:
           python-version: '3.10'
 
       - name: Test the preflight checker
-        run: python3 -m unittest tests/python/test_windows_build_preflight.py
+        run: python3 -m unittest tests/python/test_windows_build_preflight.py tests/python/test_shader_header_target.py
 
       - name: Check Windows source contracts
         run: python3 tools/windows_build_preflight.py --source-only

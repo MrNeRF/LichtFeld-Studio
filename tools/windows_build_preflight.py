@@ -362,7 +362,23 @@ def _valid_base(root: Path, candidate: str | None) -> str | None:
     return candidate if result.returncode == 0 else None
 
 
-def discover_changed_files(root: Path, base: str | None) -> tuple[set[Path], bool]:
+def _is_project_path(root: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return False
+    return bool(relative.parts) and relative.parts[0] in {"src", "include", "tests"}
+
+
+def _is_build_output(path: Path, root: Path, build_dir: Path | None) -> bool:
+    # Never discard the whole checkout if a caller passes its root as the
+    # compile-database directory (for example, in a source-only test fixture).
+    return build_dir is not None and build_dir != root and path.is_relative_to(build_dir)
+
+
+def discover_changed_files(
+    root: Path, base: str | None, build_dir: Path | None = None
+) -> tuple[set[Path], bool]:
     """Return changed paths and whether missing base forced full coverage."""
 
     requested_base = base or os.environ.get("LFS_PREFLIGHT_BASE")
@@ -390,12 +406,21 @@ def discover_changed_files(root: Path, base: str | None) -> tuple[set[Path], boo
             for path in diff.stdout.split("\0"):
                 if path:
                     changed.add((root / path).resolve())
-            untracked = _git(root, "ls-files", "-z", "--others", "--exclude-standard")
+            # Build directories can have arbitrary names (CI uses b/). Only
+            # untracked project sources are edits; configured/generated files
+            # are dependency-index inputs, not reasons to replay their users.
+            untracked = _git(
+                root, "ls-files", "-z", "--others", "--exclude-standard",
+                "--", "src", "include", "tests",
+            )
             if untracked.returncode == 0:
                 for path in untracked.stdout.split("\0"):
                     if path:
                         changed.add((root / path).resolve())
-    return changed, force_all
+    return {
+        path for path in changed
+        if _is_project_path(root, path) and not _is_build_output(path, root, build_dir)
+    }, force_all
 
 
 def _lexical_absolute(path: Path, base: Path | None = None) -> Path:
@@ -426,6 +451,8 @@ def _iter_local_includes(
             if len(parts) != 3:
                 continue
             source = (root / parts[0]).resolve()
+            if source not in project_files:
+                continue
             match = INCLUDE_RE.search(parts[2])
             if match is not None:
                 yield source, match.group(1), match.group(0).endswith('"')
@@ -441,7 +468,10 @@ def _iter_local_includes(
 def build_reverse_include_graph(
     root: Path, extra_dependencies: Iterable[Path] = (), build_dir: Path | None = None
 ) -> dict[Path, set[Path]]:
-    project_files = set(_iter_project_files(root, PROJECT_SOURCE_SUFFIXES))
+    project_files = {
+        path for path in _iter_project_files(root, PROJECT_SOURCE_SUFFIXES)
+        if not _is_build_output(path, root, build_dir)
+    }
     generated_root = (build_dir or root / "build") / "include"
     generated_files = {
         path.resolve() for path in generated_root.rglob("*")
@@ -480,12 +510,13 @@ def build_reverse_include_graph(
     return reverse
 
 
-def _is_project_compile_command(root: Path, command: CompileCommand) -> bool:
-    try:
-        relative = command.file.relative_to(root)
-    except ValueError:
-        return False
-    return bool(relative.parts) and relative.parts[0] in {"src", "include", "tests"}
+def _is_project_compile_command(
+    root: Path, command: CompileCommand, build_dir: Path | None = None
+) -> bool:
+    return (
+        _is_project_path(root, command.file)
+        and not _is_build_output(command.file, root, build_dir)
+    )
 
 
 def select_compile_commands(
@@ -499,7 +530,7 @@ def select_compile_commands(
         command
         for command in commands
         if command.file.suffix.lower() in CXX_SUFFIXES
-        and _is_project_compile_command(root, command)
+        and _is_project_compile_command(root, command, build_dir)
     ]
     if force_all:
         return cxx_commands
@@ -731,12 +762,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.source_only or arguments.compile_commands is None:
         return 0
 
+    database = arguments.compile_commands.resolve()
     if arguments.all_commands:
         changed, forced_all = set(), True
     else:
-        changed, forced_all = discover_changed_files(root, arguments.changed_since)
+        changed, forced_all = discover_changed_files(
+            root, arguments.changed_since, database.parent
+        )
 
-    database = arguments.compile_commands.resolve()
     try:
         commands = load_compile_commands(database)
     except ValueError as error:
