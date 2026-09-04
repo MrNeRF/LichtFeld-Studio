@@ -237,13 +237,11 @@ TEST_F(UnicodePathTest, ProcessBoundaryHelpersPreserveJapanese) {
 #endif
     ASSERT_EQ(arguments.size(), 3);
     EXPECT_EQ(arguments[1], "--project");
-    EXPECT_EQ(arguments[2],
 #ifdef _WIN32
-              "C:\\Users\\山田\\プロジェクト.licht"
+    EXPECT_EQ(arguments[2], "C:\\Users\\山田\\プロジェクト.licht");
 #else
-              "山田/プロジェクト.licht"
+    EXPECT_EQ(arguments[2], "山田/プロジェクト.licht");
 #endif
-    );
 
     constexpr const char* environment_name = "LFS_UNICODE_PATH_TEST";
     const auto previous = lfs::core::environment::value(environment_name);
