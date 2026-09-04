@@ -14,6 +14,7 @@ from .compat import (
     compatibility_errors,
     validate_manifest_compatibility_fields,
 )
+from .plugin_localization import validate_plugin_catalogs
 
 try:
     import tomllib
@@ -29,6 +30,7 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
     """Validate plugin structure and manifest. Returns list of errors (empty if valid)."""
     plugin_dir = Path(plugin_path)
     errors = []
+    project_name = None
 
     if not plugin_dir.exists():
         return [f"Plugin not found: {plugin_dir}"]
@@ -43,6 +45,8 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
             if not lf:
                 errors.append("pyproject.toml: missing [tool.lichtfeld] section")
             project = data.get("project", {})
+            if isinstance(project.get("name"), str):
+                project_name = project["name"]
             for field in ("name", "version", "description"):
                 if field not in project:
                     errors.append(f"pyproject.toml: missing project.{field}")
@@ -76,6 +80,8 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
 
     errors.extend(_check_panel_assets(plugin_dir))
     errors.extend(_check_venv(plugin_dir))
+    if project_name is not None:
+        errors.extend(validate_plugin_catalogs(plugin_dir, project_name))
 
     return errors
 

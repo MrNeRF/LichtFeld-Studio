@@ -581,6 +581,7 @@ set(TEST_FILES
     test_run_guarded.cpp
     test_tcp_responder.cpp
     test_error_envelope.cpp
+    test_plugin_localization.cpp
 )
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)
@@ -1001,6 +1002,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_operator_rich_returns.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_api_surface.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_marketplace_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_localization.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_system.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_templates.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_plugin_validator.py

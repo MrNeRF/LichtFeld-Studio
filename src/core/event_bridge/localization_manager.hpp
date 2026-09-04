@@ -7,6 +7,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <format>
 #include <mutex>
@@ -20,6 +21,9 @@ namespace lfs::event {
 
     class LFS_BRIDGE_API LocalizationManager {
     public:
+        using PluginCatalogToken = std::uint64_t;
+        using TranslationMap = std::unordered_map<std::string, std::string>;
+
         static LocalizationManager& getInstance();
 
         bool initialize(const std::string& locales_dir);
@@ -47,6 +51,13 @@ namespace lfs::event {
         void clearAllOverrides();
         bool hasOverride(const std::string& key) const;
 
+        PluginCatalogToken registerPluginCatalog(std::string_view owner_id,
+                                                 std::string_view language_code,
+                                                 const TranslationMap& entries,
+                                                 std::string* error = nullptr);
+        bool unregisterPluginCatalog(PluginCatalogToken token);
+        std::size_t unregisterPluginCatalogs(std::string_view owner_id);
+
     private:
         LocalizationManager() = default;
         ~LocalizationManager() = default;
@@ -56,6 +67,7 @@ namespace lfs::event {
         bool loadLanguage(const std::string& language_code);
         bool parseLocaleFile(const std::string& filepath,
                              std::unordered_map<std::string, std::string>& strings) const;
+        bool unregisterPluginCatalogLocked(PluginCatalogToken token);
 
         mutable std::mutex mutex_;
         std::string locales_dir_;
@@ -66,6 +78,23 @@ namespace lfs::event {
         std::vector<std::string> available_languages_;
         std::unordered_map<std::string, std::string> language_names_;
         mutable std::unordered_map<std::string, std::string> overrides_;
+
+        struct PluginStringEntry {
+            PluginCatalogToken token;
+            std::string value;
+        };
+
+        struct PluginCatalogRecord {
+            std::string owner_id;
+            std::string language_code;
+            std::vector<std::string> keys;
+        };
+
+        std::unordered_map<std::string,
+                           std::unordered_map<std::string, PluginStringEntry>>
+            plugin_strings_by_language_;
+        std::unordered_map<PluginCatalogToken, PluginCatalogRecord> plugin_catalogs_;
+        PluginCatalogToken next_plugin_catalog_token_ = 1;
         std::atomic<std::uint64_t> language_generation_{0};
     };
 

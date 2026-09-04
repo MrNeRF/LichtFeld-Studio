@@ -168,6 +168,48 @@ Unload when needed:
 lf.plugins.unload("my_plugin")
 ```
 
+## Localizing a plugin
+
+Add `locales/en.json` and optional lowercase language catalogs beside `pyproject.toml`:
+
+```text
+my_plugin/
+├── pyproject.toml
+├── __init__.py
+└── locales/
+    ├── en.json
+    └── it.json
+```
+
+Catalogs use relative, nestable keys:
+
+```json
+{
+  "panel": {
+    "title": "My plugin",
+    "status": "Processed {count} items"
+  }
+}
+```
+
+`project.name` determines the namespace. Lowercase normalization collapses `.`, `_`, and `-` runs to `-`, so a project named `my_plugin` reads the example with:
+
+```python
+lf.ui.tr("plugins.my-plugin.panel.title")
+```
+
+The host loads catalogs before importing the plugin and cleans them automatically on unload, reload, cancellation, or failed activation. The fallback is active language, then `en`, then the resolved key. A translation may omit English keys, but it cannot add new ones, and its format placeholders must match English exactly. Saving a `locales/*.json` file participates in hot reload.
+
+Run the existing local checker before loading or publishing:
+
+```bash
+LichtFeld-Studio plugin check my_plugin
+```
+
+It validates namespace normalization and collisions with adjacent plugin manifests, UTF-8/JSON shape, supported host language filenames, duplicate or colliding keys, placeholder parity, and catalog limits without loading plugin code. Catalog paths must stay inside the plugin directory after resolving symlinks. NUL characters, lone Unicode surrogates, and mixed automatic/manual positional placeholders are rejected with validation errors.
+
+Use distinct project names: `my_plugin` and `my.plugin` both reserve `plugins.my-plugin`, so their catalogs cannot coexist. Discovery reports the conflict and the host rejects catalog loading before import; plugins without catalogs remain compatible. Use `lf.ui.tr()` for catalog strings; `lf.ui.loc_set()` is only the legacy global runtime override and does not provide plugin ownership.
+
 ## Dependencies
 
 Declare plugin dependencies in `pyproject.toml`:
