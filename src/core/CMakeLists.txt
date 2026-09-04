@@ -37,6 +37,9 @@ set(TENSOR_SOURCES
         tensor/backend/cuda/cuda_ops_scan_sort.cpp
         tensor/backend/cuda/cuda_ops_matrix_nn.cpp
         tensor/backend/cuda/cuda_ops_random.cpp
+        tensor/backend/cuda/cuda_ops_index_mask.cpp
+        tensor/backend/cuda/cuda_ops_movement.cpp
+        tensor/backend/cuda/cuda_services.cpp
         tensor/tensor.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp

@@ -529,6 +529,8 @@ namespace lfs::core {
         LFS_CORE_API void require_same_gpu_backend(const Tensor& reference,
                                                    const Tensor& other,
                                                    std::string_view operation);
+        LFS_CORE_API void read_scalar(const Tensor& tensor, size_t element_index,
+                                      void* output, size_t bytes);
     } // namespace internal
 
 } // namespace lfs::core
@@ -561,7 +563,8 @@ namespace lfs::core {
             // cross-thread *use* still requires host-side ordering plus
             // sync_to_stream/record_stream for the allocator.
             struct StreamHandle {
-                std::atomic<cudaStream_t> value{nullptr};
+                using ValueType = cudaStream_t;
+                std::atomic<ValueType> value{nullptr};
 
                 StreamHandle() = default;
                 StreamHandle(const StreamHandle& other)
@@ -574,7 +577,7 @@ namespace lfs::core {
                     value.store(stream, std::memory_order_relaxed);
                     return *this;
                 }
-                operator cudaStream_t() const {
+                operator ValueType() const {
                     return value.load(std::memory_order_relaxed);
                 }
             };
@@ -2747,29 +2750,7 @@ namespace lfs::core {
 
             const auto read_storage_value = [this]<typename StorageT>() {
                 StorageT value{};
-                const void* item_ptr = data_ptr();
-
-                if (device_ == Device::CUDA) {
-                    // A blocking memcpy only orders against the legacy stream; data
-                    // produced on the tensor's home stream must be drained first.
-                    if (const cudaStream_t home = state_->stream; home != nullptr) {
-                        LFS_CUDA_CHECK_MSG(
-                            cudaStreamSynchronize(home),
-                            "item<T>() home-stream synchronization (stream={}, "
-                            "requested_cpp_type={}, tensor_shape={}, tensor_dtype={}({}))",
-                            static_cast<const void*>(home), detail::tensor_cpp_type_name<T>(),
-                            shape_.str(), dtype_name(dtype_), static_cast<int>(dtype_));
-                    }
-                    LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(&value, item_ptr, sizeof(StorageT), cudaMemcpyDeviceToHost),
-                        "item<T>() readback (bytes={}, source_pointer={}, storage_cpp_type={}, "
-                        "requested_cpp_type={}, tensor_shape={}, tensor_dtype={}({}))",
-                        sizeof(StorageT), item_ptr, detail::tensor_cpp_type_name<StorageT>(),
-                        detail::tensor_cpp_type_name<T>(), shape_.str(), dtype_name(dtype_),
-                        static_cast<int>(dtype_));
-                } else {
-                    value = *static_cast<const StorageT*>(item_ptr);
-                }
+                internal::read_scalar(*this, 0, &value, sizeof(StorageT));
                 return value;
             };
 
@@ -3258,66 +3239,27 @@ namespace lfs::core {
                            "TensorRowProxy::item_as() index is out of bounds");
 
             const size_t linear_index = row_index_ * tensor_->stride(0);
+            const auto copy_and_convert = [&]<typename Stored>() -> T {
+                Stored value{};
+                internal::read_scalar(*tensor_, linear_index, &value, sizeof(Stored));
+                return static_cast<T>(value);
+            };
 
-            if (tensor_->device() == Device::CUDA) {
-                // Blocking memcpy only orders against the legacy stream; drain
-                // the tensor's home stream first.
-                if (const cudaStream_t home = tensor_->stream(); home != nullptr) {
-                    LFS_CUDA_CHECK_MSG(
-                        cudaStreamSynchronize(home),
-                        "TensorRowProxy::item_as() home-stream synchronization "
-                        "(stream={}, row_index={}, linear_index={}, tensor_shape={}, "
-                        "tensor_dtype={}({}))",
-                        static_cast<const void*>(home), row_index_, linear_index,
-                        tensor_->shape().str(), dtype_name(tensor_->dtype()),
-                        static_cast<int>(tensor_->dtype()));
-                }
-
-                const auto copy_and_convert = [&]<typename Stored>() -> T {
-                    Stored value{};
-                    const auto* source = static_cast<const char*>(tensor_->data_ptr()) +
-                                         linear_index * sizeof(Stored);
-                    LFS_CUDA_CHECK_MSG(
-                        cudaMemcpy(&value, source, sizeof(Stored), cudaMemcpyDeviceToHost),
-                        "TensorRowProxy::item_as() readback (bytes={}, source_pointer={}, "
-                        "row_index={}, linear_index={}, tensor_shape={}, tensor_dtype={}({}))",
-                        sizeof(Stored), static_cast<const void*>(source), row_index_, linear_index,
-                        tensor_->shape().str(), dtype_name(tensor_->dtype()),
-                        static_cast<int>(tensor_->dtype()));
-                    return static_cast<T>(value);
-                };
-
-                switch (tensor_->dtype()) {
-                case DataType::Float32:
-                    return copy_and_convert.template operator()<float>();
-                case DataType::Int32:
-                    return copy_and_convert.template operator()<int32_t>();
-                case DataType::UInt32:
-                    return copy_and_convert.template operator()<uint32_t>();
-                case DataType::Int64:
-                    return copy_and_convert.template operator()<int64_t>();
-                case DataType::UInt8:
-                case DataType::Bool:
-                    return copy_and_convert.template operator()<uint8_t>();
-                case DataType::Float16:
-                    LFS_ASSERT_MSG(false,
-                                   "TensorRowProxy::item_as() does not support Float16");
-                }
-            } else {
-                if (tensor_->dtype() == DataType::Float32) {
-                    return static_cast<T>(tensor_->ptr<float>()[linear_index]);
-                } else if (tensor_->dtype() == DataType::Int32) {
-                    return static_cast<T>(tensor_->ptr<int32_t>()[linear_index]);
-                } else if (tensor_->dtype() == DataType::UInt32) {
-                    return static_cast<T>(tensor_->ptr<uint32_t>()[linear_index]);
-                } else if (tensor_->dtype() == DataType::Int64) {
-                    return static_cast<T>(tensor_->ptr<int64_t>()[linear_index]);
-                } else if (tensor_->dtype() == DataType::Bool ||
-                           tensor_->dtype() == DataType::UInt8) {
-                    return static_cast<T>(tensor_->ptr<uint8_t>()[linear_index]);
-                }
+            switch (tensor_->dtype()) {
+            case DataType::Float32:
+                return copy_and_convert.template operator()<float>();
+            case DataType::Int32:
+                return copy_and_convert.template operator()<int32_t>();
+            case DataType::UInt32:
+                return copy_and_convert.template operator()<uint32_t>();
+            case DataType::Int64:
+                return copy_and_convert.template operator()<int64_t>();
+            case DataType::UInt8:
+            case DataType::Bool:
+                return copy_and_convert.template operator()<uint8_t>();
+            case DataType::Float16:
                 LFS_ASSERT_MSG(false,
-                               "TensorRowProxy::item_as() encountered an unsupported dtype");
+                               "TensorRowProxy::item_as() does not support Float16");
             }
             return T{};
         }

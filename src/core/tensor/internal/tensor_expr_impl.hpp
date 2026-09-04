@@ -987,14 +987,11 @@ namespace lfs::core {
         // OPTIMIZATION: Use fused gather+unary kernel!
         if (device_ == Device::CUDA) {
             pin_operands({&flat_input, &indices_tensor});
-            tensor_ops::launch_gather_fused_unary(
-                flat_input.template ptr<float>(),
-                indices_tensor.template ptr<int>(),
-                result.template ptr<float>(),
-                flat_input.numel(),
-                indices_tensor.numel(),
-                op_,
-                result.stream());
+            internal::backend_ops_for(flat_input).gather_fused_unary(internal::storage_ref(flat_input), internal::storage_ref(indices_tensor), internal::storage_ref(result), internal::pointwise_op_of<std::remove_cvref_t<UnaryOp>>::value, internal::IndexProgram{
+                                                                                                                                                                                                                                                  .input_size = flat_input.numel(),
+                                                                                                                                                                                                                                                  .index_size = indices_tensor.numel(),
+                                                                                                                                                                                                                                              },
+                                                                     internal::ExecContext{result.stream()});
         } else {
             // CPU fallback: gather then apply operation
             pin_operands({&flat_input, &indices_tensor});

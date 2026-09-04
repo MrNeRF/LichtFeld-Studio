@@ -5,8 +5,12 @@
 #include "core/export.hpp"
 #include "descriptors.hpp"
 
+#include <array>
+#include <span>
+
 namespace lfs::core {
     class Tensor;
+    class MemoryInfo;
 
     namespace tensor_ops {
         struct FusedPointwiseOpChain;
@@ -136,7 +140,133 @@ namespace lfs::core {
             virtual void normal(StorageRef output, StorageRef odd_count_scratch,
                                 const RandomProgram& program, ExecContext context) = 0;
 
-            // Sub-lane C appends index, masking, movement, allocation, copy and sync here.
+            // Sub-lane C: index, masking, movement, allocation, copy and sync.
+            virtual void gather(StorageRef input, StorageRef indices, StorageRef output,
+                                const StridedLayout& input_layout,
+                                const StridedLayout& index_layout,
+                                const IndexProgram& program, ExecContext context) = 0;
+            virtual void gather_fused_unary(StorageRef input, StorageRef indices,
+                                            StorageRef output, PointwiseOp unary,
+                                            const IndexProgram& program,
+                                            ExecContext context) = 0;
+            virtual void take(StorageRef input, StorageRef indices, StorageRef output,
+                              const IndexProgram& program, ExecContext context) = 0;
+            virtual void index_select(StorageRef input, StorageRef indices,
+                                      StorageRef output,
+                                      const StridedLayout& input_layout,
+                                      const IndexProgram& program,
+                                      ExecContext context) = 0;
+            virtual void scatter(StorageRef output, StorageRef indices, StorageRef source,
+                                 const StridedLayout& output_layout,
+                                 const StridedLayout& index_layout,
+                                 const IndexProgram& program, ExecContext context) = 0;
+            virtual void index_copy(StorageRef output, StorageRef indices,
+                                    StorageRef source,
+                                    const StridedLayout& output_layout,
+                                    const IndexProgram& program,
+                                    ExecContext context) = 0;
+            virtual void index_add(StorageRef output, StorageRef indices,
+                                   StorageRef source,
+                                   const StridedLayout& output_layout,
+                                   const IndexProgram& program,
+                                   ExecContext context) = 0;
+            virtual void index_fill(StorageRef output, StorageRef indices,
+                                    const StridedLayout& output_layout,
+                                    const IndexProgram& program, ScalarOperand value,
+                                    ExecContext context) = 0;
+            virtual void index_put(StorageRef output, StorageRef indices,
+                                   StorageRef values, const IndexProgram& program,
+                                   ExecContext context) = 0;
+            virtual void strided_scatter(StorageRef input, StorageRef output,
+                                         const StridedLayout& output_layout,
+                                         ExecContext context) = 0;
+            virtual void strided_scatter_immediate(
+                StorageRef input, StorageRef output,
+                const StridedLayout& output_layout, ExecContext context) = 0;
+            virtual void strided_scatter_int32_to_float32(
+                StorageRef input, StorageRef output,
+                const StridedLayout& output_layout, ExecContext context) = 0;
+            virtual void masked_fill(StorageRef output, StorageRef mask,
+                                     const MaskProgram& program,
+                                     ExecContext context) = 0;
+            virtual size_t masked_select(StorageRef input, StorageRef mask,
+                                         StorageRef output,
+                                         const MaskProgram& program,
+                                         ExecContext context) = 0;
+            virtual void masked_scatter(StorageRef output, StorageRef mask,
+                                        StorageRef source,
+                                        const MaskProgram& program,
+                                        ExecContext context) = 0;
+            virtual void and_live(StorageRef mask, StorageRef live_mask,
+                                  const MaskProgram& program,
+                                  ExecContext context) = 0;
+            virtual void where(StorageRef condition, StorageRef x, StorageRef y,
+                               StorageRef output,
+                               const StridedLayout& condition_layout,
+                               const StridedLayout& x_layout,
+                               const StridedLayout& y_layout,
+                               const StridedLayout& output_layout,
+                               ExecContext context) = 0;
+            virtual size_t nonzero(StorageRef input, StorageRef output,
+                                   const MaskProgram& program,
+                                   ExecContext context) = 0;
+            virtual size_t nonzero_bool(StorageRef input, StorageRef output,
+                                        const MaskProgram& program,
+                                        ExecContext context) = 0;
+            virtual void strided_copy(StorageRef input, StorageRef output,
+                                      const StridedLayout& input_layout,
+                                      ExecContext context) = 0;
+            virtual void strided_copy_immediate(StorageRef input, StorageRef output,
+                                                const StridedLayout& input_layout,
+                                                ExecContext context) = 0;
+            virtual void strided_upload(StorageRef host_input, StorageRef output,
+                                        const StridedLayout& input_layout,
+                                        ExecContext context) = 0;
+            virtual void cat_last_dim(StorageRef output,
+                                      std::span<const StorageRef> inputs,
+                                      std::span<const StridedLayout> layouts,
+                                      size_t num_rows, size_t row_size,
+                                      size_t element_size,
+                                      ExecContext context) = 0;
+            virtual void cat_middle_dim(StorageRef output,
+                                        std::span<const StorageRef> inputs,
+                                        std::span<const StridedLayout> layouts,
+                                        size_t outer_size, size_t inner_size,
+                                        int dim, size_t element_size,
+                                        ExecContext context) = 0;
+            virtual void pad(StorageRef input, StorageRef output,
+                             const StridedLayout& input_layout,
+                             const StridedLayout& output_layout,
+                             const std::array<size_t, MAX_TENSOR_RANK>& pad_before,
+                             ExecContext context) = 0;
+
+            virtual StorageRef allocate(size_t bytes, size_t alignment,
+                                        ExecContext context) = 0;
+            virtual void deallocate(StorageRef storage,
+                                    ExecContext context) noexcept = 0;
+            virtual void record_stream(StorageRef storage, ExecContext context) = 0;
+            virtual void release_stream(ExecContext context) = 0;
+            virtual void rehome_stream(StorageRef storage, ExecContext context) = 0;
+            virtual void trim() = 0;
+            virtual void trim_if_reserved_unused_exceeds(size_t threshold_bytes) = 0;
+            virtual MemoryInfo stats() = 0;
+            virtual void shutdown() = 0;
+            virtual void set_allocation_iteration(int iteration) = 0;
+            virtual void record_tensor_allocation(StorageRef storage,
+                                                  const StridedLayout& layout,
+                                                  size_t bytes) = 0;
+
+            virtual void copy_host_to_device(const CopyRequest& request) = 0;
+            virtual void copy_device_to_host(const CopyRequest& request) = 0;
+            virtual void copy_device_to_device(const CopyRequest& request) = 0;
+            virtual void memset(const FillRequest& request) = 0;
+
+            virtual void synchronize_stream(ExecContext context) = 0;
+            virtual void synchronize_device() = 0;
+            virtual void wait_for(SyncToken token) = 0;
+            virtual SyncToken bridge(ExecContext producer, ExecContext consumer) = 0;
+            virtual PointerClass classify_pointer(const void* pointer) = 0;
+            virtual bool stream_is_capturing(ExecContext context) = 0;
         };
 
         class CudaBackendOps final : public GpuBackendOps {
@@ -256,7 +386,124 @@ namespace lfs::core {
             void normal(StorageRef output, StorageRef odd_count_scratch,
                         const RandomProgram& program, ExecContext context) override;
 
-            // Sub-lane C appends overrides in its owned region.
+            // Sub-lane C: index, masking, movement, allocation, copy and sync.
+            void gather(StorageRef input, StorageRef indices, StorageRef output,
+                        const StridedLayout& input_layout,
+                        const StridedLayout& index_layout,
+                        const IndexProgram& program, ExecContext context) override;
+            void gather_fused_unary(StorageRef input, StorageRef indices,
+                                    StorageRef output, PointwiseOp unary,
+                                    const IndexProgram& program,
+                                    ExecContext context) override;
+            void take(StorageRef input, StorageRef indices, StorageRef output,
+                      const IndexProgram& program, ExecContext context) override;
+            void index_select(StorageRef input, StorageRef indices, StorageRef output,
+                              const StridedLayout& input_layout,
+                              const IndexProgram& program,
+                              ExecContext context) override;
+            void scatter(StorageRef output, StorageRef indices, StorageRef source,
+                         const StridedLayout& output_layout,
+                         const StridedLayout& index_layout,
+                         const IndexProgram& program, ExecContext context) override;
+            void index_copy(StorageRef output, StorageRef indices, StorageRef source,
+                            const StridedLayout& output_layout,
+                            const IndexProgram& program,
+                            ExecContext context) override;
+            void index_add(StorageRef output, StorageRef indices, StorageRef source,
+                           const StridedLayout& output_layout,
+                           const IndexProgram& program,
+                           ExecContext context) override;
+            void index_fill(StorageRef output, StorageRef indices,
+                            const StridedLayout& output_layout,
+                            const IndexProgram& program, ScalarOperand value,
+                            ExecContext context) override;
+            void index_put(StorageRef output, StorageRef indices, StorageRef values,
+                           const IndexProgram& program,
+                           ExecContext context) override;
+            void strided_scatter(StorageRef input, StorageRef output,
+                                 const StridedLayout& output_layout,
+                                 ExecContext context) override;
+            void strided_scatter_immediate(StorageRef input, StorageRef output,
+                                           const StridedLayout& output_layout,
+                                           ExecContext context) override;
+            void strided_scatter_int32_to_float32(
+                StorageRef input, StorageRef output,
+                const StridedLayout& output_layout, ExecContext context) override;
+            void masked_fill(StorageRef output, StorageRef mask,
+                             const MaskProgram& program,
+                             ExecContext context) override;
+            size_t masked_select(StorageRef input, StorageRef mask, StorageRef output,
+                                 const MaskProgram& program,
+                                 ExecContext context) override;
+            void masked_scatter(StorageRef output, StorageRef mask,
+                                StorageRef source, const MaskProgram& program,
+                                ExecContext context) override;
+            void and_live(StorageRef mask, StorageRef live_mask,
+                          const MaskProgram& program,
+                          ExecContext context) override;
+            void where(StorageRef condition, StorageRef x, StorageRef y,
+                       StorageRef output,
+                       const StridedLayout& condition_layout,
+                       const StridedLayout& x_layout,
+                       const StridedLayout& y_layout,
+                       const StridedLayout& output_layout,
+                       ExecContext context) override;
+            size_t nonzero(StorageRef input, StorageRef output,
+                           const MaskProgram& program,
+                           ExecContext context) override;
+            size_t nonzero_bool(StorageRef input, StorageRef output,
+                                const MaskProgram& program,
+                                ExecContext context) override;
+            void strided_copy(StorageRef input, StorageRef output,
+                              const StridedLayout& input_layout,
+                              ExecContext context) override;
+            void strided_copy_immediate(StorageRef input, StorageRef output,
+                                        const StridedLayout& input_layout,
+                                        ExecContext context) override;
+            void strided_upload(StorageRef host_input, StorageRef output,
+                                const StridedLayout& input_layout,
+                                ExecContext context) override;
+            void cat_last_dim(StorageRef output, std::span<const StorageRef> inputs,
+                              std::span<const StridedLayout> layouts,
+                              size_t num_rows, size_t row_size,
+                              size_t element_size, ExecContext context) override;
+            void cat_middle_dim(StorageRef output,
+                                std::span<const StorageRef> inputs,
+                                std::span<const StridedLayout> layouts,
+                                size_t outer_size, size_t inner_size,
+                                int dim, size_t element_size,
+                                ExecContext context) override;
+            void pad(StorageRef input, StorageRef output,
+                     const StridedLayout& input_layout,
+                     const StridedLayout& output_layout,
+                     const std::array<size_t, MAX_TENSOR_RANK>& pad_before,
+                     ExecContext context) override;
+
+            StorageRef allocate(size_t bytes, size_t alignment,
+                                ExecContext context) override;
+            void deallocate(StorageRef storage,
+                            ExecContext context) noexcept override;
+            void record_stream(StorageRef storage, ExecContext context) override;
+            void release_stream(ExecContext context) override;
+            void rehome_stream(StorageRef storage, ExecContext context) override;
+            void trim() override;
+            void trim_if_reserved_unused_exceeds(size_t threshold_bytes) override;
+            MemoryInfo stats() override;
+            void shutdown() override;
+            void set_allocation_iteration(int iteration) override;
+            void record_tensor_allocation(StorageRef storage,
+                                          const StridedLayout& layout,
+                                          size_t bytes) override;
+            void copy_host_to_device(const CopyRequest& request) override;
+            void copy_device_to_host(const CopyRequest& request) override;
+            void copy_device_to_device(const CopyRequest& request) override;
+            void memset(const FillRequest& request) override;
+            void synchronize_stream(ExecContext context) override;
+            void synchronize_device() override;
+            void wait_for(SyncToken token) override;
+            SyncToken bridge(ExecContext producer, ExecContext consumer) override;
+            PointerClass classify_pointer(const void* pointer) override;
+            bool stream_is_capturing(ExecContext context) override;
         };
 
         LFS_CORE_API GpuBackendOps& backend_ops(GpuBackend backend);

@@ -115,11 +115,22 @@ namespace lfs::core {
             size_t byte_offset;
             DataType dtype;
             const StorageMeta* meta;
+            uint32_t flags = 0;
+        };
+
+        enum class AllocationClass : uint8_t {
+            Pooled,
+            Direct,
         };
 
         struct ExecContext {
-            cudaStream_t cuda_stream;
+            cudaStream_t cuda_stream = nullptr;
+            AllocationClass allocation_class = AllocationClass::Pooled;
+            const char* allocation_label = "tensor.storage";
+            const char* allocation_operation = "tensor.allocate";
         };
+
+        inline constexpr uint32_t STORAGE_REF_DIRECT_ALLOCATION = 1U << 0;
 
         struct StridedLayout {
             size_t rank = 0;
@@ -181,6 +192,50 @@ namespace lfs::core {
             bool replacement = false;
         };
 
+        struct IndexProgram {
+            int dim = 0;
+            int boundary_mode = 0;
+            int scatter_mode = 0;
+            size_t input_size = 0;
+            size_t index_size = 0;
+            size_t total_elements = 0;
+        };
+
+        struct MaskProgram {
+            size_t count = 0;
+            size_t selected_count = 0;
+            ScalarOperand value{};
+        };
+
+        struct CopyRequest {
+            StorageRef src;
+            StorageRef dst;
+            size_t bytes = 0;
+            bool synchronous = false;
+            ExecContext context{};
+        };
+
+        struct FillRequest {
+            StorageRef dst;
+            size_t bytes = 0;
+            uint8_t value = 0;
+            bool synchronous = false;
+            ExecContext context{};
+        };
+
+        struct SyncToken {
+            GpuBackend backend = GpuBackend::CUDA;
+            uint64_t value = 0;
+            uintptr_t native = 0;
+        };
+
+        enum class PointerClass : uint8_t {
+            Device,
+            Host,
+            Pinned,
+            Unknown,
+        };
+
         static_assert(std::is_trivially_copyable_v<ScalarOperand>);
         static_assert(std::is_trivially_copyable_v<StorageRef>);
         static_assert(std::is_trivially_copyable_v<ExecContext>);
@@ -191,6 +246,29 @@ namespace lfs::core {
         static_assert(std::is_trivially_copyable_v<GemmProgram>);
         static_assert(std::is_trivially_copyable_v<PoolProgram>);
         static_assert(std::is_trivially_copyable_v<RandomProgram>);
+        static_assert(std::is_trivially_copyable_v<IndexProgram>);
+        static_assert(std::is_trivially_copyable_v<MaskProgram>);
+        static_assert(std::is_trivially_copyable_v<CopyRequest>);
+        static_assert(std::is_trivially_copyable_v<FillRequest>);
+        static_assert(std::is_trivially_copyable_v<SyncToken>);
+
+        inline StorageRef raw_storage_ref(void* const pointer,
+                                          const DataType dtype = DataType::UInt8) {
+            return StorageRef{
+                .backend = GpuBackend::CUDA,
+                .data = pointer,
+                .byte_offset = 0,
+                .dtype = dtype,
+                .meta = nullptr,
+                .flags = 0,
+            };
+        }
+
+        inline StorageRef offset_storage_ref(StorageRef storage,
+                                             const size_t byte_offset) {
+            storage.byte_offset += byte_offset;
+            return storage;
+        }
 
         inline StorageRef storage_ref(const Tensor& tensor);
         inline StridedLayout strided_layout(const Tensor& tensor);

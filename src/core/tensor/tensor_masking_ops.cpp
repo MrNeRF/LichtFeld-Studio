@@ -126,9 +126,7 @@ namespace lfs::core {
 
         // §1.9 host entry: reject graph capture before checked index_select launch.
         void reject_index_select_graph_capture(const cudaStream_t stream) {
-            cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
-            const cudaError_t query = cudaStreamIsCapturing(stream, &capture_status);
-            if (query != cudaSuccess || capture_status != cudaStreamCaptureStatusNone) {
+            if (internal::backend_ops(GpuBackend::CUDA).stream_is_capturing(internal::ExecContext{stream})) {
                 throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
             }
         }
@@ -168,8 +166,10 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             pin_operands({this, &live_mask});
             prepare_inputs_for_stream({this, &live_mask}, stream());
-            tensor_ops::launch_and_live(
-                ptr<uint8_t>(), live_mask.ptr<unsigned char>(), numel(), stream());
+            internal::backend_ops_for(*this).and_live(
+                internal::storage_ref(*this), internal::storage_ref(live_mask),
+                internal::MaskProgram{.count = numel()},
+                internal::ExecContext{stream()});
             return *this;
         }
 
@@ -231,35 +231,16 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             pin_operands({this, &mask});
             result.set_stream(stream());
-            switch (dtype_) {
-            case DataType::Float32:
-                tensor_ops::launch_masked_select(ptr<float>(), mask.ptr<unsigned char>(),
-                                                 result.ptr<float>(), numel(), output_size, stream());
-                break;
-            case DataType::Float16:
-                tensor_ops::launch_masked_select(ptr<__half>(), mask.ptr<unsigned char>(),
-                                                 result.ptr<__half>(), numel(), output_size, stream());
-                break;
-            case DataType::Int32:
-                tensor_ops::launch_masked_select(ptr<int32_t>(), mask.ptr<unsigned char>(),
-                                                 result.ptr<int32_t>(), numel(), output_size, stream());
-                break;
-            case DataType::Int64:
-                tensor_ops::launch_masked_select(ptr<int64_t>(), mask.ptr<unsigned char>(),
-                                                 result.ptr<int64_t>(), numel(), output_size, stream());
-                break;
-            case DataType::UInt8:
-            case DataType::Bool:
-                tensor_ops::launch_masked_select(ptr<uint8_t>(), mask.ptr<unsigned char>(),
-                                                 result.ptr<uint8_t>(), numel(), output_size, stream());
-                break;
-            }
-            LFS_CUDA_CHECK_MSG(
-                cudaGetLastError(),
-                "masked_select kernel launch (input_shape={}, input_dtype={}({}), "
-                "mask_shape={}, selected_count={}, stream={})",
-                shape_.str(), dtype_name(dtype_), static_cast<int>(dtype_),
-                mask.shape().str(), output_size, static_cast<const void*>(stream()));
+            const size_t selected_count = internal::backend_ops_for(*this).masked_select(
+                internal::storage_ref(*this), internal::storage_ref(mask),
+                internal::storage_ref(result),
+                internal::MaskProgram{
+                    .count = numel(),
+                    .selected_count = output_size,
+                },
+                internal::ExecContext{stream()});
+            LFS_ASSERT_MSG(selected_count == output_size,
+                           "masked_select adapter returned an unexpected count");
             // No sync - tensor operation
         } else {
             pin_operands({this, &mask});
@@ -322,31 +303,13 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             pin_operands({this, &dense_mask});
-            switch (dtype_) {
-            case DataType::Float32:
-                tensor_ops::launch_masked_fill(ptr<float>(), dense_mask.ptr<unsigned char>(),
-                                               stored_value, numel(), stream());
-                break;
-            case DataType::Float16:
-                tensor_ops::launch_masked_fill(ptr<__half>(), dense_mask.ptr<unsigned char>(),
-                                               __float2half(stored_value), numel(), stream());
-                break;
-            case DataType::Int32:
-                tensor_ops::launch_masked_fill(ptr<int32_t>(), dense_mask.ptr<unsigned char>(),
-                                               static_cast<int32_t>(stored_value), numel(), stream());
-                break;
-            case DataType::Int64:
-                tensor_ops::launch_masked_fill(ptr<int64_t>(), dense_mask.ptr<unsigned char>(),
-                                               static_cast<int64_t>(stored_value), numel(), stream());
-                break;
-            case DataType::UInt8:
-            case DataType::Bool:
-                tensor_ops::launch_masked_fill(ptr<uint8_t>(), dense_mask.ptr<unsigned char>(),
-                                               static_cast<uint8_t>(stored_value), numel(), stream());
-                break;
-            default:
-                throw std::runtime_error("masked_fill_: unsupported dtype");
-            }
+            internal::backend_ops_for(*this).masked_fill(
+                internal::storage_ref(*this), internal::storage_ref(dense_mask),
+                internal::MaskProgram{
+                    .count = numel(),
+                    .value = internal::scalar_operand(stored_value),
+                },
+                internal::ExecContext{stream()});
             // No sync - tensor operation
         } else {
             pin_operands({this, &dense_mask});
@@ -521,7 +484,6 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             pin_operands({this, &kernel_index});
-            const int* idx_ptr = kernel_index.ptr<int>();
 
             // §1.9: host rejects graph capture at the checked-launch entry BEFORE
             // prepare_inputs_for_stream can enqueue dependency edges into a capture.
@@ -537,35 +499,15 @@ namespace lfs::core {
                 reject_index_select_graph_capture(execution_stream);
             }
 
-            // Dispatch based on source tensor dtype
-            if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_index_select(ptr<float>(), idx_ptr,
-                                                out.ptr<float>(), shape_.dims().data(),
-                                                shape_.rank(), dim, indices.numel(),
-                                                static_cast<int>(mode), execution_stream);
-            } else if (dtype_ == DataType::Int64) {
-                tensor_ops::launch_index_select(ptr<int64_t>(), idx_ptr,
-                                                out.ptr<int64_t>(), shape_.dims().data(),
-                                                shape_.rank(), dim, indices.numel(),
-                                                static_cast<int>(mode), execution_stream);
-            } else if (dtype_ == DataType::Int32) {
-                tensor_ops::launch_index_select(ptr<int32_t>(), idx_ptr,
-                                                out.ptr<int32_t>(), shape_.dims().data(),
-                                                shape_.rank(), dim, indices.numel(),
-                                                static_cast<int>(mode), execution_stream);
-            } else if (dtype_ == DataType::UInt8 || dtype_ == DataType::Bool) {
-                tensor_ops::launch_index_select(ptr<uint8_t>(), idx_ptr,
-                                                out.ptr<uint8_t>(), shape_.dims().data(),
-                                                shape_.rank(), dim, indices.numel(),
-                                                static_cast<int>(mode), execution_stream);
-            } else {
-                throw std::runtime_error("index_select: unsupported dtype for CUDA");
-            }
-            LFS_CUDA_CHECK_MSG(
-                cudaGetLastError(),
-                "index_select kernel launch (input_shape={}, output_shape={}, "
-                "index_count={}, dimension={})",
-                shape_.str(), out.shape().str(), indices.numel(), dim);
+            internal::backend_ops_for(*this).index_select(
+                internal::storage_ref(*this), internal::storage_ref(kernel_index),
+                internal::storage_ref(out), internal::strided_layout(*this),
+                internal::IndexProgram{
+                    .dim = dim,
+                    .boundary_mode = static_cast<int>(mode),
+                    .index_size = indices.numel(),
+                },
+                internal::ExecContext{execution_stream});
             // Assert mode drains inline: the pre-6C Assert path was already
             // synchronous (full index D2H + host scan), so a 32-byte record
             // readback here REPLACES a sync rather than adding one, and keeps
@@ -691,26 +633,18 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             pin_operands({this, &kernel_index});
-            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&result, this, &kernel_index}, result.stream());
-            if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_gather(ptr<float>(), idx_ptr,
-                                          result.ptr<float>(), shape_.dims().data(),
-                                          indices.shape().dims().data(), shape_.rank(), dim,
-                                          result.numel(), static_cast<int>(mode), execution_stream);
-            } else {
-                tensor_ops::launch_gather(ptr<int64_t>(), idx_ptr,
-                                          result.ptr<int64_t>(), shape_.dims().data(),
-                                          indices.shape().dims().data(), shape_.rank(), dim,
-                                          result.numel(), static_cast<int>(mode), execution_stream);
-            }
-            LFS_CUDA_CHECK_MSG(
-                cudaGetLastError(),
-                "multi-dimensional gather kernel launch (input_shape={}, output_shape={}, "
-                "index_shape={}, dimension={}, boundary_mode={}, stream={})",
-                shape_.str(), result.shape().str(), indices.shape().str(), dim,
-                static_cast<int>(mode), static_cast<const void*>(execution_stream));
+            internal::backend_ops_for(*this).gather(
+                internal::storage_ref(*this), internal::storage_ref(kernel_index),
+                internal::storage_ref(result), internal::strided_layout(*this),
+                internal::strided_layout(indices),
+                internal::IndexProgram{
+                    .dim = dim,
+                    .boundary_mode = static_cast<int>(mode),
+                    .total_elements = result.numel(),
+                },
+                internal::ExecContext{execution_stream});
             // No sync - tensor operation
         } else {
             pin_operands({this, &kernel_index});
@@ -787,8 +721,14 @@ namespace lfs::core {
                 prepare_inputs_for_stream({this, &indices_int32});
             CUDAStreamGuard guard(execution_stream);
             result = internal::allocate_like(*this, indices.shape(), dtype_);
-            tensor_ops::launch_take(flat.ptr<float>(), indices_int32.ptr<int>(),
-                                    result.ptr<float>(), flat.numel(), indices_int32.numel(), result.stream());
+            internal::backend_ops_for(*this).take(
+                internal::storage_ref(flat), internal::storage_ref(indices_int32),
+                internal::storage_ref(result),
+                internal::IndexProgram{
+                    .input_size = flat.numel(),
+                    .index_size = indices_int32.numel(),
+                },
+                internal::ExecContext{result.stream()});
             // No sync - tensor operation
         } else {
             pin_operands({&flat, &indices_int32});
@@ -878,28 +818,18 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 pin_operands({this, &kernel_index, &src_same_device});
-                const int* indices = kernel_index.ptr<int>();
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
-                if (dtype_ == DataType::Float32) {
-                    tensor_ops::launch_scatter(ptr<float>(), indices, src_same_device.ptr<float>(),
-                                               shape_.dims().data(), src.shape().dims().data(),
-                                               shape_.rank(), dim, src.numel(),
-                                               static_cast<int>(mode), execution_stream);
-                } else if (dtype_ == DataType::Int32) {
-                    tensor_ops::launch_scatter(ptr<int>(), indices, src_same_device.ptr<int>(),
-                                               shape_.dims().data(), src.shape().dims().data(),
-                                               shape_.rank(), dim, src.numel(),
-                                               static_cast<int>(mode), execution_stream);
-                } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
-                    tensor_ops::launch_scatter(ptr<uint8_t>(), indices, src_same_device.ptr<uint8_t>(),
-                                               shape_.dims().data(), src.shape().dims().data(),
-                                               shape_.rank(), dim, src.numel(),
-                                               static_cast<int>(mode), execution_stream);
-                } else {
-                    LFS_ASSERT_MSG(false,
-                                   "scatter_ encountered an unsupported CUDA dtype");
-                }
+                internal::backend_ops_for(*this).scatter(
+                    internal::storage_ref(*this), internal::storage_ref(kernel_index),
+                    internal::storage_ref(src_same_device), internal::strided_layout(*this),
+                    internal::strided_layout(src_same_device),
+                    internal::IndexProgram{
+                        .dim = dim,
+                        .scatter_mode = static_cast<int>(mode),
+                        .total_elements = src.numel(),
+                    },
+                    internal::ExecContext{execution_stream});
             } else {
                 pin_operands({this, &kernel_index, &src_same_device});
                 const int* indices = kernel_index.ptr<int>();
@@ -961,31 +891,18 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             pin_operands({this, &kernel_index, &src_same_device});
-            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
-            if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_scatter(ptr<float>(), idx_ptr,
-                                           src_same_device.ptr<float>(), shape_.dims().data(),
-                                           src.shape().dims().data(),
-                                           shape_.rank(), dim, src.numel(),
-                                           static_cast<int>(mode), execution_stream);
-            } else if (dtype_ == DataType::Int32) {
-                tensor_ops::launch_scatter(ptr<int>(), idx_ptr,
-                                           src_same_device.ptr<int>(), shape_.dims().data(),
-                                           src.shape().dims().data(),
-                                           shape_.rank(), dim, src.numel(),
-                                           static_cast<int>(mode), execution_stream);
-            } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
-                tensor_ops::launch_scatter(ptr<uint8_t>(), idx_ptr,
-                                           src_same_device.ptr<uint8_t>(), shape_.dims().data(),
-                                           src.shape().dims().data(),
-                                           shape_.rank(), dim, src.numel(),
-                                           static_cast<int>(mode), execution_stream);
-            } else {
-                LFS_ASSERT_MSG(false,
-                               "scatter_ encountered an unsupported CUDA dtype");
-            }
+            internal::backend_ops_for(*this).scatter(
+                internal::storage_ref(*this), internal::storage_ref(kernel_index),
+                internal::storage_ref(src_same_device), internal::strided_layout(*this),
+                internal::strided_layout(src_same_device),
+                internal::IndexProgram{
+                    .dim = dim,
+                    .scatter_mode = static_cast<int>(mode),
+                    .total_elements = src.numel(),
+                },
+                internal::ExecContext{execution_stream});
         } else {
             pin_operands({this, &kernel_index, &src_same_device});
             size_t outer = 1;
@@ -1139,25 +1056,16 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             pin_operands({this, &kernel_index, &src_same_device});
-            const int* idx_ptr = kernel_index.ptr<int>();
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
-            if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_index_copy(ptr<float>(), idx_ptr,
-                                              src_same_device.ptr<float>(), shape_.dims().data(),
-                                              shape_.rank(), dim, idx.numel(), execution_stream);
-            } else if (dtype_ == DataType::Int32) {
-                tensor_ops::launch_index_copy(ptr<int>(), idx_ptr,
-                                              src_same_device.ptr<int>(), shape_.dims().data(),
-                                              shape_.rank(), dim, idx.numel(), execution_stream);
-            } else if (dtype_ == DataType::Bool || dtype_ == DataType::UInt8) {
-                tensor_ops::launch_index_copy(ptr<uint8_t>(), idx_ptr,
-                                              src_same_device.ptr<uint8_t>(), shape_.dims().data(),
-                                              shape_.rank(), dim, idx.numel(), execution_stream);
-            } else {
-                LFS_ASSERT_MSG(false,
-                               "index_copy_ encountered an unsupported CUDA dtype");
-            }
+            internal::backend_ops_for(*this).index_copy(
+                internal::storage_ref(*this), internal::storage_ref(kernel_index),
+                internal::storage_ref(src_same_device), internal::strided_layout(*this),
+                internal::IndexProgram{
+                    .dim = dim,
+                    .index_size = idx.numel(),
+                },
+                internal::ExecContext{execution_stream});
         } else {
             pin_operands({this, &kernel_index, &src_same_device});
             size_t outer = 1, inner = 1;
@@ -1256,19 +1164,14 @@ namespace lfs::core {
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &idx_int32, &src_same_device}, stream());
 
-                // Dispatch based on data type
-                if (dtype_ == DataType::Float32) {
-                    tensor_ops::launch_index_add<float>(ptr<float>(), idx_int32.ptr<int>(),
-                                                        src_same_device.ptr<float>(), shape_.dims().data(),
-                                                        shape_.rank(), dim, idx.numel(), execution_stream);
-                } else if (dtype_ == DataType::Int32) {
-                    tensor_ops::launch_index_add<int>(ptr<int>(), idx_int32.ptr<int>(),
-                                                      src_same_device.ptr<int>(), shape_.dims().data(),
-                                                      shape_.rank(), dim, idx.numel(), execution_stream);
-                } else {
-                    LFS_ASSERT_MSG(false,
-                                   "index_add_ encountered an unsupported CUDA dtype");
-                }
+                internal::backend_ops_for(*this).index_add(
+                    internal::storage_ref(*this), internal::storage_ref(idx_int32),
+                    internal::storage_ref(src_same_device), internal::strided_layout(*this),
+                    internal::IndexProgram{
+                        .dim = dim,
+                        .index_size = idx.numel(),
+                    },
+                    internal::ExecContext{execution_stream});
                 // No sync - tensor operation
             } else {
                 // CPU path - dispatch based on data type
@@ -1352,19 +1255,14 @@ namespace lfs::core {
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &idx_int32, &src_same_device}, stream());
 
-            // Dispatch based on data type
-            if (dtype_ == DataType::Float32) {
-                tensor_ops::launch_index_add<float>(ptr<float>(), idx_int32.ptr<int>(),
-                                                    src_same_device.ptr<float>(), shape_.dims().data(),
-                                                    shape_.rank(), dim, idx.numel(), execution_stream);
-            } else if (dtype_ == DataType::Int32) {
-                tensor_ops::launch_index_add<int>(ptr<int>(), idx_int32.ptr<int>(),
-                                                  src_same_device.ptr<int>(), shape_.dims().data(),
-                                                  shape_.rank(), dim, idx.numel(), execution_stream);
-            } else {
-                LFS_ASSERT_MSG(false,
-                               "index_add_ encountered an unsupported CUDA dtype");
-            }
+            internal::backend_ops_for(*this).index_add(
+                internal::storage_ref(*this), internal::storage_ref(idx_int32),
+                internal::storage_ref(src_same_device), internal::strided_layout(*this),
+                internal::IndexProgram{
+                    .dim = dim,
+                    .index_size = idx.numel(),
+                },
+                internal::ExecContext{execution_stream});
             // No sync - tensor operation
         } else {
             pin_operands({this, &idx_same_device, &src_same_device});
@@ -1556,9 +1454,14 @@ namespace lfs::core {
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream(
                         {this, &idx_int32, &vals_same_device}, stream());
-                tensor_ops::launch_index_copy(ptr<float>(), idx_int32.ptr<int>(),
-                                              vals_same_device.ptr<float>(), shape_.dims().data(),
-                                              shape_.rank(), 0, idx_int32.numel(), execution_stream);
+                internal::backend_ops_for(*this).index_copy(
+                    internal::storage_ref(*this), internal::storage_ref(idx_int32),
+                    internal::storage_ref(vals_same_device), internal::strided_layout(*this),
+                    internal::IndexProgram{
+                        .dim = 0,
+                        .index_size = idx_int32.numel(),
+                    },
+                    internal::ExecContext{execution_stream});
                 return *this;
             }
         }
@@ -1611,9 +1514,16 @@ namespace lfs::core {
                 const size_t bytes = numel() * dtype_size(dtype_);
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &result}, stream());
-                LFS_CUDA_CHECK(cudaMemcpyAsync(data_ptr(), result.ptr<void>(), bytes,
-                                               cudaMemcpyDeviceToDevice, execution_stream));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
+                internal::backend_ops_for(*this).copy_device_to_device(
+                    internal::CopyRequest{
+                        .src = internal::storage_ref(result),
+                        .dst = internal::storage_ref(*this),
+                        .bytes = bytes,
+                        .synchronous = false,
+                        .context = internal::ExecContext{execution_stream},
+                    });
+                internal::backend_ops_for(*this).synchronize_stream(
+                    internal::ExecContext{stream()});
             } else {
                 // CPU implementation
                 pin_operands({this, &idx_same_device, &vals_same_device});
@@ -1776,8 +1686,10 @@ namespace lfs::core {
                 pin_operands({this, &row_idx_cpu, &col_idx_cpu, &vals_same_device});
                 const int64_t* row_ptr = row_idx_cpu.ptr<int64_t>();
                 const int64_t* col_ptr = col_idx_cpu.ptr<int64_t>();
-                const float* val_ptr = vals_same_device.ptr<float>();
-                float* data_ptr = ptr<float>();
+                const internal::StorageRef values_storage =
+                    internal::storage_ref(vals_same_device);
+                const internal::StorageRef destination_storage =
+                    internal::storage_ref(*this);
 
                 for (size_t i = 0; i < row_idx.numel(); ++i) {
                     int64_t r = row_ptr[i];
@@ -1792,12 +1704,16 @@ namespace lfs::core {
                         c >= 0 && c < col_bound) {
                         const size_t offset = static_cast<size_t>(r) * strides_[0] +
                                               static_cast<size_t>(c) * strides_[1];
-                        LFS_CUDA_CHECK(cudaMemcpyAsync(
-                            data_ptr + offset,
-                            val_ptr + i,
-                            sizeof(float),
-                            cudaMemcpyDeviceToDevice,
-                            stream()));
+                        internal::backend_ops_for(*this).copy_device_to_device(
+                            internal::CopyRequest{
+                                .src = internal::offset_storage_ref(
+                                    values_storage, i * sizeof(float)),
+                                .dst = internal::offset_storage_ref(
+                                    destination_storage, offset * sizeof(float)),
+                                .bytes = sizeof(float),
+                                .synchronous = false,
+                                .context = internal::ExecContext{stream()},
+                            });
                     }
                 }
             } else {
@@ -1922,15 +1838,22 @@ namespace lfs::core {
             size_t actual_count = count; // Start with Thrust's count
 
             if (device_ == Device::CUDA) {
-                // Get ACTUAL count from CUB (not Thrust which may differ!)
                 if (is_bool_like(dtype_)) {
-                    actual_count = tensor_ops::launch_nonzero_bool(ptr<unsigned char>(),
-                                                                   reinterpret_cast<int64_t*>(temp.data_ptr()),
-                                                                   numel(), numel(), stream());
+                    actual_count = internal::backend_ops_for(*this).nonzero_bool(
+                        internal::storage_ref(*this), internal::storage_ref(temp),
+                        internal::MaskProgram{
+                            .count = numel(),
+                            .selected_count = numel(),
+                        },
+                        internal::ExecContext{stream()});
                 } else {
-                    actual_count = tensor_ops::launch_nonzero(ptr<float>(),
-                                                              reinterpret_cast<int64_t*>(temp.data_ptr()),
-                                                              numel(), numel(), stream());
+                    actual_count = internal::backend_ops_for(*this).nonzero(
+                        internal::storage_ref(*this), internal::storage_ref(temp),
+                        internal::MaskProgram{
+                            .count = numel(),
+                            .selected_count = numel(),
+                        },
+                        internal::ExecContext{stream()});
                 }
 
                 // DEBUG: Check count mismatch
@@ -2161,14 +2084,8 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            float value;
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(&value, ptr<float>() + linear_idx, sizeof(float),
-                           cudaMemcpyDeviceToHost),
-                "Tensor::at readback (bytes={}, linear_index={}, tensor_shape={}, "
-                "source_pointer={})",
-                sizeof(float), linear_idx, shape_.str(),
-                static_cast<const void*>(ptr<float>() + linear_idx));
+            float value = 0.0f;
+            internal::read_scalar(*this, linear_idx, &value, sizeof(value));
             return value;
         }
         return ptr<float>()[linear_idx];
@@ -2187,8 +2104,15 @@ namespace lfs::core {
 
         if (t.numel() > 0 && data.data() != nullptr) {
             if (device == Device::CUDA) {
-                LFS_CUDA_CHECK(cudaMemcpy(t.data_ptr(), data.data(), t.bytes(),
-                                          cudaMemcpyHostToDevice));
+                internal::backend_ops_for(t).copy_host_to_device(
+                    internal::CopyRequest{
+                        .src = internal::raw_storage_ref(
+                            const_cast<T*>(data.data()), dtype),
+                        .dst = internal::storage_ref(t),
+                        .bytes = t.bytes(),
+                        .synchronous = true,
+                        .context = internal::ExecContext{},
+                    });
             } else {
                 std::memcpy(t.data_ptr(), data.data(), t.bytes());
             }
@@ -2245,11 +2169,15 @@ namespace lfs::core {
         unsigned char val = value ? 1 : 0;
 
         if (device_ == Device::CUDA) {
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(ptr<unsigned char>() + linear_idx, &val, 1,
-                           cudaMemcpyHostToDevice),
-                "Tensor::set_bool upload (bytes=1, linear_index={}, tensor_shape={}, value={})",
-                linear_idx, shape_.str(), value);
+            internal::backend_ops_for(*this).copy_host_to_device(
+                internal::CopyRequest{
+                    .src = internal::raw_storage_ref(&val),
+                    .dst = internal::offset_storage_ref(
+                        internal::storage_ref(*this), linear_idx),
+                    .bytes = 1,
+                    .synchronous = true,
+                    .context = internal::ExecContext{},
+                });
         } else {
             ptr<unsigned char>()[linear_idx] = val;
         }
@@ -2272,12 +2200,8 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            unsigned char val;
-            LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(&val, ptr<unsigned char>() + linear_idx, 1,
-                           cudaMemcpyDeviceToHost),
-                "Tensor::get_bool readback (bytes=1, linear_index={}, tensor_shape={})",
-                linear_idx, shape_.str());
+            unsigned char val = 0;
+            internal::read_scalar(*this, linear_idx, &val, sizeof(val));
             return val != 0;
         } else {
             return ptr<unsigned char>()[linear_idx] != 0;
@@ -2340,35 +2264,14 @@ namespace lfs::core {
 
         if (tensor_->device() == Device::CUDA) {
             pin_operands({tensor_, &mask_, &other});
-            switch (tensor_->dtype()) {
-            case DataType::Float32:
-                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
-                                                  mask_.ptr<unsigned char>(), other.ptr<float>(),
-                                                  tensor_->numel(), other.numel(), tensor_->stream());
-                break;
-            case DataType::Float16:
-                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<__half>(),
-                                                  mask_.ptr<unsigned char>(), other.ptr<__half>(),
-                                                  tensor_->numel(), other.numel(), tensor_->stream());
-                break;
-            case DataType::Int32:
-                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<int32_t>(),
-                                                  mask_.ptr<unsigned char>(), other.ptr<int32_t>(),
-                                                  tensor_->numel(), other.numel(), tensor_->stream());
-                break;
-            case DataType::Int64:
-                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<int64_t>(),
-                                                  mask_.ptr<unsigned char>(), other.ptr<int64_t>(),
-                                                  tensor_->numel(), other.numel(), tensor_->stream());
-                break;
-            case DataType::UInt8:
-            case DataType::Bool:
-                tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<uint8_t>(),
-                                                  mask_.ptr<unsigned char>(), other.ptr<uint8_t>(),
-                                                  tensor_->numel(), other.numel(), tensor_->stream());
-                break;
-            }
-            LFS_CUDA_CHECK(cudaGetLastError());
+            internal::backend_ops_for(*tensor_).masked_scatter(
+                internal::storage_ref(*tensor_), internal::storage_ref(mask_),
+                internal::storage_ref(other),
+                internal::MaskProgram{
+                    .count = tensor_->numel(),
+                    .selected_count = other.numel(),
+                },
+                internal::ExecContext{tensor_->stream()});
         } else {
             pin_operands({tensor_, &mask_, &other});
             const unsigned char* mask = mask_.ptr<unsigned char>();
@@ -2523,27 +2426,24 @@ namespace lfs::core {
 
             // IMPORTANT: Pass the INPUT shape to the kernel, not the output shape!
             // The kernel needs to know the source tensor dimensions to validate indices
-            const size_t* input_shape = shape_.dims().data();
-
-            // Use index_select kernel to gather into the output location
-            if (dtype_ == DataType::Float32) {
-                float* output_ptr = ptr<float>() + write_offset_elements;
-                tensor_ops::launch_index_select(ptr<float>(), idx_ptr,
-                                                output_ptr, input_shape,
-                                                shape_.rank(), 0, n_gather,
-                                                0 /*BoundaryMode::Assert*/, execution_stream);
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
-            } else if (dtype_ == DataType::UInt8 || dtype_ == DataType::Bool) {
-                uint8_t* output_ptr = ptr<uint8_t>() + write_offset_elements;
-                tensor_ops::launch_index_select(ptr<uint8_t>(), idx_ptr,
-                                                output_ptr, input_shape,
-                                                shape_.rank(), 0, n_gather,
-                                                0 /*BoundaryMode::Assert*/, execution_stream);
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
-            } else {
+            if (dtype_ != DataType::Float32 && dtype_ != DataType::UInt8 &&
+                dtype_ != DataType::Bool) {
                 LFS_ASSERT_MSG(false,
                                "append_gather encountered an unsupported CUDA dtype");
             }
+            internal::StorageRef output = internal::storage_ref(*this);
+            output.byte_offset += write_offset_elements * dtype_size(dtype_);
+            internal::backend_ops_for(*this).index_select(
+                internal::storage_ref(*this), internal::storage_ref(kernel_index),
+                output, internal::strided_layout(*this),
+                internal::IndexProgram{
+                    .dim = 0,
+                    .boundary_mode = 0,
+                    .index_size = n_gather,
+                },
+                internal::ExecContext{execution_stream});
+            internal::backend_ops_for(*this).synchronize_stream(
+                internal::ExecContext{stream()});
         } else {
             // CPU implementation (byte-wise; works for any dtype)
             const size_t elem = dtype_size(dtype_);
@@ -2667,9 +2567,14 @@ namespace lfs::core {
 
         // Zero out the appended region
         if (device_ == Device::CUDA) {
-            void* write_ptr = static_cast<uint8_t*>(data_) + write_offset_bytes;
-            LFS_CUDA_CHECK(cudaMemsetAsync(write_ptr, 0, zero_bytes, stream()));
-            LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
+            internal::backend_ops_for(*this).memset(internal::FillRequest{
+                .dst = internal::offset_storage_ref(
+                    internal::storage_ref(*this), write_offset_bytes),
+                .bytes = zero_bytes,
+                .value = 0,
+                .synchronous = true,
+                .context = internal::ExecContext{stream()},
+            });
         } else {
             void* write_ptr = static_cast<uint8_t*>(data_) + write_offset_bytes;
             std::memset(write_ptr, 0, zero_bytes);

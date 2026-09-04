@@ -3,8 +3,8 @@
 
 #pragma once
 
+#include "../backend/gpu_backend_ops.hpp"
 #include "core/cuda_error.hpp"
-#include "memory_pool.hpp"
 
 #include <cuda_runtime.h>
 #include <memory>
@@ -23,8 +23,14 @@ namespace lfs::core {
 
         void free_owned() {
             if (ptr_) {
-                // pool-liveness-aware free.
-                safe_cuda_pool_deallocate(ptr_, stream_);
+                internal::backend_ops(GpuBackend::CUDA).deallocate(internal::StorageRef{
+                                                                       .backend = GpuBackend::CUDA,
+                                                                       .data = ptr_,
+                                                                       .byte_offset = 0,
+                                                                       .dtype = DataType::UInt8,
+                                                                       .meta = nullptr,
+                                                                   },
+                                                                   internal::ExecContext{stream_});
                 ptr_ = nullptr;
                 size_ = 0;
             }
@@ -37,8 +43,9 @@ namespace lfs::core {
             : size_(count),
               stream_(stream) {
             if (count > 0) {
-                ptr_ = static_cast<T*>(
-                    CudaMemoryPool::instance().allocate(count * sizeof(T), stream));
+                const internal::StorageRef storage =
+                    internal::backend_ops(GpuBackend::CUDA).allocate(count * sizeof(T), alignof(T), internal::ExecContext{stream});
+                ptr_ = static_cast<T*>(storage.data);
                 if (!ptr_) {
                     ensure_cuda_success(
                         cudaErrorMemoryAllocation, "CudaMemoryPool(CudaDeviceMemory)",
@@ -109,7 +116,26 @@ namespace lfs::core {
             if (!ptr_ || count > size_) {
                 return cudaErrorInvalidValue;
             }
-            return cudaMemcpy(ptr_, host_ptr, count * sizeof(T), cudaMemcpyHostToDevice);
+            internal::backend_ops(GpuBackend::CUDA).copy_host_to_device(internal::CopyRequest{
+                .src = internal::StorageRef{
+                    .backend = GpuBackend::CUDA,
+                    .data = const_cast<T*>(host_ptr),
+                    .byte_offset = 0,
+                    .dtype = DataType::UInt8,
+                    .meta = nullptr,
+                },
+                .dst = internal::StorageRef{
+                    .backend = GpuBackend::CUDA,
+                    .data = ptr_,
+                    .byte_offset = 0,
+                    .dtype = DataType::UInt8,
+                    .meta = nullptr,
+                },
+                .bytes = count * sizeof(T),
+                .synchronous = true,
+                .context = internal::ExecContext{stream_},
+            });
+            return cudaSuccess;
         }
 
         // Copy data to host
@@ -117,7 +143,26 @@ namespace lfs::core {
             if (!ptr_ || count > size_) {
                 return cudaErrorInvalidValue;
             }
-            return cudaMemcpy(host_ptr, ptr_, count * sizeof(T), cudaMemcpyDeviceToHost);
+            internal::backend_ops(GpuBackend::CUDA).copy_device_to_host(internal::CopyRequest{
+                .src = internal::StorageRef{
+                    .backend = GpuBackend::CUDA,
+                    .data = ptr_,
+                    .byte_offset = 0,
+                    .dtype = DataType::UInt8,
+                    .meta = nullptr,
+                },
+                .dst = internal::StorageRef{
+                    .backend = GpuBackend::CUDA,
+                    .data = host_ptr,
+                    .byte_offset = 0,
+                    .dtype = DataType::UInt8,
+                    .meta = nullptr,
+                },
+                .bytes = count * sizeof(T),
+                .synchronous = true,
+                .context = internal::ExecContext{stream_},
+            });
+            return cudaSuccess;
         }
     };
 
