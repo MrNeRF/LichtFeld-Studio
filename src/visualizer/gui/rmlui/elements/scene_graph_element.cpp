@@ -2619,9 +2619,32 @@ namespace lfs::vis::gui {
     }
 
     void SceneGraphElement::requestDeleteSelection() {
-        if (!selectionActionState().all_delete_enabled)
+        if (selected_ids_.empty())
             return;
-        deleteSelectedNodes();
+
+        std::vector<core::NodeId> node_ids;
+        node_ids.reserve(selected_ids_.size());
+        for (const core::NodeId id : selected_ids_) {
+            const auto it = node_snapshots_.find(id);
+            if (it == node_snapshots_.end())
+                continue;
+
+            bool covered_by_selected_ancestor = false;
+            for (core::NodeId parent_id = it->second.parent_id;
+                 parent_id != core::NULL_NODE;) {
+                if (selected_ids_.contains(parent_id)) {
+                    covered_by_selected_ancestor = true;
+                    break;
+                }
+                const auto parent_it = node_snapshots_.find(parent_id);
+                if (parent_it == node_snapshots_.end())
+                    break;
+                parent_id = parent_it->second.parent_id;
+            }
+            if (!covered_by_selected_ancestor)
+                node_ids.push_back(id);
+        }
+        requestDeleteNodes(node_ids);
     }
 
     void SceneGraphElement::clearSelectedNodes() {

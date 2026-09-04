@@ -69,10 +69,12 @@ namespace lfs::vis::op {
     };
 
     struct SceneTopologyProof {
+        std::vector<lfs::core::Uuid> roots;
         std::vector<SceneTopologyNodeProof> nodes;
         lfs::core::Uuid training_model_uuid;
         bool consolidated = false;
         std::size_t consolidated_extent = 0;
+        bool scoped = false;
 
         friend bool operator==(
             const SceneTopologyProof&,
@@ -431,6 +433,7 @@ namespace lfs::vis::op {
         bool include_selected_nodes = true;
         bool include_scene_context = true;
         bool preserve_node_ids = false;
+        bool scoped_topology = false;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -503,6 +506,8 @@ namespace lfs::vis::op {
     struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
         bool preserve_node_ids = false;
+        bool complete_root_order = false;
+        bool scoped_topology = false;
         std::optional<std::vector<lfs::core::Uuid>> selected_node_uuids;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;

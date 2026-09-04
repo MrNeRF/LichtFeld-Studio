@@ -4271,6 +4271,16 @@ namespace lfs::core {
                         }
                     }
                 }
+            } else if (src_type == NodeType::ELLIPSOID) {
+                const auto* src_for_ellipsoid = getNodeById(src_id);
+                if (src_for_ellipsoid && src_for_ellipsoid->ellipsoid && parent_id != NULL_NODE) {
+                    new_id = addEllipsoid(new_name, parent_id);
+                    if (auto* new_node = getNodeById(new_id)) {
+                        if (new_node->ellipsoid) {
+                            *new_node->ellipsoid = *src_for_ellipsoid->ellipsoid;
+                        }
+                    }
+                }
             } else if (src_type == NodeType::MESH) {
                 const auto* src_for_mesh = getNodeById(src_id);
                 if (src_for_mesh && src_for_mesh->mesh) {

@@ -106,11 +106,23 @@ namespace {
             if (include_ids)
                 out << node->id << ':';
             out << node->uuid.to_string() << ':' << node->name << ':'
-                << static_cast<int>(node->type) << ':' << node->parent_id << ':'
+                << static_cast<int>(node->type) << ':';
+            if (include_ids) {
+                out << node->parent_id;
+            } else if (const auto* parent = scene.getNodeById(node->parent_id)) {
+                out << parent->uuid.to_string();
+            }
+            out << ':'
                 << static_cast<bool>(node->visible) << ':' << static_cast<bool>(node->locked) << ':'
                 << node->gaussian_count.load(std::memory_order_acquire) << ':';
-            for (const NodeId child : node->children)
-                out << child << ',';
+            for (const NodeId child : node->children) {
+                if (include_ids) {
+                    out << child;
+                } else if (const auto* child_node = scene.getNodeById(child)) {
+                    out << child_node->uuid.to_string();
+                }
+                out << ',';
+            }
             const auto transform = scene.getNodeTransform(node->id);
             for (int col = 0; col < 4; ++col)
                 for (int row = 0; row < 4; ++row)
@@ -154,8 +166,8 @@ namespace {
             if (!other.contains(uuid))
                 continue;
             const auto current_it = current.find(uuid);
-            ASSERT_NE(current_it, current.end())
-                << "seed=" << seed << " operation=" << operation << " kind=" << kind;
+            if (current_it == current.end())
+                continue;
             EXPECT_EQ(current_it->second, id)
                 << "seed=" << seed << " operation=" << operation << " kind=" << kind;
         }
@@ -433,6 +445,97 @@ namespace {
         EXPECT_EQ(scene_state(*manager_), before);
     }
 
+    TEST_F(SceneGraphRegression, DuplicatePreservesEllipsoidChild) {
+        auto& scene = manager_->getScene();
+        const NodeId source_id = scene.addSplat("source", make_cpu_splat(2, 0.0f));
+        ASSERT_NE(source_id, lfs::core::NULL_NODE);
+        const NodeId ellipsoid_id = scene.addEllipsoid("source_ellipsoid", source_id);
+        ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+        auto* source_ellipsoid = scene.getEllipsoidData(ellipsoid_id);
+        ASSERT_NE(source_ellipsoid, nullptr);
+        source_ellipsoid->radii = glm::vec3(2.0f, 3.0f, 4.0f);
+        source_ellipsoid->inverse = true;
+        source_ellipsoid->enabled = true;
+        scene.setNodeTransform(ellipsoid_id, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+        const auto expected_data = *source_ellipsoid;
+        const auto expected_transform = scene.getNodeById(ellipsoid_id)->local_transform.get();
+
+        const auto duplicate_name = manager_->duplicateNodeTree(source_id);
+        ASSERT_FALSE(duplicate_name.empty());
+        const auto* duplicate = scene.getNode(duplicate_name);
+        ASSERT_NE(duplicate, nullptr);
+        ASSERT_NE(duplicate->uuid, scene.getNodeById(source_id)->uuid);
+        const NodeId duplicate_ellipsoid_id = scene.getEllipsoidForSplat(duplicate->id);
+        ASSERT_NE(duplicate_ellipsoid_id, lfs::core::NULL_NODE);
+        const auto* duplicate_ellipsoid = scene.getEllipsoidData(duplicate_ellipsoid_id);
+        ASSERT_NE(duplicate_ellipsoid, nullptr);
+        EXPECT_EQ(duplicate_ellipsoid->radii, expected_data.radii);
+        EXPECT_EQ(duplicate_ellipsoid->inverse, expected_data.inverse);
+        EXPECT_EQ(duplicate_ellipsoid->enabled, expected_data.enabled);
+        EXPECT_EQ(scene.getNodeById(duplicate_ellipsoid_id)->local_transform.get(), expected_transform);
+    }
+
+    TEST_F(SceneGraphRegression, PastePreservesEllipsoidChild) {
+        auto& scene = manager_->getScene();
+        const NodeId source_id = scene.addSplat("source", make_cpu_splat(2, 0.0f));
+        ASSERT_NE(source_id, lfs::core::NULL_NODE);
+        const NodeId ellipsoid_id = scene.addEllipsoid("source_ellipsoid", source_id);
+        ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+        auto* source_ellipsoid = scene.getEllipsoidData(ellipsoid_id);
+        ASSERT_NE(source_ellipsoid, nullptr);
+        source_ellipsoid->radii = glm::vec3(2.0f, 3.0f, 4.0f);
+        source_ellipsoid->inverse = true;
+        source_ellipsoid->enabled = true;
+        scene.setNodeTransform(ellipsoid_id, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+        const auto expected_data = *source_ellipsoid;
+        const auto expected_transform = scene.getNodeById(ellipsoid_id)->local_transform.get();
+
+        manager_->selectNode(source_id);
+        ASSERT_TRUE(manager_->copySelectedNodes());
+        manager_->clearSelection();
+        const auto pasted = manager_->pasteNodes();
+        ASSERT_EQ(pasted.size(), 1u);
+        ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+        const auto* pasted_node = scene.getNode(pasted.front());
+        ASSERT_NE(pasted_node, nullptr);
+        const NodeId pasted_ellipsoid_id = scene.getEllipsoidForSplat(pasted_node->id);
+        ASSERT_NE(pasted_ellipsoid_id, lfs::core::NULL_NODE);
+        const auto* pasted_ellipsoid = scene.getEllipsoidData(pasted_ellipsoid_id);
+        ASSERT_NE(pasted_ellipsoid, nullptr);
+        EXPECT_EQ(pasted_ellipsoid->radii, expected_data.radii);
+        EXPECT_EQ(pasted_ellipsoid->inverse, expected_data.inverse);
+        EXPECT_EQ(pasted_ellipsoid->enabled, expected_data.enabled);
+        EXPECT_EQ(scene.getNodeById(pasted_ellipsoid_id)->local_transform.get(), expected_transform);
+    }
+
+    TEST_F(SceneGraphRegression, MergeHonorsEllipsoidCrop) {
+        auto& scene = manager_->getScene();
+        const NodeId group_id = scene.addGroup("ellipsoid_merge");
+        const NodeId splat_id = scene.addSplat(
+            "ellipsoid_model",
+            make_cpu_splat(3, -2.0f),
+            group_id);
+        ASSERT_NE(group_id, lfs::core::NULL_NODE);
+        ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+        const NodeId ellipsoid_id = scene.addEllipsoid("ellipsoid_model_ellipsoid", splat_id);
+        ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+        auto* ellipsoid = scene.getEllipsoidData(ellipsoid_id);
+        ASSERT_NE(ellipsoid, nullptr);
+        ellipsoid->radii = glm::vec3(0.5f);
+        ellipsoid->enabled = true;
+        scene.setNodeTransform(
+            ellipsoid_id,
+            glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 1.0f, -1.0f)));
+
+        ASSERT_EQ(manager_->mergeGroupNode(group_id), "ellipsoid_merge");
+        const auto* merged = scene.getNode("ellipsoid_merge");
+        ASSERT_NE(merged, nullptr);
+        ASSERT_NE(merged->model, nullptr);
+        EXPECT_EQ(merged->model->size(), 1);
+        EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
+                  (std::vector<float>{-1.0f, 1.0f, -1.0f}));
+    }
+
     TEST_F(SceneGraphFuzzTest, BatchRemovalRejectsDuplicateIdsAtomically) {
         seed_scene();
         const auto& scene = manager_->getScene();
@@ -450,12 +553,45 @@ namespace {
         const auto& scene = manager_->getScene();
         const NodeId a = scene.getNodeIdByName("a");
         const NodeId d = scene.getNodeIdByName("d");
-        const std::string before = scene_state(*manager_);
+        const std::string before_graph = scene_state(*manager_, false);
+        const auto before_ids = node_ids_by_uuid(*manager_);
+        const auto a_uuid = scene.getNodeById(a)->uuid;
+        const auto d_uuid = scene.getNodeById(d)->uuid;
 
         ASSERT_TRUE(manager_->removeNodesByIdsWithResult({a, d}));
         ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
         ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
-        EXPECT_EQ(scene_state(*manager_), before);
+        EXPECT_EQ(scene_state(*manager_, false), before_graph);
+        const auto current_ids = node_ids_by_uuid(*manager_);
+        for (const auto& [uuid, id] : before_ids) {
+            if (uuid == a_uuid || uuid == d_uuid)
+                continue;
+            const auto current_id = current_ids.find(uuid);
+            ASSERT_NE(current_id, current_ids.end());
+            EXPECT_EQ(current_id->second, id);
+        }
+    }
+
+    TEST_F(SceneGraphRegression, ScopedBatchDeleteRootUndoRedoIgnoresUnrelatedRoots) {
+        auto& scene = manager_->getScene();
+        const NodeId deleted_root = scene.addGroup("deleted_root");
+        const NodeId other_root = scene.addGroup("other_root");
+        ASSERT_NE(deleted_root, lfs::core::NULL_NODE);
+        ASSERT_NE(other_root, lfs::core::NULL_NODE);
+        ASSERT_NE(scene.addSplat("deleted_child", make_cuda_splat(1, 0.0f), deleted_root),
+                  lfs::core::NULL_NODE);
+
+        const auto before = scene_state(*manager_, false);
+        ASSERT_TRUE(manager_->removeNodesByIdsWithResult({deleted_root}));
+        ASSERT_NE(scene.addGroup("unrelated_root"), lfs::core::NULL_NODE);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_NE(scene.getNode("deleted_root"), nullptr);
+        EXPECT_EQ(scene.getNode("unrelated_root"), nullptr);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+        EXPECT_EQ(scene.getNode("deleted_root"), nullptr);
+        EXPECT_EQ(scene.getNode("unrelated_root"), nullptr);
+        ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+        EXPECT_EQ(scene_state(*manager_, false), before);
     }
 
     TEST_F(SceneGraphFuzzTest, MoveNodeIntoSplatLeafIsRejected) {
@@ -519,9 +655,10 @@ namespace {
         const auto nested_transform = glm::rotate(glm::mat4(1.0f), 0.35f, glm::vec3(0.0f, 1.0f, 0.0f));
         scene.setNodeTransform(left, left_transform);
         scene.setNodeTransform(nested, nested_transform);
-        const auto before = scene_state(*manager_);
         manager_->selectNode(left);
         ASSERT_TRUE(manager_->copySelectedNodes());
+        manager_->clearSelection();
+        const auto before = scene_state(*manager_);
 
         const auto pasted = manager_->pasteNodes();
         ASSERT_EQ(pasted.size(), 1u);
@@ -699,8 +836,8 @@ namespace {
                 };
 
                 std::string before = scene_state(*manager_);
-                const std::string before_graph = scene_state(*manager_, false);
-                const auto before_ids = node_ids_by_uuid(*manager_);
+                std::string before_graph = scene_state(*manager_, false);
+                auto before_ids = node_ids_by_uuid(*manager_);
                 const size_t undo_before = lfs::vis::op::undoHistory().undoCount();
                 const int kind = static_cast<int>(rng() % 18);
                 bool changed = false;
@@ -801,6 +938,11 @@ namespace {
                     if (node) {
                         manager_->selectNodesById({node->id});
                         manager_->copySelectedNodes();
+                        // Selecting the node is part of the delete command's
+                        // pre-state, just like it is in the GUI.
+                        before = scene_state(*manager_);
+                        before_graph = scene_state(*manager_, false);
+                        before_ids = node_ids_by_uuid(*manager_);
                         if ((rng() & 1u) != 0) {
                             const auto result = manager_->removeNodeWithResult(node->id);
                             changed = result.has_value();
@@ -864,23 +1006,29 @@ namespace {
                     if (!undo_frames.empty() && lfs::vis::op::undoHistory().canUndo() &&
                         (redo_frames.empty() || (rng() & 1u) == 0)) {
                         const auto frame = undo_frames.back();
+                        const auto replay_ids = node_ids_by_uuid(*manager_);
                         const auto result = lfs::vis::op::undoHistory().undo();
-                        ASSERT_TRUE(result.success) << result.error;
+                        ASSERT_TRUE(result.success)
+                            << result.error << " seed=" << seed << " operation=" << operation
+                            << " kind=" << frame.kind;
                         EXPECT_EQ(scene_state(*manager_, false), frame.before_graph)
                             << "seed=" << seed << " operation=" << operation << " kind=" << frame.kind;
                         if (frame.stable_common_ids)
-                            expect_common_node_ids(*manager_, frame.before_ids, frame.after_ids,
+                            expect_common_node_ids(*manager_, replay_ids, frame.before_ids,
                                                    seed, operation, frame.kind);
                         undo_frames.pop_back();
                         redo_frames.push_back(frame);
                     } else if (!redo_frames.empty() && lfs::vis::op::undoHistory().canRedo()) {
                         const auto frame = redo_frames.back();
+                        const auto replay_ids = node_ids_by_uuid(*manager_);
                         const auto result = lfs::vis::op::undoHistory().redo();
-                        ASSERT_TRUE(result.success) << result.error;
+                        ASSERT_TRUE(result.success)
+                            << result.error << " seed=" << seed << " operation=" << operation
+                            << " kind=" << frame.kind;
                         EXPECT_EQ(scene_state(*manager_, false), frame.after_graph)
                             << "seed=" << seed << " operation=" << operation << " kind=" << frame.kind;
                         if (frame.stable_common_ids)
-                            expect_common_node_ids(*manager_, frame.before_ids, frame.after_ids,
+                            expect_common_node_ids(*manager_, replay_ids, frame.after_ids,
                                                    seed, operation, frame.kind);
                         redo_frames.pop_back();
                         undo_frames.push_back(frame);
@@ -965,8 +1113,22 @@ namespace {
                         .before_ids = before_ids,
                         .after_ids = after_ids,
                         .kind = kind,
-                        .stable_common_ids = kind == 3 || kind == 4 || kind == 5 || kind == 6 || kind == 17,
+                        // UUIDs are the history identity. Every UUID present in
+                        // both snapshots must retain its live node ID; only
+                        // nodes absent immediately before replay may receive
+                        // fresh IDs.
+                        .stable_common_ids = true,
                     });
+                    redo_frames.clear();
+                } else if (history_candidate && undo_after == undo_before && !undo_frames.empty()) {
+                    // Property entries can coalesce with the previous history
+                    // entry.  Keep the model of the history stack in sync with
+                    // the merged entry instead of replaying the old after-state.
+                    auto& frame = undo_frames.back();
+                    frame.after = after;
+                    frame.after_graph = after_graph;
+                    frame.after_ids = after_ids;
+                    frame.kind = kind;
                     redo_frames.clear();
                 }
                 if (untracked_mutation) {

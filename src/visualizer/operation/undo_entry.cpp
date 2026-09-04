@@ -1657,28 +1657,10 @@ namespace lfs::vis::op {
                 }
             };
 
-            const auto live_roots = scene.getRootNodes();
-            std::unordered_set<lfs::core::Uuid> desired_root_uuids;
-            desired_root_uuids.reserve(desired.roots.size());
-            const bool has_complete_root_order =
-                desired.roots.size() == live_roots.size() &&
-                std::ranges::all_of(desired.roots, [&](const auto& root) {
-                    return root.parent_uuid.is_nil() && desired_root_uuids.insert(root.uuid).second;
-                }) &&
-                std::ranges::all_of(live_roots, [&](const auto id) {
-                    const auto* node = scene.getNodeById(id);
-                    return node && desired_root_uuids.contains(node->uuid);
-                });
-
-            // A snapshot may intentionally cover only one root of a larger
-            // scene. Its root order_index is relative to the captured roots,
-            // not a command to reorder unrelated live roots. Child lists are
-            // complete for every captured parent and remain safe to restore.
-            // ID-preserving replacement snapshots (currently merge and batch
-            // deletion) also carry an explicit scene-root position for their
-            // replacement subtree, even when the snapshot is scoped to that
-            // subtree.
-            if (has_complete_root_order || desired.preserve_node_ids) {
+            if (desired.complete_root_order) {
+                // Complete root snapshots record positions in the global root
+                // list. Apply those absolute positions after all nodes exist,
+                // so fresh IDs cannot make an older entry rotate the roots.
                 for (size_t i = 0; i < desired.roots.size(); ++i) {
                     const auto& root = desired.roots[i];
                     const auto parent_id = root.parent_uuid.is_nil()
@@ -1715,6 +1697,8 @@ namespace lfs::vis::op {
             std::vector<lfs::core::NodeId> selected_node_ids;
             selected_node_ids.reserve(selected_node_uuids.size());
             for (const auto& uuid : selected_node_uuids) {
+                if (uuid.is_nil())
+                    continue;
                 const auto id = scene_manager.getScene().getNodeIdByUuid(uuid);
                 if (id != lfs::core::NULL_NODE) {
                     selected_node_ids.push_back(id);
@@ -1729,10 +1713,11 @@ namespace lfs::vis::op {
             }
         }
 
-        [[nodiscard]] SceneTopologyProof
-        captureTopologyProof(
-            const lfs::core::Scene& scene) {
+        [[nodiscard]] SceneTopologyProof captureTopologyProof(
+            const lfs::core::Scene& scene,
+            const SceneGraphStateSnapshot* scope = nullptr) {
             SceneTopologyProof proof;
+            proof.scoped = scope && scope->scoped_topology;
             proof.training_model_uuid =
                 scene.getTrainingModelNodeUuid();
             proof.consolidated =
@@ -1741,9 +1726,23 @@ namespace lfs::vis::op {
                 scene.getTotalGaussianCount();
 
             const auto nodes = scene.getNodes();
-            proof.nodes.reserve(nodes.size());
+            std::unordered_set<lfs::core::Uuid> scoped_uuids;
+            if (proof.scoped) {
+                for (const auto& root : scope->roots) {
+                    collectSnapshotUuids(root, scoped_uuids);
+                    proof.roots.push_back(root.uuid);
+                }
+            } else {
+                proof.roots.reserve(scene.getRootNodes().size());
+                for (const auto root_id : scene.getRootNodes()) {
+                    if (const auto* root = scene.getNodeById(root_id)) {
+                        proof.roots.push_back(root->uuid);
+                    }
+                }
+            }
+            proof.nodes.reserve(proof.scoped ? scoped_uuids.size() : nodes.size());
             for (const auto* node : nodes) {
-                if (!node) {
+                if (!node || (proof.scoped && !scoped_uuids.contains(node->uuid))) {
                     continue;
                 }
                 SceneTopologyNodeProof item{
@@ -1801,8 +1800,9 @@ namespace lfs::vis::op {
                     if (const auto* child =
                             scene.getNodeById(
                                 child_id)) {
-                        item.children.push_back(
-                            child->uuid);
+                        if (!proof.scoped || scoped_uuids.contains(child->uuid)) {
+                            item.children.push_back(child->uuid);
+                        }
                     }
                 }
                 proof.nodes.push_back(
@@ -1834,10 +1834,183 @@ namespace lfs::vis::op {
                  current == *allowed_compound_transition)) {
                 return;
             }
+
+            const auto uuid_text = [](const lfs::core::Uuid& uuid) {
+                return uuid.is_nil() ? std::string("<root>") : uuid.to_string();
+            };
+            const auto list_text = [&](const std::vector<lfs::core::Uuid>& uuids) {
+                std::string result = "[";
+                for (size_t i = 0; i < uuids.size(); ++i) {
+                    if (i > 0)
+                        result += ", ";
+                    result += uuid_text(uuids[i]);
+                }
+                result += ']';
+                return result;
+            };
+
+            if (expected.scoped) {
+                std::string difference;
+                std::unordered_set<lfs::core::Uuid> expected_uuids;
+                expected_uuids.reserve(expected.nodes.size());
+                for (const auto& node : expected.nodes) {
+                    expected_uuids.insert(node.uuid);
+                }
+
+                const auto current_node = [&](const lfs::core::Uuid& uuid) {
+                    return std::ranges::find(current.nodes, uuid, &SceneTopologyNodeProof::uuid);
+                };
+                for (const auto& expected_node : expected.nodes) {
+                    const auto current_it = current_node(expected_node.uuid);
+                    if (current_it == current.nodes.end()) {
+                        difference = "missing scoped node " + uuid_text(expected_node.uuid);
+                        break;
+                    }
+                    if (expected_node.parent_uuid != current_it->parent_uuid) {
+                        difference = "scoped parent mismatch for " + uuid_text(expected_node.uuid) +
+                                     ": expected " + uuid_text(expected_node.parent_uuid) +
+                                     ", actual " + uuid_text(current_it->parent_uuid);
+                        break;
+                    }
+                    std::vector<lfs::core::Uuid> current_children;
+                    for (const auto& child : current_it->children) {
+                        if (expected_uuids.contains(child)) {
+                            current_children.push_back(child);
+                        }
+                    }
+                    if (expected_node.children != current_children) {
+                        difference = "scoped child order mismatch for " + uuid_text(expected_node.uuid) +
+                                     ": expected " + list_text(expected_node.children) +
+                                     ", actual " + list_text(current_children);
+                        break;
+                    }
+                    if (expected_node.type != current_it->type ||
+                        expected_node.primary_extent != current_it->primary_extent ||
+                        expected_node.secondary_extent != current_it->secondary_extent) {
+                        difference = "scoped node payload/topology mismatch for " +
+                                     uuid_text(expected_node.uuid);
+                        break;
+                    }
+                }
+
+                if (difference.empty()) {
+                    std::vector<std::pair<lfs::core::Uuid, std::vector<lfs::core::Uuid>>> sibling_groups;
+                    for (const auto& root_uuid : expected.roots) {
+                        const auto root_it = current_node(root_uuid);
+                        const auto parent_uuid = root_it == current.nodes.end()
+                                                     ? lfs::core::Uuid{}
+                                                     : root_it->parent_uuid;
+                        const auto group_it = std::ranges::find(sibling_groups, parent_uuid,
+                                                                [](const auto& group) { return group.first; });
+                        if (group_it == sibling_groups.end()) {
+                            sibling_groups.emplace_back(parent_uuid,
+                                                        std::vector<lfs::core::Uuid>{root_uuid});
+                        } else {
+                            group_it->second.push_back(root_uuid);
+                        }
+                    }
+                    for (const auto& [parent_uuid, expected_siblings] : sibling_groups) {
+                        std::vector<lfs::core::Uuid> actual_siblings;
+                        const auto sibling_ids = parent_uuid.is_nil()
+                                                     ? scene.getRootNodes()
+                                                     : (scene.getNodeIdByUuid(parent_uuid) == lfs::core::NULL_NODE
+                                                            ? std::vector<lfs::core::NodeId>{}
+                                                            : scene.getNodeByUuid(parent_uuid)->children);
+                        for (const auto sibling_id : sibling_ids) {
+                            const auto* sibling = scene.getNodeById(sibling_id);
+                            if (sibling && std::ranges::find(expected_siblings, sibling->uuid) != expected_siblings.end()) {
+                                actual_siblings.push_back(sibling->uuid);
+                            }
+                        }
+                        if (expected_siblings != actual_siblings) {
+                            difference = "scoped sibling order mismatch under " + uuid_text(parent_uuid) +
+                                         ": expected " + list_text(expected_siblings) +
+                                         ", actual " + list_text(actual_siblings);
+                            break;
+                        }
+                    }
+                }
+
+                if (difference.empty()) {
+                    return;
+                }
+                throw HistoryCorruptionError(
+                    "Cannot replay undo entry '" + std::string(entry_name) +
+                    "' after scene topology changed (" + difference + ")");
+            }
+
+            std::string difference;
+            const size_t root_count = std::min(expected.roots.size(), current.roots.size());
+            for (size_t i = 0; i < root_count; ++i) {
+                if (expected.roots[i] != current.roots[i]) {
+                    difference = "root order mismatch at index " + std::to_string(i) + ": expected " +
+                                 uuid_text(expected.roots[i]) + ", actual " + uuid_text(current.roots[i]);
+                    break;
+                }
+            }
+            if (difference.empty() && expected.roots.size() != current.roots.size()) {
+                difference = "root order length mismatch: expected " + std::to_string(expected.roots.size()) +
+                             ", actual " + std::to_string(current.roots.size()) +
+                             "; expected roots=" + list_text(expected.roots) +
+                             ", actual roots=" + list_text(current.roots);
+            }
+
+            if (difference.empty()) {
+                const size_t node_count = std::min(expected.nodes.size(), current.nodes.size());
+                for (size_t i = 0; i < node_count; ++i) {
+                    const auto& expected_node = expected.nodes[i];
+                    const auto& current_node = current.nodes[i];
+                    if (expected_node.uuid != current_node.uuid) {
+                        difference = "node order/set mismatch at index " + std::to_string(i) +
+                                     ": expected " + uuid_text(expected_node.uuid) +
+                                     ", actual " + uuid_text(current_node.uuid);
+                        break;
+                    }
+                    if (expected_node.parent_uuid != current_node.parent_uuid) {
+                        difference = "parent mismatch for " + uuid_text(expected_node.uuid) +
+                                     ": expected " + uuid_text(expected_node.parent_uuid) +
+                                     ", actual " + uuid_text(current_node.parent_uuid);
+                        break;
+                    }
+                    if (expected_node.children != current_node.children) {
+                        difference = "child order mismatch for " + uuid_text(expected_node.uuid) +
+                                     ": expected " + list_text(expected_node.children) +
+                                     ", actual " + list_text(current_node.children);
+                        break;
+                    }
+                    if (expected_node.type != current_node.type ||
+                        expected_node.primary_extent != current_node.primary_extent ||
+                        expected_node.secondary_extent != current_node.secondary_extent) {
+                        difference = "node payload/topology mismatch for " + uuid_text(expected_node.uuid);
+                        break;
+                    }
+                }
+                if (difference.empty() && expected.nodes.size() != current.nodes.size()) {
+                    difference = "node count mismatch: expected " + std::to_string(expected.nodes.size()) +
+                                 ", actual " + std::to_string(current.nodes.size());
+                }
+            }
+
+            if (difference.empty() && expected.training_model_uuid != current.training_model_uuid) {
+                difference = "training-model UUID mismatch: expected " +
+                             uuid_text(expected.training_model_uuid) + ", actual " +
+                             uuid_text(current.training_model_uuid);
+            }
+            if (difference.empty() && expected.consolidated != current.consolidated) {
+                difference = "consolidation-state mismatch";
+            }
+            if (difference.empty() && expected.consolidated_extent != current.consolidated_extent) {
+                difference = "consolidated extent mismatch: expected " +
+                             std::to_string(expected.consolidated_extent) + ", actual " +
+                             std::to_string(current.consolidated_extent);
+            }
+            if (difference.empty())
+                difference = "unknown topology-proof mismatch";
+
             throw HistoryCorruptionError(
                 "Cannot replay undo entry '" +
                 std::string(entry_name) +
-                "' after scene topology changed");
+                "' after scene topology changed (" + difference + ")");
         }
     } // namespace
 
@@ -3160,6 +3333,7 @@ namespace lfs::vis::op {
                                                                     const SceneGraphCaptureOptions options) {
         SceneGraphStateSnapshot snapshot;
         snapshot.preserve_node_ids = options.preserve_node_ids;
+        snapshot.scoped_topology = options.scoped_topology;
         if (options.include_selected_nodes) {
             const auto selected_node_ids = scene_manager.getSelectedNodeIds();
             std::vector<std::string> selected_node_names;
@@ -3167,7 +3341,8 @@ namespace lfs::vis::op {
             selected_node_names.reserve(selected_node_ids.size());
             selected_node_uuids.reserve(selected_node_ids.size());
             for (const auto id : selected_node_ids) {
-                if (const auto* node = scene_manager.getScene().getNodeById(id)) {
+                if (const auto* node = scene_manager.getScene().getNodeById(id);
+                    node && !node->uuid.is_nil()) {
                     selected_node_names.push_back(node->name);
                     selected_node_uuids.push_back(node->uuid);
                 }
@@ -3196,6 +3371,12 @@ namespace lfs::vis::op {
         }
 
         const auto& scene = scene_manager.getScene();
+        const auto scene_roots = scene.getRootNodes();
+        const std::set<lfs::core::NodeId> scene_root_ids(scene_roots.begin(), scene_roots.end());
+        snapshot.complete_root_order = unique_ids.size() == scene_roots.size() &&
+                                       std::ranges::all_of(unique_ids, [&](const auto id) {
+                                           return scene_root_ids.contains(id);
+                                       });
         const std::set<lfs::core::NodeId> requested(unique_ids.begin(), unique_ids.end());
         std::vector<const lfs::core::SceneNode*> root_nodes;
         root_nodes.reserve(unique_ids.size());
@@ -3261,7 +3442,7 @@ namespace lfs::vis::op {
           after_(std::move(after)),
           expected_topology_(
               captureTopologyProof(
-                  scene.getScene())) {}
+                  scene.getScene(), &after_)) {}
 
     void SceneGraphPatchEntry::applyState(const SceneGraphStateSnapshot& desired,
                                           const SceneGraphStateSnapshot& current) {
@@ -3269,7 +3450,18 @@ namespace lfs::vis::op {
             scene_.getScene(),
             expected_topology_, name_);
         auto& scene = scene_.getScene();
-        const auto uuids_to_remove = uuidsToRemove(desired, current);
+        auto uuids_to_remove = uuidsToRemove(desired, current);
+        if (current.complete_root_order) {
+            std::unordered_set<lfs::core::Uuid> desired_uuids;
+            for (const auto& root : desired.roots) {
+                collectSnapshotUuids(root, desired_uuids);
+            }
+            for (const auto* node : scene_.getScene().getNodes()) {
+                if (node && !desired_uuids.contains(node->uuid)) {
+                    uuids_to_remove.insert(node->uuid);
+                }
+            }
+        }
 
         // Scene::Transaction batches events only. All logical failure paths must be
         // exhausted before the first removal so an invalid snapshot cannot partially
@@ -3389,7 +3581,7 @@ namespace lfs::vis::op {
             scene_.publishLiveCameraCount();
         }
         expected_topology_ =
-            captureTopologyProof(scene);
+            captureTopologyProof(scene, &desired);
     }
 
     void SceneGraphPatchEntry::undo() {

@@ -317,6 +317,8 @@ namespace lfs::vis {
     private:
         enum class HistoryMode : uint8_t {
             Record,
+            RecordFull,
+            RecordPreserveIds,
             Skip,
         };
 
@@ -405,6 +407,7 @@ namespace lfs::vis {
                 bool locked = false;
                 std::unique_ptr<lfs::core::SplatData> data;
                 std::unique_ptr<core::CropBoxData> cropbox;
+                std::unique_ptr<core::EllipsoidData> ellipsoid;
                 std::vector<HierarchyNode> children;
             };
             std::optional<HierarchyNode> hierarchy;

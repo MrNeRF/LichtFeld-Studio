@@ -1356,6 +1356,73 @@ TEST_F(UndoHistoryTest, GaussianShWriteScattersOnlySelectedRowsAndIsUndoable) {
               std::vector<float>(replacement.begin() + 9, replacement.end()));
 }
 
+TEST_F(UndoHistoryTest, DeleteSplatUndoRestoresVisibleCropBox) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto splat_id = scene.addSplat("model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto cropbox_id = scene.addCropBox("model_cropbox", splat_id);
+    ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    scene.setNodeVisibility(cropbox_id, true);
+    auto* cropbox = scene.getMutableNode("model_cropbox");
+    ASSERT_NE(cropbox, nullptr);
+    ASSERT_NE(cropbox->cropbox, nullptr);
+    cropbox->cropbox->enabled = true;
+    const auto expected_data = *cropbox->cropbox;
+
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(splat_id));
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+
+    const auto* restored_splat = scene.getNode("model");
+    ASSERT_NE(restored_splat, nullptr);
+    const auto restored_cropbox_id = scene.getCropBoxForSplat(restored_splat->id);
+    ASSERT_NE(restored_cropbox_id, lfs::core::NULL_NODE);
+    const auto* restored_cropbox = scene.getNodeById(restored_cropbox_id);
+    ASSERT_NE(restored_cropbox, nullptr);
+    ASSERT_NE(restored_cropbox->cropbox, nullptr);
+    EXPECT_TRUE(restored_cropbox->visible);
+    EXPECT_EQ(restored_cropbox->cropbox->min, expected_data.min);
+    EXPECT_EQ(restored_cropbox->cropbox->max, expected_data.max);
+    EXPECT_EQ(restored_cropbox->cropbox->inverse, expected_data.inverse);
+    EXPECT_EQ(restored_cropbox->cropbox->enabled, expected_data.enabled);
+}
+
+TEST_F(UndoHistoryTest, CropBoxIsAppliedWhenMergingGroup) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group_id = scene.addGroup("group");
+    const auto splat_id = scene.addSplat(
+        "model",
+        make_test_splat({-2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f}),
+        group_id);
+    const auto cropbox_id = scene.addCropBox("model_cropbox", splat_id);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    auto* cropbox = scene.getMutableNode("model_cropbox");
+    ASSERT_NE(cropbox, nullptr);
+    ASSERT_NE(cropbox->cropbox, nullptr);
+    cropbox->cropbox->min = glm::vec3(-0.5f);
+    cropbox->cropbox->max = glm::vec3(0.5f);
+    cropbox->cropbox->enabled = true;
+
+    ASSERT_EQ(scene_manager->mergeGroupNode(group_id), "group");
+    const auto* merged = scene.getNode("group");
+    ASSERT_NE(merged, nullptr);
+    ASSERT_NE(merged->model, nullptr);
+    EXPECT_EQ(merged->model->size(), 1);
+    EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
+              (std::vector<float>{0.0f, 0.0f, 0.0f}));
+}
+
 TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresNodeVisibilityAndEnabledState) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -2754,6 +2821,55 @@ TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
     EXPECT_EQ(scene.getNode("a.png"), nullptr);
     EXPECT_EQ(scene.getAllCameras().size(), 1u);
     EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
+}
+
+TEST_F(UndoHistoryTest, CameraBatchDeleteUndoRestoresOrderAndId) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto training_id = scene.addCameraGroup("Training", cameras_id, 3);
+    const auto first_id = scene.addCamera("first.png", training_id, make_test_camera("first.png", 1));
+    const auto second_id = scene.addCamera("second.png", training_id, make_test_camera("second.png", 2));
+    const auto third_id = scene.addCamera("third.png", training_id, make_test_camera("third.png", 3));
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    ASSERT_NE(third_id, lfs::core::NULL_NODE);
+    const auto expected_children = scene.getNodeById(training_id)->children;
+
+    const auto remove_result = scene_manager->removeNodesByIdsWithResult({first_id}, false);
+    ASSERT_TRUE(remove_result) << (remove_result ? "" : remove_result.error());
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+
+    ASSERT_NE(scene.getNodeById(first_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(training_id)->children, expected_children);
+    EXPECT_EQ(scene.getNodeById(second_id)->parent_id, training_id);
+    EXPECT_EQ(scene.getNodeById(third_id)->parent_id, training_id);
+}
+
+TEST_F(UndoHistoryTest, DeleteUndoEntriesReplayAfterFreshIdRestore) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto first_id = scene.addGroup("first");
+    const auto second_id = scene.addGroup("second");
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    const auto first_uuid = scene.getNodeUuid(first_id);
+    const auto second_uuid = scene.getNodeUuid(second_id);
+
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(first_id));
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(second_id));
+    auto result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(second_uuid), nullptr);
 }
 
 TEST_F(UndoHistoryTest, RenameNodeCreatesUndoableSceneGraphEntry) {
