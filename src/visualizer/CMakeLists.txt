@@ -312,6 +312,8 @@ find_package(glslang CONFIG REQUIRED)
 add_executable(lfs_shader_compiler EXCLUDE_FROM_ALL
         tools/shader_compiler.cpp)
 target_compile_features(lfs_shader_compiler PRIVATE cxx_std_23)
+target_include_directories(lfs_shader_compiler PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(lfs_shader_compiler
         PRIVATE
         glslang::glslang

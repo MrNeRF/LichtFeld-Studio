@@ -501,6 +501,32 @@ protected:
         return condition();
     }
 
+    [[nodiscard]] bool pumpUntilImportSettled(
+        lfs::vis::VisualizerImpl& viewer,
+        std::mutex& queue_mutex,
+        std::vector<lfs::vis::Visualizer::WorkItem>& queue,
+        const std::chrono::milliseconds timeout = std::chrono::seconds(30)) {
+        return pumpUntil(
+            queue_mutex, queue,
+            [&] {
+                auto& tasks = viewer.getGuiManager()->asyncTasks();
+                tasks.pollImportCompletion();
+                return !tasks.isImporting() &&
+                       !tasks.hasPendingMainThreadCompletions();
+            },
+            timeout);
+    }
+
+    [[nodiscard]] std::filesystem::path makeSplatFixture(
+        const std::string_view stem) const {
+        const auto path = temporary_.path / (std::string(stem) + ".ply");
+        const auto saved = lfs::io::save_ply(
+            *lfs::test::licht::make_splat(2),
+            {.output_path = path, .binary = true, .async = false});
+        EXPECT_TRUE(saved);
+        return path;
+    }
+
     void installModalOverlay(
         std::unique_ptr<lfs::vis::gui::RmlModalOverlay>& overlay,
         lfs::vis::gui::RmlUIManager& manager) {
@@ -5394,9 +5420,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadFileWipeGateDirtyDatasetDiscardAndSplatAdd) {
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
         bool prompted = false;
@@ -5502,9 +5526,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
         auto options = projectOptions();
@@ -5575,10 +5597,13 @@ namespace lfs::vis {
                     "Keep until splat load"),
                 nullptr);
 
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
                 [&] {
+                    gui->asyncTasks().pollImportCompletion();
                     return viewer.pending_training_action_ ==
                                VisualizerImpl::PendingTrainingAction::
                                    None &&
@@ -5587,7 +5612,9 @@ namespace lfs::vis {
                            !viewer.getTrainerManager()
                                 ->isTrainingActive() &&
                            !viewer.getTrainerManager()
-                                ->isCompletionPending();
+                                ->isCompletionPending() &&
+                           !gui->asyncTasks().isImporting() &&
+                           !gui->asyncTasks().hasPendingMainThreadCompletions();
                 }));
             EXPECT_FALSE(drop_blocked) << drop_error;
             EXPECT_FALSE(
@@ -5610,9 +5637,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto first_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto first_path = makeSplatFixture("bicycle_ref");
         const auto second_path =
             std::filesystem::path(PROJECT_ROOT_PATH) /
             "tests/data/bike.ply";
@@ -5693,10 +5718,13 @@ namespace lfs::vis {
                 viewer.getSceneManager()->getContentType(),
                 SceneManager::ContentType::Dataset);
 
+            auto* const gui = viewer.getGuiManager();
+            ASSERT_NE(gui, nullptr);
             ASSERT_TRUE(pumpUntil(
                 viewer.work_queue_mutex_,
                 viewer.work_queue_,
                 [&] {
+                    gui->asyncTasks().pollImportCompletion();
                     return viewer.pending_training_action_ ==
                                VisualizerImpl::PendingTrainingAction::
                                    None &&
@@ -5705,7 +5733,9 @@ namespace lfs::vis {
                            !viewer.getTrainerManager()
                                 ->isTrainingActive() &&
                            !viewer.getTrainerManager()
-                                ->isCompletionPending();
+                                ->isCompletionPending() &&
+                           !gui->asyncTasks().isImporting() &&
+                           !gui->asyncTasks().hasPendingMainThreadCompletions();
                 }));
             EXPECT_FALSE(drop_blocked) << drop_error;
             EXPECT_EQ(
@@ -6030,6 +6060,8 @@ namespace lfs::vis {
                 .discard_changes = true}
                 .emit();
 
+            ASSERT_TRUE(pumpUntilImportSettled(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
             EXPECT_FALSE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
             EXPECT_EQ(
@@ -6093,6 +6125,8 @@ namespace lfs::vis {
                 .is_dataset = false}
                 .emit();
 
+            ASSERT_TRUE(pumpUntilImportSettled(
+                viewer, viewer.work_queue_mutex_, viewer.work_queue_));
             EXPECT_TRUE(lifecycle->hasSourcePath());
             EXPECT_FALSE(lifecycle->isScratchBoundSession());
             const auto has_path = viewer.projectHasPath();
@@ -14307,8 +14341,7 @@ namespace lfs::vis {
         ASSERT_NE(node, nullptr);
         ASSERT_NE(node->model, nullptr);
 
-        auto started = lifecycle->synchronizeDocumentFromViewer(
-            project::ProjectLifecycle::DocumentSyncMode::Autosave);
+        auto started = lifecycle->startAutosave();
         ASSERT_TRUE(started)
             << lfs::format_for_developer(started.error());
         ASSERT_TRUE(viewer.jobs().anyRunning(JobType::ProjectWrite));

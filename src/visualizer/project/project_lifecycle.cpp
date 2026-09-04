@@ -423,7 +423,7 @@ namespace lfs::vis::project {
             if (!input) {
                 return lifecycleError(
                     lfs::ErrorCode::PermissionDenied,
-                    "A dataset file could not be opened.", path.string(),
+                    "A dataset file could not be opened.", lfs::core::path_to_utf8(path),
                     "project.dataset_embed");
             }
             lfs::io::project::Hash128Stream hasher;
@@ -439,14 +439,14 @@ namespace lfs::vis::project {
                         static_cast<std::size_t>(count)))) {
                     return lifecycleError(
                         lfs::ErrorCode::DataLoss,
-                        "A dataset file could not be hashed.", path.string(),
+                        "A dataset file could not be hashed.", lfs::core::path_to_utf8(path),
                         "project.dataset_embed");
                 }
             }
             if (!input.eof() || !hasher.valid()) {
                 return lifecycleError(
                     lfs::ErrorCode::DataLoss,
-                    "A dataset file could not be hashed.", path.string(),
+                    "A dataset file could not be hashed.", lfs::core::path_to_utf8(path),
                     "project.dataset_embed");
             }
             return hasher.digest();
@@ -473,7 +473,7 @@ namespace lfs::vis::project {
         discoverDatasetFiles(const std::filesystem::path& root,
                              std::string& images_folder) {
             const auto info = lfs::io::detect_dataset_info(root);
-            images_folder = info.images_path.lexically_relative(root).generic_string();
+            images_folder = lfs::core::path_to_generic_utf8(info.images_path.lexically_relative(root));
             std::vector<std::pair<std::filesystem::path, std::string>> result;
             const auto append = [&](const auto& directory, const std::string_view kind) {
                 auto files = datasetFiles(directory, kind);
@@ -498,11 +498,11 @@ namespace lfs::vis::project {
             std::set<std::string> seen_paths;
             std::erase_if(result, [&](const auto& item) {
                 return !seen_paths.insert(
-                                      item.first.lexically_relative(root).generic_string())
+                                      lfs::core::path_to_generic_utf8(item.first.lexically_relative(root)))
                             .second;
             });
             std::ranges::sort(result, {}, [&](const auto& item) {
-                return item.first.lexically_relative(root).generic_string();
+                return lfs::core::path_to_generic_utf8(item.first.lexically_relative(root));
             });
             return result;
         }
@@ -569,7 +569,7 @@ namespace lfs::vis::project {
                         "The project-open job requested cancellation",
                         "project.dataset_embed");
                 }
-                const auto relative = std::filesystem::path(entry.rel_path);
+                const auto relative = lfs::core::utf8_to_path(entry.rel_path);
                 if (relative.empty() || relative.is_absolute() ||
                     relative.lexically_normal() != relative) {
                     return lifecycleError(
@@ -617,13 +617,16 @@ namespace lfs::vis::project {
                         "The embedded dataset cache could not be created.",
                         error.message(), "project.dataset_embed");
                 }
-                const auto temporary = destination.string() + ".part";
-                std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+                auto temporary = destination;
+                temporary += ".part";
+                std::ofstream output;
+                lfs::core::open_file_for_write(
+                    temporary, std::ios::binary | std::ios::trunc, output);
                 if (!output) {
                     return lifecycleError(
                         lfs::ErrorCode::PermissionDenied,
                         "An embedded dataset file could not be extracted.",
-                        destination.string(), "project.dataset_embed");
+                        lfs::core::path_to_utf8(destination), "project.dataset_embed");
                 }
                 lfs::io::project::Hash128Stream hasher;
                 auto copied = source->visit_stream(
@@ -645,7 +648,7 @@ namespace lfs::vis::project {
                                 return lfs::Result<void>::failure(lifecycleError(
                                     lfs::ErrorCode::DataLoss,
                                     "An embedded dataset file could not be extracted.",
-                                    destination.string(), "project.dataset_embed"));
+                                    lfs::core::path_to_utf8(destination), "project.dataset_embed"));
                             }
                             output.write(buffer.data(), count);
                             copied_bytes += static_cast<std::uint64_t>(count);
@@ -654,7 +657,7 @@ namespace lfs::vis::project {
                             return lfs::Result<void>::failure(lifecycleError(
                                 lfs::ErrorCode::DataLoss,
                                 "An embedded dataset file could not be extracted.",
-                                destination.string(), "project.dataset_embed"));
+                                lfs::core::path_to_utf8(destination), "project.dataset_embed"));
                         }
                         return {};
                     });
@@ -664,7 +667,7 @@ namespace lfs::vis::project {
                     return copied ? lifecycleError(
                                         lfs::ErrorCode::DataLoss,
                                         "The embedded dataset file failed hash verification.",
-                                        destination.string(), "project.dataset_embed")
+                                        lfs::core::path_to_utf8(destination), "project.dataset_embed")
                                   : std::move(copied).error();
                 }
                 std::filesystem::rename(temporary, destination, error);
@@ -691,7 +694,7 @@ namespace lfs::vis::project {
                 return lifecycleError(
                     lfs::ErrorCode::PermissionDenied,
                     "The embedded dataset cache could not be finalized.",
-                    marker.string(), "project.dataset_embed");
+                    lfs::core::path_to_utf8(marker), "project.dataset_embed");
             }
             LOG_INFO(
                 "Embedded dataset extraction completed: {} files extracted, {} files reused, cache {}",
@@ -1868,7 +1871,7 @@ namespace lfs::vis::project {
                     lfs::ErrorCode::InvalidArgument,
                     "A project path must end in .licht.",
                     std::format(
-                        "received '{}'", path.string()),
+                        "received '{}'", lfs::core::path_to_utf8(path)),
                     "project.path");
             }
             std::error_code error;
@@ -1898,7 +1901,7 @@ namespace lfs::vis::project {
                         unpublishedLichtUserMessage(
                             path),
                     std::format(
-                        "received '{}'", path.string()),
+                        "received '{}'", lfs::core::path_to_utf8(path)),
                     "project.path");
             }
             return resolved;
@@ -2232,7 +2235,7 @@ namespace lfs::vis::project {
                 return fail<ProjectLifecycleSettings>(
                     lfs::ErrorCode::PermissionDenied,
                     "Project lifecycle settings could not be opened.",
-                    path.string(), "settings.path");
+                    lfs::core::path_to_utf8(path), "settings.path");
             }
             const Json json = Json::parse(stream);
             if (!json.is_object()) {
@@ -3801,7 +3804,7 @@ namespace lfs::vis::project {
             std::chrono::duration<double, std::milli>(
                 start_write_finished - start_write_started)
                 .count(),
-            project_write_destination_.string());
+            lfs::core::path_to_utf8(project_write_destination_));
         return {};
     }
 
@@ -4018,7 +4021,7 @@ namespace lfs::vis::project {
                             fail_worker(lifecycleError(
                                 lfs::ErrorCode::DataLoss,
                                 "A dataset file could not be inspected.",
-                                std::format("{}: {}", path.string(), error.message()),
+                                std::format("{}: {}", lfs::core::path_to_utf8(path), error.message()),
                                 "project.dataset_embed"));
                             return;
                         }
@@ -4032,7 +4035,7 @@ namespace lfs::vis::project {
                             fail_worker(previous.error());
                             return;
                         }
-                        const auto rel = path.lexically_relative(root).generic_string();
+                        const auto rel = lfs::core::path_to_generic_utf8(path.lexically_relative(root));
                         const EmbeddedDatasetEntry* old = nullptr;
                         if (previous->has_value()) {
                             const auto old_it = std::ranges::find_if(
@@ -4443,7 +4446,7 @@ namespace lfs::vis::project {
                     "project.project_location");
             }
             const auto stem = sanitizedProjectFileStem(
-                dataset.data_path.filename().string());
+                lfs::core::path_to_utf8(dataset.data_path.filename()));
             lfs::Error last_error = lifecycleError(
                 lfs::ErrorCode::Unavailable,
                 "The training project could not be created.",
@@ -4457,12 +4460,12 @@ namespace lfs::vis::project {
                         : std::format("-{}", attempt + 1);
                 const auto candidate =
                     location / (stem + suffix + ".licht");
+                auto lock_path = candidate;
+                lock_path += ".lock";
                 std::error_code exists_error;
                 const bool exists =
                     std::filesystem::exists(candidate, exists_error) ||
-                    std::filesystem::exists(
-                        std::filesystem::path(candidate.string() + ".lock"),
-                        exists_error);
+                    std::filesystem::exists(lock_path, exists_error);
                 if (exists_error) {
                     return fail<void>(
                         lfs::ErrorCode::PermissionDenied,
@@ -4751,6 +4754,13 @@ namespace lfs::vis::project {
                               Autosave);
             !synchronized) {
             return synchronized;
+        }
+        // Synchronization may queue an asynchronous geometry capture in the
+        // same exclusive ProjectWrite slot. Autosave can continue only after
+        // that capture has settled; do not attempt the document write in the
+        // same tick and turn the expected overlap into an error.
+        if (viewer_.jobs().anyRunning(JobType::ProjectWrite)) {
+            return {};
         }
         const bool untitled_crash_dirty =
             untitled &&
@@ -8835,7 +8845,7 @@ namespace lfs::vis::project {
             !removed) {
             LOG_WARN(
                 "Discarded autosave cleanup failed for {}: {}",
-                master.string(),
+                lfs::core::path_to_utf8(master),
                 developerError(removed.error()));
         }
     }
@@ -9553,8 +9563,8 @@ namespace lfs::vis::project {
                     return lhs.wallclock_unix_ns <
                            rhs.wallclock_unix_ns;
                 }
-                return lhs.selected_path.generic_string() <
-                       rhs.selected_path.generic_string();
+                return lfs::core::path_to_generic_utf8(lhs.selected_path) <
+                       lfs::core::path_to_generic_utf8(rhs.selected_path);
             });
     }
 
@@ -9576,7 +9586,7 @@ namespace lfs::vis::project {
         const auto display_name =
             candidate.untitled_scratch
                 ? std::string(LOC(Keys::UNSAVED_SESSION))
-                : candidate.master_path.stem().string();
+                : lfs::core::path_to_utf8(candidate.master_path.stem());
         const auto saved_at = formatRecoverySavedTime(
             candidate.wallclock_unix_ns,
             candidate.selected_path);

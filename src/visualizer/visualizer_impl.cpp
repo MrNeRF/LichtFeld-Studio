@@ -3004,6 +3004,18 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Loading PLY file: {}", lfs::core::path_to_utf8(path));
+        if (trainer_manager_ &&
+            (trainer_manager_->isTrainingActive() ||
+             trainer_manager_->isCompletionPending())) {
+            cmd::LoadFile{
+                .path = path,
+                .is_dataset = false,
+                .stop_training = true,
+                .discard_changes = true,
+                .replace = true}
+                .emit();
+            return {};
+        }
         return data_loader_->loadPLY(path);
     }
 
@@ -4367,9 +4379,17 @@ namespace lfs::vis {
             auto commands =
                 std::exchange(
                     pending_load_files_, {});
-            for (auto& command : commands) {
-                command.stop_training = false;
-                command.emit();
+            if (commands.empty()) {
+                break;
+            }
+            auto command = std::move(commands.front());
+            commands.erase(commands.begin());
+            auto remaining = std::move(commands);
+            command.stop_training = false;
+            command.emit();
+            if (!remaining.empty()) {
+                pending_load_files_ = std::move(remaining);
+                pending_training_action_ = PendingTrainingAction::LoadDataset;
             }
             break;
         }

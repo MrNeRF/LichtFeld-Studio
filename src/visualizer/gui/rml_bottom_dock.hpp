@@ -23,8 +23,11 @@ namespace lfs::vis::gui {
     struct BottomDockLayout {
         glm::vec2 pos{0, 0};
         glm::vec2 size{0, 0};
+        float grip_h = 0.0f;
         float tab_bar_h = 0.0f;
         float separator_h = 0.0f;
+        bool grip_hovered = false;
+        bool grip_active = false;
     };
 
     class RmlBottomDock {
@@ -59,6 +62,7 @@ namespace lfs::vis::gui {
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::Element* dock_grip_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;
         Rml::Element* tab_strip_viewport_el_ = nullptr;
         Rml::Element* tab_separator_el_ = nullptr;
@@ -70,6 +74,8 @@ namespace lfs::vis::gui {
         bool tabs_overflow_ = false;
         bool can_scroll_tabs_left_ = false;
         bool can_scroll_tabs_right_ = false;
+        bool last_grip_hovered_ = false;
+        bool last_grip_active_ = false;
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;

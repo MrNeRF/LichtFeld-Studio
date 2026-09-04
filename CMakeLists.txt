@@ -599,6 +599,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
+    resources/lichtfeld-studio.manifest
 )
 if(TARGET lfs_scene_upscaler_nvidia_dlss)
     add_dependencies(${PROJECT_NAME} lfs_scene_upscaler_nvidia_dlss)

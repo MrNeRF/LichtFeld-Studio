@@ -103,12 +103,11 @@ body {
     left: 0;
     width: 38dp;
     height: auto;
-    max-height: 90%;
     padding: 5dp 3dp;
     flex-direction: column;
     align-items: center;
     pointer-events: auto;
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 .toolbar-position-top .toolbar-vertical {
@@ -167,6 +166,55 @@ body {
 .toolbar-vertical .icon-btn img {
     width: 20dp;
     height: 20dp;
+}
+
+.toolbar-vertical .rail-columns,
+.toolbar-vertical .rail-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.toolbar-vertical.rail-tools-empty .rail-group--tools,
+.toolbar-vertical.rail-panels-empty .rail-group--panels,
+.toolbar-vertical.rail-tools-empty .rail-columns > .toolbar-separator,
+.toolbar-vertical.rail-panels-empty .rail-columns > .toolbar-separator {
+    display: none;
+}
+
+.toolbar-vertical.rail-two-column {
+    width: auto;
+}
+
+.toolbar-vertical.rail-two-column .rail-columns {
+    flex-direction: row;
+    align-items: stretch;
+}
+
+.toolbar-vertical.rail-two-column .rail-columns > .toolbar-separator {
+    width: 1dp;
+    height: auto;
+    margin: 0 5dp;
+}
+
+.toolbar-vertical.rail-compact .icon-btn {
+    width: 26dp;
+    height: 26dp;
+    min-width: 26dp;
+    min-height: 26dp;
+    margin: 0;
+    padding: 2dp;
+}
+
+.toolbar-vertical.rail-compact .icon-btn img {
+    width: 18dp;
+    height: 18dp;
+}
+
+.toolbar-vertical.rail-compact .rail-columns > .toolbar-separator {
+    margin-top: 4dp;
+    margin-bottom: 3dp;
 }
 
 .viewport-gizmo-controls {

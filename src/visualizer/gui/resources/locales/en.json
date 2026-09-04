@@ -1972,6 +1972,9 @@
     "downloads": "Downloads",
     "invalid_link": "Invalid link",
     "button.install": "Install",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling...",
+    "installation_cancelled": "Installation cancelled",
     "local_install": "Local Installation",
     "install_as_git_checkout": "Install as git checkout",
     "confirm_uninstall_message": "Are you sure you want to uninstall \"{name}\"?",
@@ -1985,7 +1988,8 @@
     "registry_loaded.other": "Registry loaded: {count} plugins in the marketplace catalog.",
     "registry_unavailable.one": "Registry unavailable: showing {count} fallback plugin.",
     "registry_unavailable.few": "Registry unavailable: showing {count} fallback plugins.",
-    "registry_unavailable.other": "Registry unavailable: showing {count} fallback plugins."
+    "registry_unavailable.other": "Registry unavailable: showing {count} fallback plugins.",
+    "popularity_unavailable": "Popularity data unavailable."
   },
   "sequencer": {
     "edit_focal_length": "Edit Focal Length...",

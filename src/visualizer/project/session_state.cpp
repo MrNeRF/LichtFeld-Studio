@@ -2561,18 +2561,16 @@ namespace lfs::vis::project {
                                 absolute
                                     .lexically_relative(
                                         root);
+                            const auto relative_text =
+                                lfs::core::path_to_generic_utf8(relative);
+                            const auto first = relative.begin();
                             if (!relative.empty() &&
                                 relative != "." &&
-                                !relative
-                                     .generic_string()
-                                     .starts_with(
-                                         "..")) {
+                                (first == relative.end() ||
+                                 *first != std::filesystem::path(".."))) {
                                 saved_clip
                                     ["directory_hint"] =
-                                        lfs::core::
-                                            path_to_utf8(
-                                                relative
-                                                    .generic_string());
+                                        relative_text;
                             }
                         }
                     }

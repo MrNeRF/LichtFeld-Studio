@@ -1972,6 +1972,9 @@
     "downloads": "Downloads",
     "invalid_link": "Ongeldige link",
     "button.install": "Installeren",
+    "cancel": "Annuleren",
+    "cancelling": "Annuleren...",
+    "installation_cancelled": "Installatie geannuleerd",
     "local_install": "Lokale installatie",
     "install_as_git_checkout": "Als Git-checkout installeren",
     "confirm_uninstall_message": "Weet je zeker dat je \"{name}\" wilt verwijderen?",
@@ -1985,7 +1988,8 @@
     "registry_loaded.other": "Register geladen: {count} plugins in de marketplacecatalogus.",
     "registry_unavailable.one": "Register niet beschikbaar: {count} fallbackplugin wordt weergegeven.",
     "registry_unavailable.few": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven.",
-    "registry_unavailable.other": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven."
+    "registry_unavailable.other": "Register niet beschikbaar: {count} fallbackplugins worden weergegeven.",
+    "popularity_unavailable": "Populariteitsgegevens niet beschikbaar."
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",

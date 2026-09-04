@@ -38,18 +38,26 @@ if(BUILD_UNICODE_TEST_ONLY)
     # Standalone Unicode path test without CUDA
     add_executable(unicode_path_test
         test_unicode_paths_windows.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/environment.cpp
+        ${CMAKE_SOURCE_DIR}/src/io/stb_image_impl.cpp
     )
 
     target_include_directories(unicode_path_test PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/include
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/core/include
+        ${CMAKE_SOURCE_DIR}/src/io/include
+        ${CMAKE_SOURCE_DIR}/external
     )
 
     target_link_libraries(unicode_path_test PRIVATE
         GTest::gtest
         GTest::gtest_main
     )
+    target_compile_definitions(unicode_path_test PRIVATE
+        LFS_CORE_EXPORTS
+        LFS_UNICODE_TEST_STANDALONE)
 
     # C++23 standard
     set_target_properties(unicode_path_test PROPERTIES

@@ -1972,6 +1972,9 @@
     "downloads": "Pobierania",
     "invalid_link": "Nieprawidłowy link",
     "button.install": "Zainstaluj",
+    "cancel": "Anuluj",
+    "cancelling": "Anulowanie...",
+    "installation_cancelled": "Instalacja anulowana",
     "local_install": "Instalacja lokalna",
     "install_as_git_checkout": "Zainstaluj jako checkout Git",
     "confirm_uninstall_message": "Czy na pewno chcesz odinstalować \"{name}\"?",
@@ -1985,7 +1988,8 @@
     "registry_loaded.other": "Rejestr załadowany: {count} wtyczek w katalogu marketplace.",
     "registry_unavailable.one": "Rejestr niedostępny: wyświetlono {count} zastępczą wtyczkę.",
     "registry_unavailable.few": "Rejestr niedostępny: wyświetlono {count} zastępcze wtyczki.",
-    "registry_unavailable.other": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek."
+    "registry_unavailable.other": "Rejestr niedostępny: wyświetlono {count} zastępczych wtyczek.",
+    "popularity_unavailable": "Dane popularności niedostępne."
   },
   "sequencer": {
     "edit_focal_length": "Edytuj ogniskową...",

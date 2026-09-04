@@ -329,8 +329,10 @@ namespace lfs::vis::gui {
         LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.builtin_document_sync", 0.25);
         const bool dirty = lfs::python::sync_viewport_overlay_document(document_);
         document_sync_dirty_ = false;
-        if (dirty)
+        if (dirty) {
+            toolbar_rail_layout_dirty_ = true;
             markRenderNeeded(RenderReason::DocumentSync);
+        }
         return dirty;
     }
 
@@ -347,6 +349,8 @@ namespace lfs::vis::gui {
             markRenderNeeded(RenderReason::ViewportResize);
         if (context_size_changed)
             toolbar_roots_dirty_ = true;
+        if (context_size_changed)
+            toolbar_rail_layout_dirty_ = true;
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
@@ -384,6 +388,7 @@ namespace lfs::vis::gui {
         secondary_toolbar_width_ = secondary_width;
         markRenderNeeded(RenderReason::ToolbarLayout);
         toolbar_roots_dirty_ = true;
+        toolbar_rail_layout_dirty_ = true;
         updateToolbarRoots();
     }
 
@@ -625,7 +630,80 @@ namespace lfs::vis::gui {
         applied_secondary_toolbar_x_ = secondary_toolbar_x_;
         applied_secondary_toolbar_width_ = secondary_toolbar_width_;
         toolbar_roots_dirty_ = false;
+        toolbar_rail_layout_dirty_ = true;
         return true;
+    }
+
+    bool RmlViewportOverlay::updateToolbarRailLayout() {
+        if (!document_ || !rml_context_ || !toolbar_rail_layout_dirty_)
+            return false;
+
+        const float dpi = std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
+        const float available_height = std::max(0.0f, vp_size_.y - 24.0f * dpi);
+        auto* const primary_toolbar = document_->GetElementById("primary-utility-toolbar");
+        auto* const secondary_toolbar = document_->GetElementById("secondary-utility-toolbar");
+        auto* const primary_tools = document_->GetElementById("primary-rail-tools");
+        auto* const primary_panels = document_->GetElementById("primary-rail-panels");
+        auto* const secondary_tools = document_->GetElementById("secondary-rail-tools");
+        auto* const secondary_panels = document_->GetElementById("secondary-rail-panels");
+
+        auto* toolbar = primary_toolbar;
+        auto* tools = primary_tools;
+        auto* panels = primary_panels;
+        if (primary_toolbar_width_ <= 0.0f && show_secondary_toolbar_ && secondary_toolbar) {
+            toolbar = secondary_toolbar;
+            tools = secondary_tools;
+            panels = secondary_panels;
+        }
+        if (!toolbar || !tools || !panels)
+            return false;
+
+        const bool tools_empty = tools->GetNumChildren() == 0;
+        const bool panels_empty = panels->GetNumChildren() == 0;
+        const bool both_groups_non_empty = !tools_empty && !panels_empty;
+        bool changed = false;
+
+        const auto set_class_on_roots = [&](const char* class_name, const bool enabled) {
+            bool class_changed = false;
+            const auto set_class = [&](Rml::Element* element) {
+                if (!element || element->IsClassSet(class_name) == enabled)
+                    return;
+                element->SetClass(class_name, enabled);
+                changed = true;
+                class_changed = true;
+            };
+            set_class(primary_toolbar);
+            set_class(secondary_toolbar);
+            return class_changed;
+        };
+
+        bool classes_changed = false;
+        classes_changed |= set_class_on_roots("rail-tools-empty", tools_empty);
+        classes_changed |= set_class_on_roots("rail-panels-empty", panels_empty);
+        classes_changed |= set_class_on_roots("rail-two-column", false);
+        classes_changed |= set_class_on_roots("rail-compact", false);
+        if (classes_changed)
+            rml_context_->Update();
+
+        const auto natural_height = [&]() {
+            return toolbar->GetBox().GetSize(Rml::BoxArea::Border).y;
+        };
+        if (natural_height() > available_height + 0.5f) {
+            if (both_groups_non_empty) {
+                if (set_class_on_roots("rail-two-column", true))
+                    rml_context_->Update();
+                if (natural_height() > available_height + 0.5f) {
+                    if (set_class_on_roots("rail-compact", true))
+                        rml_context_->Update();
+                }
+            } else {
+                if (set_class_on_roots("rail-compact", true))
+                    rml_context_->Update();
+            }
+        }
+
+        toolbar_rail_layout_dirty_ = false;
+        return changed;
     }
 
     float RmlViewportOverlay::toolbarFreeGap(const float toolbar_height) const {
@@ -1430,6 +1508,10 @@ namespace lfs::vis::gui {
             return;
 
         const bool theme_changed = updateTheme();
+        const float toolbar_dpi = std::max(rml_context_->GetDensityIndependentPixelRatio(), 0.01f);
+        const bool dpi_changed = std::abs(last_toolbar_dpi_ - toolbar_dpi) > 0.001f;
+        if (theme_changed || dpi_changed)
+            toolbar_rail_layout_dirty_ = true;
         const int w = static_cast<int>(vp_size_.x);
         const int h = static_cast<int>(vp_size_.y);
         const bool size_changed = (w != last_render_w_ || h != last_render_h_);
@@ -1475,7 +1557,7 @@ namespace lfs::vis::gui {
         }
 
         const bool needs_render = render_needed_ || animation_active_ || document_dirty ||
-                                  theme_changed || size_changed || toolbar_changed ||
+                                  theme_changed || size_changed || dpi_changed || toolbar_changed ||
                                   tooltip_changed || had_data_model_binding_dirty;
         if (!needs_render) {
             queueCachedVulkanContext(direct_cache_.texture == 0 ||
@@ -1510,6 +1592,7 @@ namespace lfs::vis::gui {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.context_update", 0.25);
                 rml_context_->Update();
             }
+            updateToolbarRailLayout();
             if (viewport_toolbar_position_ == "free" && applyToolbarPosition()) {
                 LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.render.update.toolbar_position", 0.25);
                 rml_context_->Update();
@@ -1527,6 +1610,7 @@ namespace lfs::vis::gui {
         render_reason_bits_ = 0;
         last_render_w_ = w;
         last_render_h_ = h;
+        last_toolbar_dpi_ = toolbar_dpi;
     }
 
     std::optional<double> RmlViewportOverlay::nextScheduledUpdateDelay() const {

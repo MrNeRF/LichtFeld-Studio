@@ -1613,8 +1613,8 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
         "position: relative;",
         "width: 38dp;",
         "height: auto;",
-        "max-height: 90%;",
         "padding: 5dp 3dp;",
+        "overflow: hidden;",
     ):
         assert declaration in toolbar_rule
     assert "bottom:" not in toolbar_rule
@@ -1628,6 +1628,13 @@ def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
     assert "align-items: center;" in toolbar_root_rule
     assert "#secondary-utility-toolbar" not in rcss
     assert "left: -20dp;" not in rcss
+
+    selection_panel_start = rcss.index("#selection-block .viewport-selection-panel {")
+    selection_panel_end = rcss.index("\n}", selection_panel_start)
+    selection_panel_rule = rcss[selection_panel_start:selection_panel_end]
+    assert "width: 65%;" in selection_panel_rule
+    assert "max-width: 1500dp;" in selection_panel_rule
+    assert "instead of collapsing to the icon row" in selection_panel_rule
 
     selection_panel_start = rcss.index("#selection-block .viewport-selection-panel {")
     selection_panel_end = rcss.index("\n}", selection_panel_start)
@@ -1882,6 +1889,7 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-color: @{right_panel.border};" in scene_tree_theme
 
 
+
 def test_gt_compare_modes_show_matching_color_legends():
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
@@ -1903,6 +1911,27 @@ def test_gt_compare_modes_show_matching_color_legends():
     assert "horizontal-gradient(#000000 #380578)" in rcss
     assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
 
+
+def test_gt_compare_modes_show_matching_color_legends():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+
+    assert 'data-if="gt_compare_mode_value == \'depth\'"' in rml
+    assert 'data-if="gt_compare_depth_mode_value == \'palette\'"' in rml
+    assert 'data-if="gt_compare_depth_mode_value == \'gray\'"' in rml
+    assert "@tr:ui.far" in rml
+    assert "@tr:ui.near" in rml
+    assert "horizontal-gradient(#0d0a26 #0f3280)" in rcss
+    assert "horizontal-gradient(#f6d14d #fb6e20)" in rcss
+    assert "horizontal-gradient(#000000 #ffffff)" in rcss
+
+    assert 'data-if="gt_compare_mode_value == \'loss\'"' in rml
+    assert "@tr:tooltip.gt_loss_lower_error" in rml
+    assert "@tr:tooltip.gt_loss_higher_error" in rml
+    assert "horizontal-gradient(#000000 #380578)" in rcss
+    assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
 
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module

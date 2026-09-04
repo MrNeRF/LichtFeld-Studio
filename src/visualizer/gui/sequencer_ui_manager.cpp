@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/sequencer_ui_manager.hpp"
+#include "core/environment.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
@@ -119,21 +120,19 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::filesystem::path plySequenceCacheRoot() {
 #ifdef _WIN32
-            if (const char* local_app_data = std::getenv("LOCALAPPDATA");
-                local_app_data && *local_app_data) {
-                return lfs::core::utf8_to_path(local_app_data) / "LichtFeld" / "ply_sequence_cache";
+            if (const auto local_app_data = lfs::core::environment::value("LOCALAPPDATA")) {
+                return lfs::core::utf8_to_path(*local_app_data) / "LichtFeld" / "ply_sequence_cache";
             }
-            if (const char* temp = std::getenv("TEMP"); temp && *temp) {
-                return lfs::core::utf8_to_path(temp) / "LichtFeld" / "ply_sequence_cache";
+            if (const auto temp = lfs::core::environment::value("TEMP")) {
+                return lfs::core::utf8_to_path(*temp) / "LichtFeld" / "ply_sequence_cache";
             }
             return std::filesystem::path("C:/Temp/LichtFeld/ply_sequence_cache");
 #else
-            if (const char* xdg_cache = std::getenv("XDG_CACHE_HOME");
-                xdg_cache && *xdg_cache) {
-                return lfs::core::utf8_to_path(xdg_cache) / "lichtfeld" / "ply_sequence_cache";
+            if (const auto xdg_cache = lfs::core::environment::value("XDG_CACHE_HOME")) {
+                return lfs::core::utf8_to_path(*xdg_cache) / "lichtfeld" / "ply_sequence_cache";
             }
-            if (const char* home = std::getenv("HOME"); home && *home) {
-                return lfs::core::utf8_to_path(home) / ".cache" / "lichtfeld" / "ply_sequence_cache";
+            if (const auto home = lfs::core::environment::value("HOME")) {
+                return lfs::core::utf8_to_path(*home) / ".cache" / "lichtfeld" / "ply_sequence_cache";
             }
             return std::filesystem::temp_directory_path() / "lichtfeld" / "ply_sequence_cache";
 #endif
@@ -235,8 +234,8 @@ namespace lfs::vis::gui {
                 return false;
             }
 
-            const auto tmp_path = cache_path.parent_path() /
-                                  (cache_path.filename().string() + ".tmp");
+            auto tmp_path = cache_path;
+            tmp_path += ".tmp";
             std::ofstream file;
             if (!lfs::core::open_file_for_write(tmp_path,
                                                 std::ios::binary | std::ios::trunc,
@@ -455,7 +454,7 @@ namespace lfs::vis::gui {
         cmd::SequencerLoadPlySequence::when([this](const auto& event) {
             if (event.fps > 0.0f)
                 ui_state_.sequence_fps = std::clamp(event.fps, MIN_SEQUENCE_FPS, MAX_SEQUENCE_FPS);
-            loadPlySequenceFromDirectory(std::filesystem::path(event.directory));
+            loadPlySequenceFromDirectory(lfs::core::utf8_to_path(event.directory));
         });
 
         state::KeyframeListChanged::when([this](const auto&) {

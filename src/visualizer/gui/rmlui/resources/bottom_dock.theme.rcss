@@ -1,3 +1,12 @@
 #tab-bar {
     background-color: @{surface};
 }
+
+.dock-grip-bar {
+    background-color: @{alpha(text_dim,0.55)};
+}
+
+#dock-grip.hover .dock-grip-bar,
+#dock-grip.active .dock-grip-bar {
+    background-color: @{primary};
+}
