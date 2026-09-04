@@ -1205,6 +1205,43 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     CUDA::cudart
 )
 
+add_executable(tensor_backend_corpus
+    tensor_backend_corpus.cpp
+)
+set_target_properties(tensor_backend_corpus PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(tensor_backend_corpus PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(tensor_backend_corpus PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
+add_executable(tensor_interface_freeze
+    test_tensor_interface_freeze.cpp
+)
+set_target_properties(tensor_interface_freeze PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(tensor_interface_freeze PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(tensor_interface_freeze PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+add_test(NAME tensor_interface_freeze COMMAND tensor_interface_freeze)
+
 # Phase 6C-P3 negative nvcc TU fixtures (Ruling 1 / §1.11) live under
 # tests/cuda_fixtures/ and are intentionally NOT listed in any target SOURCES.
 # Positive nvcc TU: device_fault_cuda_utils.cu (compiled into lichtfeld_tests;
