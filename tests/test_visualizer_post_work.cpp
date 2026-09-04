@@ -517,6 +517,16 @@ protected:
             timeout);
     }
 
+    [[nodiscard]] std::filesystem::path makeSplatFixture(
+        const std::string_view stem) const {
+        const auto path = temporary_.path / (std::string(stem) + ".ply");
+        const auto saved = lfs::io::save_ply(
+            *lfs::test::licht::make_splat(2),
+            {.output_path = path, .binary = true, .async = false});
+        EXPECT_TRUE(saved);
+        return path;
+    }
+
     void installModalOverlay(
         std::unique_ptr<lfs::vis::gui::RmlModalOverlay>& overlay,
         lfs::vis::gui::RmlUIManager& manager) {
@@ -5410,9 +5420,7 @@ namespace lfs::vis {
 
     TEST_F(VisualizerImplResetTest,
            LoadFileWipeGateDirtyDatasetDiscardAndSplatAdd) {
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
         bool prompted = false;
@@ -5518,9 +5526,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto splat_path = makeSplatFixture("bicycle_ref");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
 
         auto options = projectOptions();
@@ -5631,9 +5637,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto first_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bicycle_ref.sog";
+        const auto first_path = makeSplatFixture("bicycle_ref");
         const auto second_path =
             std::filesystem::path(PROJECT_ROOT_PATH) /
             "tests/data/bike.ply";

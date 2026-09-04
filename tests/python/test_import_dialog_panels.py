@@ -67,3 +67,53 @@ def test_import_panel_registration_keeps_only_new_project_and_resume():
     source = (Path(__file__).parents[2] / "src" / "python" / "lfs_plugins" / "import_panels.py").read_text()
     assert "NewProjectPanel" in source
     assert "lfs.new_project" in source
+
+
+def test_new_project_typed_source_path_validates(import_dialog_module, monkeypatch):
+    module, _state, _checkpoint, dataset = import_dialog_module
+    panel = module.NewProjectPanel()
+    panel._dialog_mounted = True
+    panel._set_name("untitled")
+
+    panel._handle = SimpleNamespace(
+        dirty=lambda _field: None,
+        dirty_all=lambda: None,
+        request_update=lambda: None,
+    )
+    now = [10.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    timers = []
+
+    class _Timer:
+        def __init__(self, _delay, callback):
+            timers.append(callback)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(module.threading, "Timer", _Timer)
+    browse_calls = []
+    monkeypatch.setattr(
+        module.lf.ui,
+        "open_dataset_folder_dialog",
+        lambda: browse_calls.append(True),
+    )
+    module.lf.is_dataset_path = lambda path: str(path) == str(dataset)
+    module.lf.detect_dataset_info = lambda _path: SimpleNamespace(
+        sparse_path="",
+        has_masks=False,
+        image_count=0,
+        mask_count=0,
+    )
+
+    panel._set_source_path(str(dataset))
+    assert panel._source_kind == "checking"
+    assert len(timers) == 1
+
+    now[0] += 0.31
+    timers.pop()()
+    panel.on_update(None)
+
+    assert panel._source_kind == "dataset"
+    assert panel._can_create() is True
+    assert browse_calls == []

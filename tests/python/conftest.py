@@ -155,6 +155,13 @@ def isolate_lichtfeld_module_overrides():
 
     sys.modules.update(before)
 
+    # A test may delete and re-import the manager while a stub is installed;
+    # restore its logging bridge to the restored runtime module as well.
+    restored_manager = sys.modules.get("lfs_plugins.manager")
+    restored_lf = sys.modules.get("lichtfeld")
+    if restored_manager is not None and restored_lf is not None:
+        restored_manager._lf = restored_lf
+
     # `sys.modules.pop("lfs_plugins.types")` + reimport rebinds the live
     # package attribute even after the original module is restored in
     # sys.modules. Native register_class looks up Operator via
