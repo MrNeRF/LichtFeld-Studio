@@ -62,7 +62,12 @@ namespace lfs::core {
     // Orders all work currently enqueued on `from` before future work on `to`
     // (pooled event edge, host-sync fallback). Unlike waitForCUDAStream, a
     // nullptr `from` (legacy default stream) is still bridged — allocator
-    // reuse must order against legacy-stream work too.
+    // reuse must order against legacy-stream work too. `from` is a stored
+    // home stream that may have been released and destroyed since it was
+    // recorded, so a handle in the retired registry is skipped without
+    // touching the driver. The driver reuses handle values: a caller holding
+    // a live stream goes through waitForCUDAStream (or a guard, set_stream,
+    // the pools), which drops the handle from the registry first.
     LFS_CORE_API void bridgeStreams(cudaStream_t from, cudaStream_t to);
 
 } // namespace lfs::core
