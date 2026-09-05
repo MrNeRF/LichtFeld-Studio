@@ -413,8 +413,7 @@ TEST_F(ArenaMetricsContentionTest, ViewerGrowReservesIdleWindowAfterTrainingFram
             Failure failure = Failure::None;
             grew = arena.grow_external_backing(device_ptr, 2 * MiB, [&](size_t requested) {
                 committed = requested;
-                return true;
-            }, 2000, &failure);
+                return true; }, 2000, &failure);
             if (grew || failure != Failure::Busy)
                 break;
             std::this_thread::yield();

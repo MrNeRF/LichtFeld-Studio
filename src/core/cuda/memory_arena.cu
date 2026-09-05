@@ -881,7 +881,7 @@ namespace lfs::core {
     }
 
     bool RasterizerMemoryArena::install_external_backing_impl(ExternalBacking backing, const bool wait,
-                                                               const uint32_t timeout_ms) {
+                                                              const uint32_t timeout_ms) {
         if (!backing.valid()) {
             LOG_WARN("RasterizerMemoryArena::install_external_backing called with invalid backing");
             return false;
@@ -2284,7 +2284,7 @@ namespace lfs::core {
     }
 
     bool GlobalArenaManager::try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,
-                                                           const uint32_t timeout_ms) {
+                                                          const uint32_t timeout_ms) {
         return get_arena().try_install_external_backing(std::move(backing), timeout_ms);
     }
 
