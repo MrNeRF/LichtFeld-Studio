@@ -5,36 +5,19 @@
 
 #include "core/assert.hpp"
 #include "vk_context.hpp"
+#include "vk_shader_table.hpp"
 
 #include <algorithm>
-#include <filesystem>
 #include <format>
-#include <fstream>
-#include <nlohmann/json.hpp>
+#include <string_view>
 #include <vector>
 
 namespace lfs::core::internal {
     namespace {
-        std::vector<uint32_t> read_spirv(const std::filesystem::path& path) {
-            std::ifstream stream(path, std::ios::binary | std::ios::ate);
-            LFS_ASSERT_MSG(stream.good(),
-                           std::string("Vulkan backend: cannot open SPIR-V module ") +
-                               path.string());
-            const std::streamoff byte_count = stream.tellg();
-            LFS_ASSERT_MSG(byte_count > 0 && byte_count % 4 == 0,
-                           "Vulkan backend: SPIR-V module has invalid byte size");
-            std::vector<uint32_t> words(static_cast<size_t>(byte_count) / 4);
-            stream.seekg(0);
-            stream.read(reinterpret_cast<char*>(words.data()), byte_count);
-            LFS_ASSERT_MSG(stream.good() && words.front() == 0x07230203u,
-                           "Vulkan backend: SPIR-V module is invalid");
-            return words;
-        }
-
         // Every capability a module may declare maps to a device feature the
         // context enables at creation; a capability outside this table means a
         // shader change that the runtime has not been taught to check.
-        bool capability_provided(const VkDeviceCaps& caps, const std::string& capability) {
+        bool capability_provided(const VkDeviceCaps& caps, const std::string_view capability) {
             if (capability == "Shader" || capability == "Int64" || capability == "Int16" ||
                 capability == "PhysicalStorageBufferAddresses" ||
                 capability == "StorageBuffer16BitAccess" ||
@@ -51,14 +34,6 @@ namespace lfs::core::internal {
                 return caps.shader_atomic_float;
             }
             return false;
-        }
-
-        nlohmann::json read_manifest(const std::filesystem::path& path) {
-            std::ifstream stream(path);
-            LFS_ASSERT_MSG(stream.good(),
-                           std::string("Vulkan backend: cannot open shader manifest ") +
-                               path.string());
-            return nlohmann::json::parse(stream);
         }
     } // namespace
 
@@ -94,37 +69,32 @@ namespace lfs::core::internal {
                                          const uint32_t expected_local_size_x,
                                          const uint32_t expected_push_constant_size,
                                          const std::span<const uint32_t> constants) {
-        const std::filesystem::path directory(LFS_TENSOR_SPV_DIR);
-        const nlohmann::json manifest =
-            read_manifest(directory / (module + ".json"));
-        LFS_ASSERT_MSG(manifest.at("entry_point") == "main",
-                       "Vulkan backend: shader manifest entry point mismatch");
-        LFS_ASSERT_MSG(manifest.at("local_size").at(0).get<uint32_t>() ==
-                               expected_local_size_x &&
-                           manifest.at("local_size").at(1).get<uint32_t>() == 1 &&
-                           manifest.at("local_size").at(2).get<uint32_t>() == 1,
-                       "Vulkan backend: shader manifest local size mismatch");
-        LFS_ASSERT_MSG(manifest.at("push_constant_size").get<uint32_t>() ==
-                           expected_push_constant_size,
-                       "Vulkan backend: shader manifest push constant size mismatch");
-        const auto capabilities = manifest.at("capabilities").get<std::vector<std::string>>();
-        for (const std::string& capability : capabilities) {
+        const EmbeddedShader* const shader = find_embedded_shader(module);
+        LFS_ASSERT_MSG(shader != nullptr,
+                       std::format("Vulkan backend: no embedded shader module named {}", module));
+        LFS_ASSERT_MSG(shader->entry_point == "main",
+                       "Vulkan backend: shader entry point mismatch");
+        LFS_ASSERT_MSG(shader->local_size[0] == expected_local_size_x &&
+                           shader->local_size[1] == 1 && shader->local_size[2] == 1,
+                       "Vulkan backend: shader local size mismatch");
+        LFS_ASSERT_MSG(shader->push_constant_size == expected_push_constant_size,
+                       std::format("Vulkan backend: module {} declares a {} byte push constant block, "
+                                   "the host passes {} bytes",
+                                   module, shader->push_constant_size, expected_push_constant_size));
+        for (const std::string_view capability : shader->capabilities) {
             LFS_ASSERT_MSG(capability_provided(context_.caps(), capability),
                            std::format("Vulkan backend: module {} declares SPIR-V capability {}, "
                                        "which this device or the backend contract does not provide",
                                        module, capability));
         }
-        const auto preserve =
-            manifest.at("signed_zero_inf_nan_preserve").get<std::vector<uint32_t>>();
-        for (const uint32_t width : manifest.at("float_widths").get<std::vector<uint32_t>>()) {
-            LFS_ASSERT_MSG(std::ranges::find(preserve, width) != preserve.end(),
+        for (const uint32_t width : shader->float_widths) {
+            LFS_ASSERT_MSG(std::ranges::find(shader->signed_zero_inf_nan_preserve, width) !=
+                               shader->signed_zero_inf_nan_preserve.end(),
                            std::format("Vulkan backend: module {} computes in {}-bit floats without "
                                        "the SignedZeroInfNanPreserve {} execution mode",
                                        module, width, width));
         }
-
-        const std::vector<uint32_t> words =
-            read_spirv(directory / (module + ".spv"));
+        const std::span<const uint32_t> words = shader->code;
         VulkanPipeline result;
         result.local_size_x = expected_local_size_x;
         result.push_constant_size = expected_push_constant_size;

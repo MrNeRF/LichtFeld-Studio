@@ -4,10 +4,10 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
+#include "core/tensor/backend/vulkan/vk_shader_table.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <gtest/gtest.h>
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
@@ -16,12 +16,12 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <limits>
 #include <mutex>
 #include <ranges>
 #include <set>
+#include <span>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -529,47 +529,43 @@ namespace {
         internal::gpu_backend_reset_for_testing();
     }
 
-    TEST_F(TensorVulkanRuntime, ShaderManifestsCarryTheFloatControlsContract) {
-        // Catches a module built without the finalize step (no execution mode),
-        // an fp32 module that regained the Float16 capability through a half
-        // intrinsic, and a capability the loader table does not know.
-        const std::filesystem::path directory = internal::vulkan_shader_directory_for_testing();
-        const std::set<std::string> known{"Shader", "Int64", "Int16",
-                                          "PhysicalStorageBufferAddresses",
-                                          "SignedZeroInfNanPreserve", "Float16",
-                                          "AtomicFloat32AddEXT"};
-        size_t modules = 0;
-        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-            if (entry.path().extension() != ".json") {
-                continue;
-            }
-            ++modules;
-            const std::string module = entry.path().stem().string();
-            std::ifstream stream(entry.path());
-            const nlohmann::json manifest = nlohmann::json::parse(stream);
-            EXPECT_EQ(manifest.at("entry_point"), "main") << module;
-            EXPECT_EQ(manifest.at("local_size").get<std::vector<uint32_t>>(),
-                      (std::vector<uint32_t>{256, 1, 1}))
-                << module;
-            EXPECT_EQ(manifest.at("push_constant_size").get<uint32_t>() % 4, 0u) << module;
-            const auto capabilities = manifest.at("capabilities").get<std::vector<std::string>>();
-            for (const std::string& capability : capabilities) {
+    TEST_F(TensorVulkanRuntime, EmbeddedShadersCarryTheFloatControlsContract) {
+        // Catches a module embedded without the finalize step (no execution
+        // mode), an fp32 module that regained the Float16 capability through a
+        // half intrinsic, and a capability the loader table does not know.
+        const std::set<std::string_view> known{"Shader", "Int64", "Int16",
+                                               "PhysicalStorageBufferAddresses",
+                                               "SignedZeroInfNanPreserve", "Float16",
+                                               "AtomicFloat32AddEXT"};
+        const std::span<const internal::EmbeddedShader> shaders = internal::embedded_shaders();
+        EXPECT_EQ(shaders.size(), 21u);
+        for (const internal::EmbeddedShader& shader : shaders) {
+            const std::string module(shader.name);
+            EXPECT_EQ(internal::find_embedded_shader(shader.name), &shader) << module;
+            EXPECT_GT(shader.code.size(), 5u) << module;
+            EXPECT_EQ(shader.code[0], 0x07230203u) << module;
+            EXPECT_EQ(shader.entry_point, "main") << module;
+            EXPECT_EQ(shader.local_size, (std::array<uint32_t, 3>{256, 1, 1})) << module;
+            EXPECT_EQ(shader.push_constant_size % 4, 0u) << module;
+            for (const std::string_view capability : shader.capabilities) {
                 EXPECT_TRUE(known.contains(capability)) << module << " declares " << capability;
             }
-            const bool half = std::ranges::find(capabilities, "Float16") != capabilities.end();
+            const bool half = std::ranges::find(shader.capabilities, "Float16") != shader.capabilities.end();
             EXPECT_EQ(half, module == "pointwise_half") << module;
-            EXPECT_EQ(std::ranges::find(capabilities, "AtomicFloat32AddEXT") != capabilities.end(),
+            EXPECT_EQ(std::ranges::find(shader.capabilities, "AtomicFloat32AddEXT") !=
+                          shader.capabilities.end(),
                       module == "index_atomic")
                 << module;
-            const auto widths = manifest.at("float_widths").get<std::vector<uint32_t>>();
-            const auto preserve =
-                manifest.at("signed_zero_inf_nan_preserve").get<std::vector<uint32_t>>();
-            EXPECT_EQ(widths, preserve) << module;
+            EXPECT_TRUE(std::ranges::equal(shader.float_widths, shader.signed_zero_inf_nan_preserve))
+                << module;
             const bool byte_mover = module == "fill" || module == "cat_pad";
-            EXPECT_EQ(std::ranges::find(widths, 32u) != widths.end(), !byte_mover) << module;
-            EXPECT_EQ(std::ranges::find(widths, 16u) != widths.end(), half) << module;
+            EXPECT_EQ(std::ranges::find(shader.float_widths, 32u) != shader.float_widths.end(),
+                      !byte_mover)
+                << module;
+            EXPECT_EQ(std::ranges::find(shader.float_widths, 16u) != shader.float_widths.end(), half)
+                << module;
         }
-        EXPECT_EQ(modules, 21u);
+        EXPECT_EQ(internal::find_embedded_shader("no_such_module"), nullptr);
         const internal::VkDeviceCaps caps = internal::vulkan_device_caps_for_testing();
         EXPECT_TRUE(caps.float_controls_fp16 || !caps.shader_float16);
     }

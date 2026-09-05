@@ -150,9 +150,8 @@ add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
-    target_compile_definitions(lfs_core PRIVATE
-        LFS_TENSOR_VULKAN=1
-        LFS_TENSOR_SPV_DIR="${LFS_TENSOR_SPV_DIR}")
+    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE})
+    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
 endif()
 
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS)
@@ -167,7 +166,6 @@ target_include_directories(lfs_core
         ${CMAKE_SOURCE_DIR}/src/io/include
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
         ${CMAKE_CURRENT_SOURCE_DIR}/nn
-        ${LFS_TENSOR_SPV_DIR}
 )
 target_include_directories(lfs_core SYSTEM PRIVATE
     ${CMAKE_SOURCE_DIR}/external

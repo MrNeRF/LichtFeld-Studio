@@ -922,10 +922,6 @@ namespace lfs::core::internal {
         return acquire_vulkan_context()->caps();
     }
 
-    std::filesystem::path vulkan_shader_directory_for_testing() {
-        return std::filesystem::path(LFS_TENSOR_SPV_DIR);
-    }
-
     uint64_t vulkan_live_vma_objects_for_testing() noexcept {
         try {
             if (const auto context = try_live_vulkan_context()) {

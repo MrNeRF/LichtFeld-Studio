@@ -59,7 +59,10 @@ function(_tensor_add_slang_kernel name src)
         VERBATIM)
     list(APPEND LFS_TENSOR_SHADER_OUTPUTS ${_spv} ${_manifest})
     set(LFS_TENSOR_SHADER_OUTPUTS ${LFS_TENSOR_SHADER_OUTPUTS} PARENT_SCOPE)
+    list(APPEND LFS_TENSOR_SHADER_EMBED_ARGS ${name} ${_spv})
+    set(LFS_TENSOR_SHADER_EMBED_ARGS ${LFS_TENSOR_SHADER_EMBED_ARGS} PARENT_SCOPE)
 endfunction()
+set(LFS_TENSOR_SHADER_EMBED_ARGS)
 
 _tensor_add_slang_kernel(fill fill.slang)
 _tensor_add_slang_kernel(pointwise pointwise.slang)
@@ -82,4 +85,13 @@ _tensor_add_slang_kernel(matrix_misc matrix_misc.slang)
 _tensor_add_slang_kernel(cdist cdist.slang)
 _tensor_add_slang_kernel(nn nn.slang)
 _tensor_add_slang_kernel(random random.slang)
-add_custom_target(lfs_tensor_vulkan_shaders DEPENDS ${LFS_TENSOR_SHADER_OUTPUTS})
+# The library carries its modules: one generated translation unit holds every
+# finalized SPIR-V word stream and the facts the loader checks.
+set(LFS_TENSOR_SHADER_TABLE "${LFS_TENSOR_SPV_DIR}/lfs_tensor_shader_table.cpp")
+add_custom_command(
+    OUTPUT ${LFS_TENSOR_SHADER_TABLE}
+    COMMAND lfs_tensor_spirv_finalize embed ${LFS_TENSOR_SHADER_TABLE} ${LFS_TENSOR_SHADER_EMBED_ARGS}
+    DEPENDS ${LFS_TENSOR_SHADER_OUTPUTS} lfs_tensor_spirv_finalize
+    COMMENT "embed tensor shaders"
+    VERBATIM)
+add_custom_target(lfs_tensor_vulkan_shaders DEPENDS ${LFS_TENSOR_SHADER_OUTPUTS} ${LFS_TENSOR_SHADER_TABLE})

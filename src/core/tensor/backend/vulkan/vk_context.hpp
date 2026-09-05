@@ -140,7 +140,6 @@ namespace lfs::core::internal {
 
     [[nodiscard]] LFS_CORE_API std::vector<std::string> vulkan_validation_messages_for_testing();
     [[nodiscard]] LFS_CORE_API VkDeviceCaps vulkan_device_caps_for_testing();
-    [[nodiscard]] LFS_CORE_API std::filesystem::path vulkan_shader_directory_for_testing();
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_live_vma_objects_for_testing() noexcept;
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_completed_timeline_for_testing();
     [[nodiscard]] LFS_CORE_API size_t vulkan_dead_recorder_count_for_testing();
