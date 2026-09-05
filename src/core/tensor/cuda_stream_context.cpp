@@ -70,6 +70,18 @@ namespace lfs::core {
         }
     }
 
+    cudaError_t memcpy_ordered(void* const dst, const void* const src, const size_t bytes,
+                               const cudaMemcpyKind kind, const cudaStream_t stream) {
+        if (stream != nullptr && kind == cudaMemcpyDeviceToHost) {
+            bridgeStreams(stream, nullptr);
+        }
+        const cudaError_t status = cudaMemcpy(dst, src, bytes, kind);
+        if (status == cudaSuccess && stream != nullptr && kind == cudaMemcpyHostToDevice) {
+            bridgeStreams(nullptr, stream);
+        }
+        return status;
+    }
+
     cudaStream_t prepare_inputs_for_stream(
         const std::initializer_list<const Tensor*> inputs,
         const std::optional<cudaStream_t> requested_stream) {

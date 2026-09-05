@@ -2137,8 +2137,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             float value;
             LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(&value, ptr<float>() + linear_idx, sizeof(float),
-                           cudaMemcpyDeviceToHost),
+                memcpy_ordered(&value, ptr<float>() + linear_idx, sizeof(float),
+                               cudaMemcpyDeviceToHost, stream()),
                 "Tensor::at readback (bytes={}, linear_index={}, tensor_shape={}, "
                 "source_pointer={})",
                 sizeof(float), linear_idx, shape_.str(),
@@ -2161,8 +2161,8 @@ namespace lfs::core {
 
         if (t.numel() > 0 && data.data() != nullptr) {
             if (device == Device::CUDA) {
-                LFS_CUDA_CHECK(cudaMemcpy(t.data_ptr(), data.data(), t.bytes(),
-                                          cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(memcpy_ordered(t.data_ptr(), data.data(), t.bytes(),
+                                              cudaMemcpyHostToDevice, t.stream()));
             } else {
                 std::memcpy(t.data_ptr(), data.data(), t.bytes());
             }
@@ -2220,8 +2220,8 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(ptr<unsigned char>() + linear_idx, &val, 1,
-                           cudaMemcpyHostToDevice),
+                memcpy_ordered(ptr<unsigned char>() + linear_idx, &val, 1,
+                               cudaMemcpyHostToDevice, stream()),
                 "Tensor::set_bool upload (bytes=1, linear_index={}, tensor_shape={}, value={})",
                 linear_idx, shape_.str(), value);
         } else {
@@ -2248,8 +2248,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             unsigned char val;
             LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(&val, ptr<unsigned char>() + linear_idx, 1,
-                           cudaMemcpyDeviceToHost),
+                memcpy_ordered(&val, ptr<unsigned char>() + linear_idx, 1,
+                               cudaMemcpyDeviceToHost, stream()),
                 "Tensor::get_bool readback (bytes=1, linear_index={}, tensor_shape={})",
                 linear_idx, shape_.str());
             return val != 0;
