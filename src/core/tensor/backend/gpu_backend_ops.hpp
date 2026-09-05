@@ -75,15 +75,19 @@ namespace lfs::core {
                                         size_t outer_size, size_t reduce_size,
                                         size_t inner_size, const ReduceProgram& program,
                                         ExecContext context) = 0;
+            // rhs_storages lists the tensor operands of the chain so a backend can
+            // order their producers and record their last use.
             virtual void fused_transform_reduce(
                 StorageRef input, StorageRef output, size_t count,
                 const tensor_ops::FusedPointwiseOpChain& chain,
                 const ReduceProgram& program,
+                std::span<const StorageRef> rhs_storages,
                 ExecContext context) = 0;
             virtual void fused_segmented_transform_reduce(
                 StorageRef input, StorageRef output, size_t segment_count,
                 size_t segment_size, const tensor_ops::FusedPointwiseOpChain& chain,
-                const ReduceProgram& program, ExecContext context) = 0;
+                const ReduceProgram& program,
+                std::span<const StorageRef> rhs_storages, ExecContext context) = 0;
             // Count reductions synchronize and download the counter before returning.
             virtual size_t count_nonzero_bool(StorageRef input, size_t count,
                                               ExecContext context) = 0;
@@ -329,11 +333,13 @@ namespace lfs::core {
                 StorageRef input, StorageRef output, size_t count,
                 const tensor_ops::FusedPointwiseOpChain& chain,
                 const ReduceProgram& program,
+                std::span<const StorageRef> rhs_storages,
                 ExecContext context) override;
             void fused_segmented_transform_reduce(
                 StorageRef input, StorageRef output, size_t segment_count,
                 size_t segment_size, const tensor_ops::FusedPointwiseOpChain& chain,
-                const ReduceProgram& program, ExecContext context) override;
+                const ReduceProgram& program,
+                std::span<const StorageRef> rhs_storages, ExecContext context) override;
             size_t count_nonzero_bool(StorageRef input, size_t count,
                                       ExecContext context) override;
             size_t count_nonzero_float(StorageRef input, size_t count,

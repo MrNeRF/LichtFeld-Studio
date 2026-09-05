@@ -46,7 +46,8 @@ def main() -> int:
             continue
         new_index, new_line = candidate[key]
         rule = ref_line.split()[4]
-        if not rule.startswith("tolerance:"):
+        scan = rule.startswith("tolerance-scan:")
+        if not scan and not rule.startswith("tolerance:"):
             if ref_line != new_line:
                 print(f"DIFF {key}")
                 failures += 1
@@ -58,6 +59,8 @@ def main() -> int:
             failures += 1
             continue
         rtol = 1e-5 * max(1.0, math.log2(max(2, len(a))))
+        # Prefix-sum rows scale their bound with the row's largest magnitude.
+        floor = max((abs(x) for x in a if math.isfinite(x)), default=0.0) if scan else 0.0
         worst = 0.0
         bad = 0
         for x, y in zip(a, b):
@@ -66,7 +69,7 @@ def main() -> int:
                 continue
             error = abs(x - y)
             worst = max(worst, error / abs(x) if x else error)
-            if error > 1e-6 + rtol * abs(x):
+            if error > 1e-6 + rtol * max(abs(x), floor):
                 bad += 1
         status = "ok" if bad == 0 else "FAIL"
         print(f"{status} {key}: n={len(a)} max_rel_error={worst:.3e} violations={bad}")

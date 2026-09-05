@@ -259,9 +259,9 @@ int intBinary(int lhs, int rhs)
     if (kOp == 0 || kOp == 4) return lhs + rhs;
     if (kOp == 1 || kOp == 5) return lhs - rhs;
     if (kOp == 2 || kOp == 6) return lhs * rhs;
-    if (kOp == 3 || kOp == 7) return rhs == 0 ? 0 : lhs / rhs;
+    if (kOp == 3 || kOp == 7) return rhs == 0 ? 0 : rhs == -1 ? -lhs : lhs / rhs;
     if (kOp == 8 || kOp == 25) return rhs == 2 ? lhs * lhs : int(pow(float(lhs), float(rhs)));
-    if (kOp == 9 || kOp == 26) return rhs == 0 ? 0 : lhs % rhs;
+    if (kOp == 9 || kOp == 26) return rhs == 0 || rhs == -1 ? 0 : lhs % rhs;
     if (kOp == 27 || kOp == 57) return max(lhs, rhs);
     if (kOp == 28 || kOp == 58) return min(lhs, rhs);
     return lhs;
@@ -302,9 +302,9 @@ int64_t int64Binary(int64_t lhs, int64_t rhs)
     if (kOp == 4) return lhs + rhs;
     if (kOp == 5) return lhs - rhs;
     if (kOp == 6) return lhs * rhs;
-    if (kOp == 7) return rhs == 0 ? int64_t(0) : lhs / rhs;
+    if (kOp == 7) return rhs == 0 ? int64_t(0) : rhs == int64_t(-1) ? -lhs : lhs / rhs;
     if (kOp == 25) return rhs == 2 ? lhs * lhs : int64_t(pow(float(lhs), float(rhs)));
-    if (kOp == 26) return rhs == 0 ? int64_t(0) : lhs % rhs;
+    if (kOp == 26) return rhs == 0 || rhs == int64_t(-1) ? int64_t(0) : lhs % rhs;
     if (kOp == 27) return lhs < rhs ? rhs : lhs;
     if (kOp == 28) return rhs < lhs ? rhs : lhs;
     return lhs;

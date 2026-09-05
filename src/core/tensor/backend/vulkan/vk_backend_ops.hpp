@@ -38,11 +38,12 @@ namespace lfs::core::internal {
         void strided_reduce(StorageRef, StorageRef, size_t, size_t, size_t, const ReduceProgram&, ExecContext) override;
         void fused_transform_reduce(StorageRef, StorageRef, size_t,
                                     const tensor_ops::FusedPointwiseOpChain&,
-                                    const ReduceProgram&, ExecContext) override;
+                                    const ReduceProgram&, std::span<const StorageRef>,
+                                    ExecContext) override;
         void fused_segmented_transform_reduce(
             StorageRef, StorageRef, size_t, size_t,
             const tensor_ops::FusedPointwiseOpChain&, const ReduceProgram&,
-            ExecContext) override;
+            std::span<const StorageRef>, ExecContext) override;
         size_t count_nonzero_bool(StorageRef, size_t, ExecContext) override;
         size_t count_nonzero_float(StorageRef, size_t, ExecContext) override;
         bool has_nan(StorageRef, size_t, ExecContext) override;

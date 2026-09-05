@@ -1413,7 +1413,12 @@ namespace lfs::core {
                             };
                             std::iota(program.axes.begin(),
                                       program.axes.begin() + program.axis_count, 0);
-                            internal::backend_ops_for(fused_source).fused_transform_reduce(internal::storage_ref(fused_source), internal::storage_ref(result), n, chain, program, internal::ExecContext{execution_stream});
+                            std::vector<internal::StorageRef> rhs_refs;
+                            rhs_refs.reserve(rhs_storage.size());
+                            for (const auto& r : rhs_storage) {
+                                rhs_refs.push_back(internal::storage_ref(r));
+                            }
+                            internal::backend_ops_for(fused_source).fused_transform_reduce(internal::storage_ref(fused_source), internal::storage_ref(result), n, chain, program, rhs_refs, internal::ExecContext{execution_stream});
                         }
 
                         internal::lazy_executor_diagnostics_counters_increment_fused();
@@ -1556,11 +1561,16 @@ namespace lfs::core {
                                 .result_dtype = DataType::Float32,
                             };
                             program.axes[0] = static_cast<int>(fused_source.ndim()) - 1;
+                            std::vector<internal::StorageRef> rhs_refs;
+                            rhs_refs.reserve(rhs_storage.size());
+                            for (const auto& r : rhs_storage) {
+                                rhs_refs.push_back(internal::storage_ref(r));
+                            }
                             internal::backend_ops_for(fused_source)
                                 .fused_segmented_transform_reduce(
                                     internal::storage_ref(fused_source),
                                     internal::storage_ref(result), num_segments,
-                                    segment_size, chain, program,
+                                    segment_size, chain, program, rhs_refs,
                                     internal::ExecContext{execution_stream});
                         }
 

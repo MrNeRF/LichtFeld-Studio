@@ -126,8 +126,11 @@ namespace {
     // | has_nan_gpu | Tensor::has_nan |
     // | has_inf_gpu | Tensor::has_inf |
 
+    // Scan rows hold prefix sums, so their bound scales with the largest
+    // magnitude of the row instead of the element, which passes through zero.
     enum class Rule { Digest,
                       Tolerance,
+                      Scan,
                       Permutation,
                       Stat };
 
@@ -189,7 +192,7 @@ namespace {
         ENTRY(launch_fused_segmented_transform_reduce, "Tensor::add(float).sum(-1)", kF32, Tolerance),
         ENTRY(launch_count_nonzero_bool, "Tensor::count_nonzero(Bool)", kBool, Digest),
         ENTRY(launch_count_nonzero_float, "Tensor::count_nonzero(Float32)", kF32, Digest),
-        ENTRY(launch_cumsum, "Tensor::cumsum", kF32I32, Tolerance),
+        ENTRY(launch_cumsum, "Tensor::cumsum", kF32I32, Scan),
         ENTRY(launch_sort_1d, "Tensor::sort(rank1)", kF32, Permutation),
         ENTRY(launch_sort_2d, "Tensor::sort(rank2)", kF32, Permutation),
         ENTRY(launch_gather, "Tensor::gather", kF32, Digest),
@@ -866,13 +869,15 @@ namespace {
     // Wrap-around integer arithmetic is associative, so integral inputs on a
     // tolerance entry are bitwise-reproducible and compared by digest.
     Rule effective_rule(const Entry& entry, DataType dtype) {
-        return entry.rule == Rule::Tolerance && integral_dtype(dtype) ? Rule::Digest : entry.rule;
+        const bool tolerance = entry.rule == Rule::Tolerance || entry.rule == Rule::Scan;
+        return tolerance && integral_dtype(dtype) ? Rule::Digest : entry.rule;
     }
 
     std::string rule_name(Rule rule) {
         switch (rule) {
         case Rule::Digest: return "digest";
         case Rule::Tolerance: return "tolerance:1e-5:1e-6";
+        case Rule::Scan: return "tolerance-scan:1e-5:1e-6";
         case Rule::Permutation: return "permutation";
         case Rule::Stat: return "stat";
         }
@@ -1343,7 +1348,8 @@ namespace {
             fields >> launcher >> call >> profile >> dtype >> rule;
             const auto reference_file = options.reference / (std::to_string(i) + ".bin");
             const auto candidate_file = options.output / (std::to_string(i) + ".bin");
-            if (rule.starts_with("tolerance:")) {
+            const bool scan = rule.starts_with("tolerance-scan:");
+            if (scan || rule.starts_with("tolerance:")) {
                 if (!std::filesystem::is_regular_file(reference_file) ||
                     !std::filesystem::is_regular_file(candidate_file)) {
                     std::cerr << "row " << i << " has no dumped bytes to compare: " << lines[i] << '\n';
@@ -1359,6 +1365,12 @@ namespace {
                 }
                 const double rtol = 1e-5 * std::max(1.0, std::log2(static_cast<double>(std::max<size_t>(2, reference.size()))));
                 const double atol = 1e-6;
+                double scale_floor = 0.0;
+                if (scan) {
+                    for (const double a : reference)
+                        if (!std::isnan(a) && !std::isinf(a))
+                            scale_floor = std::max(scale_floor, std::abs(a));
+                }
                 double row_worst = 0.0;
                 bool row_ok = true;
                 for (size_t k = 0; k < reference.size(); ++k) {
@@ -1370,7 +1382,7 @@ namespace {
                         continue;
                     }
                     const double error = std::abs(a - b);
-                    const double bound = atol + rtol * std::abs(a);
+                    const double bound = atol + rtol * std::max(std::abs(a), scale_floor);
                     row_worst = std::max(row_worst, std::abs(a) > 0 ? error / std::abs(a) : error);
                     if (error > bound)
                         row_ok = false;
@@ -1438,7 +1450,7 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < first.size(); ++i) {
             if (first[i] == second[i])
                 continue;
-            if (first[i].find(" tolerance:") != std::string::npos ||
+            if (first[i].find(" tolerance") != std::string::npos ||
                 first[i].find(" permutation ") != std::string::npos) {
                 ++tolerated_differences;
                 std::cerr << "nondeterministic tolerance-rule case " << i << "\nfirst: "

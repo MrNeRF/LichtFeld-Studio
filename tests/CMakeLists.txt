@@ -590,6 +590,7 @@ if(LFS_TENSOR_VULKAN)
     list(APPEND TEST_FILES
         test_tensor_vulkan_runtime.cpp
         test_tensor_vulkan_pointwise.cpp
+        test_tensor_vulkan_reduce.cpp
         test_tensor_backend_parity.cpp
     )
 endif()

@@ -8,6 +8,7 @@
 #include "core/assert.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
+#include "vk_ops_common.hpp"
 #include "vk_pipelines.hpp"
 #include "vk_recorder.hpp"
 
@@ -19,27 +20,10 @@
 
 namespace lfs::core::internal {
     namespace {
-        constexpr uint32_t kLocalSize = 256;
-
-        uint64_t address(const StorageRef storage) {
-            LFS_ASSERT_MSG(storage.backend == GpuBackend::Vulkan && storage.meta != nullptr,
-                           "Vulkan movement operation received non-Vulkan storage");
-            return storage.meta->gpu_descriptor.base_address + storage.byte_offset;
-        }
-
-        uint32_t checked_u32(const size_t value, const char* const description) {
-            LFS_ASSERT_MSG(value <= std::numeric_limits<uint32_t>::max(), description);
-            return static_cast<uint32_t>(value);
-        }
-
-        uint32_t dispatch_groups(const VulkanContext& context, const size_t work) {
-            if (work == 0) {
-                return 0;
-            }
-            const uint64_t groups = (work + kLocalSize - 1) / kLocalSize;
-            return static_cast<uint32_t>(
-                std::min<uint64_t>(groups, context.caps().max_workgroup_count[0]));
-        }
+        using vk::address;
+        using vk::checked_u32;
+        using vk::dispatch_groups;
+        using vk::kLocalSize;
 
         struct StridedPush {
             uint64_t input_address;

@@ -11,6 +11,7 @@
 #include "core/cuda_error.hpp"
 
 #include <cuda_runtime.h>
+#include <span>
 #include <type_traits>
 
 namespace lfs::core::internal {
@@ -137,7 +138,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::fused_transform_reduce(
         const StorageRef input, const StorageRef output, const size_t count,
         const tensor_ops::FusedPointwiseOpChain& chain,
-        const ReduceProgram& program,
+        const ReduceProgram& program, std::span<const StorageRef>,
         const ExecContext context) {
         LFS_FACADE_TRACE(fused_transform_reduce);
         tensor_ops::launch_fused_transform_reduce(
@@ -148,7 +149,8 @@ namespace lfs::core::internal {
     void CudaBackendOps::fused_segmented_transform_reduce(
         const StorageRef input, const StorageRef output, const size_t segment_count,
         const size_t segment_size, const tensor_ops::FusedPointwiseOpChain& chain,
-        const ReduceProgram& program, const ExecContext context) {
+        const ReduceProgram& program, std::span<const StorageRef>,
+        const ExecContext context) {
         LFS_FACADE_TRACE(fused_segmented_transform_reduce);
         tensor_ops::launch_fused_segmented_transform_reduce(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),

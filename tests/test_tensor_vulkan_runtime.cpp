@@ -254,8 +254,8 @@ namespace {
         EXPECT_EQ(cuda_roundtrip.to_vector(), cuda.to_vector());
     }
 
-    TEST_F(TensorVulkanRuntime, MixedBackendAndKernelEntriesFailAtTheFacade) {
-        // Catches mixed storage reaching either API and missing operations failing ambiguously.
+    TEST_F(TensorVulkanRuntime, MixedBackendOperandsFailAtTheFacade) {
+        // Catches mixed storage reaching either API.
         Tensor cuda;
         Tensor vulkan;
         {
@@ -271,13 +271,6 @@ namespace {
             FAIL() << "mixed-backend binary operation did not throw";
         } catch (const std::exception& error) {
             EXPECT_NE(std::string(error.what()).find("matching GPU backends"),
-                      std::string::npos);
-        }
-        try {
-            static_cast<void>(vulkan.sum().item<float>());
-            FAIL() << "unimplemented Vulkan reduction entry did not throw";
-        } catch (const std::exception& error) {
-            EXPECT_NE(std::string(error.what()).find("is not implemented yet"),
                       std::string::npos);
         }
     }

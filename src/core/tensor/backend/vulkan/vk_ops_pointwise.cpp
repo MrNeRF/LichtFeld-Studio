@@ -9,6 +9,7 @@
 #include "core/assert.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
+#include "vk_ops_common.hpp"
 #include "vk_pipelines.hpp"
 #include "vk_recorder.hpp"
 
@@ -22,29 +23,10 @@
 
 namespace lfs::core::internal {
     namespace {
-        constexpr uint32_t kLocalSize = 256;
-
-        uint64_t address(const StorageRef storage) {
-            LFS_ASSERT_MSG(storage.backend == GpuBackend::Vulkan && storage.meta != nullptr,
-                           "Vulkan pointwise operation received non-Vulkan storage");
-            return storage.meta->gpu_descriptor.base_address + storage.byte_offset;
-        }
-
-        uint32_t checked_u32(const size_t value, const char* const description) {
-            LFS_ASSERT_MSG(value <= std::numeric_limits<uint32_t>::max(), description);
-            return static_cast<uint32_t>(value);
-        }
-
-        uint32_t dispatch_groups(const VulkanContext& context, const size_t work) {
-            if (work == 0) {
-                return 0;
-            }
-            const uint64_t groups = (work + kLocalSize - 1) / kLocalSize;
-            // Kernels iterate grid-stride over NumWorkgroups, so a count above the
-            // device's group limit (65535 on lavapipe) is covered by fewer groups.
-            return static_cast<uint32_t>(
-                std::min<uint64_t>(groups, context.caps().max_workgroup_count[0]));
-        }
+        using vk::address;
+        using vk::checked_u32;
+        using vk::dispatch_groups;
+        using vk::kLocalSize;
 
         uint64_t scalar_integer(const ScalarOperand scalar) {
             switch (scalar.kind) {
@@ -317,13 +299,6 @@ namespace lfs::core::internal {
             uint32_t padding;
         };
         static_assert(sizeof(ConvertPush) == 24);
-
-        struct VulkanChainOp {
-            uint32_t kind;
-            float scalar;
-            uint64_t rhs_address;
-        };
-        static_assert(sizeof(VulkanChainOp) == 16);
     } // namespace
 
     void VulkanBackendOps::unary(const PointwiseProgram& program,
@@ -409,23 +384,8 @@ namespace lfs::core::internal {
                            output.dtype == DataType::Float32 && chain.num_ops > 0 &&
                            chain.num_ops <= tensor_ops::FUSED_POINTWISE_MAX_OPS,
                        "Vulkan fused pointwise chain requires Float32 and 1 to 16 operations");
-        std::array<VulkanChainOp, tensor_ops::FUSED_POINTWISE_MAX_OPS> descriptors{};
-        for (int i = 0; i < chain.num_ops; ++i) {
-            descriptors[i] = VulkanChainOp{
-                .kind = chain.ops[i].kind,
-                .scalar = chain.ops[i].scalar,
-                .rhs_address = static_cast<uint64_t>(
-                    reinterpret_cast<uintptr_t>(chain.ops[i].rhs)),
-            };
-        }
         const auto context = acquire_vulkan_context();
-        StorageRef metadata = context->memory().allocate(sizeof(descriptors), 16, {});
-        context->memory().copy_host_to_device(CopyRequest{
-            .src = raw_storage_ref(descriptors.data()),
-            .dst = metadata,
-            .bytes = sizeof(descriptors),
-            .synchronous = false,
-        });
+        const StorageRef metadata = vk::upload_chain(*context, chain);
         const std::array constants{0u, 0u, 0u, 4u, 0u, 0u};
         const VulkanPipeline& pipeline =
             context->pipelines().specialized("pointwise", sizeof(PointwisePush), constants);

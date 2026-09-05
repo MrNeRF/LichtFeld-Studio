@@ -40,20 +40,6 @@ namespace lfs::core::internal {
         not_implemented(#Name);               \
     }
 
-    LFS_VK_NOTIMPL_FLOAT(sum_scalar, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_FLOAT(mean_scalar, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_FLOAT(max_scalar, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_FLOAT(min_scalar, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_VOID(reduce, (StorageRef, StorageRef, const StridedLayout&, const ReduceProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(column_reduce, (StorageRef, StorageRef, size_t, size_t, const ReduceProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(strided_reduce, (StorageRef, StorageRef, size_t, size_t, size_t, const ReduceProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(fused_transform_reduce, (StorageRef, StorageRef, size_t, const tensor_ops::FusedPointwiseOpChain&, const ReduceProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(fused_segmented_transform_reduce, (StorageRef, StorageRef, size_t, size_t, const tensor_ops::FusedPointwiseOpChain&, const ReduceProgram&, ExecContext))
-    LFS_VK_NOTIMPL_SIZE(count_nonzero_bool, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_SIZE(count_nonzero_float, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_BOOL(has_nan, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_BOOL(has_inf, (StorageRef, size_t, ExecContext))
-    LFS_VK_NOTIMPL_VOID(cumsum, (StorageRef, const StridedLayout&, int, ExecContext))
     LFS_VK_NOTIMPL_VOID(sort_1d, (StorageRef, StorageRef, size_t, const SortProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(sort_2d, (StorageRef, StorageRef, const SortProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(sgemm, (StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext))

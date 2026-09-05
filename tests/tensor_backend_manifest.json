@@ -173,7 +173,7 @@
     "file": "tests/test_fastgs_kernels.cpp",
     "line": 718,
     "eligibility": "consumer",
-    "reason": "includes io/formats/ply.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -618,7 +618,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 605,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -630,7 +630,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 410,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -642,7 +642,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2432,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -654,7 +654,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 458,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -666,7 +666,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 662,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -695,7 +695,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1928,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -707,7 +707,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2211,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -719,7 +719,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2126,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -731,7 +731,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1079,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -743,7 +743,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 537,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -755,7 +755,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2065,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -871,7 +871,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1971,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -883,7 +883,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1751,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -895,7 +895,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 324,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -907,7 +907,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2000,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -919,7 +919,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1004,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -931,7 +931,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1033,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -943,7 +943,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1860,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -955,7 +955,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2261,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -967,7 +967,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2339,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -979,7 +979,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1816,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -991,7 +991,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 384,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -1137,7 +1137,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1699,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -1149,7 +1149,7 @@
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1666,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/depth_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -3228,7 +3228,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 188,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -3253,7 +3253,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 207,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -4233,7 +4233,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 677,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4284,7 +4284,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1057,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4296,7 +4296,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 733,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4308,7 +4308,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 821,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4320,7 +4320,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 775,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4354,7 +4354,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1269,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4366,7 +4366,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1233,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4378,7 +4378,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1172,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4390,7 +4390,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1191,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4402,7 +4402,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 566,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4414,7 +4414,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1300,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -4439,7 +4439,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1360,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -4460,7 +4460,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1427,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -4481,7 +4481,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1390,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -4506,7 +4506,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1753,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4540,7 +4540,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 907,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4552,7 +4552,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 907,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -4564,7 +4564,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 907,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -4613,7 +4613,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 419,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -5536,7 +5536,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 328,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -7539,7 +7539,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_error_map.cpp",
     "line": 64,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -9528,7 +9529,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 123,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -9544,7 +9545,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 387,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -9560,7 +9561,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 636,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_count_nonzero_bool",
@@ -9605,7 +9606,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 401,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op",
       "launch_normal"
@@ -9652,7 +9653,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 87,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -9668,7 +9669,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 437,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -9684,7 +9685,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 457,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -9700,7 +9701,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 540,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op"
     ],
@@ -9716,7 +9717,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 526,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op",
       "launch_reduce_op"
@@ -9734,7 +9735,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 479,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_ieee_round_float",
       "launch_load_op",
@@ -9755,7 +9756,7 @@
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 624,
     "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_load_op"
@@ -10922,7 +10923,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1620,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -10934,7 +10935,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1210,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -14505,7 +14506,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 755,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -14530,7 +14531,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 830,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce"
@@ -14548,7 +14549,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 204,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -14593,7 +14594,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 222,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -14618,7 +14619,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 283,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_normal"
     ],
@@ -14654,7 +14655,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 183,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_normal"
@@ -14672,7 +14673,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 330,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_normal"
@@ -14690,7 +14691,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 346,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -14706,7 +14707,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 250,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_normal"
     ],
@@ -14767,7 +14768,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 297,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_normal"
@@ -15192,7 +15193,7 @@
     "file": "tests/test_gpu_teardown_order.cpp",
     "line": 27,
     "eligibility": "consumer",
-    "reason": "includes training/strategies/strategy_utils.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes components/ppisp_controller.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -15204,7 +15205,7 @@
     "file": "tests/test_gpu_teardown_order.cpp",
     "line": 42,
     "eligibility": "consumer",
-    "reason": "includes training/strategies/strategy_utils.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes components/ppisp_controller.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -18072,7 +18073,7 @@
     "file": "tests/test_loss_workspace_union.cpp",
     "line": 220,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_normal"
     ],
@@ -18088,7 +18089,7 @@
     "file": "tests/test_loss_workspace_union.cpp",
     "line": 355,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided",
       "launch_fused_pointwise_chain",
@@ -18110,7 +18111,7 @@
     "file": "tests/test_loss_workspace_union.cpp",
     "line": 93,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -18133,7 +18134,7 @@
     "file": "tests/test_loss_workspace_union.cpp",
     "line": 254,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_normal"
     ],
@@ -18160,7 +18161,7 @@
     "file": "tests/test_loss_workspace_union.cpp",
     "line": 281,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_normal"
@@ -18513,7 +18514,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1893,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -18529,7 +18530,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1919,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -18545,7 +18546,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1625,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -18561,7 +18562,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1731,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_eye",
@@ -18617,7 +18618,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 362,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -18633,7 +18634,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 925,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -18660,7 +18661,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1476,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -18676,7 +18677,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1092,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -18692,7 +18693,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 694,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_load_op",
       "launch_reduce_op"
@@ -18710,7 +18711,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 241,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_ieee_round_float",
       "launch_reduce_op",
@@ -18729,7 +18730,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 270,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -18756,7 +18757,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1236,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -18797,7 +18798,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1789,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -18834,7 +18835,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1402,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_eye",
       "launch_reduce_op"
@@ -18852,7 +18853,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1290,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -18887,7 +18888,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1646,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_eye",
@@ -18907,7 +18908,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 800,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -18934,7 +18935,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 963,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -18969,7 +18970,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 486,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -18998,7 +18999,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 995,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -19033,7 +19034,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 745,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -19060,7 +19061,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 896,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -19087,7 +19088,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 377,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -19114,7 +19115,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1540,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_eye",
@@ -19134,7 +19135,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 426,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -19150,7 +19151,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 451,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_count_nonzero_bool",
@@ -19177,7 +19178,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 393,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_count_nonzero_bool",
@@ -19206,7 +19207,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 571,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -19233,7 +19234,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1340,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_count_nonzero_bool",
@@ -19263,7 +19264,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1028,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_count_nonzero_bool",
@@ -19290,7 +19291,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1061,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -19306,7 +19307,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1121,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -19322,7 +19323,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 617,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -19349,7 +19350,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 879,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op"
     ],
@@ -19365,7 +19366,7 @@
     "file": "tests/test_mrnf_strategy.cpp",
     "line": 1489,
     "eligibility": "consumer",
-    "reason": "includes training/dataset.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -19401,7 +19402,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 392,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_ieee_round_float",
@@ -19422,7 +19423,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 513,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_fused_pointwise_chain",
@@ -19453,7 +19454,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 327,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -19465,7 +19466,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 338,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -19477,7 +19478,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 302,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_ieee_round_float",
@@ -19502,7 +19503,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 276,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -19535,7 +19536,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 254,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_fused_pointwise_chain",
@@ -19564,7 +19565,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 229,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_fused_pointwise_chain",
@@ -19595,7 +19596,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 452,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -19624,7 +19625,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 554,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -19651,7 +19652,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 488,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -19678,7 +19679,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 79,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -19701,7 +19702,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 178,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -19724,7 +19725,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 160,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -19747,7 +19748,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 608,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_fill_strided",
@@ -19780,7 +19781,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 202,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_fused_transform_reduce",
@@ -19803,7 +19804,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 129,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -19826,7 +19827,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 409,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_uniform"
@@ -19844,7 +19845,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 437,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_uniform"
@@ -19862,7 +19863,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 350,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_fused_pointwise_chain",
@@ -19895,7 +19896,7 @@
     "file": "tests/test_mask_loss.cpp",
     "line": 110,
     "eligibility": "consumer",
-    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/ssim.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -20095,7 +20096,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 534,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -20122,7 +20123,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 668,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_normal"
@@ -20140,7 +20141,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 592,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -20179,7 +20180,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 809,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_ieee_round_float",
       "launch_reduce_op",
@@ -20200,7 +20201,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 781,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_fused_pointwise_chain",
@@ -20243,7 +20244,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 623,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -20300,7 +20301,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 565,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -20339,7 +20340,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 488,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -20401,7 +20402,7 @@
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 684,
     "eligibility": "consumer",
-    "reason": "includes training/losses/photometric_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_load_op",
@@ -22349,11 +22350,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_moge2.cpp",
     "line": 146,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": true,
     "skip_reason": "opt-in through LFS_MOGE2_WEIGHTS"
   },
@@ -23460,7 +23461,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 444,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23475,7 +23477,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 483,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23490,7 +23493,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 420,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23505,11 +23509,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 919,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23517,7 +23521,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 586,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_strided_copy_immediate"
@@ -23534,7 +23539,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 626,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23549,7 +23555,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 543,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy_immediate"
     ],
@@ -23564,7 +23571,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 836,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy_immediate"
     ],
@@ -23579,7 +23587,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 815,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_strided_copy_immediate"
@@ -23596,11 +23605,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 1016,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23608,7 +23617,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 895,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23623,7 +23633,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 297,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23638,11 +23649,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 270,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23650,7 +23661,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 241,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23665,7 +23677,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 1057,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy_immediate"
     ],
@@ -23680,11 +23693,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 385,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23692,11 +23705,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 285,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23704,7 +23717,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 352,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -23725,7 +23739,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 746,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_strided_copy_immediate"
@@ -23742,7 +23757,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 717,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_strided_copy_immediate"
@@ -23759,7 +23775,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 696,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23785,11 +23802,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 863,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": true,
     "skip_reason": "numpy fixture file is not checked in"
   },
@@ -23798,11 +23815,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 413,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23810,11 +23827,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 763,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23822,7 +23839,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 653,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23837,11 +23855,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 790,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -23849,11 +23867,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 929,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": true,
     "skip_reason": "needs the vcpkg python writer on the path"
   },
@@ -23862,7 +23880,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 963,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -23877,7 +23896,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_nn_ops.cpp",
     "line": 511,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_cat_middle_dim",
       "launch_strided_copy",
@@ -25812,11 +25832,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_exposure_seed.cpp",
     "line": 74,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26000,7 +26020,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 40,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26031,7 +26052,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 28,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26062,7 +26084,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 73,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26095,7 +26118,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 52,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "has_inf_gpu",
       "has_nan_gpu",
@@ -26143,7 +26167,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 150,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26174,7 +26199,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 187,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26214,7 +26240,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_controller.cpp",
     "line": 121,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26567,11 +26594,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_exposure_seed.cpp",
     "line": 25,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26579,11 +26606,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_exposure_seed.cpp",
     "line": 102,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26591,7 +26618,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_exposure_seed.cpp",
     "line": 45,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_index_select"
     ],
@@ -26659,11 +26687,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 625,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26671,11 +26699,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 584,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26683,11 +26711,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 514,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26695,11 +26723,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 461,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26707,11 +26735,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 198,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26719,11 +26747,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 150,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26731,7 +26759,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 666,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_ieee_maximum_float",
@@ -26748,7 +26777,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 709,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_fused_pointwise_chain",
@@ -26780,11 +26810,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 272,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26792,11 +26822,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 238,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26804,11 +26834,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 420,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26816,11 +26846,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 379,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26828,11 +26858,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 342,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26840,11 +26870,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_regularization.cpp",
     "line": 307,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -26852,7 +26882,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_sidecar.cpp",
     "line": 111,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -26883,7 +26914,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_sidecar.cpp",
     "line": 221,
-    "eligibility": "vulkan",
+    "eligibility": "consumer",
+    "reason": "includes components/ppisp.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_index_select"
     ],
@@ -28367,7 +28399,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1805,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -32061,11 +32093,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sam2.cpp",
     "line": 209,
-    "eligibility": "no-gpu-work",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": true,
     "skip_reason": "opt-in through LFS_SAM2_WEIGHTS"
   },
@@ -33560,7 +33592,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 969,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33586,7 +33618,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 982,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33598,7 +33630,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1161,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33621,7 +33653,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1020,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33655,7 +33687,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1805,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33667,7 +33699,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1242,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy_immediate"
     ],
@@ -33683,7 +33715,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1313,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -33714,7 +33746,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1258,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33739,7 +33771,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1372,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33751,7 +33783,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1417,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33763,7 +33795,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1712,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33775,7 +33807,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1791,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33787,7 +33819,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1821,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33799,7 +33831,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1725,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33822,7 +33854,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1738,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33834,7 +33866,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1753,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33846,7 +33878,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1767,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33869,7 +33901,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1546,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_column_reduce"
     ],
@@ -33907,7 +33939,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1841,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33941,7 +33973,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1935,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33953,7 +33985,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1652,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_column_reduce"
     ],
@@ -33980,7 +34012,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1880,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -33992,7 +34024,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1864,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34004,7 +34036,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1990,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34016,7 +34048,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 2018,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34039,7 +34071,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1143,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34062,7 +34094,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1233,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34074,7 +34106,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1221,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy_immediate"
     ],
@@ -34101,7 +34133,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1575,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_column_reduce"
     ],
@@ -34117,7 +34149,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1209,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34129,7 +34161,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 1193,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34163,7 +34195,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 867,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -34197,7 +34229,7 @@
     "file": "tests/test_screen_share.cpp",
     "line": 61,
     "eligibility": "consumer",
-    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes lfs/training/screen_share.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -35836,7 +35868,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 925,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -35848,7 +35880,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 949,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -35876,7 +35908,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 974,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -35888,7 +35920,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 984,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy_immediate"
     ],
@@ -35904,7 +35936,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 1146,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -35916,7 +35948,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 905,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -35928,7 +35960,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 1189,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36090,7 +36122,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 198,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36121,7 +36153,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 510,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36153,7 +36185,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 177,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36165,7 +36197,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 237,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -36197,7 +36229,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 608,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36227,7 +36259,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 370,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36239,7 +36271,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 222,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36251,7 +36283,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 250,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36263,7 +36295,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 338,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_count_nonzero_bool",
@@ -36290,7 +36322,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 421,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36302,7 +36334,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 474,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -36341,7 +36373,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 529,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36353,7 +36385,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 280,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36365,7 +36397,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 298,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -36377,7 +36409,7 @@
     "file": "tests/test_sh_value_storage.cpp",
     "line": 318,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37052,7 +37084,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 971,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37064,7 +37096,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1012,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37076,7 +37108,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1031,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37088,7 +37120,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 990,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37100,7 +37132,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1246,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37154,7 +37186,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 877,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37192,7 +37224,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 166,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37204,7 +37236,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1139,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37216,7 +37248,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 273,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37228,7 +37260,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 797,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37240,7 +37272,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 523,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37252,7 +37284,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 213,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37264,7 +37296,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 736,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37287,7 +37319,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1104,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_broadcast_binary",
       "launch_fused_segmented_transform_reduce",
@@ -37323,7 +37355,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1280,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37348,7 +37380,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1053,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37373,7 +37405,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 954,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37385,7 +37417,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1453,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37397,7 +37429,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1347,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37436,7 +37468,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1639,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37448,7 +37480,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1289,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -37460,7 +37492,7 @@
     "file": "tests/test_exportable_storage.cpp",
     "line": 1425,
     "eligibility": "consumer",
-    "reason": "includes io/loader.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -41016,12 +41048,32 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorBackendValidators.DeferredExpressionsCarryTheBackendOfTheirLeaves",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_validators.cpp",
+    "line": 117,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorBackendValidators.ExternalOwnerStaysCudaUnderVulkanScope",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 130,
+    "line": 158,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_backend_validators.cpp:140: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_backend_validators.cpp:168: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -41115,7 +41167,7 @@
     "name": "TensorBackendValidators.ProcessDefaultIsReadOnceAndInvalidValuesAreRejected",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 117,
+    "line": 145,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56752,6 +56804,174 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanReduce.AxisReductionsSelectSegmentedStridedAndSplitPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 159,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.CountsAndSpecialValueChecksReadBackExactTallies",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 374,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_count_nonzero_bool",
+      "launch_count_nonzero_float",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "has_nan_gpu",
+      "has_inf_gpu"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.CumsumCoversThreadAndWorkgroupScans",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 313,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_cumsum",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.FullReductionsCoverSingleGroupPartialAndTailPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 122,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.FusedTransformReductionsApplyTheChainFirst",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 283,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.IntegerAndBoolReductionsWidenLikeCuda",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 223,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.MaxAndMinFollowTheCudaNaNAndSignedZeroPolicy",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 267,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "direct_max_scalar",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.MultiAxisReductionsUseTheRunAndGeneralPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 200,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.ScalarFastPathsReadBackTheDeviceResult",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 146,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "direct_mean_scalar",
+      "direct_max_scalar",
+      "direct_min_scalar",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanRuntime.CloneAndReservePreserveBytesAndGenerationRules",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
@@ -56767,7 +56987,7 @@
     "name": "TensorVulkanRuntime.CompletedDeadThreadRecordersAreReclaimed",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 331,
+    "line": 324,
     "eligibility": "no-gpu-work",
     "launchers": [],
     "launchers_source": "measured",
@@ -56779,7 +56999,7 @@
     "name": "TensorVulkanRuntime.CrossThreadConsumerFlushesUnsubmittedProducer",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 285,
+    "line": 278,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -56794,7 +57014,7 @@
     "name": "TensorVulkanRuntime.CrossThreadWriteAfterWriteFollowsProgramOrder",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 461,
+    "line": 454,
     "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
@@ -56817,7 +57037,7 @@
     "name": "TensorVulkanRuntime.DispatchesAboveTheDeviceGroupLimitCoverEveryElement",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 440,
+    "line": 433,
     "eligibility": "vulkan",
     "launchers": [
       "launch_convert_type",
@@ -56842,7 +57062,7 @@
     "name": "TensorVulkanRuntime.EnvironmentSelectsVulkanForPublicFactories",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 513,
+    "line": 506,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -56866,27 +57086,22 @@
     "skip_allowlisted": false
   },
   {
-    "name": "TensorVulkanRuntime.MixedBackendAndKernelEntriesFailAtTheFacade",
+    "name": "TensorVulkanRuntime.MixedBackendOperandsFailAtTheFacade",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
     "line": 257,
     "eligibility": "vulkan",
     "launchers": [
-      "launch_load_op",
-      "launch_reduce_op"
+      "launch_fill_strided"
     ],
-    "launchers_source": "measured",
-    "entries": {
-      "load_fill": 2,
-      "reduce": 1
-    },
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
     "name": "TensorVulkanRuntime.OddOffsetViewsAreZeroedWithoutUnalignedFillCommands",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 407,
+    "line": 400,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload",
@@ -56926,7 +57141,7 @@
     "name": "TensorVulkanRuntime.ShutdownDropsLiveContextAndReinitializes",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 370,
+    "line": 363,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -56941,7 +57156,7 @@
     "name": "TensorVulkanRuntime.ShutdownWaitsForAutoSubmittedCommands",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 351,
+    "line": 344,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -56968,7 +57183,7 @@
     "name": "TensorVulkanRuntime.SurvivorOfShutdownAndReinitIsReleasedAsNoOp",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 386,
+    "line": 379,
     "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
@@ -56980,7 +57195,7 @@
     "name": "TensorVulkanRuntime.ThreadExitFlushesItsOpenRecorder",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 320,
+    "line": 313,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -57592,7 +57807,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1136,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_column_reduce",
       "launch_load_op"
@@ -57610,7 +57825,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 1094,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_column_reduce",
       "launch_load_op"
@@ -57670,7 +57885,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 250,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_column_reduce",
       "launch_load_op"
@@ -57784,7 +57999,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 696,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57796,7 +58011,7 @@
     "file": "tests/test_scene_validity.cpp",
     "line": 746,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57830,7 +58045,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 162,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57842,7 +58057,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 97,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57865,7 +58080,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 106,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57877,7 +58092,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 201,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57889,7 +58104,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 225,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57915,7 +58130,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 416,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -57946,7 +58161,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 236,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57972,7 +58187,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 172,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57984,7 +58199,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 251,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -57996,7 +58211,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 217,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58008,7 +58223,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 202,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58034,7 +58249,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 375,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -58079,7 +58294,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 185,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58091,7 +58306,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 339,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58103,7 +58318,7 @@
     "file": "tests/test_training_cropbox_mask.cpp",
     "line": 159,
     "eligibility": "consumer",
-    "reason": "includes training/optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58386,7 +58601,7 @@
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 518,
     "eligibility": "consumer",
-    "reason": "includes io/exporter.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
