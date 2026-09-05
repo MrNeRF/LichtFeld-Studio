@@ -950,17 +950,16 @@ namespace lfs::core {
     }
 
     void Tensor::trim_memory_pool() {
-        internal::backend_ops(GpuBackend::CUDA).trim();
+        internal::trim_live_gpu_backends();
         PinnedMemoryAllocator::instance().empty_cache();
     }
 
     void Tensor::trim_memory_pool_if_reserved_unused_exceeds(const size_t threshold_bytes) {
-        internal::backend_ops(GpuBackend::CUDA)
-            .trim_if_reserved_unused_exceeds(threshold_bytes);
+        internal::trim_live_gpu_backends_if_reserved_unused_exceeds(threshold_bytes);
     }
 
     void Tensor::trim_device_memory_pool() {
-        internal::backend_ops(GpuBackend::CUDA).trim();
+        internal::trim_live_gpu_backends();
     }
 
     void Tensor::shutdown_memory_pool() {

@@ -663,4 +663,32 @@ namespace {
         ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
     }
 
+    TEST_F(TensorVulkanRuntime, TrimReleasesFreeVulkanBlocksOfBothKinds) {
+        // Catches a public trim that only reaches the CUDA pool: pooled blocks
+        // and readback blocks freed on Vulkan stay cached until the backend
+        // shuts down.
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor warm = Tensor::ones({256}, Device::CUDA);
+            ASSERT_FLOAT_EQ(warm.sum_scalar(), 256.0f);
+        }
+        Tensor::trim_memory_pool();
+        const uint64_t baseline = internal::vulkan_live_vma_objects_for_testing();
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            std::vector<Tensor> blocks;
+            for (size_t i = 0; i < 6; ++i) {
+                blocks.push_back(Tensor::ones({4096 + 512 * i}, Device::CUDA));
+            }
+            float total = 0.0f;
+            for (const Tensor& block : blocks) {
+                total += block.sum_scalar();
+            }
+            EXPECT_GT(total, 0.0f);
+        }
+        EXPECT_GT(internal::vulkan_live_vma_objects_for_testing(), baseline);
+        Tensor::trim_memory_pool();
+        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
+    }
+
 } // namespace

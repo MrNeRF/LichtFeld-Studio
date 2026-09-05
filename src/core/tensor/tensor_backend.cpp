@@ -198,6 +198,24 @@ namespace lfs::core {
 
     namespace internal {
 
+        void trim_live_gpu_backends() {
+            backend_ops(GpuBackend::CUDA).trim();
+#ifdef LFS_TENSOR_VULKAN
+            if (vulkan_backend_live()) {
+                backend_ops(GpuBackend::Vulkan).trim();
+            }
+#endif
+        }
+
+        void trim_live_gpu_backends_if_reserved_unused_exceeds(const size_t threshold_bytes) {
+            backend_ops(GpuBackend::CUDA).trim_if_reserved_unused_exceeds(threshold_bytes);
+#ifdef LFS_TENSOR_VULKAN
+            if (vulkan_backend_live()) {
+                backend_ops(GpuBackend::Vulkan).trim_if_reserved_unused_exceeds(threshold_bytes);
+            }
+#endif
+        }
+
         GpuBackend resolve_new_gpu_storage_backend() {
             const GpuBackend backend = scoped_backend ? *scoped_backend : default_gpu_backend();
             if (!gpu_backend_available(backend)) {

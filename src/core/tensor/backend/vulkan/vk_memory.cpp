@@ -630,8 +630,10 @@ namespace lfs::core::internal {
     size_t VulkanMemory::cached_bytes() const noexcept {
         std::lock_guard lock(allocations_mutex_);
         size_t result = 0;
-        for (const auto& [size, records] : free_lists_) {
-            result += static_cast<size_t>(size) * records.size();
+        for (const auto* lists : {&free_lists_, &readback_free_lists_}) {
+            for (const auto& [size, records] : *lists) {
+                result += static_cast<size_t>(size) * records.size();
+            }
         }
         return result;
     }
@@ -639,9 +641,11 @@ namespace lfs::core::internal {
     uint64_t VulkanMemory::live_object_count() const noexcept {
         std::lock_guard lock(allocations_mutex_);
         size_t free_count = 0;
-        for (const auto& [size, records] : free_lists_) {
-            (void)size;
-            free_count += records.size();
+        for (const auto* lists : {&free_lists_, &readback_free_lists_}) {
+            for (const auto& [size, records] : *lists) {
+                (void)size;
+                free_count += records.size();
+            }
         }
         return allocations_.size() + retired_.size() + free_count +
                (staging_buffer_ != VK_NULL_HANDLE ? 1 : 0);

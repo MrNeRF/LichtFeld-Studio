@@ -510,6 +510,10 @@ namespace lfs::core {
 
     namespace internal {
         LFS_CORE_API GpuBackend resolve_new_gpu_storage_backend();
+        // Cache trimming for every GPU backend that has a live context; a
+        // backend that was never initialized is not brought up to be trimmed.
+        LFS_CORE_API void trim_live_gpu_backends();
+        LFS_CORE_API void trim_live_gpu_backends_if_reserved_unused_exceeds(size_t threshold_bytes);
         LFS_CORE_API Tensor allocate_like(const Tensor& input,
                                           const TensorShape& shape,
                                           DataType dtype);

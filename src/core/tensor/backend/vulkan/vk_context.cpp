@@ -910,6 +910,11 @@ namespace lfs::core::internal {
         return live && live->dead();
     }
 
+    bool vulkan_backend_live() noexcept {
+        const auto live = try_live_vulkan_context();
+        return live && !live->dead() && live->accepting_work();
+    }
+
     std::shared_ptr<VulkanContext> acquire_vulkan_context() {
         std::shared_ptr<ContextSlot> slot;
         {

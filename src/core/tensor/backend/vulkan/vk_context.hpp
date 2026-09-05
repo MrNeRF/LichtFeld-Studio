@@ -137,6 +137,8 @@ namespace lfs::core::internal {
     // True while a live context exists whose device was lost: new work is
     // refused with a DeviceLost error until the backend is shut down.
     [[nodiscard]] bool vulkan_backend_lost() noexcept;
+    // True while a live, healthy context exists; never initializes one.
+    [[nodiscard]] bool vulkan_backend_live() noexcept;
     [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
     [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
