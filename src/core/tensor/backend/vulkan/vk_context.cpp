@@ -200,9 +200,12 @@ namespace lfs::core::internal {
             VkPhysicalDeviceSubgroupProperties subgroup{
                 VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};
             VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceFloatControlsProperties float_controls{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES};
             VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
             properties.pNext = &subgroup;
             subgroup.pNext = &ids;
+            ids.pNext = &float_controls;
             vkGetPhysicalDeviceProperties2(device, &properties);
             const VkSubgroupFeatureFlags subgroup_required =
                 VK_SUBGROUP_FEATURE_BASIC_BIT |
@@ -216,12 +219,15 @@ namespace lfs::core::internal {
                 VK_API_VERSION_MAJOR(properties.properties.apiVersion) > 1 ||
                 (VK_API_VERSION_MAJOR(properties.properties.apiVersion) == 1 &&
                  VK_API_VERSION_MINOR(properties.properties.apiVersion) >= 3);
+            // Every module declares SignedZeroInfNanPreserve for fp32 (plan D12);
+            // a device that cannot honor it would run the shaders with
+            // undefined NaN and signed-zero behaviour.
             const bool required =
                 available && features.features.shaderInt64 &&
                 features.features.shaderInt16 && features11.storageBuffer16BitAccess &&
                 features12.storageBuffer8BitAccess && features12.timelineSemaphore &&
                 features12.bufferDeviceAddress && features13.synchronization2 &&
-                subgroup_supported;
+                subgroup_supported && float_controls.shaderSignedZeroInfNanPreserveFloat32;
             if (required && caps != nullptr) {
                 std::copy_n(ids.deviceUUID, VK_UUID_SIZE, caps->device_uuid.begin());
                 std::copy_n(ids.driverUUID, VK_UUID_SIZE, caps->driver_uuid.begin());
@@ -235,7 +241,9 @@ namespace lfs::core::internal {
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
-                caps->shader_float16 = features12.shaderFloat16;
+                caps->shader_float16 = features12.shaderFloat16 &&
+                                       float_controls.shaderSignedZeroInfNanPreserveFloat16;
+                caps->float_controls_fp16 = float_controls.shaderSignedZeroInfNanPreserveFloat16;
             }
             return required;
         }
@@ -489,7 +497,7 @@ namespace lfs::core::internal {
         query12.pNext = &query13;
         query13.pNext = &atomic_float;
         vkGetPhysicalDeviceFeatures2(physical_device_, &query);
-        caps_.shader_float16 = query12.shaderFloat16;
+        caps_.shader_float16 = query12.shaderFloat16 && caps_.float_controls_fp16;
         caps_.shader_atomic_float =
             extensions_available.contains(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME) &&
             atomic_float.shaderBufferFloat32AtomicAdd &&
@@ -912,6 +920,10 @@ namespace lfs::core::internal {
 
     VkDeviceCaps vulkan_device_caps_for_testing() {
         return acquire_vulkan_context()->caps();
+    }
+
+    std::filesystem::path vulkan_shader_directory_for_testing() {
+        return std::filesystem::path(LFS_TENSOR_SPV_DIR);
     }
 
     uint64_t vulkan_live_vma_objects_for_testing() noexcept {

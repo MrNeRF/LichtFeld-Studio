@@ -1,5 +1,6 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 24;
+#include "half_bits.slangh"
 
 [SpecializationConstant]
 const uint kInputDType = 0;
@@ -42,7 +43,7 @@ void storeByte(uint64_t address, uint64_t index, uint value)
 float loadAsFloat(uint64_t address, uint index)
 {
     if (kInputDType == 0) return ((Ptr<float, Access.Read>)address)[index];
-    if (kInputDType == 1) return f16tof32(uint(((Ptr<uint16_t, Access.Read>)address)[index]));
+    if (kInputDType == 1) return halfBitsToFloat(uint(((Ptr<uint16_t, Access.Read>)address)[index]));
     if (kInputDType == 2) return float(((Ptr<int, Access.Read>)address)[index]);
     if (kInputDType == 3) return float(((Ptr<int64_t, Access.Read>)address)[index]);
     if (kInputDType == 6) return float(((Ptr<uint, Access.Read>)address)[index]);
@@ -106,7 +107,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
                 loadAsFloat(parameters.inputAddress, index);
         else if (kOutputDType == 1)
             ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                uint16_t(f32tof16(loadAsFloat(parameters.inputAddress, index)));
+                uint16_t(floatToHalfBits(loadAsFloat(parameters.inputAddress, index)));
         else if (kOutputDType == 2)
             ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
                 int(loadAsInt64(parameters.inputAddress, index));

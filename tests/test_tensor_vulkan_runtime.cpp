@@ -7,14 +7,21 @@
 #include "core/tensor_backend.hpp"
 
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <limits>
 #include <mutex>
 #include <ranges>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -520,6 +527,90 @@ namespace {
         unsetenv("LFS_TENSOR_BACKEND");
 #endif
         internal::gpu_backend_reset_for_testing();
+    }
+
+    TEST_F(TensorVulkanRuntime, ShaderManifestsCarryTheFloatControlsContract) {
+        // Catches a module built without the finalize step (no execution mode),
+        // an fp32 module that regained the Float16 capability through a half
+        // intrinsic, and a capability the loader table does not know.
+        const std::filesystem::path directory = internal::vulkan_shader_directory_for_testing();
+        const std::set<std::string> known{"Shader", "Int64", "Int16",
+                                          "PhysicalStorageBufferAddresses",
+                                          "SignedZeroInfNanPreserve", "Float16",
+                                          "AtomicFloat32AddEXT"};
+        size_t modules = 0;
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (entry.path().extension() != ".json") {
+                continue;
+            }
+            ++modules;
+            const std::string module = entry.path().stem().string();
+            std::ifstream stream(entry.path());
+            const nlohmann::json manifest = nlohmann::json::parse(stream);
+            EXPECT_EQ(manifest.at("entry_point"), "main") << module;
+            EXPECT_EQ(manifest.at("local_size").get<std::vector<uint32_t>>(),
+                      (std::vector<uint32_t>{256, 1, 1}))
+                << module;
+            EXPECT_EQ(manifest.at("push_constant_size").get<uint32_t>() % 4, 0u) << module;
+            const auto capabilities = manifest.at("capabilities").get<std::vector<std::string>>();
+            for (const std::string& capability : capabilities) {
+                EXPECT_TRUE(known.contains(capability)) << module << " declares " << capability;
+            }
+            const bool half = std::ranges::find(capabilities, "Float16") != capabilities.end();
+            EXPECT_EQ(half, module == "pointwise_half") << module;
+            EXPECT_EQ(std::ranges::find(capabilities, "AtomicFloat32AddEXT") != capabilities.end(),
+                      module == "index_atomic")
+                << module;
+            const auto widths = manifest.at("float_widths").get<std::vector<uint32_t>>();
+            const auto preserve =
+                manifest.at("signed_zero_inf_nan_preserve").get<std::vector<uint32_t>>();
+            EXPECT_EQ(widths, preserve) << module;
+            const bool byte_mover = module == "fill" || module == "cat_pad";
+            EXPECT_EQ(std::ranges::find(widths, 32u) != widths.end(), !byte_mover) << module;
+            EXPECT_EQ(std::ranges::find(widths, 16u) != widths.end(), half) << module;
+        }
+        EXPECT_EQ(modules, 21u);
+        const internal::VkDeviceCaps caps = internal::vulkan_device_caps_for_testing();
+        EXPECT_TRUE(caps.float_controls_fp16 || !caps.shader_float16);
+    }
+
+    TEST_F(TensorVulkanRuntime, HalfConversionsMatchCudaBitForBitOnEverySpecialValue) {
+        // The fp32 modules convert Float16 storage with integer arithmetic; a
+        // wrong tie, a dropped subnormal, an early overflow or a NaN turned
+        // infinity differs from the CUDA conversion in at least one bit.
+        std::vector<float> values{
+            0.0f, -0.0f, 1.0f, -1.0f, 65504.0f, 65519.99f, 65520.0f, 65536.0f, 1.0e5f,
+            std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+            std::numeric_limits<float>::quiet_NaN(), 6.103515625e-05f, 5.9604645e-08f,
+            std::ldexp(1.0f, -25), std::ldexp(1.5f, -25), std::ldexp(1.0f, -26),
+            std::ldexp(3.0f, -26), 1.0f + std::ldexp(1.0f, -11), 1.0f + std::ldexp(3.0f, -11),
+            1.0f + std::ldexp(1.0f, -11) + std::ldexp(1.0f, -20), 0.1f, 0.3f, 1.0e-3f, 3.14159f,
+            10000.7f, -2.5e-5f, 1.2345e-6f};
+        for (int i = 0; i < 4096; ++i) {
+            values.push_back(std::ldexp(1.0f + static_cast<float>(i) / 4096.0f, (i % 40) - 20));
+            values.push_back(-std::ldexp(1.0f + static_cast<float>(i * 7 % 4096) / 4096.0f,
+                                         (i % 13) - 26));
+        }
+        const Tensor cpu = Tensor::from_vector(values, {values.size()}, Device::CPU);
+        const auto round_trip = [&](const GpuBackend backend) {
+            GpuBackendScope scope(backend);
+            return cpu.to(Device::CUDA).to(DataType::Float16).to(DataType::Float32).cpu().to_vector();
+        };
+        const std::vector<float> cuda = round_trip(GpuBackend::CUDA);
+        const std::vector<float> vulkan = round_trip(GpuBackend::Vulkan);
+        ASSERT_EQ(cuda.size(), vulkan.size());
+        size_t mismatches = 0;
+        for (size_t i = 0; i < cuda.size(); ++i) {
+            const bool both_nan = std::isnan(cuda[i]) && std::isnan(vulkan[i]);
+            if (!both_nan && std::bit_cast<uint32_t>(cuda[i]) != std::bit_cast<uint32_t>(vulkan[i])) {
+                ++mismatches;
+                if (mismatches <= 8) {
+                    ADD_FAILURE() << "index " << i << " input " << values[i] << " cuda " << cuda[i]
+                                  << " vulkan " << vulkan[i];
+                }
+            }
+        }
+        EXPECT_EQ(mismatches, 0u);
     }
 
 } // namespace

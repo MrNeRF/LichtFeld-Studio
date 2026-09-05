@@ -1,5 +1,6 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 136;
+#include "half_bits.slangh"
 
 [SpecializationConstant]
 const uint kOp = 4;
@@ -156,17 +157,17 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
         {
             const float lhs = kInputDType == 0
                                   ? ((Ptr<float, Access.Read>)parameters.lhsAddress)[lhsIndex]
-                                  : f16tof32(uint(((Ptr<uint16_t, Access.Read>)parameters.lhsAddress)[lhsIndex]));
+                                  : halfBitsToFloat(uint(((Ptr<uint16_t, Access.Read>)parameters.lhsAddress)[lhsIndex]));
             const float rhs = kInputDType == 0
                                   ? ((Ptr<float, Access.Read>)parameters.rhsAddress)[rhsIndex]
-                                  : f16tof32(uint(((Ptr<uint16_t, Access.Read>)parameters.rhsAddress)[rhsIndex]));
+                                  : halfBitsToFloat(uint(((Ptr<uint16_t, Access.Read>)parameters.rhsAddress)[rhsIndex]));
             if (kOutputDType == 5)
                 storeByte(parameters.outputAddress, index, predicateFloat(lhs, rhs) ? 1u : 0u);
             else if (kOutputDType == 0)
                 ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] = floatOp(lhs, rhs);
             else
                 ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                    uint16_t(f32tof16(floatOp(lhs, rhs)));
+                    uint16_t(floatToHalfBits(floatOp(lhs, rhs)));
             continue;
         }
         if (kInputDType == 3)

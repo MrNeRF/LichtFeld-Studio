@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -36,6 +37,7 @@ namespace lfs::core::internal {
         float timestamp_period = 0.0f;
         bool shader_float16 = false;
         bool shader_atomic_float = false;
+        bool float_controls_fp16 = false;
         bool memory_budget = false;
         bool host_visible_device_local = false;
         bool direct_host_uploads = false;
@@ -138,6 +140,7 @@ namespace lfs::core::internal {
 
     [[nodiscard]] LFS_CORE_API std::vector<std::string> vulkan_validation_messages_for_testing();
     [[nodiscard]] LFS_CORE_API VkDeviceCaps vulkan_device_caps_for_testing();
+    [[nodiscard]] LFS_CORE_API std::filesystem::path vulkan_shader_directory_for_testing();
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_live_vma_objects_for_testing() noexcept;
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_completed_timeline_for_testing();
     [[nodiscard]] LFS_CORE_API size_t vulkan_dead_recorder_count_for_testing();

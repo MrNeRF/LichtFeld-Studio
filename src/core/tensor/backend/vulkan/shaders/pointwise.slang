@@ -1,5 +1,6 @@
 static const uint LFS_LOCAL_SIZE_X = 256;
 static const uint LFS_PUSH_CONSTANT_SIZE = 48;
+#include "half_bits.slangh"
 
 [SpecializationConstant]
 const uint kOp = 0;
@@ -329,7 +330,7 @@ float loadFloat(uint64_t address, uint index)
     if (kInputDType == kFloat32)
         return ((Ptr<float, Access.Read>)address)[index];
     if (kInputDType == kFloat16)
-        return f16tof32(uint(((Ptr<uint16_t, Access.Read>)address)[index]));
+        return halfBitsToFloat(uint(((Ptr<uint16_t, Access.Read>)address)[index]));
     return 0.0f;
 }
 
@@ -338,7 +339,7 @@ void storeFloat(uint64_t address, uint index, float value)
     if (kOutputDType == kFloat32)
         ((Ptr<float, Access.ReadWrite>)address)[index] = value;
     else
-        ((Ptr<uint16_t, Access.ReadWrite>)address)[index] = uint16_t(f32tof16(value));
+        ((Ptr<uint16_t, Access.ReadWrite>)address)[index] = uint16_t(floatToHalfBits(value));
 }
 
 void evaluateScalar(uint index, uniform Parameters parameters)

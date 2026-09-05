@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "vk_context.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -28,6 +29,28 @@ namespace lfs::core::internal {
             LFS_ASSERT_MSG(stream.good() && words.front() == 0x07230203u,
                            "Vulkan backend: SPIR-V module is invalid");
             return words;
+        }
+
+        // Every capability a module may declare maps to a device feature the
+        // context enables at creation; a capability outside this table means a
+        // shader change that the runtime has not been taught to check.
+        bool capability_provided(const VkDeviceCaps& caps, const std::string& capability) {
+            if (capability == "Shader" || capability == "Int64" || capability == "Int16" ||
+                capability == "PhysicalStorageBufferAddresses" ||
+                capability == "StorageBuffer16BitAccess" ||
+                capability == "StorageBuffer8BitAccess") {
+                return true;
+            }
+            if (capability == "SignedZeroInfNanPreserve") {
+                return true;
+            }
+            if (capability == "Float16") {
+                return caps.shader_float16;
+            }
+            if (capability == "AtomicFloat32AddEXT") {
+                return caps.shader_atomic_float;
+            }
+            return false;
         }
 
         nlohmann::json read_manifest(const std::filesystem::path& path) {
@@ -84,22 +107,21 @@ namespace lfs::core::internal {
         LFS_ASSERT_MSG(manifest.at("push_constant_size").get<uint32_t>() ==
                            expected_push_constant_size,
                        "Vulkan backend: shader manifest push constant size mismatch");
-        const auto capabilities =
-            manifest.at("required_capabilities").get<std::vector<std::string>>();
-        std::vector<std::string> expected_capabilities{
-            "Int64", "PhysicalStorageBufferAddresses"};
-        if (module == "pointwise_half") {
-            expected_capabilities.emplace_back("Float16");
-            LFS_ASSERT_MSG(context_.caps().shader_float16,
-                           "Vulkan native Float16 pipeline requires shaderFloat16");
+        const auto capabilities = manifest.at("capabilities").get<std::vector<std::string>>();
+        for (const std::string& capability : capabilities) {
+            LFS_ASSERT_MSG(capability_provided(context_.caps(), capability),
+                           std::format("Vulkan backend: module {} declares SPIR-V capability {}, "
+                                       "which this device or the backend contract does not provide",
+                                       module, capability));
         }
-        if (module == "index_atomic") {
-            expected_capabilities.emplace_back("AtomicFloat32Add");
-            LFS_ASSERT_MSG(context_.caps().shader_atomic_float,
-                           "Vulkan float atomic pipeline requires shaderBufferFloat32AtomicAdd");
+        const auto preserve =
+            manifest.at("signed_zero_inf_nan_preserve").get<std::vector<uint32_t>>();
+        for (const uint32_t width : manifest.at("float_widths").get<std::vector<uint32_t>>()) {
+            LFS_ASSERT_MSG(std::ranges::find(preserve, width) != preserve.end(),
+                           std::format("Vulkan backend: module {} computes in {}-bit floats without "
+                                       "the SignedZeroInfNanPreserve {} execution mode",
+                                       module, width, width));
         }
-        LFS_ASSERT_MSG(capabilities == expected_capabilities,
-                       "Vulkan backend: shader manifest capabilities mismatch");
 
         const std::vector<uint32_t> words =
             read_spirv(directory / (module + ".spv"));

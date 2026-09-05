@@ -15,36 +15,46 @@ find_program(LFS_TENSOR_SLANGC
     PATH_SUFFIXES tools/shader-slang
     REQUIRED)
 
-find_program(LFS_TENSOR_SPIRV_VAL
-    NAMES spirv-val
-    HINTS
-        ${CMAKE_PREFIX_PATH}
-        ${CMAKE_PREFIX_PATH}/tools/spirv-tools
-        ${VCPKG_INSTALLED_DIR}/${_tensor_host_triplet}/tools/spirv-tools
-    PATH_SUFFIXES tools/spirv-tools
-    NO_CACHE)
+find_package(SPIRV-Headers CONFIG REQUIRED)
+find_package(SPIRV-Tools CONFIG QUIET)
+
+# Host tool run on every compiled module: declares the float-controls
+# execution modes the backend contract requires, validates the result when the
+# SPIRV-Tools library is available and writes the manifest from the binary.
+add_executable(lfs_tensor_spirv_finalize
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/tools/spirv_finalize.cpp)
+target_link_libraries(lfs_tensor_spirv_finalize PRIVATE SPIRV-Headers::SPIRV-Headers)
+if(TARGET SPIRV-Tools-static)
+    target_link_libraries(lfs_tensor_spirv_finalize PRIVATE SPIRV-Tools-static)
+    target_compile_definitions(lfs_tensor_spirv_finalize PRIVATE LFS_SPIRV_FINALIZE_HAS_TOOLS=1)
+elseif(TARGET SPIRV-Tools)
+    target_link_libraries(lfs_tensor_spirv_finalize PRIVATE SPIRV-Tools)
+    target_compile_definitions(lfs_tensor_spirv_finalize PRIVATE LFS_SPIRV_FINALIZE_HAS_TOOLS=1)
+else()
+    message(STATUS "tensor Vulkan shaders: SPIRV-Tools not found, finalized modules are not validated")
+endif()
+
+file(GLOB LFS_TENSOR_SLANG_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders/*.slangh")
 
 set(LFS_TENSOR_SHADER_OUTPUTS)
 function(_tensor_add_slang_kernel name src)
     set(_source "${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders/${src}")
+    set(_raw "${LFS_TENSOR_SPV_DIR}/${name}.raw.spv")
     set(_spv "${LFS_TENSOR_SPV_DIR}/${name}.spv")
     set(_manifest "${LFS_TENSOR_SPV_DIR}/${name}.json")
-    set(_validation)
-    if(LFS_TENSOR_SPIRV_VAL)
-        set(_validation COMMAND ${LFS_TENSOR_SPIRV_VAL} --target-env vulkan1.3 ${_spv})
-    endif()
     add_custom_command(
         OUTPUT ${_spv} ${_manifest}
+        BYPRODUCTS ${_raw}
         COMMAND ${LFS_TENSOR_SLANGC} ${_source}
                 -entry main -stage compute -O -fp-mode precise
                 -line-directive-mode none -target spirv -profile glsl_460
-                -emit-spirv-directly -o ${_spv}
-        ${_validation}
-        COMMAND ${CMAKE_COMMAND} -DSOURCE=${_source} -DOUTPUT=${_manifest}
-                -P ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/write_shader_manifest.cmake
-        DEPENDS ${_source}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/write_shader_manifest.cmake
-                ${LFS_TENSOR_SLANGC}
+                -emit-spirv-directly
+                -I ${CMAKE_CURRENT_SOURCE_DIR}/tensor/backend/vulkan/shaders
+                -o ${_raw}
+        COMMAND lfs_tensor_spirv_finalize ${_raw} ${_spv} ${_manifest}
+        DEPENDS ${_source} ${LFS_TENSOR_SLANG_HEADERS} ${LFS_TENSOR_SLANGC}
+                lfs_tensor_spirv_finalize
         COMMENT "slangc tensor/${name}.spv"
         VERBATIM)
     list(APPEND LFS_TENSOR_SHADER_OUTPUTS ${_spv} ${_manifest})
