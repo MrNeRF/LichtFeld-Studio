@@ -3383,9 +3383,6 @@ namespace lfs::vis {
 
         core::Scene::Transaction txn(scene_);
 
-        auto splat_data = std::move(model_node->model);
-        const size_t num_gaussians = splat_data->size();
-
         // Preserve the model's world transform so the trained model
         // appears at the same position/orientation in edit mode as it
         // did during training (rendering uses getWorldTransform).
@@ -3398,6 +3395,11 @@ namespace lfs::vis {
                 return;
             }
         }
+
+        // Keep the model owned by the scene until trainer teardown succeeds:
+        // a deferred clear must not destroy it through a local unique_ptr.
+        auto splat_data = std::move(model_node->model);
+        const size_t num_gaussians = splat_data->size();
 
         scene_.clear();
         {
