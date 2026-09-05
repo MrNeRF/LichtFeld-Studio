@@ -63,6 +63,17 @@ namespace lfs::core {
         }
 
         [[noreturn]] void throw_backend_unavailable(const GpuBackend backend) {
+#ifdef LFS_TENSOR_VULKAN
+            if (backend == GpuBackend::Vulkan && internal::vulkan_backend_lost()) {
+                throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::DeviceLost,
+                    .domain = lfs::ErrorDomain::Vulkan,
+                    .user_message = "Vulkan tensor backend device lost; shut the backend down "
+                                    "to create a new context",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+#endif
             throw TensorError(std::format(
                 "GPU backend '{}' is unavailable", gpu_backend_name(backend)));
         }

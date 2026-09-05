@@ -134,10 +134,17 @@ namespace lfs::core::internal {
     };
 
     [[nodiscard]] bool vulkan_backend_probe_available() noexcept;
+    // True while a live context exists whose device was lost: new work is
+    // refused with a DeviceLost error until the backend is shut down.
+    [[nodiscard]] bool vulkan_backend_lost() noexcept;
     [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
     [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
 
+    // Marks the live context lost as if a call had returned VK_ERROR_DEVICE_LOST,
+    // so the typed error path, thread exit and shutdown can be exercised on a
+    // healthy device.
+    LFS_CORE_API void vulkan_inject_device_loss_for_testing();
     [[nodiscard]] LFS_CORE_API std::vector<std::string> vulkan_validation_messages_for_testing();
     [[nodiscard]] LFS_CORE_API VkDeviceCaps vulkan_device_caps_for_testing();
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_live_vma_objects_for_testing() noexcept;

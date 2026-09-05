@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/error.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
@@ -16,6 +17,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <latch>
 #include <limits>
 #include <mutex>
 #include <ranges>
@@ -607,6 +609,58 @@ namespace {
             }
         }
         EXPECT_EQ(mismatches, 0u);
+    }
+
+    TEST_F(TensorVulkanRuntime, InjectedDeviceLossRaisesTypedErrorsAndShutsDownCleanly) {
+        // Catches a lost-device path that throws a boundary assertion instead of
+        // the typed DeviceLost error consumers act on, a probe that keeps
+        // reporting a dead backend as available, and a shutdown that fails or
+        // hangs on a dead context.
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor warm = Tensor::ones({16}, Device::CUDA);
+            ASSERT_FLOAT_EQ(warm.sum_scalar(), 16.0f);
+        }
+        internal::vulkan_inject_device_loss_for_testing();
+        EXPECT_FALSE(gpu_backend_available(GpuBackend::Vulkan));
+        bool typed = false;
+        try {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor lost = Tensor::zeros({16}, Device::CUDA);
+            (void)lost.sum_scalar();
+        } catch (const lfs::Exception& error) {
+            typed = error.error().code() == lfs::ErrorCode::DeviceLost;
+            EXPECT_TRUE(typed) << error.what();
+        } catch (const std::exception& error) {
+            ADD_FAILURE() << "untyped failure on a lost device: " << error.what();
+        }
+        EXPECT_TRUE(typed);
+        const auto status = shutdown_gpu_backend(GpuBackend::Vulkan);
+        EXPECT_TRUE(status.has_value());
+        ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor fresh = Tensor::ones({16}, Device::CUDA);
+        EXPECT_FLOAT_EQ(fresh.sum_scalar(), 16.0f);
+    }
+
+    TEST_F(TensorVulkanRuntime, ThreadsWithPendingWorkExitCleanlyAfterDeviceLoss) {
+        // Catches the thread-exit token submitting a pending batch to a lost
+        // device from its destructor, which ends the process.
+        std::latch recorded(1);
+        std::latch lost(1);
+        std::thread worker([&] {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor pending = Tensor::zeros({64}, Device::CUDA);
+            (void)pending;
+            recorded.count_down();
+            lost.wait();
+        });
+        recorded.wait();
+        internal::vulkan_inject_device_loss_for_testing();
+        lost.count_down();
+        worker.join();
+        EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
+        ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
     }
 
 } // namespace

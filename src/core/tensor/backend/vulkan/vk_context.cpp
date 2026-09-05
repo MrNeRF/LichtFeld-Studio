@@ -342,7 +342,14 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::create_instance() {
-        const bool validation_requested = environment_flag("LFS_VULKAN_VALIDATION");
+        // LFS_VULKAN_VALIDATION=1 enables the Khronos layer; =sync also turns on
+        // its synchronization validation, which checks the barriers between
+        // recorded commands instead of the API usage alone.
+        const char* const validation_value = std::getenv("LFS_VULKAN_VALIDATION");
+        const bool sync_validation =
+            validation_value != nullptr && std::string_view(validation_value) == "sync";
+        const bool validation_requested =
+            sync_validation || environment_flag("LFS_VULKAN_VALIDATION");
         const bool validation_available = has_layer(kValidationLayer);
         const bool debug_utils = has_instance_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         std::vector<const char*> layers;
@@ -353,6 +360,13 @@ namespace lfs::core::internal {
                 extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
             }
         }
+        const std::array validation_enables{
+            VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT};
+        VkValidationFeaturesEXT validation_features{
+            VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+        validation_features.enabledValidationFeatureCount =
+            static_cast<uint32_t>(validation_enables.size());
+        validation_features.pEnabledValidationFeatures = validation_enables.data();
         VkApplicationInfo application{VK_STRUCTURE_TYPE_APPLICATION_INFO};
         application.pApplicationName = "LichtFeld Tensor Vulkan";
         application.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
@@ -360,6 +374,9 @@ namespace lfs::core::internal {
         application.apiVersion = VK_API_VERSION_1_3;
         VkInstanceCreateInfo create_info{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
         create_info.pApplicationInfo = &application;
+        if (sync_validation && !layers.empty()) {
+            create_info.pNext = &validation_features;
+        }
         create_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
         create_info.ppEnabledLayerNames = layers.data();
         create_info.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
@@ -679,14 +696,18 @@ namespace lfs::core::internal {
     }
 
     uint64_t VulkanContext::reserve_timeline_value() {
-        LFS_ASSERT_MSG(accepting_work() && !dead(),
-                       "Vulkan backend is not accepting new work");
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "reserve timeline value");
+        }
+        LFS_ASSERT_MSG(accepting_work(), "Vulkan backend is not accepting new work");
         return next_timeline_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
     void VulkanContext::submit(const VkCommandBuffer command,
                                const uint64_t signal_value) {
-        LFS_ASSERT_MSG(!dead(), "Vulkan backend device is lost");
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "vkQueueSubmit2");
+        }
         VkCommandBufferSubmitInfo command_info{
             VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
         command_info.commandBuffer = command;
@@ -709,7 +730,9 @@ namespace lfs::core::internal {
         if (value == 0) {
             return;
         }
-        LFS_ASSERT_MSG(!dead(), "Vulkan backend device is lost");
+        if (dead()) {
+            vk_check(this, VK_ERROR_DEVICE_LOST, "vkWaitSemaphores");
+        }
         VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         wait_info.semaphoreCount = 1;
         wait_info.pSemaphores = &timeline_;
@@ -721,16 +744,16 @@ namespace lfs::core::internal {
                 vk_check(this, result, "vkWaitSemaphores");
                 return;
             }
-            LFS_ASSERT_MSG(!dead(), "Vulkan backend device is lost");
+            if (dead()) {
+                vk_check(this, VK_ERROR_DEVICE_LOST, "vkWaitSemaphores");
+            }
             if (slice == 14) {
                 LOG_WARN("Vulkan timeline value {} not signalled after 30 s", value);
             }
             if (slice == 59) {
-                mark_device_lost_once();
-                LFS_ASSERT_MSG(false,
-                               std::format("Vulkan timeline value {} not signalled after 120 s; "
-                                           "treating the device as lost",
-                                           value));
+                LOG_ERROR("Vulkan timeline value {} not signalled after 120 s; treating the device as lost",
+                          value);
+                vk_check(this, VK_ERROR_DEVICE_LOST, "vkWaitSemaphores (timeline stalled for 120 s)");
             }
         }
     }
@@ -871,6 +894,11 @@ namespace lfs::core::internal {
         return available;
     }
 
+    bool vulkan_backend_lost() noexcept {
+        const auto live = try_live_vulkan_context();
+        return live && live->dead();
+    }
+
     std::shared_ptr<VulkanContext> acquire_vulkan_context() {
         std::shared_ptr<ContextSlot> slot;
         {
@@ -911,6 +939,10 @@ namespace lfs::core::internal {
             // deleter that runs later is a no-op by the context-id check.
             VulkanMemory::reset_last_shutdown_live_allocations();
         }
+    }
+
+    void vulkan_inject_device_loss_for_testing() {
+        acquire_vulkan_context()->mark_device_lost_once();
     }
 
     std::vector<std::string> vulkan_validation_messages_for_testing() {

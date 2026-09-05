@@ -270,7 +270,16 @@ namespace lfs::core::internal {
         }
         Recorder& recorder = *iterator->second;
         if (recorder.command != VK_NULL_HANDLE) {
-            flush_through_locked(recorder.reserved_value);
+            if (context_.dead()) {
+                // Nothing reaches a lost device; the buffer goes with the pool at
+                // shutdown. Submitting here would throw out of a thread-exit
+                // destructor.
+                recorder.command = VK_NULL_HANDLE;
+                recorder.reserved_value = 0;
+                recorder.command_count = 0;
+            } else {
+                flush_through_locked(recorder.reserved_value);
+            }
         }
         recorder.owner_alive = false;
     }
