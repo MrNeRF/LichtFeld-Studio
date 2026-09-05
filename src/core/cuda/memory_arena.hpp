@@ -293,10 +293,20 @@ namespace lfs::core {
         // drains all frames and the device, then invokes `commit(new_size)` — which
         // performs the physical grow + Vulkan re-import — inside that safe window;
         // on success the arena's committed capacity is bumped to new_size.
+        // With a nonzero timeout, reserve the next idle window against new
+        // training frames. The wait is bounded because callers may hold model
+        // locks needed by an active training frame. Zero keeps the try-only path.
+        enum class ExternalGrowFailure { None,
+                                         Busy,
+                                         BackingMissing,
+                                         CudaFailure,
+                                         CommitFailure };
         bool grow_external_backing(const void* device_ptr, size_t new_size,
-                                   const std::function<bool(size_t)>& commit);
+                                   const std::function<bool(size_t)>& commit,
+                                   uint32_t timeout_ms = 0,
+                                   ExternalGrowFailure* failure = nullptr);
         void clear_external_backing(const void* device_ptr = nullptr);
-        [[nodiscard]] bool using_external_backing() const;
+        [[nodiscard]] bool using_external_backing(const void* device_ptr = nullptr) const;
 
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
@@ -348,7 +358,9 @@ namespace lfs::core {
         bool install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
         bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
         bool grow_external_backing(const void* device_ptr, size_t new_size,
-                                   const std::function<bool(size_t)>& commit);
+                                   const std::function<bool(size_t)>& commit,
+                                   uint32_t timeout_ms = 0,
+                                   RasterizerMemoryArena::ExternalGrowFailure* failure = nullptr);
         void clear_external_backing(const void* device_ptr = nullptr);
         void reset();
         void shutdown() { shutdown_global_arena_manager(); }

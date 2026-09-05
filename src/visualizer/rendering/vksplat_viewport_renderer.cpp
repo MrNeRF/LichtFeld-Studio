@@ -3499,6 +3499,21 @@ namespace lfs::vis {
         // in reimportSharedScratchIfGrown() once the render owns the arena frame
         // (which excludes training), so the block is stable when we read it.
 
+        // B3 pause/end can detach the backing on the training thread without
+        // changing this renderer's cached installation flag. Reinstall the same
+        // block before either the capacity fast path or growth uses it again.
+        if (shared_scratch_.block) {
+            shared_scratch_.installed_in_training_arena =
+                lfs::core::GlobalArenaManager::instance().get_arena().using_external_backing(
+                    shared_scratch_.block->device_ptr);
+            if (!shared_scratch_.installed_in_training_arena) {
+                if (!try_install_existing()) {
+                    return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
+                }
+                shared_scratch_.installed_in_training_arena = true;
+            }
+        }
+
         // Fast path: an installed block already large enough for this frame.
         if (shared_scratch_.block && shared_scratch_.bytes >= required_bytes &&
             shared_scratch_.imported_buffer.buffer != VK_NULL_HANDLE) {
@@ -3556,15 +3571,28 @@ namespace lfs::vis {
                 return true;
             };
             const std::size_t exact_required_bytes = alignUp(required_bytes, kSharedScratchPageBytes);
+            using GrowFailure = lfs::core::RasterizerMemoryArena::ExternalGrowFailure;
+            GrowFailure failure = GrowFailure::None;
             bool grew = lfs::core::GlobalArenaManager::instance().grow_external_backing(
-                device_ptr, exact_required_bytes, commit);
+                device_ptr, exact_required_bytes, commit, /*timeout_ms=*/15, &failure);
             if (!grew) {
+                if (failure == GrowFailure::Busy || failure == GrowFailure::BackingMissing) {
+                    if (failure == GrowFailure::BackingMissing) {
+                        shared_scratch_.installed_in_training_arena = false;
+                    }
+                    LOG_PERF("VkSplat shared scratch grow deferred: {}",
+                             failure == GrowFailure::Busy ? "arena busy" : "backing detached; reinstall next frame");
+                    return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
+                }
+                if (commit_error.empty()) {
+                    commit_error = failure == GrowFailure::CudaFailure
+                                       ? "CUDA synchronization failed (see preceding CUDA diagnostic)"
+                                       : "allocation or Vulkan binding callback failed without detail";
+                }
                 LOG_ERROR("VkSplat shared scratch grow to {} MiB failed: {}",
                           exact_required_bytes >> 20,
-                          commit_error.empty() ? "unknown error" : commit_error);
-                return std::unexpected(commit_error.empty()
-                                           ? std::string("VkSplat shared scratch training rasterizer arena is busy")
-                                           : std::format("VkSplat shared scratch grow failed: {}", commit_error));
+                          commit_error);
+                return std::unexpected(std::format("VkSplat shared scratch grow failed: {}", commit_error));
             }
             shared_scratch_.installed_in_training_arena = true;
             publish_capacity();
@@ -8986,6 +9014,15 @@ namespace lfs::vis {
                 try {
                     if (!shared_arena_guard) {
                         shared_arena_guard.emplace();
+                    }
+                    // Pause can detach after ensureSharedScratchArena checked
+                    // installation but before this frame acquired ownership.
+                    // Never bind the retained block against an unrelated arena.
+                    if (!lfs::core::GlobalArenaManager::instance().get_arena().using_external_backing(
+                            shared_scratch_.block->device_ptr)) {
+                        shared_scratch_.installed_in_training_arena = false;
+                        shared_arena_guard.reset();
+                        return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
                     }
                     // Now that the render owns the arena frame (training is
                     // excluded), it is safe to re-import the block if training grew

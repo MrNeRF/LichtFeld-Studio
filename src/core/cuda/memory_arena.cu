@@ -998,15 +998,48 @@ namespace lfs::core {
     }
 
     bool RasterizerMemoryArena::grow_external_backing(const void* device_ptr, size_t new_size,
-                                                      const std::function<bool(size_t)>& commit) {
-        // Non-blocking on purpose: this is called by the render thread while it
-        // holds the trainer's render_mutex_ (shared). Waiting here for the arena
-        // to drain would deadlock against a refining training step that holds the
-        // arena frame and is itself blocked on render_mutex_ (write). If the arena
-        // is busy we bail; the caller falls back to a cached frame and retries.
-        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::try_to_lock);
-        if (!sync_lock.owns_lock() || active_frames_ != 0 || pending_render_frames_ != 0) {
+                                                      const std::function<bool(size_t)>& commit,
+                                                      const uint32_t timeout_ms,
+                                                      ExternalGrowFailure* failure) {
+        if (failure) {
+            *failure = ExternalGrowFailure::None;
+        }
+        const auto fail = [failure](ExternalGrowFailure reason) {
+            if (failure) {
+                *failure = reason;
+            }
             return false;
+        };
+        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::try_to_lock);
+        if (!sync_lock.owns_lock() || pending_render_frames_ != 0) {
+            return fail(ExternalGrowFailure::Busy);
+        }
+        if (active_frames_ != 0) {
+            if (timeout_ms == 0) {
+                return fail(ExternalGrowFailure::Busy);
+            }
+            // Growth happens before the renderer acquires its arena frame.
+            // Reserve that same idle window here, otherwise consecutive training
+            // frames can starve growth and leave the viewport on its cached image.
+            // Never wait indefinitely: refining can hold the arena while waiting
+            // for the caller's shared model lock to be released.
+            ++pending_render_frames_;
+            bool idle = false;
+            try {
+                idle = sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(timeout_ms),
+                                         [this] { return active_frames_ == 0; });
+            } catch (...) {
+                --pending_render_frames_;
+                sync_cv_.notify_all();
+                throw;
+            }
+            --pending_render_frames_;
+            sync_cv_.notify_all();
+            if (!idle) {
+                return fail(ExternalGrowFailure::Busy);
+            }
+            // Keep sync_mutex_ through commit: no new frame can enter between
+            // releasing the reservation and updating the physical backing.
         }
 
         const cudaError_t sync_status = cudaDeviceSynchronize();
@@ -1015,7 +1048,7 @@ namespace lfs::core {
                 sync_status, "cudaDeviceSynchronize(external arena growth)",
                 detail::format_cuda_safe("requested_bytes={}", new_size),
                 LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-            return false;
+            return fail(ExternalGrowFailure::CudaFailure);
         }
 
         std::scoped_lock lock(arena_mutex_, frame_mutex_);
@@ -1031,7 +1064,7 @@ namespace lfs::core {
         if (!target) {
             sync_lock.unlock();
             sync_cv_.notify_all();
-            return false;
+            return fail(ExternalGrowFailure::BackingMissing);
         }
         if (new_size <= target->committed_size) {
             sync_lock.unlock();
@@ -1047,7 +1080,7 @@ namespace lfs::core {
         if (!commit(new_size)) {
             sync_lock.unlock();
             sync_cv_.notify_all();
-            return false;
+            return fail(ExternalGrowFailure::CommitFailure);
         }
         TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1069,11 +1102,12 @@ namespace lfs::core {
         return true;
     }
 
-    bool RasterizerMemoryArena::using_external_backing() const {
+    bool RasterizerMemoryArena::using_external_backing(const void* device_ptr) const {
         std::lock_guard<std::mutex> lock(arena_mutex_);
         for (const auto& entry : device_arenas_) {
             const auto& arena_ptr = entry.second;
-            if (arena_ptr && arena_ptr->external_backing) {
+            if (arena_ptr && arena_ptr->external_backing &&
+                (!device_ptr || arena_ptr->fallback_buffer == device_ptr)) {
                 return true;
             }
         }
@@ -2226,8 +2260,10 @@ namespace lfs::core {
     }
 
     bool GlobalArenaManager::grow_external_backing(const void* device_ptr, size_t new_size,
-                                                   const std::function<bool(size_t)>& commit) {
-        return get_arena().grow_external_backing(device_ptr, new_size, commit);
+                                                   const std::function<bool(size_t)>& commit,
+                                                   const uint32_t timeout_ms,
+                                                   RasterizerMemoryArena::ExternalGrowFailure* failure) {
+        return get_arena().grow_external_backing(device_ptr, new_size, commit, timeout_ms, failure);
     }
 
     void GlobalArenaManager::clear_external_backing(const void* device_ptr) {
