@@ -61,6 +61,50 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training_panel"]["color_blue_prefix"] == "B:"
 
 
+@pytest.mark.parametrize("enabled,method,legacy,popspa", [
+    (False, 0, False, False),
+    (False, 1, False, False),
+    (True, 0, True, False),
+    (True, 1, False, True),
+])
+def test_sparsity_method_controls_rows_and_search(
+    training_panel_module, monkeypatch, enabled, method, legacy, popspa
+):
+    module = training_panel_module
+    params = SimpleNamespace(
+        has_params=lambda: True, mask_mode=SimpleNamespace(value=0),
+        use_depth_loss=False, use_normal_loss=False, ppisp=False,
+        use_exposure_correction=False, ppisp_use_controller=False,
+        use_bilateral_grid=False, strategy="mcmc", random=False,
+        enable_sparsity=enabled, sparsity_method=SimpleNamespace(value=method),
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    panel = module.TrainingPanel()
+    assert panel._property_view_condition_visible("dep_opacity_admm") is legacy
+    assert panel._property_view_condition_visible("dep_popspa") is popspa
+    view = module.property_view
+    for prop_id in view.POPSPA_PROPS:
+        assert view.PROP_VISIBILITY_CONDITION_IDS[prop_id] == "dep_popspa"
+    assert view.PROP_VISIBILITY_CONDITION_IDS["sparsify_steps"] == "dep_opacity_admm"
+    assert view.PROP_VISIBILITY_CONDITION_IDS["init_rho"] == "dep_opacity_admm"
+    assert "sparsity_method" in view.SPARSITY_RUNS[0].prop_ids
+    # Search uses the same per-row predicate as ordinary rendering.
+    rows = [
+        dict(id=prop_id, kind="number", label_key="", name=prop_id,
+             tooltip_key="", precision=0, text="0", strategies=())
+        for prop_id in ("sparsify_steps", "popspa_target_count")
+    ]
+    binding = view.SectionBinding(
+        "sparsity", rows, lambda: params, {}, lambda _binding: None,
+        search_accessor=lambda: "s",
+        visibility_condition_id="dep_sparsity",
+        visibility_predicate=panel._property_view_condition_visible,
+    )
+    visible = {row["id"] for row in binding._records()}
+    assert ("sparsify_steps" in visible) is legacy
+    assert ("popspa_target_count" in visible) is popspa
+
+
 @pytest.fixture
 def training_panel_module(monkeypatch):
     project_root = Path(__file__).parent.parent.parent
@@ -1640,7 +1684,9 @@ def test_save_modified_pc_unbound_writes_dataset_ply(training_panel_module, monk
 
     training_panel_module.TrainingPanel()._save_modified_pc()
 
-    assert ply_calls == [(pc, "/data/scene_a/sparse/0/points3D.ply")]
+    assert [(cloud, Path(path)) for cloud, path in ply_calls] == [
+        (pc, Path("/data/scene_a/sparse/0/points3D.ply"))
+    ]
     assert scene.is_point_cloud_modified is False
 
 

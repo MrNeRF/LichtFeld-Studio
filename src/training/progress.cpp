@@ -33,6 +33,10 @@ namespace lfs::training {
                 return "Ctrl";
             case TrainingProgress::Phase::Sparse:
                 return "(-)";
+            case TrainingProgress::Phase::Score:
+                return "POP";
+            case TrainingProgress::Phase::Recover:
+                return "Recover";
             }
             return "";
         }
