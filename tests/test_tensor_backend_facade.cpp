@@ -84,11 +84,13 @@ namespace {
 
     TEST(TensorBackendFacade, RegistryReturnsVulkanAndRejectsCpuStorage) {
         // Catches the Vulkan registry entry silently returning the CUDA singleton.
-        GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor vulkan = Tensor::empty({2}, Device::CUDA);
-        EXPECT_EQ(internal::backend_ops(GpuBackend::Vulkan)
-                      .classify_pointer(vulkan.data_ptr()),
-                  PointerClass::Device);
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor vulkan = Tensor::empty({2}, Device::CUDA);
+            EXPECT_EQ(internal::backend_ops(GpuBackend::Vulkan)
+                          .classify_pointer(vulkan.data_ptr()),
+                      PointerClass::Device);
+        }
 
         // Catches CPU tensors reaching a GPU facade through a default-backend fallback.
         const Tensor cpu = Tensor::ones({2}, Device::CPU);
