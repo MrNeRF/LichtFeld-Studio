@@ -43,7 +43,7 @@ namespace {
         internal::gpu_backend_reset_for_testing();
 
         // Catches a thread scope freezing the otherwise untouched process default.
-        {
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
             GpuBackendScope scope(GpuBackend::Vulkan);
             const Tensor tensor = Tensor::empty({1}, Device::CUDA);
             EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
@@ -78,6 +78,9 @@ namespace {
 
     TEST(TensorBackendSelection, ScopeNestsRestoresAndIsThreadLocal) {
         // Catches a scope implemented as a process-global mutable selector.
+        if (!gpu_backend_available(GpuBackend::Vulkan)) {
+            GTEST_SKIP() << "Vulkan backend unavailable";
+        }
         std::atomic<bool> other_thread_used_cuda = false;
         {
             GpuBackendScope outer(GpuBackend::Vulkan);
@@ -132,7 +135,9 @@ namespace {
 
     TEST(TensorBackendSelection, VulkanFactorySucceedsWithoutChangingDefault) {
         // Catches a Vulkan scope falling through to a CUDA allocation.
-        ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
+        if (!gpu_backend_available(GpuBackend::Vulkan)) {
+            GTEST_SKIP() << "Vulkan backend unavailable";
+        }
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
             const Tensor tensor = Tensor::zeros({2}, Device::CUDA);
@@ -175,6 +180,9 @@ namespace {
         EXPECT_NE(clone.data_ptr(), source.data_ptr());
         EXPECT_EQ(clone.to_vector(), source.to_vector());
 
+        if (!gpu_backend_available(GpuBackend::Vulkan)) {
+            return;
+        }
         const Tensor vulkan =
             internal::copy_to_backend(source, GpuBackend::Vulkan);
         EXPECT_EQ(gpu_backend_of(vulkan), GpuBackend::Vulkan);
@@ -185,9 +193,13 @@ namespace {
         // Catches placeholder Vulkan services leaking CUDA statistics or errors.
         EXPECT_TRUE(gpu_backend_available(GpuBackend::CUDA));
         const MemoryInfo vulkan = gpu_backend_memory_info(GpuBackend::Vulkan);
-        EXPECT_GT(vulkan.total_bytes, 0u);
-        EXPECT_GT(vulkan.free_bytes, 0u);
-        EXPECT_GE(vulkan.device_id, 0);
+        if (gpu_backend_available(GpuBackend::Vulkan)) {
+            EXPECT_GT(vulkan.total_bytes, 0u);
+            EXPECT_GT(vulkan.free_bytes, 0u);
+            EXPECT_GE(vulkan.device_id, 0);
+        } else {
+            EXPECT_EQ(vulkan.total_bytes, 0u);
+        }
         EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::CUDA).has_value());
         EXPECT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
     }
