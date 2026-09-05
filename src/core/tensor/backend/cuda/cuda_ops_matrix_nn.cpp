@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -27,6 +28,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::sgemm(
         const StorageRef lhs, const StorageRef rhs, const StorageRef output,
         const GemmProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(sgemm);
         tensor_ops::launch_sgemm(
             cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
             cuda_pointer<float>(output), program.m, program.n, program.k,
@@ -36,6 +38,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::sgemm_tn(
         const StorageRef lhs, const StorageRef rhs, const StorageRef output,
         const GemmProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(sgemm_tn);
         tensor_ops::launch_sgemm_tn(
             cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
             cuda_pointer<float>(output), program.m, program.n, program.k,
@@ -45,6 +48,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::sgemm_batched(
         const StorageRef lhs, const StorageRef rhs, const StorageRef output,
         const GemmProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(sgemm_batched);
         tensor_ops::launch_sgemm_batched(
             cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
             cuda_pointer<float>(output), program.batch, program.m, program.n,
@@ -55,6 +59,7 @@ namespace lfs::core::internal {
         const StorageRef lhs, const StorageRef rhs, const StorageRef bias,
         const StorageRef output, const GemmProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(sgemm_bias_relu);
         tensor_ops::launch_sgemm_bias_relu(
             cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
             cuda_const_pointer<float>(bias), cuda_pointer<float>(output),
@@ -64,6 +69,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::dot_product(
         const StorageRef lhs, const StorageRef rhs, const StorageRef output,
         const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(dot_product);
         tensor_ops::launch_dot_product(
             cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
             cuda_pointer<float>(output), count, context.cuda_stream);
@@ -72,6 +78,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::diag(
         const StorageRef diagonal, const StorageRef output, const size_t count,
         const ExecContext context) {
+        LFS_FACADE_TRACE(diag);
         tensor_ops::launch_diag(
             cuda_const_pointer<float>(diagonal), cuda_pointer<float>(output),
             count, context.cuda_stream);
@@ -80,6 +87,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::eye(
         const StorageRef output, const size_t rows, const size_t columns,
         const ExecContext context) {
+        LFS_FACADE_TRACE(eye);
         tensor_ops::launch_eye(
             cuda_pointer<float>(output), rows, columns, context.cuda_stream);
     }
@@ -88,6 +96,7 @@ namespace lfs::core::internal {
         const StorageRef lhs, const StorageRef rhs, const StorageRef output,
         const size_t lhs_rows, const size_t rhs_rows, const size_t columns,
         const float p, const ExecContext context) {
+        LFS_FACADE_TRACE(cdist);
         tensor_ops::launch_cdist(
             cuda_const_pointer<float>(lhs), cuda_const_pointer<float>(rhs),
             cuda_pointer<float>(output), lhs_rows, rhs_rows, columns, p,
@@ -97,6 +106,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::max_pool2d(
         const StorageRef input, const StorageRef output,
         const PoolProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(max_pool2d);
         tensor_ops::launch_max_pool2d(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),
             program.batch, program.channels, program.input_height, program.input_width,
@@ -107,6 +117,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::adaptive_avg_pool2d(
         const StorageRef input, const StorageRef output,
         const PoolProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(adaptive_avg_pool2d);
         tensor_ops::launch_adaptive_avg_pool2d(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),
             program.batch, program.channels, program.input_height, program.input_width,
@@ -117,6 +128,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef bias, const StorageRef output,
         const int count, const int channels, const int spatial_size,
         const ExecContext context) {
+        LFS_FACADE_TRACE(bias_add);
         tensor_ops::launch_bias_add(
             cuda_const_pointer<float>(input), cuda_const_pointer<float>(bias),
             cuda_pointer<float>(output), count, channels, spatial_size,
@@ -127,6 +139,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef bias, const StorageRef output,
         const int count, const int channels, const int spatial_size,
         const ExecContext context) {
+        LFS_FACADE_TRACE(bias_relu);
         tensor_ops::launch_bias_relu(
             cuda_const_pointer<float>(input), cuda_const_pointer<float>(bias),
             cuda_pointer<float>(output), count, channels, spatial_size,
@@ -136,6 +149,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::relu(
         const StorageRef input, const StorageRef output, const int count,
         const ExecContext context) {
+        LFS_FACADE_TRACE(relu);
         tensor_ops::launch_relu(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),
             count, context.cuda_stream);

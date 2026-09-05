@@ -5,6 +5,7 @@
 
 #include "core/tensor.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -33,13 +34,23 @@ namespace tensor_hardening {
         return cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
     }
 
+    // Backend-neutral: the tensor side of these cases uses only the public API,
+    // so they run under whichever GPU backend is the process default. The CUDA
+    // device is selected only when that default is CUDA.
     class CudaTest : public ::testing::Test {
     protected:
         void SetUp() override {
-            if (!has_cuda_device()) {
-                GTEST_SKIP() << "CUDA device required";
+            const lfs::core::GpuBackend backend = lfs::core::default_gpu_backend();
+            if (!lfs::core::gpu_backend_available(backend)) {
+                GTEST_SKIP() << "GPU backend " << lfs::core::gpu_backend_name(backend)
+                             << " unavailable";
             }
-            ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+            if (backend == lfs::core::GpuBackend::CUDA) {
+                if (!has_cuda_device()) {
+                    GTEST_SKIP() << "CUDA device required";
+                }
+                ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
+            }
         }
     };
 

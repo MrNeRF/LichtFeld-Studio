@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "core/tensor_backend.hpp"
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -21,8 +23,10 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <random>
+#include <set>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -275,9 +279,12 @@ namespace {
                 for (float& value : values)
                     value = std::abs(value * 1024.0f);
             }
-            auto cpu = Tensor::from_vector(values, shape, Device::CPU);
-            auto cuda = cpu.to(Device::CUDA);
-            return dtype == DataType::Float32 ? cuda : cuda.to(dtype);
+            // Convert on the host so both backends receive identical bytes; a backend
+            // conversion defect must fail the convert row, not every other row.
+            Tensor cpu = Tensor::from_vector(values, shape, Device::CPU);
+            if (dtype != DataType::Float32)
+                cpu = cpu.to(dtype);
+            return cpu.to(Device::CUDA);
         }
         if (dtype == DataType::Bool) {
             std::vector<bool> values(count);
@@ -287,8 +294,10 @@ namespace {
         }
         std::vector<int> values(count);
         std::generate(values.begin(), values.end(), [&] { return int_dist(generator); });
-        auto cuda = Tensor::from_vector(values, shape, Device::CPU).to(Device::CUDA);
-        return dtype == DataType::Int32 ? cuda : cuda.to(dtype);
+        Tensor cpu = Tensor::from_vector(values, shape, Device::CPU);
+        if (dtype != DataType::Int32)
+            cpu = cpu.to(dtype);
+        return cpu.to(Device::CUDA);
     }
 
     Tensor make_profile_tensor(const Profile& profile, DataType dtype, uint64_t seed,
@@ -415,9 +424,7 @@ namespace {
         }
         if (name == "launch_masked_fill" || name == "launch_masked_select" ||
             name == "launch_masked_scatter") {
-            inputs.mask = inputs.a.to(DataType::Float32).gt(0.0f);
-            if (lfs::core::gpu_backend_of(inputs.a) == GpuBackend::Vulkan)
-                (void)inputs.mask.data_ptr();
+            inputs.mask = inputs.a.to(DataType::Float32).gt(0.0f).contiguous();
             if (name != "launch_masked_select")
                 prepare_destinations(inputs, inputs.a, execution_count, noncontiguous);
             if (name == "launch_masked_scatter") {
@@ -430,9 +437,7 @@ namespace {
             prepare_destinations(inputs, inputs.a, execution_count, noncontiguous);
         }
         if (name == "launch_where") {
-            inputs.mask = inputs.a.gt(0.0f);
-            if (lfs::core::gpu_backend_of(inputs.a) == GpuBackend::Vulkan)
-                (void)inputs.mask.data_ptr();
+            inputs.mask = inputs.a.gt(0.0f).contiguous();
         }
         if (name == "launch_sgemm") {
             const size_t k = std::max<size_t>(3, std::min<size_t>(profile.cols, 33));
@@ -576,7 +581,7 @@ namespace {
             return {a.cumsum(-1)};
         if (name == "launch_sort_1d" || name == "launch_sort_2d") {
             auto [values, order] = inputs.input.sort(-1, false);
-            return {values, order};
+            return {values, order, inputs.input.contiguous()};
         }
         if (name == "launch_gather")
             return {inputs.input.gather(0, inputs.indices)};
@@ -705,7 +710,8 @@ namespace {
             Tensor output = internal::allocate_like(a, a.shape(), DataType::Float32);
             internal::backend_ops_for(a).fused_pointwise_chain(
                 internal::storage_ref(a), internal::storage_ref(output),
-                output.numel(), chain, internal::ExecContext{output.stream()});
+                output.numel(), chain, std::span<const internal::StorageRef>{},
+                internal::ExecContext{output.stream()});
             return {std::move(output)};
         }
         if (name == "launch_cdist")
@@ -713,7 +719,19 @@ namespace {
         if (name == "launch_eye")
             return {Tensor::eye(inputs.profile.rows, inputs.profile.cols)};
         if (name == "has_nan_gpu" || name == "has_inf_gpu") {
-            const bool result = name == "has_nan_gpu" ? a.has_nan() : a.has_inf();
+            // The clean input answers false; a copy with one injected special value at
+            // a seeded position answers true, so a constant-false entry fails the row.
+            std::vector<float> host = a.cpu().to_vector();
+            host[(a.numel() * 7 + 3) % a.numel()] =
+                name == "has_nan_gpu" ? std::numeric_limits<float>::quiet_NaN()
+                                      : std::numeric_limits<float>::infinity();
+            const Tensor dirty = Tensor::from_vector(host, a.shape(), Device::CPU).to(Device::CUDA);
+            const bool clean_result = name == "has_nan_gpu" ? a.has_nan() : a.has_inf();
+            const bool dirty_result = name == "has_nan_gpu" ? dirty.has_nan() : dirty.has_inf();
+            return {Tensor::from_vector(std::vector<float>{clean_result ? 1.0f : 0.0f,
+                                                           dirty_result ? 1.0f : 0.0f},
+                                        {2}, Device::CPU)};
+            const bool result = clean_result;
             return {Tensor::from_vector({result}, {1}, Device::CPU)};
         }
         throw std::runtime_error("no runner for " + std::string(name));
@@ -840,6 +858,17 @@ namespace {
         return hash.finish();
     }
 
+    bool integral_dtype(DataType dtype) {
+        return dtype == DataType::Int32 || dtype == DataType::Int64 || dtype == DataType::UInt8 ||
+               dtype == DataType::UInt32 || dtype == DataType::Bool;
+    }
+
+    // Wrap-around integer arithmetic is associative, so integral inputs on a
+    // tolerance entry are bitwise-reproducible and compared by digest.
+    Rule effective_rule(const Entry& entry, DataType dtype) {
+        return entry.rule == Rule::Tolerance && integral_dtype(dtype) ? Rule::Digest : entry.rule;
+    }
+
     std::string rule_name(Rule rule) {
         switch (rule) {
         case Rule::Digest: return "digest";
@@ -860,25 +889,36 @@ namespace {
         for (float value : values)
             variance += (value - mean) * (value - mean);
         variance /= values.size();
-        auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
         std::sort(values.begin(), values.end());
-        double ks = 0.0;
-        for (size_t i = 0; i < values.size(); ++i) {
-            double cdf = 0.0;
+        const float minimum = values.front();
+        const float maximum = values.back();
+        const auto theoretical_cdf = [&](const float value) {
             if (launcher == "launch_uniform")
-                cdf = std::clamp((values[i] + 2.0) / 4.0, 0.0, 1.0);
-            else if (launcher == "launch_bernoulli")
-                cdf = values[i] < 1.0f ? 0.65 : 1.0;
-            else if (launcher == "launch_randint")
-                cdf = std::clamp((values[i] + 8.0) / 15.0, 0.0, 1.0);
-            else if (launcher == "launch_multinomial")
-                cdf = std::clamp((values[i] + 1.0) /
-                                     static_cast<double>(std::max<size_t>(7, profile.cols)),
-                                 0.0, 1.0);
-            else
-                cdf = static_cast<double>(i + 1) / values.size();
-            ks = std::max(ks, std::abs(static_cast<double>(i + 1) / values.size() - cdf));
+                return std::clamp((value + 2.0) / 4.0, 0.0, 1.0);
+            if (launcher == "launch_bernoulli")
+                return value < 1.0f ? 0.65 : 1.0;
+            if (launcher == "launch_randint")
+                return std::clamp((value + 8.0) / 15.0, 0.0, 1.0);
+            if (launcher == "launch_multinomial")
+                return std::clamp((value + 1.0) /
+                                      static_cast<double>(std::max<size_t>(7, profile.cols)),
+                                  0.0, 1.0);
+            return 0.0;
+        };
+        // Evaluate the empirical CDF once per distinct value, on both sides of the
+        // step, so ties in discrete outputs do not inflate the statistic.
+        double ks = 0.0;
+        for (size_t i = 0; i < values.size();) {
+            size_t j = i;
+            while (j < values.size() && values[j] == values[i])
+                ++j;
+            const double cdf = theoretical_cdf(values[i]);
+            ks = std::max(ks, std::abs(static_cast<double>(j) / values.size() - cdf));
+            ks = std::max(ks, std::abs(static_cast<double>(i) / values.size() - cdf));
+            i = j;
         }
+        auto min_it = &minimum;
+        auto max_it = &maximum;
         std::ostringstream out;
         out << std::setprecision(6) << "mean=" << mean << ",var=" << variance << ",min=" << *min_it
             << ",max=" << *max_it << ",ks=" << ks;
@@ -891,6 +931,7 @@ namespace {
         std::string only;
         bool dump = false;
         bool time = false;
+        std::filesystem::path reference;
     };
 
     Options parse_options(int argc, char** argv) {
@@ -908,10 +949,12 @@ namespace {
                 options.dump = true;
             else if (arg == "--time")
                 options.time = true;
+            else if (arg == "--reference" && i + 1 < argc)
+                options.reference = argv[++i];
             else
                 throw std::runtime_error(
                     "usage: tensor_backend_corpus --backend cuda|vulkan --out DIR [--dump] "
-                    "[--time] [--only LAUNCHER_SUBSTRING]");
+                    "[--time] [--only LAUNCHER_SUBSTRING] [--reference DIR]");
         }
         if (backend == "vulkan")
             options.backend = GpuBackend::Vulkan;
@@ -919,6 +962,8 @@ namespace {
             throw std::runtime_error("--backend cuda|vulkan is required");
         if (options.output.empty())
             throw std::runtime_error("--out DIR is required");
+        if (!options.reference.empty())
+            options.dump = true;
         if (options.backend == GpuBackend::Vulkan && options.time)
             throw std::runtime_error("--time is not available for the phase-P3 Vulkan corpus; Vulkan timing is enabled in P4");
         return options;
@@ -990,12 +1035,137 @@ namespace {
         return std::ranges::find(names, launcher) != names.end();
     }
 
+    using FacadeEntry = internal::FacadeEntry;
+
+    // Facade entries a launcher row may legitimately reach. Rows whose public call
+    // the lazy executor routes through the fused chain above the lazy size
+    // threshold, or eagerly below it, list every entry that is correct for them;
+    // the recorded entry is written next to the digest so the op matrix reports
+    // the kernel that ran, not the one the row is named after.
+    const std::map<std::string_view, std::vector<FacadeEntry>> kExpectedEntries{
+        {"launch_unary_op_generic", {FacadeEntry::unary, FacadeEntry::fused_pointwise_chain}},
+        {"launch_ieee_round_float", {FacadeEntry::unary, FacadeEntry::fused_pointwise_chain}},
+        {"launch_binary_op_generic", {FacadeEntry::binary, FacadeEntry::fused_pointwise_chain}},
+        {"launch_ieee_maximum_float", {FacadeEntry::binary}},
+        {"launch_ieee_minimum_float", {FacadeEntry::binary}},
+        {"launch_scalar_op_generic", {FacadeEntry::scalar, FacadeEntry::unary, FacadeEntry::fused_pointwise_chain}},
+        {"launch_broadcast_binary", {FacadeEntry::broadcast_binary}},
+        {"launch_ieee_maximum_float_broadcast", {FacadeEntry::broadcast_binary}},
+        {"launch_ieee_minimum_float_broadcast", {FacadeEntry::broadcast_binary}},
+        {"direct_sum_scalar", {FacadeEntry::sum_scalar}},
+        {"direct_mean_scalar", {FacadeEntry::mean_scalar}},
+        {"direct_max_scalar", {FacadeEntry::max_scalar}},
+        {"direct_min_scalar", {FacadeEntry::min_scalar}},
+        {"launch_reduce_op", {FacadeEntry::reduce}},
+        {"launch_column_reduce", {FacadeEntry::column_reduce}},
+        {"launch_strided_reduce_fast", {FacadeEntry::strided_reduce}},
+        {"launch_fused_transform_reduce", {FacadeEntry::fused_transform_reduce, FacadeEntry::reduce, FacadeEntry::sum_scalar}},
+        {"launch_fused_segmented_transform_reduce", {FacadeEntry::fused_segmented_transform_reduce, FacadeEntry::reduce}},
+        {"launch_count_nonzero_bool", {FacadeEntry::count_nonzero_bool}},
+        {"launch_count_nonzero_float", {FacadeEntry::count_nonzero_float}},
+        {"launch_cumsum", {FacadeEntry::cumsum}},
+        {"launch_sort_1d", {FacadeEntry::sort_1d}},
+        {"launch_sort_2d", {FacadeEntry::sort_2d}},
+        {"launch_gather", {FacadeEntry::gather, FacadeEntry::index_select}},
+        {"launch_gather_fused_unary", {FacadeEntry::gather_fused_unary}},
+        {"launch_take", {FacadeEntry::take}},
+        {"launch_index_select", {FacadeEntry::index_select}},
+        {"launch_scatter", {FacadeEntry::scatter}},
+        {"launch_index_copy", {FacadeEntry::index_copy}},
+        {"launch_index_add", {FacadeEntry::index_add}},
+        {"launch_strided_scatter", {FacadeEntry::strided_scatter}},
+        {"launch_strided_scatter_immediate", {FacadeEntry::strided_scatter_immediate}},
+        {"launch_strided_scatter_int32_to_float32", {FacadeEntry::strided_scatter_int32_to_float32}},
+        {"launch_masked_fill", {FacadeEntry::masked_fill}},
+        {"launch_masked_select", {FacadeEntry::masked_select}},
+        {"launch_masked_scatter", {FacadeEntry::masked_scatter}},
+        {"launch_and_live", {FacadeEntry::and_live}},
+        {"launch_where", {FacadeEntry::where}},
+        {"launch_nonzero", {FacadeEntry::nonzero, FacadeEntry::count_nonzero_float}},
+        {"launch_nonzero_bool", {FacadeEntry::nonzero_bool, FacadeEntry::count_nonzero_bool}},
+        {"launch_sgemm", {FacadeEntry::sgemm}},
+        {"launch_sgemm_tn", {FacadeEntry::sgemm_tn}},
+        {"launch_sgemm_batched", {FacadeEntry::sgemm_batched}},
+        {"launch_sgemm_bias_relu", {FacadeEntry::sgemm_bias_relu}},
+        {"launch_dot_product", {FacadeEntry::dot_product}},
+        {"launch_diag", {FacadeEntry::diag}},
+        {"launch_max_pool2d", {FacadeEntry::max_pool2d}},
+        {"launch_adaptive_avg_pool2d", {FacadeEntry::adaptive_avg_pool2d}},
+        {"launch_bias_add", {FacadeEntry::bias_add}},
+        {"launch_bias_relu", {FacadeEntry::bias_relu}},
+        {"launch_relu", {FacadeEntry::relu}},
+        {"launch_uniform", {FacadeEntry::uniform}},
+        {"launch_bernoulli", {FacadeEntry::bernoulli}},
+        {"launch_randint", {FacadeEntry::randint}},
+        {"launch_multinomial", {FacadeEntry::multinomial}},
+        {"launch_strided_copy", {FacadeEntry::strided_copy}},
+        {"launch_strided_copy_immediate", {FacadeEntry::strided_copy_immediate}},
+        {"launch_strided_upload", {FacadeEntry::strided_upload}},
+        {"launch_convert_type", {FacadeEntry::convert_type}},
+        {"launch_cat_last_dim", {FacadeEntry::cat_last_dim}},
+        {"launch_cat_middle_dim", {FacadeEntry::cat_middle_dim}},
+        {"launch_pad", {FacadeEntry::pad}},
+        {"launch_fill_strided", {FacadeEntry::fill_strided}},
+        {"launch_load_op", {FacadeEntry::load_fill}},
+        {"launch_clamp_scalar", {FacadeEntry::clamp_scalar}},
+        {"launch_clamp_fused", {FacadeEntry::clamp_fused}},
+        {"launch_clamp_scalar_int", {FacadeEntry::clamp_scalar_int}},
+        {"launch_fused_pointwise_chain", {FacadeEntry::fused_pointwise_chain, FacadeEntry::scalar}},
+        {"launch_cdist", {FacadeEntry::cdist}},
+        {"launch_eye", {FacadeEntry::eye}},
+        {"has_nan_gpu", {FacadeEntry::has_nan}},
+        {"has_inf_gpu", {FacadeEntry::has_inf}},
+    };
+
+    std::string executed_entries(const Entry& entry,
+                                 const std::array<uint64_t, internal::kFacadeEntryCount>& before,
+                                 const std::array<uint64_t, internal::kFacadeEntryCount>& after) {
+        const auto expected = kExpectedEntries.find(entry.launcher);
+        if (expected == kExpectedEntries.end())
+            throw std::runtime_error(std::string("no facade entry expectation for ") +
+                                     std::string(entry.launcher));
+        std::string reached;
+        bool matched = false;
+        for (size_t index = 0; index < internal::kFacadeEntryCount; ++index) {
+            if (after[index] == before[index])
+                continue;
+            const auto facade_entry = static_cast<FacadeEntry>(index);
+            if (std::ranges::find(expected->second, facade_entry) != expected->second.end()) {
+                matched = true;
+                if (!reached.empty())
+                    reached += ',';
+                reached += std::string(internal::facade_entry_name(facade_entry)) + '=' +
+                           std::to_string(after[index] - before[index]);
+            }
+        }
+        if (!matched) {
+            std::string advanced;
+            for (size_t index = 0; index < internal::kFacadeEntryCount; ++index) {
+                if (after[index] != before[index])
+                    advanced += (advanced.empty() ? "" : ",") +
+                                std::string(internal::facade_entry_name(static_cast<FacadeEntry>(index)));
+            }
+            // LFS_CORPUS_TRACE_SURVEY=1 records every mismatch in entries.txt instead of
+            // stopping at the first, so the expectation table can be corrected in one run.
+            if (std::getenv("LFS_CORPUS_TRACE_SURVEY") != nullptr)
+                return "UNEXPECTED:" + (advanced.empty() ? std::string("none") : advanced);
+            throw std::runtime_error(std::string(entry.launcher) +
+                                     " reached none of its expected facade entries; advanced: " +
+                                     (advanced.empty() ? "none" : advanced));
+        }
+        return reached;
+    }
+
     std::vector<std::string> corpus_pass(const Options& options, bool write_files,
                                          double* aggregate_median_ms = nullptr) {
         std::vector<std::string> lines;
         std::ofstream timing;
+        std::ofstream entries_file;
         if (write_files && options.time)
             timing.open(options.output / "timing.txt");
+        if (write_files)
+            entries_file.open(options.output / "entries.txt");
+        internal::facade_trace_enable_for_testing(true);
         double median_sum_us = 0.0;
         size_t case_index = 0;
         for (size_t entry_index = 0; entry_index < kEntries.size(); ++entry_index) {
@@ -1010,11 +1180,15 @@ namespace {
             for (const auto& [profile, noncontiguous] : variants) {
                 for (DataType dtype : entry.dtypes) {
                     try {
-                        if (entry.rule == Rule::Stat)
+                        const Rule rule = effective_rule(entry, dtype);
+                        if (rule == Rule::Stat)
                             Tensor::manual_seed(kSeed + entry_index);
+                        const auto trace_before = internal::facade_trace_snapshot_for_testing();
                         auto outputs = run_entry(entry_index, profile, dtype, noncontiguous);
                         auto bytes = download(outputs);
-                        if (entry.rule == Rule::Permutation) {
+                        const auto trace_after = internal::facade_trace_snapshot_for_testing();
+                        const std::string reached = executed_entries(entry, trace_before, trace_after);
+                        if (rule == Rule::Permutation) {
                             const auto order = outputs.at(1).cpu().to_vector_int64();
                             const size_t width = entry.launcher == "launch_sort_1d" ? order.size()
                                                                                     : profile.cols;
@@ -1028,15 +1202,31 @@ namespace {
                                         throw std::runtime_error("sort indices failed permutation check");
                                 }
                             }
+                            // The permutation must reproduce the sorted values: gather the
+                            // unsorted input through the indices and compare bitwise.
+                            const auto sorted_values = outputs.front().cpu().to_vector();
+                            const auto unsorted_values = outputs.at(2).cpu().to_vector();
+                            for (size_t offset = 0; offset < order.size(); offset += width) {
+                                for (size_t i = 0; i < width; ++i) {
+                                    const auto source = static_cast<size_t>(order[offset + i]);
+                                    const float expected = unsorted_values[offset + source];
+                                    const float actual = sorted_values[offset + i];
+                                    if (std::bit_cast<uint32_t>(expected) != std::bit_cast<uint32_t>(actual))
+                                        throw std::runtime_error("sort indices do not reproduce the sorted values");
+                                }
+                            }
                             bytes = download({outputs.front()});
                         }
                         const std::string result =
-                            entry.rule == Rule::Stat ? statistics(outputs, entry.launcher, profile)
-                                                     : digest(bytes);
+                            rule == Rule::Stat ? statistics(outputs, entry.launcher, profile)
+                                               : digest(bytes);
                         std::ostringstream line;
                         line << entry.launcher << ' ' << entry.call << ' ' << profile.name << ' '
-                             << compact_dtype_name(dtype) << ' ' << rule_name(entry.rule) << ' ' << result;
+                             << compact_dtype_name(dtype) << ' ' << rule_name(rule) << ' ' << result;
                         lines.push_back(line.str());
+                        if (write_files)
+                            entries_file << case_index << ' ' << entry.launcher << ' ' << profile.name
+                                         << ' ' << compact_dtype_name(dtype) << ' ' << reached << '\n';
                         if (write_files && options.dump) {
                             std::ofstream dump(options.output / (std::to_string(case_index) + ".bin"),
                                                std::ios::binary);
@@ -1070,6 +1260,159 @@ namespace {
                    << *aggregate_median_ms << '\n';
         }
         return lines;
+    }
+
+} // namespace
+
+namespace {
+
+    float half_to_float(const uint16_t bits) {
+        const uint32_t sign = (bits & 0x8000u) << 16;
+        const uint32_t exponent = (bits >> 10) & 0x1fu;
+        const uint32_t mantissa = bits & 0x3ffu;
+        uint32_t word;
+        if (exponent == 0) {
+            if (mantissa == 0) {
+                word = sign;
+            } else {
+                uint32_t m = mantissa;
+                int e = -1;
+                do {
+                    ++e;
+                    m <<= 1;
+                } while ((m & 0x400u) == 0);
+                word = sign | ((127 - 15 - e) << 23) | ((m & 0x3ffu) << 13);
+            }
+        } else if (exponent == 31) {
+            word = sign | 0x7f800000u | (mantissa << 13);
+        } else {
+            word = sign | ((exponent + 127 - 15) << 23) | (mantissa << 13);
+        }
+        return std::bit_cast<float>(word);
+    }
+
+    std::vector<float> as_floats(const std::vector<std::byte>& bytes, const std::string& dtype) {
+        std::vector<float> values;
+        if (dtype == "f16") {
+            values.resize(bytes.size() / 2);
+            for (size_t i = 0; i < values.size(); ++i) {
+                uint16_t half;
+                std::memcpy(&half, bytes.data() + i * 2, 2);
+                values[i] = half_to_float(half);
+            }
+        } else {
+            values.resize(bytes.size() / 4);
+            std::memcpy(values.data(), bytes.data(), values.size() * 4);
+        }
+        return values;
+    }
+
+    // Compares this run's rows and dumped bytes against a --dump reference run:
+    // digest and permutation rows must match textually, tolerance rows are compared
+    // element-wise within rtol scaled by log2(n), stat rows compare mean and
+    // variance. Returns the number of failing rows.
+    size_t compare_against_reference(const Options& options, const std::vector<std::string>& lines) {
+        std::ifstream reference_manifest(options.reference / "manifest.txt");
+        if (!reference_manifest)
+            throw std::runtime_error("reference manifest not found under " + options.reference.string());
+        std::vector<std::string> reference_lines;
+        for (std::string line; std::getline(reference_manifest, line);)
+            reference_lines.push_back(line);
+        if (reference_lines.size() != lines.size())
+            throw std::runtime_error("reference manifest row count differs");
+        size_t failures = 0;
+        size_t identical = 0;
+        size_t within = 0;
+        double worst_error = 0.0;
+        std::string worst_row;
+        const auto read_bytes = [](const std::filesystem::path& file) {
+            std::ifstream stream(file, std::ios::binary);
+            const std::vector<char> chars((std::istreambuf_iterator<char>(stream)),
+                                          std::istreambuf_iterator<char>());
+            std::vector<std::byte> bytes(chars.size());
+            std::memcpy(bytes.data(), chars.data(), chars.size());
+            return bytes;
+        };
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (lines[i] == reference_lines[i]) {
+                ++identical;
+                continue;
+            }
+            std::istringstream fields(lines[i]);
+            std::string launcher, call, profile, dtype, rule;
+            fields >> launcher >> call >> profile >> dtype >> rule;
+            const auto reference_file = options.reference / (std::to_string(i) + ".bin");
+            const auto candidate_file = options.output / (std::to_string(i) + ".bin");
+            if (rule.starts_with("tolerance:")) {
+                if (!std::filesystem::is_regular_file(reference_file) ||
+                    !std::filesystem::is_regular_file(candidate_file)) {
+                    std::cerr << "row " << i << " has no dumped bytes to compare: " << lines[i] << '\n';
+                    ++failures;
+                    continue;
+                }
+                const auto reference = as_floats(read_bytes(reference_file), dtype);
+                const auto candidate = as_floats(read_bytes(candidate_file), dtype);
+                if (reference.size() != candidate.size()) {
+                    std::cerr << "row " << i << " element count differs\n";
+                    ++failures;
+                    continue;
+                }
+                const double rtol = 1e-5 * std::max(1.0, std::log2(static_cast<double>(std::max<size_t>(2, reference.size()))));
+                const double atol = 1e-6;
+                double row_worst = 0.0;
+                bool row_ok = true;
+                for (size_t k = 0; k < reference.size(); ++k) {
+                    const double a = reference[k];
+                    const double b = candidate[k];
+                    if (std::isnan(a) || std::isnan(b)) {
+                        if (std::isnan(a) != std::isnan(b))
+                            row_ok = false;
+                        continue;
+                    }
+                    const double error = std::abs(a - b);
+                    const double bound = atol + rtol * std::abs(a);
+                    row_worst = std::max(row_worst, std::abs(a) > 0 ? error / std::abs(a) : error);
+                    if (error > bound)
+                        row_ok = false;
+                }
+                if (row_worst > worst_error) {
+                    worst_error = row_worst;
+                    worst_row = lines[i];
+                }
+                if (row_ok) {
+                    ++within;
+                } else {
+                    std::cerr << "row " << i << " exceeds tolerance (max relative error "
+                              << row_worst << "): " << lines[i] << '\n';
+                    ++failures;
+                }
+            } else if (rule == "stat") {
+                const auto parse = [](const std::string& line, const char* key) {
+                    const auto position = line.find(key);
+                    return position == std::string::npos ? 0.0 : std::stod(line.substr(position + std::strlen(key)));
+                };
+                const double mean_a = parse(reference_lines[i], "mean=");
+                const double mean_b = parse(lines[i], "mean=");
+                const double var_a = parse(reference_lines[i], "var=");
+                const double var_b = parse(lines[i], "var=");
+                if (std::abs(mean_a - mean_b) <= 0.02 * std::max(1.0, std::abs(mean_a)) &&
+                    std::abs(var_a - var_b) <= 0.05 * std::max(1.0, var_a)) {
+                    ++within;
+                } else {
+                    std::cerr << "row " << i << " statistics differ: " << lines[i] << " vs " << reference_lines[i] << '\n';
+                    ++failures;
+                }
+            } else {
+                std::cerr << "row " << i << " differs from the reference: " << lines[i] << '\n';
+                ++failures;
+            }
+        }
+        std::cout << "reference compare: " << identical << " identical, " << within
+                  << " within rule, " << failures << " failing";
+        if (!worst_row.empty())
+            std::cout << "; max relative error " << worst_error << " at " << worst_row;
+        std::cout << '\n';
+        return failures;
     }
 
 } // namespace
@@ -1114,6 +1457,8 @@ int main(int argc, char** argv) {
         if (options.time)
             std::cout << "aggregate_median_ms " << std::fixed << std::setprecision(3)
                       << aggregate_median_ms << '\n';
+        if (!options.reference.empty() && compare_against_reference(options, first) != 0)
+            return 2;
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "tensor_backend_corpus: " << error.what() << '\n';

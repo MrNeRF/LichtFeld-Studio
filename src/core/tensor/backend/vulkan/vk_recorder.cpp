@@ -53,6 +53,7 @@ namespace lfs::core::internal {
         uint64_t id = 0;
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer command = VK_NULL_HANDLE;
+        VkCommandBuffer submitted_command = VK_NULL_HANDLE;
         uint64_t reserved_value = 0;
         uint64_t submitted_value = 0;
         uint32_t command_count = 0;
@@ -95,6 +96,11 @@ namespace lfs::core::internal {
         }
         if (recorder.submitted_value != 0) {
             context_.wait(recorder.submitted_value);
+            if (recorder.submitted_command != VK_NULL_HANDLE) {
+                vkFreeCommandBuffers(context_.device(), recorder.pool, 1,
+                                     &recorder.submitted_command);
+                recorder.submitted_command = VK_NULL_HANDLE;
+            }
             vk_check(&context_, vkResetCommandPool(context_.device(), recorder.pool, 0),
                      "vkResetCommandPool");
             recorder.submitted_value = 0;
@@ -186,6 +192,7 @@ namespace lfs::core::internal {
         vk_check(&context_, vkEndCommandBuffer(command), "vkEndCommandBuffer");
         context_.submit(command, value);
         recorder.submitted_value = value;
+        recorder.submitted_command = command;
     }
 
     uint64_t VulkanRecorderRegistry::flush_through_locked(const uint64_t value) {
@@ -287,16 +294,28 @@ namespace lfs::core::internal {
             return;
         }
         shutting_down_ = true;
-        const uint64_t submitted =
-            flush_through_locked(std::numeric_limits<uint64_t>::max());
-        if (submitted != 0) {
-            context_.wait(submitted);
+        if (!context_.dead()) {
+            try {
+                const uint64_t submitted =
+                    flush_through_locked(std::numeric_limits<uint64_t>::max());
+                if (submitted != 0) {
+                    context_.wait(submitted);
+                }
+                for (auto& [id, recorder] : recorders_) {
+                    (void)id;
+                    if (recorder->submitted_value != 0) {
+                        context_.wait(recorder->submitted_value);
+                    }
+                }
+            } catch (...) {
+                context_.mark_device_lost_once();
+            }
+        }
+        if (context_.dead()) {
+            static_cast<void>(vkDeviceWaitIdle(context_.device()));
         }
         for (auto& [id, recorder] : recorders_) {
             (void)id;
-            if (recorder->submitted_value != 0) {
-                context_.wait(recorder->submitted_value);
-            }
             if (recorder->pool != VK_NULL_HANDLE) {
                 vkDestroyCommandPool(context_.device(), recorder->pool, nullptr);
             }

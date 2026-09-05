@@ -90,6 +90,16 @@ namespace lfs::core::internal {
         }
     }
 
+    std::atomic<uint64_t> VulkanMemory::g_last_shutdown_live_allocations{0};
+
+    uint64_t VulkanMemory::last_shutdown_live_allocations() noexcept {
+        return g_last_shutdown_live_allocations.load(std::memory_order_acquire);
+    }
+
+    void VulkanMemory::reset_last_shutdown_live_allocations() noexcept {
+        g_last_shutdown_live_allocations.store(0, std::memory_order_release);
+    }
+
     VulkanMemory::~VulkanMemory() {
         shutdown();
     }
@@ -545,6 +555,9 @@ namespace lfs::core::internal {
             return;
         }
         shutting_down_ = true;
+        // Client allocations still alive at shutdown are a leak unless a test keeps
+        // them on purpose; the count is exposed so the G4 fixture can assert on it.
+        g_last_shutdown_live_allocations.store(allocations_.size(), std::memory_order_release);
         for (auto& [key, record] : allocations_) {
             (void)key;
             vmaDestroyBuffer(context_.allocator(), record->buffer,

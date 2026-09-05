@@ -4,6 +4,7 @@
 
 #include "../descriptors.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -47,6 +48,8 @@ namespace lfs::core::internal {
         [[nodiscard]] uint64_t live_object_count() const noexcept;
         [[nodiscard]] bool owns_address(const void* pointer) const noexcept;
         void shutdown();
+        [[nodiscard]] static uint64_t last_shutdown_live_allocations() noexcept;
+        static void reset_last_shutdown_live_allocations() noexcept;
 
     private:
         struct AllocationRecord;
@@ -77,6 +80,7 @@ namespace lfs::core::internal {
         VkDeviceSize staging_head_ = 0;
         uint64_t staging_retire_value_ = 0;
         bool shutting_down_ = false;
+        static std::atomic<uint64_t> g_last_shutdown_live_allocations;
     };
 
 } // namespace lfs::core::internal

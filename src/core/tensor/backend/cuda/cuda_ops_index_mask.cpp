@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
 #include "../../internal/tensor_functors.hpp"
@@ -56,6 +57,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const StridedLayout& index_layout,
         const IndexProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(gather);
         if (input.dtype == DataType::Float32) {
             tensor_ops::launch_gather(
                 cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
@@ -78,6 +80,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const PointwiseOp unary, const IndexProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(gather_fused_unary);
         switch (unary) {
         case PointwiseOp::Abs:
             tensor_ops::launch_gather_fused_unary(
@@ -105,6 +108,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::take(
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const IndexProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(take);
         tensor_ops::launch_take(
             cuda_const_pointer<float>(input), cuda_const_pointer<int>(indices),
             cuda_pointer<float>(output), program.input_size, program.index_size,
@@ -115,6 +119,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef indices, const StorageRef output,
         const StridedLayout& input_layout, const IndexProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(index_select);
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_index_select(
                 cuda_const_pointer<T>(input), cuda_const_pointer<int>(indices),
@@ -137,6 +142,7 @@ namespace lfs::core::internal {
         const StorageRef output, const StorageRef indices, const StorageRef source,
         const StridedLayout& output_layout, const StridedLayout& source_layout,
         const IndexProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(scatter);
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_scatter(
                 cuda_pointer<T>(output), cuda_const_pointer<int>(indices),
@@ -157,6 +163,7 @@ namespace lfs::core::internal {
         const StorageRef output, const StorageRef indices, const StorageRef source,
         const StridedLayout& output_layout, const IndexProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(index_copy);
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_index_copy(
                 cuda_pointer<T>(output), cuda_const_pointer<int>(indices),
@@ -177,6 +184,7 @@ namespace lfs::core::internal {
         const StorageRef output, const StorageRef indices, const StorageRef source,
         const StridedLayout& output_layout, const IndexProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(index_add);
         if (output.dtype == DataType::Float32) {
             tensor_ops::launch_index_add<float>(
                 cuda_pointer<float>(output), cuda_const_pointer<int>(indices),
@@ -198,6 +206,7 @@ namespace lfs::core::internal {
         const StorageRef output, const StorageRef indices,
         const StridedLayout& output_layout, const IndexProgram& program,
         const ScalarOperand value, const ExecContext context) {
+        LFS_FACADE_TRACE(index_fill);
         if (output.dtype == DataType::Float32) {
             tensor_ops::launch_index_fill<float>(
                 cuda_pointer<float>(output), cuda_const_pointer<int>(indices),
@@ -224,6 +233,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::index_put(
         const StorageRef output, const StorageRef indices, const StorageRef values,
         const IndexProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(index_put);
         LFS_ASSERT_MSG(output.dtype == DataType::Float32,
                        "CUDA index_put launcher supports only Float32");
         tensor_ops::launch_index_put(
@@ -235,6 +245,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::masked_fill(
         const StorageRef output, const StorageRef mask, const MaskProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(masked_fill);
         switch (output.dtype) {
         case DataType::Float32:
             tensor_ops::launch_masked_fill(
@@ -270,6 +281,7 @@ namespace lfs::core::internal {
     size_t CudaBackendOps::masked_select(
         const StorageRef input, const StorageRef mask, const StorageRef output,
         const MaskProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(masked_select);
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_masked_select(
                 cuda_const_pointer<T>(input), cuda_const_pointer<unsigned char>(mask),
@@ -284,6 +296,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::masked_scatter(
         const StorageRef output, const StorageRef mask, const StorageRef source,
         const MaskProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(masked_scatter);
         const auto launch = [&]<typename T>() {
             tensor_ops::launch_masked_scatter(
                 cuda_pointer<T>(output), cuda_const_pointer<unsigned char>(mask),
@@ -297,6 +310,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::and_live(
         const StorageRef mask, const StorageRef live_mask,
         const MaskProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(and_live);
         tensor_ops::launch_and_live(
             cuda_pointer<uint8_t>(mask), cuda_const_pointer<unsigned char>(live_mask),
             program.count, context.cuda_stream);
@@ -307,6 +321,7 @@ namespace lfs::core::internal {
         const StorageRef output, const StridedLayout& condition_layout,
         const StridedLayout& x_layout, const StridedLayout& y_layout,
         const StridedLayout& output_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(where);
         tensor_ops::launch_where(
             cuda_const_pointer<unsigned char>(condition), cuda_const_pointer<float>(x),
             cuda_const_pointer<float>(y), cuda_pointer<float>(output),
@@ -319,6 +334,7 @@ namespace lfs::core::internal {
     size_t CudaBackendOps::nonzero(
         const StorageRef input, const StorageRef output, const MaskProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(nonzero);
         return tensor_ops::launch_nonzero(
             cuda_const_pointer<float>(input), cuda_pointer<int64_t>(output),
             program.count, program.selected_count, context.cuda_stream);
@@ -327,6 +343,7 @@ namespace lfs::core::internal {
     size_t CudaBackendOps::nonzero_bool(
         const StorageRef input, const StorageRef output, const MaskProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(nonzero_bool);
         return tensor_ops::launch_nonzero_bool(
             cuda_const_pointer<unsigned char>(input), cuda_pointer<int64_t>(output),
             program.count, program.selected_count, context.cuda_stream);

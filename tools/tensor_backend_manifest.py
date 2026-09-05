@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import collections
 import dataclasses
 import difflib
@@ -20,7 +21,18 @@ OUTPUTS = {
     "manifest": TESTS / "tensor_backend_manifest.json",
     "lichtfeld_tests": TESTS / "tensor_backend_suite.filter",
     "tensor_hardening_tests": TESTS / "tensor_backend_hardening.filter",
+    "lichtfeld_tests_flags": TESTS / "tensor_backend_suite.flags",
+    "tensor_hardening_tests_flags": TESTS / "tensor_backend_hardening.flags",
 }
+ALLOWLIST = TESTS / "tensor_backend_skip_allowlist.json"
+# A test whose file includes an application header reaches production code
+# outside core/tensor (loss kernels, exportable storage, rasterizer packers,
+# device-fault utilities); its GPU work is invisible to the classifier and
+# would run raw CUDA kernels on Vulkan storage, so it is excluded from G2.
+APPLICATION_INCLUDE_PREFIXES = (
+    "training/", "rendering/", "visualizer/", "io/", "scene/", "python/",
+    "kernels/", "optimizer/", "project/", "loader/", "geometry/",
+)
 BINARIES = {
     "lichtfeld_tests": ROOT / "build/tests/lichtfeld_tests",
     "tensor_hardening_tests": ROOT / "build/tests/tensor_hardening_tests",
@@ -504,6 +516,84 @@ def shared_cuda_pointer(fragments: list[Fragment]):
     return None
 
 
+@functools.lru_cache(maxsize=None)
+def includes_application_headers(path: Path) -> str | None:
+    for line in path.read_text(errors="replace").splitlines():
+        match = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
+        if match and match.group(1).startswith(APPLICATION_INCLUDE_PREFIXES):
+            return match.group(1)
+    return None
+
+
+ENTRY_TO_LAUNCHERS = {
+    "unary": ["launch_unary_op_generic", "launch_ieee_round_float"],
+    "binary": ["launch_binary_op_generic", "launch_ieee_maximum_float", "launch_ieee_minimum_float"],
+    "scalar": ["launch_scalar_op_generic"],
+    "broadcast_binary": ["launch_broadcast_binary", "launch_ieee_maximum_float_broadcast",
+                         "launch_ieee_minimum_float_broadcast"],
+    "fused_pointwise_chain": ["launch_fused_pointwise_chain"],
+    "clamp_scalar": ["launch_clamp_scalar"], "clamp_fused": ["launch_clamp_fused"],
+    "clamp_scalar_int": ["launch_clamp_scalar_int"], "convert_type": ["launch_convert_type"],
+    "fill_strided": ["launch_fill_strided"], "load_fill": ["launch_load_op"],
+    "sum_scalar": ["direct_sum_scalar"], "mean_scalar": ["direct_mean_scalar"],
+    "max_scalar": ["direct_max_scalar"], "min_scalar": ["direct_min_scalar"],
+    "reduce": ["launch_reduce_op"], "column_reduce": ["launch_column_reduce"],
+    "strided_reduce": ["launch_strided_reduce_fast"],
+    "fused_transform_reduce": ["launch_fused_transform_reduce"],
+    "fused_segmented_transform_reduce": ["launch_fused_segmented_transform_reduce"],
+    "count_nonzero_bool": ["launch_count_nonzero_bool"],
+    "count_nonzero_float": ["launch_count_nonzero_float"],
+    "has_nan": ["has_nan_gpu"], "has_inf": ["has_inf_gpu"], "cumsum": ["launch_cumsum"],
+    "sort_1d": ["launch_sort_1d"], "sort_2d": ["launch_sort_2d"], "sgemm": ["launch_sgemm"],
+    "sgemm_tn": ["launch_sgemm_tn"], "sgemm_batched": ["launch_sgemm_batched"],
+    "sgemm_bias_relu": ["launch_sgemm_bias_relu"], "dot_product": ["launch_dot_product"],
+    "diag": ["launch_diag"], "eye": ["launch_eye"], "cdist": ["launch_cdist"],
+    "max_pool2d": ["launch_max_pool2d"], "adaptive_avg_pool2d": ["launch_adaptive_avg_pool2d"],
+    "bias_add": ["launch_bias_add"], "bias_relu": ["launch_bias_relu"], "relu": ["launch_relu"],
+    "uniform": ["launch_uniform"], "bernoulli": ["launch_bernoulli"], "randint": ["launch_randint"],
+    "multinomial": ["launch_multinomial"], "normal": ["launch_normal"], "gather": ["launch_gather"],
+    "gather_fused_unary": ["launch_gather_fused_unary"], "take": ["launch_take"],
+    "index_select": ["launch_index_select"], "scatter": ["launch_scatter"],
+    "index_copy": ["launch_index_copy"], "index_add": ["launch_index_add"],
+    "index_fill": ["launch_index_fill"], "index_put": ["launch_index_put"],
+    "strided_scatter": ["launch_strided_scatter"],
+    "strided_scatter_immediate": ["launch_strided_scatter_immediate"],
+    "strided_scatter_int32_to_float32": ["launch_strided_scatter_int32_to_float32"],
+    "masked_fill": ["launch_masked_fill"], "masked_select": ["launch_masked_select"],
+    "masked_scatter": ["launch_masked_scatter"], "and_live": ["launch_and_live"],
+    "where": ["launch_where"], "nonzero": ["launch_nonzero"], "nonzero_bool": ["launch_nonzero_bool"],
+    "strided_copy": ["launch_strided_copy"], "strided_copy_immediate": ["launch_strided_copy_immediate"],
+    "strided_upload": ["launch_strided_upload"], "cat_last_dim": ["launch_cat_last_dim"],
+    "cat_middle_dim": ["launch_cat_middle_dim"], "pad": ["launch_pad"],
+}
+
+
+def load_trace(path: Path | None) -> dict[str, dict[str, int]]:
+    """Per-test facade entry counts written by the lichtfeld_tests trace listener."""
+    if path is None:
+        return {}
+    trace = {}
+    for line in path.read_text().splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        trace[record["test"]] = record.get("entries", {})
+    return trace
+
+
+def load_allowlist() -> dict[str, dict]:
+    if not ALLOWLIST.is_file():
+        return {}
+    entries = json.loads(ALLOWLIST.read_text())
+    allowlist = {}
+    for entry in entries:
+        for key in ("name", "reason", "reviewed"):
+            if key not in entry:
+                raise ValueError(f"skip allowlist entry is missing '{key}': {entry}")
+        allowlist[entry["name"]] = entry
+    return allowlist
+
+
 def classify(registration: Registration, fragments: list[Fragment], launchers: list[str]):
     combined = "\n".join(fragment.text for fragment in fragments)
     masked = mask_cpp(combined)
@@ -555,6 +645,12 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
     )
     if not cuda_indicator and "Device::CPU" in masked and factory_calls_are_cpu_only(combined):
         return "cpu-only", "constructs and exercises only CPU tensor storage"
+    application_header = includes_application_headers(registration.file)
+    if application_header is not None:
+        return "consumer", (
+            f"includes {application_header}: reaches production code outside core/tensor; "
+            "run under G7, not G2"
+        )
     return "vulkan", None
 
 
@@ -591,7 +687,8 @@ def make_filter(records: list[dict], executable: str, all_names: list[str]) -> s
     return ":".join(patterns) + "\n"
 
 
-def generated_files() -> tuple[dict[Path, bytes], dict[str, int], dict[str, list[str]]]:
+def generated_files(trace_path: Path | None = None) -> tuple[dict[Path, bytes], dict[str, int], dict[str, list[str]]]:
+    trace = load_trace(trace_path)
     registrations, instantiations = source_registrations()
     runtime = {name: run_list(name) for name in BINARIES}
     runtime_to_reg = {}
@@ -633,6 +730,12 @@ def generated_files() -> tuple[dict[Path, bytes], dict[str, int], dict[str, list
         raise ValueError("\n".join(failures))
 
     helpers, fixtures, fixture_bases = extract_helpers()
+    allowlist = load_allowlist()
+    stale_allowlist = set(allowlist) - runtime_names
+    if stale_allowlist:
+        raise ValueError(
+            "skip allowlist names no longer exist: " + ", ".join(sorted(stale_allowlist))
+        )
     records = []
     analysis_cache = {}
     for executable in BINARIES:
@@ -654,7 +757,21 @@ def generated_files() -> tuple[dict[Path, bytes], dict[str, int], dict[str, list
             if reason is not None:
                 record["reason"] = reason
             record["launchers"] = launchers
-            record["skip_allowlisted"] = False
+            record["launchers_source"] = "inferred"
+            if name in trace:
+                measured = sorted({
+                    row for entry_name, count in trace[name].items() if count
+                    for row in ENTRY_TO_LAUNCHERS.get(entry_name, [])
+                })
+                record["launchers"] = measured
+                record["launchers_source"] = "measured"
+                record["entries"] = dict(sorted(trace[name].items()))
+                if not measured and record["eligibility"] == "vulkan":
+                    record["eligibility"] = "no-gpu-work"
+                    record["reason"] = "measured: no facade entry executed"
+            record["skip_allowlisted"] = name in allowlist
+            if name in allowlist:
+                record["skip_reason"] = allowlist[name]["reason"]
             records.append(record)
     records.sort(key=lambda record: (record["executable"], record["name"]))
 
@@ -667,6 +784,12 @@ def generated_files() -> tuple[dict[Path, bytes], dict[str, int], dict[str, list
         OUTPUTS["manifest"]: manifest,
         OUTPUTS["lichtfeld_tests"]: filters["lichtfeld_tests"].encode(),
         OUTPUTS["tensor_hardening_tests"]: filters["tensor_hardening_tests"].encode(),
+        # gtest reads one flag per line from --gtest_flagfile; the joined filter
+        # exceeds the Windows command-line limit, the flag file does not.
+        OUTPUTS["lichtfeld_tests_flags"]:
+            ("--gtest_filter=" + filters["lichtfeld_tests"]).encode(),
+        OUTPUTS["tensor_hardening_tests_flags"]:
+            ("--gtest_filter=" + filters["tensor_hardening_tests"]).encode(),
     }
     counts = {}
     for executable in BINARIES:
@@ -686,9 +809,11 @@ def generated_files() -> tuple[dict[Path, bytes], dict[str, int], dict[str, list
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify generated files are current")
+    parser.add_argument("--trace", type=Path, default=None,
+                        help="per-test facade entry counts (JSON lines) from LFS_TENSOR_FACADE_TRACE")
     args = parser.parse_args()
     try:
-        files, filter_counts, _ = generated_files()
+        files, filter_counts, _ = generated_files(args.trace)
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

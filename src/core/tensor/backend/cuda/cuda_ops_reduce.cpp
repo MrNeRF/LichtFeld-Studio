@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
 #include "../../internal/memory_pool.hpp"
@@ -68,6 +69,7 @@ namespace lfs::core::internal {
 
     float CudaBackendOps::sum_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(sum_scalar);
         prime_stream_polling(context);
         return tensor_ops::direct_sum_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
@@ -75,6 +77,7 @@ namespace lfs::core::internal {
 
     float CudaBackendOps::mean_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(mean_scalar);
         prime_stream_polling(context);
         return tensor_ops::direct_mean_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
@@ -82,6 +85,7 @@ namespace lfs::core::internal {
 
     float CudaBackendOps::max_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(max_scalar);
         prime_stream_polling(context);
         return tensor_ops::direct_max_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
@@ -89,6 +93,7 @@ namespace lfs::core::internal {
 
     float CudaBackendOps::min_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(min_scalar);
         prime_stream_polling(context);
         return tensor_ops::direct_min_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
@@ -98,6 +103,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output,
         const StridedLayout& input_layout, const ReduceProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(reduce);
         LFS_ASSERT_MSG(program.axis_count <= MAX_TENSOR_RANK,
                        "reduction axis count exceeds MAX_TENSOR_RANK");
         tensor_ops::launch_reduce_op(
@@ -111,6 +117,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output, const size_t rows,
         const size_t columns, const ReduceProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(column_reduce);
         tensor_ops::launch_column_reduce(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),
             rows, columns, program.op, context.cuda_stream);
@@ -121,6 +128,7 @@ namespace lfs::core::internal {
         const size_t reduce_size, const size_t inner_size,
         const ReduceProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(strided_reduce);
         tensor_ops::launch_strided_reduce_fast(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),
             outer_size, reduce_size, inner_size, program.op, context.cuda_stream);
@@ -131,6 +139,7 @@ namespace lfs::core::internal {
         const tensor_ops::FusedPointwiseOpChain& chain,
         const ReduceProgram& program,
         const ExecContext context) {
+        LFS_FACADE_TRACE(fused_transform_reduce);
         tensor_ops::launch_fused_transform_reduce(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output), count,
             chain, program.op, context.cuda_stream);
@@ -140,6 +149,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output, const size_t segment_count,
         const size_t segment_size, const tensor_ops::FusedPointwiseOpChain& chain,
         const ReduceProgram& program, const ExecContext context) {
+        LFS_FACADE_TRACE(fused_segmented_transform_reduce);
         tensor_ops::launch_fused_segmented_transform_reduce(
             cuda_const_pointer<float>(input), cuda_pointer<float>(output),
             segment_count, segment_size, chain, program.op, context.cuda_stream);
@@ -147,16 +157,19 @@ namespace lfs::core::internal {
 
     size_t CudaBackendOps::count_nonzero_bool(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(count_nonzero_bool);
         return count_nonzero<unsigned char>(input, count, context);
     }
 
     size_t CudaBackendOps::count_nonzero_float(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(count_nonzero_float);
         return count_nonzero<float>(input, count, context);
     }
 
     bool CudaBackendOps::has_nan(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(has_nan);
         prime_stream_polling(context);
         return tensor_ops::has_nan_gpu(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
@@ -164,6 +177,7 @@ namespace lfs::core::internal {
 
     bool CudaBackendOps::has_inf(
         const StorageRef input, const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(has_inf);
         prime_stream_polling(context);
         return tensor_ops::has_inf_gpu(
             cuda_const_pointer<float>(input), count, context.cuda_stream);

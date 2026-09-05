@@ -321,6 +321,9 @@ namespace lfs::core::internal {
             shutdown();
         } catch (...) {
         }
+        pipelines_.reset();
+        memory_.reset();
+        recorders_.reset();
     }
 
     void VulkanContext::create_instance() {
@@ -708,6 +711,13 @@ namespace lfs::core::internal {
             if (slice == 14) {
                 LOG_WARN("Vulkan timeline value {} not signalled after 30 s", value);
             }
+            if (slice == 59) {
+                mark_device_lost_once();
+                LFS_ASSERT_MSG(false,
+                               std::format("Vulkan timeline value {} not signalled after 120 s; "
+                                           "treating the device as lost",
+                                           value));
+            }
         }
     }
 
@@ -761,7 +771,11 @@ namespace lfs::core::internal {
         }
         accepting_work_.store(false, std::memory_order_release);
         if (!dead() && recorders_) {
-            recorders_->wait_all();
+            try {
+                recorders_->wait_all();
+            } catch (...) {
+                mark_device_lost_once();
+            }
         }
         if (memory_) {
             memory_->shutdown();
@@ -778,9 +792,6 @@ namespace lfs::core::internal {
             vkDestroyPipelineCache(device_, pipeline_cache_, nullptr);
             pipeline_cache_ = VK_NULL_HANDLE;
         }
-        pipelines_.reset();
-        memory_.reset();
-        recorders_.reset();
         if (allocator_ != nullptr) {
             vmaDestroyAllocator(allocator_);
             allocator_ = nullptr;
@@ -856,6 +867,10 @@ namespace lfs::core::internal {
         }
         if (context) {
             context->shutdown();
+        } else {
+            // Nothing can be outstanding from a context that no longer exists; a
+            // deleter that runs later is a no-op by the context-id check.
+            VulkanMemory::reset_last_shutdown_live_allocations();
         }
     }
 
@@ -876,7 +891,9 @@ namespace lfs::core::internal {
             }
         } catch (...) {
         }
-        return 0;
+        // No live context: report what the last shutdown found still allocated,
+        // so a leaked tensor is detected instead of hidden by the slot replacement.
+        return VulkanMemory::last_shutdown_live_allocations();
     }
 
     uint64_t vulkan_completed_timeline_for_testing() {

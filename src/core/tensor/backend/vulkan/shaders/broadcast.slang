@@ -144,61 +144,63 @@ bool predicateInt64(int64_t lhs, int64_t rhs)
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
-    const uint index = dispatchThreadId.x;
-    if (index >= parameters.count)
-        return;
-    const uint lhsIndex = broadcastOffset(index, parameters.lhsRank, parameters.lhsDims,
-                                          parameters.outputRank, parameters.outputDims);
-    const uint rhsIndex = broadcastOffset(index, parameters.rhsRank, parameters.rhsDims,
-                                          parameters.outputRank, parameters.outputDims);
-    if (kInputDType == 0 || kInputDType == 1)
+    const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
-        const float lhs = kInputDType == 0
-                              ? ((Ptr<float, Access.Read>)parameters.lhsAddress)[lhsIndex]
-                              : f16tof32(uint(((Ptr<uint16_t, Access.Read>)parameters.lhsAddress)[lhsIndex]));
-        const float rhs = kInputDType == 0
-                              ? ((Ptr<float, Access.Read>)parameters.rhsAddress)[rhsIndex]
-                              : f16tof32(uint(((Ptr<uint16_t, Access.Read>)parameters.rhsAddress)[rhsIndex]));
-        if (kOutputDType == 5)
-            storeByte(parameters.outputAddress, index, predicateFloat(lhs, rhs) ? 1u : 0u);
-        else if (kOutputDType == 0)
-            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] = floatOp(lhs, rhs);
-        else
-            ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                uint16_t(f32tof16(floatOp(lhs, rhs)));
-        return;
-    }
-    if (kInputDType == 3)
-    {
-        const int64_t lhs = ((Ptr<int64_t, Access.Read>)parameters.lhsAddress)[lhsIndex];
-        const int64_t rhs = ((Ptr<int64_t, Access.Read>)parameters.rhsAddress)[rhsIndex];
-        if (kOutputDType == 5)
-            storeByte(parameters.outputAddress, index, predicateInt64(lhs, rhs) ? 1u : 0u);
-        else
+        const uint lhsIndex = broadcastOffset(index, parameters.lhsRank, parameters.lhsDims,
+                                              parameters.outputRank, parameters.outputDims);
+        const uint rhsIndex = broadcastOffset(index, parameters.rhsRank, parameters.rhsDims,
+                                              parameters.outputRank, parameters.outputDims);
+        if (kInputDType == 0 || kInputDType == 1)
         {
-            int64_t result = lhs;
-            if (kOp == 4) result = lhs + rhs;
-            if (kOp == 5) result = lhs - rhs;
-            if (kOp == 6) result = lhs * rhs;
-            if (kOp == 7) result = rhs == 0 ? int64_t(0) : lhs / rhs;
-            if (kOp == 26) result = rhs == 0 ? int64_t(0) : lhs % rhs;
-            if (kOp == 27) result = lhs < rhs ? rhs : lhs;
-            if (kOp == 28) result = rhs < lhs ? rhs : lhs;
-            ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] = result;
+            const float lhs = kInputDType == 0
+                                  ? ((Ptr<float, Access.Read>)parameters.lhsAddress)[lhsIndex]
+                                  : f16tof32(uint(((Ptr<uint16_t, Access.Read>)parameters.lhsAddress)[lhsIndex]));
+            const float rhs = kInputDType == 0
+                                  ? ((Ptr<float, Access.Read>)parameters.rhsAddress)[rhsIndex]
+                                  : f16tof32(uint(((Ptr<uint16_t, Access.Read>)parameters.rhsAddress)[rhsIndex]));
+            if (kOutputDType == 5)
+                storeByte(parameters.outputAddress, index, predicateFloat(lhs, rhs) ? 1u : 0u);
+            else if (kOutputDType == 0)
+                ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] = floatOp(lhs, rhs);
+            else
+                ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
+                    uint16_t(f32tof16(floatOp(lhs, rhs)));
+            continue;
         }
-        return;
+        if (kInputDType == 3)
+        {
+            const int64_t lhs = ((Ptr<int64_t, Access.Read>)parameters.lhsAddress)[lhsIndex];
+            const int64_t rhs = ((Ptr<int64_t, Access.Read>)parameters.rhsAddress)[rhsIndex];
+            if (kOutputDType == 5)
+                storeByte(parameters.outputAddress, index, predicateInt64(lhs, rhs) ? 1u : 0u);
+            else
+            {
+                int64_t result = lhs;
+                if (kOp == 4) result = lhs + rhs;
+                if (kOp == 5) result = lhs - rhs;
+                if (kOp == 6) result = lhs * rhs;
+                if (kOp == 7) result = rhs == 0 ? int64_t(0) : lhs / rhs;
+                if (kOp == 26) result = rhs == 0 ? int64_t(0) : lhs % rhs;
+                if (kOp == 27) result = lhs < rhs ? rhs : lhs;
+                if (kOp == 28) result = rhs < lhs ? rhs : lhs;
+                ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] = result;
+            }
+            continue;
+        }
+        const uint lhs = kInputDType == 2
+                             ? uint(((Ptr<int, Access.Read>)parameters.lhsAddress)[lhsIndex])
+                             : loadByte(parameters.lhsAddress, lhsIndex);
+        const uint rhs = kInputDType == 2
+                             ? uint(((Ptr<int, Access.Read>)parameters.rhsAddress)[rhsIndex])
+                             : loadByte(parameters.rhsAddress, rhsIndex);
+        if (kOutputDType == 5)
+            storeByte(parameters.outputAddress, index,
+                      predicateInt64(int64_t(int(lhs)), int64_t(int(rhs))) ? 1u : 0u);
+        else if (kInputDType == 2)
+            ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] = intOp(int(lhs), int(rhs));
+        else
+            storeByte(parameters.outputAddress, index, uint(intOp(int(lhs), int(rhs))) & 255u);
     }
-    const uint lhs = kInputDType == 2
-                         ? uint(((Ptr<int, Access.Read>)parameters.lhsAddress)[lhsIndex])
-                         : loadByte(parameters.lhsAddress, lhsIndex);
-    const uint rhs = kInputDType == 2
-                         ? uint(((Ptr<int, Access.Read>)parameters.rhsAddress)[rhsIndex])
-                         : loadByte(parameters.rhsAddress, rhsIndex);
-    if (kOutputDType == 5)
-        storeByte(parameters.outputAddress, index,
-                  predicateInt64(int64_t(int(lhs)), int64_t(int(rhs))) ? 1u : 0u);
-    else if (kInputDType == 2)
-        ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] = intOp(int(lhs), int(rhs));
-    else
-        storeByte(parameters.outputAddress, index, uint(intOp(int(lhs), int(rhs))) & 255u);
 }

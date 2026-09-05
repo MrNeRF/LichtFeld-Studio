@@ -479,8 +479,13 @@ namespace lfs::core::internal {
                     source, source.shape(), DataType::Float32);
                 float* out_ptr = out.ptr<float>();
                 assert(out_ptr != nullptr);
+                std::vector<StorageRef> rhs_refs;
+                rhs_refs.reserve(rhs_storage.size());
+                for (const auto& r : rhs_storage) {
+                    rhs_refs.push_back(storage_ref(r));
+                }
                 backend_ops_for(source).fused_pointwise_chain(
-                    storage_ref(source), storage_ref(out), n, chain,
+                    storage_ref(source), storage_ref(out), n, chain, rhs_refs,
                     ExecContext{out.stream()});
                 materialized = std::move(out);
                 return true;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -36,9 +37,8 @@ namespace lfs::core::internal {
                 return 0;
             }
             const uint64_t groups = (work + kLocalSize - 1) / kLocalSize;
-            LFS_ASSERT_MSG(groups <= context.caps().max_workgroup_count[0],
-                           "Vulkan movement dispatch exceeds maxComputeWorkGroupCount[0]");
-            return static_cast<uint32_t>(groups);
+            return static_cast<uint32_t>(
+                std::min<uint64_t>(groups, context.caps().max_workgroup_count[0]));
         }
 
         struct StridedPush {
@@ -66,6 +66,9 @@ namespace lfs::core::internal {
             }
             size_t last = 0;
             for (size_t i = 0; i < layout.rank; ++i) {
+                if (layout.strides[i] == 0) {
+                    continue;
+                }
                 LFS_ASSERT_MSG(
                     layout.dims[i] - 1 <=
                         (std::numeric_limits<size_t>::max() - last) / layout.strides[i],
@@ -177,6 +180,7 @@ namespace lfs::core::internal {
     void VulkanBackendOps::strided_copy(
         const StorageRef input, const StorageRef output,
         const StridedLayout& input_layout, ExecContext) {
+        LFS_FACADE_TRACE(strided_copy);
         LFS_ASSERT_MSG(input.dtype == output.dtype,
                        "Vulkan strided copy requires matching dtypes");
         dispatch_strided(input, output, input_layout, false,
@@ -186,12 +190,14 @@ namespace lfs::core::internal {
     void VulkanBackendOps::strided_copy_immediate(
         const StorageRef input, const StorageRef output,
         const StridedLayout& input_layout, ExecContext context) {
+        LFS_FACADE_TRACE(strided_copy_immediate);
         strided_copy(input, output, input_layout, context);
     }
 
     void VulkanBackendOps::strided_upload(
         const StorageRef host_input, const StorageRef output,
         const StridedLayout& input_layout, ExecContext) {
+        LFS_FACADE_TRACE(strided_upload);
         if (input_layout.element_count == 0) {
             return;
         }
@@ -220,6 +226,7 @@ namespace lfs::core::internal {
     void VulkanBackendOps::strided_scatter(
         const StorageRef input, const StorageRef output,
         const StridedLayout& output_layout, ExecContext) {
+        LFS_FACADE_TRACE(strided_scatter);
         LFS_ASSERT_MSG(input.dtype == output.dtype,
                        "Vulkan strided scatter requires matching dtypes");
         dispatch_strided(input, output, output_layout, true,
@@ -229,12 +236,14 @@ namespace lfs::core::internal {
     void VulkanBackendOps::strided_scatter_immediate(
         const StorageRef input, const StorageRef output,
         const StridedLayout& output_layout, ExecContext context) {
+        LFS_FACADE_TRACE(strided_scatter_immediate);
         strided_scatter(input, output, output_layout, context);
     }
 
     void VulkanBackendOps::strided_scatter_int32_to_float32(
         const StorageRef input, const StorageRef output,
         const StridedLayout& output_layout, ExecContext) {
+        LFS_FACADE_TRACE(strided_scatter_int32_to_float32);
         LFS_ASSERT_MSG(input.dtype == DataType::Int32 &&
                            output.dtype == DataType::Float32 &&
                            output_layout.rank == 2,
@@ -247,6 +256,7 @@ namespace lfs::core::internal {
         const StorageRef output, const std::span<const StorageRef> inputs,
         const std::span<const StridedLayout> layouts, const size_t num_rows,
         const size_t row_size, const size_t element_size, ExecContext) {
+        LFS_FACADE_TRACE(cat_last_dim);
         LFS_ASSERT_MSG(inputs.size() == layouts.size() && !inputs.empty(),
                        "Vulkan cat requires matching non-empty input metadata");
         LFS_ASSERT_MSG(element_size == dtype_size(output.dtype),
@@ -269,6 +279,7 @@ namespace lfs::core::internal {
         const std::span<const StridedLayout> layouts, const size_t outer_size,
         const size_t inner_size, const int dim, const size_t element_size,
         ExecContext) {
+        LFS_FACADE_TRACE(cat_middle_dim);
         LFS_ASSERT_MSG(inputs.size() == layouts.size() && !inputs.empty(),
                        "Vulkan cat requires matching non-empty input metadata");
         LFS_ASSERT_MSG(dim >= 0 && element_size == dtype_size(output.dtype),
@@ -299,6 +310,7 @@ namespace lfs::core::internal {
         const StridedLayout& output_layout,
         const std::array<size_t, MAX_TENSOR_RANK>& pad_before,
         ExecContext) {
+        LFS_FACADE_TRACE(pad);
         if (input_layout.element_count == 0) {
             return;
         }

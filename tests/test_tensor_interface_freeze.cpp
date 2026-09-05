@@ -3,6 +3,7 @@
 
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_debug.hpp"
 #include "core/tensor_label.hpp"
 #include "core/tensor_serialization_sink.hpp"
@@ -12,10 +13,12 @@
 #include <cstdio>
 #include <istream>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -57,6 +60,60 @@ namespace {
     using S = TensorShape;
     using R = RankedDims;
     using RP = TensorRowProxy;
+
+    // Exact signatures for non-overloaded callables. A requires expression only
+    // proves a call is well-formed; it lets a changed return type, a widened
+    // parameter or an added defaulted parameter through. decltype does not.
+#define LFS_FREEZE(member, ...) \
+    static_assert(std::is_same_v<decltype(&member), __VA_ARGS__>, "signature moved: " #member)
+    LFS_FREEZE(T::exp, T (T::*)() const);
+    LFS_FREEZE(T::log, T (T::*)() const);
+    LFS_FREEZE(T::sqrt, T (T::*)() const);
+    LFS_FREEZE(T::neg, T (T::*)() const);
+    LFS_FREEZE(T::abs, T (T::*)() const);
+    LFS_FREEZE(T::sigmoid, T (T::*)() const);
+    LFS_FREEZE(T::tanh, T (T::*)() const);
+    LFS_FREEZE(T::relu, T (T::*)() const);
+    LFS_FREEZE(T::contiguous, T (T::*)() const);
+    LFS_FREEZE(T::clone, T (T::*)() const);
+    LFS_FREEZE(T::cpu, T (T::*)() const);
+    LFS_FREEZE(T::count_nonzero, size_t (T::*)() const);
+    LFS_FREEZE(T::has_nan, bool (T::*)() const);
+    LFS_FREEZE(T::has_inf, bool (T::*)() const);
+    LFS_FREEZE(T::sum_scalar, float (T::*)() const);
+    LFS_FREEZE(T::mean_scalar, float (T::*)() const);
+    LFS_FREEZE(T::max_scalar, float (T::*)() const);
+    LFS_FREEZE(T::min_scalar, float (T::*)() const);
+    LFS_FREEZE(T::to_vector, std::vector<float> (T::*)() const);
+    LFS_FREEZE(T::to_vector_int, std::vector<int> (T::*)() const);
+    LFS_FREEZE(T::to_vector_bool, std::vector<bool> (T::*)() const);
+    LFS_FREEZE(T::stream, cudaStream_t (T::*)() const);
+    LFS_FREEZE(T::set_stream, void (T::*)(cudaStream_t));
+    LFS_FREEZE(T::record_stream, void (T::*)(cudaStream_t) const);
+    LFS_FREEZE(T::sync_to_stream, void (T::*)(cudaStream_t) const);
+    LFS_FREEZE(T::reserve, void (T::*)(size_t));
+    LFS_FREEZE(T::numel, size_t (T::*)() const);
+    LFS_FREEZE(T::ndim, size_t (T::*)() const);
+    LFS_FREEZE(T::is_contiguous, bool (T::*)() const);
+    LFS_FREEZE(T::is_valid, bool (T::*)() const);
+    LFS_FREEZE(T::device, Device (T::*)() const);
+    LFS_FREEZE(T::dtype, DataType (T::*)() const);
+    LFS_FREEZE(T::bytes, size_t (T::*)() const);
+    LFS_FREEZE(T::storage_offset, size_t (T::*)() const);
+    // Selector exports: the additive public header must keep these shapes, and
+    // taking their address ODR-uses them so the Windows import library is linked.
+    LFS_FREEZE(default_gpu_backend, GpuBackend (*)());
+    LFS_FREEZE(set_default_gpu_backend, lfs::Status (*)(GpuBackend));
+    LFS_FREEZE(gpu_backend_available, bool (*)(GpuBackend));
+    LFS_FREEZE(gpu_backend_memory_info, MemoryInfo (*)(GpuBackend));
+    LFS_FREEZE(shutdown_gpu_backend, lfs::Status (*)(GpuBackend));
+    LFS_FREEZE(gpu_backend_of, std::optional<GpuBackend> (*)(const T&));
+#undef LFS_FREEZE
+    constexpr size_t kExactSignatureCount = 40;
+    [[maybe_unused]] constexpr auto kSelectorAnchors = std::tuple{
+        &default_gpu_backend, &set_default_gpu_backend, &gpu_backend_available,
+        &gpu_backend_memory_info, &shutdown_gpu_backend, &gpu_backend_of};
+    [[gnu::used]] const void* const kSelectorAnchorAddress = &kSelectorAnchors;
 
     // Non-template overload sets use exact function-pointer types. Template
     // callables are checked below in requires expressions, which keeps them in an
@@ -842,6 +899,13 @@ namespace {
 } // namespace
 
 int main() {
-    std::puts("tensor_interface_freeze: covered 529 callables");
+    constexpr size_t kExactCasts =
+        std::tuple_size_v<decltype(kFactoryOverloads)> + std::tuple_size_v<decltype(kMovementOverloads)> +
+        std::tuple_size_v<decltype(kReductionOverloads)> + std::tuple_size_v<decltype(kIndexOverloads)>;
+    static_assert(kExactCasts + kExactSignatureCount <= kFrozenCallableSlots.size());
+    std::printf("tensor_interface_freeze: covered %zu callables (%zu exact overload casts, "
+                "%zu exact signatures, %zu well-formedness checks)\n",
+                kFrozenCallableSlots.size(), kExactCasts, kExactSignatureCount,
+                kFrozenCallableSlots.size() - kExactCasts - kExactSignatureCount);
     return 0;
 }

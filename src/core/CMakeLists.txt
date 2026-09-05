@@ -37,6 +37,7 @@ set(TENSOR_SOURCES
         tensor/lazy_executor.cpp
         tensor/tensor_backend.cpp
         tensor/backend/backend_registry.cpp
+        tensor/backend/facade_trace.cpp
         tensor/backend/cuda/cuda_ops_pointwise.cpp
         tensor/backend/cuda/cuda_ops_reduce.cpp
         tensor/backend/cuda/cuda_ops_scan_sort.cpp

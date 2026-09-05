@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
 #include "../../internal/cuda_memory_guard.hpp"
@@ -97,6 +98,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::strided_copy(
         const StorageRef input, const StorageRef output,
         const StridedLayout& input_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(strided_copy);
         CudaDeviceMemory<size_t> device_shape(input_layout.rank, context.cuda_stream);
         CudaDeviceMemory<size_t> device_strides(input_layout.rank, context.cuda_stream);
         copy_metadata_to_device(device_shape, device_strides, input_layout, context);
@@ -109,6 +111,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::strided_copy_immediate(
         const StorageRef input, const StorageRef output,
         const StridedLayout& input_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(strided_copy_immediate);
         const LayoutVectorScratch& layout = immediate_layout_vectors(input_layout);
         tensor_ops::launch_strided_copy_immediate(
             cuda_const_pointer<void>(input), cuda_pointer<void>(output),
@@ -119,6 +122,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::strided_upload(
         const StorageRef host_input, const StorageRef output,
         const StridedLayout& input_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(strided_upload);
         if (input_layout.rank == 3) {
             tensor_ops::launch_strided_upload(
                 cuda_const_pointer<void>(host_input), cuda_pointer<void>(output),
@@ -140,6 +144,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::strided_scatter(
         const StorageRef input, const StorageRef output,
         const StridedLayout& output_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(strided_scatter);
         CudaDeviceMemory<size_t> device_shape(output_layout.rank, context.cuda_stream);
         CudaDeviceMemory<size_t> device_strides(output_layout.rank, context.cuda_stream);
         copy_metadata_to_device(device_shape, device_strides, output_layout, context);
@@ -152,6 +157,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::strided_scatter_immediate(
         const StorageRef input, const StorageRef output,
         const StridedLayout& output_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(strided_scatter_immediate);
         const LayoutVectorScratch& layout = immediate_layout_vectors(output_layout);
         tensor_ops::launch_strided_scatter_immediate(
             cuda_const_pointer<void>(input), cuda_pointer<void>(output),
@@ -162,6 +168,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::strided_scatter_int32_to_float32(
         const StorageRef input, const StorageRef output,
         const StridedLayout& output_layout, const ExecContext context) {
+        LFS_FACADE_TRACE(strided_scatter_int32_to_float32);
         // This specialized launcher reads its rank-2 metadata on the host before
         // passing scalar dimensions to the kernel.
         tensor_ops::launch_strided_scatter_int32_to_float32(
@@ -175,6 +182,7 @@ namespace lfs::core::internal {
         const std::span<const StridedLayout> layouts, const size_t num_rows,
         const size_t row_size, const size_t element_size,
         const ExecContext context) {
+        LFS_FACADE_TRACE(cat_last_dim);
         const std::vector<Tensor> tensors = tensor_views(inputs, layouts, context);
         tensor_ops::launch_cat_last_dim(
             cuda_pointer<void>(output), tensors, num_rows, row_size, element_size,
@@ -186,6 +194,7 @@ namespace lfs::core::internal {
         const std::span<const StridedLayout> layouts, const size_t outer_size,
         const size_t inner_size, const int dim, const size_t element_size,
         const ExecContext context) {
+        LFS_FACADE_TRACE(cat_middle_dim);
         const std::vector<Tensor> tensors = tensor_views(inputs, layouts, context);
         tensor_ops::launch_cat_middle_dim(
             cuda_pointer<void>(output), tensors, outer_size, inner_size, dim,
@@ -197,6 +206,7 @@ namespace lfs::core::internal {
         const StridedLayout& input_layout, const StridedLayout& output_layout,
         const std::array<size_t, MAX_TENSOR_RANK>& pad_before,
         const ExecContext context) {
+        LFS_FACADE_TRACE(pad);
         LFS_ASSERT_MSG(input.dtype == DataType::Float32,
                        "CUDA pad supports only Float32");
         tensor_ops::launch_pad(

@@ -40,6 +40,7 @@ namespace lfs::core {
             virtual void fused_pointwise_chain(
                 StorageRef input, StorageRef output, size_t count,
                 const tensor_ops::FusedPointwiseOpChain& chain,
+                std::span<const StorageRef> rhs_storages,
                 ExecContext context) = 0;
             virtual void clamp_scalar(StorageRef data, ScalarOperand minimum,
                                       ScalarOperand maximum, size_t count,
@@ -290,6 +291,7 @@ namespace lfs::core {
             void fused_pointwise_chain(
                 StorageRef input, StorageRef output, size_t count,
                 const tensor_ops::FusedPointwiseOpChain& chain,
+                std::span<const StorageRef> rhs_storages,
                 ExecContext context) override;
             void clamp_scalar(StorageRef data, ScalarOperand minimum,
                               ScalarOperand maximum, size_t count,

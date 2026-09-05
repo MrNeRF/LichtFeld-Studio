@@ -52,16 +52,18 @@ uint64_t logicalOffset(uint linear, uniform FillParameters parameters)
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform FillParameters parameters)
 {
-    const uint index = dispatchThreadId.x;
-    if (index >= parameters.count)
-        return;
-    const uint64_t offset = logicalOffset(index, parameters);
-    if (kDType == 0 || kDType == 2 || kDType == 6)
-        ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[offset] = uint(parameters.pattern);
-    else if (kDType == 1)
-        ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[offset] = uint16_t(parameters.pattern);
-    else if (kDType == 3)
-        ((Ptr<uint64_t, Access.ReadWrite>)parameters.outputAddress)[offset] = parameters.pattern;
-    else
-        storeByte(parameters.outputAddress, offset, uint(parameters.pattern));
+    const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
+    {
+        const uint64_t offset = logicalOffset(index, parameters);
+        if (kDType == 0 || kDType == 2 || kDType == 6)
+            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[offset] = uint(parameters.pattern);
+        else if (kDType == 1)
+            ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[offset] = uint16_t(parameters.pattern);
+        else if (kDType == 3)
+            ((Ptr<uint64_t, Access.ReadWrite>)parameters.outputAddress)[offset] = parameters.pattern;
+        else
+            storeByte(parameters.outputAddress, offset, uint(parameters.pattern));
+    }
 }

@@ -347,9 +347,11 @@ void evaluateScalar(uint index, uniform Parameters parameters)
     if (kArity == 4)
     {
         float value = ((Ptr<float, Access.Read>)parameters.lhsAddress)[index];
+        // flags carries the chunk offset for a chain dispatched in pieces: tensor
+        // operands are addressed by the element's global index.
         Ptr<ChainOp, Access.Read> chain = (Ptr<ChainOp, Access.Read>)parameters.rhsAddress;
         for (uint operation = 0; operation < parameters.scalarKind; ++operation)
-            value = applyChainOp(value, chain[operation], index);
+            value = applyChainOp(value, chain[operation], index + parameters.flags);
         ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] = value;
         return;
     }

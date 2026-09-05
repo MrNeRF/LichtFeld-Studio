@@ -3486,15 +3486,23 @@ namespace lfs::core {
                     : StorageAccountingKind::CudaDirect;
             record_storage_allocation(accounting_kind, new_bytes);
             const cudaStream_t allocation_stream = stream();
+            const GpuStorageDescriptor released_descriptor =
+                new_gpu_storage.meta != nullptr ? new_gpu_storage.meta->gpu_descriptor
+                                                : GpuStorageDescriptor{};
             new_owner = std::shared_ptr<void>(new_data, [bytes = new_bytes,
                                                          new_gpu_storage,
+                                                         released_descriptor,
                                                          accounting_kind,
                                                          allocation_stream](void* ptr) {
                 if (ptr && (new_gpu_storage.backend == GpuBackend::Vulkan ||
                             !gpu_process_teardown_started())) {
+                    StorageMeta owner;
+                    owner.backend = new_gpu_storage.backend;
+                    owner.gpu_descriptor = released_descriptor;
+                    internal::StorageRef released = new_gpu_storage;
+                    released.meta = new_gpu_storage.meta != nullptr ? &owner : nullptr;
                     internal::backend_ops(new_gpu_storage.backend)
-                        .deallocate(new_gpu_storage,
-                                    internal::ExecContext{allocation_stream});
+                        .deallocate(released, internal::ExecContext{allocation_stream});
                 }
                 Tensor::record_storage_deallocation(accounting_kind, bytes);
             });

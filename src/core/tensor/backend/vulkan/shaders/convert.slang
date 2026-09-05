@@ -72,57 +72,59 @@ uint torchUInt8Cast(float value)
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
-    const uint index = dispatchThreadId.x;
-    if (index >= parameters.count)
-        return;
-    if (kInputDType == kOutputDType)
+    const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
-        if (kInputDType == 0)
+        if (kInputDType == kOutputDType)
+        {
+            if (kInputDType == 0)
+                ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
+                    ((Ptr<float, Access.Read>)parameters.inputAddress)[index];
+            else if (kInputDType == 1)
+                ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
+                    ((Ptr<uint16_t, Access.Read>)parameters.inputAddress)[index];
+            else if (kInputDType == 2)
+                ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
+                    ((Ptr<int, Access.Read>)parameters.inputAddress)[index];
+            else if (kInputDType == 3)
+                ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
+                    ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[index];
+            else if (kInputDType == 6)
+                ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
+                    ((Ptr<uint, Access.Read>)parameters.inputAddress)[index];
+            else if (kInputDType == 5)
+                storeByte(parameters.outputAddress, index,
+                          loadByte(parameters.inputAddress, index) != 0u ? 1u : 0u);
+            else
+                storeByte(parameters.outputAddress, index,
+                          loadByte(parameters.inputAddress, index));
+            continue;
+        }
+        if (kOutputDType == 0)
             ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
-                ((Ptr<float, Access.Read>)parameters.inputAddress)[index];
-        else if (kInputDType == 1)
+                loadAsFloat(parameters.inputAddress, index);
+        else if (kOutputDType == 1)
             ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                ((Ptr<uint16_t, Access.Read>)parameters.inputAddress)[index];
-        else if (kInputDType == 2)
+                uint16_t(f32tof16(loadAsFloat(parameters.inputAddress, index)));
+        else if (kOutputDType == 2)
             ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
-                ((Ptr<int, Access.Read>)parameters.inputAddress)[index];
-        else if (kInputDType == 3)
+                int(loadAsInt64(parameters.inputAddress, index));
+        else if (kOutputDType == 3)
             ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-                ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[index];
-        else if (kInputDType == 6)
-            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
-                ((Ptr<uint, Access.Read>)parameters.inputAddress)[index];
-        else if (kInputDType == 5)
+                loadAsInt64(parameters.inputAddress, index);
+        else if (kOutputDType == 4)
+        {
+            const uint value = kInputDType == 0 || kInputDType == 1
+                                   ? torchUInt8Cast(loadAsFloat(parameters.inputAddress, index))
+                                   : uint(loadAsInt64(parameters.inputAddress, index)) & 255u;
+            storeByte(parameters.outputAddress, index, value);
+        }
+        else if (kOutputDType == 5)
             storeByte(parameters.outputAddress, index,
-                      loadByte(parameters.inputAddress, index) != 0u ? 1u : 0u);
+                      loadAsFloat(parameters.inputAddress, index) != 0.0f ? 1u : 0u);
         else
-            storeByte(parameters.outputAddress, index,
-                      loadByte(parameters.inputAddress, index));
-        return;
+            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
+                uint(loadAsInt64(parameters.inputAddress, index));
     }
-    if (kOutputDType == 0)
-        ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] =
-            loadAsFloat(parameters.inputAddress, index);
-    else if (kOutputDType == 1)
-        ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-            uint16_t(f32tof16(loadAsFloat(parameters.inputAddress, index)));
-    else if (kOutputDType == 2)
-        ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[index] =
-            int(loadAsInt64(parameters.inputAddress, index));
-    else if (kOutputDType == 3)
-        ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
-            loadAsInt64(parameters.inputAddress, index);
-    else if (kOutputDType == 4)
-    {
-        const uint value = kInputDType == 0 || kInputDType == 1
-                               ? torchUInt8Cast(loadAsFloat(parameters.inputAddress, index))
-                               : uint(loadAsInt64(parameters.inputAddress, index)) & 255u;
-        storeByte(parameters.outputAddress, index, value);
-    }
-    else if (kOutputDType == 5)
-        storeByte(parameters.outputAddress, index,
-                  loadAsFloat(parameters.inputAddress, index) != 0.0f ? 1u : 0u);
-    else
-        ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
-            uint(loadAsInt64(parameters.inputAddress, index));
 }

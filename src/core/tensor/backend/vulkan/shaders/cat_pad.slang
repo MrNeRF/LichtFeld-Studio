@@ -66,31 +66,33 @@ void copyElement(uint64_t inputAddress, uint64_t inputIndex,
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
-    const uint index = dispatchThreadId.x;
-    if (index >= parameters.count)
-        return;
-    if (kMode == 0)
+    const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
-        const uint outer = index / parameters.inputBlock;
-        const uint within = index % parameters.inputBlock;
-        copyElement(parameters.inputAddress, index, parameters.outputAddress,
-                    uint64_t(outer * parameters.outputBlock + parameters.outputOffset + within));
-        return;
+        if (kMode == 0)
+        {
+            const uint outer = index / parameters.inputBlock;
+            const uint within = index % parameters.inputBlock;
+            copyElement(parameters.inputAddress, index, parameters.outputAddress,
+                        uint64_t(outer * parameters.outputBlock + parameters.outputOffset + within));
+            continue;
+        }
+        uint remaining = index;
+        uint64_t inputOffset = 0;
+        uint64_t outputOffset = 0;
+        for (uint dimension = 0; dimension < parameters.rank; ++dimension)
+        {
+            uint64_t contiguousStride = 1;
+            for (uint next = dimension + 1; next < parameters.rank; ++next)
+                contiguousStride *= parameters.inputDims[next];
+            const uint64_t coordinate = uint64_t(remaining) / contiguousStride;
+            remaining = uint(uint64_t(remaining) % contiguousStride);
+            inputOffset += coordinate * parameters.inputStrides[dimension];
+            outputOffset += (coordinate + parameters.padBefore[dimension]) *
+                            parameters.outputStrides[dimension];
+        }
+        copyElement(parameters.inputAddress, inputOffset,
+                    parameters.outputAddress, outputOffset);
     }
-    uint remaining = index;
-    uint64_t inputOffset = 0;
-    uint64_t outputOffset = 0;
-    for (uint dimension = 0; dimension < parameters.rank; ++dimension)
-    {
-        uint64_t contiguousStride = 1;
-        for (uint next = dimension + 1; next < parameters.rank; ++next)
-            contiguousStride *= parameters.inputDims[next];
-        const uint64_t coordinate = uint64_t(remaining) / contiguousStride;
-        remaining = uint(uint64_t(remaining) % contiguousStride);
-        inputOffset += coordinate * parameters.inputStrides[dimension];
-        outputOffset += (coordinate + parameters.padBefore[dimension]) *
-                        parameters.outputStrides[dimension];
-    }
-    copyElement(parameters.inputAddress, inputOffset,
-                parameters.outputAddress, outputOffset);
 }

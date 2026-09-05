@@ -59,34 +59,36 @@ uint64_t logicalOffset(uint linear, uniform Parameters parameters)
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
-    const uint index = dispatchThreadId.x;
-    if (index >= parameters.count)
-        return;
-    const uint64_t strided = logicalOffset(index, parameters);
-    const uint64_t inputIndex = kScatter != 0 ? uint64_t(index) : strided;
-    const uint64_t outputIndex = kScatter != 0 ? strided : uint64_t(index);
-    if (kInputDType == 2 && kOutputDType == 0)
+    const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
-        ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
-            float(((Ptr<int, Access.Read>)parameters.inputAddress)[inputIndex]);
-        return;
+        const uint64_t strided = logicalOffset(index, parameters);
+        const uint64_t inputIndex = kScatter != 0 ? uint64_t(index) : strided;
+        const uint64_t outputIndex = kScatter != 0 ? strided : uint64_t(index);
+        if (kInputDType == 2 && kOutputDType == 0)
+        {
+            ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                float(((Ptr<int, Access.Read>)parameters.inputAddress)[inputIndex]);
+            continue;
+        }
+        if (kInputDType == 0)
+            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                ((Ptr<uint, Access.Read>)parameters.inputAddress)[inputIndex];
+        else if (kInputDType == 1)
+            ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                ((Ptr<uint16_t, Access.Read>)parameters.inputAddress)[inputIndex];
+        else if (kInputDType == 2)
+            ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                ((Ptr<int, Access.Read>)parameters.inputAddress)[inputIndex];
+        else if (kInputDType == 3)
+            ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[inputIndex];
+        else if (kInputDType == 6)
+            ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
+                ((Ptr<uint, Access.Read>)parameters.inputAddress)[inputIndex];
+        else
+            storeByte(parameters.outputAddress, outputIndex,
+                      loadByte(parameters.inputAddress, inputIndex));
     }
-    if (kInputDType == 0)
-        ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
-            ((Ptr<uint, Access.Read>)parameters.inputAddress)[inputIndex];
-    else if (kInputDType == 1)
-        ((Ptr<uint16_t, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
-            ((Ptr<uint16_t, Access.Read>)parameters.inputAddress)[inputIndex];
-    else if (kInputDType == 2)
-        ((Ptr<int, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
-            ((Ptr<int, Access.Read>)parameters.inputAddress)[inputIndex];
-    else if (kInputDType == 3)
-        ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
-            ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[inputIndex];
-    else if (kInputDType == 6)
-        ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[outputIndex] =
-            ((Ptr<uint, Access.Read>)parameters.inputAddress)[inputIndex];
-    else
-        storeByte(parameters.outputAddress, outputIndex,
-                  loadByte(parameters.inputAddress, inputIndex));
 }

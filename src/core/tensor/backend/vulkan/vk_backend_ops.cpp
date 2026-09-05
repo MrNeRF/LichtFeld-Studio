@@ -3,6 +3,8 @@
 
 #include "vk_backend_ops.hpp"
 
+#include "../facade_trace.hpp"
+
 #include "core/assert.hpp"
 
 #include <format>
@@ -18,13 +20,25 @@ namespace lfs::core::internal {
     } // namespace
 
 #define LFS_VK_NOTIMPL_VOID(Name, Parameters) \
-    void VulkanBackendOps::Name Parameters { not_implemented(#Name); }
+    void VulkanBackendOps::Name Parameters {  \
+        LFS_FACADE_TRACE(Name);               \
+        not_implemented(#Name);               \
+    }
 #define LFS_VK_NOTIMPL_FLOAT(Name, Parameters) \
-    float VulkanBackendOps::Name Parameters { not_implemented(#Name); }
-#define LFS_VK_NOTIMPL_SIZE(Name, Parameters) \
-    size_t VulkanBackendOps::Name Parameters { not_implemented(#Name); }
+    float VulkanBackendOps::Name Parameters {  \
+        LFS_FACADE_TRACE(Name);                \
+        not_implemented(#Name);                \
+    }
+#define LFS_VK_NOTIMPL_SIZE(Name, Parameters)  \
+    size_t VulkanBackendOps::Name Parameters { \
+        LFS_FACADE_TRACE(Name);                \
+        not_implemented(#Name);                \
+    }
 #define LFS_VK_NOTIMPL_BOOL(Name, Parameters) \
-    bool VulkanBackendOps::Name Parameters { not_implemented(#Name); }
+    bool VulkanBackendOps::Name Parameters {  \
+        LFS_FACADE_TRACE(Name);               \
+        not_implemented(#Name);               \
+    }
 
     LFS_VK_NOTIMPL_FLOAT(sum_scalar, (StorageRef, size_t, ExecContext))
     LFS_VK_NOTIMPL_FLOAT(mean_scalar, (StorageRef, size_t, ExecContext))

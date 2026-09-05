@@ -4,6 +4,8 @@
 
 #include "../gpu_backend_ops.hpp"
 
+#include <span>
+
 namespace lfs::core::internal {
 
     class VulkanBackendOps final : public GpuBackendOps {
@@ -18,6 +20,7 @@ namespace lfs::core::internal {
                               const StridedLayout&, ExecContext) override;
         void fused_pointwise_chain(StorageRef, StorageRef, size_t,
                                    const tensor_ops::FusedPointwiseOpChain&,
+                                   std::span<const StorageRef> rhs_storages,
                                    ExecContext) override;
         void clamp_scalar(StorageRef, ScalarOperand, ScalarOperand, size_t, ExecContext) override;
         void clamp_fused(StorageRef, StorageRef, ScalarOperand, ScalarOperand, size_t, ExecContext) override;

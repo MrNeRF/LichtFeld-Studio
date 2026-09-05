@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <cstdlib>
@@ -348,6 +349,10 @@ namespace {
     }
 
     TEST_F(TensorVulkanRuntime, ShutdownWaitsForAutoSubmittedCommands) {
+        // 65 fills cross the 64-command auto-flush; shutdown must wait for that
+        // submission. The tensors are deliberately kept alive across shutdown, so
+        // the leak detector must report exactly them (an accessor that returned
+        // zero here was vacuous), and releasing them afterwards must be a no-op.
         std::vector<Tensor> live;
         live.reserve(65);
         {
@@ -358,7 +363,7 @@ namespace {
             }
         }
         ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
-        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), 0u);
+        EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), 65u);
         live.clear();
     }
 
@@ -430,6 +435,27 @@ namespace {
             EXPECT_EQ(bytes.to(DataType::Int32).to_vector_int(), expected_bytes)
                 << "start=" << start;
         }
+    }
+
+    TEST_F(TensorVulkanRuntime, DispatchesAboveTheDeviceGroupLimitCoverEveryElement) {
+        // Catches a dispatch that asserts or truncates when ceil(count / 256) exceeds
+        // maxComputeWorkGroupCount[0] (65535 on lavapipe): fill, pointwise and convert
+        // must iterate grid-stride instead. Skips on devices whose limit is not reachable.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const uint64_t limit = internal::vulkan_device_caps_for_testing().max_workgroup_count[0];
+        constexpr size_t count = 20'000'003;
+        if ((count + 255) / 256 <= limit) {
+            GTEST_SKIP() << "device group limit " << limit << " is above the test size";
+        }
+        const Tensor ones = Tensor::ones({count}, Device::CUDA);
+        const Tensor twos = ones + 1.0f;
+        const Tensor ints = twos.to(DataType::Int32);
+        const auto values = ints.to_vector_int();
+        ASSERT_EQ(values.size(), count);
+        EXPECT_EQ(values.front(), 2);
+        EXPECT_EQ(values[count / 2], 2);
+        EXPECT_EQ(values.back(), 2);
+        EXPECT_EQ(std::count(values.begin(), values.end(), 2), static_cast<ptrdiff_t>(count));
     }
 
     TEST_F(TensorVulkanRuntime, CrossThreadWriteAfterWriteFollowsProgramOrder) {

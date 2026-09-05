@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -39,9 +40,10 @@ namespace lfs::core::internal {
                 return 0;
             }
             const uint64_t groups = (work + kLocalSize - 1) / kLocalSize;
-            LFS_ASSERT_MSG(groups <= context.caps().max_workgroup_count[0],
-                           "Vulkan pointwise dispatch exceeds maxComputeWorkGroupCount[0]");
-            return static_cast<uint32_t>(groups);
+            // Kernels iterate grid-stride over NumWorkgroups, so a count above the
+            // device's group limit (65535 on lavapipe) is covered by fewer groups.
+            return static_cast<uint32_t>(
+                std::min<uint64_t>(groups, context.caps().max_workgroup_count[0]));
         }
 
         uint64_t scalar_integer(const ScalarOperand scalar) {
@@ -123,32 +125,44 @@ namespace lfs::core::internal {
             const VulkanPipeline& pipeline = context->pipelines().specialized(
                 native_half ? "pointwise_half" : "pointwise",
                 sizeof(PointwisePush), constants);
-            const PointwisePush push{
-                .lhs_address = lhs_address,
-                .rhs_address = rhs_address,
-                .output_address = output_address,
-                .scalar_int64 = scalar_integer(program.scalar),
-                .scalar_float = scalar_float(program.scalar),
-                .count = checked_u32(count, "Vulkan pointwise count exceeds uint32"),
-                .scalar_kind = static_cast<uint32_t>(program.scalar.kind),
-                .flags = program.scalar.scalar_on_right ? 1u : 0u,
-            };
+            // The kernel maps one invocation to one element (or one float4 group), so
+            // a count above the device's group limit is dispatched in chunks with the
+            // operand addresses advanced per chunk. Chunk boundaries are multiples of
+            // four elements and of four bytes for every dtype.
+            const uint64_t chunk_elements =
+                static_cast<uint64_t>(context->caps().max_workgroup_count[0]) * kLocalSize *
+                (vectorized ? 4u : 1u);
+            const size_t in_bytes = dtype_size(program.in_dtype);
+            const size_t out_bytes = dtype_size(program.out_dtype);
             std::array<StorageRef, 2> reads{lhs, rhs};
             const size_t read_count = arity == 2 ? 2 : 1;
             const std::array writes{output};
-            context->recorders().record(
-                std::span<const StorageRef>(reads.data(), read_count), writes,
-                [&](const VkCommandBuffer command) {
-                    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                      pipeline.pipeline);
-                    vkCmdPushConstants(command, pipeline.layout,
-                                       VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                       sizeof(push), &push);
-                    vkCmdDispatch(command,
-                                  dispatch_groups(*context,
-                                                  vectorized ? count / 4 : count),
-                                  1, 1);
-                });
+            for (size_t offset = 0; offset < count; offset += chunk_elements) {
+                const size_t chunk = std::min<size_t>(count - offset, chunk_elements);
+                const PointwisePush push{
+                    .lhs_address = lhs_address + offset * in_bytes,
+                    .rhs_address = arity == 2 ? rhs_address + offset * in_bytes : rhs_address,
+                    .output_address = output_address + offset * out_bytes,
+                    .scalar_int64 = scalar_integer(program.scalar),
+                    .scalar_float = scalar_float(program.scalar),
+                    .count = checked_u32(chunk, "Vulkan pointwise count exceeds uint32"),
+                    .scalar_kind = static_cast<uint32_t>(program.scalar.kind),
+                    .flags = program.scalar.scalar_on_right ? 1u : 0u,
+                };
+                context->recorders().record(
+                    std::span<const StorageRef>(reads.data(), read_count), writes,
+                    [&](const VkCommandBuffer command) {
+                        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                          pipeline.pipeline);
+                        vkCmdPushConstants(command, pipeline.layout,
+                                           VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                           sizeof(push), &push);
+                        vkCmdDispatch(command,
+                                      dispatch_groups(*context,
+                                                      vectorized ? chunk / 4 : chunk),
+                                      1, 1);
+                    });
+            }
         }
 
         struct BroadcastPush {
@@ -315,6 +329,7 @@ namespace lfs::core::internal {
     void VulkanBackendOps::unary(const PointwiseProgram& program,
                                  const StorageRef input, const StorageRef output,
                                  const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(unary);
         dispatch_pointwise(program, input, {}, output, count, 1);
     }
 
@@ -322,12 +337,14 @@ namespace lfs::core::internal {
                                   const StorageRef lhs, const StorageRef rhs,
                                   const StorageRef output, const size_t count,
                                   ExecContext) {
+        LFS_FACADE_TRACE(binary);
         dispatch_pointwise(program, lhs, rhs, output, count, 2);
     }
 
     void VulkanBackendOps::scalar(const PointwiseProgram& program,
                                   const StorageRef input, const StorageRef output,
                                   const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(scalar);
         dispatch_pointwise(program, input, {}, output, count, 3);
     }
 
@@ -337,6 +354,7 @@ namespace lfs::core::internal {
         const StorageRef rhs, const StridedLayout& rhs_layout,
         const StorageRef output, const StridedLayout& output_layout,
         ExecContext) {
+        LFS_FACADE_TRACE(broadcast_binary);
         if (output_layout.element_count == 0) {
             return;
         }
@@ -381,7 +399,9 @@ namespace lfs::core::internal {
 
     void VulkanBackendOps::fused_pointwise_chain(
         const StorageRef input, const StorageRef output, const size_t count,
-        const tensor_ops::FusedPointwiseOpChain& chain, ExecContext) {
+        const tensor_ops::FusedPointwiseOpChain& chain,
+        const std::span<const StorageRef> rhs_storages, ExecContext) {
+        LFS_FACADE_TRACE(fused_pointwise_chain);
         if (count == 0) {
             return;
         }
@@ -409,30 +429,43 @@ namespace lfs::core::internal {
         const std::array constants{0u, 0u, 0u, 4u, 0u, 0u};
         const VulkanPipeline& pipeline =
             context->pipelines().specialized("pointwise", sizeof(PointwisePush), constants);
-        const PointwisePush push{
-            .lhs_address = address(input),
-            .rhs_address = address(metadata),
-            .output_address = address(output),
-            .count = checked_u32(count, "Vulkan fused pointwise count exceeds uint32"),
-            .scalar_kind = static_cast<uint32_t>(chain.num_ops),
-        };
-        const std::array reads{input, metadata};
+        // Every rhs operand is listed as a read so the recorder flushes its producer
+        // and stamps its last use; the chain descriptor only carries its address.
+        // Tensor rhs operands are indexed by the element's global index in the shader,
+        // so the chain is dispatched in chunks with the input and output advanced but
+        // the descriptor table unchanged; rhs addresses are absolute per element.
+        std::vector<StorageRef> reads{input, metadata};
+        reads.insert(reads.end(), rhs_storages.begin(), rhs_storages.end());
         const std::array writes{output};
-        context->recorders().record(
-            reads, writes, [&](const VkCommandBuffer command) {
-                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                  pipeline.pipeline);
-                vkCmdPushConstants(command, pipeline.layout,
-                                   VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                   sizeof(push), &push);
-                vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
-            });
+        const uint64_t chunk_elements =
+            static_cast<uint64_t>(context->caps().max_workgroup_count[0]) * kLocalSize;
+        for (size_t offset = 0; offset < count; offset += chunk_elements) {
+            const size_t chunk = std::min<size_t>(count - offset, chunk_elements);
+            const PointwisePush push{
+                .lhs_address = address(input) + offset * sizeof(float),
+                .rhs_address = address(metadata),
+                .output_address = address(output) + offset * sizeof(float),
+                .count = checked_u32(chunk, "Vulkan fused pointwise count exceeds uint32"),
+                .scalar_kind = static_cast<uint32_t>(chain.num_ops),
+                .flags = checked_u32(offset, "Vulkan fused pointwise offset exceeds uint32"),
+            };
+            context->recorders().record(
+                reads, writes, [&](const VkCommandBuffer command) {
+                    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                      pipeline.pipeline);
+                    vkCmdPushConstants(command, pipeline.layout,
+                                       VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                       sizeof(push), &push);
+                    vkCmdDispatch(command, dispatch_groups(*context, chunk), 1, 1);
+                });
+        }
         context->memory().deallocate(metadata);
     }
 
     void VulkanBackendOps::clamp_scalar(
         const StorageRef data, const ScalarOperand minimum,
         const ScalarOperand maximum, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(clamp_scalar);
         clamp_fused(data, data, minimum, maximum, count, {});
     }
 
@@ -440,6 +473,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output,
         const ScalarOperand minimum, const ScalarOperand maximum,
         const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(clamp_fused);
         if (count == 0) {
             return;
         }
@@ -475,6 +509,7 @@ namespace lfs::core::internal {
     void VulkanBackendOps::clamp_scalar_int(
         const StorageRef data, const ScalarOperand minimum,
         const ScalarOperand maximum, const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(clamp_scalar_int);
         if (count == 0) {
             return;
         }
@@ -511,6 +546,7 @@ namespace lfs::core::internal {
     void VulkanBackendOps::convert_type(const StorageRef input,
                                         const StorageRef output,
                                         const size_t count, ExecContext) {
+        LFS_FACADE_TRACE(convert_type);
         if (count == 0) {
             return;
         }
@@ -542,11 +578,13 @@ namespace lfs::core::internal {
     void VulkanBackendOps::fill_strided(const StorageRef output,
                                         const StridedLayout& layout,
                                         const ScalarOperand value, ExecContext) {
+        LFS_FACADE_TRACE(fill_strided);
         dispatch_fill(output, layout, value);
     }
 
     void VulkanBackendOps::load_fill(const StorageRef output, const size_t count,
                                      const ScalarOperand value, ExecContext) {
+        LFS_FACADE_TRACE(load_fill);
         StridedLayout layout{};
         layout.rank = 1;
         layout.dims[0] = count;

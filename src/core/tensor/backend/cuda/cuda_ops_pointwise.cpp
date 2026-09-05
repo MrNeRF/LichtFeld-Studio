@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 #include "../pointwise_lowering.hpp"
 
@@ -355,6 +356,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::unary(const PointwiseProgram& program,
                                const StorageRef input, const StorageRef output,
                                const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(unary);
         validate_program(program, input, output);
         switch (program.op) {
 #define LFS_UNARY_SAME_CASE(Id, Functor)                                      \
@@ -485,6 +487,7 @@ namespace lfs::core::internal {
                                 const StorageRef lhs, const StorageRef rhs,
                                 const StorageRef output, const size_t count,
                                 const ExecContext context) {
+        LFS_FACADE_TRACE(binary);
         validate_program(program, lhs, output);
         LFS_ASSERT_MSG(rhs.dtype == program.in_dtype,
                        "binary pointwise rhs dtype does not match program");
@@ -542,6 +545,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::scalar(const PointwiseProgram& program,
                                 const StorageRef input, const StorageRef output,
                                 const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(scalar);
         validate_program(program, input, output);
         switch (program.op) {
         case PointwiseOp::AddTensor:
@@ -571,6 +575,7 @@ namespace lfs::core::internal {
         const StorageRef rhs, const StridedLayout& rhs_layout,
         const StorageRef output, const StridedLayout& output_layout,
         const ExecContext context) {
+        LFS_FACADE_TRACE(broadcast_binary);
         validate_program(program, lhs, output);
         LFS_ASSERT_MSG(rhs.dtype == program.in_dtype,
                        "broadcast rhs dtype does not match pointwise program");
@@ -638,7 +643,9 @@ namespace lfs::core::internal {
     void CudaBackendOps::fused_pointwise_chain(
         const StorageRef input, const StorageRef output, const size_t count,
         const tensor_ops::FusedPointwiseOpChain& chain,
+        std::span<const StorageRef>,
         const ExecContext context) {
+        LFS_FACADE_TRACE(fused_pointwise_chain);
         LFS_ASSERT_MSG(input.dtype == DataType::Float32 &&
                            output.dtype == DataType::Float32,
                        "fused pointwise chain supports only Float32");
@@ -651,6 +658,7 @@ namespace lfs::core::internal {
         const StorageRef data, const ScalarOperand minimum,
         const ScalarOperand maximum, const size_t count,
         const ExecContext context) {
+        LFS_FACADE_TRACE(clamp_scalar);
         LFS_ASSERT_MSG(data.dtype == DataType::Float32 &&
                            minimum.kind == ScalarKind::Float &&
                            maximum.kind == ScalarKind::Float,
@@ -664,6 +672,7 @@ namespace lfs::core::internal {
         const StorageRef input, const StorageRef output,
         const ScalarOperand minimum, const ScalarOperand maximum,
         const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(clamp_fused);
         LFS_ASSERT_MSG(input.dtype == DataType::Float32 &&
                            output.dtype == DataType::Float32 &&
                            minimum.kind == ScalarKind::Float &&
@@ -679,6 +688,7 @@ namespace lfs::core::internal {
         const StorageRef data, const ScalarOperand minimum,
         const ScalarOperand maximum, const size_t count,
         const ExecContext context) {
+        LFS_FACADE_TRACE(clamp_scalar_int);
         LFS_ASSERT_MSG(data.dtype == DataType::Int32 &&
                            minimum.kind == ScalarKind::Int32 &&
                            maximum.kind == ScalarKind::Int32,
@@ -691,6 +701,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::convert_type(
         const StorageRef input, const StorageRef output,
         const size_t count, const ExecContext context) {
+        LFS_FACADE_TRACE(convert_type);
         switch (input.dtype) {
         case DataType::Float32:
             switch (output.dtype) {
@@ -754,6 +765,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::fill_strided(
         const StorageRef output, const StridedLayout& layout,
         const ScalarOperand value, const ExecContext context) {
+        LFS_FACADE_TRACE(fill_strided);
         LFS_ASSERT_MSG(layout.rank <= MAX_TENSOR_RANK,
                        "strided fill rank exceeds MAX_TENSOR_RANK");
         switch (output.dtype) {
@@ -782,6 +794,7 @@ namespace lfs::core::internal {
     void CudaBackendOps::load_fill(
         const StorageRef output, const size_t count,
         const ScalarOperand value, const ExecContext context) {
+        LFS_FACADE_TRACE(load_fill);
         LFS_ASSERT_MSG(output.dtype == DataType::Float32 &&
                            value.kind == ScalarKind::Float,
                        "CUDA load fill supports only Float32");

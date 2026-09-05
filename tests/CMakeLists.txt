@@ -521,6 +521,7 @@ set(TEST_FILES
     test_tensor_storage_version.cpp
     test_tensor_backend_selection.cpp
     test_tensor_seam_regressions.cpp
+    test_tensor_backend_validators.cpp
     test_tensor_backend_facade.cpp
     test_tensor_backend_facade_c.cpp
     test_modal_registry_regression.cpp
