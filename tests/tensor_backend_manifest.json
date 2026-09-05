@@ -4998,7 +4998,7 @@
       "fused_pointwise_chain": 1,
       "fused_segmented_transform_reduce": 1,
       "load_fill": 4,
-      "service_allocate": 2498,
+      "service_allocate": 2501,
       "service_copy_device_to_device": 396,
       "service_copy_device_to_host": 397,
       "service_copy_host_to_device": 802,
@@ -6049,7 +6049,7 @@
     ],
     "launchers_source": "measured",
     "entries": {
-      "service_allocate": 21,
+      "service_allocate": 20,
       "service_copy_device_to_device": 1,
       "service_copy_device_to_host": 3,
       "service_copy_host_to_device": 2,
@@ -6761,10 +6761,12 @@
     "line": 116,
     "eligibility": "cuda-only",
     "reason": "tests/test_cuda_event_pool.cpp:22: raw CUDA operation on tensor storage or CUDA-only fixture",
-    "launchers": [
-      "launch_fill_strided"
-    ],
-    "launchers_source": "inferred",
+    "launchers": [],
+    "launchers_source": "measured",
+    "entries": {
+      "service_allocate": 8,
+      "service_copy_host_to_device": 8
+    },
     "skip_allowlisted": false
   },
   {
@@ -26471,7 +26473,7 @@
       "fused_segmented_transform_reduce": 2,
       "index_select": 13,
       "load_fill": 4,
-      "service_allocate": 2582,
+      "service_allocate": 2579,
       "service_copy_device_to_device": 404,
       "service_copy_device_to_host": 406,
       "service_copy_host_to_device": 792,
@@ -33391,7 +33393,7 @@
       "fused_pointwise_chain": 1,
       "fused_segmented_transform_reduce": 1,
       "load_fill": 2,
-      "service_allocate": 1236,
+      "service_allocate": 1234,
       "service_copy_device_to_device": 197,
       "service_copy_device_to_host": 203,
       "service_copy_host_to_device": 395,
@@ -33433,7 +33435,7 @@
       "fused_pointwise_chain": 1,
       "fused_segmented_transform_reduce": 1,
       "load_fill": 2,
-      "service_allocate": 1626,
+      "service_allocate": 1629,
       "service_copy_device_to_device": 197,
       "service_copy_device_to_host": 397,
       "service_copy_host_to_device": 788,
@@ -33551,7 +33553,7 @@
       "fused_pointwise_chain": 1,
       "fused_segmented_transform_reduce": 1,
       "load_fill": 6,
-      "service_allocate": 2154,
+      "service_allocate": 2151,
       "service_copy_device_to_device": 202,
       "service_copy_device_to_host": 604,
       "service_copy_host_to_device": 1212,
@@ -33608,7 +33610,7 @@
       "load_fill": 2,
       "nonzero_bool": 1,
       "reduce": 1,
-      "service_allocate": 1277,
+      "service_allocate": 1280,
       "service_copy_device_to_device": 214,
       "service_copy_device_to_host": 219,
       "service_copy_host_to_device": 397,
@@ -67198,18 +67200,19 @@
     "line": 357,
     "eligibility": "vulkan",
     "launchers": [
-      "launch_reduce_op",
-      "launch_column_reduce",
-      "launch_strided_reduce_fast",
-      "launch_fused_transform_reduce",
-      "launch_fused_segmented_transform_reduce",
       "launch_cumsum",
-      "launch_strided_copy",
-      "launch_strided_copy_immediate",
-      "launch_strided_upload",
-      "launch_convert_type"
+      "launch_reduce_op"
     ],
-    "launchers_source": "inferred",
+    "launchers_source": "measured",
+    "entries": {
+      "cumsum": 2,
+      "reduce": 3,
+      "service_allocate": 9,
+      "service_copy_device_to_device": 2,
+      "service_copy_device_to_host": 5,
+      "service_copy_host_to_device": 4,
+      "service_synchronize_stream": 9
+    },
     "skip_allowlisted": false
   },
   {
@@ -67376,7 +67379,7 @@
     "name": "TensorVulkanRuntime.CloneAndReservePreserveBytesAndGenerationRules",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 169,
+    "line": 178,
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
@@ -67393,7 +67396,7 @@
     "name": "TensorVulkanRuntime.CompletedDeadThreadRecordersAreReclaimed",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 324,
+    "line": 333,
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
@@ -67408,7 +67411,7 @@
     "name": "TensorVulkanRuntime.CrossThreadConsumerFlushesUnsubmittedProducer",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 278,
+    "line": 287,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67426,7 +67429,7 @@
     "name": "TensorVulkanRuntime.CrossThreadWriteAfterWriteFollowsProgramOrder",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 454,
+    "line": 463,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67445,7 +67448,7 @@
     "name": "TensorVulkanRuntime.DeviceIndexOverrideAndCapsAreExposed",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 59,
+    "line": 68,
     "eligibility": "not-tensor",
     "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
@@ -67457,7 +67460,7 @@
     "name": "TensorVulkanRuntime.DispatchesAboveTheDeviceGroupLimitCoverEveryElement",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 433,
+    "line": 442,
     "eligibility": "no-gpu-work",
     "launchers": [],
     "launchers_source": "measured",
@@ -67466,10 +67469,22 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanRuntime.EmbeddedShadersCarryTheFloatControlsContract",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 534,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "launchers_source": "measured",
+    "entries": {},
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanRuntime.EmptyCreatesNativeVulkanStorageDescriptor",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 41,
+    "line": 50,
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
@@ -67482,7 +67497,7 @@
     "name": "TensorVulkanRuntime.EnvironmentSelectsVulkanForPublicFactories",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 506,
+    "line": 515,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67500,9 +67515,9 @@
     "name": "TensorVulkanRuntime.ExplicitCrossBackendCopyIsBitExactBothWays",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 230,
+    "line": 239,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_vulkan_runtime.cpp:253: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "reason": "tests/test_tensor_vulkan_runtime.cpp:262: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {
@@ -67515,10 +67530,47 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanRuntime.HalfConversionsMatchCudaBitForBitOnEverySpecialValue",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 575,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_convert_type"
+    ],
+    "launchers_source": "measured",
+    "entries": {
+      "convert_type": 4,
+      "service_allocate": 6,
+      "service_copy_device_to_host": 2,
+      "service_copy_host_to_device": 2,
+      "service_synchronize_stream": 4
+    },
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.InjectedDeviceLossRaisesTypedErrorsAndShutsDownCleanly",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 614,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_load_op"
+    ],
+    "launchers_source": "measured",
+    "entries": {
+      "load_fill": 2,
+      "service_allocate": 2,
+      "sum_scalar": 2
+    },
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanRuntime.MixedBackendOperandsFailAtTheFacade",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 257,
+    "line": 266,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67534,7 +67586,7 @@
     "name": "TensorVulkanRuntime.OddOffsetViewsAreZeroedWithoutUnalignedFillCommands",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 400,
+    "line": 409,
     "eligibility": "vulkan",
     "launchers": [
       "launch_convert_type"
@@ -67554,7 +67606,7 @@
     "name": "TensorVulkanRuntime.RecorderProtectsReadAllocationsUntilTimelineCompletion",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 203,
+    "line": 212,
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
@@ -67570,7 +67622,7 @@
     "name": "TensorVulkanRuntime.RetiredTierAllocationIsReusedAfterTimelineCompletion",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 189,
+    "line": 198,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67588,7 +67640,7 @@
     "name": "TensorVulkanRuntime.ShutdownDropsLiveContextAndReinitializes",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 363,
+    "line": 372,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67606,7 +67658,7 @@
     "name": "TensorVulkanRuntime.ShutdownWaitsForAutoSubmittedCommands",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 344,
+    "line": 353,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67623,7 +67675,7 @@
     "name": "TensorVulkanRuntime.StagingRingWrapWaitsBeforeReusingSlices",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 111,
+    "line": 120,
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
@@ -67638,7 +67690,7 @@
     "name": "TensorVulkanRuntime.SurvivorOfShutdownAndReinitIsReleasedAsNoOp",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 379,
+    "line": 388,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67656,7 +67708,7 @@
     "name": "TensorVulkanRuntime.ThreadExitFlushesItsOpenRecorder",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 313,
+    "line": 322,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -67671,10 +67723,42 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanRuntime.ThreadsWithPendingWorkExitCleanlyAfterDeviceLoss",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 646,
+    "eligibility": "vulkan",
+    "launchers": [],
+    "launchers_source": "measured",
+    "entries": {
+      "service_allocate": 1,
+      "service_memset": 1
+    },
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRuntime.TrimReleasesFreeVulkanBlocksOfBothKinds",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_runtime.cpp",
+    "line": 666,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_load_op"
+    ],
+    "launchers_source": "measured",
+    "entries": {
+      "load_fill": 7,
+      "service_allocate": 7,
+      "sum_scalar": 7
+    },
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanRuntime.UploadAndDownloadAreBitExactForEveryDtypeAndBoundarySize",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 84,
+    "line": 93,
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
@@ -67690,7 +67774,7 @@
     "name": "TensorVulkanRuntime.ViewsShareDescriptorAndDownloadInLogicalOrder",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 143,
+    "line": 152,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -67711,7 +67795,7 @@
     "name": "TensorVulkanRuntime.ZeroOneAndFullUseTransferAndFillPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
-    "line": 122,
+    "line": 131,
     "eligibility": "vulkan",
     "launchers": [
       "launch_load_op"
@@ -75866,11 +75950,11 @@
     "launchers": [],
     "launchers_source": "measured",
     "entries": {
-      "service_allocate": 21,
+      "service_allocate": 27,
       "service_copy_device_to_host": 17,
-      "service_copy_host_to_device": 3,
+      "service_copy_host_to_device": 9,
       "service_memset": 18,
-      "service_synchronize_stream": 3
+      "service_synchronize_stream": 4
     },
     "skip_allowlisted": false
   },
@@ -77442,11 +77526,11 @@
     "launchers_source": "measured",
     "entries": {
       "load_fill": 2,
-      "service_allocate": 118,
+      "service_allocate": 124,
       "service_copy_device_to_device": 24,
       "service_copy_device_to_host": 18,
       "service_copy_host_to_device": 26,
-      "service_memset": 56,
+      "service_memset": 64,
       "service_synchronize_stream": 19,
       "strided_copy_immediate": 1
     },
