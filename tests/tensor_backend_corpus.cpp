@@ -922,15 +922,18 @@ namespace {
             return 0.0;
         };
         // Evaluate the empirical CDF once per distinct value, on both sides of the
-        // step, so ties in discrete outputs do not inflate the statistic.
+        // step, so ties in discrete outputs do not inflate the statistic. The left
+        // side compares against the theoretical CDF just below the value, which for
+        // a discrete distribution is the CDF of the previous atom.
         double ks = 0.0;
         for (size_t i = 0; i < values.size();) {
             size_t j = i;
             while (j < values.size() && values[j] == values[i])
                 ++j;
             const double cdf = theoretical_cdf(values[i]);
+            const double cdf_below = i == 0 ? 0.0 : theoretical_cdf(values[i - 1]);
             ks = std::max(ks, std::abs(static_cast<double>(j) / values.size() - cdf));
-            ks = std::max(ks, std::abs(static_cast<double>(i) / values.size() - cdf));
+            ks = std::max(ks, std::abs(static_cast<double>(i) / values.size() - cdf_below));
             i = j;
         }
         auto min_it = &minimum;
@@ -1441,15 +1444,33 @@ namespace {
                     const auto position = line.find(key);
                     return position == std::string::npos ? 0.0 : std::stod(line.substr(position + std::strlen(key)));
                 };
+                // Two generators only agree in distribution: the candidate must pass
+                // the Kolmogorov test against the theoretical distribution at its
+                // sample size (1% level), and the moments must match the reference
+                // once the sample is large enough for them to be stable.
+                size_t samples = 1;
+                for (const Profile& candidate_profile : kProfiles) {
+                    if (profile.starts_with(candidate_profile.name))
+                        samples = candidate_profile.rows * candidate_profile.cols;
+                }
+                const double ks_b = parse(lines[i], "ks=");
+                const double ks_critical = 1.63 / std::sqrt(static_cast<double>(samples));
                 const double mean_a = parse(reference_lines[i], "mean=");
                 const double mean_b = parse(lines[i], "mean=");
                 const double var_a = parse(reference_lines[i], "var=");
                 const double var_b = parse(lines[i], "var=");
-                if (std::abs(mean_a - mean_b) <= 0.02 * std::max(1.0, std::abs(mean_a)) &&
-                    std::abs(var_a - var_b) <= 0.05 * std::max(1.0, var_a)) {
+                // Five standard errors of the sample mean and of the sample variance.
+                const double count = static_cast<double>(samples);
+                const double mean_bound = 5.0 * std::sqrt(std::max(var_a, 1e-12) / count) + 1e-9;
+                const double variance_bound = 5.0 * var_a * std::sqrt(2.0 / count) + 1e-9;
+                const bool moments_ok =
+                    samples < 1000 ||
+                    (std::abs(mean_a - mean_b) <= mean_bound && std::abs(var_a - var_b) <= variance_bound);
+                if (ks_b <= ks_critical && moments_ok) {
                     ++within;
                 } else {
-                    std::cerr << "row " << i << " statistics differ: " << lines[i] << " vs " << reference_lines[i] << '\n';
+                    std::cerr << "row " << i << " statistics differ (ks " << ks_b << " critical "
+                              << ks_critical << "): " << lines[i] << " vs " << reference_lines[i] << '\n';
                     ++failures;
                 }
             } else {

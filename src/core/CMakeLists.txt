@@ -76,13 +76,15 @@ if(LFS_TENSOR_VULKAN)
         tensor/backend/vulkan/vk_memory.cpp
         tensor/backend/vulkan/vk_recorder.cpp
         tensor/backend/vulkan/vk_pipelines.cpp
-        tensor/backend/vulkan/vk_backend_ops.cpp
         tensor/backend/vulkan/vk_ops_pointwise.cpp
         tensor/backend/vulkan/vk_ops_movement.cpp
         tensor/backend/vulkan/vk_ops_reduce.cpp
         tensor/backend/vulkan/vk_ops_index.cpp
         tensor/backend/vulkan/vk_ops_mask.cpp
         tensor/backend/vulkan/vk_ops_sort.cpp
+        tensor/backend/vulkan/vk_ops_matrix.cpp
+        tensor/backend/vulkan/vk_ops_nn.cpp
+        tensor/backend/vulkan/vk_ops_random.cpp
         tensor/backend/vulkan/vk_services.cpp
     )
 endif()
