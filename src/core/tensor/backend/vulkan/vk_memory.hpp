@@ -65,7 +65,7 @@ namespace lfs::core::internal {
         void create_pool();
         [[nodiscard]] StorageRef allocate_storage(size_t bytes, size_t alignment,
                                                   bool host_visible,
-                                                  bool direct_class);
+                                                  const ExecContext& context);
         void ensure_staging(size_t bytes);
         [[nodiscard]] StagingSlice acquire_staging(size_t bytes, size_t alignment);
         void collect_retired_locked(uint64_t completed);

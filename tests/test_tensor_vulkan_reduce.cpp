@@ -354,6 +354,61 @@ namespace {
         }
     }
 
+    TEST_F(TensorVulkanReduce, Int32SumsCarryPastThirtyTwoBitsOnEveryPath) {
+        // Catches a segmented, strided or split-partial path that keeps Int32
+        // partials in 32 bits (each line sums to about 7.8e9, past both the
+        // signed and the unsigned 32-bit range), and a cumsum that widens or
+        // saturates instead of wrapping like the CUDA kernel.
+        constexpr size_t lines = 6;
+        constexpr size_t length = 4096;
+        std::vector<int> values(lines * length);
+        for (size_t i = 0; i < values.size(); ++i) {
+            values[i] = 1500000 + static_cast<int>(i % 101) * 7919;
+        }
+        std::vector<int64_t> line_sums(lines, 0);
+        for (size_t i = 0; i < values.size(); ++i) {
+            line_sums[i / length] += values[i];
+        }
+        ASSERT_GT(line_sums[0], int64_t{1} << 32);
+        const auto expect_int64 = [&](const Tensor& actual, const std::vector<int64_t>& expected,
+                                      const char* label) {
+            ASSERT_EQ(actual.dtype(), DataType::Int64) << label;
+            const Tensor host = actual.cpu();
+            ASSERT_EQ(host.numel(), expected.size()) << label;
+            const int64_t* data = host.ptr<int64_t>();
+            for (size_t i = 0; i < expected.size(); ++i) {
+                EXPECT_EQ(data[i], expected[i]) << label << " index=" << i;
+            }
+        };
+        const Tensor by_rows = upload_vulkan(Tensor::from_vector(values, {lines, length}, Device::CPU));
+        expect_int64(by_rows.sum(1), line_sums, "segmented int32 sum(1)");
+        const Tensor by_columns = upload_vulkan(
+            Tensor::from_vector(values, {lines, length}, Device::CPU).transpose(0, 1).contiguous());
+        expect_int64(by_columns.sum(0), line_sums, "strided int32 sum(0)");
+        int64_t total = 0;
+        for (const int64_t line : line_sums) {
+            total += line;
+        }
+        EXPECT_EQ(by_rows.sum().item<int64_t>(), total);
+
+        for (const size_t scan_length : {size_t{5}, size_t{100}}) {
+            std::vector<int> scan_values(3 * scan_length, 1000000000);
+            const Tensor scanned =
+                upload_vulkan(Tensor::from_vector(scan_values, {3, scan_length}, Device::CPU)).cumsum(1);
+            ASSERT_EQ(scanned.dtype(), DataType::Int32);
+            const Tensor host = scanned.cpu();
+            const int* data = host.ptr<int>();
+            for (size_t line = 0; line < 3; ++line) {
+                uint32_t running = 0;
+                for (size_t i = 0; i < scan_length; ++i) {
+                    running += 1000000000u;
+                    EXPECT_EQ(data[line * scan_length + i], static_cast<int>(running))
+                        << "length " << scan_length << " line " << line << " index " << i;
+                }
+            }
+        }
+    }
+
     TEST_F(TensorVulkanReduce, MaxAndMinFollowTheCudaNaNAndSignedZeroPolicy) {
         // Catches a max that uses the plain comparison, which loses NaN and
         // returns the wrong zero sign.

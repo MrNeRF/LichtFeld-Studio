@@ -808,7 +808,10 @@ def generated_files(trace_path: Path | None = None) -> tuple[dict[Path, bytes], 
                 record["launchers"] = measured
                 record["launchers_source"] = "measured"
                 record["entries"] = dict(sorted(trace[name].items()))
-                if not measured and record["eligibility"] == "vulkan":
+                moved_storage = any(
+                    count for entry_name, count in trace[name].items()
+                    if entry_name.startswith("service_"))
+                if not measured and not moved_storage and record["eligibility"] == "vulkan":
                     record["eligibility"] = "no-gpu-work"
                     record["reason"] = "measured: no facade entry executed"
             record["skip_allowlisted"] = name in allowlist

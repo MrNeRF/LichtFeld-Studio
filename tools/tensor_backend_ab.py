@@ -23,6 +23,35 @@ def read_timing(path: Path) -> dict[str, float]:
     return rows
 
 
+def check_clocks(path: Path, minimum_sm_mhz: float) -> bool:
+    """Every sample after the first (taken before the GPU ramps up) must stay at or above the floor."""
+    samples = []
+    for line in path.read_text().splitlines()[1:]:
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 4:
+            continue
+        match = re.match(r"(\d+)", parts[1])
+        if match is None:
+            continue
+        samples.append((parts[0], float(match.group(1)), parts[3]))
+    if len(samples) < 2:
+        print(f"clock log {path} has {len(samples)} samples; cannot judge the GPU state",
+              file=sys.stderr)
+        return False
+    body = samples[1:]
+    low = [sample for sample in body if sample[1] < minimum_sm_mhz]
+    clocks = sorted(sample[1] for sample in body)
+    states = sorted({sample[0] for sample in body})
+    print(f"GPU clock log: {len(samples)} samples, SM clock min {clocks[0]:.0f} median "
+          f"{clocks[len(clocks) // 2]:.0f} max {clocks[-1]:.0f} MHz, pstates {' '.join(states)}, "
+          f"temperature {min(int(s[2]) for s in body)} to {max(int(s[2]) for s in body)} C")
+    if low:
+        print(f"{len(low)} samples below {minimum_sm_mhz:.0f} MHz after the first: the box was "
+              "not in its measurement state; rerun", file=sys.stderr)
+        return False
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
@@ -34,7 +63,15 @@ def main() -> int:
                         help="regex over the row key; matching rows are reported but do not "
                              "count toward the verdict (rows whose timed work differs "
                              "between the two harness sources)")
+    parser.add_argument("--clocks", type=Path, default=None,
+                        help="nvidia-smi --query-gpu=pstate,clocks.sm,clocks.mem,temperature.gpu "
+                             "CSV sampled during the run; the run is rejected when any sample "
+                             "after the first reports an SM clock below --min-sm-mhz")
+    parser.add_argument("--min-sm-mhz", type=float, default=2400.0)
     args = parser.parse_args()
+
+    if args.clocks is not None and not check_clocks(args.clocks, args.min_sm_mhz):
+        return 2
 
     references = []
     candidates = []

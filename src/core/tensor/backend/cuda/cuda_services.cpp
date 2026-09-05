@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
 #include "../../internal/cuda_event_pool.hpp"
@@ -148,6 +149,7 @@ namespace lfs::core {
 
         StorageRef CudaBackendOps::allocate(
             const size_t bytes, const size_t alignment, const ExecContext context) {
+            LFS_FACADE_TRACE(service_allocate);
             LFS_ASSERT_MSG(alignment == 0 || (alignment & (alignment - 1)) == 0,
                            "CUDA allocation alignment must be zero or a power of two");
             (void)alignment;
@@ -239,18 +241,22 @@ namespace lfs::core {
         }
 
         void CudaBackendOps::copy_host_to_device(const CopyRequest& request) {
+            LFS_FACADE_TRACE(service_copy_host_to_device);
             copy_cuda(request, cudaMemcpyHostToDevice);
         }
 
         void CudaBackendOps::copy_device_to_host(const CopyRequest& request) {
+            LFS_FACADE_TRACE(service_copy_device_to_host);
             copy_cuda(request, cudaMemcpyDeviceToHost);
         }
 
         void CudaBackendOps::copy_device_to_device(const CopyRequest& request) {
+            LFS_FACADE_TRACE(service_copy_device_to_device);
             copy_cuda(request, cudaMemcpyDeviceToDevice);
         }
 
         void CudaBackendOps::memset(const FillRequest& request) {
+            LFS_FACADE_TRACE(service_memset);
             if (request.bytes == 0) {
                 return;
             }
@@ -276,6 +282,7 @@ namespace lfs::core {
         }
 
         void CudaBackendOps::synchronize_stream(const ExecContext context) {
+            LFS_FACADE_TRACE(service_synchronize_stream);
             LFS_CUDA_CHECK(cudaStreamSynchronize(context.cuda_stream));
         }
 

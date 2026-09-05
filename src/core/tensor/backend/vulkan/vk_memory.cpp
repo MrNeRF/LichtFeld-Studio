@@ -5,6 +5,7 @@
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
+#include "core/memory_pressure.hpp"
 #include "vk_context.hpp"
 #include "vk_recorder.hpp"
 
@@ -182,12 +183,14 @@ namespace lfs::core::internal {
 
     StorageRef VulkanMemory::allocate(const size_t bytes, const size_t alignment,
                                       const ExecContext context) {
-        return allocate_storage(bytes, alignment, false,
-                                context.allocation_class == AllocationClass::Direct);
+        return allocate_storage(bytes, alignment, false, context);
     }
 
     StorageRef VulkanMemory::allocate_readback(const size_t bytes) {
-        const StorageRef storage = allocate_storage(bytes, 16, true, false);
+        const StorageRef storage = allocate_storage(
+            bytes, 16, true,
+            ExecContext{.allocation_label = "tensor.readback",
+                        .allocation_operation = "tensor.readback"});
         std::byte* mapped = nullptr;
         {
             std::lock_guard lock(allocations_mutex_);
@@ -234,7 +237,8 @@ namespace lfs::core::internal {
 
     StorageRef VulkanMemory::allocate_storage(const size_t bytes, const size_t alignment,
                                               const bool host_visible,
-                                              const bool direct_class) {
+                                              const ExecContext& context) {
+        const bool direct_class = context.allocation_class == AllocationClass::Direct;
         LFS_ASSERT_MSG(bytes > 0, "Vulkan allocation requires a non-zero byte count");
         LFS_ASSERT_MSG(alignment == 0 || (alignment & (alignment - 1)) == 0,
                        "Vulkan allocation alignment must be zero or a power of two");
@@ -290,6 +294,23 @@ namespace lfs::core::internal {
                 result = vmaCreateBuffer(
                     context_.allocator(), &buffer_info, &allocation_info,
                     &record->buffer, &record->allocation, &mapping_info);
+            }
+            if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
+                result == VK_ERROR_OUT_OF_HOST_MEMORY ||
+                result == VK_ERROR_OUT_OF_POOL_MEMORY ||
+                result == VK_ERROR_FRAGMENTED_POOL) {
+                // The same typed failure the CUDA services raise, so callers
+                // that retry or report on MemoryAllocationError see one contract.
+                throw MemoryAllocationError(AllocationFailure{
+                    .domain = MemoryDomain::VulkanDevice,
+                    .requested_bytes = bytes,
+                    .alignment = alignment,
+                    .device = 0,
+                    .stream = 0,
+                    .label = context.allocation_label,
+                    .operation = context.allocation_operation,
+                    .native_error = static_cast<long long>(result),
+                });
             }
             vk_check(&context_, result, "vmaCreateBuffer(storage)");
             if (host_visible) {

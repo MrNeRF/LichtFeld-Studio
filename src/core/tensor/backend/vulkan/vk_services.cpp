@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "../facade_trace.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -12,6 +13,7 @@ namespace lfs::core::internal {
 
     StorageRef VulkanBackendOps::allocate(const size_t bytes, const size_t alignment,
                                           const ExecContext context) {
+        LFS_FACADE_TRACE(service_allocate);
         return acquire_vulkan_context()->memory().allocate(bytes, alignment, context);
     }
 
@@ -56,22 +58,27 @@ namespace lfs::core::internal {
         StorageRef, const StridedLayout&, size_t) {}
 
     void VulkanBackendOps::copy_host_to_device(const CopyRequest& request) {
+        LFS_FACADE_TRACE(service_copy_host_to_device);
         acquire_vulkan_context()->memory().copy_host_to_device(request);
     }
 
     void VulkanBackendOps::copy_device_to_host(const CopyRequest& request) {
+        LFS_FACADE_TRACE(service_copy_device_to_host);
         acquire_vulkan_context()->memory().copy_device_to_host(request);
     }
 
     void VulkanBackendOps::copy_device_to_device(const CopyRequest& request) {
+        LFS_FACADE_TRACE(service_copy_device_to_device);
         acquire_vulkan_context()->memory().copy_device_to_device(request);
     }
 
     void VulkanBackendOps::memset(const FillRequest& request) {
+        LFS_FACADE_TRACE(service_memset);
         acquire_vulkan_context()->memory().memset(request);
     }
 
     void VulkanBackendOps::synchronize_stream(ExecContext) {
+        LFS_FACADE_TRACE(service_synchronize_stream);
         const auto context = acquire_vulkan_context();
         context->recorders().wait_all();
         context->check_fault_buffer();
