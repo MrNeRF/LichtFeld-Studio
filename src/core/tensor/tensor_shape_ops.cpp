@@ -107,6 +107,7 @@ namespace lfs::core {
                     return materialized.permute(std::span<const int>(deferred_axes));
                 },
                 std::move(deferred_inputs));
+            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source_stream);
             return deferred;
         }
@@ -226,6 +227,7 @@ namespace lfs::core {
                     return materialized.slice(std::span<const std::pair<int, int>>(deferred_ranges));
                 },
                 std::move(deferred_inputs));
+            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source_stream);
             return deferred;
         }
@@ -284,6 +286,7 @@ namespace lfs::core {
                     return materialized.slice(dim, start, end);
                 },
                 std::move(deferred_inputs));
+            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source_stream);
             return deferred;
         }

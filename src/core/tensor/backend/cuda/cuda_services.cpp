@@ -82,6 +82,20 @@ namespace lfs::core {
                                std::string("CUDA copy expects device memory for the ") + role);
             }
 
+            void prime_stream_polling(const cudaStream_t stream) {
+                // Runtime scheduling side effect, not useful work: a query on the stream
+                // keeps the following blocking copy on the CUDA runtime's active polling
+                // path. Measured on driver 580.173 (RTX 4090): the seven-element gather
+                // row, whose index validation reads seven indices back synchronously,
+                // takes 20.4 us instead of 12.8 us without it once the per-call pointer
+                // query of storage_ptr() is gone. Same mechanism as the scalar
+                // reductions in cuda_ops_reduce.cpp; re-measure before removing.
+                const cudaError_t status = cudaStreamQuery(stream);
+                if (status != cudaSuccess && status != cudaErrorNotReady) {
+                    LFS_CUDA_CHECK(status);
+                }
+            }
+
             void copy_cuda(const CopyRequest& request, const cudaMemcpyKind kind) {
                 if (request.bytes == 0) {
                     return;
@@ -102,6 +116,9 @@ namespace lfs::core {
                 }
                 void* const destination = cuda_address(request.dst);
                 const void* const source = cuda_const_address(request.src);
+                if (request.synchronous && kind == cudaMemcpyDeviceToHost) {
+                    prime_stream_polling(request.context.cuda_stream);
+                }
                 if (request.synchronous && request.context.cuda_stream == nullptr) {
                     LFS_CUDA_CHECK_MSG_ARGS(
                         cudaMemcpy(destination, source, request.bytes, kind),

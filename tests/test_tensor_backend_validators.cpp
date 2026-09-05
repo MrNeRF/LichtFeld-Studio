@@ -114,6 +114,34 @@ namespace {
         });
     }
 
+    TEST_F(TensorBackendValidators, DeferredExpressionsCarryTheBackendOfTheirLeaves) {
+        // Catches a deferred (lazy) tensor reporting the default backend before it
+        // materializes: validators then rejected a Vulkan operand against its own
+        // deferred result, and the pointwise adapter was chosen from the wrong tag.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor base = Tensor::ones({100, 100}, Device::CUDA);
+        Tensor chain = base;
+        for (int step = 0; step < 8; ++step) {
+            chain = chain.add(0.001f).mul(1.001f);
+            EXPECT_EQ(gpu_backend_of(chain), GpuBackend::Vulkan) << "step " << step;
+        }
+        const Tensor difference = chain.sub(base);
+        EXPECT_EQ(gpu_backend_of(difference), GpuBackend::Vulkan);
+        const std::vector<float> values = difference.to_vector();
+        ASSERT_EQ(values.size(), 10000u);
+        EXPECT_NEAR(values[0], 0.016064f, 1e-4f);
+        const Tensor mask = base.gt(0.5f);
+        EXPECT_EQ(gpu_backend_of(mask), GpuBackend::Vulkan);
+        const Tensor selected = base.mul(mask.to(DataType::Float32)).add(1.0f);
+        EXPECT_EQ(gpu_backend_of(selected), GpuBackend::Vulkan);
+        EXPECT_EQ(selected.to_vector(), std::vector<float>(10000, 2.0f));
+        const Tensor view = base.transpose(0, 1);
+        EXPECT_EQ(gpu_backend_of(view), GpuBackend::Vulkan);
+        Tensor target = Tensor::zeros({100, 100}, Device::CUDA);
+        target.copy_from(view);
+        EXPECT_EQ(target.to_vector(), std::vector<float>(10000, 1.0f));
+    }
+
     TEST_F(TensorBackendValidators, ProcessDefaultIsReadOnceAndInvalidValuesAreRejected) {
         // Catches the selector re-reading LFS_TENSOR_BACKEND after the first
         // resolution, and an unknown value silently mapping to CUDA.

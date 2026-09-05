@@ -539,6 +539,8 @@ namespace lfs::core {
         LFS_CORE_API void read_scalar(const Tensor& tensor, size_t element_index,
                                       void* output, size_t bytes);
         LFS_CORE_API void preserve_lazy_snapshots_before_write(Tensor& tensor);
+        inline void tag_deferred_gpu_backend(Tensor& deferred, GpuBackend backend);
+        inline GpuBackend gpu_backend_tag(const Tensor& tensor);
     } // namespace internal
 
 } // namespace lfs::core
@@ -562,6 +564,8 @@ namespace lfs::core {
                                                        const Tensor& other,
                                                        std::string_view operation);
         friend void internal::preserve_lazy_snapshots_before_write(Tensor& tensor);
+        friend void internal::tag_deferred_gpu_backend(Tensor& deferred, GpuBackend backend);
+        friend GpuBackend internal::gpu_backend_tag(const Tensor& tensor);
 
         struct TensorState {
             // Capacity management for in-place growth (like std::vector)
@@ -1142,6 +1146,7 @@ namespace lfs::core {
                         return out;
                     },
                     {lazy_expr_id(), other.lazy_expr_id()});
+                internal::tag_deferred_gpu_backend(result, internal::gpu_backend_tag(*this));
                 if (dev == Device::CUDA) {
                     result.set_stream(stream_hint);
                 }
@@ -1364,6 +1369,7 @@ namespace lfs::core {
                         return materialized.create_view(deferred_shape);
                     },
                     std::move(deferred_inputs));
+                internal::tag_deferred_gpu_backend(view, internal::gpu_backend_tag(*this));
                 view.set_stream(source_stream);
                 return view;
             }
@@ -3186,6 +3192,9 @@ namespace lfs::core {
         std::function<Tensor()> materializer;
         Tensor result;
         bool materializer_unregistered = false;
+        // The backend the materializer will allocate on, derived from the inputs;
+        // a deferred tensor has no storage yet, so validators read this instead.
+        GpuBackend backend = GpuBackend::CUDA;
     };
 
     inline uint64_t Tensor::lazy_expr_id() const {
@@ -3382,12 +3391,26 @@ namespace lfs::core {
             if (reference.device_ != Device::CUDA || other.device_ != Device::CUDA) {
                 return;
             }
-            const GpuBackend lhs = reference.storage_meta_ ? reference.storage_meta_->backend
-                                                           : GpuBackend::CUDA;
-            const GpuBackend rhs = other.storage_meta_ ? other.storage_meta_->backend
-                                                       : GpuBackend::CUDA;
-            if (lhs != rhs) {
+            if (gpu_backend_tag(reference) != gpu_backend_tag(other)) {
                 throw_gpu_backend_mismatch(reference, other, operation);
+            }
+        }
+
+        // Backend of a GPU tensor: the storage tag when storage exists, the lazy
+        // state's tag for a deferred tensor that has not materialized yet.
+        inline GpuBackend gpu_backend_tag(const Tensor& tensor) {
+            if (tensor.storage_meta_) {
+                return tensor.storage_meta_->backend;
+            }
+            if (tensor.state_ && tensor.state_->lazy) {
+                return tensor.state_->lazy->backend;
+            }
+            return GpuBackend::CUDA;
+        }
+
+        inline void tag_deferred_gpu_backend(Tensor& deferred, const GpuBackend backend) {
+            if (deferred.state_ && deferred.state_->lazy) {
+                deferred.state_->lazy->backend = backend;
             }
         }
 
@@ -3425,34 +3448,36 @@ namespace lfs::core {
             return layout;
         }
 
+        // The storage refs are taken before the adapter is chosen: a deferred
+        // input materializes inside storage_ref, and only the materialized storage
+        // carries the backend that must dispatch it.
         template <class Functor>
         inline void run_pointwise_unary(const Tensor& input, const Tensor& output,
                                         const Functor& functor,
                                         const ExecContext context) {
-            backend_ops_for(input).unary(
-                pointwise_program(input.dtype(), output.dtype(), functor),
-                storage_ref(input), storage_ref(output), output.numel(), context);
+            const StorageRef in = storage_ref(input);
+            const StorageRef out = storage_ref(output);
+            backend_ops(in.backend).unary(pointwise_program(input.dtype(), output.dtype(), functor), in, out, output.numel(), context);
         }
 
         template <class Functor>
         inline void run_pointwise_binary(const Tensor& lhs, const Tensor& rhs,
                                          const Tensor& output, const Functor& functor,
                                          const ExecContext context) {
-            backend_ops_for(lhs).binary(
-                pointwise_program(lhs.dtype(), output.dtype(), functor),
-                storage_ref(lhs), storage_ref(rhs), storage_ref(output),
-                output.numel(), context);
+            const StorageRef left = storage_ref(lhs);
+            const StorageRef right = storage_ref(rhs);
+            const StorageRef out = storage_ref(output);
+            backend_ops(left.backend).binary(pointwise_program(lhs.dtype(), output.dtype(), functor), left, right, out, output.numel(), context);
         }
 
         template <class Functor>
         inline void run_pointwise_broadcast(
             const Tensor& lhs, const Tensor& rhs, const Tensor& output,
             const Functor& functor, const ExecContext context) {
-            backend_ops_for(lhs).broadcast_binary(
-                pointwise_program(lhs.dtype(), output.dtype(), functor),
-                storage_ref(lhs), strided_layout(lhs),
-                storage_ref(rhs), strided_layout(rhs),
-                storage_ref(output), strided_layout(output), context);
+            const StorageRef left = storage_ref(lhs);
+            const StorageRef right = storage_ref(rhs);
+            const StorageRef out = storage_ref(output);
+            backend_ops(left.backend).broadcast_binary(pointwise_program(lhs.dtype(), output.dtype(), functor), left, strided_layout(lhs), right, strided_layout(rhs), out, strided_layout(output), context);
         }
 
     } // namespace internal

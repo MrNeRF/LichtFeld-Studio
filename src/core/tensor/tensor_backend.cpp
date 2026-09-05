@@ -142,7 +142,7 @@ namespace lfs::core {
         if (!tensor.is_valid() || tensor.device_ != Device::CUDA) {
             return std::nullopt;
         }
-        return tensor.storage_meta_ ? tensor.storage_meta_->backend : GpuBackend::CUDA;
+        return internal::gpu_backend_tag(tensor);
     }
 
     GpuBackendScope::GpuBackendScope(const GpuBackend backend)

@@ -380,6 +380,9 @@ namespace lfs::core {
 
     const TensorShape& TensorLeaf::shape_impl() const { return tensor_ptr_->shape(); }
     Device TensorLeaf::device_impl() const { return tensor_ptr_->device(); }
+    std::optional<GpuBackend> TensorLeaf::gpu_backend_impl() const {
+        return tensor_ptr_ ? gpu_backend_of(*tensor_ptr_) : std::nullopt;
+    }
     DataType TensorLeaf::dtype_impl() const { return tensor_ptr_->dtype(); }
     cudaStream_t TensorLeaf::stream_hint_impl() const { return tensor_ptr_ ? tensor_ptr_->stream() : nullptr; }
 
@@ -2441,6 +2444,7 @@ namespace lfs::core {
                     return lfs::core::broadcast_to(materialized, deferred_shape);
                 },
                 std::move(deferred_inputs));
+            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source.stream());
             return deferred;
         }

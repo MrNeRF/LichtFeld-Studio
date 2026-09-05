@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/ usr / bin / env python3
 """Generate the per-case tensor backend eligibility manifest."""
 
 from __future__ import annotations
@@ -25,13 +25,16 @@ OUTPUTS = {
     "tensor_hardening_tests_flags": TESTS / "tensor_backend_hardening.flags",
 }
 ALLOWLIST = TESTS / "tensor_backend_skip_allowlist.json"
-# A test whose file includes an application header reaches production code
-# outside core/tensor (loss kernels, exportable storage, rasterizer packers,
-# device-fault utilities); its GPU work is invisible to the classifier and
-# would run raw CUDA kernels on Vulkan storage, so it is excluded from G2.
+#A test whose file includes an application header reaches production code
+#outside core / tensor(loss kernels, exportable storage, rasterizer packers,
+#device - fault utilities); its GPU work is invisible to the classifier and
+#would run raw CUDA kernels on Vulkan storage, so it is excluded from G2.
 APPLICATION_INCLUDE_PREFIXES = (
     "training/", "rendering/", "visualizer/", "io/", "scene/", "python/",
-    "kernels/", "optimizer/", "project/", "loader/", "geometry/",
+    "kernels/", "optimizer/", "project/", "loader/", "geometry/", "components/",
+    # core/nn launches its own CUDA kernels on tensor storage (gemm.cu), so
+    # its tests consume tensors rather than exercise the facade.
+    "core/nn",
 )
 BINARIES = {
     "lichtfeld_tests": ROOT / "build/tests/lichtfeld_tests",
@@ -47,8 +50,8 @@ INACTIVE_SOURCE_REGISTRATIONS = {
 }
 RAW_LITERAL_RE = re.compile(r'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
 
-# Lane B section 1 supplies the launcher rows. The values are the public Tensor
-# method names from the Lane D inventory which can route to each row.
+#Lane B section 1 supplies the launcher rows.The values are the public Tensor
+#method names from the Lane D inventory which can route to each row.
 LAUNCHER_METHODS = {
     "launch_unary_op_generic": (
         "abs", "acos", "asin", "atan", "cos", "cosh", "erf", "exp", "exp2",
@@ -520,7 +523,8 @@ def shared_cuda_pointer(fragments: list[Fragment]):
 def includes_application_headers(path: Path) -> str | None:
     for line in path.read_text(errors="replace").splitlines():
         match = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
-        if match and match.group(1).startswith(APPLICATION_INCLUDE_PREFIXES):
+        if match and (match.group(1).startswith(APPLICATION_INCLUDE_PREFIXES) or
+                      "/kernels/" in match.group(1) or match.group(1).endswith(".cuh")):
             return match.group(1)
     return None
 
@@ -784,8 +788,8 @@ def generated_files(trace_path: Path | None = None) -> tuple[dict[Path, bytes], 
         OUTPUTS["manifest"]: manifest,
         OUTPUTS["lichtfeld_tests"]: filters["lichtfeld_tests"].encode(),
         OUTPUTS["tensor_hardening_tests"]: filters["tensor_hardening_tests"].encode(),
-        # gtest reads one flag per line from --gtest_flagfile; the joined filter
-        # exceeds the Windows command-line limit, the flag file does not.
+#gtest reads one flag per line from-- gtest_flagfile; the joined filter
+#exceeds the Windows command - line limit, the flag file does not .
         OUTPUTS["lichtfeld_tests_flags"]:
             ("--gtest_filter=" + filters["lichtfeld_tests"]).encode(),
         OUTPUTS["tensor_hardening_tests_flags"]:
