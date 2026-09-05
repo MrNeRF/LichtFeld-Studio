@@ -395,18 +395,12 @@ namespace lfs::core::internal {
                 }
             }
             const auto context = acquire_vulkan_context();
-            const vk::ScopedAllocation scratch_block(*context, 16);
+            const vk::ScopedAllocation scratch_block(*context, 16, true);
             const StorageRef scratch = scratch_block.storage();
             reduce_full(*context, op, input, DataType::Float32, count, scratch,
                         DataType::Float32, nullptr);
             float value = 0.0f;
-            context->memory().copy_device_to_host(CopyRequest{
-                .src = scratch,
-                .dst = raw_storage_ref(&value),
-                .bytes = sizeof(value),
-                .synchronous = true,
-                .operation = "tensor.reduce.scalar",
-            });
+            context->memory().read_readback(scratch, &value, sizeof(value));
             return value;
         }
 
@@ -417,14 +411,9 @@ namespace lfs::core::internal {
                 return 0;
             }
             const auto context = acquire_vulkan_context();
-            const vk::ScopedAllocation scratch_block(*context, 16);
+            // Readback storage comes back zeroed, so the counter needs no memset.
+            const vk::ScopedAllocation scratch_block(*context, 16, true);
             const StorageRef scratch = scratch_block.storage();
-            context->memory().memset(FillRequest{
-                .dst = scratch,
-                .bytes = sizeof(uint32_t),
-                .value = 0,
-                .operation = "tensor.count.zero",
-            });
             const std::array constants{kind};
             const VulkanPipeline& pipeline =
                 context->pipelines().specialized("count", sizeof(CountPush), constants);
@@ -445,13 +434,7 @@ namespace lfs::core::internal {
                     vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
                 });
             uint32_t value = 0;
-            context->memory().copy_device_to_host(CopyRequest{
-                .src = scratch,
-                .dst = raw_storage_ref(&value),
-                .bytes = sizeof(value),
-                .synchronous = true,
-                .operation = "tensor.count.readback",
-            });
+            context->memory().read_readback(scratch, &value, sizeof(value));
             return value;
         }
     } // namespace

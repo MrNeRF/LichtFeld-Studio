@@ -69,6 +69,8 @@ namespace lfs::core::internal {
         VkDeviceAddress address = 0;
         uint64_t last_use = 0;
         bool direct = false;
+        bool host_visible = false;
+        std::byte* mapped = nullptr;
         StorageMeta descriptor_owner;
     };
 
@@ -180,18 +182,71 @@ namespace lfs::core::internal {
 
     StorageRef VulkanMemory::allocate(const size_t bytes, const size_t alignment,
                                       const ExecContext context) {
-        (void)context;
+        return allocate_storage(bytes, alignment, false,
+                                context.allocation_class == AllocationClass::Direct);
+    }
+
+    StorageRef VulkanMemory::allocate_readback(const size_t bytes) {
+        const StorageRef storage = allocate_storage(bytes, 16, true, false);
+        std::byte* mapped = nullptr;
+        {
+            std::lock_guard lock(allocations_mutex_);
+            mapped = allocation_for(storage).mapped;
+        }
+        std::memset(mapped, 0, bytes);
+        return storage;
+    }
+
+    void VulkanMemory::read_readback(const StorageRef storage, void* const destination,
+                                     const size_t bytes) {
+        // The producer's writes become host-visible through a HOST_READ barrier
+        // recorded behind it; the wait covers both.
+        const std::array writes{storage};
+        const uint64_t value = context_.recorders().record(
+            {}, writes, [&](const VkCommandBuffer command) {
+                const VkMemoryBarrier2 host_read{
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                    .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                };
+                const VkDependencyInfo dependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1,
+                    .pMemoryBarriers = &host_read,
+                };
+                vkCmdPipelineBarrier2(command, &dependency);
+            });
+        context_.recorders().flush_current();
+        context_.wait(value);
+        context_.check_fault_buffer();
+        const std::byte* source = nullptr;
+        {
+            std::lock_guard lock(allocations_mutex_);
+            const AllocationRecord& record = allocation_for(storage);
+            LFS_ASSERT_MSG(record.host_visible && record.mapped != nullptr,
+                           "read_readback requires host-visible Vulkan storage");
+            source = record.mapped + storage.byte_offset;
+        }
+        std::memcpy(destination, source, bytes);
+    }
+
+    StorageRef VulkanMemory::allocate_storage(const size_t bytes, const size_t alignment,
+                                              const bool host_visible,
+                                              const bool direct_class) {
         LFS_ASSERT_MSG(bytes > 0, "Vulkan allocation requires a non-zero byte count");
         LFS_ASSERT_MSG(alignment == 0 || (alignment & (alignment - 1)) == 0,
                        "Vulkan allocation alignment must be zero or a power of two");
         const VkDeviceSize bucket_size = allocation_size(bytes);
-        const bool direct = bucket_size >= kDirectLimit;
+        const bool direct = bucket_size >= kDirectLimit && !host_visible;
         std::unique_ptr<AllocationRecord> record;
         if (!direct) {
             std::lock_guard lock(allocations_mutex_);
             collect_retired_locked(context_.completed_timeline());
-            auto free_iterator = free_lists_.find(bucket_size);
-            if (free_iterator != free_lists_.end() && !free_iterator->second.empty()) {
+            auto& free_lists = host_visible ? readback_free_lists_ : free_lists_;
+            auto free_iterator = free_lists.find(bucket_size);
+            if (free_iterator != free_lists.end() && !free_iterator->second.empty()) {
                 record = std::move(free_iterator->second.back());
                 free_iterator->second.pop_back();
             }
@@ -200,18 +255,28 @@ namespace lfs::core::internal {
             record = std::make_unique<AllocationRecord>();
             record->allocated_size = bucket_size;
             record->direct = direct;
+            record->host_visible = host_visible;
 
             VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             VmaAllocationCreateInfo allocation_info{};
-            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-            allocation_info.pool = record->direct ? VK_NULL_HANDLE : device_pool_;
+            VmaAllocationInfo mapping_info{};
+            if (host_visible) {
+                allocation_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                                        VMA_ALLOCATION_CREATE_MAPPED_BIT;
+                allocation_info.usage = VMA_MEMORY_USAGE_AUTO;
+                allocation_info.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+            } else {
+                allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+                allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+                allocation_info.pool = record->direct ? VK_NULL_HANDLE : device_pool_;
+            }
             VkResult result = vmaCreateBuffer(
                 context_.allocator(), &buffer_info, &allocation_info,
-                &record->buffer, &record->allocation, nullptr);
+                &record->buffer, &record->allocation, &mapping_info);
             if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY ||
                 result == VK_ERROR_OUT_OF_HOST_MEMORY ||
                 result == VK_ERROR_OUT_OF_POOL_MEMORY ||
@@ -224,9 +289,14 @@ namespace lfs::core::internal {
                 }
                 result = vmaCreateBuffer(
                     context_.allocator(), &buffer_info, &allocation_info,
-                    &record->buffer, &record->allocation, nullptr);
+                    &record->buffer, &record->allocation, &mapping_info);
             }
             vk_check(&context_, result, "vmaCreateBuffer(storage)");
+            if (host_visible) {
+                record->mapped = static_cast<std::byte*>(mapping_info.pMappedData);
+                LFS_ASSERT_MSG(record->mapped != nullptr,
+                               "host-visible Vulkan storage was not mapped");
+            }
             VkBufferDeviceAddressInfo address_info{
                 VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
             address_info.buffer = record->buffer;
@@ -262,9 +332,7 @@ namespace lfs::core::internal {
             .byte_offset = 0,
             .dtype = DataType::UInt8,
             .meta = descriptor,
-            .flags = context.allocation_class == AllocationClass::Direct
-                         ? STORAGE_REF_DIRECT_ALLOCATION
-                         : 0,
+            .flags = direct_class ? STORAGE_REF_DIRECT_ALLOCATION : 0,
         };
     }
 
@@ -489,6 +557,8 @@ namespace lfs::core::internal {
             if (record->direct) {
                 vmaDestroyBuffer(context_.allocator(), record->buffer,
                                  record->allocation);
+            } else if (record->host_visible) {
+                readback_free_lists_[record->allocated_size].push_back(std::move(record));
             } else {
                 free_lists_[record->allocated_size].push_back(std::move(record));
             }
@@ -497,14 +567,16 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::destroy_free_locked() {
-        for (auto& [size, records] : free_lists_) {
-            (void)size;
-            for (auto& record : records) {
-                vmaDestroyBuffer(context_.allocator(), record->buffer,
-                                 record->allocation);
+        for (auto* lists : {&free_lists_, &readback_free_lists_}) {
+            for (auto& [size, records] : *lists) {
+                (void)size;
+                for (auto& record : records) {
+                    vmaDestroyBuffer(context_.allocator(), record->buffer,
+                                     record->allocation);
+                }
             }
+            lists->clear();
         }
-        free_lists_.clear();
     }
 
     void VulkanMemory::trim() {

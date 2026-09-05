@@ -45,9 +45,11 @@ namespace lfs::core::internal::vk {
     // end of recording no longer leaks the block.
     class ScopedAllocation {
     public:
-        ScopedAllocation(VulkanContext& context, const size_t bytes)
+        ScopedAllocation(VulkanContext& context, const size_t bytes,
+                         const bool host_visible = false)
             : context_(&context),
-              storage_(context.memory().allocate(bytes, 16, {})) {}
+              storage_(host_visible ? context.memory().allocate_readback(bytes)
+                                    : context.memory().allocate(bytes, 16, {})) {}
         ScopedAllocation(ScopedAllocation&& other) noexcept
             : context_(std::exchange(other.context_, nullptr)),
               storage_(other.storage_) {}

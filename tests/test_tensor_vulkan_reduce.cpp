@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -495,6 +496,51 @@ namespace {
         const Tensor with_inf = upload_vulkan(Tensor::from_vector(values, {count}, Device::CPU));
         EXPECT_FALSE(with_inf.has_nan());
         EXPECT_TRUE(with_inf.has_inf());
+    }
+
+    TEST_F(TensorVulkanReduce, ReadbacksStayOrderedBehindTheirProducersAcrossThreads) {
+        // Catches a host read that lands before the producing dispatch completes
+        // (the recycled block still holds the previous result), a recycled
+        // counter that is not re-zeroed, and a readback block shared between
+        // threads.
+        constexpr size_t count = size_t{1} << 22;
+        constexpr int threads_count = 4;
+        constexpr int rounds = 12;
+        const std::vector<float> values = pattern(count);
+        const double base = reference(values, 1, count, 1, Kind::Sum)[0];
+        size_t positives = 0;
+        for (const float value : values) {
+            positives += value > 0.0f ? 1 : 0;
+        }
+        std::vector<std::string> failures(threads_count);
+        std::vector<std::thread> threads;
+        for (int t = 0; t < threads_count; ++t) {
+            threads.emplace_back([&, t] {
+                const Tensor vulkan = upload_vulkan(Tensor::from_vector(values, {count}, Device::CPU));
+                for (int round = 1; round <= rounds; ++round) {
+                    const float scale = static_cast<float>(t * rounds + round);
+                    const double expected = base * scale + static_cast<double>(count) * 0.5;
+                    const float observed = vulkan.mul(scale).add(0.5f).sum_scalar();
+                    if (std::abs(observed - expected) > tolerance(expected, count)) {
+                        failures[t] = "sum round " + std::to_string(round) + ": " +
+                                      std::to_string(observed) + " vs " + std::to_string(expected);
+                        return;
+                    }
+                    const size_t nonzero = vulkan.gt(0.0f).count_nonzero();
+                    if (nonzero != positives) {
+                        failures[t] = "count round " + std::to_string(round) + ": " +
+                                      std::to_string(nonzero) + " vs " + std::to_string(positives);
+                        return;
+                    }
+                }
+            });
+        }
+        for (std::thread& thread : threads) {
+            thread.join();
+        }
+        for (int t = 0; t < threads_count; ++t) {
+            EXPECT_TRUE(failures[t].empty()) << "thread " << t << ": " << failures[t];
+        }
     }
 
 } // namespace

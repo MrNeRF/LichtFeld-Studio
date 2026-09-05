@@ -33,6 +33,13 @@ namespace lfs::core::internal {
 
         [[nodiscard]] StorageRef allocate(size_t bytes, size_t alignment,
                                           ExecContext context);
+        // Host-visible, persistently mapped storage for results the host reads
+        // right after they are produced (scalar reductions, counters): shaders
+        // write it through its device address and read_readback waits for the
+        // producer and copies from the mapping, so the staging ring and its
+        // mutex stay out of the path. The block comes back zeroed.
+        [[nodiscard]] StorageRef allocate_readback(size_t bytes);
+        void read_readback(StorageRef storage, void* destination, size_t bytes);
         void deallocate(StorageRef storage) noexcept;
         void copy_host_to_device(const CopyRequest& request);
         void copy_device_to_host(const CopyRequest& request);
@@ -56,6 +63,9 @@ namespace lfs::core::internal {
         struct StagingSlice;
 
         void create_pool();
+        [[nodiscard]] StorageRef allocate_storage(size_t bytes, size_t alignment,
+                                                  bool host_visible,
+                                                  bool direct_class);
         void ensure_staging(size_t bytes);
         [[nodiscard]] StagingSlice acquire_staging(size_t bytes, size_t alignment);
         void collect_retired_locked(uint64_t completed);
@@ -72,6 +82,9 @@ namespace lfs::core::internal {
         std::unordered_map<VkDeviceSize,
                            std::vector<std::unique_ptr<AllocationRecord>>>
             free_lists_;
+        std::unordered_map<VkDeviceSize,
+                           std::vector<std::unique_ptr<AllocationRecord>>>
+            readback_free_lists_;
         mutable std::mutex staging_mutex_;
         VkBuffer staging_buffer_ = VK_NULL_HANDLE;
         VmaAllocation staging_allocation_ = VK_NULL_HANDLE;

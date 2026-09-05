@@ -25,16 +25,16 @@ OUTPUTS = {
     "tensor_hardening_tests_flags": TESTS / "tensor_backend_hardening.flags",
 }
 ALLOWLIST = TESTS / "tensor_backend_skip_allowlist.json"
-#A test whose file includes an application header reaches production code
-#outside core / tensor(loss kernels, exportable storage, rasterizer packers,
-#device - fault utilities); its GPU work is invisible to the classifier and
-#would run raw CUDA kernels on Vulkan storage, so it is excluded from G2.
-APPLICATION_INCLUDE_PREFIXES = (
-    "training/", "rendering/", "visualizer/", "io/", "scene/", "python/",
-    "kernels/", "optimizer/", "project/", "loader/", "geometry/", "components/",
-    # core/nn launches its own CUDA kernels on tensor storage (gemm.cu), so
-    # its tests consume tensors rather than exercise the facade.
-    "core/nn",
+# A test file may include only tensor-library headers (and helper headers under
+# tests/, which are walked). Any other quoted include reaches production code
+# outside core/tensor, whose GPU work is invisible to the classifier and may run
+# raw CUDA kernels on Vulkan storage; such tests are consumers and run under G7.
+TENSOR_LIBRARY_INCLUDES = (
+    "core/tensor.hpp", "core/tensor_fwd.hpp", "core/tensor_backend.hpp",
+    "core/gpu_backend_fwd.hpp", "core/tensor/", "core/alloc_counter.hpp",
+    "core/logger.hpp", "core/cuda_error.hpp", "core/pinned_memory_allocator.hpp",
+    "core/error.hpp", "core/export.hpp", "core/assert.hpp", "core/failure_report.hpp",
+    "core/device_fault.hpp",
 )
 BINARIES = {
     "lichtfeld_tests": ROOT / "build/tests/lichtfeld_tests",
@@ -521,8 +521,8 @@ def shared_cuda_pointer(fragments: list[Fragment]):
 
 @functools.lru_cache(maxsize=None)
 def includes_application_headers(path: Path) -> str | None:
-    # Walks the registration file and every tests/ header it reaches, so a
-    # fixture header that pulls in production code marks its tests as consumers.
+    # Walks the registration file and every tests/ header it reaches; the first
+    # quoted include outside the tensor-library allowlist names the consumer edge.
     pending = [path]
     visited: set[Path] = set()
     while pending:
@@ -531,16 +531,17 @@ def includes_application_headers(path: Path) -> str | None:
             continue
         visited.add(current)
         for line in current.read_text(errors="replace").splitlines():
-            match = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
+            match = re.match(r'\s*#\s*include\s*"([^"]+)"', line)
             if not match:
                 continue
             include = match.group(1)
-            if (include.startswith(APPLICATION_INCLUDE_PREFIXES) or "/kernels/" in include or
-                    include.endswith(".cuh")):
-                return include if current == path else f"{include} (via {current.name})"
             local = current.parent / include
             if local.suffix in {".hpp", ".h", ".hh"} and local.is_file():
                 pending.append(local)
+                continue
+            if include.startswith(TENSOR_LIBRARY_INCLUDES):
+                continue
+            return include if current == path else f"{include} (via {current.name})"
     return None
 
 
