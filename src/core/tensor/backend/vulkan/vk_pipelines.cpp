@@ -93,6 +93,11 @@ namespace lfs::core::internal {
             LFS_ASSERT_MSG(context_.caps().shader_float16,
                            "Vulkan native Float16 pipeline requires shaderFloat16");
         }
+        if (module == "index_atomic") {
+            expected_capabilities.emplace_back("AtomicFloat32Add");
+            LFS_ASSERT_MSG(context_.caps().shader_atomic_float,
+                           "Vulkan float atomic pipeline requires shaderBufferFloat32AtomicAdd");
+        }
         LFS_ASSERT_MSG(capabilities == expected_capabilities,
                        "Vulkan backend: shader manifest capabilities mismatch");
 

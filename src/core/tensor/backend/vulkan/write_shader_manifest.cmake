@@ -10,6 +10,9 @@ set(_required_capabilities "\"Int64\", \"PhysicalStorageBufferAddresses\"")
 if(_source MATCHES "LFS_REQUIRED_FLOAT16[ \t]*=[ \t]*1")
     string(APPEND _required_capabilities ", \"Float16\"")
 endif()
+if(_source MATCHES "LFS_REQUIRED_ATOMIC_FLOAT[ \t]*=[ \t]*1")
+    string(APPEND _required_capabilities ", \"AtomicFloat32Add\"")
+endif()
 file(WRITE "${OUTPUT}"
     "{\n"
     "  \"entry_point\": \"main\",\n"

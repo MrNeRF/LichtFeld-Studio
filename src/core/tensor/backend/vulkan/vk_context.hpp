@@ -79,6 +79,10 @@ namespace lfs::core::internal {
         void wait(uint64_t value);
         [[nodiscard]] uint64_t completed_timeline() const;
         void check_fault_buffer();
+        // Shaders record an out-of-range index as {code, index, extent, op}; the
+        // adapter that owns the launch reads and clears the record after its wait.
+        [[nodiscard]] uint64_t fault_address() const noexcept { return fault_address_; }
+        [[nodiscard]] std::array<uint32_t, 4> consume_fault_record() noexcept;
         void mark_device_lost_once();
 
         [[nodiscard]] VulkanMemory& memory();
@@ -111,6 +115,7 @@ namespace lfs::core::internal {
         VmaAllocation fault_allocation_ = nullptr;
         VkBuffer fault_buffer_ = VK_NULL_HANDLE;
         void* fault_mapped_ = nullptr;
+        uint64_t fault_address_ = 0;
         VkPhysicalDeviceProperties properties_{};
         VkPhysicalDeviceMemoryProperties memory_properties_{};
         VkDeviceCaps caps_{};

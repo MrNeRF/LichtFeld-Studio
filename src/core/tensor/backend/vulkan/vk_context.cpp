@@ -34,6 +34,13 @@
 
 namespace lfs::core::internal {
     namespace {
+        // Test hook: pretend the device has no float atomics so the deterministic
+        // index_add fallback is exercised on hardware that has the extension.
+        bool force_no_atomic_float() {
+            const char* const value = std::getenv("LFS_VULKAN_FORCE_NO_ATOMIC_FLOAT");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }
+
         constexpr std::string_view kValidationLayer = "VK_LAYER_KHRONOS_validation";
         constexpr std::array<std::string_view, 2> kValidationAllowlist{
             "loader_add_layer_properties",
@@ -485,7 +492,8 @@ namespace lfs::core::internal {
         caps_.shader_float16 = query12.shaderFloat16;
         caps_.shader_atomic_float =
             extensions_available.contains(VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME) &&
-            atomic_float.shaderBufferFloat32AtomicAdd;
+            atomic_float.shaderBufferFloat32AtomicAdd &&
+            !force_no_atomic_float();
         caps_.host_visible_device_local = false;
         for (uint32_t index = 0; index < memory_properties_.memoryTypeCount; ++index) {
             const VkMemoryPropertyFlags flags =
@@ -630,6 +638,7 @@ namespace lfs::core::internal {
         VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_info.size = 16;
         buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -644,6 +653,11 @@ namespace lfs::core::internal {
                  "vmaCreateBuffer(fault)");
         fault_mapped_ = info.pMappedData;
         std::memset(fault_mapped_, 0, 16);
+        VkBufferDeviceAddressInfo address_info{VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO};
+        address_info.buffer = fault_buffer_;
+        fault_address_ = vkGetBufferDeviceAddress(device_, &address_info);
+        LFS_ASSERT_MSG(fault_address_ != 0,
+                       "vkGetBufferDeviceAddress returned zero for the fault buffer");
     }
 
     void VulkanContext::destroy_fault_buffer() noexcept {
@@ -652,6 +666,7 @@ namespace lfs::core::internal {
             fault_buffer_ = VK_NULL_HANDLE;
             fault_allocation_ = VK_NULL_HANDLE;
             fault_mapped_ = nullptr;
+            fault_address_ = 0;
         }
     }
 
@@ -723,14 +738,33 @@ namespace lfs::core::internal {
         return value;
     }
 
+    // A recorded fault surfaces at the next synchronization as a Vulkan-domain
+    // error; the record is cleared so later synchronizations run clean.
     void VulkanContext::check_fault_buffer() {
-        if (fault_mapped_ == nullptr) {
+        const std::array<uint32_t, 4> record = consume_fault_record();
+        if (record[0] == 0) {
             return;
         }
-        const auto* const words = static_cast<const uint32_t*>(fault_mapped_);
-        LFS_ASSERT_MSG(words[0] == 0,
-                       std::format("Vulkan backend device fault code {} at index {}",
-                                   words[0], words[1]));
+        throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+            .code = ErrorCode::BoundsViolation,
+            .domain = lfs::ErrorDomain::Vulkan,
+            .user_message = "A tensor index was out of range on the Vulkan backend",
+            .detail = std::format("device fault code {}: index {} is outside the extent {} "
+                                  "(operation {})",
+                                  record[0], static_cast<int32_t>(record[1]), record[2],
+                                  record[3]),
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
+    }
+
+    std::array<uint32_t, 4> VulkanContext::consume_fault_record() noexcept {
+        std::array<uint32_t, 4> record{};
+        if (fault_mapped_ == nullptr) {
+            return record;
+        }
+        std::memcpy(record.data(), fault_mapped_, sizeof(record));
+        std::memset(fault_mapped_, 0, sizeof(record));
+        return record;
     }
 
     void VulkanContext::mark_device_lost_once() {
