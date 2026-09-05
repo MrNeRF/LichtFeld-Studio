@@ -247,7 +247,10 @@ def prepare_training_from_scene() -> None:
 
 def start_training() -> None:
     """
-    Start training with current parameters; waits for off-thread initialization
+    Start training with current parameters.
+
+    Returns after dispatch when called on the viewer thread. Other callers wait
+    for initialization. Asynchronous failures are reported through training state.
     """
 
 def training_start_overwrite_conflict() -> int | None:
