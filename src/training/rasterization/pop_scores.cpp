@@ -82,6 +82,7 @@ namespace lfs::training {
     } catch (const lfs::Exception& e) {
         return lfs::Status::failure(e.error());
     } catch (const std::exception& e) {
+        // LFS-CENSUS-OK(empty-catch): pop_runtime_error() returns a typed rendering error with the exception detail.
         return pop_runtime_error(e);
     }
 
@@ -114,6 +115,7 @@ namespace lfs::training {
     } catch (const lfs::Exception& e) {
         return lfs::Status::failure(e.error());
     } catch (const std::exception& e) {
+        // LFS-CENSUS-OK(empty-catch): pop_runtime_error() returns a typed rendering error with the exception detail.
         return pop_runtime_error(e);
     }
 } // namespace lfs::training

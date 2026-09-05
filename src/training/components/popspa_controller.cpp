@@ -91,7 +91,10 @@ namespace lfs::training {
             keep.insert(keep.end(), candidates.begin(), candidates.begin() + (count - keep.size()));
             std::sort(keep.begin(), keep.end());
             return keep;
-        } catch (const std::exception& e) { return failure(e); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return failure(e);
+        }
     }
 
     void POPSpaController::set_masks(const Tensor& active, const Tensor& frozen) {
@@ -138,7 +141,10 @@ namespace lfs::training {
             next.initialized_ = true;
             adopt_checkpoint_state(next);
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e));
+        }
     }
 
     uint64_t POPSpaController::additional_iterations() const noexcept {
@@ -154,7 +160,10 @@ namespace lfs::training {
             if (++score_view_ == view_count_)
                 phase_ = phase_ == POPSpaPhase::FirstScore ? POPSpaPhase::FirstPrune : POPSpaPhase::FinalPrune;
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e));
+        }
     }
     lfs::Result<Tensor> POPSpaController::prune_indices() const {
         try {
@@ -182,7 +191,10 @@ namespace lfs::training {
             scratch.set_stream(stream);
             keep.set_stream(stream);
             return keep;
-        } catch (const std::exception& e) { return failure(e); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return failure(e);
+        }
     }
     void POPSpaController::project(const Tensor& opacities, bool update_dual) {
         validate_opacity(opacities, rows_);
@@ -227,7 +239,10 @@ namespace lfs::training {
                 next.project(opacities, false);
             adopt_checkpoint_state(next);
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e));
+        }
     }
     lfs::Result<Tensor> POPSpaController::regularization(const Tensor& opacities, const Tensor& log_scales,
                                                          Tensor& opacity_grad, Tensor& scales_grad) {
@@ -261,7 +276,10 @@ namespace lfs::training {
                 loss.set_stream(stream);
             }
             return loss;
-        } catch (const std::exception& e) { return failure(e); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return failure(e);
+        }
     }
     lfs::Status POPSpaController::after_backward(const Tensor& opacities) {
         try {
@@ -270,7 +288,10 @@ namespace lfs::training {
             if (projection_due())
                 project(opacities, true);
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e));
+        }
     }
     lfs::Status POPSpaController::finish_optimization_step() {
         try {
@@ -285,7 +306,10 @@ namespace lfs::training {
                 scores_.zero_();
             }
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e));
+        }
     }
     void POPSpaController::reset() noexcept {
         POPSpaController empty;
@@ -395,7 +419,10 @@ namespace lfs::training {
             os << scores_ << z_ << u_ << active_ << frozen_;
             require(os.good(), "POPSpa checkpoint write failed (stream.good=false)");
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e, lfs::ErrorCode::DataLoss)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e, lfs::ErrorCode::DataLoss));
+        }
     }
     POPSpaController POPSpaController::read_serialized(std::istream& is) {
         const auto observed_magic = read<uint32_t>(is), observed_version = read<uint32_t>(is);
@@ -438,7 +465,10 @@ namespace lfs::training {
             next.frozen_ = next.frozen_.cuda();
             adopt_checkpoint_state(next);
             return {};
-        } catch (const std::exception& e) { return lfs::Status::failure(failure(e, lfs::ErrorCode::DataLoss)); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return lfs::Status::failure(failure(e, lfs::ErrorCode::DataLoss));
+        }
     }
     lfs::Result<size_t> POPSpaController::checkpoint_size_bytes(size_t expected_rows) const {
         try {
@@ -451,11 +481,17 @@ namespace lfs::training {
                 bytes += extra;
             }
             return bytes;
-        } catch (const std::exception& e) { return failure(e, lfs::ErrorCode::DataLoss); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return failure(e, lfs::ErrorCode::DataLoss);
+        }
     }
     lfs::Result<size_t> POPSpaController::consume_checkpoint(std::istream& is) {
         try {
             return read_serialized(is).rows_;
-        } catch (const std::exception& e) { return failure(e, lfs::ErrorCode::DataLoss); }
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): failure() returns a typed error carrying the exception detail.
+            return failure(e, lfs::ErrorCode::DataLoss);
+        }
     }
 } // namespace lfs::training

@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
+#include "popspa_cameras.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/postprocess_compaction.hpp"
@@ -48,33 +49,35 @@ namespace lfs::training {
             return optimizer;
         }
 
-        uint64_t camera_fingerprint(const std::vector<core::Camera*>& cameras) {
-            uint64_t hash = 14695981039346656037ULL;
-            const auto append = [&hash](const void* data, size_t size) {
-                const auto* bytes = static_cast<const uint8_t*>(data);
-                for (size_t i = 0; i < size; ++i) {
-                    hash ^= bytes[i];
-                    hash *= 1099511628211ULL;
-                }
-            };
-            for (const auto* cam : cameras) {
-                const std::string identity = std::format("{}:{}:{}:{}:{}:{};", cam->uid(), cam->camera_id(),
-                                                         core::path_to_utf8(cam->image_path()), cam->image_width(), cam->image_height(),
-                                                         static_cast<int>(cam->camera_model_type()));
-                append(identity.data(), identity.size());
-                const auto [fx, fy, cx, cy] = cam->get_intrinsics();
-                const float intrinsics[] = {fx, fy, cx, cy};
-                append(intrinsics, sizeof(intrinsics));
-                for (const auto& tensor : {cam->R(), cam->T(), cam->radial_distortion(), cam->tangential_distortion()}) {
-                    if (tensor.is_valid() && tensor.numel() > 0) {
-                        const auto host = tensor.cpu().contiguous();
-                        append(host.data_ptr(), host.numel() * core::dtype_size(host.dtype()));
-                    }
+    } // namespace
+
+    uint64_t sort_and_fingerprint_popspa_cameras(std::vector<core::Camera*>& cameras) {
+        std::sort(cameras.begin(), cameras.end(), [](const auto* a, const auto* b) { return a->uid() < b->uid(); });
+        uint64_t hash = 14695981039346656037ULL;
+        const auto append = [&hash](const void* data, size_t size) {
+            const auto* bytes = static_cast<const uint8_t*>(data);
+            for (size_t i = 0; i < size; ++i) {
+                hash ^= bytes[i];
+                hash *= 1099511628211ULL;
+            }
+        };
+        for (const auto* cam : cameras) {
+            const std::string identity = std::format("{}:{}:{}:{}:{}:{};", cam->uid(), cam->camera_id(),
+                                                     core::path_to_utf8(cam->image_path()), cam->image_width(), cam->image_height(),
+                                                     static_cast<int>(cam->camera_model_type()));
+            append(identity.data(), identity.size());
+            const auto [fx, fy, cx, cy] = cam->get_intrinsics();
+            const float intrinsics[] = {fx, fy, cx, cy};
+            append(intrinsics, sizeof(intrinsics));
+            for (const auto& tensor : {cam->R(), cam->T(), cam->radial_distortion(), cam->tangential_distortion()}) {
+                if (tensor.is_valid() && tensor.numel() > 0) {
+                    const auto host = tensor.cpu().contiguous();
+                    append(host.data_ptr(), host.numel() * core::dtype_size(host.dtype()));
                 }
             }
-            return hash;
         }
-    } // namespace
+        return hash;
+    }
 
     bool Trainer::popspa_enabled() const {
         const auto params = getParams();
@@ -181,8 +184,7 @@ namespace lfs::training {
                     cam->load_image_size(params_.dataset.resize_factor, params_.dataset.max_width);
                 cameras.push_back(cam);
             }
-            const uint64_t fingerprint = camera_fingerprint(cameras);
-            std::sort(cameras.begin(), cameras.end(), [](const auto* a, const auto* b) { return a->uid() < b->uid(); });
+            const uint64_t fingerprint = sort_and_fingerprint_popspa_cameras(cameras);
             auto& model = strategy_->get_model();
             if (!popspa_controller_.is_initialized()) {
                 sparsity_optimizer_.reset();

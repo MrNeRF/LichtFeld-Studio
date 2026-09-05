@@ -8,11 +8,13 @@
 #include "core/tensor.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "training/components/popspa_controller.hpp"
+#include "training/popspa_cameras.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/rasterization/gsplat_rasterizer.hpp"
 #include "training/strategies/postprocess_compaction.hpp"
 #include "training/strategies/strategy_factory.hpp"
 #include "training/strategies/strategy_utils.hpp"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -20,6 +22,7 @@
 #include <gtest/gtest.h>
 #include <memory>
 #include <numeric>
+#include <sstream>
 #include <vector>
 
 namespace {
@@ -51,10 +54,10 @@ namespace {
         return model;
     }
 
-    std::unique_ptr<Camera> pipeline_camera(int view) {
+    std::unique_ptr<Camera> pipeline_camera(int view, float x_offset = 0.f, float focal = 35.f) {
         auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
-        auto T = Tensor::from_vector({float(view) * 0.015f, 0.f, 3.f}, {3}, Device::CUDA);
-        return std::make_unique<Camera>(R, T, 35.f, 35.f, 4.f, 4.f, Tensor{}, Tensor{},
+        auto T = Tensor::from_vector({float(view) * 0.015f + x_offset, 0.f, 3.f}, {3}, Device::CUDA);
+        return std::make_unique<Camera>(R, T, focal, focal, 4.f, 4.f, Tensor{}, Tensor{},
                                         lfs::core::CameraModelType::PINHOLE, "pipeline", "",
                                         std::filesystem::path{}, kWidth, kHeight, view);
     }
@@ -87,6 +90,49 @@ namespace {
         for (size_t axis = 0; axis < 3; ++axis)
             EXPECT_EQ(means[frozen * 3 + axis], original_frozen_mean[axis]);
         EXPECT_EQ(model.opacity_raw().to_vector()[frozen], -0.4f);
+    }
+
+    TEST(POPSpaCameras, ReorderedViewsPreserveCheckpointFingerprintAndScoreCursor) {
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA device required";
+        auto first = pipeline_camera(0), second = pipeline_camera(1), third = pipeline_camera(2);
+        const std::vector<Camera*> expected{first.get(), second.get(), third.get()};
+        auto cameras = expected;
+        const auto fingerprint = sort_and_fingerprint_popspa_cameras(cameras);
+        POPSpaController controller;
+        auto opacity = Tensor::zeros({2, 1}, Device::CUDA);
+        ASSERT_TRUE(controller.initialize({.target_count = 1, .camera_fingerprint = fingerprint}, opacity, cameras.size()));
+        ASSERT_TRUE(controller.finish_score_view());
+        std::stringstream checkpoint;
+        ASSERT_TRUE(controller.serialize(checkpoint));
+        POPSpaController restored;
+        ASSERT_TRUE(restored.deserialize(checkpoint));
+        ASSERT_EQ(restored.score_view(), 1u);
+
+        std::array<size_t, 3> order{0, 1, 2};
+        do {
+            cameras = {expected[order[0]], expected[order[1]], expected[order[2]]};
+            EXPECT_EQ(sort_and_fingerprint_popspa_cameras(cameras), restored.config().camera_fingerprint);
+            EXPECT_EQ(cameras, expected);
+            EXPECT_EQ(cameras.at(restored.score_view()), second.get());
+        } while (std::next_permutation(order.begin(), order.end()));
+    }
+
+    TEST(POPSpaCameras, FingerprintStillDetectsChangedViewsPosesAndIntrinsics) {
+        int devices = 0;
+        if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
+            GTEST_SKIP() << "CUDA device required";
+        auto first = pipeline_camera(0), second = pipeline_camera(1), third = pipeline_camera(2);
+        auto moved = pipeline_camera(1, 0.1f), refocused = pipeline_camera(1, 0.f, 40.f);
+        std::vector<Camera*> cameras{first.get(), second.get()};
+        const auto fingerprint = sort_and_fingerprint_popspa_cameras(cameras);
+        for (auto* changed : {third.get(), moved.get(), refocused.get()}) {
+            cameras = {changed, first.get()};
+            EXPECT_NE(sort_and_fingerprint_popspa_cameras(cameras), fingerprint);
+        }
+        cameras = {first.get()};
+        EXPECT_NE(sort_and_fingerprint_popspa_cameras(cameras), fingerprint);
     }
 
     class POPSpaPipeline : public ::testing::TestWithParam<bool> {};
