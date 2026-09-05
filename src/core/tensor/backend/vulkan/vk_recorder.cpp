@@ -12,6 +12,7 @@
 #include <array>
 #include <limits>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace lfs::core::internal {
@@ -148,16 +149,20 @@ namespace lfs::core::internal {
         std::lock_guard lock(mutex_);
         collect_completed_locked(context_.completed_timeline());
         Recorder& recorder = current_locked();
-        for (const StorageRef storage : reads) {
+        const auto flush_foreign_producer = [&](const StorageRef storage) {
             if (storage.meta != nullptr &&
                 storage.meta->pending_recorder.load(std::memory_order_acquire) != recorder.id) {
                 ensure_submitted_locked(storage);
             }
+        };
+        for (const StorageRef storage : reads) {
+            flush_foreign_producer(storage);
+        }
+        for (const StorageRef storage : writes) {
+            flush_foreign_producer(storage);
         }
         begin_locked(recorder);
-        if (recorder.command_count != 0) {
-            global_barrier(recorder.command);
-        }
+        global_barrier(recorder.command);
         command(recorder.command);
         ++recorder.command_count;
         for (const StorageRef storage : writes) {
@@ -175,12 +180,12 @@ namespace lfs::core::internal {
         if (recorder.command == VK_NULL_HANDLE) {
             return;
         }
-        vk_check(&context_, vkEndCommandBuffer(recorder.command), "vkEndCommandBuffer");
-        context_.submit(recorder.command, recorder.reserved_value);
-        recorder.submitted_value = recorder.reserved_value;
-        recorder.reserved_value = 0;
-        recorder.command = VK_NULL_HANDLE;
+        const VkCommandBuffer command = std::exchange(recorder.command, VK_NULL_HANDLE);
+        const uint64_t value = std::exchange(recorder.reserved_value, uint64_t{0});
         recorder.command_count = 0;
+        vk_check(&context_, vkEndCommandBuffer(command), "vkEndCommandBuffer");
+        context_.submit(command, value);
+        recorder.submitted_value = value;
     }
 
     uint64_t VulkanRecorderRegistry::flush_through_locked(const uint64_t value) {

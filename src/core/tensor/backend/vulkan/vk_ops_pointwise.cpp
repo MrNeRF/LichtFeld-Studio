@@ -39,9 +39,7 @@ namespace lfs::core::internal {
                 return 0;
             }
             const uint64_t groups = (work + kLocalSize - 1) / kLocalSize;
-            VkPhysicalDeviceProperties properties{};
-            vkGetPhysicalDeviceProperties(context.physical_device(), &properties);
-            LFS_ASSERT_MSG(groups <= properties.limits.maxComputeWorkGroupCount[0],
+            LFS_ASSERT_MSG(groups <= context.caps().max_workgroup_count[0],
                            "Vulkan pointwise dispatch exceeds maxComputeWorkGroupCount[0]");
             return static_cast<uint32_t>(groups);
         }

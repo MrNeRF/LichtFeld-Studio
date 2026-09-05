@@ -16,8 +16,11 @@ namespace lfs::core::internal {
     }
 
     void VulkanBackendOps::deallocate(const StorageRef storage, ExecContext) noexcept {
-        if (const auto context = try_live_vulkan_context()) {
-            context->memory().deallocate(storage);
+        try {
+            if (const auto context = try_live_vulkan_context()) {
+                context->memory().deallocate(storage);
+            }
+        } catch (...) {
         }
     }
 

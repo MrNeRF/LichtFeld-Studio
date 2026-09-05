@@ -234,6 +234,7 @@ namespace lfs::core::internal {
         record->descriptor_owner.gpu_descriptor = GpuStorageDescriptor{
             .native_buffer = handle_value(record->buffer),
             .native_allocation = handle_value(record->allocation),
+            .native_context = context_.context_id(),
             .base_address = record->address,
             .byte_size = bytes,
             .accounting_kind = StorageAccountingKind::VulkanOwned,
@@ -374,14 +375,22 @@ namespace lfs::core::internal {
         if (request.bytes == 0) {
             return;
         }
-        const size_t aligned_bytes = request.bytes & ~size_t{3};
-        const size_t tail_bytes = request.bytes - aligned_bytes;
+        // vkCmdFillBuffer requires a 4-byte-aligned dstOffset (VUID-vkCmdFillBuffer-dstOffset-00028),
+        // so an odd-offset view (a UInt8/Bool/Float16 slice or append_zeros after an odd count) fills
+        // only its 4-byte-aligned interior with the fill command and patches the unaligned head and
+        // tail bytes through a staging copy.
+        const VkDeviceSize dst_offset = offset_for(request.dst);
+        const size_t head_bytes =
+            std::min<size_t>(request.bytes, (4 - (static_cast<size_t>(dst_offset) & 3)) & 3);
+        const size_t aligned_bytes = (request.bytes - head_bytes) & ~size_t{3};
+        const size_t tail_bytes = request.bytes - head_bytes - aligned_bytes;
+        const size_t edge_bytes = head_bytes + tail_bytes;
         std::unique_lock staging_lock(staging_mutex_, std::defer_lock);
-        StagingSlice tail{};
-        if (tail_bytes != 0) {
+        StagingSlice edge{};
+        if (edge_bytes != 0) {
             staging_lock.lock();
-            tail = acquire_staging(tail_bytes, 4);
-            std::memset(tail.mapped, request.value, tail_bytes);
+            edge = acquire_staging(edge_bytes, 4);
+            std::memset(edge.mapped, request.value, edge_bytes);
         }
         const std::array writes{request.dst};
         const uint64_t value = context_.recorders().record(
@@ -390,19 +399,30 @@ namespace lfs::core::internal {
                     const uint32_t pattern = static_cast<uint32_t>(request.value) *
                                              0x01010101u;
                     vkCmdFillBuffer(command, buffer_for(request.dst),
-                                    offset_for(request.dst), aligned_bytes, pattern);
+                                    dst_offset + head_bytes, aligned_bytes, pattern);
+                }
+                std::array<VkBufferCopy, 2> regions{};
+                uint32_t region_count = 0;
+                if (head_bytes != 0) {
+                    regions[region_count++] = VkBufferCopy{
+                        .srcOffset = edge.offset,
+                        .dstOffset = dst_offset,
+                        .size = head_bytes,
+                    };
                 }
                 if (tail_bytes != 0) {
-                    const VkBufferCopy region{
-                        .srcOffset = tail.offset,
-                        .dstOffset = offset_for(request.dst) + aligned_bytes,
+                    regions[region_count++] = VkBufferCopy{
+                        .srcOffset = edge.offset + head_bytes,
+                        .dstOffset = dst_offset + head_bytes + aligned_bytes,
                         .size = tail_bytes,
                     };
-                    vkCmdCopyBuffer(command, tail.buffer, buffer_for(request.dst), 1,
-                                    &region);
+                }
+                if (region_count != 0) {
+                    vkCmdCopyBuffer(command, edge.buffer, buffer_for(request.dst),
+                                    region_count, regions.data());
                 }
             });
-        if (tail_bytes != 0) {
+        if (edge_bytes != 0) {
             staging_retire_value_ = std::max(staging_retire_value_, value);
         }
         if (request.synchronous) {
@@ -419,6 +439,9 @@ namespace lfs::core::internal {
             }
             std::lock_guard lock(allocations_mutex_);
             if (shutting_down_) {
+                return;
+            }
+            if (storage.meta->gpu_descriptor.native_context != context_.context_id()) {
                 return;
             }
             const uint64_t key = storage.meta->gpu_descriptor.native_allocation;

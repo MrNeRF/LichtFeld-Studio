@@ -3639,7 +3639,11 @@ namespace lfs::core {
             backend == GpuBackend::Vulkan ? StorageAccountingKind::VulkanOwned
                                           : StorageAccountingKind::CudaDirect;
         record_storage_allocation(accounting_kind, total_bytes);
+        const GpuStorageDescriptor released_descriptor =
+            storage.meta != nullptr ? storage.meta->gpu_descriptor
+                                    : GpuStorageDescriptor{};
         t.data_owner_ = std::shared_ptr<void>(data_ptr, [bytes = total_bytes, storage,
+                                                         released_descriptor,
                                                          accounting_kind](void* ptr) {
             if (!ptr) {
                 return;
@@ -3648,10 +3652,17 @@ namespace lfs::core {
             // destroyed after ordered GPU teardown. Skipping cudaFree when the
             // process has already begun teardown avoids cudaErrorContextIsDestroyed
             // / SIGSEGV on a dead primary context. Pre-shutdown hooks should
-            // release long-lived holders while CUDA is still healthy.
+            // release long-lived holders while CUDA is still healthy. The deleter
+            // rebuilds a by-value descriptor so it never dereferences a freed
+            // allocator record after shutdown and reinitialization.
             if (storage.backend == GpuBackend::Vulkan ||
                 !gpu_process_teardown_started()) {
-                internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{nullptr});
+                StorageMeta owner;
+                owner.backend = storage.backend;
+                owner.gpu_descriptor = released_descriptor;
+                internal::StorageRef released = storage;
+                released.meta = storage.meta != nullptr ? &owner : nullptr;
+                internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{nullptr});
             }
             Tensor::record_storage_deallocation(accounting_kind, bytes);
         });

@@ -480,6 +480,7 @@ namespace lfs::core {
     struct GpuStorageDescriptor {
         uint64_t native_buffer;
         uint64_t native_allocation;
+        uint64_t native_context;
         uint64_t base_address;
         uint64_t byte_size;
         StorageAccountingKind accounting_kind;

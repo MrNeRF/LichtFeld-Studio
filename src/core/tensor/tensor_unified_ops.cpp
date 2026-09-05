@@ -414,11 +414,21 @@ namespace lfs::core {
                     bytes, alignof(std::max_align_t), internal::ExecContext{s});
                 storage.dtype = result.dtype_;
                 void* const ptr = storage.data;
+                const GpuStorageDescriptor released_descriptor =
+                    storage.meta != nullptr ? storage.meta->gpu_descriptor
+                                            : GpuStorageDescriptor{};
                 // Route destruction through the backend service, which is aware
-                // of ordered process teardown and pool lifetime.
-                result.adopt_storage(ptr, [s, storage, bytes](void* p) {
+                // of ordered process teardown and pool lifetime. The deleter must
+                // not dereference the allocator record through storage.meta, which
+                // shutdown may have freed, so it rebuilds a by-value descriptor.
+                result.adopt_storage(ptr, [s, storage, bytes, released_descriptor](void* p) {
                     if (p != nullptr) {
-                        internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{s});
+                        StorageMeta owner;
+                        owner.backend = storage.backend;
+                        owner.gpu_descriptor = released_descriptor;
+                        internal::StorageRef released = storage;
+                        released.meta = storage.meta != nullptr ? &owner : nullptr;
+                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{s});
                         if (storage.backend == GpuBackend::Vulkan) {
                             Tensor::record_storage_deallocation(
                                 StorageAccountingKind::VulkanOwned, bytes);
@@ -663,10 +673,19 @@ namespace lfs::core {
                     bytes, alignof(std::max_align_t), internal::ExecContext{s});
                 storage.dtype = result.dtype_;
                 void* const ptr = storage.data;
-                // pool-liveness-aware deleter (see empty/ path above).
-                result.data_owner_ = std::shared_ptr<void>(ptr, [s, storage, bytes](void* p) {
+                const GpuStorageDescriptor released_descriptor =
+                    storage.meta != nullptr ? storage.meta->gpu_descriptor
+                                            : GpuStorageDescriptor{};
+                // pool-liveness-aware deleter (see empty/ path above); rebuilds a
+                // by-value descriptor so it never touches a freed allocator record.
+                result.data_owner_ = std::shared_ptr<void>(ptr, [s, storage, bytes, released_descriptor](void* p) {
                     if (p != nullptr) {
-                        internal::backend_ops(storage.backend).deallocate(storage, internal::ExecContext{s});
+                        StorageMeta owner;
+                        owner.backend = storage.backend;
+                        owner.gpu_descriptor = released_descriptor;
+                        internal::StorageRef released = storage;
+                        released.meta = storage.meta != nullptr ? &owner : nullptr;
+                        internal::backend_ops(storage.backend).deallocate(released, internal::ExecContext{s});
                         if (storage.backend == GpuBackend::Vulkan) {
                             Tensor::record_storage_deallocation(
                                 StorageAccountingKind::VulkanOwned, bytes);

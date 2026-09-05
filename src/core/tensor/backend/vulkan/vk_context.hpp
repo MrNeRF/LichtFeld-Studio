@@ -28,6 +28,7 @@ namespace lfs::core::internal {
         std::array<uint8_t, VK_UUID_SIZE> device_uuid{};
         std::array<uint8_t, VK_UUID_SIZE> driver_uuid{};
         std::array<uint32_t, 3> max_workgroup_size{};
+        std::array<uint32_t, 3> max_workgroup_count{};
         uint32_t device_index = 0;
         uint32_t subgroup_size = 0;
         uint32_t max_workgroup_invocations = 0;

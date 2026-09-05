@@ -378,6 +378,112 @@ namespace {
         }
     }
 
+    TEST_F(TensorVulkanRuntime, SurvivorOfShutdownAndReinitIsReleasedAsNoOp) {
+        // Catches deleters that dereference the destroyed allocator record after
+        // shutdown, or free a live allocation of the new context whose VMA handle
+        // value was recycled from the old one.
+        Tensor survivor;
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            survivor = Tensor::full({33}, 3.0f, Device::CUDA);
+            EXPECT_EQ(survivor.to_vector(), std::vector<float>(33, 3.0f));
+        }
+        ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor fresh = Tensor::full({33}, 5.0f, Device::CUDA);
+            survivor = Tensor();
+            EXPECT_EQ(fresh.to_vector(), std::vector<float>(33, 5.0f));
+            EXPECT_EQ(Tensor::full({33}, 6.0f, Device::CUDA).to_vector(),
+                      std::vector<float>(33, 6.0f));
+        }
+    }
+
+    TEST_F(TensorVulkanRuntime, OddOffsetViewsAreZeroedWithoutUnalignedFillCommands) {
+        // Catches vkCmdFillBuffer issued at a view offset that is not a multiple of
+        // four (VUID-vkCmdFillBuffer-dstOffset-00028); the validation collector in
+        // TearDown turns the violation into a failure.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        for (const size_t start : {size_t{1}, size_t{2}, size_t{3}}) {
+            std::vector<float> values(11);
+            for (size_t index = 0; index < values.size(); ++index) {
+                values[index] = static_cast<float>(index + 1);
+            }
+            Tensor half = Tensor::from_vector(values, {values.size()}, Device::CUDA)
+                              .to(DataType::Float16);
+            half.slice(0, start, start + 5).zero_();
+            std::vector<float> expected = values;
+            for (size_t index = start; index < start + 5; ++index) {
+                expected[index] = 0.0f;
+            }
+            EXPECT_EQ(half.to(DataType::Float32).to_vector(), expected) << "start=" << start;
+
+            Tensor bytes = Tensor::from_vector(values, {values.size()}, Device::CUDA)
+                               .to(DataType::UInt8);
+            bytes.slice(0, start, start + 5).zero_();
+            std::vector<int> expected_bytes(values.size());
+            for (size_t index = 0; index < values.size(); ++index) {
+                expected_bytes[index] = index >= start && index < start + 5
+                                            ? 0
+                                            : static_cast<int>(values[index]);
+            }
+            EXPECT_EQ(bytes.to(DataType::Int32).to_vector_int(), expected_bytes)
+                << "start=" << start;
+        }
+    }
+
+    TEST_F(TensorVulkanRuntime, CrossThreadWriteAfterWriteFollowsProgramOrder) {
+        // Catches writes that never consult the target's pending token: a writer whose
+        // command buffer was opened earlier (lower timeline value) would be submitted
+        // before the producer that wrote first, inverting program order.
+        std::mutex mutex;
+        std::condition_variable condition;
+        Tensor shared;
+        bool late_opened = false;
+        bool first_written = false;
+        bool second_written = false;
+        std::thread late_writer([&] {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            const Tensor warm = Tensor::full({4099}, 0.5f, Device::CUDA);
+            {
+                std::lock_guard lock(mutex);
+                late_opened = true;
+            }
+            condition.notify_all();
+            Tensor target;
+            {
+                std::unique_lock lock(mutex);
+                condition.wait(lock, [&] { return first_written; });
+                target = shared;
+            }
+            target.fill_(2.0f);
+            {
+                std::lock_guard lock(mutex);
+                second_written = true;
+            }
+            condition.notify_all();
+        });
+        std::thread first_writer([&] {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            {
+                std::unique_lock lock(mutex);
+                condition.wait(lock, [&] { return late_opened; });
+            }
+            Tensor value = Tensor::full({4099}, 1.0f, Device::CUDA);
+            {
+                std::lock_guard lock(mutex);
+                shared = std::move(value);
+                first_written = true;
+            }
+            condition.notify_all();
+            std::unique_lock lock(mutex);
+            condition.wait(lock, [&] { return second_written; });
+        });
+        first_writer.join();
+        late_writer.join();
+        EXPECT_EQ(shared.to_vector(), std::vector<float>(4099, 2.0f));
+    }
+
     TEST_F(TensorVulkanRuntime, EnvironmentSelectsVulkanForPublicFactories) {
         internal::gpu_backend_reset_for_testing();
 #if defined(_WIN32)

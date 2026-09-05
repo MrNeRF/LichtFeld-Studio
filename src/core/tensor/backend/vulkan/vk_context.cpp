@@ -223,6 +223,8 @@ namespace lfs::core::internal {
                     properties.properties.limits.maxComputeWorkGroupInvocations;
                 std::copy_n(properties.properties.limits.maxComputeWorkGroupSize, 3,
                             caps->max_workgroup_size.begin());
+                std::copy_n(properties.properties.limits.maxComputeWorkGroupCount, 3,
+                            caps->max_workgroup_count.begin());
                 caps->shared_memory_size =
                     properties.properties.limits.maxComputeSharedMemorySize;
                 caps->timestamp_period = properties.properties.limits.timestampPeriod;
@@ -690,12 +692,23 @@ namespace lfs::core::internal {
         if (value == 0) {
             return;
         }
+        LFS_ASSERT_MSG(!dead(), "Vulkan backend device is lost");
         VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         wait_info.semaphoreCount = 1;
         wait_info.pSemaphores = &timeline_;
         wait_info.pValues = &value;
-        vk_check(this, vkWaitSemaphores(device_, &wait_info, std::numeric_limits<uint64_t>::max()),
-                 "vkWaitSemaphores");
+        constexpr uint64_t kSliceNanoseconds = 2'000'000'000ull;
+        for (uint32_t slice = 0;; ++slice) {
+            const VkResult result = vkWaitSemaphores(device_, &wait_info, kSliceNanoseconds);
+            if (result != VK_TIMEOUT) {
+                vk_check(this, result, "vkWaitSemaphores");
+                return;
+            }
+            LFS_ASSERT_MSG(!dead(), "Vulkan backend device is lost");
+            if (slice == 14) {
+                LOG_WARN("Vulkan timeline value {} not signalled after 30 s", value);
+            }
+        }
     }
 
     uint64_t VulkanContext::completed_timeline() const {
@@ -838,16 +851,11 @@ namespace lfs::core::internal {
         std::shared_ptr<VulkanContext> context;
         {
             std::lock_guard lock(g_context_mutex);
-            context = g_context_slot->context;
+            context = std::move(g_context_slot->context);
+            g_context_slot = std::make_shared<ContextSlot>();
         }
         if (context) {
             context->shutdown();
-        }
-        {
-            std::lock_guard lock(g_context_mutex);
-            if (g_context_slot->context == context) {
-                g_context_slot = std::make_shared<ContextSlot>();
-            }
         }
     }
 
