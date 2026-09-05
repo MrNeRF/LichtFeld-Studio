@@ -47,7 +47,8 @@ def main() -> int:
         new_index, new_line = candidate[key]
         rule = ref_line.split()[4]
         scan = rule.startswith("tolerance-scan:")
-        if not scan and not rule.startswith("tolerance:"):
+        reduce = rule.startswith("tolerance-reduce:")
+        if not scan and not reduce and not rule.startswith("tolerance:"):
             if ref_line != new_line:
                 print(f"DIFF {key}")
                 failures += 1
@@ -59,17 +60,25 @@ def main() -> int:
             failures += 1
             continue
         rtol = 1e-5 * max(1.0, math.log2(max(2, len(a))))
-        # Prefix-sum rows scale their bound with the row's largest magnitude.
-        floor = max((abs(x) for x in a if math.isfinite(x)), default=0.0) if scan else 0.0
+        # Prefix-sum rows scale their bound with the largest magnitude of their
+        # scan line (last rule field); reduce rows with the row's largest magnitude.
+        span = int(rule.rsplit(":", 1)[1]) if scan else len(a)
+        floors = [0.0] * len(a)
+        if scan or reduce:
+            for start in range(0, len(a), span):
+                chunk = [abs(x) for x in a[start:start + span] if math.isfinite(x)]
+                floor = max(chunk, default=0.0)
+                for k in range(start, min(len(a), start + span)):
+                    floors[k] = floor
         worst = 0.0
         bad = 0
-        for x, y in zip(a, b):
+        for k, (x, y) in enumerate(zip(a, b)):
             if math.isnan(x) or math.isnan(y):
                 bad += math.isnan(x) != math.isnan(y)
                 continue
             error = abs(x - y)
             worst = max(worst, error / abs(x) if x else error)
-            if error > 1e-6 + rtol * max(abs(x), floor):
+            if error > 1e-6 + rtol * max(abs(x), floors[k]):
                 bad += 1
         status = "ok" if bad == 0 else "FAIL"
         print(f"{status} {key}: n={len(a)} max_rel_error={worst:.3e} violations={bad}")

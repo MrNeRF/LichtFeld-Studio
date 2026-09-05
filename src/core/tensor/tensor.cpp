@@ -450,14 +450,16 @@ namespace lfs::core {
     Tensor Tensor::make_deferred_expr_tensor(TensorShape shape,
                                              const Device device,
                                              const DataType dtype,
+                                             const GpuBackend backend,
                                              std::function<Tensor()> materializer) {
         return make_deferred_expr_tensor(
-            std::move(shape), device, dtype, std::move(materializer), {});
+            std::move(shape), device, dtype, backend, std::move(materializer), {});
     }
 
     Tensor Tensor::make_deferred_expr_tensor(TensorShape shape,
                                              Device device,
                                              DataType dtype,
+                                             const GpuBackend backend,
                                              std::function<Tensor()> materializer,
                                              std::vector<uint64_t> lazy_input_ids) {
         if (!materializer) {
@@ -477,6 +479,7 @@ namespace lfs::core {
         deferred.ensure_state();
         deferred.state_->lazy = std::make_shared<LazyExprState>();
         deferred.state_->lazy->materializer = std::move(materializer);
+        deferred.state_->lazy->backend = backend;
         deferred.id_ = next_id_++;
         deferred.compute_alignment();
 
@@ -585,6 +588,8 @@ namespace lfs::core {
         const bool preserved_tracked = state_->tracked;
         const std::string preserved_name = state_->name;
         const cudaStream_t preserved_stream = state_->stream;
+        const std::optional<GpuBackend> lazy_backend =
+            state_->lazy ? std::optional<GpuBackend>(state_->lazy->backend) : std::nullopt;
 
         data_ = published.data_;
         data_owner_ = published.data_owner_;
@@ -615,6 +620,14 @@ namespace lfs::core {
             state_->tracked = preserved_tracked;
             state_->name = preserved_name;
             state_->stream = preserved_stream;
+        }
+        if (device_ == Device::CUDA) {
+            const GpuBackend backend = internal::gpu_backend_tag(*this);
+            LFS_ASSERT_MSG(!lazy_backend || backend == *lazy_backend,
+                           "deferred tensor materialized on a different GPU backend than its tag");
+            if (backend == GpuBackend::Vulkan) {
+                state_->stream = nullptr;
+            }
         }
 
         // when TensorState is shared, keep lazy->result so sibling handles
@@ -845,6 +858,11 @@ namespace lfs::core {
     }
 
     void Tensor::set_stream(cudaStream_t stream) {
+        // Vulkan storage orders on its own timeline; a CUDA stream identity on it
+        // would make every cross-stream check bridge (a queue submit) for nothing.
+        if (internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
+            stream = nullptr;
+        }
         if (stream) {
             unretire_stream(stream);
         }
@@ -907,7 +925,8 @@ namespace lfs::core {
     void Tensor::sync_to_stream(cudaStream_t execution_stream) const {
         LFS_ASSERT_MSG(is_valid(),
                        "sync_to_stream requires a valid tensor");
-        if (device_ != Device::CUDA) {
+        if (device_ != Device::CUDA ||
+            internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
             return;
         }
         const cudaStream_t home = stream();
@@ -2437,14 +2456,13 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_shape]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
                     return lfs::core::broadcast_to(materialized, deferred_shape);
                 },
                 std::move(deferred_inputs));
-            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source.stream());
             return deferred;
         }

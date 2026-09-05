@@ -348,6 +348,21 @@ namespace lfs::core::internal {
                 };
                 vkCmdCopyBuffer(command, buffer_for(request.src), slice.buffer, 1,
                                 &region);
+                // Makes the transfer write visible to the host domain; the timeline
+                // signal alone only guarantees device visibility.
+                const VkMemoryBarrier2 host_read{
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                };
+                const VkDependencyInfo dependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1,
+                    .pMemoryBarriers = &host_read,
+                };
+                vkCmdPipelineBarrier2(command, &dependency);
             });
         staging_retire_value_ = std::max(staging_retire_value_, value);
         context_.recorders().flush_current();

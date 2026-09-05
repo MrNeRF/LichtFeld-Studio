@@ -459,7 +459,11 @@ namespace lfs::core::internal {
                 chain.ops[i].kind = static_cast<uint8_t>(recipe.ops[i].kind);
                 chain.ops[i].scalar = recipe.ops[i].scalar;
                 if (is_tensor_binary_kind(recipe.ops[i].kind)) {
-                    chain.ops[i].rhs = rhs_storage[rhs_i].ptr<float>();
+                    chain.ops[i].rhs =
+                        rhs_storage[rhs_i].device() == Device::CUDA
+                            ? internal::chain_operand_address(
+                                  internal::storage_ref(rhs_storage[rhs_i]))
+                            : rhs_storage[rhs_i].ptr<float>();
                     ++rhs_i;
                 } else {
                     chain.ops[i].rhs = nullptr;

@@ -2,12 +2,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/vulkan/vk_context.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor_backend.hpp"
 
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -140,6 +145,100 @@ namespace {
         Tensor target = Tensor::zeros({100, 100}, Device::CUDA);
         target.copy_from(view);
         EXPECT_EQ(target.to_vector(), std::vector<float>(10000, 1.0f));
+    }
+
+    TEST_F(TensorBackendValidators, VulkanTensorsNeverTakeACudaStreamIdentity) {
+        // Catches Vulkan storage taking part in CUDA stream bookkeeping: a deferred
+        // result or a prepared input that adopts the current CUDA stream makes every
+        // later cross-stream check bridge, which is a queue submit per operation.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        cudaStream_t stream = nullptr;
+        ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
+        {
+            CUDAStreamGuard guard(stream);
+            const Tensor a = Tensor::ones({1024, 1024}, Device::CUDA);
+            const Tensor b = Tensor::full({1024, 1024}, 2.0f, Device::CUDA);
+            EXPECT_TRUE(a.stream() == nullptr);
+            Tensor c = a.add(b);
+            ASSERT_TRUE(c.is_deferred());
+            EXPECT_TRUE(c.stream() == nullptr);
+            EXPECT_FLOAT_EQ(c.to_vector()[0], 3.0f);
+            EXPECT_TRUE(c.stream() == nullptr);
+            Tensor d = c.mul(a);
+            static_cast<void>(d.to_vector());
+            EXPECT_TRUE(d.stream() == nullptr);
+            const uint64_t completed_before = internal::vulkan_completed_timeline_for_testing();
+            Tensor x = Tensor::ones({16, 16}, Device::CUDA);
+            const Tensor y = Tensor::full({16, 16}, 0.5f, Device::CUDA);
+            for (int i = 0; i < 8; ++i) {
+                x = x.add(y);
+            }
+            EXPECT_FLOAT_EQ(x.to_vector()[0], 5.0f);
+            // Eight eager adds and one readback stay within a couple of submits.
+            EXPECT_LE(internal::vulkan_completed_timeline_for_testing() - completed_before, 3u);
+        }
+        ASSERT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+    }
+
+    TEST_F(TensorBackendValidators, DeferredViewsCarryTheBackendOfTheirSource) {
+        // Catches a view deferral site that drops the tag of its deferred source.
+        GpuBackendScope scope(GpuBackend::Vulkan);
+        const Tensor base = Tensor::ones({64, 128}, Device::CUDA);
+        const Tensor chain = base.add(1.0f);
+        ASSERT_TRUE(chain.is_deferred());
+        const Tensor permuted = chain.permute({1, 0});
+        const Tensor sliced = chain.slice(0, 2, 10);
+        const Tensor reshaped = chain.reshape({128, 64});
+        const Tensor expanded = chain.unsqueeze(0).broadcast_to(TensorShape({3, 64, 128}));
+        for (const Tensor* view : {&permuted, &sliced, &reshaped, &expanded}) {
+            ASSERT_TRUE(view->is_deferred());
+            EXPECT_EQ(gpu_backend_of(*view), GpuBackend::Vulkan);
+        }
+        EXPECT_FLOAT_EQ(permuted.to_vector()[0], 2.0f);
+        EXPECT_FLOAT_EQ(sliced.to_vector()[0], 2.0f);
+        EXPECT_FLOAT_EQ(reshaped.to_vector()[0], 2.0f);
+        EXPECT_FLOAT_EQ(expanded.to_vector()[0], 2.0f);
+        for (const Tensor* view : {&permuted, &sliced, &reshaped, &expanded}) {
+            EXPECT_EQ(gpu_backend_of(*view), GpuBackend::Vulkan);
+        }
+    }
+
+    TEST_F(TensorBackendValidators, DeferredTensorsMaterializeOnTheirLeafBackendOnAnyThread) {
+        // Catches a materializer that allocates on the calling thread's default
+        // backend instead of the leaf backend the tag promised.
+        Tensor deferred;
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            deferred = Tensor::ones({512, 512}, Device::CUDA).add(0.5f).mul(2.0f);
+        }
+        ASSERT_TRUE(deferred.is_deferred());
+        EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
+        std::vector<float> values;
+        std::thread worker([&] {
+            EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
+            values = deferred.to_vector();
+        });
+        worker.join();
+        ASSERT_EQ(values.size(), 262144u);
+        EXPECT_FLOAT_EQ(values[7], 3.0f);
+        EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
+    }
+
+    TEST_F(TensorBackendValidators, InPlaceWriteOnALeafPreservesTheDeferredSnapshotBackend) {
+        // Catches snapshot preservation cloning the leaf on the scope default
+        // instead of the leaf backend.
+        Tensor leaf;
+        Tensor deferred;
+        {
+            GpuBackendScope scope(GpuBackend::Vulkan);
+            leaf = Tensor::ones({512, 512}, Device::CUDA);
+            deferred = leaf.add(1.0f);
+        }
+        leaf.mul_(10.0f);
+        EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
+        EXPECT_FLOAT_EQ(deferred.to_vector()[0], 2.0f);
+        EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
+        EXPECT_EQ(gpu_backend_of(leaf), GpuBackend::Vulkan);
     }
 
     TEST_F(TensorBackendValidators, ProcessDefaultIsReadOnceAndInvalidValuesAreRejected) {

@@ -128,9 +128,13 @@ namespace {
 
     // Scan rows hold prefix sums, so their bound scales with the largest
     // magnitude of the row instead of the element, which passes through zero.
+    // Reduce rows sum many inputs of similar scale, so an output that cancels
+    // toward zero still carries the rounding error of its partials; their bound
+    // scales with the largest magnitude of the row.
     enum class Rule { Digest,
                       Tolerance,
                       Scan,
+                      Reduce,
                       Permutation,
                       Stat };
 
@@ -181,15 +185,15 @@ namespace {
         ENTRY(launch_broadcast_binary, "Tensor::add(broadcast)", kBinary, Digest),
         ENTRY(launch_ieee_maximum_float_broadcast, "Tensor::maximum(broadcast)", kF32, Digest),
         ENTRY(launch_ieee_minimum_float_broadcast, "Tensor::minimum(broadcast)", kF32, Digest),
-        ENTRY(direct_sum_scalar, "Tensor::sum_scalar", kF32, Tolerance),
-        ENTRY(direct_mean_scalar, "Tensor::mean_scalar", kF32, Tolerance),
+        ENTRY(direct_sum_scalar, "Tensor::sum_scalar", kF32, Reduce),
+        ENTRY(direct_mean_scalar, "Tensor::mean_scalar", kF32, Reduce),
         ENTRY(direct_max_scalar, "Tensor::max_scalar", kF32, Digest),
         ENTRY(direct_min_scalar, "Tensor::min_scalar", kF32, Digest),
-        ENTRY(launch_reduce_op, "Tensor::sum", kReduce, Tolerance),
-        ENTRY(launch_column_reduce, "Tensor::sum(0)", kF32, Tolerance),
-        ENTRY(launch_strided_reduce_fast, "Tensor::sum(1)", kF32, Tolerance),
-        ENTRY(launch_fused_transform_reduce, "Tensor::add(float).sum", kF32, Tolerance),
-        ENTRY(launch_fused_segmented_transform_reduce, "Tensor::add(float).sum(-1)", kF32, Tolerance),
+        ENTRY(launch_reduce_op, "Tensor::sum", kReduce, Reduce),
+        ENTRY(launch_column_reduce, "Tensor::sum(0)", kF32, Reduce),
+        ENTRY(launch_strided_reduce_fast, "Tensor::sum(1)", kF32, Reduce),
+        ENTRY(launch_fused_transform_reduce, "Tensor::add(float).sum", kF32, Reduce),
+        ENTRY(launch_fused_segmented_transform_reduce, "Tensor::add(float).sum(-1)", kF32, Reduce),
         ENTRY(launch_count_nonzero_bool, "Tensor::count_nonzero(Bool)", kBool, Digest),
         ENTRY(launch_count_nonzero_float, "Tensor::count_nonzero(Float32)", kF32, Digest),
         ENTRY(launch_cumsum, "Tensor::cumsum", kF32I32, Scan),
@@ -376,6 +380,14 @@ namespace {
         }
         if (name == "launch_strided_reduce_fast") {
             inputs.input = make_tensor({2, 3, std::max<size_t>(profile.cols, 257)}, dtype, seed);
+        }
+        if (name == "has_nan_gpu" || name == "has_inf_gpu") {
+            // The dirty copy is prepared here so the timed window holds only the two checks.
+            std::vector<float> host = inputs.a.cpu().to_vector();
+            host[(inputs.a.numel() * 7 + 3) % inputs.a.numel()] =
+                name == "has_nan_gpu" ? std::numeric_limits<float>::quiet_NaN()
+                                      : std::numeric_limits<float>::infinity();
+            inputs.rhs = Tensor::from_vector(host, inputs.a.shape(), Device::CPU).to(Device::CUDA);
         }
         if (name == "launch_sort_1d" || name == "launch_sort_2d") {
             inputs.input = name == "launch_sort_1d" ? make_tensor({elements(profile)}, dtype, seed)
@@ -722,20 +734,15 @@ namespace {
         if (name == "launch_eye")
             return {Tensor::eye(inputs.profile.rows, inputs.profile.cols)};
         if (name == "has_nan_gpu" || name == "has_inf_gpu") {
-            // The clean input answers false; a copy with one injected special value at
-            // a seeded position answers true, so a constant-false entry fails the row.
-            std::vector<float> host = a.cpu().to_vector();
-            host[(a.numel() * 7 + 3) % a.numel()] =
-                name == "has_nan_gpu" ? std::numeric_limits<float>::quiet_NaN()
-                                      : std::numeric_limits<float>::infinity();
-            const Tensor dirty = Tensor::from_vector(host, a.shape(), Device::CPU).to(Device::CUDA);
+            // The clean input answers false; the copy with one injected special value
+            // (prepared outside the timed window) answers true, so a constant-false
+            // entry fails the row.
+            const Tensor& dirty = inputs.rhs;
             const bool clean_result = name == "has_nan_gpu" ? a.has_nan() : a.has_inf();
             const bool dirty_result = name == "has_nan_gpu" ? dirty.has_nan() : dirty.has_inf();
             return {Tensor::from_vector(std::vector<float>{clean_result ? 1.0f : 0.0f,
                                                            dirty_result ? 1.0f : 0.0f},
                                         {2}, Device::CPU)};
-            const bool result = clean_result;
-            return {Tensor::from_vector({result}, {1}, Device::CPU)};
         }
         throw std::runtime_error("no runner for " + std::string(name));
     }
@@ -869,15 +876,19 @@ namespace {
     // Wrap-around integer arithmetic is associative, so integral inputs on a
     // tolerance entry are bitwise-reproducible and compared by digest.
     Rule effective_rule(const Entry& entry, DataType dtype) {
-        const bool tolerance = entry.rule == Rule::Tolerance || entry.rule == Rule::Scan;
+        const bool tolerance = entry.rule == Rule::Tolerance || entry.rule == Rule::Scan ||
+                               entry.rule == Rule::Reduce;
         return tolerance && integral_dtype(dtype) ? Rule::Digest : entry.rule;
     }
 
-    std::string rule_name(Rule rule) {
+    // Scan rows carry their line length so the comparator can bound each
+    // prefix sum by the largest magnitude of its own line.
+    std::string rule_name(Rule rule, const Profile& profile) {
         switch (rule) {
         case Rule::Digest: return "digest";
         case Rule::Tolerance: return "tolerance:1e-5:1e-6";
-        case Rule::Scan: return "tolerance-scan:1e-5:1e-6";
+        case Rule::Scan: return "tolerance-scan:1e-5:1e-6:" + std::to_string(profile.cols);
+        case Rule::Reduce: return "tolerance-reduce:1e-5:1e-6";
         case Rule::Permutation: return "permutation";
         case Rule::Stat: return "stat";
         }
@@ -1227,7 +1238,7 @@ namespace {
                                                : digest(bytes);
                         std::ostringstream line;
                         line << entry.launcher << ' ' << entry.call << ' ' << profile.name << ' '
-                             << compact_dtype_name(dtype) << ' ' << rule_name(rule) << ' ' << result;
+                             << compact_dtype_name(dtype) << ' ' << rule_name(rule, profile) << ' ' << result;
                         lines.push_back(line.str());
                         if (write_files)
                             entries_file << case_index << ' ' << entry.launcher << ' ' << profile.name
@@ -1346,10 +1357,23 @@ namespace {
             std::istringstream fields(lines[i]);
             std::string launcher, call, profile, dtype, rule;
             fields >> launcher >> call >> profile >> dtype >> rule;
+            {
+                std::istringstream reference_fields(reference_lines[i]);
+                std::string reference_key[4];
+                reference_fields >> reference_key[0] >> reference_key[1] >> reference_key[2] >> reference_key[3];
+                if (reference_key[0] != launcher || reference_key[1] != call ||
+                    reference_key[2] != profile || reference_key[3] != dtype) {
+                    std::cerr << "row " << i << " key differs from the reference: " << lines[i]
+                              << " vs " << reference_lines[i] << '\n';
+                    ++failures;
+                    continue;
+                }
+            }
             const auto reference_file = options.reference / (std::to_string(i) + ".bin");
             const auto candidate_file = options.output / (std::to_string(i) + ".bin");
             const bool scan = rule.starts_with("tolerance-scan:");
-            if (scan || rule.starts_with("tolerance:")) {
+            const bool reduce = rule.starts_with("tolerance-reduce:");
+            if (scan || reduce || rule.starts_with("tolerance:")) {
                 if (!std::filesystem::is_regular_file(reference_file) ||
                     !std::filesystem::is_regular_file(candidate_file)) {
                     std::cerr << "row " << i << " has no dumped bytes to compare: " << lines[i] << '\n';
@@ -1365,11 +1389,25 @@ namespace {
                 }
                 const double rtol = 1e-5 * std::max(1.0, std::log2(static_cast<double>(std::max<size_t>(2, reference.size()))));
                 const double atol = 1e-6;
-                double scale_floor = 0.0;
+                // Scan rows: the floor is the largest magnitude of the element's own
+                // scan line (line length is the last rule field). Reduce rows: the
+                // largest magnitude of the row.
+                size_t line_length = reference.size();
                 if (scan) {
-                    for (const double a : reference)
-                        if (!std::isnan(a) && !std::isinf(a))
-                            scale_floor = std::max(scale_floor, std::abs(a));
+                    const auto last_colon = rule.rfind(':');
+                    line_length = std::max<size_t>(1, std::stoul(rule.substr(last_colon + 1)));
+                }
+                std::vector<double> floors(reference.size(), 0.0);
+                if (scan || reduce) {
+                    const size_t span = scan ? line_length : reference.size();
+                    for (size_t start = 0; start < reference.size(); start += span) {
+                        const size_t stop = std::min(reference.size(), start + span);
+                        double floor = 0.0;
+                        for (size_t k = start; k < stop; ++k)
+                            if (!std::isnan(reference[k]) && !std::isinf(reference[k]))
+                                floor = std::max(floor, std::abs(static_cast<double>(reference[k])));
+                        std::fill(floors.begin() + start, floors.begin() + stop, floor);
+                    }
                 }
                 double row_worst = 0.0;
                 bool row_ok = true;
@@ -1382,7 +1420,7 @@ namespace {
                         continue;
                     }
                     const double error = std::abs(a - b);
-                    const double bound = atol + rtol * std::max(std::abs(a), scale_floor);
+                    const double bound = atol + rtol * std::max(std::abs(a), floors[k]);
                     row_worst = std::max(row_worst, std::abs(a) > 0 ? error / std::abs(a) : error);
                     if (error > bound)
                         row_ok = false;

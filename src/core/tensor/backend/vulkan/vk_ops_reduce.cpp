@@ -32,6 +32,8 @@ namespace lfs::core::internal {
         constexpr uint32_t kSegmentedMode = 2;
         constexpr uint32_t kStridedMode = 3;
         constexpr uint32_t kGeneralMode = 4;
+        // Shader element code for float2 (sum, compensation) partials.
+        constexpr uint32_t kPairCode = 8;
 
         constexpr size_t kMaxPartials = 1024;
         constexpr size_t kElementsPerPartial = kLocalSize * 8;
@@ -97,11 +99,15 @@ namespace lfs::core::internal {
             return op == ReduceOp::Any || op == ReduceOp::All;
         }
 
-        // Partial results keep the accumulator width: float for float
-        // arithmetic, int64 for integer, boolean and logical reductions.
-        DataType partial_dtype(const DataType input, const ReduceOp op) {
-            return input == DataType::Float32 && !logical_op(op) ? DataType::Float32
-                                                                 : DataType::Int64;
+        // Partial results keep the accumulator width: (sum, compensation) pairs
+        // for float sums, float for float max/min/prod, int64 for integer,
+        // boolean and logical reductions. Every partial slot is 8 bytes.
+        uint32_t partial_code(const DataType input, const ReduceOp op) {
+            if (input != DataType::Float32 || logical_op(op)) {
+                return shader_dtype(DataType::Int64);
+            }
+            return op == ReduceOp::Sum || op == ReduceOp::Mean ? kPairCode
+                                                               : shader_dtype(DataType::Float32);
         }
 
         float mean_scale_for(const ReduceOp op, const size_t reduce) {
@@ -109,7 +115,7 @@ namespace lfs::core::internal {
         }
 
         struct Chain {
-            StorageRef table;
+            vk::ScopedAllocation table;
             uint32_t length = 0;
             std::vector<StorageRef> reads;
         };
@@ -122,15 +128,15 @@ namespace lfs::core::internal {
                 .length = static_cast<uint32_t>(chain.num_ops),
             };
             result.reads.reserve(1 + rhs_storages.size());
-            result.reads.push_back(result.table);
+            result.reads.push_back(result.table.storage());
             result.reads.insert(result.reads.end(), rhs_storages.begin(), rhs_storages.end());
             return result;
         }
 
         struct Stage {
             ReduceOp op;
-            DataType input_dtype;
-            DataType output_dtype;
+            uint32_t input_code;
+            uint32_t output_code;
             uint32_t mode;
             StorageRef input;
             StorageRef output;
@@ -146,13 +152,13 @@ namespace lfs::core::internal {
             stage.push.input_address = address(stage.input);
             stage.push.output_address = address(stage.output);
             if (stage.chain != nullptr) {
-                stage.push.chain_address = address(stage.chain->table);
+                stage.push.chain_address = address(stage.chain->table.storage());
                 stage.push.chain_length = stage.chain->length;
             }
             const std::array constants{
                 static_cast<uint32_t>(stage.op),
-                shader_dtype(stage.input_dtype),
-                shader_dtype(stage.output_dtype),
+                stage.input_code,
+                stage.output_code,
                 stage.mode,
                 stage.chain != nullptr ? 1u : 0u,
             };
@@ -187,8 +193,8 @@ namespace lfs::core::internal {
             if (count <= kSingleGroupFullReduce) {
                 Stage stage{
                     .op = op,
-                    .input_dtype = input_dtype,
-                    .output_dtype = output_dtype,
+                    .input_code = shader_dtype(input_dtype),
+                    .output_code = shader_dtype(output_dtype),
                     .mode = kSegmentedMode,
                     .input = input,
                     .output = output,
@@ -203,13 +209,13 @@ namespace lfs::core::internal {
             }
             const size_t groups =
                 std::min(kMaxPartials, (count + kElementsPerPartial - 1) / kElementsPerPartial);
-            const DataType partial = partial_dtype(input_dtype, op);
-            const StorageRef partials =
-                context.memory().allocate(groups * sizeof(int64_t), 16, {});
+            const uint32_t partial = partial_code(input_dtype, op);
+            const vk::ScopedAllocation partial_block(context, groups * sizeof(int64_t));
+            const StorageRef partials = partial_block.storage();
             Stage first{
                 .op = op,
-                .input_dtype = input_dtype,
-                .output_dtype = partial,
+                .input_code = shader_dtype(input_dtype),
+                .output_code = partial,
                 .mode = kPartialMode,
                 .input = input,
                 .output = partials,
@@ -221,8 +227,8 @@ namespace lfs::core::internal {
             record_stage(context, first);
             Stage second{
                 .op = op,
-                .input_dtype = partial,
-                .output_dtype = output_dtype,
+                .input_code = partial,
+                .output_code = shader_dtype(output_dtype),
                 .mode = kSegmentedMode,
                 .input = partials,
                 .output = output,
@@ -232,7 +238,6 @@ namespace lfs::core::internal {
             second.push.inner = 1;
             second.push.mean_scale = mean_scale;
             record_stage(context, second);
-            context.memory().deallocate(partials);
         }
 
         // Reduces the middle extent of an (outer, reduce, inner) view into
@@ -256,8 +261,8 @@ namespace lfs::core::internal {
             if (inner == 1 && reduce >= kSegmentedThreshold) {
                 Stage stage{
                     .op = op,
-                    .input_dtype = input_dtype,
-                    .output_dtype = output_dtype,
+                    .input_code = shader_dtype(input_dtype),
+                    .output_code = shader_dtype(output_dtype),
                     .mode = kSegmentedMode,
                     .input = input,
                     .output = output,
@@ -284,8 +289,8 @@ namespace lfs::core::internal {
             if (splits == 1) {
                 Stage stage{
                     .op = op,
-                    .input_dtype = input_dtype,
-                    .output_dtype = output_dtype,
+                    .input_code = shader_dtype(input_dtype),
+                    .output_code = shader_dtype(output_dtype),
                     .mode = kStridedMode,
                     .input = input,
                     .output = output,
@@ -300,13 +305,13 @@ namespace lfs::core::internal {
                 record_stage(context, stage);
                 return;
             }
-            const DataType partial = partial_dtype(input_dtype, op);
-            const StorageRef partials =
-                context.memory().allocate(splits * outputs * sizeof(int64_t), 16, {});
+            const uint32_t partial = partial_code(input_dtype, op);
+            const vk::ScopedAllocation partial_block(context, splits * outputs * sizeof(int64_t));
+            const StorageRef partials = partial_block.storage();
             Stage first{
                 .op = op,
-                .input_dtype = input_dtype,
-                .output_dtype = partial,
+                .input_code = shader_dtype(input_dtype),
+                .output_code = partial,
                 .mode = kStridedMode,
                 .input = input,
                 .output = partials,
@@ -322,8 +327,8 @@ namespace lfs::core::internal {
             record_stage(context, first);
             Stage second{
                 .op = op,
-                .input_dtype = partial,
-                .output_dtype = output_dtype,
+                .input_code = partial,
+                .output_code = shader_dtype(output_dtype),
                 .mode = kStridedMode,
                 .input = partials,
                 .output = output,
@@ -335,41 +340,48 @@ namespace lfs::core::internal {
             second.push.split_chunk = static_cast<uint32_t>(splits);
             second.push.mean_scale = mean_scale;
             record_stage(context, second);
-            context.memory().deallocate(partials);
         }
 
-        // Reduces the axes of reduced_mask, which are not one contiguous run,
-        // with one thread per output element.
-        void reduce_general(VulkanContext& context, const ReduceOp op,
+        // Reduces the axes of reduced_mask, which are not one contiguous run: the
+        // kept axes are permute-copied to the front so the contiguous-run path,
+        // with its splits, does the work (one thread per output over a strided
+        // walk was two orders of magnitude slower).
+        void reduce_general(VulkanBackendOps& ops, VulkanContext& context, const ReduceOp op,
                             const StorageRef input, const DataType input_dtype,
                             const StorageRef output, const DataType output_dtype,
                             const StridedLayout& layout, const uint32_t reduced_mask) {
             size_t outputs = 1;
             size_t reduce = 1;
-            Stage stage{
-                .op = op,
-                .input_dtype = input_dtype,
-                .output_dtype = output_dtype,
-                .mode = kGeneralMode,
-                .input = input,
-                .output = output,
-            };
-            for (size_t axis = 0; axis < layout.rank; ++axis) {
-                stage.push.dims[axis] = checked_u32(layout.dims[axis],
-                                                    "Vulkan reduction dimension exceeds uint32");
+            std::array<size_t, MAX_TENSOR_RANK> strides{};
+            size_t stride = 1;
+            for (size_t axis = layout.rank; axis-- > 0;) {
+                strides[axis] = stride;
+                stride *= layout.dims[axis];
                 ((reduced_mask >> axis) & 1u ? reduce : outputs) *= layout.dims[axis];
             }
             if (outputs == 0 || reduce == 0) {
                 return;
             }
-            stage.groups_x = dispatch_groups(context, outputs);
-            stage.push.outer = checked_u32(outputs, "Vulkan reduction output count exceeds uint32");
-            stage.push.reduce = checked_u32(reduce, "Vulkan reduction size exceeds uint32");
-            stage.push.inner = 1;
-            stage.push.reduced_mask = reduced_mask;
-            stage.push.rank = static_cast<uint32_t>(layout.rank);
-            stage.push.mean_scale = mean_scale_for(op, reduce);
-            record_stage(context, stage);
+            StridedLayout permuted{};
+            permuted.rank = layout.rank;
+            permuted.element_count = layout.element_count;
+            size_t position = 0;
+            for (const bool reduced_pass : {false, true}) {
+                for (size_t axis = 0; axis < layout.rank; ++axis) {
+                    if ((((reduced_mask >> axis) & 1u) != 0u) == reduced_pass) {
+                        permuted.dims[position] = layout.dims[axis];
+                        permuted.strides[position] = strides[axis];
+                        ++position;
+                    }
+                }
+            }
+            const vk::ScopedAllocation scratch(
+                context, layout.element_count * dtype_size(input_dtype));
+            StorageRef permuted_input = scratch.storage();
+            permuted_input.dtype = input_dtype;
+            ops.strided_copy(input, permuted_input, permuted, {});
+            reduce_axes(context, op, permuted_input, input_dtype, output, output_dtype,
+                        outputs, reduce, 1, nullptr);
         }
 
         float scalar_reduce(const ReduceOp op, const StorageRef input, const size_t count) {
@@ -383,7 +395,8 @@ namespace lfs::core::internal {
                 }
             }
             const auto context = acquire_vulkan_context();
-            const StorageRef scratch = context->memory().allocate(16, 16, {});
+            const vk::ScopedAllocation scratch_block(*context, 16);
+            const StorageRef scratch = scratch_block.storage();
             reduce_full(*context, op, input, DataType::Float32, count, scratch,
                         DataType::Float32, nullptr);
             float value = 0.0f;
@@ -394,7 +407,6 @@ namespace lfs::core::internal {
                 .synchronous = true,
                 .operation = "tensor.reduce.scalar",
             });
-            context->memory().deallocate(scratch);
             return value;
         }
 
@@ -405,7 +417,8 @@ namespace lfs::core::internal {
                 return 0;
             }
             const auto context = acquire_vulkan_context();
-            const StorageRef scratch = context->memory().allocate(16, 16, {});
+            const vk::ScopedAllocation scratch_block(*context, 16);
+            const StorageRef scratch = scratch_block.storage();
             context->memory().memset(FillRequest{
                 .dst = scratch,
                 .bytes = sizeof(uint32_t),
@@ -439,7 +452,6 @@ namespace lfs::core::internal {
                 .synchronous = true,
                 .operation = "tensor.count.readback",
             });
-            context->memory().deallocate(scratch);
             return value;
         }
     } // namespace
@@ -472,6 +484,8 @@ namespace lfs::core::internal {
                        "reduction axis count exceeds MAX_TENSOR_RANK");
         LFS_ASSERT_MSG(input.dtype != DataType::Float16,
                        "Vulkan backend: Float16 reduction is not implemented yet");
+        LFS_ASSERT_MSG(output.dtype == program.result_dtype,
+                       "Vulkan reduction output storage dtype does not match the program");
         if (input_layout.element_count == 0) {
             return;
         }
@@ -494,7 +508,7 @@ namespace lfs::core::internal {
             contiguous_run = contiguous_run && (i == 0 || axes[i] == axes[i - 1] + 1);
         }
         if (!contiguous_run) {
-            reduce_general(*context, program.op, input, input.dtype, output,
+            reduce_general(*this, *context, program.op, input, input.dtype, output,
                            program.result_dtype, input_layout, reduced_mask);
             return;
         }
@@ -542,7 +556,6 @@ namespace lfs::core::internal {
         const Chain descriptors = make_chain(*context, chain, rhs_storages);
         reduce_full(*context, program.op, input, DataType::Float32, count, output,
                     DataType::Float32, &descriptors);
-        context->memory().deallocate(descriptors.table);
     }
 
     void VulkanBackendOps::fused_segmented_transform_reduce(
@@ -558,7 +571,6 @@ namespace lfs::core::internal {
         const Chain descriptors = make_chain(*context, chain, rhs_storages);
         reduce_axes(*context, program.op, input, DataType::Float32, output, DataType::Float32,
                     segment_count, segment_size, 1, &descriptors);
-        context->memory().deallocate(descriptors.table);
     }
 
     size_t VulkanBackendOps::count_nonzero_bool(
@@ -605,9 +617,9 @@ namespace lfs::core::internal {
             return;
         }
         const auto context = acquire_vulkan_context();
-        // Many short lines scan one per thread; few long lines get a workgroup
-        // each and scan in chunks with a carried total.
-        const uint32_t mode = lines >= 1024 || size <= 32 ? 0u : 1u;
+        // Short lines scan one per thread; any longer line gets a workgroup and
+        // scans in chunks with a carried total (the line loop covers any count).
+        const uint32_t mode = size <= 32 ? 0u : 1u;
         const std::array constants{shader_dtype(data.dtype), mode};
         const VulkanPipeline& pipeline =
             context->pipelines().specialized("scan", sizeof(ScanPush), constants);

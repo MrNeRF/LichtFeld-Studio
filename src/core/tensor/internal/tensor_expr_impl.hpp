@@ -38,13 +38,10 @@ namespace lfs::core {
 
         expr = expr.snapshot();
         const cudaStream_t stream_hint = expr.stream_hint_impl();
-        const std::optional<GpuBackend> backend = expr.gpu_backend();
+        const GpuBackend backend = expr.gpu_backend().value_or(GpuBackend::CUDA);
         Tensor deferred = Tensor::make_deferred_expr_tensor(
-            shape, device, dtype,
+            shape, device, dtype, backend,
             [expr = std::move(expr)]() mutable { return expr.eval(); });
-        if (backend) {
-            internal::tag_deferred_gpu_backend(deferred, *backend);
-        }
         deferred.set_stream(stream_hint);
         return deferred;
     }

@@ -521,11 +521,26 @@ def shared_cuda_pointer(fragments: list[Fragment]):
 
 @functools.lru_cache(maxsize=None)
 def includes_application_headers(path: Path) -> str | None:
-    for line in path.read_text(errors="replace").splitlines():
-        match = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
-        if match and (match.group(1).startswith(APPLICATION_INCLUDE_PREFIXES) or
-                      "/kernels/" in match.group(1) or match.group(1).endswith(".cuh")):
-            return match.group(1)
+    # Walks the registration file and every tests/ header it reaches, so a
+    # fixture header that pulls in production code marks its tests as consumers.
+    pending = [path]
+    visited: set[Path] = set()
+    while pending:
+        current = pending.pop()
+        if current in visited or not current.is_file():
+            continue
+        visited.add(current)
+        for line in current.read_text(errors="replace").splitlines():
+            match = re.match(r'\s*#\s*include\s*[<"]([^>"]+)[>"]', line)
+            if not match:
+                continue
+            include = match.group(1)
+            if (include.startswith(APPLICATION_INCLUDE_PREFIXES) or "/kernels/" in include or
+                    include.endswith(".cuh")):
+                return include if current == path else f"{include} (via {current.name})"
+            local = current.parent / include
+            if local.suffix in {".hpp", ".h", ".hh"} and local.is_file():
+                pending.append(local)
     return None
 
 
@@ -611,7 +626,6 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
         (
             r"\bcuda(?:Memcpy|Memset)(?:Async|2D|3D)?\s*\([^;]*(?:\.ptr\s*<|\.data_ptr\s*\()",
             r"(?:\.ptr\s*<|\.data_ptr\s*\()[^;]*\bcuda(?:Memcpy|Memset)(?:Async|2D|3D)?\s*\(",
-            r"\b(?:cudaDeviceSynchronize|cudaStreamSynchronize)\s*\(",
             r"\bGateStream\b",
             r"\b(?:thrust|cub)::[^;]*(?:\.ptr\s*<|\.data_ptr\s*\()",
             r"<<<[^>]*>>>",
@@ -634,6 +648,28 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
     if cuda_launcher:
         file, line, _ = cuda_launcher
         return "cuda-only", f"{file}:{line}: calls the CUDA launcher layer directly"
+
+    # Tests that assert the CUDA backend by design, or drive a CUDA launcher
+    # hook, describe CUDA behaviour and cannot pass under another default.
+    backend_assertion = first_match(
+        fragments,
+        (
+            r"\b(?:EXPECT|ASSERT)_(?:EQ|NE|TRUE|FALSE)\s*\([^;]*\bGpuBackend::CUDA\b",
+            r"\bset_cub_workspace_failure_for_testing\s*\(\s*true",
+            r"\bset_reduce_path_override_for_testing\s*\(",
+            # CUDA stream identity, CUDA pool accounting and CUDA launch counters
+            # are contracts of the CUDA backend, not of the tensor interface.
+            r"\b(?:EXPECT|ASSERT)_(?:EQ|NE)\s*\([^;]*\.stream\s*\(\)",
+            r"\bCudaMemoryPool\b",
+            r"\balloc_counter\b|\bAllocCounter\b",
+            r"\b(?:reset_)?tensor_kernel_launch_count\s*\(",
+            r"\bassert_device_storage_matches_tag\b|device-tag mismatch",
+            r"\bfrom_blob\s*\([^;]*(?:\.data_ptr\s*\(|\.ptr\s*<)",
+        ),
+    )
+    if backend_assertion:
+        file, line, _ = backend_assertion
+        return "cuda-only", f"{file}:{line}: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)"
 
     tensor_signal = bool(
         launchers

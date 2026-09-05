@@ -29,7 +29,7 @@ namespace lfs::core::internal {
             return cuda_pointer<const T>(storage);
         }
 
-        void prime_stream_polling(const ExecContext context) {
+        void prime_stream_polling(const ExecContext context, const char* const operation) {
             // Runtime scheduling side effect, not useful work: a query on the stream
             // keeps the following blocking synchronization on the CUDA runtime's
             // active polling path. Measured on driver 580.173 (RTX 4090): without it
@@ -37,7 +37,9 @@ namespace lfs::core::internal {
             // Re-measure before removing (tensor_backend_corpus --time --only direct_).
             const cudaError_t status = cudaStreamQuery(context.cuda_stream);
             if (status != cudaSuccess && status != cudaErrorNotReady) {
-                LFS_CUDA_CHECK(status);
+                LFS_CUDA_CHECK_MSG_STREAM(status, context.cuda_stream,
+                                          "{} (stream query before the synchronous reduction)",
+                                          operation);
             }
         }
 
@@ -71,7 +73,7 @@ namespace lfs::core::internal {
     float CudaBackendOps::sum_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(sum_scalar);
-        prime_stream_polling(context);
+        prime_stream_polling(context, "sum_scalar");
         return tensor_ops::direct_sum_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
@@ -79,7 +81,7 @@ namespace lfs::core::internal {
     float CudaBackendOps::mean_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(mean_scalar);
-        prime_stream_polling(context);
+        prime_stream_polling(context, "mean_scalar");
         return tensor_ops::direct_mean_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
@@ -87,7 +89,7 @@ namespace lfs::core::internal {
     float CudaBackendOps::max_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(max_scalar);
-        prime_stream_polling(context);
+        prime_stream_polling(context, "max_scalar");
         return tensor_ops::direct_max_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
@@ -95,7 +97,7 @@ namespace lfs::core::internal {
     float CudaBackendOps::min_scalar(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(min_scalar);
-        prime_stream_polling(context);
+        prime_stream_polling(context, "min_scalar");
         return tensor_ops::direct_min_scalar(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
@@ -172,7 +174,7 @@ namespace lfs::core::internal {
     bool CudaBackendOps::has_nan(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(has_nan);
-        prime_stream_polling(context);
+        prime_stream_polling(context, "has_nan");
         return tensor_ops::has_nan_gpu(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }
@@ -180,7 +182,7 @@ namespace lfs::core::internal {
     bool CudaBackendOps::has_inf(
         const StorageRef input, const size_t count, const ExecContext context) {
         LFS_FACADE_TRACE(has_inf);
-        prime_stream_polling(context);
+        prime_stream_polling(context, "has_inf");
         return tensor_ops::has_inf_gpu(
             cuda_const_pointer<float>(input), count, context.cuda_stream);
     }

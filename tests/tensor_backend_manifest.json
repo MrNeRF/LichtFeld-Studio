@@ -107,8 +107,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_adam_capacity_invariant.cpp",
     "line": 143,
-    "eligibility": "consumer",
-    "reason": "includes optimizer/adam_optimizer.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_adam_capacity_invariant.cpp:182: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_convert_type",
       "launch_index_select",
@@ -143,7 +143,7 @@
     "file": "tests/test_adam_capacity_invariant.cpp",
     "line": 51,
     "eligibility": "cuda-only",
-    "reason": "tests/test_adam_capacity_invariant.cpp:109: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_adam_capacity_invariant.cpp:110: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -158,7 +158,7 @@
     "file": "tests/test_fastgs_kernels.cpp",
     "line": 745,
     "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_kernels.cpp:779: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_fastgs_kernels.cpp:784: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_strided_upload",
@@ -415,8 +415,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_steady_alloc_invariant.cpp",
     "line": 79,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_steady_alloc_invariant.cpp:80: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -427,7 +427,7 @@
     "file": "tests/test_alloc_counter.cpp",
     "line": 41,
     "eligibility": "cuda-only",
-    "reason": "tests/test_alloc_counter.cpp:21: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_alloc_counter.cpp:44: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -440,7 +440,7 @@
     "file": "tests/test_alloc_counter.cpp",
     "line": 54,
     "eligibility": "cuda-only",
-    "reason": "tests/test_alloc_counter.cpp:21: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_alloc_counter.cpp:66: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -452,8 +452,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_alloc_counter.cpp",
     "line": 34,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_alloc_counter.cpp:35: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -464,7 +464,7 @@
     "file": "tests/test_alloc_counter.cpp",
     "line": 75,
     "eligibility": "cuda-only",
-    "reason": "tests/test_alloc_counter.cpp:21: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_alloc_counter.cpp:79: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -477,7 +477,7 @@
     "file": "tests/test_allocator_hygiene.cpp",
     "line": 167,
     "eligibility": "cuda-only",
-    "reason": "tests/test_allocator_hygiene.cpp:42: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_allocator_hygiene.cpp:189: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_count_nonzero_bool",
       "launch_count_nonzero_float",
@@ -504,8 +504,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_allocator_hygiene.cpp",
     "line": 51,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_allocator_hygiene.cpp:42: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -521,7 +520,7 @@
     "file": "tests/test_allocator_hygiene.cpp",
     "line": 132,
     "eligibility": "cuda-only",
-    "reason": "tests/test_allocator_hygiene.cpp:42: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_allocator_hygiene.cpp:133: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fill_strided",
       "launch_load_op"
@@ -535,7 +534,7 @@
     "file": "tests/test_allocator_hygiene.cpp",
     "line": 93,
     "eligibility": "cuda-only",
-    "reason": "tests/test_allocator_hygiene.cpp:42: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_allocator_hygiene.cpp:94: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -570,7 +569,7 @@
     "file": "tests/test_allocator_policy.cpp",
     "line": 136,
     "eligibility": "cuda-only",
-    "reason": "tests/test_allocator_policy.cpp:166: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_allocator_policy.cpp:153: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_load_op"
     ],
@@ -677,8 +676,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 939,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -766,8 +765,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2797,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:2608: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -794,8 +793,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2879,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:2608: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -818,8 +817,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2903,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:2608: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -842,8 +841,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 2840,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:2643: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -1002,8 +1001,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 731,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -1033,8 +1032,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 821,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -1053,8 +1052,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 797,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -1070,8 +1069,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 772,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -1087,8 +1086,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 885,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_ieee_round_float",
@@ -1107,8 +1106,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 848,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:231: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_ieee_round_float",
@@ -4047,8 +4046,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1192,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:1225: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -4068,8 +4067,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1241,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:1315: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -4089,8 +4088,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1349,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:1422: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -4110,8 +4109,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1440,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:1535: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -4131,8 +4130,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_analytical_gradients.cpp",
     "line": 1554,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_analytical_gradients.cpp:1577: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -5235,8 +5234,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_compact_splats_peak.cpp",
     "line": 79,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_compact_splats_peak.cpp:98: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_index_select",
       "launch_strided_copy",
@@ -6493,8 +6492,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_deferred_d3_pin_operands.cpp",
     "line": 261,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_deferred_d3_pin_operands.cpp:287: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -6517,8 +6516,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densification_info_zero.cpp",
     "line": 90,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densification_info_zero.cpp:111: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -6533,8 +6532,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densification_info_zero.cpp",
     "line": 36,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densification_info_zero.cpp:60: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -7593,8 +7592,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_events_4x.cpp",
     "line": 236,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:254: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -7606,8 +7605,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_events_4x.cpp",
     "line": 205,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:226: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -7619,8 +7618,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_events_4x.cpp",
     "line": 264,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:278: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -7633,7 +7632,7 @@
     "file": "tests/test_densify_events_4x.cpp",
     "line": 104,
     "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:135: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_densify_events_4x.cpp:138: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -7646,8 +7645,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_events_4x.cpp",
     "line": 147,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:164: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -7659,8 +7658,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_events_4x.cpp",
     "line": 173,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:183: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -7672,8 +7671,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_densify_events_4x.cpp",
     "line": 193,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_densify_events_4x.cpp:199: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -8197,8 +8196,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 241,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_device_fault.cpp:262: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8212,8 +8210,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 287,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_device_fault.cpp:262: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8227,8 +8224,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 189,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_device_fault.cpp:262: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8242,8 +8238,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 214,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_device_fault.cpp:262: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8400,8 +8395,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_discovery_fuzz.cpp",
     "line": 1159,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_discovery_fuzz.cpp:677: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -8546,8 +8540,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_discovery.cpp",
     "line": 1407,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_discovery.cpp:1416: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -9590,8 +9583,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 332,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_dual_rep_optimizer.cpp:372: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -9623,8 +9616,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 191,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_dual_rep_optimizer.cpp:227: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -9638,8 +9631,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_dual_rep_optimizer.cpp",
     "line": 255,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_dual_rep_optimizer.cpp:302: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -10665,8 +10658,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 280,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:284: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -10738,8 +10730,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 107,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:11: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
       "launch_strided_copy",
@@ -10760,8 +10751,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 181,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:11: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -10775,8 +10765,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 160,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:11: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_cat_last_dim",
       "launch_cat_middle_dim",
@@ -10790,8 +10779,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 84,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:11: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_cat_last_dim",
       "launch_cat_middle_dim",
@@ -10805,8 +10793,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 61,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:11: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_cat_last_dim",
       "launch_cat_middle_dim",
@@ -10820,8 +10807,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 33,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_expanded_tensor_ops.cpp:11: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_cat_last_dim",
       "launch_cat_middle_dim",
@@ -10909,8 +10895,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_exportable_storage.cpp",
     "line": 1560,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_exportable_storage.cpp:1614: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -10946,8 +10932,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_exportable_storage.cpp",
     "line": 108,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_exportable_storage.cpp:143: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -14485,8 +14471,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 136,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:93: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -14573,8 +14559,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 110,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:93: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -14634,8 +14620,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 266,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:93: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -14722,8 +14708,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 382,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:93: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -14747,8 +14733,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 163,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:93: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -14785,8 +14771,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_noise_injection.cpp",
     "line": 169,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_noise_injection.cpp:195: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -14799,8 +14785,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_noise_injection.cpp",
     "line": 67,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_noise_injection.cpp:91: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -14813,8 +14799,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_noise_injection.cpp",
     "line": 137,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_noise_injection.cpp:155: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -14826,8 +14812,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_noise_injection.cpp",
     "line": 106,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_noise_injection.cpp:121: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -15981,8 +15967,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_image_kernels.cpp",
     "line": 32,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_image_kernels.cpp:72: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes kernels/densification_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -17240,7 +17226,7 @@
     "file": "tests/test_joint_bounds_grow_only.cpp",
     "line": 21,
     "eligibility": "cuda-only",
-    "reason": "tests/test_joint_bounds_grow_only.cpp:28: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_joint_bounds_grow_only.cpp:30: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -17251,7 +17237,7 @@
     "file": "tests/test_joint_bounds_grow_only.cpp",
     "line": 43,
     "eligibility": "cuda-only",
-    "reason": "tests/test_joint_bounds_grow_only.cpp:51: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_joint_bounds_grow_only.cpp:53: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -17261,8 +17247,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_kernels.cpp",
     "line": 1515,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_kernels.cpp:1586: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -17275,8 +17261,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fastgs_kernels.cpp",
     "line": 1625,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fastgs_kernels.cpp:1697: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -17841,8 +17827,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_lod_page_dequant.cpp",
     "line": 404,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_lod_page_dequant.cpp:253: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -17852,8 +17838,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_lod_page_dequant.cpp",
     "line": 392,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_lod_page_dequant.cpp:253: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -17863,8 +17849,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_lod_page_dequant.cpp",
     "line": 382,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_lod_page_dequant.cpp:253: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -17874,8 +17860,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_lod_page_dequant.cpp",
     "line": 363,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_lod_page_dequant.cpp:253: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -18122,8 +18108,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_loss_workspace_union.cpp",
     "line": 146,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_loss_workspace_union.cpp:161: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -18178,8 +18164,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mcmc_nan_fix.cpp",
     "line": 209,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mcmc_nan_fix.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_strided_upload",
@@ -18194,8 +18180,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mcmc_nan_fix.cpp",
     "line": 53,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mcmc_nan_fix.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -18208,8 +18194,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mcmc_nan_fix.cpp",
     "line": 114,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mcmc_nan_fix.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -18222,8 +18208,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mcmc_nan_fix.cpp",
     "line": 158,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mcmc_nan_fix.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/kernels/mcmc_kernels.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -18582,7 +18568,7 @@
     "file": "tests/test_compact_splats_peak.cpp",
     "line": 109,
     "eligibility": "cuda-only",
-    "reason": "tests/test_compact_splats_peak.cpp:146: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_compact_splats_peak.cpp:147: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_index_select",
       "launch_strided_copy",
@@ -18599,8 +18585,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_compact_splats_peak.cpp",
     "line": 200,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_compact_splats_peak.cpp:241: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_index_select",
       "launch_strided_copy",
@@ -19918,8 +19904,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 182,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:192: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -19942,8 +19928,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 229,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:236: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -19968,8 +19954,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 144,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:157: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -19994,8 +19980,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 111,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:120: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -20020,8 +20006,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 125,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:138: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -20046,8 +20032,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 163,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:176: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/losses/mask_loss.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -20070,7 +20056,7 @@
     "file": "tests/test_mask_preprocess_fusion.cpp",
     "line": 198,
     "eligibility": "cuda-only",
-    "reason": "tests/test_mask_preprocess_fusion.cpp:217: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_mask_preprocess_fusion.cpp:219: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -20229,8 +20215,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 466,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:476: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type",
       "launch_fill_strided"
@@ -20280,8 +20266,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 643,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:656: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -20351,8 +20337,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 727,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:736: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -20376,8 +20362,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_fused_l1_ssim.cpp",
     "line": 704,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_fused_l1_ssim.cpp:712: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/l1_loss.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -20815,7 +20801,7 @@
     "file": "tests/test_mcmc_multinomial.cpp",
     "line": 152,
     "eligibility": "cuda-only",
-    "reason": "tests/test_mcmc_multinomial.cpp:48: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_mcmc_multinomial.cpp:62: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -20830,7 +20816,7 @@
     "file": "tests/test_mcmc_multinomial.cpp",
     "line": 97,
     "eligibility": "cuda-only",
-    "reason": "tests/test_mcmc_multinomial.cpp:48: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_mcmc_multinomial.cpp:62: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -22336,8 +22322,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_moge2.cpp",
     "line": 255,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_moge2.cpp:276: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -22350,8 +22336,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_moge2.cpp",
     "line": 146,
-    "eligibility": "consumer",
-    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_moge2.cpp:246: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -23448,8 +23434,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/bench_nn_ops.cpp",
     "line": 77,
-    "eligibility": "cuda-only",
-    "reason": "tests/bench_nn_ops.cpp:54: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_convert_type"
     ],
@@ -25844,8 +25830,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_banded_region.cpp",
     "line": 119,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_banded_region.cpp:136: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_uniform"
     ],
@@ -25857,8 +25843,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_banded_region.cpp",
     "line": 79,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_banded_region.cpp:55: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_uniform",
       "launch_strided_copy",
@@ -25872,8 +25858,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_banded_region.cpp",
     "line": 99,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_banded_region.cpp:55: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_uniform",
       "launch_strided_copy",
@@ -25887,8 +25873,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_banded_region.cpp",
     "line": 89,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_banded_region.cpp:55: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_uniform",
       "launch_strided_copy",
@@ -25902,8 +25888,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_banded_region.cpp",
     "line": 109,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_banded_region.cpp:55: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_uniform",
       "launch_strided_copy",
@@ -26274,8 +26260,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 435,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:447: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -26293,8 +26279,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 309,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:229: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26317,8 +26303,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 336,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:229: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26341,8 +26327,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 359,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:229: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26365,8 +26351,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 410,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_uniform",
@@ -26380,8 +26366,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 235,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26404,8 +26390,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 263,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26428,8 +26414,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 275,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26452,8 +26438,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 246,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26476,8 +26462,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 289,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26500,8 +26486,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 299,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26524,8 +26510,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 382,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26548,8 +26534,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 392,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -26572,8 +26558,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_ppisp_cuda_vs_torch.cpp",
     "line": 458,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_ppisp_cuda_vs_torch.cpp:201: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/kernels/ppisp.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -27519,7 +27505,7 @@
     "file": "tests/test_photometric_hygiene.cpp",
     "line": 35,
     "eligibility": "cuda-only",
-    "reason": "tests/test_photometric_hygiene.cpp:48: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_photometric_hygiene.cpp:53: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_convert_type"
     ],
@@ -27743,8 +27729,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_pipelined_loader_ledger.cpp",
     "line": 370,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_pipelined_loader_ledger.cpp:397: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -29849,8 +29835,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_python_io.cpp",
     "line": 2163,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_python_io.cpp:2212: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "cpu-only",
+    "reason": "constructs and exercises only CPU tensor storage",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -32079,8 +32065,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sam2.cpp",
     "line": 585,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_sam2.cpp:594: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/nn.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type"
@@ -32380,8 +32366,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_scene_consolidation.cpp",
     "line": 235,
-    "eligibility": "consumer",
-    "reason": "includes io/formats/ply.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_scene_consolidation.cpp:255: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_column_reduce"
     ],
@@ -34262,8 +34248,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_screen_share.cpp",
     "line": 123,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_screen_share.cpp:144: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes lfs/training/screen_share.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -35982,8 +35968,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sh_swizzle_layout.cpp",
     "line": 33,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_sh_swizzle_layout.cpp:67: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -36010,8 +35996,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sh_swizzle_layout.cpp",
     "line": 153,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_sh_swizzle_layout.cpp:179: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -36025,8 +36011,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sh_swizzle_layout.cpp",
     "line": 110,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_sh_swizzle_layout.cpp:131: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -36040,8 +36026,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sh_swizzle_layout.cpp",
     "line": 195,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_sh_swizzle_layout.cpp:206: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -36212,8 +36198,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_sh_value_storage.cpp",
     "line": 551,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_sh_value_storage.cpp:599: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -37366,8 +37352,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_exportable_storage.cpp",
     "line": 412,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_exportable_storage.cpp:402: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -37454,8 +37440,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_exportable_storage.cpp",
     "line": 470,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_exportable_storage.cpp:402: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38491,7 +38477,7 @@
     "file": "tests/test_steady_alloc_invariant.cpp",
     "line": 44,
     "eligibility": "cuda-only",
-    "reason": "tests/test_steady_alloc_invariant.cpp:56: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_steady_alloc_invariant.cpp:45: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -38839,8 +38825,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 257,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38852,8 +38837,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 315,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38865,8 +38849,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 303,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "cpu-only",
+    "reason": "constructs and exercises only CPU tensor storage",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38878,8 +38862,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 208,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -38893,8 +38876,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 192,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38906,8 +38888,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 178,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38919,8 +38900,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 242,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38932,8 +38912,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 330,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38945,8 +38924,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 223,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38958,8 +38936,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 136,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38971,8 +38948,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 118,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38984,8 +38960,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 275,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -38997,8 +38972,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 34,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -39010,8 +38984,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 58,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -39023,8 +38996,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 96,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -39038,8 +39010,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 73,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -39051,8 +39022,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 154,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -39064,8 +39034,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 293,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -39077,8 +39046,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_strided_fill.cpp",
     "line": 343,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_strided_fill.cpp:13: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -39091,7 +39059,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 155,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39112,7 +39080,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 108,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39132,7 +39100,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 226,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39152,7 +39120,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 209,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39172,7 +39140,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 145,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39192,7 +39160,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 165,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39212,7 +39180,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 132,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -39236,7 +39204,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 185,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39256,7 +39224,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 89,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -39276,7 +39244,7 @@
     "file": "tests/test_strided_reduce_w2.cpp",
     "line": 99,
     "eligibility": "cuda-only",
-    "reason": "tests/test_strided_reduce_w2.cpp:25: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_strided_reduce_w2.cpp:72: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -40412,7 +40380,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 158,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_clamp_fused",
       "launch_clamp_scalar",
@@ -40431,7 +40400,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 194,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_load_op"
@@ -40448,7 +40418,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 101,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_broadcast_binary",
@@ -40503,7 +40474,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 261,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fused_segmented_transform_reduce",
       "launch_fused_transform_reduce",
@@ -40522,7 +40494,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 314,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_bias_add",
       "launch_cdist",
@@ -40555,7 +40528,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 386,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_adaptive_avg_pool2d",
       "launch_bias_add",
@@ -40580,7 +40554,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 433,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_bernoulli",
       "launch_multinomial",
@@ -40603,7 +40578,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 209,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "direct_max_scalar",
       "direct_mean_scalar",
@@ -40643,7 +40619,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_facade.cpp",
     "line": 283,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_facade.cpp:50: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_cumsum",
       "launch_sort_1d",
@@ -40778,7 +40755,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_parity.cpp",
     "line": 215,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_parity.cpp:87: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_broadcast_binary",
       "launch_ieee_maximum_float_broadcast",
@@ -40795,7 +40773,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_parity.cpp",
     "line": 252,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_parity.cpp:87: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_convert_type",
@@ -40814,7 +40793,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_parity.cpp",
     "line": 243,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_parity.cpp:87: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_cat_last_dim",
       "launch_strided_copy",
@@ -40833,7 +40813,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_parity.cpp",
     "line": 132,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_parity.cpp:87: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fused_pointwise_chain"
     ],
@@ -40848,7 +40829,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_parity.cpp",
     "line": 122,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_parity.cpp:87: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fused_pointwise_chain"
     ],
@@ -40863,7 +40845,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_parity.cpp",
     "line": 138,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_parity.cpp:87: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fused_pointwise_chain",
       "launch_ieee_round_float",
@@ -40881,11 +40864,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 37,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:42: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -40893,8 +40876,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 184,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:186: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -40904,8 +40887,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 66,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:73: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -40915,7 +40898,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 170,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:174: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_load_op"
     ],
@@ -40941,7 +40925,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 145,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:158: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fused_transform_reduce",
       "launch_load_op",
@@ -40960,11 +40945,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 79,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:96: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -40972,11 +40957,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 108,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:116: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -40984,18 +40969,18 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_selection.cpp",
     "line": 133,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_selection.cpp:142: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
     "name": "TensorBackendValidators.BinaryArithmeticRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 60,
+    "line": 65,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41013,7 +40998,7 @@
     "name": "TensorBackendValidators.CatRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 80,
+    "line": 85,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41033,7 +41018,7 @@
     "name": "TensorBackendValidators.CopyFromRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 86,
+    "line": 91,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41051,7 +41036,7 @@
     "name": "TensorBackendValidators.DeferredExpressionsCarryTheBackendOfTheirLeaves",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 117,
+    "line": 122,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41068,12 +41053,51 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorBackendValidators.DeferredTensorsMaterializeOnTheirLeafBackendOnAnyThread",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_validators.cpp",
+    "line": 206,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_backend_validators.cpp:218: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendValidators.DeferredViewsCarryTheBackendOfTheirSource",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_validators.cpp",
+    "line": 183,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorBackendValidators.ExternalOwnerStaysCudaUnderVulkanScope",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 158,
+    "line": 257,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_backend_validators.cpp:168: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_backend_validators.cpp:267: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -41087,10 +41111,29 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorBackendValidators.InPlaceWriteOnALeafPreservesTheDeferredSnapshotBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_validators.cpp",
+    "line": 227,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorBackendValidators.IndexSelectRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 74,
+    "line": 79,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41109,7 +41152,7 @@
     "name": "TensorBackendValidators.LazyExpressionRejectsMixedBackendsAtMaterialization",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 90,
+    "line": 95,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41128,7 +41171,7 @@
     "name": "TensorBackendValidators.MaskedFillRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 70,
+    "line": 75,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41147,7 +41190,7 @@
     "name": "TensorBackendValidators.MatmulRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 106,
+    "line": 111,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41167,7 +41210,7 @@
     "name": "TensorBackendValidators.ProcessDefaultIsReadOnceAndInvalidValuesAreRejected",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 145,
+    "line": 244,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41185,7 +41228,7 @@
     "name": "TensorBackendValidators.TernaryWhereRejectsMixedBackends",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_backend_validators.cpp",
-    "line": 64,
+    "line": 69,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -41196,6 +41239,25 @@
       "launch_strided_copy_immediate",
       "launch_strided_upload",
       "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendValidators.VulkanTensorsNeverTakeACudaStreamIdentity",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_validators.cpp",
+    "line": 150,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
     ],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -45063,11 +45125,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_d4_from_blob_stream.cpp",
     "line": 267,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_d4_from_blob_stream.cpp:272: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -45510,11 +45572,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_dispatch_6a.cpp",
     "line": 321,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_dispatch_6a.cpp:327: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -46289,8 +46351,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 71,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_fill_strided"
@@ -46303,8 +46364,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 406,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -46318,8 +46378,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 298,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -46333,8 +46392,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 287,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -46348,8 +46406,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 319,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -46361,8 +46418,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 436,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
       "direct_mean_scalar",
@@ -46379,8 +46435,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 420,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_strided_scatter",
@@ -46398,8 +46453,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 332,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_scatter",
       "launch_strided_scatter_immediate",
@@ -46416,8 +46470,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 168,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_max_scalar",
       "direct_min_scalar",
@@ -46434,8 +46487,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 187,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_max_scalar",
       "launch_uniform",
@@ -46451,8 +46503,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 178,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_min_scalar",
       "launch_uniform",
@@ -46468,8 +46519,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 126,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_strided_copy",
@@ -46484,8 +46534,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 135,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_strided_copy",
@@ -46500,8 +46549,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 508,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -46525,8 +46573,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 491,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided",
       "launch_clamp_scalar",
@@ -46540,8 +46587,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 95,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -46553,8 +46599,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 114,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_fill_strided"
@@ -46567,8 +46612,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 274,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_index_add",
       "launch_strided_upload",
@@ -46583,8 +46627,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 265,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_index_copy",
       "launch_strided_upload",
@@ -46599,8 +46642,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 257,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_scatter",
       "launch_strided_upload",
@@ -46615,8 +46657,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 397,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_scatter",
       "launch_strided_scatter_immediate",
@@ -46633,8 +46674,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 220,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_strided_scatter",
@@ -46652,8 +46692,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 234,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_scatter",
       "launch_strided_scatter_immediate",
@@ -46670,8 +46709,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 372,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_scatter",
       "launch_strided_scatter_immediate",
@@ -46688,8 +46726,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 200,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_masked_fill",
       "launch_fill_strided"
@@ -46702,8 +46739,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 88,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -46715,8 +46751,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 382,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_scatter",
       "launch_strided_scatter_immediate",
@@ -46733,8 +46768,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 158,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -46746,8 +46780,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 552,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_scatter",
       "launch_strided_scatter_immediate",
@@ -46764,8 +46797,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 534,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_mean_scalar",
       "launch_strided_copy",
@@ -46780,8 +46812,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 248,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_scatter",
       "launch_strided_upload",
@@ -46796,8 +46827,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 81,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -46809,8 +46839,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 148,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_max_scalar",
       "direct_min_scalar",
@@ -46825,8 +46854,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 468,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -46838,8 +46866,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_inplace_capacity.cpp",
     "line": 106,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_inplace_capacity.cpp:43: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
       "launch_fill_strided"
@@ -46898,7 +46925,7 @@
     "file": "tests/test_tensor_kernels_6c.cpp",
     "line": 83,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_kernels_6c.cpp:102: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_kernels_6c.cpp:105: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -46917,7 +46944,7 @@
     "file": "tests/test_tensor_kernels_6c.cpp",
     "line": 118,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_kernels_6c.cpp:134: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_kernels_6c.cpp:137: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -46974,8 +47001,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_kernels_6c.cpp",
     "line": 241,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_kernels_6c.cpp:253: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -46992,7 +47018,7 @@
     "file": "tests/test_tensor_kernels_6c.cpp",
     "line": 201,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_kernels_6c.cpp:218: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_kernels_6c.cpp:221: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -48068,7 +48094,7 @@
     "file": "tests/test_tensor_lazy_ir.cpp",
     "line": 1864,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_lazy_ir.cpp:1911: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_lazy_ir.cpp:61: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -48086,7 +48112,7 @@
     "file": "tests/test_tensor_lazy_ir.cpp",
     "line": 1787,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_lazy_ir.cpp:1817: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_lazy_ir.cpp:61: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -48104,7 +48130,7 @@
     "file": "tests/test_tensor_lazy_ir.cpp",
     "line": 1827,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_lazy_ir.cpp:1854: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_lazy_ir.cpp:61: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -48122,7 +48148,7 @@
     "file": "tests/test_tensor_lazy_ir.cpp",
     "line": 1701,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_lazy_ir.cpp:1734: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_lazy_ir.cpp:61: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_unary_op_generic",
       "launch_binary_op_generic",
@@ -48479,7 +48505,7 @@
     "file": "tests/test_tensor_lazy_ir.cpp",
     "line": 1747,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_lazy_ir.cpp:1777: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_lazy_ir.cpp:61: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -50017,8 +50043,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_matrix.cpp",
     "line": 219,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_matrix.cpp:250: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_sgemm_batched",
       "launch_strided_copy",
@@ -50943,7 +50968,7 @@
     "file": "tests/test_tensor_multistream.cpp",
     "line": 433,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_multistream.cpp:35: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_multistream.cpp:92: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_convert_type",
       "launch_fill_strided",
@@ -50958,7 +50983,7 @@
     "file": "tests/test_tensor_multistream.cpp",
     "line": 504,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_multistream.cpp:35: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_multistream.cpp:92: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_fill_strided",
       "launch_load_op"
@@ -50972,7 +50997,7 @@
     "file": "tests/test_tensor_multistream.cpp",
     "line": 397,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_multistream.cpp:35: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_multistream.cpp:92: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_convert_type",
       "launch_fill_strided",
@@ -50987,7 +51012,7 @@
     "file": "tests/test_tensor_multistream.cpp",
     "line": 463,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_multistream.cpp:35: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_tensor_multistream.cpp:92: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_convert_type",
       "launch_fill_strided",
@@ -53394,8 +53419,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 161,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
       "launch_reduce_op",
@@ -53414,8 +53438,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 97,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -53431,8 +53454,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 71,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -53448,8 +53470,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 129,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -53465,8 +53486,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 193,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -53482,8 +53502,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 36,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -53499,8 +53518,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction_alignment.cpp",
     "line": 220,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction_alignment.cpp:15: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -53629,7 +53647,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction.cpp",
     "line": 102,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_reduction.cpp:104: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "direct_sum_scalar",
       "launch_load_op"
@@ -53953,8 +53972,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_reduction.cpp",
     "line": 676,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_reduction.cpp:714: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
       "launch_column_reduce",
@@ -56807,7 +56825,25 @@
     "name": "TensorVulkanReduce.AxisReductionsSelectSegmentedStridedAndSplitPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 159,
+    "line": 241,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.CompensationSurvivesEachSummationPath",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 149,
     "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
@@ -56825,7 +56861,7 @@
     "name": "TensorVulkanReduce.CountsAndSpecialValueChecksReadBackExactTallies",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 374,
+    "line": 458,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56845,7 +56881,7 @@
     "name": "TensorVulkanReduce.CumsumCoversThreadAndWorkgroupScans",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 313,
+    "line": 396,
     "eligibility": "vulkan",
     "launchers": [
       "launch_cumsum",
@@ -56859,7 +56895,7 @@
     "name": "TensorVulkanReduce.FullReductionsCoverSingleGroupPartialAndTailPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 122,
+    "line": 125,
     "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
@@ -56877,7 +56913,7 @@
     "name": "TensorVulkanReduce.FusedTransformReductionsApplyTheChainFirst",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 283,
+    "line": 366,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56899,7 +56935,7 @@
     "name": "TensorVulkanReduce.IntegerAndBoolReductionsWidenLikeCuda",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 223,
+    "line": 306,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56920,7 +56956,7 @@
     "name": "TensorVulkanReduce.MaxAndMinFollowTheCudaNaNAndSignedZeroPolicy",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 267,
+    "line": 350,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
@@ -56940,7 +56976,25 @@
     "name": "TensorVulkanReduce.MultiAxisReductionsUseTheRunAndGeneralPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 200,
+    "line": 283,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.NonContiguousAxisSetsReduceThroughThePermutedCopy",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 203,
     "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
@@ -56958,13 +57012,32 @@
     "name": "TensorVulkanReduce.ScalarFastPathsReadBackTheDeviceResult",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 146,
+    "line": 228,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
       "direct_mean_scalar",
       "direct_max_scalar",
       "direct_min_scalar",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanReduce.SumsKeepTheirCompensationAcrossThreadsAndStages",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_reduce.cpp",
+    "line": 173,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
       "launch_strided_upload",
       "launch_convert_type"
     ],
@@ -57078,11 +57151,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_runtime.cpp",
     "line": 230,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_vulkan_runtime.cpp:253: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -58642,8 +58715,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_training_snapshot_service.cpp",
     "line": 288,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_training_snapshot_service.cpp:326: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/checkpoint.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -58702,8 +58775,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_training_snapshot_service.cpp",
     "line": 534,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_training_snapshot_service.cpp:579: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes training/checkpoint.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59233,8 +59306,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 442,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:459: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_convert_type",
@@ -59274,8 +59347,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 422,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:434: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59301,8 +59374,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 287,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59314,8 +59387,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 275,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59328,8 +59401,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 264,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59341,8 +59414,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 298,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59445,8 +59518,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 219,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59458,8 +59531,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 206,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59472,8 +59545,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 195,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59485,8 +59558,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 183,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59499,8 +59572,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 231,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59512,8 +59585,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 241,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -59537,8 +59610,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 602,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59551,8 +59624,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 311,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -59565,8 +59638,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_undistort.cpp",
     "line": 324,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_undistort.cpp:39: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "consumer",
+    "reason": "includes io/formats/colmap.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -62933,7 +63006,7 @@
     "file": "tests/test_video_color_convert.cpp",
     "line": 262,
     "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:297: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_video_color_convert.cpp:300: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -62947,8 +63020,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_video_color_convert.cpp",
     "line": 369,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:397: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -62958,8 +63031,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_video_color_convert.cpp",
     "line": 327,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:353: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -62969,8 +63042,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_video_color_convert.cpp",
     "line": 177,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:205: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -62980,8 +63053,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_video_color_convert.cpp",
     "line": 90,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:113: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -62991,8 +63064,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_video_color_convert.cpp",
     "line": 131,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:152: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -63002,8 +63075,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_video_color_convert.cpp",
     "line": 40,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_video_color_convert.cpp:63: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -67263,8 +67336,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_gsplat_rasterizer.cpp",
     "line": 301,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_gsplat_rasterizer.cpp:321: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -67275,7 +67348,7 @@
     "file": "tests/test_vram_leak_regression.cpp",
     "line": 102,
     "eligibility": "cuda-only",
-    "reason": "tests/test_vram_leak_regression.cpp:58: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_vram_leak_regression.cpp:66: raw CUDA operation on tensor storage or CUDA-only fixture",
     "launchers": [
       "launch_convert_type",
       "launch_fill_strided"
@@ -68552,8 +68625,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 125,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -68571,8 +68643,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 162,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -68590,8 +68661,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 138,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -68609,8 +68679,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 92,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -68625,7 +68694,7 @@
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 49,
     "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_zero_stride_expand.cpp:51: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -68639,8 +68708,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 110,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -68655,7 +68723,7 @@
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 60,
     "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_zero_stride_expand.cpp:74: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -68706,8 +68774,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 200,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -68723,8 +68790,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 234,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
       "launch_strided_copy_immediate",
@@ -68738,8 +68804,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 214,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_masked_select",
       "launch_strided_copy",
@@ -68754,8 +68819,7 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_zero_stride_expand.cpp",
     "line": 147,
-    "eligibility": "cuda-only",
-    "reason": "tests/test_zero_stride_expand.cpp:19: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
       "launch_scalar_op_generic",
@@ -68774,7 +68838,7 @@
     "file": "tests/test_zip_gather.cpp",
     "line": 82,
     "eligibility": "cuda-only",
-    "reason": "tests/test_zip_gather.cpp:92: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_zip_gather.cpp:88: calls the CUDA launcher layer directly",
     "launchers": [
       "launch_strided_upload",
       "launch_fill_strided"
@@ -68788,7 +68852,7 @@
     "file": "tests/test_zip_gather.cpp",
     "line": 55,
     "eligibility": "cuda-only",
-    "reason": "tests/test_zip_gather.cpp:76: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_zip_gather.cpp:71: calls the CUDA launcher layer directly",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -68801,7 +68865,7 @@
     "file": "tests/test_zip_gather.cpp",
     "line": 33,
     "eligibility": "cuda-only",
-    "reason": "tests/test_zip_gather.cpp:50: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "reason": "tests/test_zip_gather.cpp:46: calls the CUDA launcher layer directly",
     "launchers": [
       "launch_strided_upload"
     ],

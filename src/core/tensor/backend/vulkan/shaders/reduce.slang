@@ -24,6 +24,8 @@ static const uint kFloat32 = 0;
 static const uint kInt32 = 2;
 static const uint kInt64 = 3;
 static const uint kBool = 5;
+// Internal partial format: float2 (sum, compensation), 8 bytes per slot.
+static const uint kPair = 8;
 
 static const uint kSum = 0;
 static const uint kMean = 1;
@@ -33,7 +35,7 @@ static const uint kProd = 4;
 static const uint kAny = 5;
 static const uint kAll = 6;
 
-static const bool kFloatInput = kInputDType == kFloat32;
+static const bool kFloatInput = kInputDType == kFloat32 || kInputDType == kPair;
 static const bool kLogical = kOp == kAny || kOp == kAll;
 static const bool kFloatAccumulator = kFloatInput && !kLogical;
 
@@ -63,6 +65,7 @@ struct ChainOp
 };
 
 groupshared float sharedFloat[LFS_LOCAL_SIZE_X];
+groupshared float sharedComp[LFS_LOCAL_SIZE_X];
 groupshared int64_t sharedInt[LFS_LOCAL_SIZE_X];
 
 uint loadByte(uint64_t address, uint64_t index)
@@ -203,15 +206,27 @@ int64_t intIdentity()
     return int64_t(0);
 }
 
+// The error terms of TwoSum and Neumaier ((a - (a + b)) + b) are not zero in
+// floating point, but the driver's shader compiler folds them away as if the
+// arithmetic were exact, and a plain bitcast does not stop it. Mixing in a
+// zero that only exists at run time (a push constant) keeps the rounded
+// intermediate observable. Measured: without it every compensation is 0.
+static uint gOpaqueZero = 0;
+
+float opaque(float value)
+{
+    return asfloat(asuint(value) + gOpaqueZero);
+}
+
 // Sum and Mean accumulate with Neumaier compensation so long sequential loops
 // stay within a few ulps of the CUDA double-accumulated kernels.
 void combineFloat(inout float accumulator, inout float compensation, float value)
 {
     if (kOp == kSum || kOp == kMean)
     {
-        const float total = accumulator + value;
-        compensation += abs(accumulator) >= abs(value) ? (accumulator - total) + value
-                                                       : (value - total) + accumulator;
+        const float total = opaque(accumulator + value);
+        compensation += abs(accumulator) >= abs(value) ? opaque(accumulator - total) + value
+                                                       : opaque(value - total) + accumulator;
         accumulator = total;
     }
     else if (kOp == kMax)
@@ -222,9 +237,48 @@ void combineFloat(inout float accumulator, inout float compensation, float value
         accumulator *= value;
 }
 
+// Only sums carry a compensation; adding a zero term to a max or min result
+// would turn -0 into +0.
 float compensated(float accumulator, float compensation)
 {
+    if (kOp != kSum && kOp != kMean)
+        return accumulator;
     return isfinite(compensation) ? accumulator + compensation : accumulator;
+}
+
+// Knuth TwoSum: total and the exact rounding error of the addition.
+void twoSum(float a, float b, out float total, out float error)
+{
+    total = opaque(a + b);
+    const float bb = opaque(total - a);
+    error = opaque(a - opaque(total - bb)) + opaque(b - bb);
+}
+
+// Combines a (value, compensation) pair so the compensation survives every
+// cross-thread step; float ops other than sums ignore the compensation.
+void combinePair(inout float accumulator, inout float compensation, float value, float valueCompensation)
+{
+    if (kOp == kSum || kOp == kMean)
+    {
+        float total;
+        float error;
+        twoSum(accumulator, value, total, error);
+        accumulator = total;
+        compensation += error + valueCompensation;
+    }
+    else if (kOp == kMax)
+        accumulator = ieeeMaximum(accumulator, value);
+    else if (kOp == kMin)
+        accumulator = ieeeMinimum(accumulator, value);
+    else
+        accumulator *= value;
+}
+
+void loadPair(uint64_t index, uint64_t address, out float value, out float valueCompensation)
+{
+    const float2 pair = ((Ptr<float2, Access.Read>)address)[index];
+    value = pair.x;
+    valueCompensation = pair.y;
 }
 
 void combineInt(inout int64_t accumulator, int64_t value)
@@ -250,22 +304,25 @@ int64_t logicalValue(uint64_t index, Parameters parameters)
     return loadInt(index, parameters.inputAddress) != 0 ? int64_t(1) : int64_t(0);
 }
 
-float workgroupReduceFloat(float value, uint thread)
+float workgroupReduceFloat(float value, float compensation, uint thread, out float compensationOut)
 {
     sharedFloat[thread] = value;
+    sharedComp[thread] = compensation;
     GroupMemoryBarrierWithGroupSync();
     for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
     {
         if (thread < span)
         {
             float lhs = sharedFloat[thread];
-            float unused = 0.0f;
-            combineFloat(lhs, unused, sharedFloat[thread + span]);
+            float lhsCompensation = sharedComp[thread];
+            combinePair(lhs, lhsCompensation, sharedFloat[thread + span], sharedComp[thread + span]);
             sharedFloat[thread] = lhs;
+            sharedComp[thread] = lhsCompensation;
         }
         GroupMemoryBarrierWithGroupSync();
     }
     const float result = sharedFloat[0];
+    compensationOut = sharedComp[0];
     GroupMemoryBarrierWithGroupSync();
     return result;
 }
@@ -289,11 +346,15 @@ int64_t workgroupReduceInt(int64_t value, uint thread)
     return result;
 }
 
-void storeResult(uint64_t index, float floatValue, int64_t intValue, Parameters parameters)
+void storeResult(uint64_t index, float floatValue, float compensation, int64_t intValue, Parameters parameters)
 {
-    if (kOutputDType == kFloat32)
+    if (kOutputDType == kPair)
     {
-        float value = kFloatAccumulator ? floatValue : float(intValue);
+        ((Ptr<float2, Access.ReadWrite>)parameters.outputAddress)[index] = float2(floatValue, compensation);
+    }
+    else if (kOutputDType == kFloat32)
+    {
+        float value = kFloatAccumulator ? compensated(floatValue, compensation) : float(intValue);
         if (kOp == kMean)
             value *= parameters.meanScale;
         ((Ptr<float, Access.ReadWrite>)parameters.outputAddress)[index] = value;
@@ -311,6 +372,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
           uint3 groupThreadId : SV_GroupThreadID, uniform Parameters parameters)
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    gOpaqueZero = parameters.pad0;
     const uint thread = groupThreadId.x;
     const uint gridStride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
 
@@ -322,20 +384,31 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
         for (uint64_t index = dispatchThreadId.x; index < parameters.count; index += gridStride)
         {
             if (kFloatAccumulator)
-                combineFloat(accumulator, compensation, loadFloat(index, parameters));
+            {
+                if (kInputDType == kPair)
+                {
+                    float pairValue;
+                    float pairCompensation;
+                    loadPair(index, parameters.inputAddress, pairValue, pairCompensation);
+                    combinePair(accumulator, compensation, pairValue, pairCompensation);
+                }
+                else
+                    combineFloat(accumulator, compensation, loadFloat(index, parameters));
+            }
             else if (kLogical)
                 combineInt(intAccumulator, logicalValue(index, parameters));
             else
                 combineInt(intAccumulator, loadInt(index, parameters.inputAddress));
         }
         float total = 0.0f;
+        float totalCompensation = 0.0f;
         int64_t intTotal = 0;
         if (kFloatAccumulator)
-            total = workgroupReduceFloat(compensated(accumulator, compensation), thread);
+            total = workgroupReduceFloat(accumulator, compensation, thread, totalCompensation);
         else
             intTotal = workgroupReduceInt(intAccumulator, thread);
         if (thread == 0)
-            storeResult(groupId.x, total, intTotal, parameters);
+            storeResult(groupId.x, total, totalCompensation, intTotal, parameters);
     }
     else if (kMode == 2)
     {
@@ -349,20 +422,31 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             {
                 const uint64_t index = base + element;
                 if (kFloatAccumulator)
-                    combineFloat(accumulator, compensation, loadFloat(index, parameters));
+                {
+                    if (kInputDType == kPair)
+                    {
+                        float pairValue;
+                        float pairCompensation;
+                        loadPair(index, parameters.inputAddress, pairValue, pairCompensation);
+                        combinePair(accumulator, compensation, pairValue, pairCompensation);
+                    }
+                    else
+                        combineFloat(accumulator, compensation, loadFloat(index, parameters));
+                }
                 else if (kLogical)
                     combineInt(intAccumulator, logicalValue(index, parameters));
                 else
                     combineInt(intAccumulator, loadInt(index, parameters.inputAddress));
             }
             float total = 0.0f;
+            float totalCompensation = 0.0f;
             int64_t intTotal = 0;
             if (kFloatAccumulator)
-                total = workgroupReduceFloat(compensated(accumulator, compensation), thread);
+                total = workgroupReduceFloat(accumulator, compensation, thread, totalCompensation);
             else
                 intTotal = workgroupReduceInt(intAccumulator, thread);
             if (thread == 0)
-                storeResult(segment, total, intTotal, parameters);
+                storeResult(segment, total, totalCompensation, intTotal, parameters);
         }
     }
     else if (kMode == 3)
@@ -382,14 +466,24 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
             {
                 const uint64_t index = base + uint64_t(element) * parameters.inner;
                 if (kFloatAccumulator)
-                    combineFloat(accumulator, compensation, loadFloat(index, parameters));
+                {
+                    if (kInputDType == kPair)
+                    {
+                        float pairValue;
+                        float pairCompensation;
+                        loadPair(index, parameters.inputAddress, pairValue, pairCompensation);
+                        combinePair(accumulator, compensation, pairValue, pairCompensation);
+                    }
+                    else
+                        combineFloat(accumulator, compensation, loadFloat(index, parameters));
+                }
                 else if (kLogical)
                     combineInt(intAccumulator, logicalValue(index, parameters));
                 else
                     combineInt(intAccumulator, loadInt(index, parameters.inputAddress));
             }
-            storeResult(uint64_t(groupId.y) * outputs + output,
-                        compensated(accumulator, compensation), intAccumulator, parameters);
+            storeResult(uint64_t(groupId.y) * outputs + output, accumulator, compensation,
+                        intAccumulator, parameters);
         }
     }
     else
@@ -432,13 +526,23 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
                     }
                 }
                 if (kFloatAccumulator)
-                    combineFloat(accumulator, compensation, loadFloat(index, parameters));
+                {
+                    if (kInputDType == kPair)
+                    {
+                        float pairValue;
+                        float pairCompensation;
+                        loadPair(index, parameters.inputAddress, pairValue, pairCompensation);
+                        combinePair(accumulator, compensation, pairValue, pairCompensation);
+                    }
+                    else
+                        combineFloat(accumulator, compensation, loadFloat(index, parameters));
+                }
                 else if (kLogical)
                     combineInt(intAccumulator, logicalValue(index, parameters));
                 else
                     combineInt(intAccumulator, loadInt(index, parameters.inputAddress));
             }
-            storeResult(output, compensated(accumulator, compensation), intAccumulator, parameters);
+            storeResult(output, accumulator, compensation, intAccumulator, parameters);
         }
     }
 }

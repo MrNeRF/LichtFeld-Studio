@@ -1381,7 +1381,8 @@ namespace lfs::core {
                                 k == internal::LazyPointwiseOpKind::MulTensor ||
                                 k == internal::LazyPointwiseOpKind::DivTensor;
                             if (is_tensor_bin) {
-                                chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
+                                chain.ops[i].rhs = internal::chain_operand_address(
+                                    internal::storage_ref(rhs_storage[rhs_i]));
                                 ++rhs_i;
                             } else {
                                 chain.ops[i].rhs = nullptr;
@@ -1497,7 +1498,8 @@ namespace lfs::core {
                                 k == internal::LazyPointwiseOpKind::MulTensor ||
                                 k == internal::LazyPointwiseOpKind::DivTensor;
                             if (is_tensor_bin) {
-                                chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
+                                chain.ops[i].rhs = internal::chain_operand_address(
+                                    internal::storage_ref(rhs_storage[rhs_i]));
                                 ++rhs_i;
                             } else {
                                 chain.ops[i].rhs = nullptr;

@@ -12,6 +12,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 namespace lfs::core::internal::vk {
 
@@ -39,6 +40,43 @@ namespace lfs::core::internal::vk {
             std::min<uint64_t>(groups, context.caps().max_workgroup_count[0]));
     }
 
+    // Owns a device allocation for the duration of an adapter call; release is
+    // timeline-tracked by VulkanMemory, so an exception between allocate and the
+    // end of recording no longer leaks the block.
+    class ScopedAllocation {
+    public:
+        ScopedAllocation(VulkanContext& context, const size_t bytes)
+            : context_(&context),
+              storage_(context.memory().allocate(bytes, 16, {})) {}
+        ScopedAllocation(ScopedAllocation&& other) noexcept
+            : context_(std::exchange(other.context_, nullptr)),
+              storage_(other.storage_) {}
+        ScopedAllocation& operator=(ScopedAllocation&& other) noexcept {
+            if (this != &other) {
+                release();
+                context_ = std::exchange(other.context_, nullptr);
+                storage_ = other.storage_;
+            }
+            return *this;
+        }
+        ScopedAllocation(const ScopedAllocation&) = delete;
+        ScopedAllocation& operator=(const ScopedAllocation&) = delete;
+        ~ScopedAllocation() { release(); }
+
+        [[nodiscard]] StorageRef storage() const { return storage_; }
+
+    private:
+        void release() noexcept {
+            if (context_ != nullptr) {
+                context_->memory().deallocate(storage_);
+                context_ = nullptr;
+            }
+        }
+
+        VulkanContext* context_;
+        StorageRef storage_;
+    };
+
     struct ChainOp {
         uint32_t kind;
         float scalar;
@@ -50,8 +88,8 @@ namespace lfs::core::internal::vk {
 
     // Uploads the chain descriptors to a device table the shader indexes by
     // element; the caller lists the table and every rhs operand as reads.
-    inline StorageRef upload_chain(VulkanContext& context,
-                                   const tensor_ops::FusedPointwiseOpChain& chain) {
+    inline ScopedAllocation upload_chain(VulkanContext& context,
+                                         const tensor_ops::FusedPointwiseOpChain& chain) {
         LFS_ASSERT_MSG(chain.num_ops > 0 && chain.num_ops <= tensor_ops::FUSED_POINTWISE_MAX_OPS,
                        "Vulkan fused chain requires 1 to 16 operations");
         ChainTable descriptors{};
@@ -63,10 +101,10 @@ namespace lfs::core::internal::vk {
                     reinterpret_cast<uintptr_t>(chain.ops[i].rhs)),
             };
         }
-        const StorageRef table = context.memory().allocate(sizeof(descriptors), 16, {});
+        ScopedAllocation table(context, sizeof(descriptors));
         context.memory().copy_host_to_device(CopyRequest{
             .src = raw_storage_ref(descriptors.data()),
-            .dst = table,
+            .dst = table.storage(),
             .bytes = sizeof(descriptors),
             .synchronous = false,
         });

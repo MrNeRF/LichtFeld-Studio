@@ -23,11 +23,14 @@ namespace {
         return cpu.to(Device::CUDA);
     }
 
-    // Asymmetric pattern so sums do not cancel to zero and mean stays finite.
+    // Asymmetric, non-dyadic pattern: sums do not cancel to zero, the mean stays
+    // finite, and partial sums are not exactly representable, so a reduction
+    // order or a dropped compensation changes the result.
     std::vector<float> pattern(const size_t count, const size_t period = 31) {
         std::vector<float> values(count);
         for (size_t i = 0; i < count; ++i) {
-            values[i] = static_cast<float>(static_cast<int>(i % period) - 10) / 16.0f;
+            values[i] = static_cast<float>(static_cast<int>(i % period) - 10) / 16.0f +
+                        static_cast<float>(i % 13) * 0.0017f;
         }
         return values;
     }
@@ -143,6 +146,91 @@ namespace {
         EXPECT_NEAR(vulkan.prod().item(), expected, 1.0e-4 * std::abs(expected));
     }
 
+    TEST_F(TensorVulkanReduce, CompensationSurvivesEachSummationPath) {
+        // Catches the driver folding the TwoSum and Neumaier error terms to zero
+        // (seen on NVIDIA 580 without the run-time barrier) on the per-thread
+        // path, the single-group tree, and a tree fed one element per thread.
+        std::vector<float> rows(1000 * 3);
+        for (size_t t = 0; t < 1000; ++t) {
+            rows[3 * t] = 1.0e8f;
+            rows[3 * t + 1] = 1.0f;
+            rows[3 * t + 2] = -1.0e8f;
+        }
+        const Tensor per_thread = upload_vulkan(Tensor::from_vector(rows, {1000, 3}, Device::CPU));
+        const std::vector<float> thread_sums = per_thread.sum(1).cpu().to_vector();
+        EXPECT_FLOAT_EQ(thread_sums[0], 1.0f) << "per-thread Neumaier";
+        EXPECT_FLOAT_EQ(thread_sums[999], 1.0f) << "per-thread Neumaier";
+        const Tensor one_group = upload_vulkan(Tensor::from_vector(rows, {1, 3000}, Device::CPU));
+        EXPECT_FLOAT_EQ(one_group.sum(1).cpu().to_vector()[0], 1000.0f) << "single group tree";
+        std::vector<float> nine(9, 0.0f);
+        nine[0] = 1.0e8f;
+        nine[1] = 1.0f;
+        nine[2] = -1.0e8f;
+        nine[3] = 1.0e8f;
+        nine[4] = 1.0f;
+        nine[5] = -1.0e8f;
+        nine[6] = 1.0e8f;
+        nine[7] = 1.0f;
+        nine[8] = -1.0e8f;
+        const Tensor tiny = upload_vulkan(Tensor::from_vector(nine, {1, 9}, Device::CPU));
+        EXPECT_FLOAT_EQ(tiny.sum(1).cpu().to_vector()[0], 3.0f) << "nine elements, one thread each";
+    }
+
+    TEST_F(TensorVulkanReduce, SumsKeepTheirCompensationAcrossThreadsAndStages) {
+        // Catches a tree, partial or split stage that adds plain fp32: on rows of
+        // (1e8, 1, -1e8) the compensation is the whole answer.
+        constexpr size_t triples = 1000;
+        std::vector<float> row(3 * triples);
+        for (size_t t = 0; t < triples; ++t) {
+            row[3 * t] = 1.0e8f;
+            row[3 * t + 1] = 1.0f;
+            row[3 * t + 2] = -1.0e8f;
+        }
+        std::vector<float> matrix;
+        for (int r = 0; r < 64; ++r) {
+            matrix.insert(matrix.end(), row.begin(), row.end());
+        }
+        const Tensor segmented = upload_vulkan(Tensor::from_vector(matrix, {64, 3 * triples}, Device::CPU));
+        const std::vector<float> row_sums = segmented.sum(1).cpu().to_vector();
+        for (const float sum : row_sums) {
+            EXPECT_FLOAT_EQ(sum, static_cast<float>(triples));
+        }
+        EXPECT_FLOAT_EQ(segmented.sum().item(), static_cast<float>(64 * triples));
+        EXPECT_FLOAT_EQ(segmented.sum_scalar(), static_cast<float>(64 * triples));
+        const std::vector<float> column_sums = segmented.sum(0).cpu().to_vector();
+        for (size_t c = 0; c < 3 * triples; ++c) {
+            EXPECT_FLOAT_EQ(column_sums[c], 64.0f * row[c]) << c;
+        }
+        const Tensor tall = upload_vulkan(Tensor::from_vector(matrix, {64 * 3 * triples / 3, 3}, Device::CPU));
+        const std::vector<float> tall_sums = tall.sum(0).cpu().to_vector();
+        EXPECT_FLOAT_EQ(tall_sums[1], static_cast<float>(64 * triples));
+    }
+
+    TEST_F(TensorVulkanReduce, NonContiguousAxisSetsReduceThroughThePermutedCopy) {
+        // Catches a wrong permutation of kept and reduced axes and a scratch that is
+        // read before the copy lands; the shape also exercises the split pass.
+        const std::vector<float> values = pattern(200000 * 2 * 3);
+        const Tensor vulkan = upload_vulkan(Tensor::from_vector(values, {200000, 2, 3}, Device::CPU));
+        std::vector<double> expected(2, 0.0);
+        for (size_t a = 0; a < 200000; ++a) {
+            for (size_t b = 0; b < 2; ++b) {
+                for (size_t c = 0; c < 3; ++c) {
+                    expected[b] += values[(a * 2 + b) * 3 + c];
+                }
+            }
+        }
+        expect_reduction(vulkan.sum({0, 2}), expected, 600000, "sum{0,2} large");
+        const Tensor small = upload_vulkan(Tensor::from_vector(pattern(4 * 5 * 6 * 7), {4, 5, 6, 7}, Device::CPU));
+        const std::vector<float> small_values = pattern(4 * 5 * 6 * 7);
+        std::vector<double> kept(5 * 7, 0.0);
+        for (size_t a = 0; a < 4; ++a)
+            for (size_t b = 0; b < 5; ++b)
+                for (size_t c = 0; c < 6; ++c)
+                    for (size_t d = 0; d < 7; ++d)
+                        kept[b * 7 + d] += small_values[((a * 5 + b) * 6 + c) * 7 + d];
+        expect_reduction(small.sum({0, 2}), kept, 24, "sum{0,2} rank4");
+    }
+
     TEST_F(TensorVulkanReduce, ScalarFastPathsReadBackTheDeviceResult) {
         // Catches a scalar entry that returns before the readback completes or
         // scales the mean by the wrong count.
@@ -152,8 +240,8 @@ namespace {
         const double sum = reference(values, 1, count, 1, Kind::Sum)[0];
         EXPECT_NEAR(vulkan.sum_scalar(), sum, tolerance(sum, count));
         EXPECT_NEAR(vulkan.mean_scalar(), sum / count, tolerance(sum / count, count));
-        EXPECT_FLOAT_EQ(vulkan.max_scalar(), 20.0f / 16.0f);
-        EXPECT_FLOAT_EQ(vulkan.min_scalar(), -10.0f / 16.0f);
+        EXPECT_FLOAT_EQ(vulkan.max_scalar(), *std::max_element(values.begin(), values.end()));
+        EXPECT_FLOAT_EQ(vulkan.min_scalar(), *std::min_element(values.begin(), values.end()));
     }
 
     TEST_F(TensorVulkanReduce, AxisReductionsSelectSegmentedStridedAndSplitPaths) {
@@ -323,6 +411,7 @@ namespace {
             Case{{100000, 5}, 1},
             Case{{2000, 3}, 0},
             Case{{70001}, 0},
+            Case{{4000, 1500}, 1},
         };
         for (const Case& test : cases) {
             size_t count = 1;

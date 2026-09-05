@@ -100,14 +100,13 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_axes = std::move(deferred_axes)]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
                     return materialized.permute(std::span<const int>(deferred_axes));
                 },
                 std::move(deferred_inputs));
-            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source_stream);
             return deferred;
         }
@@ -220,14 +219,13 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_ranges = std::move(deferred_ranges)]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
                     return materialized.slice(std::span<const std::pair<int, int>>(deferred_ranges));
                 },
                 std::move(deferred_inputs));
-            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source_stream);
             return deferred;
         }
@@ -279,14 +277,13 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), dim, start, end]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
                     return materialized.slice(dim, start, end);
                 },
                 std::move(deferred_inputs));
-            internal::tag_deferred_gpu_backend(deferred, internal::gpu_backend_tag(*this));
             deferred.set_stream(source_stream);
             return deferred;
         }

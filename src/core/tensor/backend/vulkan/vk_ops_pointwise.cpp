@@ -385,7 +385,8 @@ namespace lfs::core::internal {
                            chain.num_ops <= tensor_ops::FUSED_POINTWISE_MAX_OPS,
                        "Vulkan fused pointwise chain requires Float32 and 1 to 16 operations");
         const auto context = acquire_vulkan_context();
-        const StorageRef metadata = vk::upload_chain(*context, chain);
+        const vk::ScopedAllocation table = vk::upload_chain(*context, chain);
+        const StorageRef metadata = table.storage();
         const std::array constants{0u, 0u, 0u, 4u, 0u, 0u};
         const VulkanPipeline& pipeline =
             context->pipelines().specialized("pointwise", sizeof(PointwisePush), constants);
@@ -419,7 +420,6 @@ namespace lfs::core::internal {
                     vkCmdDispatch(command, dispatch_groups(*context, chunk), 1, 1);
                 });
         }
-        context->memory().deallocate(metadata);
     }
 
     void VulkanBackendOps::clamp_scalar(

@@ -539,7 +539,6 @@ namespace lfs::core {
         LFS_CORE_API void read_scalar(const Tensor& tensor, size_t element_index,
                                       void* output, size_t bytes);
         LFS_CORE_API void preserve_lazy_snapshots_before_write(Tensor& tensor);
-        inline void tag_deferred_gpu_backend(Tensor& deferred, GpuBackend backend);
         inline GpuBackend gpu_backend_tag(const Tensor& tensor);
     } // namespace internal
 
@@ -564,7 +563,6 @@ namespace lfs::core {
                                                        const Tensor& other,
                                                        std::string_view operation);
         friend void internal::preserve_lazy_snapshots_before_write(Tensor& tensor);
-        friend void internal::tag_deferred_gpu_backend(Tensor& deferred, GpuBackend backend);
         friend GpuBackend internal::gpu_backend_tag(const Tensor& tensor);
 
         struct TensorState {
@@ -677,13 +675,16 @@ namespace lfs::core {
         /// address region and is otherwise hard to diagnose.
         void assert_device_storage_matches_tag() const;
 
+        // The backend tags the deferred result before any validator can observe it.
         static Tensor make_deferred_expr_tensor(TensorShape shape,
                                                 Device device,
                                                 DataType dtype,
+                                                GpuBackend backend,
                                                 std::function<Tensor()> materializer);
         static Tensor make_deferred_expr_tensor(TensorShape shape,
                                                 Device device,
                                                 DataType dtype,
+                                                GpuBackend backend,
                                                 std::function<Tensor()> materializer,
                                                 std::vector<uint64_t> lazy_input_ids);
 
@@ -1124,7 +1125,7 @@ namespace lfs::core {
                 const cudaStream_t stream_hint =
                     (dev == Device::CUDA) ? getCurrentCUDAStream() : nullptr;
                 Tensor result = make_deferred_expr_tensor(
-                    shp, dev, DataType::Float32,
+                    shp, dev, DataType::Float32, internal::gpu_backend_tag(*this),
                     [lhs_source, rhs_operand, op, shp, dev, stream_hint]() mutable {
                         lhs_source.materialize_if_deferred();
                         rhs_operand.materialize_if_deferred();
@@ -1146,7 +1147,6 @@ namespace lfs::core {
                         return out;
                     },
                     {lazy_expr_id(), other.lazy_expr_id()});
-                internal::tag_deferred_gpu_backend(result, internal::gpu_backend_tag(*this));
                 if (dev == Device::CUDA) {
                     result.set_stream(stream_hint);
                 }
@@ -1362,14 +1362,13 @@ namespace lfs::core {
                     deferred_inputs.push_back(source_id);
                 }
                 Tensor view = make_deferred_expr_tensor(
-                    deferred_shape, device_, dtype_,
+                    deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                     [source = std::move(source), deferred_shape]() mutable {
                         Tensor materialized = source;
                         materialized.materialize_if_deferred();
                         return materialized.create_view(deferred_shape);
                     },
                     std::move(deferred_inputs));
-                internal::tag_deferred_gpu_backend(view, internal::gpu_backend_tag(*this));
                 view.set_stream(source_stream);
                 return view;
             }
@@ -3408,10 +3407,11 @@ namespace lfs::core {
             return GpuBackend::CUDA;
         }
 
-        inline void tag_deferred_gpu_backend(Tensor& deferred, const GpuBackend backend) {
-            if (deferred.state_ && deferred.state_->lazy) {
-                deferred.state_->lazy->backend = backend;
-            }
+        // Fused-chain operands cross the facade as raw addresses; deriving them from
+        // the StorageRef skips the pointer classification ptr<T>() performs per call.
+        inline const float* chain_operand_address(const StorageRef& storage) {
+            return reinterpret_cast<const float*>(
+                static_cast<const unsigned char*>(storage.data) + storage.byte_offset);
         }
 
         inline StorageRef storage_ref(const Tensor& tensor) {

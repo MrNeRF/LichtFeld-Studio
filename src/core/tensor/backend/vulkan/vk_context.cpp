@@ -601,19 +601,10 @@ namespace lfs::core::internal {
                 VK_SUCCESS) {
                 return;
             }
+            // A per-context temporary plus rename is atomic on its own; a lock
+            // directory left behind by a crash would silence every later save.
             const std::filesystem::path destination(pipeline_cache_path_);
-            const std::filesystem::path lock_path = destination.string() + ".lock";
             std::error_code error;
-            if (!std::filesystem::create_directory(lock_path, error)) {
-                return;
-            }
-            struct LockCleanup {
-                std::filesystem::path path;
-                ~LockCleanup() {
-                    std::error_code ignored;
-                    std::filesystem::remove(path, ignored);
-                }
-            } cleanup{lock_path};
             const std::filesystem::path temporary =
                 destination.string() + std::format(".tmp.{}", context_id_);
             {
