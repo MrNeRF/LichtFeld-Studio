@@ -591,6 +591,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_runtime.cpp
         test_tensor_vulkan_pointwise.cpp
         test_tensor_vulkan_reduce.cpp
+        test_tensor_vulkan_index.cpp
         test_tensor_backend_parity.cpp
     )
 endif()

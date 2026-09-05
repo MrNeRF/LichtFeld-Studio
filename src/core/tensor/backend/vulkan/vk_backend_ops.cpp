@@ -40,8 +40,6 @@ namespace lfs::core::internal {
         not_implemented(#Name);               \
     }
 
-    LFS_VK_NOTIMPL_VOID(sort_1d, (StorageRef, StorageRef, size_t, const SortProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(sort_2d, (StorageRef, StorageRef, const SortProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(sgemm, (StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(sgemm_tn, (StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(sgemm_batched, (StorageRef, StorageRef, StorageRef, const GemmProgram&, ExecContext))
@@ -60,22 +58,6 @@ namespace lfs::core::internal {
     LFS_VK_NOTIMPL_VOID(randint, (StorageRef, const RandomProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(multinomial, (StorageRef, StorageRef, const RandomProgram&, ExecContext))
     LFS_VK_NOTIMPL_VOID(normal, (StorageRef, StorageRef, const RandomProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(gather, (StorageRef, StorageRef, StorageRef, const StridedLayout&, const StridedLayout&, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(gather_fused_unary, (StorageRef, StorageRef, StorageRef, PointwiseOp, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(take, (StorageRef, StorageRef, StorageRef, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(index_select, (StorageRef, StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(scatter, (StorageRef, StorageRef, StorageRef, const StridedLayout&, const StridedLayout&, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(index_copy, (StorageRef, StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(index_add, (StorageRef, StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(index_fill, (StorageRef, StorageRef, const StridedLayout&, const IndexProgram&, ScalarOperand, ExecContext))
-    LFS_VK_NOTIMPL_VOID(index_put, (StorageRef, StorageRef, StorageRef, const IndexProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(masked_fill, (StorageRef, StorageRef, const MaskProgram&, ExecContext))
-    LFS_VK_NOTIMPL_SIZE(masked_select, (StorageRef, StorageRef, StorageRef, const MaskProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(masked_scatter, (StorageRef, StorageRef, StorageRef, const MaskProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(and_live, (StorageRef, StorageRef, const MaskProgram&, ExecContext))
-    LFS_VK_NOTIMPL_VOID(where, (StorageRef, StorageRef, StorageRef, StorageRef, const StridedLayout&, const StridedLayout&, const StridedLayout&, const StridedLayout&, ExecContext))
-    LFS_VK_NOTIMPL_SIZE(nonzero, (StorageRef, StorageRef, const MaskProgram&, ExecContext))
-    LFS_VK_NOTIMPL_SIZE(nonzero_bool, (StorageRef, StorageRef, const MaskProgram&, ExecContext))
 
 #undef LFS_VK_NOTIMPL_VOID
 #undef LFS_VK_NOTIMPL_FLOAT
