@@ -983,8 +983,6 @@ namespace {
             throw std::runtime_error("--out DIR is required");
         if (!options.reference.empty())
             options.dump = true;
-        if (options.backend == GpuBackend::Vulkan && options.time)
-            throw std::runtime_error("--time is not available for the phase-P3 Vulkan corpus; Vulkan timing is enabled in P4");
         return options;
     }
 
@@ -1004,12 +1002,44 @@ namespace {
         return line.str();
     }
 
+    // CUDA rows are timed on the device between two events; Vulkan rows are
+    // timed on the host from the call to the completion of every submitted
+    // batch, so a Vulkan timing includes recording and submission and is only
+    // comparable with another Vulkan timing.
+    std::array<double, 3> time_case_vulkan(size_t entry_index, PreparedInputs& inputs,
+                                           size_t warmup_count, size_t sample_count) {
+        auto& ops = internal::backend_ops(GpuBackend::Vulkan);
+        for (size_t i = 0; i < warmup_count; ++i) {
+            const auto outputs = execute(entry_index, inputs);
+            for (const auto& output : outputs)
+                (void)output.data_ptr();
+        }
+        ops.synchronize_stream(internal::ExecContext{});
+        std::vector<double> samples;
+        samples.reserve(sample_count);
+        for (size_t i = 0; i < sample_count; ++i) {
+            if (kEntries[entry_index].rule == Rule::Stat)
+                Tensor::manual_seed(kSeed + entry_index);
+            const auto begin = std::chrono::steady_clock::now();
+            const auto outputs = execute(entry_index, inputs);
+            for (const auto& output : outputs)
+                (void)output.data_ptr();
+            ops.synchronize_stream(internal::ExecContext{});
+            const auto end = std::chrono::steady_clock::now();
+            samples.push_back(std::chrono::duration<double, std::micro>(end - begin).count());
+        }
+        std::sort(samples.begin(), samples.end());
+        return {samples[50], samples[25], samples[75]};
+    }
+
     std::array<double, 3> time_case(size_t entry_index, const Profile& profile, DataType dtype,
-                                    bool noncontiguous) {
+                                    bool noncontiguous, GpuBackend backend) {
         constexpr size_t warmup_count = 5;
         constexpr size_t sample_count = 100;
         auto inputs = prepare(entry_index, profile, dtype, noncontiguous,
                               warmup_count + sample_count);
+        if (backend == GpuBackend::Vulkan)
+            return time_case_vulkan(entry_index, inputs, warmup_count, sample_count);
         cudaEvent_t start = nullptr;
         cudaEvent_t stop = nullptr;
         cuda_check(cudaEventCreate(&start), "cudaEventCreate start");
@@ -1254,7 +1284,8 @@ namespace {
                         }
                         if (write_files && options.time) {
                             const auto quartiles =
-                                time_case(entry_index, profile, dtype, noncontiguous);
+                                time_case(entry_index, profile, dtype, noncontiguous,
+                                          options.backend);
                             median_sum_us += quartiles[0];
                             timing << entry.launcher << ' ' << profile.name << ' ' << compact_dtype_name(dtype) << ' '
                                    << std::fixed << std::setprecision(3) << quartiles[0] << ' ' << quartiles[1]

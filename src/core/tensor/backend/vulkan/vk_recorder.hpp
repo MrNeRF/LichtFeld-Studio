@@ -45,6 +45,7 @@ namespace lfs::core::internal {
         uint64_t flush_through_locked(uint64_t value);
         void submit_locked(Recorder& recorder);
         void begin_locked(Recorder& recorder);
+        void retire_completed_locked(Recorder& recorder, uint64_t completed);
         void collect_completed_locked(uint64_t completed);
         static void stamp(StorageRef storage, uint64_t recorder_id, uint64_t value);
 

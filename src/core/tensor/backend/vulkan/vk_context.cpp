@@ -733,6 +733,17 @@ namespace lfs::core::internal {
         if (dead()) {
             vk_check(this, VK_ERROR_DEVICE_LOST, "vkWaitSemaphores");
         }
+        // Most waits follow a batch that finishes within a few microseconds; a
+        // blocking wait entered before the signal costs one or two milliseconds
+        // of wake-up latency on the NVIDIA driver, so the counter is polled for
+        // a short budget first.
+        constexpr auto kPollBudget = std::chrono::microseconds(300);
+        const auto poll_start = std::chrono::steady_clock::now();
+        do {
+            if (completed_timeline() >= value) {
+                return;
+            }
+        } while (std::chrono::steady_clock::now() - poll_start < kPollBudget);
         VkSemaphoreWaitInfo wait_info{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
         wait_info.semaphoreCount = 1;
         wait_info.pSemaphores = &timeline_;

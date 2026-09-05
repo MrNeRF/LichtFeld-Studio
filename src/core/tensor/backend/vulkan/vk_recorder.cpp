@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
 #include <limits>
 #include <thread>
 #include <utility>
@@ -50,15 +51,41 @@ namespace lfs::core::internal {
     } // namespace
 
     struct VulkanRecorderRegistry::Recorder {
+        struct Submitted {
+            VkCommandBuffer command = VK_NULL_HANDLE;
+            uint64_t value = 0;
+        };
+
         uint64_t id = 0;
         VkCommandPool pool = VK_NULL_HANDLE;
         VkCommandBuffer command = VK_NULL_HANDLE;
-        VkCommandBuffer submitted_command = VK_NULL_HANDLE;
+        // Submitted batches whose completion the host has not observed yet,
+        // oldest first. Recording continues while they run; the host waits
+        // only when kInFlightLimit batches are outstanding.
+        std::deque<Submitted> in_flight;
         uint64_t reserved_value = 0;
         uint64_t submitted_value = 0;
         uint32_t command_count = 0;
         bool owner_alive = true;
     };
+
+    namespace {
+        constexpr size_t kInFlightLimit = 4;
+    } // namespace
+
+    void VulkanRecorderRegistry::retire_completed_locked(Recorder& recorder,
+                                                         const uint64_t completed) {
+        while (!recorder.in_flight.empty() && recorder.in_flight.front().value <= completed) {
+            vkFreeCommandBuffers(context_.device(), recorder.pool, 1,
+                                 &recorder.in_flight.front().command);
+            recorder.in_flight.pop_front();
+        }
+        if (recorder.in_flight.empty() && recorder.command == VK_NULL_HANDLE &&
+            recorder.submitted_value != 0) {
+            vk_check(&context_, vkResetCommandPool(context_.device(), recorder.pool, 0),
+                     "vkResetCommandPool");
+        }
+    }
 
     VulkanRecorderRegistry::VulkanRecorderRegistry(VulkanContext& context)
         : context_(context) {}
@@ -94,16 +121,10 @@ namespace lfs::core::internal {
         if (recorder.command != VK_NULL_HANDLE) {
             return;
         }
-        if (recorder.submitted_value != 0) {
-            context_.wait(recorder.submitted_value);
-            if (recorder.submitted_command != VK_NULL_HANDLE) {
-                vkFreeCommandBuffers(context_.device(), recorder.pool, 1,
-                                     &recorder.submitted_command);
-                recorder.submitted_command = VK_NULL_HANDLE;
-            }
-            vk_check(&context_, vkResetCommandPool(context_.device(), recorder.pool, 0),
-                     "vkResetCommandPool");
-            recorder.submitted_value = 0;
+        retire_completed_locked(recorder, context_.completed_timeline());
+        if (recorder.in_flight.size() >= kInFlightLimit) {
+            context_.wait(recorder.in_flight.front().value);
+            retire_completed_locked(recorder, context_.completed_timeline());
         }
         VkCommandBufferAllocateInfo allocate_info{
             VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -192,7 +213,7 @@ namespace lfs::core::internal {
         vk_check(&context_, vkEndCommandBuffer(command), "vkEndCommandBuffer");
         context_.submit(command, value);
         recorder.submitted_value = value;
-        recorder.submitted_command = command;
+        recorder.in_flight.push_back({command, value});
     }
 
     uint64_t VulkanRecorderRegistry::flush_through_locked(const uint64_t value) {
@@ -214,11 +235,12 @@ namespace lfs::core::internal {
 
     void VulkanRecorderRegistry::collect_completed_locked(const uint64_t completed) {
         std::erase_if(recorders_, [&](const auto& entry) {
-            const Recorder& recorder = *entry.second;
+            Recorder& recorder = *entry.second;
             if (recorder.owner_alive || recorder.command != VK_NULL_HANDLE ||
                 recorder.submitted_value > completed) {
                 return false;
             }
+            retire_completed_locked(recorder, completed);
             vkDestroyCommandPool(context_.device(), recorder.pool, nullptr);
             return true;
         });
