@@ -21,8 +21,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include "windows_console.hpp"
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif

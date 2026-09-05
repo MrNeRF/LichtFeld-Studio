@@ -110,7 +110,7 @@ TEST(LoggerWindowsConsoleTest, UnicodeUsesPrivateScreenBufferWithoutChangingCons
     std::wstring actual(expected.size(), L'\0');
     DWORD read = 0;
     ASSERT_TRUE(ReadConsoleOutputCharacterW(buffer, actual.data(), static_cast<DWORD>(actual.size()),
-                                           COORD{0, 0}, &read));
+                                            COORD{0, 0}, &read));
     EXPECT_EQ(read, expected.size());
     EXPECT_EQ(actual, expected);
     CONSOLE_SCREEN_BUFFER_INFO info{};

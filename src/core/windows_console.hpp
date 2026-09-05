@@ -7,8 +7,8 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include <io.h>
+#include <windows.h>
 
 #include <algorithm>
 #include <cstdio>
