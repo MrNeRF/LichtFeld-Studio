@@ -9,7 +9,11 @@
 #include <string_view>
 #include <utility>
 #include <vector>
-#ifndef _WIN32
+#ifdef _WIN32
+#include "core/windows_console.hpp"
+#include <fcntl.h>
+#include <memory>
+#else
 #include <unistd.h>
 #endif
 
@@ -71,6 +75,91 @@ namespace {
     }
 
 } // namespace
+
+#ifdef _WIN32
+TEST(LoggerWindowsConsoleTest, UnicodeUsesPrivateScreenBufferWithoutChangingConsoleSettings) {
+    // An inactive buffer exercises real WriteConsoleW without touching the user's
+    // visible output or changing the console code pages, modes or active buffer.
+    const HANDLE buffer = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
+                                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                                    nullptr, CONSOLE_TEXTMODE_BUFFER, nullptr);
+    if (buffer == INVALID_HANDLE_VALUE)
+        GTEST_SKIP() << "Requires an attached Windows console";
+    const int fd = _open_osfhandle(reinterpret_cast<intptr_t>(buffer), _O_WRONLY | _O_TEXT);
+    if (fd < 0) {
+        CloseHandle(buffer);
+        FAIL() << "Cannot create console descriptor";
+    }
+    FILE* raw = _fdopen(fd, "w");
+    if (!raw) {
+        _close(fd);
+        FAIL() << "Cannot create console stream";
+    }
+    const std::unique_ptr<FILE, decltype(&std::fclose)> stream(raw, &std::fclose);
+    const auto input_cp = GetConsoleCP();
+    const auto output_cp = GetConsoleOutputCP();
+    DWORD mode_before = 0;
+    ASSERT_TRUE(GetConsoleMode(buffer, &mode_before));
+    EXPECT_EQ(lfs::core::detail::console_output_handle(stream.get()), buffer);
+
+    // Cross the writer's chunk boundary before the visible Unicode suffix.
+    std::string message(40'000, '\r');
+    message += "caf\xc3\xa9 \xe2\x80\x94 \xce\xa9 \xd0\x96\n";
+    ASSERT_TRUE(lfs::core::detail::write_console_utf8(buffer, message));
+    const std::wstring expected = L"caf\u00e9 \u2014 \u03a9 \u0416";
+    std::wstring actual(expected.size(), L'\0');
+    DWORD read = 0;
+    ASSERT_TRUE(ReadConsoleOutputCharacterW(buffer, actual.data(), static_cast<DWORD>(actual.size()),
+                                           COORD{0, 0}, &read));
+    EXPECT_EQ(read, expected.size());
+    EXPECT_EQ(actual, expected);
+    CONSOLE_SCREEN_BUFFER_INFO info{};
+    ASSERT_TRUE(GetConsoleScreenBufferInfo(buffer, &info));
+    EXPECT_EQ(info.dwCursorPosition.X, 0);
+    EXPECT_EQ(info.dwCursorPosition.Y, 1);
+    DWORD mode_after = 0;
+    ASSERT_TRUE(GetConsoleMode(buffer, &mode_after));
+    EXPECT_EQ(mode_after, mode_before);
+    EXPECT_EQ(GetConsoleCP(), input_cp);
+    EXPECT_EQ(GetConsoleOutputCP(), output_cp);
+}
+
+TEST(LoggerWindowsConsoleTest, RedirectedStdoutAndStderrRetainUtf8Bytes) {
+    LoggerInitGuard restore;
+    auto& logger = lfs::core::Logger::get();
+    const std::string message = "caf\xc3\xa9 \xe2\x80\x94 \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x8c\x8d";
+    for (const bool use_stderr : {false, true}) {
+        logger.init(lfs::core::LogLevel::Info, "", "", use_stderr);
+        // Capture after init to guard against caching the old stream handle.
+        if (use_stderr)
+            testing::internal::CaptureStderr();
+        else
+            testing::internal::CaptureStdout();
+        const auto handle = lfs::core::detail::console_output_handle(use_stderr ? stderr : stdout);
+        logger.log(lfs::core::LogLevel::Info, LFS_SOURCE_SITE_CURRENT(), message);
+        const auto captured = use_stderr ? testing::internal::GetCapturedStderr()
+                                         : testing::internal::GetCapturedStdout();
+        EXPECT_EQ(handle, INVALID_HANDLE_VALUE);
+        EXPECT_EQ(count_occurrences(captured, message), 1);
+        EXPECT_NE(logger.buffered_logs_as_text().find(message), std::string::npos);
+    }
+}
+
+TEST(LoggerWindowsConsoleTest, InitializationWritesUnicodeProbeToLogFile) {
+    LoggerInitGuard restore;
+    const auto directory = unique_temp_dir("unicode_probe");
+    const auto log_file = directory / "startup.log";
+    std::filesystem::create_directories(directory);
+    lfs::core::Logger::get().init(lfs::core::LogLevel::Info, log_file.string());
+    lfs::core::Logger::get().flush();
+
+    const auto content = read_file(log_file);
+    EXPECT_NE(content.find("\xE2\x80\x94 UTF-8 console: \xE2\x9C\x93"), std::string::npos);
+    // Release the explicit rotating sink before deleting its Windows file.
+    lfs::core::Logger::get().init();
+    std::filesystem::remove_all(directory);
+}
+#endif
 
 TEST(LoggerTest, ScopedTimerThresholdSuppressesBelowThresholdPerfLog) {
     auto& logger = lfs::core::Logger::get();
