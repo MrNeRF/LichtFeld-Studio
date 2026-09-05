@@ -5,6 +5,7 @@
 #pragma once
 
 #include "buffer_utils.h"
+#include "fisheye_kb.cuh"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "lfs/training/screen_share.cuh"
@@ -54,6 +55,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         return (static_cast<InstanceKey>(tile_key) << depth_bits) | static_cast<InstanceKey>(depth_key);
     }
 
+    template <FastGSCameraKind KIND>
     __global__ void preprocess_cu(
         const float3* __restrict__ means,
         const float3* __restrict__ raw_scales,
@@ -96,9 +98,20 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float far_,
         const uint depth_bits,
         const bool mip_filter,
-        float* __restrict__ max_screen_share) {
-        (void)w;
-        (void)h;
+        float* __restrict__ max_screen_share,
+        const float4 fisheye_k,
+        const float theta_max) {
+        if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+            (void)w;
+            (void)h;
+            (void)fisheye_k;
+            (void)theta_max;
+        } else {
+            (void)clip_left;
+            (void)clip_right;
+            (void)clip_top;
+            (void)clip_bottom;
+        }
         auto work_idx = cg::this_grid().thread_rank();
         bool active = work_idx < n_work_items;
         if (!active) {
@@ -117,11 +130,25 @@ namespace fast_lfs::rasterization::kernels::forward {
         // load 3d mean
         const float3 mean3d = means[primitive_idx];
 
-        // z culling
         const float4 w2c_r3 = w2c[2];
-        const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
-        if (depth < near_ || depth > far_)
-            active = false;
+        float depth;
+        [[maybe_unused]] float3 fisheye_P;
+        if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+            // z culling
+            depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
+            if (depth < near_ || depth > far_)
+                active = false;
+        } else {
+            const float4 fisheye_w2c_r1 = w2c[0];
+            const float4 fisheye_w2c_r2 = w2c[1];
+            fisheye_P.x = fisheye_w2c_r1.x * mean3d.x + fisheye_w2c_r1.y * mean3d.y + fisheye_w2c_r1.z * mean3d.z + fisheye_w2c_r1.w;
+            fisheye_P.y = fisheye_w2c_r2.x * mean3d.x + fisheye_w2c_r2.y * mean3d.y + fisheye_w2c_r2.z * mean3d.z + fisheye_w2c_r2.w;
+            fisheye_P.z = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
+            // FISHEYE depth is ray length D = |P| (z can be <= 0 at FOV > 180).
+            depth = sqrtf(fisheye_P.x * fisheye_P.x + fisheye_P.y * fisheye_P.y + fisheye_P.z * fisheye_P.z);
+            if (depth < near_ || depth > far_ || depth < fisheye_kb::kMinRayLength)
+                active = false;
+        }
 
         // early exit if whole warp is inactive
         if (__ballot_sync(0xffffffffu, active) == 0)
@@ -173,59 +200,113 @@ namespace fast_lfs::rasterization::kernels::forward {
             rotation_scaled.m31 * rotation.m31 + rotation_scaled.m32 * rotation.m32 + rotation_scaled.m33 * rotation.m33,
         };
 
-        // compute 2d mean in normalized image coordinates
-        const float inv_depth = 1.0f / depth;
-        const float4 w2c_r1 = w2c[0];
-        const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
-        const float4 w2c_r2 = w2c[1];
-        const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
+        float3 cov2d;
+        float2 mean2d;
+        float4 w2c_r1, w2c_r2;
+        if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+            // compute 2d mean in normalized image coordinates
+            const float inv_depth = 1.0f / depth;
+            w2c_r1 = w2c[0];
+            const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
+            w2c_r2 = w2c[1];
+            const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
 
-        // ewa splatting (clip box is grid-uniform; computed once on the host)
-        const float tx = clamp(x, clip_left, clip_right);
-        const float ty = clamp(y, clip_top, clip_bottom);
-        const float j11 = fx * inv_depth;
-        const float j13 = -j11 * tx;
-        const float j22 = fy * inv_depth;
-        const float j23 = -j22 * ty;
-        const float3 jw_r1 = make_float3(
-            j11 * w2c_r1.x + j13 * w2c_r3.x,
-            j11 * w2c_r1.y + j13 * w2c_r3.y,
-            j11 * w2c_r1.z + j13 * w2c_r3.z);
-        const float3 jw_r2 = make_float3(
-            j22 * w2c_r2.x + j23 * w2c_r3.x,
-            j22 * w2c_r2.y + j23 * w2c_r3.y,
-            j22 * w2c_r2.z + j23 * w2c_r3.z);
-        const float3 jwc_r1 = make_float3(
-            jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
-            jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
-            jw_r1.x * cov3d.m13 + jw_r1.y * cov3d.m23 + jw_r1.z * cov3d.m33);
-        const float3 jwc_r2 = make_float3(
-            jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
-            jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
-            jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
-        float3 cov2d = make_float3(dot(jwc_r1, jw_r1), dot(jwc_r1, jw_r2), dot(jwc_r2, jw_r2));
+            // ewa splatting (clip box is grid-uniform; computed once on the host)
+            const float tx = clamp(x, clip_left, clip_right);
+            const float ty = clamp(y, clip_top, clip_bottom);
+            const float j11 = fx * inv_depth;
+            const float j13 = -j11 * tx;
+            const float j22 = fy * inv_depth;
+            const float j23 = -j22 * ty;
+            const float3 jw_r1 = make_float3(
+                j11 * w2c_r1.x + j13 * w2c_r3.x,
+                j11 * w2c_r1.y + j13 * w2c_r3.y,
+                j11 * w2c_r1.z + j13 * w2c_r3.z);
+            const float3 jw_r2 = make_float3(
+                j22 * w2c_r2.x + j23 * w2c_r3.x,
+                j22 * w2c_r2.y + j23 * w2c_r3.y,
+                j22 * w2c_r2.z + j23 * w2c_r3.z);
+            const float3 jwc_r1 = make_float3(
+                jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
+                jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
+                jw_r1.x * cov3d.m13 + jw_r1.y * cov3d.m23 + jw_r1.z * cov3d.m33);
+            const float3 jwc_r2 = make_float3(
+                jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
+                jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
+                jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
+            cov2d = make_float3(dot(jwc_r1, jw_r1), dot(jwc_r1, jw_r2), dot(jwc_r2, jw_r2));
+            mean2d = make_float2(x * fx + cx, y * fy + cy);
+        } else {
+            w2c_r1 = w2c[0];
+            w2c_r2 = w2c[1];
+            const auto proj = fisheye_kb::kb_project(
+                fisheye_P.x, fisheye_P.y, fisheye_P.z, fx, fy, cx, cy,
+                fisheye_k.x, fisheye_k.y, fisheye_k.z, fisheye_k.w);
+            const bool proj_ok = proj.finite && proj.theta < theta_max;
+            if (!proj_ok)
+                active = false;
+
+            if (proj_ok) {
+                mean2d = make_float2(proj.px, proj.py);
+                const float3 jw_r1 = make_float3(
+                    proj.J00 * w2c_r1.x + proj.J01 * w2c_r2.x + proj.J02 * w2c_r3.x,
+                    proj.J00 * w2c_r1.y + proj.J01 * w2c_r2.y + proj.J02 * w2c_r3.y,
+                    proj.J00 * w2c_r1.z + proj.J01 * w2c_r2.z + proj.J02 * w2c_r3.z);
+                const float3 jw_r2 = make_float3(
+                    proj.J10 * w2c_r1.x + proj.J11 * w2c_r2.x + proj.J12 * w2c_r3.x,
+                    proj.J10 * w2c_r1.y + proj.J11 * w2c_r2.y + proj.J12 * w2c_r3.y,
+                    proj.J10 * w2c_r1.z + proj.J11 * w2c_r2.z + proj.J12 * w2c_r3.z);
+                const float3 jwc_r1 = make_float3(
+                    jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
+                    jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
+                    jw_r1.x * cov3d.m13 + jw_r1.y * cov3d.m23 + jw_r1.z * cov3d.m33);
+                const float3 jwc_r2 = make_float3(
+                    jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
+                    jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
+                    jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
+                cov2d = make_float3(dot(jwc_r1, jw_r1), dot(jwc_r1, jw_r2), dot(jwc_r2, jw_r2));
+            } else {
+                // Finite dummy so culled threads cannot inject NaN into the warp.
+                mean2d = make_float2(cx, cy);
+                cov2d = make_float3(config::dilation, 0.0f, config::dilation);
+            }
+        }
 
         // Mip filter: use smaller dilation and compensate opacity
         const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
-        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        const float kernel_size = mip_filter ? config::dilation_for<KIND, true>()
+                                             : config::dilation_for<KIND, false>();
         cov2d.x += kernel_size;
         cov2d.z += kernel_size;
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
         if (det < config::min_cov2d_determinant)
             active = false;
         const float det_rcp = 1.0f / det;
-        const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
+        float output_opacity;
+        if constexpr (KIND == FastGSCameraKind::FISHEYE) {
+            output_opacity = opacity;
+            (void)det_raw;
+        } else {
+            output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
+        }
         if (output_opacity < config::min_alpha_threshold)
             active = false;
 
         const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
-        const float2 mean2d = make_float2(x * fx + cx, y * fy + cy);
 
         // Compute bounds
         const float power_threshold = logf(output_opacity * config::min_alpha_threshold_rcp);
         const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
+        if constexpr (KIND == FastGSCameraKind::FISHEYE) {
+            // Cull (never clamp) when the projected pixel is outside the image by
+            // more than the splat's screen-radius margin. Pinhole clip-box is unused.
+            if (mean2d.x + extent_x < 0.0f || mean2d.x - extent_x >= w ||
+                mean2d.y + extent_y < 0.0f || mean2d.y - extent_y >= h) {
+                active = false;
+            }
+        }
         const uint4 screen_bounds = compute_screen_tile_bounds(
             mean2d, extent_x, extent_y, grid_width, grid_height);
         const uint n_touched_tiles_max = (screen_bounds.y - screen_bounds.x) * (screen_bounds.w - screen_bounds.z);
@@ -298,6 +379,11 @@ namespace fast_lfs::rasterization::kernels::forward {
         primitive_color[work_idx] = make_float4(sh_color, 0.0f);
         primitive_depth_keys[work_idx] = quantize_depth_key(depth, depth_bits);
         primitive_depths[work_idx] = depth;
+        // Sort key: PINHOLE uses camera-z; FISHEYE uses ray length D = |P|.
+        // quantize_depth_key maps d>0 through (2d+1)/(d+1) into [1,2) so D's
+        // wider range stays ordered. CUB DeviceRadixSort is stable, and
+        // create_instances writes primitives in index order, so equal-depth
+        // ties are deterministic across runs.
 
         // Camera-space unit normal: rotation column of the smallest axis, oriented toward the camera.
         if (primitive_normals != nullptr) {
@@ -849,6 +935,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             image[pixel_idx + n_pixels] = color_pixel0.y + transmittance0 * bg.y;
             image[pixel_idx + n_pixels * 2] = color_pixel0.z + transmittance0 * bg.z;
             alpha_map[pixel_idx] = 1.0f - transmittance0;
+            // Accumulated primitive depth: camera-z for PINHOLE, ray length D for FISHEYE.
             depth_map[pixel_idx] = depth_pixel0;
             if constexpr (kRenderNormal) {
                 normal_map[pixel_idx] = normal_pixel0.x;

@@ -9,6 +9,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "fisheye_kb.cuh"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
@@ -302,6 +303,30 @@ namespace lfs::training {
 
         auto [fx, fy, cx, cy] = viewpoint_camera.get_intrinsics();
 
+        FastGSCameraKind camera_kind = FastGSCameraKind::PINHOLE;
+        float fisheye_k1 = 0.0f, fisheye_k2 = 0.0f, fisheye_k3 = 0.0f, fisheye_k4 = 0.0f;
+        float fisheye_theta_max = 0.0f;
+        if (viewpoint_camera.camera_model_type() == core::CameraModelType::FISHEYE) {
+            camera_kind = FastGSCameraKind::FISHEYE;
+            const auto radial = viewpoint_camera.radial_distortion();
+            if (radial.is_valid() && radial.numel() > 0) {
+                auto radial_cpu = radial.to(core::Device::CPU).contiguous();
+                const float* kptr = radial_cpu.ptr<float>();
+                fisheye_k1 = kptr[0];
+                if (radial.numel() > 1)
+                    fisheye_k2 = kptr[1];
+                if (radial.numel() > 2)
+                    fisheye_k3 = kptr[2];
+                if (radial.numel() > 3)
+                    fisheye_k4 = kptr[3];
+            }
+            // Full-image, unadjusted principal point. Training tiles shift
+            // cx/cy and shrink w/h; theta_max must not follow them.
+            fisheye_theta_max = fast_lfs::rasterization::fisheye_kb::kb_theta_max_from_intrinsics(
+                fisheye_k1, fisheye_k2, fisheye_k3, fisheye_k4,
+                full_width, full_height, fx, fy, cx, cy);
+        }
+
         // Adjust camera center point for tile rendering
         // When rendering a tile at offset, the principal point shifts
         const float cx_adjusted = cx - static_cast<float>(tile_x_offset);
@@ -448,7 +473,13 @@ namespace lfs::training {
                  gaussian_model._max_screen_share.ndim() == 1 &&
                  gaussian_model._max_screen_share.numel() >= static_cast<size_t>(n_primitives))
                     ? gaussian_model._max_screen_share.ptr<float>()
-                    : nullptr);
+                    : nullptr,
+                camera_kind,
+                fisheye_k1,
+                fisheye_k2,
+                fisheye_k3,
+                fisheye_k4,
+                fisheye_theta_max);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(
@@ -538,6 +569,7 @@ namespace lfs::training {
 
         // background is composed inside blend_cu (single write).
         // No separate full-image compose pass.
+        // Depth is camera-z for pinhole and ray length D=|P| for Kannala-Brandt fisheye.
 
         render_output.image = image;
         render_output.alpha = alpha;
@@ -579,6 +611,12 @@ namespace lfs::training {
         ctx.near_plane = near_plane;
         ctx.far_plane = far_plane;
         ctx.mip_filter = mip_filter;
+        ctx.camera_kind = camera_kind;
+        ctx.fisheye_k1 = fisheye_k1;
+        ctx.fisheye_k2 = fisheye_k2;
+        ctx.fisheye_k3 = fisheye_k3;
+        ctx.fisheye_k4 = fisheye_k4;
+        ctx.fisheye_theta_max = fisheye_theta_max;
 
         // Store tile information
         ctx.tile_x_offset = tile_x_offset;
@@ -846,7 +884,13 @@ namespace lfs::training {
             fused_adam.mean_step_far_mask,
             fused_adam.mean_step_far_mask_n,
             fused_extra_gradients.edge_weight_map,
-            fused_extra_gradients.edge_score_out);
+            fused_extra_gradients.edge_score_out,
+            ctx.camera_kind,
+            ctx.fisheye_k1,
+            ctx.fisheye_k2,
+            ctx.fisheye_k3,
+            ctx.fisheye_k4,
+            ctx.fisheye_theta_max);
 
         ctx.mark_forward_context_released();
 
