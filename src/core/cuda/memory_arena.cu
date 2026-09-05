@@ -876,24 +876,52 @@ namespace lfs::core {
         return install_external_backing_impl(std::move(backing), true);
     }
 
-    bool RasterizerMemoryArena::try_install_external_backing(ExternalBacking backing) {
-        return install_external_backing_impl(std::move(backing), false);
+    bool RasterizerMemoryArena::try_install_external_backing(ExternalBacking backing, const uint32_t timeout_ms) {
+        return install_external_backing_impl(std::move(backing), false, timeout_ms);
     }
 
-    bool RasterizerMemoryArena::install_external_backing_impl(ExternalBacking backing, bool wait) {
+    bool RasterizerMemoryArena::install_external_backing_impl(ExternalBacking backing, const bool wait,
+                                                               const uint32_t timeout_ms) {
         if (!backing.valid()) {
             LOG_WARN("RasterizerMemoryArena::install_external_backing called with invalid backing");
             return false;
         }
 
-        std::unique_lock<std::mutex> sync_lock(sync_mutex_);
+        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::defer_lock);
+        if (wait) {
+            sync_lock.lock();
+        } else if (!sync_lock.try_lock()) {
+            return false;
+        }
         const auto can_install = [this]() {
             return active_frames_ == 0 && pending_render_frames_ == 0;
         };
         if (wait) {
             sync_cv_.wait(sync_lock, can_install);
         } else if (!can_install()) {
-            return false;
+            if (timeout_ms == 0 || pending_render_frames_ != 0) {
+                return false;
+            }
+            // Installation happens before the renderer acquires its arena frame.
+            // Reserve the next idle window so resumed training cannot continuously
+            // win it and leave a detached viewer backing permanently uninstalled.
+            ++pending_render_frames_;
+            bool idle = false;
+            try {
+                idle = sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(timeout_ms),
+                                         [this] { return active_frames_ == 0; });
+            } catch (...) {
+                --pending_render_frames_;
+                sync_cv_.notify_all();
+                throw;
+            }
+            --pending_render_frames_;
+            sync_cv_.notify_all();
+            if (!idle) {
+                return false;
+            }
+            // Keep sync_mutex_ through installation: no training frame can enter
+            // after the reservation is released and before the backing is visible.
         }
 
         // A submitted viewport batch may still be reading the current backing;
@@ -2255,8 +2283,9 @@ namespace lfs::core {
         return get_arena().install_external_backing(std::move(backing));
     }
 
-    bool GlobalArenaManager::try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing) {
-        return get_arena().try_install_external_backing(std::move(backing));
+    bool GlobalArenaManager::try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,
+                                                           const uint32_t timeout_ms) {
+        return get_arena().try_install_external_backing(std::move(backing), timeout_ms);
     }
 
     bool GlobalArenaManager::grow_external_backing(const void* device_ptr, size_t new_size,

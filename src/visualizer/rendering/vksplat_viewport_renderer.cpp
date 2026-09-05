@@ -1055,6 +1055,7 @@ namespace lfs::vis {
 
         constexpr std::size_t kSharedScratchPageBytes = std::size_t{2} << 20;
         constexpr std::size_t kSharedScratchMinBytes = std::size_t{128} << 20;
+        constexpr uint32_t kSharedScratchIdleReservationTimeoutMs = 15;
 
         enum InputRegion : std::size_t {
             InputXyzWs = 0,
@@ -3490,7 +3491,8 @@ namespace lfs::vis {
                 return false;
             }
             auto backing = make_external_backing(shared_scratch_.block);
-            return lfs::core::GlobalArenaManager::instance().try_install_external_backing(std::move(backing));
+            return lfs::core::GlobalArenaManager::instance().try_install_external_backing(
+                std::move(backing), kSharedScratchIdleReservationTimeoutMs);
         };
 
         // NOTE: if the training thread grew the block in place (new export handle),
@@ -3574,7 +3576,7 @@ namespace lfs::vis {
             using GrowFailure = lfs::core::RasterizerMemoryArena::ExternalGrowFailure;
             GrowFailure failure = GrowFailure::None;
             bool grew = lfs::core::GlobalArenaManager::instance().grow_external_backing(
-                device_ptr, exact_required_bytes, commit, /*timeout_ms=*/15, &failure);
+                device_ptr, exact_required_bytes, commit, kSharedScratchIdleReservationTimeoutMs, &failure);
             if (!grew) {
                 if (failure == GrowFailure::Busy || failure == GrowFailure::BackingMissing) {
                     if (failure == GrowFailure::BackingMissing) {
@@ -3633,7 +3635,8 @@ namespace lfs::vis {
         }
 
         auto backing = make_external_backing(*block_result);
-        if (!lfs::core::GlobalArenaManager::instance().try_install_external_backing(std::move(backing))) {
+        if (!lfs::core::GlobalArenaManager::instance().try_install_external_backing(
+                std::move(backing), kSharedScratchIdleReservationTimeoutMs)) {
             context.destroyExternalBuffer(imported);
             return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
         }

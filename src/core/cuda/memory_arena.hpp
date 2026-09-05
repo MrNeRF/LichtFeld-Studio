@@ -287,7 +287,9 @@ namespace lfs::core {
         bool release_at_boundary();
         void full_reset();
         bool install_external_backing(ExternalBacking backing);
-        bool try_install_external_backing(ExternalBacking backing);
+        // With a nonzero timeout, reserve the next idle window against new training
+        // frames. Zero keeps the try-only path used by callers that must not wait.
+        bool try_install_external_backing(ExternalBacking backing, uint32_t timeout_ms = 0);
         // Grows the committed size of an already-installed external backing whose
         // base pointer is `device_ptr` (which must stay constant). The arena
         // drains all frames and the device, then invokes `commit(new_size)` — which
@@ -330,7 +332,7 @@ namespace lfs::core {
         // and clears it. Must run before any path that frees or replaces arena
         // backing — a device sync cannot observe the in-flight Vulkan batch.
         void drain_external_release();
-        bool install_external_backing_impl(ExternalBacking backing, bool wait);
+        bool install_external_backing_impl(ExternalBacking backing, bool wait, uint32_t timeout_ms = 0);
         char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id,
                                 const char* label);
         void release_arena_storage(Arena& arena);
@@ -356,7 +358,8 @@ namespace lfs::core {
         RasterizerMemoryArena& get_arena();
         RasterizerMemoryArena* try_get_arena();
         bool install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
-        bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
+        bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,
+                                          uint32_t timeout_ms = 0);
         bool grow_external_backing(const void* device_ptr, size_t new_size,
                                    const std::function<bool(size_t)>& commit,
                                    uint32_t timeout_ms = 0,

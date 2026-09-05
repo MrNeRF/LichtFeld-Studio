@@ -402,14 +402,25 @@ TEST_F(ArenaMetricsContentionTest, ViewerGrowReservesIdleWindowAfterTrainingFram
     std::atomic<bool> finished{false};
     bool grew = false;
     size_t committed = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     std::thread viewer([&] {
         EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
-        grew = arena.grow_external_backing(device_ptr, 2 * MiB, [&](size_t requested) {
-            committed = requested;
-            return true; }, 2000);
+        // The observer below briefly owns sync_mutex_. A try-lock miss is a
+        // legitimate Busy result, so retry it as the viewer does on later frames.
+        // The reserved assertion still rejects an implementation that never queues.
+        using Failure = RasterizerMemoryArena::ExternalGrowFailure;
+        do {
+            Failure failure = Failure::None;
+            grew = arena.grow_external_backing(device_ptr, 2 * MiB, [&](size_t requested) {
+                committed = requested;
+                return true;
+            }, 2000, &failure);
+            if (grew || failure != Failure::Busy)
+                break;
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
         finished.store(true, std::memory_order_release);
     });
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     bool reserved = false;
     while (!(reserved = arena.is_rendering_active()) &&
            !finished.load(std::memory_order_acquire) &&
@@ -428,6 +439,103 @@ TEST_F(ArenaMetricsContentionTest, ViewerGrowReservesIdleWindowAfterTrainingFram
     const auto next = arena.try_begin_frame(nullptr, false);
     ASSERT_TRUE(next.has_value());
     arena.end_frame(*next, nullptr, false);
+}
+
+TEST_F(ArenaMetricsContentionTest, ViewerInstallReservesIdleWindowAfterTrainingFrame) {
+    constexpr size_t MiB = 1024 * 1024;
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, MiB), cudaSuccess);
+    auto owner = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+    RasterizerMemoryArena::Config config;
+    config.max_physical = MiB;
+    config.enable_vmm = false;
+    config.granularity = MiB;
+    RasterizerMemoryArena arena(config);
+    const RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = MiB,
+        .device = 0,
+        .owner = owner,
+        .label = "test.external.viewer_reinstall",
+    };
+
+    // Reproduce the B3 detach while the viewer retains the physical block.
+    ASSERT_TRUE(arena.install_external_backing(backing));
+    arena.clear_external_backing(device_ptr);
+    ASSERT_FALSE(arena.using_external_backing(device_ptr));
+
+    const auto held = arena.begin_frame(nullptr, false);
+    std::atomic<bool> finished{false};
+    bool installed = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    std::thread viewer([&] {
+        EXPECT_EQ(cudaSetDevice(0), cudaSuccess);
+        // Observing the reservation also locks sync_mutex_; a failed initial
+        // try-lock must not make this test depend on which thread runs first.
+        do {
+            installed = arena.try_install_external_backing(backing, 2000);
+            if (installed)
+                break;
+            std::this_thread::yield();
+        } while (std::chrono::steady_clock::now() < deadline);
+        finished.store(true, std::memory_order_release);
+    });
+    bool reserved = false;
+    while (!(reserved = arena.is_rendering_active()) &&
+           !finished.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    // The retained block must register its request before training releases its
+    // frame; this fails with the former try-only reinstall path.
+    EXPECT_TRUE(reserved);
+    arena.end_frame(held, nullptr, false);
+    viewer.join();
+
+    EXPECT_TRUE(installed);
+    EXPECT_TRUE(arena.using_external_backing(device_ptr));
+    EXPECT_FALSE(arena.is_rendering_active());
+    arena.clear_external_backing(device_ptr);
+}
+
+TEST_F(ArenaMetricsContentionTest, ViewerInstallTimeoutReleasesOnlyItsOwnReservation) {
+    constexpr size_t MiB = 1024 * 1024;
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, MiB), cudaSuccess);
+    auto owner = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+    RasterizerMemoryArena arena;
+    const RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = MiB,
+        .device = 0,
+        .owner = owner,
+        .label = "test.external.install_timeout",
+    };
+
+    const auto held = arena.begin_frame(nullptr, false);
+    EXPECT_FALSE(arena.try_install_external_backing(backing, 15));
+    EXPECT_FALSE(arena.is_rendering_active());
+    EXPECT_FALSE(arena.using_external_backing(device_ptr));
+    arena.end_frame(held, nullptr, false);
+
+    // A timed-out installer must allow training to continue.
+    const auto next = arena.try_begin_frame(nullptr, false);
+    ASSERT_TRUE(next.has_value());
+    arena.end_frame(*next, nullptr, false);
+
+    // A different viewer's reservation must not be consumed by installation.
+    arena.set_rendering_active(true);
+    EXPECT_FALSE(arena.try_install_external_backing(backing, 15));
+    EXPECT_TRUE(arena.is_rendering_active());
+    EXPECT_FALSE(arena.using_external_backing(device_ptr));
+    arena.set_rendering_active(false);
+    ASSERT_TRUE(arena.try_install_external_backing(backing, 15));
+    EXPECT_TRUE(arena.using_external_backing(device_ptr));
+    arena.clear_external_backing(device_ptr);
 }
 
 TEST_F(ArenaMetricsContentionTest, FullResetRetainsExternalBackingAndCapacity) {
