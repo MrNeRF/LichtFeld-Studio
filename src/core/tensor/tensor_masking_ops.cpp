@@ -519,9 +519,15 @@ namespace lfs::core {
             // Assert's throw guarantee — enqueue_reset would otherwise drop an
             // unconsumed fault at the next op. Clamp/Wrap stay sync-free.
             if (device_fault_assert_path) {
-                lfs::core::device_fault_await_and_consume_or_throw(
-                    execution_stream, "tensor.masking.index_select.assert",
-                    LFS_SOURCE_SITE_CURRENT());
+                if (internal::gpu_backend_tag(*this) == GpuBackend::Vulkan) {
+                    // The Vulkan fault record is read at the next synchronization.
+                    internal::backend_ops_for(*this).synchronize_stream(
+                        internal::ExecContext{execution_stream});
+                } else {
+                    lfs::core::device_fault_await_and_consume_or_throw(
+                        execution_stream, "tensor.masking.index_select.assert",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
             }
         } else {
             // CPU implementation

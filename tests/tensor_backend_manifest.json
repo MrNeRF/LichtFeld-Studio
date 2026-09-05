@@ -5720,8 +5720,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_cuda_error_typed.cpp",
     "line": 103,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_cuda_error_typed.cpp:111: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -5822,8 +5822,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_cuda_error_typed.cpp",
     "line": 211,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_cuda_error_typed.cpp:218: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -6032,8 +6032,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_cuda_launch_check.cpp",
     "line": 51,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_cuda_launch_check.cpp:67: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -8196,7 +8196,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 241,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_device_fault.cpp:204: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8210,7 +8211,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 287,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_device_fault.cpp:204: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8224,7 +8226,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 189,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_device_fault.cpp:204: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -8238,7 +8241,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_device_fault.cpp",
     "line": 214,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_device_fault.cpp:204: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_index_select",
       "launch_strided_upload",
@@ -10252,11 +10256,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_envelope.cpp",
     "line": 58,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_envelope.cpp:24: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -10264,11 +10268,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_envelope.cpp",
     "line": 40,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_envelope.cpp:24: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -10376,11 +10380,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_envelope.cpp",
     "line": 189,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_envelope.cpp:197: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -10388,8 +10392,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_envelope.cpp",
     "line": 170,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_envelope.cpp:207: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -10445,8 +10449,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_reporter.cpp",
     "line": 128,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_reporter.cpp:135: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -10658,7 +10662,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_expanded_tensor_ops.cpp",
     "line": 280,
-    "eligibility": "vulkan",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_expanded_tensor_ops.cpp:287: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_strided_upload"
     ],
@@ -15692,11 +15697,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_bus.cpp",
     "line": 485,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_bus.cpp:494: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -15704,11 +15709,11 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_bus.cpp",
     "line": 464,
-    "eligibility": "no-gpu-work",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_bus.cpp:474: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
-    "reason": "measured: no facade entry executed",
     "skip_allowlisted": false
   },
   {
@@ -17341,8 +17346,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_error_core.cpp",
     "line": 447,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_error_core.cpp:460: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -21492,8 +21497,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_mcp_shared_scene_tools.cpp",
     "line": 189,
-    "eligibility": "not-tensor",
-    "reason": "does not exercise the LichtFeld tensor API",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_mcp_shared_scene_tools.cpp:196: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "inferred",
     "skip_allowlisted": false
@@ -56627,6 +56632,257 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanIndex.BoundaryModesClampWrapAndAssert",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 161,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_gather",
+      "launch_index_select",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanIndex.FusedGatherAppliesTheUnaryAfterTheRead",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 288,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_gather",
+      "launch_gather_fused_unary",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanIndex.GatherSelectAndTakeMatchHostReferences",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 80,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_gather",
+      "launch_take",
+      "launch_index_select",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanIndex.ScatterFamilyAssignsAndAccumulates",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 191,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_scatter",
+      "launch_index_copy",
+      "launch_index_add",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanIndexNoAtomicFloat.IndexAddFallbackMatchesTheSequentialCpuReference",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 315,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_index_add",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMask.MaskedFillSelectAndScatterAcrossSizes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 347,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_masked_fill",
+      "launch_masked_select",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMask.NonzeroAndLiveAndWhere",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 404,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_and_live",
+      "launch_where",
+      "launch_nonzero",
+      "launch_nonzero_bool",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.BatchedMatmulStridesEveryBatch",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 156,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sgemm_batched",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.CdistCoversEveryNormConvention",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 267,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_cdist"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.Conv1x1BiasReluTakesBothHostPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 182,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_bias_relu",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.DotProductCoversSingleGroupAndPartialPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 219,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_dot_product",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.EyeAndDiagWriteEveryElement",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 236,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_diag",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_eye"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.LinearUsesTheTransposedWeightLayoutAndAddsBiasPerColumn",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 123,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sgemm",
+      "launch_sgemm_bias_relu",
+      "launch_bias_add",
+      "launch_bias_relu",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.MatmulCoversTileEdgesAndPartialTiles",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 97,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sgemm",
+      "launch_sgemm_tn",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.PoolingMatchesTheCudaWindowRules",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 311,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_max_pool2d",
+      "launch_adaptive_avg_pool2d",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanMatrixNn.ReluOutZeroesNaNLikeFmaxf",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_matrix_nn.cpp",
+    "line": 388,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_relu",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanPointwise.BinaryScalarBroadcastAndLogicalCatchDtypeDispatch",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_pointwise.cpp",
@@ -56822,10 +57078,88 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanRandom.BernoulliMatchesTheProbability",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_random.cpp",
+    "line": 86,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_bernoulli"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRandom.MultinomialWithReplacementFollowsTheWeights",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_random.cpp",
+    "line": 145,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_multinomial",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRandom.MultinomialWithoutReplacementIsAPermutationFavouringHeavyWeights",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_random.cpp",
+    "line": 168,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_multinomial",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRandom.NormalMatchesMomentsForOddAndEvenCounts",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_random.cpp",
+    "line": 120,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRandom.RandintCoversTheHalfOpenRangeUniformly",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_random.cpp",
+    "line": 99,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_randint",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanRandom.UniformStaysInsideTheHalfOpenRangeWithExpectedMoments",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_random.cpp",
+    "line": 59,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_uniform",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanReduce.AxisReductionsSelectSegmentedStridedAndSplitPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 241,
+    "line": 247,
     "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
@@ -56861,7 +57195,7 @@
     "name": "TensorVulkanReduce.CountsAndSpecialValueChecksReadBackExactTallies",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 458,
+    "line": 464,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56881,7 +57215,7 @@
     "name": "TensorVulkanReduce.CumsumCoversThreadAndWorkgroupScans",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 396,
+    "line": 402,
     "eligibility": "vulkan",
     "launchers": [
       "launch_cumsum",
@@ -56913,7 +57247,7 @@
     "name": "TensorVulkanReduce.FusedTransformReductionsApplyTheChainFirst",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 366,
+    "line": 372,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56935,7 +57269,7 @@
     "name": "TensorVulkanReduce.IntegerAndBoolReductionsWidenLikeCuda",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 306,
+    "line": 312,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -56956,7 +57290,7 @@
     "name": "TensorVulkanReduce.MaxAndMinFollowTheCudaNaNAndSignedZeroPolicy",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 350,
+    "line": 356,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
@@ -56976,7 +57310,7 @@
     "name": "TensorVulkanReduce.MultiAxisReductionsUseTheRunAndGeneralPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 283,
+    "line": 289,
     "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
@@ -56994,7 +57328,7 @@
     "name": "TensorVulkanReduce.NonContiguousAxisSetsReduceThroughThePermutedCopy",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 203,
+    "line": 209,
     "eligibility": "vulkan",
     "launchers": [
       "launch_reduce_op",
@@ -57012,7 +57346,7 @@
     "name": "TensorVulkanReduce.ScalarFastPathsReadBackTheDeviceResult",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 228,
+    "line": 234,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
@@ -57029,7 +57363,7 @@
     "name": "TensorVulkanReduce.SumsKeepTheirCompensationAcrossThreadsAndStages",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_reduce.cpp",
-    "line": 173,
+    "line": 179,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
@@ -57321,6 +57655,36 @@
     "entries": {
       "load_fill": 4
     },
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanSort.OneDimensionalSortMatchesAcrossBothPaths",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 488,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sort_1d",
+      "launch_sort_2d",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanSort.TwoDimensionalSortHandlesInnerStridesAndLongLines",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 509,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sort_1d",
+      "launch_sort_2d",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -58117,8 +58481,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 162,
-    "eligibility": "consumer",
-    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_checkpoint_resume.cpp:81: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58129,8 +58493,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 97,
-    "eligibility": "consumer",
-    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_checkpoint_resume.cpp:81: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58152,8 +58516,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 106,
-    "eligibility": "consumer",
-    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_checkpoint_resume.cpp:81: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58164,8 +58528,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 201,
-    "eligibility": "consumer",
-    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_checkpoint_resume.cpp:81: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},
@@ -58176,8 +58540,8 @@
     "executable": "lichtfeld_tests",
     "file": "tests/test_checkpoint_resume.cpp",
     "line": 225,
-    "eligibility": "consumer",
-    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "eligibility": "cuda-only",
+    "reason": "tests/test_checkpoint_resume.cpp:81: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
     "entries": {},

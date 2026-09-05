@@ -665,6 +665,7 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
             r"\b(?:reset_)?tensor_kernel_launch_count\s*\(",
             r"\bassert_device_storage_matches_tag\b|device-tag mismatch",
             r"\bfrom_blob\s*\([^;]*(?:\.data_ptr\s*\(|\.ptr\s*<)",
+            r"\bErrorDomain::CUDA\b",
         ),
     )
     if backend_assertion:

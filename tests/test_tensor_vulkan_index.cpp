@@ -178,8 +178,8 @@ namespace {
         expect_exact(source.gather(0, indices, BoundaryMode::Wrap), wrapped, "gather wrap");
         // The launch records the first out-of-range index; the next
         // synchronization raises it as a Vulkan-domain error and clears it.
-        const Tensor faulted = source.index_select(0, indices, BoundaryMode::Assert);
-        EXPECT_THROW(static_cast<void>(faulted.cpu()), std::exception);
+        EXPECT_THROW(static_cast<void>(source.index_select(0, indices, BoundaryMode::Assert)),
+                     std::exception);
         const std::vector<int> fine{1, 2, 3};
         const Tensor fine_indices = upload_vulkan(Tensor::from_vector(fine, {3}, Device::CPU));
         expect_exact(source.index_select(0, fine_indices, BoundaryMode::Assert),

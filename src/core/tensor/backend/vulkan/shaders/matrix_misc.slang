@@ -20,26 +20,52 @@ struct Parameters
 };
 
 groupshared float sharedSum[LFS_LOCAL_SIZE_X];
+groupshared float sharedComp[LFS_LOCAL_SIZE_X];
+
+// The driver folds the error terms of compensated sums as if fp32 were exact;
+// a run-time zero mixed into the bit pattern keeps them (see reduce.slang).
+static uint gOpaqueZero = 0;
+
+float opaque(float value)
+{
+    return asfloat(asuint(value) + gOpaqueZero);
+}
 
 // Neumaier compensated addition, as in reduce.slang.
 void accumulate(inout float sum, inout float compensation, float value)
 {
-    const float total = sum + value;
-    compensation += abs(sum) >= abs(value) ? (sum - total) + value : (value - total) + sum;
+    const float total = opaque(sum + value);
+    compensation += abs(sum) >= abs(value) ? opaque(sum - total) + value : opaque(value - total) + sum;
     sum = total;
 }
 
-float workgroupSum(float value, uint thread)
+void twoSum(float a, float b, out float total, out float error)
+{
+    total = opaque(a + b);
+    const float bb = opaque(total - a);
+    error = opaque(a - opaque(total - bb)) + opaque(b - bb);
+}
+
+// Sums (value, compensation) pairs so the compensation survives the tree.
+float workgroupSum(float value, float compensation, uint thread)
 {
     sharedSum[thread] = value;
+    sharedComp[thread] = compensation;
     GroupMemoryBarrierWithGroupSync();
     for (uint span = LFS_LOCAL_SIZE_X / 2; span > 0; span >>= 1)
     {
         if (thread < span)
-            sharedSum[thread] += sharedSum[thread + span];
+        {
+            float total;
+            float error;
+            twoSum(sharedSum[thread], sharedSum[thread + span], total, error);
+            sharedSum[thread] = total;
+            sharedComp[thread] = sharedComp[thread] + error + sharedComp[thread + span];
+        }
         GroupMemoryBarrierWithGroupSync();
     }
-    return sharedSum[0];
+    const float compensationTotal = sharedComp[0];
+    return isfinite(compensationTotal) ? sharedSum[0] + compensationTotal : sharedSum[0];
 }
 
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
@@ -47,6 +73,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
           uint3 groupThreadId : SV_GroupThreadID, uniform Parameters parameters)
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
+    gOpaqueZero = parameters.pad0;
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
     Ptr<float, Access.ReadWrite> output = (Ptr<float, Access.ReadWrite>)parameters.outputAddress;
     Ptr<float, Access.Read> a = (Ptr<float, Access.Read>)parameters.aAddress;
@@ -76,7 +103,7 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_Group
         for (uint index = groupThreadId.x; index < parameters.count; index += LFS_LOCAL_SIZE_X)
             accumulate(sum, compensation, a[index]);
     }
-    const float total = workgroupSum(isfinite(compensation) ? sum + compensation : sum, groupThreadId.x);
+    const float total = workgroupSum(sum, compensation, groupThreadId.x);
     if (groupThreadId.x == 0)
         output[groupId.x] = total;
 }

@@ -745,6 +745,7 @@ namespace lfs::core::internal {
         if (record[0] == 0) {
             return;
         }
+        // Field names match the CUDA device-fault error so consumers read both.
         throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
             .code = ErrorCode::BoundsViolation,
             .domain = lfs::ErrorDomain::Vulkan,
@@ -754,6 +755,11 @@ namespace lfs::core::internal {
                                   record[0], static_cast<int32_t>(record[1]), record[2],
                                   record[3]),
             .detection = LFS_SOURCE_SITE_CURRENT(),
+            .fields = lfs::SmallFields{}
+                          .add("op_id", static_cast<std::int64_t>(record[3]))
+                          .add("value", static_cast<std::int64_t>(static_cast<int32_t>(record[1])))
+                          .add("bound", static_cast<std::int64_t>(record[2]))
+                          .add("fault_code", static_cast<std::int64_t>(record[0])),
         }));
     }
 
