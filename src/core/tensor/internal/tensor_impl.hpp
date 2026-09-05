@@ -509,6 +509,14 @@ namespace lfs::core {
     };
 
     namespace internal {
+        // Synchronous host copies run on the legacy default stream, which a
+        // non-blocking home stream neither waits for nor is waited on by. A
+        // download must follow the home stream's producer; an upload from
+        // pageable memory returns while its DMA is still in flight, so the home
+        // stream must wait for it. Both orderings are event edges; the host
+        // never waits on the home stream, so a gated stream cannot deadlock.
+        LFS_CORE_API void order_legacy_after_home(const Tensor& tensor);
+        LFS_CORE_API void order_home_after_legacy(const Tensor& tensor);
         LFS_CORE_API GpuBackend resolve_new_gpu_storage_backend();
         // Cache trimming for every GPU backend that has a live context; a
         // backend that was never initialized is not brought up to be trimmed.

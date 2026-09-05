@@ -2132,6 +2132,7 @@ namespace lfs::core {
                         .synchronous = true,
                         .context = internal::ExecContext{},
                     });
+                internal::order_home_after_legacy(t);
             } else {
                 std::memcpy(t.data_ptr(), data.data(), t.bytes());
             }
@@ -2201,6 +2202,7 @@ namespace lfs::core {
                     .synchronous = true,
                     .context = internal::ExecContext{},
                 });
+            internal::order_home_after_legacy(*this);
         } else {
             ptr<unsigned char>()[linear_idx] = val;
         }

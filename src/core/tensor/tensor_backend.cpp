@@ -198,6 +198,20 @@ namespace lfs::core {
 
     namespace internal {
 
+        void order_legacy_after_home(const Tensor& tensor) {
+            if (tensor.device() != Device::CUDA || tensor.stream() == nullptr) {
+                return;
+            }
+            backend_ops_for(tensor).bridge(ExecContext{tensor.stream()}, ExecContext{nullptr});
+        }
+
+        void order_home_after_legacy(const Tensor& tensor) {
+            if (tensor.device() != Device::CUDA || tensor.stream() == nullptr) {
+                return;
+            }
+            backend_ops_for(tensor).bridge(ExecContext{nullptr}, ExecContext{tensor.stream()});
+        }
+
         void trim_live_gpu_backends() {
             backend_ops(GpuBackend::CUDA).trim();
 #ifdef LFS_TENSOR_VULKAN

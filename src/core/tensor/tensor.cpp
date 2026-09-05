@@ -1679,6 +1679,7 @@ namespace lfs::core {
                 std::vector<float> temp(numel());
                 float* const download_dst = temp.data();
                 const size_t download_bytes = bytes();
+                internal::order_legacy_after_home(*this);
                 internal::backend_ops_for(*this).copy_device_to_host(
                     internal::CopyRequest{
                         .src = internal::storage_ref(*this),
@@ -1702,6 +1703,7 @@ namespace lfs::core {
                         .synchronous = true,
                         .context = internal::ExecContext{},
                     });
+                internal::order_home_after_legacy(result);
             } else {
                 const float* src = ptr<float>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1800,6 +1802,7 @@ namespace lfs::core {
                 std::vector<int> temp(numel());
                 int* const download_dst = temp.data();
                 const size_t download_bytes = bytes();
+                internal::order_legacy_after_home(*this);
                 internal::backend_ops_for(*this).copy_device_to_host(
                     internal::CopyRequest{
                         .src = internal::storage_ref(*this),
@@ -1825,6 +1828,7 @@ namespace lfs::core {
                         .synchronous = true,
                         .context = internal::ExecContext{},
                     });
+                internal::order_home_after_legacy(result);
             } else {
                 const int* src = ptr<int>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1890,6 +1894,7 @@ namespace lfs::core {
                 std::vector<int64_t> temp(numel());
                 int64_t* const download_dst = temp.data();
                 const size_t download_bytes = bytes();
+                internal::order_legacy_after_home(*this);
                 internal::backend_ops_for(*this).copy_device_to_host(
                     internal::CopyRequest{
                         .src = internal::storage_ref(*this),
@@ -1915,6 +1920,7 @@ namespace lfs::core {
                         .synchronous = true,
                         .context = internal::ExecContext{},
                     });
+                internal::order_home_after_legacy(result);
             } else {
                 const int64_t* src = ptr<int64_t>();
                 unsigned char* dst = result.ptr<unsigned char>();
@@ -1962,6 +1968,7 @@ namespace lfs::core {
                 std::vector<__half> temp(numel());
                 __half* const download_dst = temp.data();
                 const size_t download_bytes = bytes();
+                internal::order_legacy_after_home(*this);
                 internal::backend_ops_for(*this).copy_device_to_host(
                     internal::CopyRequest{
                         .src = internal::storage_ref(*this),
@@ -1988,6 +1995,7 @@ namespace lfs::core {
                         .synchronous = true,
                         .context = internal::ExecContext{},
                     });
+                internal::order_home_after_legacy(result);
                 internal::backend_ops_for(result).synchronize_device();
             } else {
                 const __half* src = ptr<__half>();
@@ -2162,8 +2170,9 @@ namespace lfs::core {
                     .dst = internal::storage_ref(*this),
                     .bytes = bytes(),
                     .synchronous = true,
-                    .context = internal::ExecContext{nullptr},
+                    .context = internal::ExecContext{},
                 });
+                internal::order_home_after_legacy(*this);
             } else {
                 unsigned char* data = static_cast<unsigned char*>(dest);
                 std::fill(data, data + numel(), bool_val);
@@ -2181,8 +2190,9 @@ namespace lfs::core {
                     .dst = internal::storage_ref(*this),
                     .bytes = bytes(),
                     .synchronous = true,
-                    .context = internal::ExecContext{nullptr},
+                    .context = internal::ExecContext{},
                 });
+                internal::order_home_after_legacy(*this);
             } else {
                 int* data = static_cast<int*>(dest);
                 std::fill(data, data + numel(), int_val);
@@ -2198,8 +2208,9 @@ namespace lfs::core {
                 .dst = internal::storage_ref(*this),
                 .bytes = bytes(),
                 .synchronous = true,
-                .context = internal::ExecContext{nullptr},
+                .context = internal::ExecContext{},
             });
+            internal::order_home_after_legacy(*this);
         } else {
             float* data = static_cast<float*>(dest);
             std::fill(data, data + numel(), value);
@@ -2361,8 +2372,10 @@ namespace lfs::core {
                         .synchronous = true,
                         .context = internal::ExecContext{},
                     });
+                internal::order_home_after_legacy(*this);
             } else if (device_ == Device::CPU && src.device_ == Device::CUDA) {
                 prepare_inputs_for_stream({this, &src}, src.stream());
+                internal::order_legacy_after_home(src);
                 internal::backend_ops_for(src).copy_device_to_host(
                     internal::CopyRequest{
                         .src = internal::storage_ref(src),
@@ -3033,12 +3046,13 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             LOG_DEBUG("Copying from CUDA to CPU, bytes: {}", bytes());
+            internal::order_legacy_after_home(*this);
             internal::backend_ops_for(*this).copy_device_to_host(internal::CopyRequest{
                 .src = internal::storage_ref(*this),
                 .dst = internal::raw_storage_ref(result.data(), dtype_),
                 .bytes = bytes(),
                 .synchronous = true,
-                .context = internal::ExecContext{nullptr},
+                .context = internal::ExecContext{},
             });
             LOG_DEBUG("CUDA copy complete");
         } else {
@@ -3084,12 +3098,13 @@ namespace lfs::core {
         std::vector<int> result(numel());
 
         if (device_ == Device::CUDA) {
+            internal::order_legacy_after_home(*this);
             internal::backend_ops_for(*this).copy_device_to_host(internal::CopyRequest{
                 .src = internal::storage_ref(*this),
                 .dst = internal::raw_storage_ref(result.data(), dtype_),
                 .bytes = bytes(),
                 .synchronous = true,
-                .context = internal::ExecContext{nullptr},
+                .context = internal::ExecContext{},
             });
         } else {
             std::memcpy(result.data(), data_ptr(), bytes());
@@ -3121,12 +3136,13 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             std::vector<unsigned char> temp(numel());
+            internal::order_legacy_after_home(*this);
             internal::backend_ops_for(*this).copy_device_to_host(internal::CopyRequest{
                 .src = internal::storage_ref(*this),
                 .dst = internal::raw_storage_ref(temp.data(), dtype_),
                 .bytes = bytes(),
                 .synchronous = true,
-                .context = internal::ExecContext{nullptr},
+                .context = internal::ExecContext{},
             });
             for (size_t i = 0; i < numel(); ++i) {
                 result[i] = temp[i] != 0;
