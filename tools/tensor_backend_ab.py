@@ -8,6 +8,7 @@ max(threshold percent, floor microseconds) in at least `fail-when-worse-in`
 of the pairs. Prints every failing row with all its deltas and exits nonzero.
 """
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,10 @@ def main() -> int:
     parser.add_argument("--fail-when-worse-in", type=int, default=4)
     parser.add_argument("--threshold-pct", type=float, default=2.0)
     parser.add_argument("--floor-us", type=float, default=0.6)
+    parser.add_argument("--exclude", default="",
+                        help="regex over the row key; matching rows are reported but do not "
+                             "count toward the verdict (rows whose timed work differs "
+                             "between the two harness sources)")
     args = parser.parse_args()
 
     references = []
@@ -46,6 +51,8 @@ def main() -> int:
     failing = []
     aggregate_ref = [sum(r.values()) / 1000.0 for r in references]
     aggregate_new = [sum(c.values()) / 1000.0 for c in candidates]
+    excluded = []
+    exclude = re.compile(args.exclude) if args.exclude else None
     for row in rows:
         deltas = []
         worse = 0
@@ -58,7 +65,14 @@ def main() -> int:
             if delta > bound:
                 worse += 1
         if worse >= args.fail_when_worse_in:
-            failing.append((row, deltas))
+            if exclude and exclude.search(row):
+                excluded.append((row, deltas))
+            else:
+                failing.append((row, deltas))
+    if excluded:
+        print(f"{len(excluded)} rows excluded from the verdict (harness differs):")
+        for row, deltas in excluded:
+            print("  " + row + "  deltas us: " + " ".join(f"{d:+.3f}" for d in deltas))
 
     print("aggregate median ms per pair (reference, candidate):")
     for index, (a, b) in enumerate(zip(aggregate_ref, aggregate_new), start=1):
