@@ -75,6 +75,7 @@ if(LFS_TENSOR_VULKAN)
     list(APPEND TENSOR_SOURCES
         tensor/backend/vulkan/vk_context.cpp
         tensor/backend/vulkan/vk_memory.cpp
+        tensor/backend/vulkan/vk_cuda_bridge.cpp
         tensor/backend/vulkan/vk_recorder.cpp
         tensor/backend/vulkan/vk_pipelines.cpp
         tensor/backend/vulkan/vk_ops_pointwise.cpp

@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "vk_context.hpp"
+#include "vk_cuda_bridge.hpp"
 #include "vk_recorder.hpp"
 
 #include <algorithm>
@@ -61,6 +62,20 @@ namespace lfs::core::internal {
             }
             return bytes;
         }
+
+        bool storage_buffer_exportable(const VkPhysicalDevice physical) {
+            VkPhysicalDeviceExternalBufferInfo info{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
+            info.usage = kStorageUsage;
+            info.handleType = kVulkanExportMemoryHandleType;
+            VkExternalBufferProperties properties{
+                VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+            vkGetPhysicalDeviceExternalBufferProperties(physical, &info, &properties);
+            const VkExternalMemoryProperties& external = properties.externalMemoryProperties;
+            return (external.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT) !=
+                       0 &&
+                   (external.compatibleHandleTypes & kVulkanExportMemoryHandleType) != 0;
+        }
     } // namespace
 
     struct VulkanMemory::AllocationRecord {
@@ -109,6 +124,9 @@ namespace lfs::core::internal {
     }
 
     void VulkanMemory::create_pool() {
+        VkExternalMemoryBufferCreateInfo external_buffer{
+            VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+        external_buffer.handleTypes = kVulkanExportMemoryHandleType;
         VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         buffer_info.size = 256;
         buffer_info.usage = kStorageUsage;
@@ -116,14 +134,42 @@ namespace lfs::core::internal {
         VmaAllocationCreateInfo allocation_info{};
         allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        const bool want_export = context_.external_memory_enabled() &&
+                                 storage_buffer_exportable(context_.physical_device());
+        if (want_export) {
+            buffer_info.pNext = &external_buffer;
+        }
         uint32_t memory_type = 0;
-        vk_check(&context_, vmaFindMemoryTypeIndexForBufferInfo(context_.allocator(), &buffer_info, &allocation_info, &memory_type),
-                 "vmaFindMemoryTypeIndexForBufferInfo");
+        VkResult find_result = vmaFindMemoryTypeIndexForBufferInfo(
+            context_.allocator(), &buffer_info, &allocation_info, &memory_type);
+        if (want_export && find_result != VK_SUCCESS) {
+            buffer_info.pNext = nullptr;
+            find_result = vmaFindMemoryTypeIndexForBufferInfo(
+                context_.allocator(), &buffer_info, &allocation_info, &memory_type);
+        }
+        vk_check(&context_, find_result, "vmaFindMemoryTypeIndexForBufferInfo");
         VmaPoolCreateInfo pool_info{};
         pool_info.memoryTypeIndex = memory_type;
         pool_info.blockSize = kPoolBlockSize;
-        vk_check(&context_, vmaCreatePool(context_.allocator(), &pool_info, &device_pool_),
-                 "vmaCreatePool");
+        if (want_export && buffer_info.pNext != nullptr) {
+            export_alloc_info_.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+            export_alloc_info_.pNext = nullptr;
+            export_alloc_info_.handleTypes = kVulkanExportMemoryHandleType;
+            pool_info.pMemoryAllocateNext = &export_alloc_info_;
+            exports_memory_ = true;
+        }
+        VkResult pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
+        if (exports_memory_ && pool_result != VK_SUCCESS) {
+            LOG_WARN("Exportable Vulkan tensor pool failed (VkResult {}); using a non-exportable pool",
+                     static_cast<int>(pool_result));
+            pool_info.pMemoryAllocateNext = nullptr;
+            exports_memory_ = false;
+            pool_result = vmaCreatePool(context_.allocator(), &pool_info, &device_pool_);
+        }
+        vk_check(&context_, pool_result, "vmaCreatePool");
+        if (exports_memory_) {
+            LOG_INFO("Tensor Vulkan backend exports device-local memory for CUDA views");
+        }
     }
 
     void VulkanMemory::ensure_staging(const size_t bytes) {
@@ -262,10 +308,16 @@ namespace lfs::core::internal {
             record->direct = direct;
             record->host_visible = host_visible;
 
+            VkExternalMemoryBufferCreateInfo external_buffer{
+                VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+            external_buffer.handleTypes = kVulkanExportMemoryHandleType;
             VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (exports_memory_ && !host_visible) {
+                buffer_info.pNext = &external_buffer;
+            }
             VmaAllocationCreateInfo allocation_info{};
             VmaAllocationInfo mapping_info{};
             if (host_visible) {
@@ -277,7 +329,12 @@ namespace lfs::core::internal {
             } else {
                 allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
                 allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-                allocation_info.pool = record->direct ? VK_NULL_HANDLE : device_pool_;
+                // Dedicated+export returns VK_ERROR_FEATURE_NOT_PRESENT on this
+                // device. The exportable pool still holds large tensors; VMA
+                // only allocates a dedicated block when size exceeds blockSize.
+                if (exports_memory_ || !direct) {
+                    allocation_info.pool = device_pool_;
+                }
             }
             VkResult result = vmaCreateBuffer(
                 context_.allocator(), &buffer_info, &allocation_info,
@@ -377,6 +434,27 @@ namespace lfs::core::internal {
 
     VkDeviceSize VulkanMemory::offset_for(const StorageRef storage) {
         return storage.byte_offset;
+    }
+
+    std::optional<VulkanMemory::CudaBlockInfo>
+    VulkanMemory::cuda_block_info(const StorageRef storage) const {
+        std::lock_guard lock(allocations_mutex_);
+        if (storage.meta == nullptr || storage.backend != GpuBackend::Vulkan) {
+            return std::nullopt;
+        }
+        const AllocationRecord& record = allocation_for(storage);
+        VmaAllocationInfo2 info{};
+        vmaGetAllocationInfo2(context_.allocator(), record.allocation, &info);
+        if (info.allocationInfo.deviceMemory == VK_NULL_HANDLE || info.blockSize == 0) {
+            return std::nullopt;
+        }
+        return CudaBlockInfo{
+            .memory = info.allocationInfo.deviceMemory,
+            .allocation_offset = info.allocationInfo.offset,
+            .block_size = info.blockSize,
+            .dedicated = info.dedicatedMemory == VK_TRUE,
+            .host_visible = record.host_visible,
+        };
     }
 
     void VulkanMemory::mark_used(const std::span<const StorageRef> reads,

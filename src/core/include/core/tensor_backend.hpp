@@ -4,8 +4,10 @@
 
 #include "core/error.hpp"
 #include "core/gpu_backend_fwd.hpp"
+#include "core/tensor.hpp"
 
 #include <cstdint>
+#include <cuda_runtime.h>
 #include <memory>
 #include <optional>
 
@@ -52,6 +54,8 @@ namespace lfs::core {
         bool shader_atomic_float = false;
         bool memory_budget = false;
         bool shader_float16 = false;
+        bool external_memory = false;
+        bool external_semaphore = false;
     };
 
     // Fails when the backend already has a context (adopt before the first
@@ -74,6 +78,14 @@ namespace lfs::core {
     };
     LFS_CORE_API void* vulkan_backend_timeline();
     LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
+
+    // A CUDA-tagged tensor aliasing a Vulkan-backend tensor's memory on NVIDIA
+    // devices with external memory support. The view is ordered after the
+    // tensor's pending Vulkan writes on `stream`; it keeps the Vulkan storage
+    // alive; writes through the view are not ordered back into Vulkan work.
+    LFS_CORE_API lfs::Result<Tensor> cuda_view_of_vulkan_tensor(const Tensor& tensor,
+                                                                cudaStream_t stream);
+    LFS_CORE_API bool vulkan_backend_exports_memory();
 
     namespace internal {
         LFS_CORE_API void gpu_backend_reset_for_testing();

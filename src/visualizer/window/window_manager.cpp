@@ -1836,6 +1836,8 @@ namespace lfs::vis {
             .shader_atomic_float = device.shader_atomic_float,
             .memory_budget = false,
             .shader_float16 = device.shader_float16,
+            .external_memory = vulkan_context_->externalMemoryInteropEnabled(),
+            .external_semaphore = vulkan_context_->externalSemaphoreInteropEnabled(),
         };
         if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
             LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));

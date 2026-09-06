@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -54,6 +55,15 @@ namespace lfs::core::internal {
         [[nodiscard]] size_t cached_bytes() const noexcept;
         [[nodiscard]] uint64_t live_object_count() const noexcept;
         [[nodiscard]] bool owns_address(const void* pointer) const noexcept;
+        [[nodiscard]] bool exports_memory() const noexcept { return exports_memory_; }
+        struct CudaBlockInfo {
+            VkDeviceMemory memory = VK_NULL_HANDLE;
+            VkDeviceSize allocation_offset = 0;
+            VkDeviceSize block_size = 0;
+            bool dedicated = false;
+            bool host_visible = false;
+        };
+        [[nodiscard]] std::optional<CudaBlockInfo> cuda_block_info(StorageRef storage) const;
         void shutdown();
         [[nodiscard]] static uint64_t last_shutdown_live_allocations() noexcept;
         static void reset_last_shutdown_live_allocations() noexcept;
@@ -75,7 +85,9 @@ namespace lfs::core::internal {
         [[nodiscard]] static VkDeviceSize offset_for(StorageRef storage);
 
         VulkanContext& context_;
+        VkExportMemoryAllocateInfo export_alloc_info_{};
         VmaPool device_pool_ = VK_NULL_HANDLE;
+        bool exports_memory_ = false;
         mutable std::mutex allocations_mutex_;
         std::unordered_map<uint64_t, std::unique_ptr<AllocationRecord>> allocations_;
         std::vector<std::unique_ptr<AllocationRecord>> retired_;
