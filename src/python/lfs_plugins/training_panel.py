@@ -498,6 +498,8 @@ class TrainingPanel(Panel):
             "dep_mrnf": _is_mrnf_strategy(params.strategy),
             "dep_igs": params.strategy == "igs+",
             "dep_sparsity": params.enable_sparsity,
+            "dep_popspa": params.enable_sparsity and params.sparsity_method.value == 1,
+            "dep_opacity_admm": params.enable_sparsity and params.sparsity_method.value == 0,
             "dep_random": params.random,
         }
         return bool(conditions.get(str(condition_id), True))
@@ -679,6 +681,14 @@ class TrainingPanel(Panel):
         model.bind_func(
             "dep_sparsity",
             lambda: p() is not None and p().has_params() and p().enable_sparsity,
+        )
+        model.bind_func(
+            "dep_popspa",
+            lambda: p() is not None and p().has_params() and p().enable_sparsity and p().sparsity_method.value == 1,
+        )
+        model.bind_func(
+            "dep_opacity_admm",
+            lambda: p() is not None and p().has_params() and p().enable_sparsity and p().sparsity_method.value == 0,
         )
         model.bind_func(
             "dep_random", lambda: p() is not None and p().has_params() and p().random

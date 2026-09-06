@@ -529,6 +529,7 @@ def _all_rows(lf):
 
 EXPECTED_RENDERED_PROP_IDS = (
     set(property_view.MIGRATED_PROP_IDS) | set(EXPECTED_ADVANCED_IDS)
+    | set(property_view.POPSPA_PROPS) | {"sparsity_method"}
 ) - set(property_view.BESPOKE_OR_HIDDEN)
 
 
@@ -542,7 +543,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 85
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 103
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 

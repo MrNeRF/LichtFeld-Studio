@@ -30,6 +30,8 @@ namespace lfs::training {
     class PPISP;
     class PPISPControllerPool;
     class ADMMSparsityOptimizer;
+    class POPSpaController;
+    class AdamOptimizer;
 
     struct CheckpointStreamResult {
         lfs::core::CheckpointHeader header;
@@ -38,6 +40,8 @@ namespace lfs::training {
 
     // Serialize the exact LFKP stream to a seekable destination for embedding
     // in a .licht CKPT chapter.
+    // An initialized POPSpa controller requires its dedicated Adam optimizer;
+    // these form one v4 payload and cannot accompany legacy sparsity state.
     [[nodiscard]] lfs::Result<CheckpointStreamResult>
     serialize_checkpoint(
         std::ostream& destination,
@@ -47,7 +51,9 @@ namespace lfs::training {
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
         const PPISPControllerPool* ppisp_controller_pool,
-        const ADMMSparsityOptimizer* sparsity_optimizer);
+        const ADMMSparsityOptimizer* sparsity_optimizer,
+        const POPSpaController* popspa_controller = nullptr,
+        const AdamOptimizer* popspa_optimizer = nullptr);
 
     /// Import a standalone legacy checkpoint.
     std::expected<int, std::string> load_checkpoint(
@@ -58,7 +64,9 @@ namespace lfs::training {
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
         ADMMSparsityOptimizer* sparsity_optimizer,
-        lfs::core::SplatTensorAllocator tensor_allocator = {});
+        lfs::core::SplatTensorAllocator tensor_allocator = {},
+        POPSpaController* popspa_controller = nullptr,
+        AdamOptimizer* popspa_optimizer = nullptr);
     using CheckpointLoadResult = decltype(load_checkpoint(
         std::filesystem::path{},
         std::declval<IStrategy&>(),
@@ -71,6 +79,9 @@ namespace lfs::training {
     /// (count, SH degree). The loader seeks past the serialized model instead of
     /// decoding it a second time and moves `preloaded_model` into the isolated
     /// load graph so training tensors stay identical to a cold deserialize.
+    /// POPSpa destinations must both be supplied or both null. The supplied Adam
+    /// must reference strategy.get_model(); only its owned state is adopted.
+    /// Null destinations still consume and validate the complete POPSpa payload.
     CheckpointLoadResult load_checkpoint(
         std::istream& source,
         std::uint64_t source_bytes,
@@ -82,6 +93,8 @@ namespace lfs::training {
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator = {},
         std::string_view source_name = "embedded CKPT",
-        lfs::core::SplatData* preloaded_model = nullptr);
+        lfs::core::SplatData* preloaded_model = nullptr,
+        POPSpaController* popspa_controller = nullptr,
+        AdamOptimizer* popspa_optimizer = nullptr);
 
 } // namespace lfs::training

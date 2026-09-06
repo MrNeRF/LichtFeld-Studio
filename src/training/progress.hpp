@@ -13,7 +13,9 @@ namespace lfs::training {
             Train,
             Refine,
             Controller,
-            Sparse
+            Sparse,
+            Score,
+            Recover
         };
 
         TrainingProgress(int total_iterations, int update_frequency = 100);

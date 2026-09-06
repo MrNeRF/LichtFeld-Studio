@@ -15,6 +15,7 @@
 #include <fstream>
 #include <gtest/gtest.h>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -695,6 +696,71 @@ namespace {
         EXPECT_EQ(restored.optimization.iterations, 40000u);
         EXPECT_EQ(restored.optimization.eval_steps, std::vector<size_t>({30100}));
         EXPECT_EQ(restored.dataset.test_every, 64);
+    }
+
+    TEST_F(TrainingParametersTest, POPSpaDefaultsRoundTripAndLegacyCompatibility) {
+        using lfs::core::param::SparsityMethod;
+        OptimizationParameters params;
+        EXPECT_EQ(params.sparsity_method, SparsityMethod::OpacityADMM);
+        auto legacy = params.to_json();
+        legacy.erase("sparsity_method");
+        EXPECT_EQ(OptimizationParameters::from_json(legacy).sparsity_method, SparsityMethod::OpacityADMM);
+        params.enable_sparsity = true;
+        params.sparsity_method = SparsityMethod::POPSpa;
+        params.popspa_target_count = 12345;
+        const auto json = params.to_json();
+        EXPECT_EQ(json["sparsity_method"], "popspa");
+        const auto restored = OptimizationParameters::from_json(json);
+        EXPECT_EQ(restored.sparsity_method, SparsityMethod::POPSpa);
+        EXPECT_EQ(restored.popspa_target_count, 12345);
+        EXPECT_EQ(restored.resolved_total_iterations(), static_cast<int>(params.iterations) + 10000);
+        EXPECT_TRUE(restored.validate().empty()) << restored.validate();
+    }
+
+    TEST_F(TrainingParametersTest, POPSpaRejectsInvalidConfigurationAndOverflow) {
+        using lfs::core::param::SparsityMethod;
+        OptimizationParameters baseline;
+        baseline.enable_sparsity = true;
+        baseline.sparsity_method = SparsityMethod::POPSpa;
+        auto params = baseline;
+        params.sparsity_method = static_cast<SparsityMethod>(99);
+        EXPECT_FALSE(params.validate().empty());
+        for (const auto member : {&OptimizationParameters::popspa_target_count,
+                                  &OptimizationParameters::popspa_projection_interval}) {
+            params = baseline;
+            params.*member = 0;
+            EXPECT_FALSE(params.validate().empty());
+        }
+        params = baseline;
+        params.popspa_first_prune_count = params.popspa_target_count - 1;
+        EXPECT_FALSE(params.validate().empty());
+        params = baseline;
+        params.popspa_sparsify_steps = std::numeric_limits<int>::max();
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_EQ(params.resolved_total_iterations(), std::numeric_limits<int>::max());
+        for (const auto member : {
+                 &OptimizationParameters::popspa_rho,
+                 &OptimizationParameters::popspa_erank_weight,
+                 &OptimizationParameters::popspa_thin_scale_weight,
+                 &OptimizationParameters::popspa_erank_epsilon,
+                 &OptimizationParameters::popspa_means_lr,
+                 &OptimizationParameters::popspa_scales_lr,
+                 &OptimizationParameters::popspa_opacities_lr,
+                 &OptimizationParameters::popspa_quaternions_lr,
+                 &OptimizationParameters::popspa_sh0_lr,
+                 &OptimizationParameters::popspa_shn_lr,
+                 &OptimizationParameters::popspa_ssim_weight,
+             }) {
+            for (const float value : {-1.0f, std::numeric_limits<float>::infinity(),
+                                      std::numeric_limits<float>::quiet_NaN()}) {
+                params = baseline;
+                params.*member = value;
+                EXPECT_FALSE(params.validate().empty());
+            }
+        }
+        params = baseline;
+        params.popspa_ssim_weight = 1.1f;
+        EXPECT_FALSE(params.validate().empty());
     }
 
 } // namespace

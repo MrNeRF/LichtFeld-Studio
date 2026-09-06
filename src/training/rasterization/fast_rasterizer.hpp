@@ -154,6 +154,10 @@ namespace lfs::training {
         float* edge_score_out = nullptr;
     };
 
+    // Accumulates FP64 removal energy into aligned CUDA UInt8 [N, sizeof(double)] storage.
+    // The caller zeros these bytes once; each call adds a view without clearing them.
+    lfs::Status fast_accumulate_pop_scores(const FastRasterizeContext& ctx, lfs::core::Tensor& scores);
+
     // Explicit forward pass - returns render output and context for backward
     // Optional tile parameters for memory-efficient training (tile_width/height=0 means full image)
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color
@@ -181,7 +185,8 @@ namespace lfs::training {
         int iteration = 0,
         const FastGSFusedExtraGradients& fused_extra_gradients = {},
         const lfs::core::Tensor& grad_depth = {},
-        const lfs::core::Tensor& grad_normal = {});
+        const lfs::core::Tensor& grad_normal = {},
+        bool defer_optimizer_step = false);
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;

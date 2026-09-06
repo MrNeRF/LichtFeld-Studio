@@ -637,6 +637,7 @@
       <div class="training-subsection-title">{{pv_header_sparsity}}</div>
       <div data-class-disabled-overlay="adv_disabled">
         <div class="setting-row" data-for="row : pv_sparsity_rows"
+             data-if="row.kind == 'number'"
              data-attr-data-tooltip="row.tooltip_key">
           <span class="prop-label">{{row.label}}</span>
           <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
@@ -647,7 +648,15 @@
           <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
           <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
         </div>
-        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="!pv_search_active">
+        <div class="setting-row" data-for="row : pv_sparsity_rows" data-if="row.kind == 'select'"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
+            <option data-for="item : pv_sparsity_options" data-if="item.prop_id == row.id"
+                    data-attr-value="item.value">{{item.label}}</option>
+          </select>
+        </div>
+        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="dep_opacity_admm &amp;&amp; !pv_search_active">
           <span class="prop-label">{{label_prune_ratio}}</span>
           <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
           <span class="slider-value">{{prune_ratio | format_float(3)}}</span>

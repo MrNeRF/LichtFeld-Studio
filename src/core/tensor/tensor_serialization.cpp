@@ -9,6 +9,7 @@
 #include "core/tensor_serialization_sink.hpp"
 
 #include <chrono>
+#include <cstring>
 #include <fstream>
 #include <ios>
 #include <limits>
@@ -112,14 +113,17 @@ namespace lfs::core {
             throw std::runtime_error("Cannot serialize invalid tensor");
         }
 
-        const TensorFileHeader header{
-            TENSOR_FILE_MAGIC,
-            TENSOR_FILE_VERSION,
-            static_cast<uint8_t>(descriptor.dtype),
-            static_cast<uint8_t>(descriptor.serialized_device),
-            static_cast<uint16_t>(
-                descriptor.serialized_shape.rank()),
-            descriptor.serialized_shape.elements()};
+        // v1 writes the native header layout, including alignment padding.
+        // Clear its representation so checkpoints never contain uninitialized
+        // stack bytes and repeated snapshots remain identical.
+        TensorFileHeader header;
+        std::memset(&header, 0, sizeof(header));
+        header.magic = TENSOR_FILE_MAGIC;
+        header.version = TENSOR_FILE_VERSION;
+        header.dtype = static_cast<uint8_t>(descriptor.dtype);
+        header.device = static_cast<uint8_t>(descriptor.serialized_device);
+        header.rank = static_cast<uint16_t>(descriptor.serialized_shape.rank());
+        header.numel = descriptor.serialized_shape.elements();
         os.write(reinterpret_cast<const char*>(&header), sizeof(header));
 
         for (const size_t dim :
@@ -266,7 +270,7 @@ namespace lfs::core {
             const bool use_pinned) {
             auto* const timing = active_tensor_load_timing;
             const auto run_timed =
-                [timing](double serialization_detail::TensorLoadTiming::*member,
+                [timing](double serialization_detail::TensorLoadTiming::* member,
                          auto&& fn) {
                     if (timing == nullptr) {
                         fn();
@@ -322,7 +326,7 @@ namespace lfs::core {
                 }
                 auto* const timing = active_tensor_load_timing;
                 const auto run_timed =
-                    [timing](double TensorLoadTiming::*member, auto&& fn) {
+                    [timing](double TensorLoadTiming::* member, auto&& fn) {
                         if (timing == nullptr) {
                             fn();
                             return;

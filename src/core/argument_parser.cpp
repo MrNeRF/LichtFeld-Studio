@@ -80,6 +80,8 @@ namespace lfs::core::args {
             OptimizationCliBinding{"--normal-end-fraction", "normal_end_fraction", Float},
             OptimizationCliBinding{"--normal-loss-space", "normal_loss_space", Enum},
             OptimizationCliBinding{"--enable-sparsity", "enable_sparsity", Bool},
+            OptimizationCliBinding{"--sparsity-method", "sparsity_method", String},
+            OptimizationCliBinding{"--popspa-target-count", "popspa_target_count", Integer},
             OptimizationCliBinding{"--sparsify-steps", "sparsify_steps", Integer},
             OptimizationCliBinding{"--init-rho", "init_rho", Float},
             OptimizationCliBinding{"--prune-ratio", "prune_ratio", Float},
@@ -623,6 +625,8 @@ namespace {
             // =============================================================================
             ::args::Group sparsity_sep(parser, " ");
             ::args::Group sparsity_group(parser, "SPARSITY OPTIMIZATION:");
+            ::args::ValueFlag<std::string> sparsity_method(sparsity_group, "sparsity_method", lfs::core::args::optimization_cli_help("--sparsity-method"), {"sparsity-method"});
+            ::args::ValueFlag<int> popspa_target_count(sparsity_group, "popspa_target_count", lfs::core::args::optimization_cli_help("--popspa-target-count"), {"popspa-target-count"});
             ::args::Flag enable_sparsity(sparsity_group, "enable_sparsity", lfs::core::args::optimization_cli_help("--enable-sparsity"), {"enable-sparsity"});
             ::args::ValueFlag<int> sparsify_steps(sparsity_group, "sparsify_steps", lfs::core::args::optimization_cli_help("--sparsify-steps"), {"sparsify-steps"});
             ::args::ValueFlag<float> init_rho(sparsity_group, "init_rho", lfs::core::args::optimization_cli_help("--init-rho"), {"init-rho"});
@@ -1054,6 +1058,9 @@ namespace {
                 }
             }
 
+            if (sparsity_method && ::args::get(sparsity_method) != "opacity_admm" && ::args::get(sparsity_method) != "popspa")
+                return std::unexpected("--sparsity-method must be opacity_admm or popspa");
+
             if (strategy) {
                 const auto strat = ::args::get(strategy);
                 if (VALID_STRATEGIES.find(strat) == VALID_STRATEGIES.end()) {
@@ -1201,6 +1208,8 @@ namespace {
                                         timelapse_images_val = cli_option_present({"--timelapse-images"}) ? std::optional<std::vector<std::string>>(::args::get(timelapse_images)) : std::optional<std::vector<std::string>>(),
                                         timelapse_every_val = cli_option_present({"--timelapse-every"}) ? std::optional<int>(::args::get(timelapse_every)) : std::optional<int>(),
                                         // Sparsity parameters
+                                        sparsity_method_val = cli_option_present({"--sparsity-method"}) ? std::optional<std::string>(::args::get(sparsity_method)) : std::optional<std::string>(),
+                                        popspa_target_count_val = cli_option_present({"--popspa-target-count"}) ? std::optional<int>(::args::get(popspa_target_count)) : std::optional<int>(),
                                         sparsify_steps_val = cli_option_present({"--sparsify-steps"}) ? std::optional<int>(::args::get(sparsify_steps)) : std::optional<int>(),
                                         init_rho_val = cli_option_present({"--init-rho"}) ? std::optional<float>(::args::get(init_rho)) : std::optional<float>(),
                                         prune_ratio_val = cli_option_present({"--prune-ratio"}) ? std::optional<float>(::args::get(prune_ratio)) : std::optional<float>(),
@@ -1361,6 +1370,15 @@ namespace {
                 }
 
                 // Sparsity parameters
+                if (sparsity_method_val) {
+                    if (*sparsity_method_val == "opacity_admm")
+                        opt.sparsity_method = lfs::core::param::SparsityMethod::OpacityADMM;
+                    else if (*sparsity_method_val == "popspa")
+                        opt.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+                    else
+                        throw std::runtime_error("--sparsity-method must be opacity_admm or popspa");
+                }
+                setVal(popspa_target_count_val, opt.popspa_target_count);
                 setVal(sparsify_steps_val, opt.sparsify_steps);
                 setVal(init_rho_val, opt.init_rho);
                 setVal(prune_ratio_val, opt.prune_ratio);
@@ -1500,6 +1518,8 @@ namespace {
                 note_opt("init_extent", init_extent_val.has_value());
                 note_opt("strategy", strategy_val.has_value());
                 note_opt("sparsify_steps", sparsify_steps_val.has_value());
+                note_opt("sparsity_method", sparsity_method_val.has_value());
+                note_opt("popspa_target_count", popspa_target_count_val.has_value());
                 note_opt("init_rho", init_rho_val.has_value());
                 note_opt("prune_ratio", prune_ratio_val.has_value());
                 note_opt("perf_bench", perf_bench_flag);

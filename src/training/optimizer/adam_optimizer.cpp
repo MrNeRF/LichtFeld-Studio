@@ -219,7 +219,7 @@ namespace lfs::training {
         screen_share_n_ = static_cast<int>(splat_data_._max_screen_share.numel());
     }
 
-    void AdamOptimizer::step(const int iteration) {
+    void AdamOptimizer::step(const int iteration, const bool apply_sh_warmup) {
         LFS_TRACE("kernel.adam.step");
         refresh_screen_share_buffer();
         if (fused_step_iteration_ == iteration) {
@@ -329,7 +329,7 @@ namespace lfs::training {
                 mean_step_far_mask_, mean_step_far_mask_n_,
                 screen_share_max_, screen_share_n_, screen_share_limit_, screen_share_penalty_);
         }
-        step_param(ParamType::ShN, iteration);
+        step_param(ParamType::ShN, iteration, apply_sh_warmup);
     }
 
     size_t AdamOptimizer::compute_state_growth(ParamType type, size_t n_new) const {
@@ -641,13 +641,13 @@ namespace lfs::training {
         state.capacity = std::max(state.capacity, alloc_cap);
     }
 
-    void AdamOptimizer::step_param(ParamType type, const int iteration) {
+    void AdamOptimizer::step_param(ParamType type, const int iteration, const bool apply_sh_warmup) {
         auto& param = get_param(type);
         if (!param.is_valid() || param.numel() == 0) {
             return;
         }
         if (type == ParamType::ShN &&
-            (iteration <= SH_WARMUP_ITERATIONS || splat_data_.active_sh_coeffs_rest() == 0)) {
+            ((apply_sh_warmup && iteration <= SH_WARMUP_ITERATIONS) || splat_data_.active_sh_coeffs_rest() == 0)) {
             return;
         }
 
