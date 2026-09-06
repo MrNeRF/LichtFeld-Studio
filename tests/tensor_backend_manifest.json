@@ -48354,7 +48354,7 @@
     "name": "TensorVulkanIndex.BoundaryModesClampWrapAndAssert",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 161,
+    "line": 162,
     "eligibility": "vulkan",
     "launchers": [
       "launch_index_select"
@@ -48366,7 +48366,7 @@
     "name": "TensorVulkanIndex.FusedGatherAppliesTheUnaryAfterTheRead",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 288,
+    "line": 289,
     "eligibility": "vulkan",
     "launchers": [
       "launch_gather_fused_unary"
@@ -48378,7 +48378,7 @@
     "name": "TensorVulkanIndex.GatherSelectAndTakeMatchHostReferences",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 80,
+    "line": 81,
     "eligibility": "vulkan",
     "launchers": [
       "launch_gather",
@@ -48392,7 +48392,7 @@
     "name": "TensorVulkanIndex.ScatterFamilyAssignsAndAccumulates",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 191,
+    "line": 192,
     "eligibility": "vulkan",
     "launchers": [
       "launch_index_add",
@@ -48407,7 +48407,7 @@
     "name": "TensorVulkanIndexNoAtomicFloat.IndexAddFallbackMatchesTheSequentialCpuReference",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 315,
+    "line": 316,
     "eligibility": "vulkan",
     "launchers": [
       "launch_index_add"
@@ -48419,7 +48419,7 @@
     "name": "TensorVulkanMask.MaskedFillSelectAndScatterAcrossSizes",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 347,
+    "line": 348,
     "eligibility": "vulkan",
     "launchers": [
       "launch_convert_type",
@@ -48437,7 +48437,7 @@
     "name": "TensorVulkanMask.NonzeroAndLiveAndWhere",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 404,
+    "line": 405,
     "eligibility": "vulkan",
     "launchers": [
       "launch_and_live",
@@ -49277,10 +49277,25 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanSort.NaNsSortLastAscendingAndZerosOfBothSignsKeepInputOrder",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_index.cpp",
+    "line": 510,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_sort_1d",
+      "launch_sort_2d",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanSort.OneDimensionalSortMatchesAcrossBothPaths",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 488,
+    "line": 489,
     "eligibility": "vulkan",
     "launchers": [
       "launch_sort_1d"
@@ -49292,7 +49307,7 @@
     "name": "TensorVulkanSort.TwoDimensionalSortHandlesInnerStridesAndLongLines",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
-    "line": 509,
+    "line": 566,
     "eligibility": "vulkan",
     "launchers": [
       "launch_sort_2d"
