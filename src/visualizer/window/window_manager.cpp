@@ -7,6 +7,8 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/services.hpp"
+#include "gui/gui_manager.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -1054,6 +1056,17 @@ namespace lfs::vis {
             const int mouse_x = static_cast<int>(std::round(event.button.x));
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
+            // Press ownership is decided HERE, at the event, and carried to the
+            // GUI frame on the frame buffer. Rectangle containment computed in
+            // the frame cannot tell a viewport press from one on a GUI-owned
+            // edge that overlaps the viewport (the left-dock resize strip), and
+            // the layout it compares against may have moved in between.
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                auto* const gui = services().guiOrNull();
+                frame_input_.notePressOwner(
+                    event.button.button,
+                    gui && gui->pressBelongsToGui(event.button.x, event.button.y));
+            }
             if (event.button.button == SDL_BUTTON_LEFT) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                     const ResizeEdge resize_edge = resizeEdgeAt(mouse_x, mouse_y);

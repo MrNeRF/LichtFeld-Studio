@@ -792,6 +792,17 @@ namespace lfs::vis::gui {
         prev_mouse_y_ = input.mouse_y;
     }
 
+    bool PanelLayoutManager::isPositionOverLeftDockResizeEdge(const float x, const float y,
+                                                              const float work_x,
+                                                              const float work_y,
+                                                              const float work_h) const {
+        if (!left_dock_visible_ || left_dock_width_ <= 0.0f || work_h <= 0.0f)
+            return false;
+
+        const float dpi = lfs::python::get_shared_dpi_scale();
+        return leftDockResizeRect(work_x, work_y, work_h, dpi, left_dock_width_).contains(x, y);
+    }
+
     void PanelLayoutManager::renderLeftDock(const PanelDrawContext& draw_ctx,
                                             const bool show_main_panel,
                                             const bool ui_hidden,
@@ -847,17 +858,16 @@ namespace lfs::vis::gui {
         if (left_dock_resizing_ && !dock_input.mouse_down[0])
             left_dock_resizing_ = false;
 
-        const float edge_grab_w = std::max(SPLITTER_H * dpi, 8.0f * dpi);
         float panel_w = left_dock_width_;
         float panel_x = screen.work_pos.x + icon_bar_w;
         float panel_right_x = panel_x + panel_w;
 
+        // Same rectangle the press-time predicate uses -- one definition only.
         left_dock_hovering_edge_ =
             !float_blocks_left_dock &&
-            dock_input.mouse_x >= panel_right_x - edge_grab_w &&
-            dock_input.mouse_x <= panel_right_x + edge_grab_w &&
-            dock_input.mouse_y >= screen.work_pos.y &&
-            dock_input.mouse_y <= screen.work_pos.y + panel_h;
+            leftDockResizeRect(screen.work_pos.x, screen.work_pos.y, panel_h, dpi,
+                               left_dock_width_)
+                .contains(dock_input.mouse_x, dock_input.mouse_y);
 
         if (left_dock_resizing_) {
             left_dock_width_ = std::clamp(left_dock_width_ + delta_x, min_panel_w, max_panel_w);

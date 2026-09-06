@@ -9,6 +9,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
 #include "input/frame_input_buffer.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
@@ -62,6 +63,33 @@ namespace lfs::vis::gui {
         bool has_text_editing = false;
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
+
+        // The frame's LAST BUTTON_DOWN for `button` in the canonical stream, or
+        // nullptr when this frame carries none.
+        //
+        // A CONVENIENCE READ, NOT A POLICY. The stream is never coalesced to
+        // this one event and no rule is decided from it alone: the press rules
+        // are applied to EVERY press, in arrival order, by the consumers that
+        // walk mouse_button_events themselves (the overlay's classification
+        // pass and GuiManager's focus loop, rml_viewport_overlay.cpp /
+        // gui_manager.cpp). This exists for the places that only need to ask
+        // "did this button go down, and where did the last one land" -- and it
+        // reads, never mutates, reorders or shortens the vector.
+        //
+        // The returned event carries its OWN coordinates (mouse_x/mouse_y are
+        // the frame's LATEST cursor, which motion queued behind the press has
+        // already moved off the pressed target) and its OWN event-time
+        // ownership verdict, so the two can never be taken from different
+        // presses.
+        [[nodiscard]] const FrameMouseButtonEvent* lastPress(const int button) const {
+            if (button < 0 || button > 2)
+                return nullptr;
+            for (auto it = mouse_button_events.rbegin(); it != mouse_button_events.rend(); ++it) {
+                if (it->down && it->button == static_cast<uint8_t>(button))
+                    return &*it;
+            }
+            return nullptr;
+        }
     };
 
     struct ScreenState {
@@ -133,6 +161,44 @@ namespace lfs::vis::gui {
             return python_console_resizing_ || python_console_hovering_edge_ ||
                    bottom_dock_resizing_ || bottom_dock_hovering_edge_ ||
                    left_dock_resizing_ || left_dock_hovering_edge_;
+        }
+
+        // The left dock's resize strip, in window coordinates, computed from the
+        // SAME geometry renderLeftDock() hit-tests (panel_layout.cpp). The
+        // strip is centred ON the dock's right edge, so half of it lies inside
+        // the viewport rectangle; isResizingPanel() only reports it once a GUI
+        // frame has latched the hover, which a press arriving in the same event
+        // batch as the motion that reached the strip has not had.
+        [[nodiscard]] bool isPositionOverLeftDockResizeEdge(float x, float y,
+                                                            float work_x, float work_y,
+                                                            float work_h) const;
+
+        // THE authoritative strip rectangle. Both the press-time predicate above
+        // and renderLeftDock()'s own hover latch go through this one function,
+        // so the two cannot drift apart -- they were duplicated line for line
+        // before, which is exactly the kind of pair that silently diverges.
+        struct LeftDockResizeRect {
+            float x0 = 0.0f;
+            float x1 = 0.0f;
+            float y0 = 0.0f;
+            float y1 = 0.0f;
+
+            [[nodiscard]] bool contains(const float x, const float y) const {
+                return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+            }
+        };
+
+        [[nodiscard]] static LeftDockResizeRect leftDockResizeRect(float work_x, float work_y,
+                                                                   float work_h, float dpi,
+                                                                   float dock_width) {
+            const float edge_grab_w = std::max(SPLITTER_H * dpi, 8.0f * dpi);
+            const float panel_right_x = work_x + ICON_BAR_WIDTH * dpi + dock_width;
+            return LeftDockResizeRect{
+                .x0 = panel_right_x - edge_grab_w,
+                .x1 = panel_right_x + edge_grab_w,
+                .y0 = work_y,
+                .y1 = work_y + work_h,
+            };
         }
 
         bool isResizeInteractionActive() const {

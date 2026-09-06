@@ -3231,7 +3231,11 @@ namespace lfs::vis::gui {
         // collector drives. The math is byte-identical to its previous inline form (F7).
         void appendScreenWindowOverlay(VulkanViewportPassParams& params,
                                        const VulkanGuidePanelTarget& panel,
-                                       const RenderSettings& settings) {
+                                       const RenderSettings& settings,
+                                       const float scale_x,
+                                       const float scale_y,
+                                       const float offset_x,
+                                       const float offset_y) {
             if (!settings.depth_filter_enabled) {
                 return;
             }
@@ -3246,12 +3250,11 @@ namespace lfs::vis::gui {
             // containment boundary.
             const float W = static_cast<float>(std::max(panel.render_size.x, 1));
             const float H = static_cast<float>(std::max(panel.render_size.y, 1));
-            const float scale_x = settings.depth_filter_scale_x;
-            const float scale_y = settings.depth_filter_scale_y;
+
             const float half_w = 0.5f * scale_x * W;
             const float half_h = 0.5f * scale_y * H;
-            const float cx = 0.5f * W + settings.depth_filter_offset_x * (0.5f * W - half_w);
-            const float cy = 0.5f * H + settings.depth_filter_offset_y * (0.5f * H - half_h);
+            const float cx = 0.5f * W + offset_x * (0.5f * W - half_w);
+            const float cy = 0.5f * H + offset_y * (0.5f * H - half_h);
             const glm::vec2 min_screen =
                 renderToPanelScreen(panel, glm::vec2(cx - half_w, cy - half_h));
             const glm::vec2 max_screen =
@@ -3277,9 +3280,15 @@ namespace lfs::vis::gui {
                                          const SceneRenderState* scene_state,
                                          const SceneManager* scene_manager,
                                          const GizmoState& gizmo,
+                                         const float depth_window_scale_x,
+                                         const float depth_window_scale_y,
+                                         const float depth_window_offset_x,
+                                         const float depth_window_offset_y,
                                          const bool suppress_screen_window = false) {
             if (!suppress_screen_window) {
-                appendScreenWindowOverlay(params, panel, settings);
+                appendScreenWindowOverlay(params, panel, settings,
+                                          depth_window_scale_x, depth_window_scale_y,
+                                          depth_window_offset_x, depth_window_offset_y);
                 if (settings.depth_filter_enabled) {
                     const op::DepthWindowPanelMapping window_panel{
                         .panel = panel.panel,
@@ -3292,10 +3301,10 @@ namespace lfs::vis::gui {
                     };
                     const auto screen_rect = op::depthWindowScreenRect(
                         window_panel,
-                        settings.depth_filter_scale_x,
-                        settings.depth_filter_scale_y,
-                        settings.depth_filter_offset_x,
-                        settings.depth_filter_offset_y);
+                        depth_window_scale_x,
+                        depth_window_scale_y,
+                        depth_window_offset_x,
+                        depth_window_offset_y);
                     const auto& overlay_state = op::depthWindowOverlayState();
                     if (overlay_state.visible) {
                         const auto geometry = op::depthWindowHandleGeometry(screen_rect);
@@ -3509,6 +3518,7 @@ namespace lfs::vis::gui {
                                             const ViewportLayout& viewport_layout,
                                             const RenderSettings& settings,
                                             RenderingManager& rendering_manager,
+                                            const RenderingManager::DepthWindowOverlaySnapshot& depth_window_snapshot,
                                             SceneManager* scene_manager,
                                             const SceneRenderState* scene_state,
                                             const GizmoState& gizmo) {
@@ -3539,7 +3549,22 @@ namespace lfs::vis::gui {
 
                 // The depth window (rect + handles) draws on no panel while GT
                 // comparison mode is active — see depthWindowOverlaySuppressed.
+                const lfs::vis::DepthWindowState panel_depth_window =
+                    depth_window_snapshot.independent_dual_active
+                        ? depth_window_snapshot.panel_windows[splitViewPanelIndex(panel.panel)]
+                        : lfs::vis::DepthWindowState{
+                              .near_plane = -settings.depth_filter_max.z,
+                              .far_plane = -settings.depth_filter_min.z,
+                              .scale_x = settings.depth_filter_scale_x,
+                              .scale_y = settings.depth_filter_scale_y,
+                              .offset_x = settings.depth_filter_offset_x,
+                              .offset_y = settings.depth_filter_offset_y,
+                          };
                 appendCropAndFilterOverlays(params, panel, settings, scene_state, scene_manager, gizmo,
+                                            panel_depth_window.scale_x,
+                                            panel_depth_window.scale_y,
+                                            panel_depth_window.offset_x,
+                                            panel_depth_window.offset_y,
                                             op::depthWindowOverlaySuppressed(rendering_manager.isGTComparisonActive()));
                 if (settings.show_coord_axes) {
                     for (size_t axis = 0; axis < axes.size(); ++axis) {
@@ -5375,6 +5400,7 @@ namespace lfs::vis::gui {
 
         if (auto* const rendering_manager = viewer_ ? viewer_->getRenderingManager() : nullptr) {
             const auto settings = rendering_manager->getSettings();
+            const auto depth_window_snapshot = rendering_manager->getDepthWindowOverlaySnapshot();
             params.scene_upscaler = sceneUpscalerBackendFromId(settings.scene_upscaler)
                                         .value_or(SceneUpscalerBackend::Native);
             params.background_color = settings.background_color;
@@ -5439,6 +5465,7 @@ namespace lfs::vis::gui {
                                                viewport_layout_,
                                                settings,
                                                *rendering_manager,
+                                               depth_window_snapshot,
                                                scene_manager,
                                                overlay_scene_state ? &*overlay_scene_state : nullptr,
                                                gizmo_state);
@@ -6957,28 +6984,33 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_live_capture_ = false;
 
         // ── Left Dock ─────────────────────────────────────────────
+        // Only the dock's own body rectangle needs this; the resize strip below
+        // takes its icon-bar width from PanelLayoutManager (whose constant is
+        // private) via leftDockResizeRect().
         constexpr float ICON_BAR_WIDTH = 40.0f;
         const float icon_bar_w = ICON_BAR_WIDTH * current_ui_scale_;
         const float left_dock_panel_w = std::max(panel_layout_.getLeftDockWidth(), 0.0f);
         const float left_dock_h = show_main_panel_ && !ui_hidden_
                                       ? screen.work_size.y
                                       : screen.work_size.y;
-        const float left_dock_edge_grab_w =
-            std::max(PanelLayoutManager::SPLITTER_H * current_ui_scale_,
-                     8.0f * current_ui_scale_);
         const float left_dock_x = screen.work_pos.x + icon_bar_w;
-        const float left_dock_right_x = panel_layout_.isLeftDockVisible() ? left_dock_x + left_dock_panel_w : -1.0f;
         const bool pointer_over_left_dock =
             panel_layout_.isLeftDockVisible() &&
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                         glm::vec2{left_dock_x, screen.work_pos.y},
                         glm::vec2{left_dock_panel_w, left_dock_h});
+        // THE authoritative strip -- the same function `renderLeftDock()`'s
+        // hover latch and `isPositionOverLeftDockResizeEdge()` use. This site
+        // used to rebuild the rectangle by hand and had already drifted from it
+        // (it excluded the strip's bottom edge, `<` where the shared rectangle
+        // uses `<=`), so a press one pixel from the bottom of the work area
+        // started a resize the router did not treat as dock-targeted input.
         const bool pointer_over_left_dock_edge =
             panel_layout_.isLeftDockVisible() &&
-            panel_input.mouse_x >= left_dock_right_x - left_dock_edge_grab_w &&
-            panel_input.mouse_x <= left_dock_right_x + left_dock_edge_grab_w &&
-            panel_input.mouse_y >= screen.work_pos.y &&
-            panel_input.mouse_y < screen.work_pos.y + left_dock_h;
+            PanelLayoutManager::leftDockResizeRect(screen.work_pos.x, screen.work_pos.y,
+                                                   left_dock_h, current_ui_scale_,
+                                                   left_dock_panel_w)
+                .contains(panel_input.mouse_x, panel_input.mouse_y);
         const bool pointer_targets_left_dock =
             pointer_over_left_dock || pointer_over_left_dock_edge;
         if (pointer_targets_left_dock &&
@@ -7315,15 +7347,57 @@ namespace lfs::vis::gui {
             if (!block_underlay_input)
                 rml_viewport_overlay_.processInput(viewport_overlay_input);
         }
-        if (rml_viewport_overlay_.wantsInput() && viewport_overlay_input.mouse_clicked[0]) {
+        // Rules in overlayPressMayFocusPanel (rml_viewport_overlay.hpp). This
+        // runs after processInput() above, so a press that dismissed a text
+        // field has already blurred and committed it before focus moves.
+        //
+        // Everything below is classified from the press's OWN coordinates: the
+        // overlay is stretched over the left dock, and mouse_x/mouse_y are the
+        // frame's latest cursor position, so neither "the overlay wanted this
+        // press" nor "the cursor is here now" answers where the press landed.
+        // ONE event answers every question below -- its coordinates AND its
+        // event-time ownership verdict -- so the two halves of the rule can
+        // never be taken from different presses.
+        //
+        // EVERY LEFT PRESS IN THE FRAME IS JUDGED, IN SDL ARRIVAL ORDER, AND
+        // EACH ELIGIBLE ONE APPLIES ITS OWN DECISION. A frame can carry more
+        // than one left DOWN, landing on different things; a refusal (chrome, a
+        // GUI-owned press, a press outside the viewport) simply does nothing, so
+        // it can never undo the focus an earlier press in the same frame already
+        // moved. When several are eligible the last one naturally wins, which is
+        // the frame's visible outcome; when none is, focus stays where it was.
+        // The overlay's list carries the two facts only it can compute, entry i
+        // beside this frame's i-th left DOWN; a frame the overlay did not
+        // process reports no presses and moves nothing.
+        const auto& overlay_left_presses = rml_viewport_overlay_.leftPressClassifications();
+        std::size_t overlay_press_index = 0;
+        for (const auto& overlay_event : viewport_overlay_input.mouse_button_events) {
+            if (!overlay_event.down || overlay_event.button != 0)
+                continue;
+            if (overlay_press_index >= overlay_left_presses.size())
+                break;
+            const auto& overlay_press_class = overlay_left_presses[overlay_press_index++];
+            const auto* const overlay_press = &overlay_event;
+            const glm::vec2 overlay_press_point{overlay_press->x, overlay_press->y};
+            if (!overlayPressMayFocusPanel({
+                    .left_pressed = true,
+                    .overlay_wants_input = rml_viewport_overlay_.wantsInput(),
+                    .pressed_interactive_control = overlay_press_class.on_interactive_control,
+                    .press_blurred_text_input = overlay_press_class.blurred_text_input,
+                    .press_inside_viewport = pointInsideViewport(overlay_press_point,
+                                                                 viewport_layout_.pos,
+                                                                 viewport_layout_.size),
+                    .press_gui_owned = overlay_press->gui_owned,
+                })) {
+                continue;
+            }
             if (auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
                 rendering && rendering->isIndependentSplitViewActive()) {
                 if (const auto target_panel = rendering->resolveViewerPanel(
                         viewer_->getViewport(),
                         viewport_layout_.pos,
                         viewport_layout_.size,
-                        glm::vec2(viewport_overlay_input.mouse_x,
-                                  viewport_overlay_input.mouse_y))) {
+                        overlay_press_point)) {
                     if (auto* const input_controller = viewer_->getInputController()) {
                         input_controller->setFocusedSplitPanel(target_panel->panel);
                     } else {
@@ -8313,6 +8387,24 @@ namespace lfs::vis::gui {
         return x >= panel_x - strip_half_w && x <= panel_x + strip_half_w &&
                y >= last_ui_layout_work_pos_.y &&
                y < last_ui_layout_work_pos_.y + last_ui_layout_work_size_.y;
+    }
+
+    bool GuiManager::pressBelongsToGui(const double x, const double y) const {
+        const auto hit = hitTestPointer(x, y);
+        if (hit.blocks_pointer || hit.blocks_mouse_button)
+            return true;
+
+        // The left dock's resize strip is the one GUI-owned edge hitTestPointer
+        // cannot answer geometrically: it reports it only through
+        // isResizingPanel(), which is a hover LATCH written by the previous GUI
+        // frame. A press that arrives in the same SDL batch as the motion which
+        // reached the strip finds that latch still false, so ask the geometry
+        // directly -- the same geometry renderLeftDock() will use a moment
+        // later to start the resize.
+        return panel_layout_.isPositionOverLeftDockResizeEdge(
+            static_cast<float>(x), static_cast<float>(y),
+            last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
+            last_ui_layout_work_size_.y);
     }
 
     GuiHitTestResult GuiManager::hitTestPointer(const double x, const double y) const {
