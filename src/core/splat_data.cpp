@@ -16,6 +16,7 @@
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "nanoflann.hpp"
 
@@ -3291,6 +3292,11 @@ namespace lfs::core {
     }
 
     bool SplatData::apply_shN_value_quant() {
+        if (gpu_backend_of(_means) == GpuBackend::Vulkan ||
+            gpu_backend_of(_shN) == GpuBackend::Vulkan) {
+            LOG_INFO("SH value quantization stays off on the Vulkan tensor backend until its encode is ported");
+            return false;
+        }
         if (!sh_value_quant::enabled()) {
             return false;
         }

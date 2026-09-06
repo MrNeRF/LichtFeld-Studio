@@ -15,6 +15,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
@@ -1432,6 +1433,17 @@ namespace lfs::io {
                 return;
             }
 
+            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
+                Tensor host = Tensor::empty(tensor.shape(), Device::CPU, tensor.dtype());
+                LFS_ASSERT_MSG(host.bytes() == data.size_bytes(),
+                               std::format("PLY Vulkan upload size must match the destination "
+                                           "(name='{}', dest_bytes={}, staging_bytes={})",
+                                           name, host.bytes(), data.size_bytes()));
+                std::memcpy(host.data_ptr(), data.data(), data.size_bytes());
+                tensor.copy_from(host);
+                return;
+            }
+
             if (tensor.device() == Device::CUDA) {
                 const cudaError_t status = cudaMemcpyAsync(
                     tensor.data_ptr(),
@@ -2191,14 +2203,18 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating Tensor objects and uploading to CUDA");
 
+            Tensor means = allocate_float_tensor(
+                host_span(host.means), {N, 3}, options, "SplatData.means");
+            const bool dest_is_vulkan =
+                means.is_valid() &&
+                lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan;
             const bool encode_shN_q16 =
                 options.shN_q16 &&
                 static_cast<bool>(options.splat_tensor_allocator) &&
                 layout_rest > 0 &&
-                host.shN_swizzled.count > 0;
+                host.shN_swizzled.count > 0 &&
+                !dest_is_vulkan;
 
-            Tensor means = allocate_float_tensor(
-                host_span(host.means), {N, 3}, options, "SplatData.means");
             Tensor sh0 = allocate_float_tensor(
                 host_span(host.sh0),
                 {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},

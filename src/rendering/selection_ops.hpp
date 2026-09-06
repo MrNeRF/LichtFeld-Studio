@@ -51,6 +51,7 @@ namespace lfs::rendering {
         int n_primitives);
 
     void set_selection_element(bool* selection, int index, bool value);
+    void set_selection_element(Tensor& selection, int index, bool value);
     [[nodiscard]] Tensor project_screen_positions_tensor(
         const Tensor& means,
         int width,

@@ -1307,7 +1307,32 @@ namespace lfs::vis {
                     byte_count,
                     mapped));
             }
-            if (!tensor.is_valid() || tensor.data_ptr() == nullptr) {
+            if (!tensor.is_valid()) {
+                return std::unexpected(std::format(
+                    "VkSplat {} copy requires valid tensor storage",
+                    label));
+            }
+            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
+                keep_alive = tensor.cpu();
+                if (!keep_alive.is_contiguous()) {
+                    keep_alive = keep_alive.contiguous();
+                }
+                if (byte_count > keep_alive.bytes()) {
+                    return std::unexpected(std::format(
+                        "VkSplat {} copy requested {} bytes from {} byte tensor",
+                        label,
+                        byte_count,
+                        keep_alive.bytes()));
+                }
+                return copyHostBytesToInteropRegion(block,
+                                                    keep_alive.data_ptr(),
+                                                    keep_alive.bytes(),
+                                                    byte_count,
+                                                    dst_offset,
+                                                    stream,
+                                                    label);
+            }
+            if (tensor.data_ptr() == nullptr) {
                 return std::unexpected(std::format(
                     "VkSplat {} copy requires valid tensor storage",
                     label));

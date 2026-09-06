@@ -4,9 +4,12 @@
 
 #include "selection_ops.hpp"
 
+#include "core/tensor_backend.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <vector>
 
 namespace lfs::rendering {
 
@@ -80,6 +83,19 @@ namespace lfs::rendering {
         // Equal distances pick the largest index, as the kernel did.
         const auto candidates = (dist_sq == best).nonzero().flatten().to_vector_int();
         return *std::max_element(candidates.begin(), candidates.end());
+    }
+
+    void set_selection_element(Tensor& selection, const int index, const bool value) {
+        if (!selection.is_valid() || index < 0 ||
+            static_cast<size_t>(index) >= selection.numel()) {
+            return;
+        }
+        if (lfs::core::gpu_backend_of(selection) == lfs::core::GpuBackend::Vulkan) {
+            Tensor idx = Tensor::from_vector(std::vector<int>{index}, {1}, selection.device());
+            selection.index_fill_(0, idx, value ? 1.0f : 0.0f);
+            return;
+        }
+        set_selection_element(selection.ptr<bool>(), index, value);
     }
 
 } // namespace lfs::rendering
