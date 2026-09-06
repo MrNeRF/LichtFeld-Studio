@@ -351,6 +351,7 @@ set(TEST_FILES
     test_display_tensors.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
+    test_tensor_async_consts.cpp
     test_tensor_stress.cpp
     test_tensor_matrix.cpp
     test_slice_mm_bug.cpp

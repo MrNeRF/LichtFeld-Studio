@@ -71,7 +71,11 @@ TEST(ViewerNoCuda, HoverGroupCountTensorProgramMatchesCpu) {
     }
 
     std::array<int, 257> host_counts{};
-    lfs::rendering::enqueue_selection_group_count_read(scratch, host_counts.data(), nullptr);
+    lfs::rendering::SelectionCountTicket ticket;
+    lfs::rendering::enqueue_selection_group_count_read(
+        scratch, host_counts.data(), nullptr, &ticket);
+    while (!lfs::rendering::poll_selection_group_count_readback(ticket, host_counts.data())) {
+    }
     for (size_t group = 0; group < 256; ++group) {
         EXPECT_EQ(static_cast<size_t>(host_counts[group]), cpu_counts[group]) << "group " << group;
     }

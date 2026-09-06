@@ -540,7 +540,7 @@ namespace {
                                                "SignedZeroInfNanPreserve", "Float16",
                                                "AtomicFloat32AddEXT"};
         const std::span<const internal::EmbeddedShader> shaders = internal::embedded_shaders();
-        EXPECT_EQ(shaders.size(), 21u);
+        EXPECT_EQ(shaders.size(), 22u);
         for (const internal::EmbeddedShader& shader : shaders) {
             const std::string module(shader.name);
             EXPECT_EQ(internal::find_embedded_shader(shader.name), &shader) << module;

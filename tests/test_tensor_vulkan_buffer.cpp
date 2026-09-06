@@ -104,6 +104,7 @@ namespace {
         Tensor::trim_memory_pool();
         EXPECT_GT(internal::vulkan_live_vma_objects_for_testing(), baseline);
         pin.reset();
+        internal::backend_ops(GpuBackend::Vulkan).synchronize_device();
         Tensor::trim_memory_pool();
         EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), baseline);
     }
