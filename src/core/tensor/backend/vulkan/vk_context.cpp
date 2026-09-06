@@ -326,6 +326,8 @@ namespace lfs::core::internal {
             try {
                 shutdown();
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): the construction failure below is
+                // the error that matters; a failed cleanup must not replace it.
             }
             throw;
         }
@@ -334,7 +336,10 @@ namespace lfs::core::internal {
     VulkanContext::~VulkanContext() {
         try {
             shutdown();
+        } catch (const std::exception& error) {
+            LOG_WARN("Vulkan tensor backend shutdown failed in the destructor: {}", error.what());
         } catch (...) {
+            LOG_WARN("Vulkan tensor backend shutdown failed in the destructor");
         }
         pipelines_.reset();
         memory_.reset();
@@ -655,7 +660,8 @@ namespace lfs::core::internal {
                 error.clear();
                 std::filesystem::rename(temporary, destination, error);
             }
-        } catch (...) {
+        } catch (const std::exception& failure) {
+            LOG_WARN("Vulkan pipeline cache not saved: {}", failure.what());
         }
     }
 
@@ -847,6 +853,7 @@ namespace lfs::core::internal {
             try {
                 recorders_->wait_all();
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): mark_device_lost_once reports the loss.
                 mark_device_lost_once();
             }
         }
@@ -898,7 +905,11 @@ namespace lfs::core::internal {
                 VulkanContext probe;
                 probe.shutdown();
                 return true;
+            } catch (const std::exception& error) {
+                LOG_INFO("Vulkan tensor backend unavailable: {}", error.what());
+                return false;
             } catch (...) {
+                LOG_INFO("Vulkan tensor backend unavailable");
                 return false;
             }
         }();
@@ -925,6 +936,8 @@ namespace lfs::core::internal {
             try {
                 slot->context = std::make_shared<VulkanContext>();
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): stored and rethrown to every caller
+                // of acquire_vulkan_context.
                 slot->failure = std::current_exception();
             }
         });
@@ -977,6 +990,8 @@ namespace lfs::core::internal {
                        (context->allocator() != nullptr ? 1 : 0);
             }
         } catch (...) {
+            // LFS-CENSUS-OK(empty-catch): test accessor; a context that cannot
+            // answer counts as no live objects.
         }
         // No live context: report what the last shutdown found still allocated,
         // so a leaked tensor is detected instead of hidden by the slot replacement.

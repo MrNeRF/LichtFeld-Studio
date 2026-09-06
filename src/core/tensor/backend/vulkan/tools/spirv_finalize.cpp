@@ -543,6 +543,8 @@ int main(const int argc, char** const argv) {
     try {
         return run(argc, argv);
     } catch (const std::exception& error) {
+        // LFS-CENSUS-OK(empty-catch): build-time host tool; the failure goes to
+        // stderr and the non-zero exit fails the build.
         std::fprintf(stderr, "spirv_finalize: %s: %s\n", argc > 1 ? argv[1] : "", error.what());
         return 1;
     }

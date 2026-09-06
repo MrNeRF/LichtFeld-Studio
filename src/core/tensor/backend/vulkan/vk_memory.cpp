@@ -5,6 +5,7 @@
 
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
+#include "core/logger.hpp"
 #include "core/memory_pressure.hpp"
 #include "vk_context.hpp"
 #include "vk_recorder.hpp"
@@ -566,7 +567,8 @@ namespace lfs::core::internal {
             retired_.push_back(std::move(iterator->second));
             allocations_.erase(iterator);
             collect_retired_locked(context_.completed_timeline());
-        } catch (...) {
+        } catch (const std::exception& error) {
+            LOG_WARN("Vulkan storage release failed: {}", error.what());
         }
     }
 

@@ -4,6 +4,8 @@
 #include "../facade_trace.hpp"
 #include "vk_backend_ops.hpp"
 
+#include "core/logger.hpp"
+
 #include "../../internal/tensor_impl.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
@@ -22,7 +24,8 @@ namespace lfs::core::internal {
             if (const auto context = try_live_vulkan_context()) {
                 context->memory().deallocate(storage);
             }
-        } catch (...) {
+        } catch (const std::exception& error) {
+            LOG_WARN("Vulkan storage release failed: {}", error.what());
         }
     }
 

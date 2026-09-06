@@ -339,6 +339,7 @@ namespace lfs::core::internal {
                     }
                 }
             } catch (...) {
+                // LFS-CENSUS-OK(empty-catch): mark_device_lost_once reports the loss.
                 context_.mark_device_lost_once();
             }
         }
