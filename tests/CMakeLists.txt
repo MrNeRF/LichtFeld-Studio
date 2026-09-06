@@ -526,6 +526,7 @@ set(TEST_FILES
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
     test_tensor_backend_selection.cpp
+    test_tensor_backend_selftest.cpp
     test_tensor_seam_regressions.cpp
     test_tensor_backend_facade.cpp
     test_tensor_backend_facade_c.cpp

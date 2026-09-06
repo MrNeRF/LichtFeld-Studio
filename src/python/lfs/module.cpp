@@ -62,6 +62,7 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "gui/utils/file_association.hpp"
@@ -2777,6 +2778,29 @@ NB_MODULE(lichtfeld, m) {
 
     m.def("_clear_training_hooks", []() { ControlBoundary::instance().clear_all(); });
     nb::module_::import_("atexit").attr("register")(m.attr("_clear_training_hooks"));
+
+    m.def(
+        "tensor_backend_selftest",
+        [](const std::string& backend) {
+            lfs::core::GpuBackend selected;
+            if (backend == "cuda") {
+                selected = lfs::core::GpuBackend::CUDA;
+            } else if (backend == "vulkan") {
+                selected = lfs::core::GpuBackend::Vulkan;
+            } else {
+                throw lfs::Exception(lfs::make_error({
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Python,
+                    .user_message =
+                        "tensor_backend_selftest backend must be \"cuda\" or \"vulkan\"",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            nb::gil_scoped_release release;
+            lfs::python::unwrap(lfs::core::tensor_backend_selftest(selected));
+        },
+        nb::arg("backend"),
+        "Allocate, dispatch a small corpus, read back, shut the backend down, and reinitialize");
 
     // Register Tensor class
     lfs::python::register_tensor(m);

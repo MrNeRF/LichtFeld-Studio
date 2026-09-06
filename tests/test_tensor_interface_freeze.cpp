@@ -2,7 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/pinned_memory_allocator.hpp"
+#include "core/source_site.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "core/tensor_backend.hpp"
 #include "core/tensor_debug.hpp"
 #include "core/tensor_label.hpp"
@@ -10,6 +14,7 @@
 #include "core/tensor_trace.hpp"
 
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <istream>
 #include <memory>
@@ -109,11 +114,11 @@ namespace {
     LFS_FREEZE(shutdown_gpu_backend, lfs::Status (*)(GpuBackend));
     LFS_FREEZE(gpu_backend_of, std::optional<GpuBackend> (*)(const T&));
 #undef LFS_FREEZE
-    constexpr size_t kExactSignatureCount = 40;
+    constexpr size_t kExactSignatureCount = 40 + 262;
     [[maybe_unused]] constexpr auto kSelectorAnchors = std::tuple{
         &default_gpu_backend, &set_default_gpu_backend, &gpu_backend_available,
         &gpu_backend_memory_info, &shutdown_gpu_backend, &gpu_backend_of};
-    [[gnu::used]] const void* const kSelectorAnchorAddress = &kSelectorAnchors;
+    [[maybe_unused]] const void* const kSelectorAnchorAddress = &kSelectorAnchors;
 
     // Non-template overload sets use exact function-pointer types. Template
     // callables are checked below in requires expressions, which keeps them in an
@@ -202,6 +207,407 @@ namespace {
         static_cast<T& (T::*)(int, const T&, float, ScatterMode)>(&T::scatter_),
         static_cast<T& (T::*)(const T&, const T&)>(&T::index_put_),
         static_cast<T& (T::*)(const std::vector<T>&, const T&)>(&T::index_put_)};
+
+    [[maybe_unused]] constexpr auto kMoreFactoryOverloads = std::tuple{
+        static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>)>(&T::from_external_owner),
+        static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t)>(&T::from_external_owner),
+        static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t)>(
+            &T::from_external_owner),
+        static_cast<T (*)(void*, S, Device, DataType, std::shared_ptr<void>, size_t, cudaStream_t, std::string)>(
+            &T::from_external_owner),
+        static_cast<T (*)(const T&, const T&, const T&)>(&T::where),
+        static_cast<T (T::*)(const T&, const T&) const>(&T::where),
+        static_cast<T (*)(const std::vector<T>&, int)>(&T::cat),
+        static_cast<T (T::*)(const T&, int) const>(&T::cat)};
+
+    [[maybe_unused]] constexpr auto kMoreReduceOverloads = std::tuple{
+        static_cast<T (T::*)(ReduceOp) const>(&T::reduce),
+        static_cast<T (T::*)(ReduceOp, const ReduceArgs&) const>(&T::reduce),
+        static_cast<T (T::*)() const>(&T::any),
+        static_cast<T (T::*)(std::span<const int>, bool) const>(&T::any),
+        static_cast<T (T::*)(int, bool) const>(&T::any),
+        static_cast<T (T::*)() const>(&T::all),
+        static_cast<T (T::*)(std::span<const int>, bool) const>(&T::all),
+        static_cast<T (T::*)(int, bool) const>(&T::all),
+        static_cast<T (T::*)() const>(&T::argmax),
+        static_cast<T (T::*)(std::span<const int>, bool) const>(&T::argmax),
+        static_cast<T (T::*)() const>(&T::argmin),
+        static_cast<T (T::*)(std::span<const int>, bool) const>(&T::argmin)};
+
+    [[maybe_unused]] constexpr auto kBinaryTensorOverloads = std::tuple{
+        static_cast<T (T::*)(const T&) const>(&T::add),
+        static_cast<T (T::*)(const T&) const>(&T::sub),
+        static_cast<T (T::*)(const T&) const>(&T::mul),
+        static_cast<T (T::*)(const T&) const>(&T::div),
+        static_cast<T (T::*)(const T&) const>(&T::pow),
+        static_cast<T (T::*)(const T&) const>(&T::mod),
+        static_cast<T (T::*)(const T&) const>(&T::maximum),
+        static_cast<T (T::*)(const T&) const>(&T::minimum),
+        static_cast<T (T::*)(const T&) const>(&T::eq),
+        static_cast<T (T::*)(const T&) const>(&T::ne),
+        static_cast<T (T::*)(const T&) const>(&T::lt),
+        static_cast<T (T::*)(const T&) const>(&T::le),
+        static_cast<T (T::*)(const T&) const>(&T::gt),
+        static_cast<T (T::*)(const T&) const>(&T::ge),
+        static_cast<T (T::*)() const>(&T::operator-),
+        static_cast<T (T::*)(const T&) const>(&T::operator&&),
+        static_cast<T (T::*)(const T&) const>(&T::operator||),
+        static_cast<T (T::*)(const T&) const>(&T::operator|)};
+
+    [[maybe_unused]] constexpr auto kMoreMemoryOverloads = std::tuple{
+        static_cast<void* (T::*)()>(&T::data_ptr),
+        static_cast<const void* (T::*)() const>(&T::data_ptr),
+        static_cast<void* (T::*)()>(&T::storage_ptr),
+        static_cast<const void* (T::*)() const>(&T::storage_ptr),
+        static_cast<void (*)()>(&T::log_storage_memory),
+        static_cast<void (*)(std::string_view)>(&T::log_storage_memory),
+        static_cast<void (T::*)(std::initializer_list<size_t>, bool)>(&T::set_bool),
+        static_cast<void (T::*)(std::span<const size_t>, bool)>(&T::set_bool),
+        static_cast<bool (T::*)(std::initializer_list<size_t>) const>(&T::get_bool),
+        static_cast<bool (T::*)(std::span<const size_t>) const>(&T::get_bool),
+        static_cast<T& (T::*)(float)>(&T::fill_),
+        static_cast<T& (T::*)(float, cudaStream_t)>(&T::fill_),
+        static_cast<T& (T::*)(S)>(&T::assert_shape),
+        static_cast<T& (T::*)(S, const std::string&)>(&T::assert_shape),
+        static_cast<void (T::*)() const>(&T::print_formatted),
+        static_cast<void (T::*)(const std::string&, size_t) const>(&T::print_formatted),
+        static_cast<float& (T::*)(std::initializer_list<size_t>)>(&T::at),
+        static_cast<float (T::*)(std::initializer_list<size_t>) const>(&T::at)};
+
+    [[maybe_unused]] constexpr auto kNnOverloads = std::tuple{
+        static_cast<T (T::*)(const T&) const>(&T::conv1x1),
+        static_cast<T (T::*)(const T&, const T&) const>(&T::conv1x1),
+        static_cast<T (T::*)(const T&) const>(&T::linear),
+        static_cast<T (T::*)(const T&, const T&) const>(&T::linear)};
+
+    [[maybe_unused]] constexpr auto kStreamOverloads = std::tuple{
+        static_cast<std::ostream& (*)(std::ostream&, const T&)>(&operator<<),
+        static_cast<std::istream& (*)(std::istream&, T&)>(&operator>>)};
+
+    [[maybe_unused]] constexpr auto kShapeOverloads = std::tuple{
+        static_cast<size_t& (R::*)(size_t) noexcept>(&R::operator[]),
+        static_cast<size_t (R::*)(size_t) const noexcept>(&R::operator[]),
+        static_cast<size_t* (R::*)() noexcept>(&R::data),
+        static_cast<const size_t* (R::*)() const noexcept>(&R::data),
+        static_cast<size_t* (R::*)() noexcept>(&R::begin),
+        static_cast<const size_t* (R::*)() const noexcept>(&R::begin),
+        static_cast<size_t* (R::*)() noexcept>(&R::end),
+        static_cast<const size_t* (R::*)() const noexcept>(&R::end),
+        static_cast<void (R::*)(std::span<const size_t>)>(&R::assign),
+        static_cast<void (R::*)(const std::vector<size_t>&)>(&R::assign),
+        static_cast<void (R::*)(std::initializer_list<size_t>)>(&R::assign),
+        static_cast<bool (R::*)(const R&) const noexcept>(&R::operator==),
+        static_cast<bool (R::*)(const std::vector<size_t>&) const noexcept>(&R::operator==),
+        static_cast<bool (R::*)(const R&) const noexcept>(&R::operator!=),
+        static_cast<bool (R::*)(const std::vector<size_t>&) const noexcept>(&R::operator!=)};
+
+    using RG = RandomGenerator;
+    [[maybe_unused]] constexpr auto kRandomOverloads = std::tuple{
+        static_cast<void* (RG::*)()>(&RG::get_impl),
+        static_cast<const void* (RG::*)() const>(&RG::get_impl)};
+
+    using Tracer = debug::TensorOpTracer;
+    [[maybe_unused]] constexpr auto kDebugOverloads = std::tuple{
+        static_cast<bool (Tracer::*)(const T&) const>(&Tracer::should_trace),
+        static_cast<bool (Tracer::*)(const T&, const T&) const>(&Tracer::should_trace),
+        static_cast<void (Tracer::*)(const char*, const T&, const SourceSite&)>(&Tracer::push),
+        static_cast<void (Tracer::*)(const char*, const T&, const T&, const SourceSite&)>(&Tracer::push),
+        static_cast<void (Tracer::*)(const char*, const S&, const SourceSite&)>(&Tracer::push),
+        static_cast<void (Tracer::*)(const char*, const S&, const S&, const SourceSite&)>(&Tracer::push),
+        static_cast<void (Tracer::*)()>(&Tracer::pop),
+        static_cast<void (Tracer::*)(const S&)>(&Tracer::pop)};
+
+    using MP = MaskedTensorProxy;
+    using TI = TensorIndexer;
+    [[maybe_unused]] constexpr auto kRowOverloads = std::tuple{
+        static_cast<float& (RP::*)(size_t)>(&RP::operator[]),
+        static_cast<float (RP::*)(size_t) const>(&RP::operator[]),
+        static_cast<RP& (RP::*)(const RP&)>(&RP::operator=),
+        static_cast<RP& (RP::*)(const T&)>(&RP::operator=),
+        static_cast<RP& (RP::*)(float)>(&RP::operator=),
+        static_cast<T (RP::*)() const>(&RP::operator-),
+        static_cast<T (RP::*)(const RP&) const>(&RP::operator-),
+        static_cast<T (RP::*)(float) const>(&RP::operator-),
+        static_cast<T (RP::*)(const RP&) const>(&RP::operator+),
+        static_cast<T (RP::*)(float) const>(&RP::operator+),
+        static_cast<T (RP::*)(const RP&) const>(&RP::operator*),
+        static_cast<T (RP::*)(float) const>(&RP::operator*),
+        static_cast<T (RP::*)(const RP&) const>(&RP::operator/),
+        static_cast<T (RP::*)(float) const>(&RP::operator/),
+        static_cast<void (MP::*)(float)>(&MP::operator=),
+        static_cast<void (MP::*)(const T&)>(&MP::operator=),
+        static_cast<void (TI::*)(float)>(&TI::operator=),
+        static_cast<void (TI::*)(const T&)>(&TI::operator=)};
+
+#define LFS_FREEZE(member, ...) \
+    static_assert(std::is_same_v<decltype(&member), __VA_ARGS__>, "signature moved: " #member)
+    LFS_FREEZE(T::load, T (*)(LoadOp, const LoadArgs&));
+    LFS_FREEZE(T::empty, T (*)(S, Device, DataType, bool));
+    LFS_FREEZE(T::empty_pageable_host, T (*)(S, DataType));
+    LFS_FREEZE(T::empty_unpinned, T (*)(S, DataType));
+    LFS_FREEZE(T::zeros, T (*)(S, Device, DataType));
+    LFS_FREEZE(T::zeros_direct, T (*)(S, size_t, Device, DataType));
+    LFS_FREEZE(T::ones, T (*)(S, Device, DataType));
+    LFS_FREEZE(T::full, T (*)(S, float, Device, DataType));
+    LFS_FREEZE(T::full_bool, T (*)(S, bool, Device));
+    LFS_FREEZE(T::zeros_bool, T (*)(S, Device));
+    LFS_FREEZE(T::ones_bool, T (*)(S, Device));
+    LFS_FREEZE(T::linspace, T (*)(float, float, size_t, Device));
+    LFS_FREEZE(T::diag, T (*)(const T&));
+    LFS_FREEZE(T::from_blob, T (*)(void*, S, Device, DataType, cudaStream_t));
+    LFS_FREEZE(T::zeros_like, T (*)(const T&));
+    LFS_FREEZE(T::empty_like, T (*)(const T&));
+    LFS_FREEZE(T::full_like, T (*)(const T&, float));
+    LFS_FREEZE(T::stack, T (*)(const std::vector<T>&, int));
+    LFS_FREEZE(T::rand, T (*)(S, Device, DataType));
+    LFS_FREEZE(T::randn, T (*)(S, Device, DataType));
+    LFS_FREEZE(T::uniform, T (*)(S, float, float, Device, DataType));
+    LFS_FREEZE(T::normal, T (*)(S, float, float, Device, DataType));
+    LFS_FREEZE(T::randint, T (*)(S, int, int, Device, DataType));
+    LFS_FREEZE(T::bernoulli, T (*)(S, float, Device, DataType));
+    LFS_FREEZE(T::multinomial, T (*)(const T&, int, bool));
+    LFS_FREEZE(T::rand_like, T (*)(const T&));
+    LFS_FREEZE(T::randn_like, T (*)(const T&));
+    LFS_FREEZE(T::manual_seed, void (*)(uint64_t));
+    LFS_FREEZE(T::enable_profiling, void (*)(bool));
+    LFS_FREEZE(T::lazy_telemetry_snapshot, LazyTelemetrySnapshot (*)());
+    LFS_FREEZE(T::reset_lazy_telemetry, void (*)());
+    LFS_FREEZE(T::clear_lazy_ir_for_testing, void (*)());
+    LFS_FREEZE(T::movement, T (T::*)(MovementOp, const MovementArgs&) const);
+    LFS_FREEZE(T::to_pageable_host, T (T::*)(cudaStream_t) const);
+    LFS_FREEZE(T::cuda, T (T::*)() const);
+    LFS_FREEZE(T::unsqueeze, T (T::*)(int) const);
+    LFS_FREEZE(T::flatten, T (T::*)(int, int) const);
+    LFS_FREEZE(T::transpose, T (T::*)(int, int) const);
+    LFS_FREEZE(T::t, T (T::*)() const);
+    LFS_FREEZE(T::broadcast_to, T (T::*)(const S&) const);
+    LFS_FREEZE(T::can_broadcast_to, bool (T::*)(const S&) const);
+    LFS_FREEZE(T::broadcast_shape, S (T::*)(const S&) const);
+    LFS_FREEZE(T::try_reshape, std::optional<T> (T::*)(S) const);
+    LFS_FREEZE(T::split_batch, std::vector<T> (*)(const T&, size_t));
+    LFS_FREEZE(T::sign, T (T::*)() const);
+    LFS_FREEZE(T::reciprocal, T (T::*)() const);
+    LFS_FREEZE(T::exp2, T (T::*)() const);
+    LFS_FREEZE(T::log2, T (T::*)() const);
+    LFS_FREEZE(T::log10, T (T::*)() const);
+    LFS_FREEZE(T::log1p, T (T::*)() const);
+    LFS_FREEZE(T::rsqrt, T (T::*)() const);
+    LFS_FREEZE(T::square, T (T::*)() const);
+    LFS_FREEZE(T::sin, T (T::*)() const);
+    LFS_FREEZE(T::cos, T (T::*)() const);
+    LFS_FREEZE(T::tan, T (T::*)() const);
+    LFS_FREEZE(T::asin, T (T::*)() const);
+    LFS_FREEZE(T::acos, T (T::*)() const);
+    LFS_FREEZE(T::atan, T (T::*)() const);
+    LFS_FREEZE(T::sinh, T (T::*)() const);
+    LFS_FREEZE(T::cosh, T (T::*)() const);
+    LFS_FREEZE(T::gelu, T (T::*)() const);
+    LFS_FREEZE(T::swish, T (T::*)() const);
+    LFS_FREEZE(T::floor, T (T::*)() const);
+    LFS_FREEZE(T::ceil, T (T::*)() const);
+    LFS_FREEZE(T::round, T (T::*)() const);
+    LFS_FREEZE(T::trunc, T (T::*)() const);
+    LFS_FREEZE(T::isnan, T (T::*)() const);
+    LFS_FREEZE(T::isinf, T (T::*)() const);
+    LFS_FREEZE(T::isfinite, T (T::*)() const);
+    LFS_FREEZE(T::logical_not, T (T::*)() const);
+    LFS_FREEZE(T::normalize, T (T::*)(int, float) const);
+    LFS_FREEZE(T::logit, T (T::*)(float) const);
+    LFS_FREEZE(T::clamp, T (T::*)(float, float) const);
+    LFS_FREEZE(T::clamp_min, T (T::*)(float) const);
+    LFS_FREEZE(T::clamp_max, T (T::*)(float) const);
+    LFS_FREEZE(T::clamp_, T& (T::*)(float, float));
+    LFS_FREEZE(T::clamp_min_, T& (T::*)(float));
+    LFS_FREEZE(T::clamp_max_, T& (T::*)(float));
+    LFS_FREEZE(T::operator!, T (T::*)() const);
+    LFS_FREEZE(T::operator~, T (T::*)() const);
+    LFS_FREEZE(T::logical_and, T (T::*)(const T&) const);
+    LFS_FREEZE(T::logical_or, T (T::*)(const T&) const);
+    LFS_FREEZE(T::logical_xor, T (T::*)(const T&) const);
+    LFS_FREEZE(T::and_live_, T& (T::*)(const T&));
+    LFS_FREEZE(T::cumsum, T (T::*)(int) const);
+    LFS_FREEZE(T::std_scalar, float (T::*)(bool) const);
+    LFS_FREEZE(T::var_scalar, float (T::*)(bool) const);
+    LFS_FREEZE(T::minmax, std::pair<float, float> (T::*)() const);
+    LFS_FREEZE(T::min_with_indices, std::pair<T, T> (T::*)(int, bool) const);
+    LFS_FREEZE(T::max_with_indices, std::pair<T, T> (T::*)(int, bool) const);
+    LFS_FREEZE(T::sort, std::pair<T, T> (T::*)(int, bool) const);
+    LFS_FREEZE(T::any_scalar, bool (T::*)() const);
+    LFS_FREEZE(T::mm, T (T::*)(const T&) const);
+    LFS_FREEZE(T::bmm, T (T::*)(const T&) const);
+    LFS_FREEZE(T::matmul, T (T::*)(const T&) const);
+    LFS_FREEZE(T::dot, T (T::*)(const T&) const);
+    LFS_FREEZE(T::cdist, T (T::*)(const T&, float) const);
+    LFS_FREEZE(T::masked_select, T (T::*)(const T&) const);
+    LFS_FREEZE(T::masked_fill_, T& (T::*)(const T&, float));
+    LFS_FREEZE(T::masked_fill, T (T::*)(const T&, float) const);
+    LFS_FREEZE(T::take, T (T::*)(const T&) const);
+    LFS_FREEZE(T::append_gather, T& (T::*)(const T&));
+    LFS_FREEZE(T::append_zeros, T& (T::*)(size_t));
+    LFS_FREEZE(T::gather_lazy, PermutationExpr<TensorLeaf, TensorLeaf> (T::*)(const T&) const);
+    LFS_FREEZE(T::nonzero, T (T::*)() const);
+    LFS_FREEZE(T::nonzero_split, std::vector<T> (T::*)() const);
+    LFS_FREEZE(T::index_fill_, T& (T::*)(int, const T&, float));
+    LFS_FREEZE(T::index_copy_, T& (T::*)(int, const T&, const T&));
+    LFS_FREEZE(T::index_add_, T& (T::*)(int, const T&, const T&));
+    LFS_FREEZE(T::index_select_into, void (T::*)(T&, int, const T&, BoundaryMode) const);
+    LFS_FREEZE(T::max_pool2d, T (T::*)(int, int, int) const);
+    LFS_FREEZE(T::adaptive_avg_pool2d, T (T::*)(int, int) const);
+    LFS_FREEZE(T::conv1x1_bias_out, void (T::*)(const T&, const T&, T&) const);
+    LFS_FREEZE(T::conv1x1_bias_relu_out, void (T::*)(const T&, const T&, T&) const);
+    LFS_FREEZE(T::relu_out, void (T::*)(T&) const);
+    LFS_FREEZE(T::max_pool2d_out, void (T::*)(int, int, int, T&) const);
+    LFS_FREEZE(T::adaptive_avg_pool2d_out, void (T::*)(int, int, T&) const);
+    LFS_FREEZE(T::linear_bias_relu_out, void (T::*)(const T&, const T&, T&) const);
+    LFS_FREEZE(T::linear_out, void (T::*)(const T&, const T&, T&) const);
+    LFS_FREEZE(T::zero_, T& (T::*)());
+    LFS_FREEZE(T::copy_from, T& (T::*)(const T&));
+    LFS_FREEZE(T::copy_, T& (T::*)(const T&));
+    LFS_FREEZE(T::uniform_, T& (T::*)(float, float));
+    LFS_FREEZE(T::normal_, T& (T::*)(float, float));
+    LFS_FREEZE(T::shape, const S& (T::*)() const);
+    LFS_FREEZE(T::owns_memory, bool (T::*)() const);
+    LFS_FREEZE(T::is_view, bool (T::*)() const);
+    LFS_FREEZE(T::is_external_storage, bool (T::*)() const);
+    LFS_FREEZE(T::is_empty, bool (T::*)() const);
+    LFS_FREEZE(T::has_lazy_expr, bool (T::*)() const);
+    LFS_FREEZE(T::is_deferred, bool (T::*)() const);
+    LFS_FREEZE(T::lazy_expr_id, uint64_t (T::*)() const);
+    LFS_FREEZE(T::lazy_expr_info, std::optional<internal::LazyExprDebugInfo> (T::*)() const);
+    LFS_FREEZE(T::debug_id, size_t (T::*)() const);
+    LFS_FREEZE(T::is_tracked, bool (T::*)() const);
+    LFS_FREEZE(T::set_tracked, T& (T::*)(bool));
+    LFS_FREEZE(T::track, T& (T::*)());
+    LFS_FREEZE(T::untrack, T& (T::*)());
+    LFS_FREEZE(T::name, const std::string& (T::*)() const);
+    LFS_FREEZE(T::set_name, T& (T::*)(std::string));
+    LFS_FREEZE(T::size, size_t (T::*)(size_t) const);
+    LFS_FREEZE(T::capacity, size_t (T::*)() const);
+    LFS_FREEZE(T::logical_size, size_t (T::*)() const);
+    LFS_FREEZE(T::external_storage_kind, std::string (T::*)() const);
+    LFS_FREEZE(T::external_storage_owner, std::shared_ptr<void> (T::*)() const);
+    LFS_FREEZE(T::set_exportable_provenance, void (T::*)(std::shared_ptr<void>, std::uint32_t, std::uint64_t));
+    LFS_FREEZE(T::has_exportable_provenance, bool (T::*)() const noexcept);
+    LFS_FREEZE(T::exportable_control, std::shared_ptr<void> (T::*)() const noexcept);
+    LFS_FREEZE(T::exportable_region, std::uint32_t (T::*)() const noexcept);
+    LFS_FREEZE(T::exportable_bound_generation, std::uint64_t (T::*)() const noexcept);
+    LFS_FREEZE(T::storage_memory_summary, std::string (*)());
+    LFS_FREEZE(T::trim_memory_pool, void (*)());
+    LFS_FREEZE(T::trim_memory_pool_if_reserved_unused_exceeds, void (*)(size_t));
+    LFS_FREEZE(T::trim_device_memory_pool, void (*)());
+    LFS_FREEZE(T::shutdown_memory_pool, void (*)());
+    LFS_FREEZE(T::set_memory_pool_iteration, void (*)(int));
+    LFS_FREEZE(T::strides, const RankedDims& (T::*)() const);
+    LFS_FREEZE(T::stride, size_t (T::*)(size_t) const);
+    LFS_FREEZE(T::has_zero_stride, bool (T::*)() const);
+    LFS_FREEZE(T::assert_device, T& (T::*)(Device));
+    LFS_FREEZE(T::assert_dtype, T& (T::*)(DataType));
+    LFS_FREEZE(T::assert_finite, T& (T::*)());
+    LFS_FREEZE(T::all_close, bool (T::*)(const T&, float, float) const);
+    LFS_FREEZE(T::str, std::string (T::*)() const);
+    LFS_FREEZE(T::to_vector_uint8, std::vector<uint8_t> (T::*)() const);
+    LFS_FREEZE(T::to_vector_int64, std::vector<int64_t> (T::*)() const);
+    LFS_FREEZE(T::debug_values, std::vector<float> (T::*)(size_t) const);
+    LFS_FREEZE(T::options, T::TensorOptions (T::*)() const);
+    LFS_FREEZE(R::size, size_t (R::*)() const noexcept);
+    LFS_FREEZE(R::empty, bool (R::*)() const noexcept);
+    LFS_FREEZE(R::clear, void (R::*)() noexcept);
+    LFS_FREEZE(R::cbegin, const size_t* (R::*)() const noexcept);
+    LFS_FREEZE(R::cend, const size_t* (R::*)() const noexcept);
+    LFS_FREEZE(S::rank, size_t (S::*)() const);
+    LFS_FREEZE(S::operator[], size_t (S::*)(size_t) const);
+    LFS_FREEZE(S::elements, size_t (S::*)() const);
+    LFS_FREEZE(S::dims, const RankedDims& (S::*)() const);
+    LFS_FREEZE(S::strides, RankedDims (S::*)() const);
+    LFS_FREEZE(S::operator==, bool (S::*)(const S&) const);
+    LFS_FREEZE(S::operator!=, bool (S::*)(const S&) const);
+    LFS_FREEZE(S::str, std::string (S::*)() const);
+    LFS_FREEZE(RG::instance, RG& (*)());
+    LFS_FREEZE(RG::manual_seed, void (RG::*)(uint64_t));
+    LFS_FREEZE(RG::get_seed, uint64_t (RG::*)() const);
+    LFS_FREEZE(RG::get_generator, void* (RG::*)(Device));
+    LFS_FREEZE(RG::get_next_cuda_seed, uint64_t (RG::*)());
+    LFS_FREEZE(RG::generate_cuda_normal, void (RG::*)(float*, size_t, float, float, cudaStream_t));
+    LFS_FREEZE(getCurrentCUDAStream, cudaStream_t (*)());
+    LFS_FREEZE(setCurrentCUDAStream, void (*)(cudaStream_t));
+    LFS_FREEZE(waitForCUDAStream, void (*)(cudaStream_t, cudaStream_t));
+    LFS_FREEZE(prepare_inputs_for_stream, cudaStream_t (*)(std::initializer_list<const T*>, std::optional<cudaStream_t>));
+    LFS_FREEZE(set_cuda_event_acquire_failure_for_testing, void (*)(bool) noexcept);
+    LFS_FREEZE(bridgeStreams, void (*)(cudaStream_t, cudaStream_t));
+    LFS_FREEZE(retire_stream, void (*)(cudaStream_t) noexcept);
+    LFS_FREEZE(unretire_stream, void (*)(cudaStream_t) noexcept);
+    LFS_FREEZE(is_stream_retired, bool (*)(cudaStream_t) noexcept);
+    LFS_FREEZE(CudaEventPool::instance, CudaEventPool& (*)());
+    LFS_FREEZE(CudaEventPool::acquire, cudaEvent_t (CudaEventPool::*)());
+    LFS_FREEZE(CudaEventPool::release, void (CudaEventPool::*)(cudaEvent_t));
+    LFS_FREEZE(CudaEventPool::shutdown, void (CudaEventPool::*)());
+    LFS_FREEZE(CudaEventPool::stats, const CudaEventPool::Stats& (CudaEventPool::*)() const);
+    LFS_FREEZE(CudaEventPool::pooled_count, size_t (CudaEventPool::*)() const);
+    LFS_FREEZE(PinnedMemoryAllocator::instance, PinnedMemoryAllocator& (*)());
+    LFS_FREEZE(PinnedMemoryAllocator::allocate, void* (PinnedMemoryAllocator::*)(size_t));
+    LFS_FREEZE(PinnedMemoryAllocator::deallocate, void (PinnedMemoryAllocator::*)(void*, cudaStream_t));
+    LFS_FREEZE(PinnedMemoryAllocator::record_stream, void (PinnedMemoryAllocator::*)(void*, cudaStream_t));
+    LFS_FREEZE(PinnedMemoryAllocator::is_cuda_host_allocation, bool (PinnedMemoryAllocator::*)(const void*) const);
+    LFS_FREEZE(PinnedMemoryAllocator::release_stream, void (PinnedMemoryAllocator::*)(cudaStream_t));
+    LFS_FREEZE(PinnedMemoryAllocator::empty_cache, void (PinnedMemoryAllocator::*)());
+    LFS_FREEZE(PinnedMemoryAllocator::prewarm, void (PinnedMemoryAllocator::*)());
+    LFS_FREEZE(PinnedMemoryAllocator::shutdown, void (PinnedMemoryAllocator::*)());
+    LFS_FREEZE(PinnedMemoryAllocator::get_stats, PinnedMemoryAllocator::Stats (PinnedMemoryAllocator::*)() const);
+    LFS_FREEZE(PinnedMemoryAllocator::reset_stats, void (PinnedMemoryAllocator::*)());
+    LFS_FREEZE(PinnedMemoryAllocator::set_enabled, void (PinnedMemoryAllocator::*)(bool));
+    LFS_FREEZE(PinnedMemoryAllocator::is_enabled, bool (PinnedMemoryAllocator::*)() const);
+    LFS_FREEZE(PinnedMemoryAllocator::set_force_fallback_for_testing, void (PinnedMemoryAllocator::*)(bool));
+    LFS_FREEZE(PinnedMemoryAllocator::set_cache_limit_for_testing, void (PinnedMemoryAllocator::*)(size_t));
+    LFS_FREEZE(PinnedMemoryAllocator::cache_limit_bytes, size_t (PinnedMemoryAllocator::*)() const);
+    LFS_FREEZE(MemoryInfo::cuda, MemoryInfo (*)());
+    LFS_FREEZE(MemoryInfo::cpu, MemoryInfo (*)());
+    LFS_FREEZE(MemoryInfo::log, void (MemoryInfo::*)() const);
+    LFS_FREEZE(save_tensor, void (*)(const T&, const std::string&));
+    LFS_FREEZE(load_tensor, T (*)(const std::string&));
+    LFS_FREEZE(TensorSerializationDescriptor::payload_bytes, std::uint64_t (TensorSerializationDescriptor::*)() const);
+    LFS_FREEZE(current_tensor_serialization_sink, TensorSerializationSink* (*)() noexcept);
+    LFS_FREEZE(serialize_tensor_with_descriptor,
+               void (*)(std::ostream&, const T&, const TensorSerializationDescriptor&, const T*));
+    LFS_FREEZE(TensorSerializationSink::write_tensor_payload,
+               void (TensorSerializationSink::*)(std::ostream&, const T&, const T*, const TensorSerializationDescriptor&));
+    LFS_FREEZE(debug::TensorValidation::is_valid, bool (debug::TensorValidation::*)() const);
+    LFS_FREEZE(debug::TensorValidation::to_string, std::string (debug::TensorValidation::*)() const);
+    LFS_FREEZE(debug::validate_tensor_cpu, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::validate_tensor_gpu, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::validate_tensor, debug::TensorValidation (*)(const T&));
+    LFS_FREEZE(debug::log_tensor_validation, void (*)(const T&, const char*, const char*, int));
+    LFS_FREEZE(debug::TensorDiff::is_close, bool (debug::TensorDiff::*)(float, float) const);
+    LFS_FREEZE(debug::TensorDiff::to_string, std::string (debug::TensorDiff::*)() const);
+    LFS_FREEZE(debug::diff_tensors, debug::TensorDiff (*)(const T&, const T&, float));
+    LFS_FREEZE(debug::log_tensor_diff, void (*)(const T&, const T&, const char*, float));
+    LFS_FREEZE(debug::TensorStats::to_string, std::string (debug::TensorStats::*)() const);
+    LFS_FREEZE(debug::get_tensor_stats, debug::TensorStats (*)(const T&));
+    LFS_FREEZE(debug::log_tensor_info, void (*)(const T&, const char*));
+    LFS_FREEZE(Tracer::instance, Tracer& (*)());
+    LFS_FREEZE(Tracer::set_enabled, void (Tracer::*)(bool));
+    LFS_FREEZE(Tracer::is_enabled, bool (Tracer::*)() const);
+    LFS_FREEZE(Tracer::print_stack, void (Tracer::*)() const);
+    LFS_FREEZE(Tracer::print_history, void (Tracer::*)(size_t) const);
+    LFS_FREEZE(Tracer::clear_history, void (Tracer::*)());
+    LFS_FREEZE(Tracer::get_history, const std::vector<Tracer::OpRecord>& (Tracer::*)() const);
+    LFS_FREEZE(debug::OpTraceGuard::set_output, void (debug::OpTraceGuard::*)(const S&));
+    LFS_FREEZE(RP::item, float (RP::*)() const);
+    LFS_FREEZE(RP::operator float, float (RP::*)() const);
+    LFS_FREEZE(RP::item_int, int (RP::*)() const);
+    LFS_FREEZE(RP::item_int64, int64_t (RP::*)() const);
+    LFS_FREEZE(RP::operator Tensor, T (RP::*)() const);
+    LFS_FREEZE(RP::pow, T (RP::*)(float) const);
+    LFS_FREEZE(RP::sqrt, T (RP::*)() const);
+    LFS_FREEZE(RP::abs, T (RP::*)() const);
+    LFS_FREEZE(RP::neg, T (RP::*)() const);
+    LFS_FREEZE(RP::sum, T (RP::*)() const);
+    LFS_FREEZE(RP::mean, T (RP::*)() const);
+    LFS_FREEZE(RP::square, T (RP::*)() const);
+    LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
+    LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
+#undef LFS_FREEZE
+    constexpr size_t kMoreExactSignatureCount = 262;
+    static_assert(kExactSignatureCount == 40 + kMoreExactSignatureCount);
 
     template <typename X>
     concept CreationFactorySurface = requires(const X& ct, S shape, Device device, DataType dtype,
@@ -774,6 +1180,22 @@ namespace {
     using PermutationExpression = PermutationExpr<LeafExpr, LeafExpr>;
     using GatherUnaryExpression = UnaryExpr<PermutationExpression, ops::abs_op>;
 
+    [[maybe_unused]] constexpr auto kExprOverloads = std::tuple{
+        static_cast<LeafExpr& (LeafExpr::*)()>(&LeafExpr::derived),
+        static_cast<const LeafExpr& (LeafExpr::*)() const>(&LeafExpr::derived),
+        static_cast<UnaryExpression& (UnaryExpression::*)()>(&UnaryExpression::derived),
+        static_cast<const UnaryExpression& (UnaryExpression::*)() const>(&UnaryExpression::derived),
+        static_cast<NestedUnaryExpression& (NestedUnaryExpression::*)()>(&NestedUnaryExpression::derived),
+        static_cast<const NestedUnaryExpression& (NestedUnaryExpression::*)() const>(
+            &NestedUnaryExpression::derived),
+        static_cast<BinaryExpression& (BinaryExpression::*)()>(&BinaryExpression::derived),
+        static_cast<const BinaryExpression& (BinaryExpression::*)() const>(&BinaryExpression::derived),
+        static_cast<ScalarExpression& (ScalarExpression::*)()>(&ScalarExpression::derived),
+        static_cast<const ScalarExpression& (ScalarExpression::*)() const>(&ScalarExpression::derived),
+        static_cast<PermutationExpression& (PermutationExpression::*)()>(&PermutationExpression::derived),
+        static_cast<const PermutationExpression& (PermutationExpression::*)() const>(
+            &PermutationExpression::derived)};
+
     template <typename X>
     concept ConcreteExprSurface = requires(const LeafExpr& leaf, const UnaryExpression& unary,
                                            const NestedUnaryExpression& nested,
@@ -901,8 +1323,30 @@ namespace {
 int main() {
     constexpr size_t kExactCasts =
         std::tuple_size_v<decltype(kFactoryOverloads)> + std::tuple_size_v<decltype(kMovementOverloads)> +
-        std::tuple_size_v<decltype(kReductionOverloads)> + std::tuple_size_v<decltype(kIndexOverloads)>;
+        std::tuple_size_v<decltype(kReductionOverloads)> + std::tuple_size_v<decltype(kIndexOverloads)> +
+        std::tuple_size_v<decltype(kMoreFactoryOverloads)> + std::tuple_size_v<decltype(kMoreReduceOverloads)> +
+        std::tuple_size_v<decltype(kBinaryTensorOverloads)> + std::tuple_size_v<decltype(kMoreMemoryOverloads)> +
+        std::tuple_size_v<decltype(kNnOverloads)> + std::tuple_size_v<decltype(kStreamOverloads)> +
+        std::tuple_size_v<decltype(kShapeOverloads)> +
+        std::tuple_size_v<decltype(kRandomOverloads)> + std::tuple_size_v<decltype(kDebugOverloads)> +
+        std::tuple_size_v<decltype(kRowOverloads)> + std::tuple_size_v<decltype(kExprOverloads)>;
     static_assert(kExactCasts + kExactSignatureCount <= kFrozenCallableSlots.size());
+    static_cast<void>(kSelectorAnchorAddress);
+    static_cast<void>(&kFactoryOverloads);
+    static_cast<void>(&kMovementOverloads);
+    static_cast<void>(&kReductionOverloads);
+    static_cast<void>(&kIndexOverloads);
+    static_cast<void>(&kMoreFactoryOverloads);
+    static_cast<void>(&kMoreReduceOverloads);
+    static_cast<void>(&kBinaryTensorOverloads);
+    static_cast<void>(&kMoreMemoryOverloads);
+    static_cast<void>(&kNnOverloads);
+    static_cast<void>(&kStreamOverloads);
+    static_cast<void>(&kShapeOverloads);
+    static_cast<void>(&kRandomOverloads);
+    static_cast<void>(&kDebugOverloads);
+    static_cast<void>(&kRowOverloads);
+    static_cast<void>(&kExprOverloads);
     std::printf("tensor_interface_freeze: covered %zu callables (%zu exact overload casts, "
                 "%zu exact signatures, %zu well-formedness checks)\n",
                 kFrozenCallableSlots.size(), kExactCasts, kExactSignatureCount,

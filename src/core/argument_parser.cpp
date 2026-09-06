@@ -480,7 +480,13 @@ namespace {
             ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
+            ::args::ValueFlag<std::string> tensor_backend_selftest(
+                mode_group, "backend",
+                "Run the tensor backend selftest and exit",
+                {"tensor-backend-selftest"},
+                ::args::Options::Hidden);
             ::args::CompletionFlag completion(parser, {"complete"});
+            (void)tensor_backend_selftest;
 
             // =============================================================================
             // TRAINING PATHS
@@ -2045,6 +2051,38 @@ namespace {
 
 std::expected<lfs::core::args::ParsedArgs, std::string>
 lfs::core::args::parse_args(const int argc, const char* const argv[]) {
+    constexpr std::string_view kSelftestFlag = "--tensor-backend-selftest";
+    constexpr std::string_view kSelftestPrefix = "--tensor-backend-selftest=";
+    for (int i = 1; i < argc; ++i) {
+        const std::string_view arg = argv[i];
+        std::string_view value;
+        if (arg == kSelftestFlag) {
+            if (i + 1 >= argc) {
+                return std::unexpected(
+                    "Usage: LichtFeld-Studio --tensor-backend-selftest <cuda|vulkan>");
+            }
+            value = argv[i + 1];
+        } else if (arg.starts_with(kSelftestPrefix)) {
+            value = arg.substr(kSelftestPrefix.size());
+        } else {
+            continue;
+        }
+
+        std::string normalized(value);
+        for (char& character : normalized) {
+            character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+        }
+        if (normalized == "cuda") {
+            return TensorBackendSelftestMode{GpuBackend::CUDA};
+        }
+        if (normalized == "vulkan") {
+            return TensorBackendSelftestMode{GpuBackend::Vulkan};
+        }
+        return std::unexpected(
+            std::format("Invalid --tensor-backend-selftest backend '{}'. Use: cuda, vulkan",
+                        value));
+    }
+
     if (argc >= 2) {
         const std::string_view arg1 = argv[1];
 

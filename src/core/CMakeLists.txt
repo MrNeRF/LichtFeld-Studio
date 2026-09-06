@@ -36,6 +36,7 @@ set(TENSOR_SOURCES
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/tensor_backend.cpp
+        tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
         tensor/backend/facade_trace.cpp
         tensor/backend/cuda/cuda_ops_pointwise.cpp

@@ -10,6 +10,7 @@
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
+#include "core/error.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -145,6 +146,16 @@ namespace {
                 preflightGpuOrExit(false);
                 analyzeCudaContextDistribution();
                 return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::TensorBackendSelftestMode>) {
+                const char* name = mode.backend == lfs::core::GpuBackend::Vulkan ? "vulkan" : "cuda";
+                const lfs::Status status = lfs::core::tensor_backend_selftest(mode.backend);
+                if (status) {
+                    std::println("tensor backend selftest {}: ok", name);
+                    return 0;
+                }
+                std::println("tensor backend selftest {}: failed: {}",
+                             name, lfs::format_for_developer(status.error()));
+                return 1;
             } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
                 preflightGpuOrExit(false);
                 return lfs::app::run_converter(mode.params);
