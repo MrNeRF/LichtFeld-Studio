@@ -31997,6 +31997,54 @@
     "skip_allowlisted": false
   },
   {
+    "name": "ShQuantTensorProgram.DegenerateBlocksMatchKernel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_sh_quant_tensor_program.cpp",
+    "line": 169,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ShQuantTensorProgram.MatchesKernelOnCudaForRandomSizes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_sh_quant_tensor_program.cpp",
+    "line": 140,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ShQuantTensorProgram.MatchesKernelOnVulkanForRandomSizes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_sh_quant_tensor_program.cpp",
+    "line": 153,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/sh_layout.cuh: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "ShSwizzleLayout.CanonicalRoundTrip_RealData",
     "executable": "lichtfeld_tests",
     "file": "tests/test_sh_swizzle_layout.cpp",
@@ -37408,7 +37456,7 @@
     "name": "TensorBroadcastPolicy.ClampAndMaskedFillAfterABroadcastDivisionKeepEveryChannel",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 388,
+    "line": 390,
     "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
@@ -37437,7 +37485,7 @@
     "name": "TensorBroadcastPolicy.DeferredLeadingBroadcastMaskFillsEveryChannel",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 440,
+    "line": 442,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -37453,7 +37501,7 @@
     "name": "TensorBroadcastPolicy.DisplayChainStagesAtImageSize",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 460,
+    "line": 462,
     "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
@@ -37480,7 +37528,7 @@
     "name": "TensorBroadcastPolicy.FullRangeLeadingSliceKeepsEveryChannelThroughTheDisplayChain",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 413,
+    "line": 415,
     "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
@@ -37509,7 +37557,7 @@
     "name": "TensorBroadcastPolicy.LeadingAxisDivisionBroadcastsOverEveryChannel",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 362,
+    "line": 364,
     "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
@@ -39325,7 +39373,7 @@
     "name": "TensorCountPolicy.CountNonzeroIsExactAboveTwentyFourBits",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 126,
+    "line": 128,
     "eligibility": "vulkan",
     "launchers": [
       "launch_count_nonzero_bool",
@@ -41244,7 +41292,7 @@
     "name": "TensorIntegerPolicy.AbsAndSquareAreExactAboveTwentyFourBits",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 74,
+    "line": 76,
     "eligibility": "vulkan",
     "launchers": [
       "launch_unary_op_generic",
@@ -41259,7 +41307,7 @@
     "name": "TensorIntegerPolicy.ClampIsExactAboveTwentyFourBits",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 92,
+    "line": 94,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -41277,7 +41325,7 @@
     "name": "TensorIntegerPolicy.PowIsWrapAroundIntegerArithmetic",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 107,
+    "line": 109,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -42561,7 +42609,7 @@
     "name": "TensorMaskPolicy.DeferredComparisonMasksBroadcastInMaskedFill",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 344,
+    "line": 346,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -42577,7 +42625,7 @@
     "name": "TensorMaskPolicy.LeadingAxisMasksBroadcastInMaskedFillAndExpand",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 319,
+    "line": 321,
     "eligibility": "vulkan",
     "launchers": [
       "launch_masked_fill",
@@ -44331,7 +44379,7 @@
     "name": "TensorMovementPolicy.Int32CopiesIntoFloatViewsOfEveryRank",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 256,
+    "line": 258,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_copy",
@@ -45823,7 +45871,7 @@
     "name": "TensorRandomPolicy.NormalDrawsAdvanceBetweenCalls",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 293,
+    "line": 295,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload",
@@ -46351,7 +46399,7 @@
     "name": "TensorReducePolicy.ColumnAndStridedMaxMinKeepInfiniteAxes",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 144,
+    "line": 146,
     "eligibility": "vulkan",
     "launchers": [
       "direct_max_scalar",
@@ -46371,7 +46419,7 @@
     "name": "TensorReducePolicy.ScalarMaxAndMinShareTheReducePolicy",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 203,
+    "line": 205,
     "eligibility": "vulkan",
     "launchers": [
       "direct_max_scalar",
@@ -47196,7 +47244,7 @@
     "name": "TensorScatterPolicy.ByteScatterAddWithDuplicateIndicesIsAtomic",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
-    "line": 236,
+    "line": 238,
     "eligibility": "vulkan",
     "launchers": [
       "launch_strided_upload",
@@ -48645,6 +48693,46 @@
       "launch_masked_select"
     ],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorViewAs.Float32ToUInt8AppendsPackedDimAndRoundTripsBytes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 499,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_integer_and_reduce_policy.cpp:508: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorViewAs.RejectsNonContiguousAndUnalignedGrow",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 540,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorViewAs.UInt8PairToFloat16DropsTrailingDimAndRoundTripsBytes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 521,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_integer_and_reduce_policy.cpp:530: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "launchers": [
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -55506,7 +55594,7 @@
     "name": "ViewerVulkanLoad.PlyCudaDefaultKeepsQ16",
     "executable": "lichtfeld_tests",
     "file": "tests/test_viewer_vulkan_load.cpp",
-    "line": 119,
+    "line": 162,
     "eligibility": "consumer",
     "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
@@ -55518,10 +55606,10 @@
     "skip_allowlisted": false
   },
   {
-    "name": "ViewerVulkanLoad.PlyLoadsOnVulkanBackendWithoutQ16",
+    "name": "ViewerVulkanLoad.PlyLoadsOnVulkanBackendWithQ16",
     "executable": "lichtfeld_tests",
     "file": "tests/test_viewer_vulkan_load.cpp",
-    "line": 98,
+    "line": 105,
     "eligibility": "consumer",
     "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
