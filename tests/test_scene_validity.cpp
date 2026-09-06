@@ -744,6 +744,11 @@ namespace lfs::python {
     }
 
     TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
+        struct EventScope {
+            EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+            ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+        } event_scope;
+
         core::Scene scene;
         const auto model_id = scene.addSplat("Model", make_test_splat(1));
         ASSERT_NE(model_id, core::NULL_NODE);
