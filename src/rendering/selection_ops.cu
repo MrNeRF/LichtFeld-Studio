@@ -105,6 +105,21 @@ namespace lfs::rendering {
             return std::any_of(mask.begin(), mask.end(), [](const bool enabled) { return !enabled; });
         }
 
+        [[nodiscard]] std::array<uint32_t, 8> copyLockedGroupsHost(const uint32_t* const locked_groups) {
+            std::array<uint32_t, 8> words{};
+            if (locked_groups == nullptr) {
+                return words;
+            }
+            if (const cudaError_t status = cudaMemcpy(
+                    words.data(), locked_groups, sizeof(words), cudaMemcpyDefault);
+                status == cudaSuccess) {
+                return words;
+            }
+            (void)cudaGetLastError();
+            std::memcpy(words.data(), locked_groups, sizeof(words));
+            return words;
+        }
+
         void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
             if (!counts_scratch.is_valid() ||
                 counts_scratch.device() != lfs::core::Device::CUDA ||
@@ -984,6 +999,22 @@ namespace lfs::rendering {
         if (!cumulative_selection.is_valid() || cumulative_selection.size(0) == 0) {
             return;
         }
+        if (lfs::core::gpu_backend_of(cumulative_selection) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(output_mask) == lfs::core::GpuBackend::Vulkan) {
+            const auto locked_host = copyLockedGroupsHost(locked_groups);
+            apply_selection_group_tensor_mask_program(
+                cumulative_selection,
+                existing_mask,
+                output_mask,
+                group_id,
+                locked_host.data(),
+                add_mode,
+                transform_indices,
+                valid_nodes,
+                replace_mode,
+                group_counts_scratch);
+            return;
+        }
 
         const int n = checkedToInt(cumulative_selection.size(0), "selection size exceeds int range");
         const bool restricts_nodes = nodeMaskRestrictsSelection(valid_nodes);
@@ -1038,6 +1069,22 @@ namespace lfs::rendering {
         const bool replace_mode) {
         if (!visible_selection.is_valid() || !visible_indices.is_valid() ||
             !output_mask.is_valid() || visible_selection.size(0) == 0) {
+            return;
+        }
+        if (lfs::core::gpu_backend_of(visible_selection) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(output_mask) == lfs::core::GpuBackend::Vulkan) {
+            const auto locked_host = copyLockedGroupsHost(locked_groups);
+            apply_selection_group_indexed_tensor_mask_program(
+                visible_selection,
+                visible_indices,
+                existing_mask,
+                output_mask,
+                group_id,
+                locked_host.data(),
+                add_mode,
+                transform_indices,
+                valid_nodes,
+                replace_mode);
             return;
         }
 
@@ -1232,6 +1279,11 @@ namespace lfs::rendering {
             accumulated_mask.numel() != delta_mask.numel()) {
             return;
         }
+        if (lfs::core::gpu_backend_of(accumulated_mask) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(delta_mask) == lfs::core::GpuBackend::Vulkan) {
+            merge_selection_mask_or_program(accumulated_mask, delta_mask);
+            return;
+        }
         if (accumulated_mask.device() != lfs::core::Device::CUDA ||
             delta_mask.device() != lfs::core::Device::CUDA ||
             accumulated_mask.dtype() != lfs::core::DataType::Bool ||
@@ -1259,7 +1311,15 @@ namespace lfs::rendering {
         if (!nodeMaskRestrictsSelection(valid_nodes)) {
             return;
         }
+        if (lfs::core::gpu_backend_of(selection) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(transform_indices) == lfs::core::GpuBackend::Vulkan) {
+            filter_selection_by_node_mask_program(selection, transform_indices, valid_nodes);
+            return;
+        }
         const int n = checkedToInt(selection.size(0), "selection size exceeds int range");
+        if (n <= 0) {
+            return;
+        }
         if (transform_indices.numel() != static_cast<std::size_t>(n)) {
             return;
         }
@@ -1288,6 +1348,22 @@ namespace lfs::rendering {
         const Tensor* const model_transforms,
         const Tensor* const transform_indices) {
         if (!selection.is_valid() || !means.is_valid()) {
+            return;
+        }
+        if (lfs::core::gpu_backend_of(selection) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan) {
+            filter_selection_by_crop_program(
+                selection,
+                means,
+                crop_box_transform,
+                crop_box_min,
+                crop_box_max,
+                crop_inverse,
+                ellipsoid_transform,
+                ellipsoid_radii,
+                ellipsoid_inverse,
+                model_transforms,
+                transform_indices);
             return;
         }
 
@@ -1378,6 +1454,31 @@ namespace lfs::rendering {
             return;
         }
         if (!selection.is_valid() || !means.is_valid() || width <= 0 || height <= 0) {
+            return;
+        }
+        if (lfs::core::gpu_backend_of(selection) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan) {
+            filter_selection_by_screen_window_program(
+                selection,
+                means,
+                view_rotation_rows,
+                translation,
+                camera_model,
+                width,
+                height,
+                pixel_focal_x,
+                pixel_focal_y,
+                center_x,
+                center_y,
+                ortho_scale,
+                near_depth,
+                far_depth,
+                scale_x,
+                scale_y,
+                offset_x,
+                offset_y,
+                model_transforms,
+                transform_indices);
             return;
         }
 

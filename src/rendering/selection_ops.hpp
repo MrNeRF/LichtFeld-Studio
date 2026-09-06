@@ -160,6 +160,74 @@ namespace lfs::rendering {
                                       Tensor& counts_scratch);
     void count_selection_groups_tensor_program(const Tensor& selection_mask,
                                                Tensor& counts_scratch);
+    void apply_selection_group_tensor_mask_program(
+        const Tensor& cumulative_selection,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        uint8_t group_id,
+        const uint32_t* locked_groups,
+        bool add_mode,
+        const Tensor* transform_indices,
+        const std::vector<bool>& valid_nodes,
+        bool replace_mode = false,
+        Tensor* group_counts_scratch = nullptr);
+    void apply_selection_group_indexed_tensor_mask_program(
+        const Tensor& visible_selection,
+        const Tensor& visible_indices,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        uint8_t group_id,
+        const uint32_t* locked_groups,
+        bool add_mode,
+        const Tensor* transform_indices,
+        const std::vector<bool>& valid_nodes,
+        bool replace_mode = false);
+    void clear_selection_group_indexed_mask_program(
+        const Tensor& visible_selection,
+        const Tensor& visible_indices,
+        const Tensor& existing_mask,
+        Tensor& output_mask,
+        uint8_t group_id,
+        const Tensor* transform_indices,
+        const std::vector<bool>& valid_nodes);
+    void merge_selection_mask_or_program(Tensor& accumulated_mask, const Tensor& delta_mask);
+    void filter_selection_by_node_mask_program(
+        Tensor& selection,
+        const Tensor& transform_indices,
+        const std::vector<bool>& valid_nodes);
+    void filter_selection_by_crop_program(
+        Tensor& selection,
+        const Tensor& means,
+        const Tensor* crop_box_transform,
+        const Tensor* crop_box_min,
+        const Tensor* crop_box_max,
+        bool crop_inverse,
+        const Tensor* ellipsoid_transform,
+        const Tensor* ellipsoid_radii,
+        bool ellipsoid_inverse,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices);
+    void filter_selection_by_screen_window_program(
+        Tensor& selection,
+        const Tensor& means,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        ScreenWindowCameraModel camera_model,
+        int width,
+        int height,
+        float pixel_focal_x,
+        float pixel_focal_y,
+        float center_x,
+        float center_y,
+        float ortho_scale,
+        float near_depth,
+        float far_depth,
+        float scale_x,
+        float scale_y,
+        float offset_x,
+        float offset_y,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices);
     void prepare_cuda_selection_group_counts_scratch(Tensor& counts_scratch);
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* pinned_host_counts,

@@ -337,7 +337,7 @@ namespace lfs::core {
             }
             return context->memory().exports_memory() &&
                    context->cuda_imports()->timeline_imported();
-        } catch (...) {
+        } catch (...) { // LFS-CENSUS-OK(empty-catch): export probe fails closed when CUDA import is absent
             return false;
         }
 #else
