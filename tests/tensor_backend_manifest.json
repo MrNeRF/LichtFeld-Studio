@@ -30651,6 +30651,19 @@
     "skip_allowlisted": false
   },
   {
+    "name": "SelectionGroupCount.AsyncReadbackMatchesCountSelectionGroupsOnVulkan",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 300,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "SelectionMaskNormalizationTest.MatchesReferenceForSoftDeletedGroupedMillionRowScene",
     "executable": "lichtfeld_tests",
     "file": "tests/test_selection_service_interactions.cpp",
@@ -35955,6 +35968,123 @@
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.ArangeMatchesCpuOnDefaultBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 252,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_load_op"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.ArangeMatchesCpuOnVulkan",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 258,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_load_op"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.FactoryMicrobenchDefaultBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 282,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.FactoryMicrobenchVulkan",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 288,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.FullMatchesCpuOnDefaultBackend",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 240,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.FullMatchesCpuOnVulkan",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 246,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.HoverMicrobenchVulkan",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 294,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.TrimLeavesInFlightWorkReadable",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 264,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorAsyncConsts.TrimLeavesInFlightWorkReadableOnVulkan",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_async_consts.cpp",
+    "line": 273,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -49091,9 +49221,9 @@
     "name": "TensorVulkanBufferQuery.CudaAndCpuTensorsReturnNullopt",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_buffer.cpp",
-    "line": 111,
+    "line": 112,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_vulkan_buffer.cpp:115: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "reason": "tests/test_tensor_vulkan_buffer.cpp:116: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "launch_fill_strided"
     ],
@@ -49133,7 +49263,7 @@
     "name": "TensorVulkanBufferQuery.TimelineIsNullAfterShutdown",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_buffer.cpp",
-    "line": 122,
+    "line": 123,
     "eligibility": "vulkan",
     "launchers": [
       "launch_fill_strided"
@@ -49157,7 +49287,7 @@
     "name": "TensorVulkanCudaBridge.AdoptedDeviceWithExternalMemoryTakesView",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
-    "line": 451,
+    "line": 452,
     "eligibility": "vulkan",
     "launchers": [
       "launch_binary_op_generic",
@@ -49174,9 +49304,9 @@
     "name": "TensorVulkanCudaBridge.CpuAndCudaSourcesReturnError",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
-    "line": 398,
+    "line": 399,
     "eligibility": "cuda-only",
-    "reason": "tests/test_tensor_vulkan_cuda_bridge.cpp:408: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "reason": "tests/test_tensor_vulkan_cuda_bridge.cpp:409: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [
       "direct_sum_scalar",
       "launch_strided_upload",
@@ -49189,7 +49319,7 @@
     "name": "TensorVulkanCudaBridge.DirectLargeAllocationsAreNotExportableButStayUsable",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
-    "line": 489,
+    "line": 490,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
@@ -49202,7 +49332,7 @@
     "name": "TensorVulkanCudaBridge.ShutdownReleasesImportsWhileViewAlive",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
-    "line": 429,
+    "line": 430,
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
@@ -55594,10 +55724,11 @@
     "name": "ViewerVulkanLoad.PlyCudaDefaultKeepsQ16",
     "executable": "lichtfeld_tests",
     "file": "tests/test_viewer_vulkan_load.cpp",
-    "line": 162,
+    "line": 166,
     "eligibility": "consumer",
     "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
+      "direct_mean_scalar",
       "launch_strided_copy",
       "launch_strided_copy_immediate",
       "launch_load_op"
@@ -55613,6 +55744,7 @@
     "eligibility": "consumer",
     "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
+      "direct_mean_scalar",
       "launch_strided_copy",
       "launch_strided_copy_immediate",
       "launch_load_op"
