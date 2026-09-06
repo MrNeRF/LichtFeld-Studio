@@ -199,7 +199,7 @@ namespace lfs::training {
         try {
             // Dump tensors as binary .tensor files
             // Each file contains: header + shape dims + raw float32 data
-            // Tensors are copied to CPU before saving if they're on CUDA
+            // Tensors are copied to CPU before saving if they're on GPU
             if (means.is_valid())
                 core::save_tensor(means, dump_dir + "/means.tensor"); // [N, 3]
             if (raw_scales.is_valid())
@@ -323,7 +323,7 @@ namespace lfs::training {
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
 
-        // Get direct GPU pointers (tensors are already contiguous on CUDA)
+        // Get direct GPU pointers (tensors are already contiguous on GPU)
         const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
@@ -624,7 +624,7 @@ namespace lfs::training {
         const cudaStream_t stream = grad_image.stream();
         if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W ||
             cached_grad_alpha.stream() != stream) {
-            cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::CUDA);
+            cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::GPU);
             if (cached_grad_alpha.stream() != stream)
                 cached_grad_alpha.set_stream(stream);
             cached_ga_h = H;
@@ -670,8 +670,8 @@ namespace lfs::training {
                    checked_dim_to_int(grad_depth_2d.shape()[0], "grad_depth height") == H &&
                    checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W &&
                    "grad_depth must have shape [H, W] or [1, H, W]");
-            if (grad_depth_2d.device() != core::Device::CUDA) {
-                grad_depth_2d = grad_depth_2d.cuda();
+            if (grad_depth_2d.device() != core::Device::GPU) {
+                grad_depth_2d = grad_depth_2d.gpu();
             }
             if (!grad_depth_2d.is_contiguous()) {
                 grad_depth_2d = grad_depth_2d.contiguous();
@@ -688,8 +688,8 @@ namespace lfs::training {
                    checked_dim_to_int(grad_normal_chw.shape()[1], "grad_normal height") == H &&
                    checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W &&
                    "grad_normal must have shape [3, H, W]");
-            if (grad_normal_chw.device() != core::Device::CUDA) {
-                grad_normal_chw = grad_normal_chw.cuda();
+            if (grad_normal_chw.device() != core::Device::GPU) {
+                grad_normal_chw = grad_normal_chw.gpu();
             }
             if (!grad_normal_chw.is_contiguous()) {
                 grad_normal_chw = grad_normal_chw.contiguous();
@@ -715,8 +715,8 @@ namespace lfs::training {
                    checked_dim_to_int(error_map_2d.shape()[0], "error_map height") == H &&
                    checked_dim_to_int(error_map_2d.shape()[1], "error_map width") == W &&
                    "pixel_error_map must have shape [H, W] or [1, H, W]");
-            if (error_map_2d.device() != core::Device::CUDA) {
-                error_map_2d = error_map_2d.cuda();
+            if (error_map_2d.device() != core::Device::GPU) {
+                error_map_2d = error_map_2d.gpu();
             }
             if (!error_map_2d.is_contiguous()) {
                 error_map_2d = error_map_2d.contiguous();

@@ -11,6 +11,9 @@ set(RENDERING_TENSOR_SOURCES
         cuda_vulkan_interop.cpp
         cuda_vulkan_interop.cu
         selection_ops.cu
+        selection_group_count.cpp
+        selection_screen_ops.cpp
+        selection_mask_ops.cpp
         raster_rendering_engine.cpp
         export_post_process.cpp
         export_post_process.cu

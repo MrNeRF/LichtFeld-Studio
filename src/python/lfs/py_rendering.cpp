@@ -163,7 +163,7 @@ namespace lfs::python {
             scene_state.transform_indices = std::make_shared<core::Tensor>(
                 core::Tensor::zeros(
                     {static_cast<std::size_t>(splat.size())},
-                    core::Device::CUDA,
+                    core::Device::GPU,
                     core::DataType::Int32));
             scene_state.node_visibility_mask = {true};
             scene_state.selected_node_mask = {true};
@@ -215,7 +215,7 @@ namespace lfs::python {
             auto transform_indices = std::make_shared<core::Tensor>(
                 core::Tensor::zeros(
                     {static_cast<std::size_t>(point_cloud.size())},
-                    core::Device::CUDA,
+                    core::Device::GPU,
                     core::DataType::Int32));
 
             rendering::PointCloudRenderRequest request{};
@@ -1499,8 +1499,8 @@ namespace {
                     eye_vec,
                     glm::vec3{tx, ty, tz},
                     glm::vec3{ux, uy, uz}))
-                .cuda(),
-            tensor_from_vec3(eye_vec).cuda()};
+                .gpu(),
+            tensor_from_vec3(eye_vec).gpu()};
     }
 
 } // namespace
@@ -1605,8 +1605,8 @@ namespace lfs::python {
         std::memcpy(T.data_ptr(), view_info->translation.data(), 3 * sizeof(float));
 
         return PyViewInfo{
-            .rotation = PyTensor(R.cuda(), true),
-            .translation = PyTensor(T.cuda(), true),
+            .rotation = PyTensor(R.gpu(), true),
+            .translation = PyTensor(T.gpu(), true),
             .width = view_info->width,
             .height = view_info->height,
             .fov_x = vertical_fov_to_horizontal_fov(view_info->fov, view_info->width, view_info->height),

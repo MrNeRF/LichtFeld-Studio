@@ -586,12 +586,12 @@ TEST_F(SogFormatTest, SyntheticExportRoundtripWithShN) {
 
     auto splat = lfs::core::SplatData(
         sh_degree,
-        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(shN, {N, size_t{3}, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(shN, {N, size_t{3}, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::GPU),
         1.0f);
 
     ScopedSogDirectory out_dir;
@@ -637,12 +637,12 @@ TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
     }
     auto source_splat = lfs::core::SplatData(
         0,
-        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::CUDA),
-        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::CUDA),
+        lfs::core::Tensor::from_vector(means, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(sh0, {N, size_t{1}, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::zeros({size_t{0}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(scales, {N, size_t{3}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(rots, {N, size_t{4}}, lfs::core::Device::GPU),
+        lfs::core::Tensor::from_vector(opac, {N, size_t{1}}, lfs::core::Device::GPU),
         1.0f);
 
     ScopedSogDirectory out_dir;
@@ -658,7 +658,7 @@ TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
                                          lfs::core::DataType dtype,
                                          std::string_view name) {
         allocated_names.emplace_back(name);
-        return lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::CUDA, dtype);
+        return lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::GPU, dtype);
     };
 
     auto loader = lfs::io::Loader::create();

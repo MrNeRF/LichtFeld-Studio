@@ -47,11 +47,11 @@ TEST_F(ImageKernelsTest, FusedCannyUInt8MatchesNormalizedFloatInput) {
         }
     }
 
-    auto float_input = Tensor::from_vector(normalized_data, TensorShape({C, H, W}), Device::CUDA);
-    auto uint8_input = Tensor::from_vector(byte_data, TensorShape({C, H, W}), Device::CUDA)
+    auto float_input = Tensor::from_vector(normalized_data, TensorShape({C, H, W}), Device::GPU);
+    auto uint8_input = Tensor::from_vector(byte_data, TensorShape({C, H, W}), Device::GPU)
                            .to(DataType::UInt8);
-    auto float_output = Tensor::zeros({H, W}, Device::CUDA, DataType::Float32);
-    auto uint8_output = Tensor::zeros({H, W}, Device::CUDA, DataType::Float32);
+    auto float_output = Tensor::zeros({H, W}, Device::GPU, DataType::Float32);
+    auto uint8_output = Tensor::zeros({H, W}, Device::GPU, DataType::Float32);
 
     launch_fused_canny_edge_filter_chw(
         float_input.ptr<float>(),
@@ -88,7 +88,7 @@ TEST_F(ImageKernelsTest, FusedCannyUInt8MatchesNormalizedFloatInput) {
 TEST_F(ImageKernelsTest, EdgeWeightFloatPositiveMedianPreservesNonQuantizedValues) {
     const std::vector<float> values{0.0f, 0.2f, 0.3f, 0.46f};
     auto weights = Tensor::from_vector(
-        values, TensorShape({2, 2}), Device::CUDA);
+        values, TensorShape({2, 2}), Device::GPU);
     lfs::training::PositiveMedianScratch scratch;
 
     launch_normalize_by_positive_median(
@@ -105,8 +105,8 @@ TEST_F(ImageKernelsTest, EdgeWeightFloatPositiveMedianPreservesNonQuantizedValue
 }
 
 TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
-    auto rgb = Tensor::full({4, 6, 3}, 255.0f, Device::CUDA, DataType::UInt8);
-    auto grayscale = Tensor::full({4, 6}, 255.0f, Device::CUDA, DataType::UInt8);
+    auto rgb = Tensor::full({4, 6, 3}, 255.0f, Device::GPU, DataType::UInt8);
+    auto grayscale = Tensor::full({4, 6}, 255.0f, Device::GPU, DataType::UInt8);
 
     const auto rgb_output = lanczos_resize(rgb, 3, 5, 2, nullptr);
     const auto grayscale_output = lanczos_resize_grayscale(grayscale, 3, 5, 2, nullptr);
@@ -120,7 +120,7 @@ TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
 }
 
 TEST_F(ImageKernelsTest, LanczosRejectsNonPositiveOutputExtentBeforeAllocation) {
-    const auto input = Tensor::zeros({2, 2, 3}, Device::CUDA, DataType::UInt8);
+    const auto input = Tensor::zeros({2, 2, 3}, Device::GPU, DataType::UInt8);
     EXPECT_FALSE(lanczos_resize(input, 0, 2, 2, nullptr).is_valid());
     EXPECT_FALSE(lanczos_resize(input, 2, -1, 2, nullptr).is_valid());
 }

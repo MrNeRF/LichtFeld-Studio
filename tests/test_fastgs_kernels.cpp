@@ -7,8 +7,8 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "io/formats/ply.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "rasterization/fastgs/utils/utils.h"
@@ -118,7 +118,7 @@ namespace {
                 }
                 return Tensor::from_blob(dequant.data(), out_shape, Device::CPU, DataType::Float32)
                     .clone()
-                    .to(Device::CUDA);
+                    .to(Device::GPU);
             }
 
             // Swizzled shN: 1D packed cells (one cell per swizzled float).
@@ -142,7 +142,7 @@ namespace {
             }
             return Tensor::from_blob(dequant.data(), TensorShape({n_cells}), Device::CPU, DataType::Float32)
                 .clone()
-                .to(Device::CUDA);
+                .to(Device::GPU);
         }
 
         throw std::runtime_error("Legacy Adam moment codec is unsupported");
@@ -182,12 +182,12 @@ namespace {
         const size_t sh_rest = sh_rest_coefficients_for_degree(sh_degree);
         return SplatData(
             sh_degree,
-            Tensor::from_vector(means_data, {count, size_t{3}}, Device::CUDA),
-            Tensor::full({count, size_t{1}, size_t{3}}, 0.25f, Device::CUDA),
-            Tensor::full({count, sh_rest, size_t{3}}, 0.1f, Device::CUDA),
-            Tensor::full({count, size_t{3}}, -1.5f, Device::CUDA),
-            Tensor::from_vector(rotations, {count, size_t{4}}, Device::CUDA),
-            Tensor::zeros({count, size_t{1}}, Device::CUDA),
+            Tensor::from_vector(means_data, {count, size_t{3}}, Device::GPU),
+            Tensor::full({count, size_t{1}, size_t{3}}, 0.25f, Device::GPU),
+            Tensor::full({count, sh_rest, size_t{3}}, 0.1f, Device::GPU),
+            Tensor::full({count, size_t{3}}, -1.5f, Device::GPU),
+            Tensor::from_vector(rotations, {count, size_t{4}}, Device::GPU),
+            Tensor::zeros({count, size_t{1}}, Device::GPU),
             1.0f);
     }
 } // namespace
@@ -214,13 +214,13 @@ protected:
             create_synthetic_data();
         }
 
-        auto R = Tensor::eye(3, Device::CUDA);
+        auto R = Tensor::eye(3, Device::GPU);
         std::vector<float> t_data{0, 0, 5};
-        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         camera_ = std::make_unique<Camera>(R, T, FX, FY, W / 2.0f, H / 2.0f,
                                            Tensor(), Tensor(), CameraModelType::PINHOLE,
                                            "test", "", std::filesystem::path{}, W, H, 0);
-        bg_ = Tensor::zeros({3}, Device::CUDA);
+        bg_ = Tensor::zeros({3}, Device::GPU);
     }
 
     void TearDown() override {
@@ -236,7 +236,7 @@ protected:
             return;
         }
         n_ = std::min(result->value.means().shape()[0], size_t(10000));
-        means_ = result->value.means().slice(0, 0, n_).contiguous().to(Device::CUDA);
+        means_ = result->value.means().slice(0, 0, n_).contiguous().to(Device::GPU);
         init_params();
     }
 
@@ -250,17 +250,17 @@ protected:
             data[i * 3 + 1] = xy(gen);
             data[i * 3 + 2] = z(gen);
         }
-        means_ = Tensor::from_blob(data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        means_ = Tensor::from_blob(data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
         init_params();
     }
 
     void init_params() {
-        sh0_ = Tensor::randn({n_, 1, 3}, Device::CUDA).mul(0.5f);
-        shN_ = Tensor::zeros({n_, 0, 3}, Device::CUDA);
-        scaling_ = Tensor::randn({n_, 3}, Device::CUDA).mul(0.3f).sub(3.5f);
-        rotation_ = Tensor::randn({n_, 4}, Device::CUDA);
+        sh0_ = Tensor::randn({n_, 1, 3}, Device::GPU).mul(0.5f);
+        shN_ = Tensor::zeros({n_, 0, 3}, Device::GPU);
+        scaling_ = Tensor::randn({n_, 3}, Device::GPU).mul(0.3f).sub(3.5f);
+        rotation_ = Tensor::randn({n_, 4}, Device::GPU);
         rotation_ = rotation_ / rotation_.pow(2.0f).sum(-1, true).sqrt();
-        opacity_ = Tensor::randn({n_}, Device::CUDA).mul(2.0f);
+        opacity_ = Tensor::randn({n_}, Device::GPU).mul(2.0f);
         splat_ = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
     }
 
@@ -352,8 +352,8 @@ TEST_F(FastGSKernelTest, EdgeWeightedContributionUsesFloatMapInMainBackward) {
     const float expected_total_contribution =
         r->first.alpha.sum().item<float>() * edge_weight;
     auto edge_weights = Tensor::full(
-        {H, W}, edge_weight, Device::CUDA, DataType::Float32);
-    auto edge_scores = Tensor::zeros({n_}, Device::CUDA, DataType::Float32);
+        {H, W}, edge_weight, Device::GPU, DataType::Float32);
+    auto edge_scores = Tensor::zeros({n_}, Device::GPU, DataType::Float32);
     FastGSFusedExtraGradients fused;
     fused.edge_weight_map = edge_weights.ptr<float>();
     fused.edge_score_out = edge_scores.ptr<float>();
@@ -383,25 +383,25 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSpl
     }
 
     std::vector<float> means_data{0.0f, 0.0f, 1.0f};
-    auto means = Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::zeros({1, 1, 3}, Device::CUDA);
-    auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({1, 3}, -1.5f, Device::CUDA);
+    auto means = Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::zeros({1, 1, 3}, Device::GPU);
+    auto shN = Tensor::zeros({1, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({1, 3}, -1.5f, Device::GPU);
     std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f};
-    auto rotation = Tensor::from_blob(rotation_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto rotation = Tensor::from_blob(rotation_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
 
     const float opacity_value = 0.3f;
     const float raw_opacity_value = std::log(opacity_value / (1.0f - opacity_value));
-    auto opacity = Tensor::full({1}, raw_opacity_value, Device::CUDA);
+    auto opacity = Tensor::full({1}, raw_opacity_value, Device::GPU);
     auto splat = SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
 
-    auto R = Tensor::eye(3, Device::CUDA);
+    auto R = Tensor::eye(3, Device::GPU);
     std::vector<float> t_data{0.0f, 0.0f, 4.0f};
-    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
     auto camera = Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
                          Tensor(), Tensor(), CameraModelType::PINHOLE,
                          "depth_grad", "", std::filesystem::path{}, 1, 1, 0);
-    auto bg = Tensor::zeros({3}, Device::CUDA);
+    auto bg = Tensor::zeros({3}, Device::GPU);
 
     auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
     ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
@@ -415,7 +415,7 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForCenteredSpl
 
     const float upstream_depth_grad = 1.7f;
     auto grad_image = Tensor::zeros_like(forward->first.image);
-    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::CUDA);
+    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::GPU);
     fast_rasterize_backward(
         forward->second,
         grad_image,
@@ -460,29 +460,29 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlapping
     std::vector<float> means_data{
         0.0f, 0.0f, 0.5f,
         0.0f, 0.0f, 1.5f};
-    auto means = Tensor::from_blob(means_data.data(), {2, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::zeros({2, 1, 3}, Device::CUDA);
-    auto shN = Tensor::zeros({2, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({2, 3}, -1.5f, Device::CUDA);
+    auto means = Tensor::from_blob(means_data.data(), {2, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::zeros({2, 1, 3}, Device::GPU);
+    auto shN = Tensor::zeros({2, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({2, 3}, -1.5f, Device::GPU);
     std::vector<float> rotation_data{
         1.0f, 0.0f, 0.0f, 0.0f,
         1.0f, 0.0f, 0.0f, 0.0f};
-    auto rotation = Tensor::from_blob(rotation_data.data(), {2, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto rotation = Tensor::from_blob(rotation_data.data(), {2, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
 
     const std::vector<float> opacity_values{0.25f, 0.4f};
     std::vector<float> raw_opacity_values{
         std::log(opacity_values[0] / (1.0f - opacity_values[0])),
         std::log(opacity_values[1] / (1.0f - opacity_values[1]))};
-    auto opacity = Tensor::from_blob(raw_opacity_values.data(), {2}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto opacity = Tensor::from_blob(raw_opacity_values.data(), {2}, Device::CPU, DataType::Float32).to(Device::GPU);
     auto splat = SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
 
-    auto R = Tensor::eye(3, Device::CUDA);
+    auto R = Tensor::eye(3, Device::GPU);
     std::vector<float> t_data{0.0f, 0.0f, 4.0f};
-    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
     auto camera = Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
                          Tensor(), Tensor(), CameraModelType::PINHOLE,
                          "depth_grad_overlap", "", std::filesystem::path{}, 1, 1, 0);
-    auto bg = Tensor::zeros({3}, Device::CUDA);
+    auto bg = Tensor::zeros({3}, Device::GPU);
 
     auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
     ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
@@ -503,7 +503,7 @@ TEST(FastGSDepthGradientTest, BackwardDepthMatchesLibtorchAutogradForOverlapping
 
     const float upstream_depth_grad = 1.3f;
     auto grad_image = Tensor::zeros_like(forward->first.image);
-    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::CUDA);
+    auto grad_depth = Tensor::full({1, 1}, upstream_depth_grad, Device::GPU);
     fast_rasterize_backward(
         forward->second,
         grad_image,
@@ -554,19 +554,19 @@ namespace {
         std::vector<float> t_data{0.0f, 0.0f, 4.0f};
 
         SplatData make_splat(const std::vector<float>& rotation_data) const {
-            auto means = Tensor::from_blob(const_cast<float*>(means_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-            auto sh0 = Tensor::zeros({1, 1, 3}, Device::CUDA);
-            auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-            auto scaling = Tensor::from_blob(const_cast<float*>(scaling_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-            auto rotation = Tensor::from_blob(const_cast<float*>(rotation_data.data()), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            auto means = Tensor::from_blob(const_cast<float*>(means_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+            auto sh0 = Tensor::zeros({1, 1, 3}, Device::GPU);
+            auto shN = Tensor::zeros({1, 0, 3}, Device::GPU);
+            auto scaling = Tensor::from_blob(const_cast<float*>(scaling_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+            auto rotation = Tensor::from_blob(const_cast<float*>(rotation_data.data()), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
             const float raw_opacity = std::log(opacity_value / (1.0f - opacity_value));
-            auto opacity = Tensor::full({1}, raw_opacity, Device::CUDA);
+            auto opacity = Tensor::full({1}, raw_opacity, Device::GPU);
             return SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
         }
 
         Camera make_camera() const {
-            auto R = Tensor::eye(3, Device::CUDA);
-            auto T = Tensor::from_blob(const_cast<float*>(t_data.data()), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            auto R = Tensor::eye(3, Device::GPU);
+            auto T = Tensor::from_blob(const_cast<float*>(t_data.data()), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
             return Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
                           Tensor(), Tensor(), CameraModelType::PINHOLE,
                           "normal_grad", "", std::filesystem::path{}, 1, 1, 0);
@@ -583,7 +583,7 @@ TEST(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
     const std::vector<float> identity_quat{1.0f, 0.0f, 0.0f, 0.0f};
     auto splat = scene.make_splat(identity_quat);
     auto camera = scene.make_camera();
-    auto bg = Tensor::zeros({3}, Device::CUDA);
+    auto bg = Tensor::zeros({3}, Device::GPU);
 
     auto without_normal = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
     ASSERT_TRUE(without_normal.has_value())
@@ -619,7 +619,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
     const std::vector<float> base_quat{0.95f, 0.15f, -0.1f, 0.05f};
     const std::vector<float> upstream{0.7f, -0.4f, 1.1f};
     auto camera = scene.make_camera();
-    auto bg = Tensor::zeros({3}, Device::CUDA);
+    auto bg = Tensor::zeros({3}, Device::GPU);
 
     const auto render_loss = [&](const std::vector<float>& quat) {
         auto splat = scene.make_splat(quat);
@@ -645,7 +645,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
 
     std::vector<float> upstream_data = upstream;
     auto grad_image = Tensor::zeros_like(forward->first.image);
-    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::GPU);
     fast_rasterize_backward(
         forward->second,
         grad_image,
@@ -735,7 +735,7 @@ TEST(AdamCropDampingTest, SetterRequiresExactBooleanRowMaskAndCanClearIt) {
 
     optimizer.set_crop_damping_mask(Tensor::zeros_bool({3}, Device::CPU));
     EXPECT_TRUE(optimizer.crop_damping_mask().is_valid());
-    EXPECT_EQ(optimizer.crop_damping_mask().device(), Device::CUDA);
+    EXPECT_EQ(optimizer.crop_damping_mask().device(), Device::GPU);
     EXPECT_TRUE(optimizer.crop_damping_mask().is_contiguous());
 
     optimizer.set_crop_damping_mask({});
@@ -763,8 +763,8 @@ TEST(AdamCropDampingTest, RepeatedMaskReplacementIsSafeAcrossStreams) {
             {
                 const CUDAStreamGuard producer_guard(producer_stream);
                 mask = iteration % 2 == 0
-                           ? Tensor::zeros_bool({4}, Device::CUDA)
-                           : Tensor::ones_bool({4}, Device::CUDA);
+                           ? Tensor::zeros_bool({4}, Device::GPU)
+                           : Tensor::ones_bool({4}, Device::GPU);
             }
             optimizer.set_crop_damping_mask(std::move(mask));
 
@@ -801,11 +801,11 @@ TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrit
 
     const auto run_backward = [](const bool damp) {
         auto splat = make_adam_test_splat(1, 1);
-        auto camera_rotation = Tensor::eye(3, Device::CUDA);
+        auto camera_rotation = Tensor::eye(3, Device::GPU);
         auto camera_translation = Tensor::from_vector(
             std::vector<float>{0.0f, 0.0f, 4.0f},
             {3},
-            Device::CUDA);
+            Device::GPU);
         Camera camera(
             camera_rotation,
             camera_translation,
@@ -822,7 +822,7 @@ TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrit
             8,
             8,
             0);
-        auto background = Tensor::zeros({3}, Device::CUDA);
+        auto background = Tensor::zeros({3}, Device::GPU);
         auto forward = fast_rasterize_forward(
             camera, splat, background, 0, 0, 0, 0, false);
         if (!forward) {
@@ -833,7 +833,7 @@ TEST(FastGSCropDampingTest, FusedBackwardZeroScaleSkipsContiguousAndSwizzledWrit
         optimizer.allocate_gradients();
         optimizer.zero_grad(1000);
         if (damp) {
-            optimizer.set_crop_damping_mask(Tensor::ones_bool({1}, Device::CUDA));
+            optimizer.set_crop_damping_mask(Tensor::ones_bool({1}, Device::GPU));
             optimizer.set_cropbox_lr_scale(0.0f);
         }
 
@@ -920,13 +920,13 @@ TEST_F(FastGSKernelTest, Numerical_GradientFinite) {
 // Edge cases
 TEST_F(FastGSKernelTest, EdgeCase_SingleGaussian) {
     n_ = 1;
-    means_ = Tensor::zeros({1, 3}, Device::CUDA);
-    sh0_ = Tensor::zeros({1, 1, 3}, Device::CUDA);
-    shN_ = Tensor::zeros({1, 0, 3}, Device::CUDA);
-    scaling_ = Tensor::full({1, 3}, -5.0f, Device::CUDA);
-    rotation_ = Tensor::zeros({1, 4}, Device::CUDA);
+    means_ = Tensor::zeros({1, 3}, Device::GPU);
+    sh0_ = Tensor::zeros({1, 1, 3}, Device::GPU);
+    shN_ = Tensor::zeros({1, 0, 3}, Device::GPU);
+    scaling_ = Tensor::full({1, 3}, -5.0f, Device::GPU);
+    rotation_ = Tensor::zeros({1, 4}, Device::GPU);
     rotation_.slice(1, 0, 1).fill_(1.0f);
-    opacity_ = Tensor::zeros({1}, Device::CUDA);
+    opacity_ = Tensor::zeros({1}, Device::GPU);
     splat_ = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
 
     auto r = forward();
@@ -944,8 +944,8 @@ TEST_F(FastGSKernelTest, EdgeCase_LargeGaussians) {
 
 TEST_F(FastGSKernelTest, EdgeCase_CameraBehind) {
     std::vector<float> t_data{0, 0, -10};
-    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    camera_ = std::make_unique<Camera>(Tensor::eye(3, Device::CUDA), T, FX, FY, W / 2.0f, H / 2.0f,
+    auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    camera_ = std::make_unique<Camera>(Tensor::eye(3, Device::GPU), T, FX, FY, W / 2.0f, H / 2.0f,
                                        Tensor(), Tensor(), CameraModelType::PINHOLE,
                                        "behind", "", std::filesystem::path{}, W, H, 0);
 
@@ -1001,22 +1001,22 @@ protected:
         std::vector<float> means_data(n_ * 3);
         for (size_t i = 0; i < n_ * 3; ++i)
             means_data[i] = pos(gen);
-        means_ = Tensor::from_blob(means_data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        means_ = Tensor::from_blob(means_data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
 
-        sh0_ = Tensor::randn({n_, 1, 3}, Device::CUDA).mul(0.3f);
-        shN_ = Tensor::zeros({n_, 0, 3}, Device::CUDA);
-        scaling_ = Tensor::randn({n_, 3}, Device::CUDA).mul(0.2f).sub(3.0f);
-        rotation_ = Tensor::randn({n_, 4}, Device::CUDA);
+        sh0_ = Tensor::randn({n_, 1, 3}, Device::GPU).mul(0.3f);
+        shN_ = Tensor::zeros({n_, 0, 3}, Device::GPU);
+        scaling_ = Tensor::randn({n_, 3}, Device::GPU).mul(0.2f).sub(3.0f);
+        rotation_ = Tensor::randn({n_, 4}, Device::GPU);
         rotation_ = rotation_ / rotation_.pow(2.0f).sum(-1, true).sqrt();
-        opacity_ = Tensor::randn({n_}, Device::CUDA);
+        opacity_ = Tensor::randn({n_}, Device::GPU);
 
-        auto R = Tensor::eye(3, Device::CUDA);
+        auto R = Tensor::eye(3, Device::GPU);
         std::vector<float> t_data{0, 0, 4};
-        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         camera_ = std::make_unique<Camera>(R, T, 200.0f, 200.0f, 64.0f, 64.0f,
                                            Tensor(), Tensor(), CameraModelType::PINHOLE,
                                            "test", "", std::filesystem::path{}, 128, 128, 0);
-        bg_ = Tensor::zeros({3}, Device::CUDA);
+        bg_ = Tensor::zeros({3}, Device::GPU);
     }
 
     void TearDown() override {
@@ -1053,19 +1053,19 @@ protected:
             // Perturb +eps
             auto perturbed = orig_cpu.clone();
             perturbed.ptr<float>()[i] += eps;
-            set_param(param, perturbed.to(Device::CUDA));
+            set_param(param, perturbed.to(Device::GPU));
             float loss_plus = compute_loss(means_, scaling_, rotation_, opacity_, sh0_);
 
             // Perturb -eps
             perturbed.ptr<float>()[i] = o_ptr[i] - eps;
-            set_param(param, perturbed.to(Device::CUDA));
+            set_param(param, perturbed.to(Device::GPU));
             float loss_minus = compute_loss(means_, scaling_, rotation_, opacity_, sh0_);
 
             g_ptr[i] = (loss_plus - loss_minus) / (2.0f * eps);
         }
 
         set_param(param, orig);
-        return grad_cpu.to(Device::CUDA);
+        return grad_cpu.to(Device::GPU);
     }
 
     void set_param(ParamType param, const Tensor& val) {
@@ -1232,26 +1232,26 @@ protected:
             means_data[i * 3 + 1] = tiny_offset(gen);              // y: tiny spread
             means_data[i * 3 + 2] = static_cast<float>(i) * 0.02f; // z: stable ordering
         }
-        means_ = Tensor::from_blob(means_data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        means_ = Tensor::from_blob(means_data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
 
-        sh0_ = Tensor::randn({n_, 1, 3}, Device::CUDA).mul(0.3f);
-        shN_ = Tensor::zeros({n_, 0, 3}, Device::CUDA);
+        sh0_ = Tensor::randn({n_, 1, 3}, Device::GPU).mul(0.3f);
+        shN_ = Tensor::zeros({n_, 0, 3}, Device::GPU);
         // Very small gaussians so they all project to the same tile (scale exp(-5) ≈ 0.007)
-        scaling_ = Tensor::full({n_, 3}, -5.0f, Device::CUDA);
-        rotation_ = Tensor::zeros({n_, 4}, Device::CUDA);
-        rotation_.slice(1, 0, 1).fill_(1.0f);               // Identity rotation (w=1, x=y=z=0)
-        opacity_ = Tensor::full({n_}, -3.0f, Device::CUDA); // sigmoid(-3) ≈ 0.047, all contribute
+        scaling_ = Tensor::full({n_, 3}, -5.0f, Device::GPU);
+        rotation_ = Tensor::zeros({n_, 4}, Device::GPU);
+        rotation_.slice(1, 0, 1).fill_(1.0f);              // Identity rotation (w=1, x=y=z=0)
+        opacity_ = Tensor::full({n_}, -3.0f, Device::GPU); // sigmoid(-3) ≈ 0.047, all contribute
 
         // Camera looking at origin from z=5
-        auto R = Tensor::eye(3, Device::CUDA);
+        auto R = Tensor::eye(3, Device::GPU);
         std::vector<float> t_data{0, 0, 5};
-        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         // 64x64 image, focal length 100 -> gaussians at (0,0) project to center (32,32)
         // which is in tile (32/16, 32/16) = tile (2, 2)
         camera_ = std::make_unique<Camera>(R, T, 100.0f, 100.0f, 32.0f, 32.0f,
                                            Tensor(), Tensor(), CameraModelType::PINHOLE,
                                            "test", "", std::filesystem::path{}, 64, 64, 0);
-        bg_ = Tensor::zeros({3}, Device::CUDA);
+        bg_ = Tensor::zeros({3}, Device::GPU);
     }
 
     void TearDown() override {
@@ -1286,18 +1286,18 @@ protected:
         for (size_t i = 0; i < orig.numel(); ++i) {
             auto perturbed = orig_cpu.clone();
             perturbed.ptr<float>()[i] += eps;
-            set_param(param, perturbed.to(Device::CUDA));
+            set_param(param, perturbed.to(Device::GPU));
             float loss_plus = compute_loss(means_, scaling_, rotation_, opacity_, sh0_);
 
             perturbed.ptr<float>()[i] = o_ptr[i] - eps;
-            set_param(param, perturbed.to(Device::CUDA));
+            set_param(param, perturbed.to(Device::GPU));
             float loss_minus = compute_loss(means_, scaling_, rotation_, opacity_, sh0_);
 
             g_ptr[i] = (loss_plus - loss_minus) / (2.0f * eps);
         }
 
         set_param(param, orig);
-        return grad_cpu.to(Device::CUDA);
+        return grad_cpu.to(Device::GPU);
     }
 
     void set_param(ParamType param, const Tensor& val) {
@@ -1464,13 +1464,13 @@ namespace {
     Tensor upload_u8(const std::vector<uint8_t>& host) {
         auto t = Tensor::empty({host.size()}, Device::CPU, DataType::UInt8);
         std::memcpy(t.ptr<uint8_t>(), host.data(), host.size());
-        return t.to(Device::CUDA);
+        return t.to(Device::GPU);
     }
 
     Tensor upload_i64(const std::vector<int64_t>& host) {
         auto t = Tensor::empty({host.size()}, Device::CPU, DataType::Int64);
         std::memcpy(t.ptr<int64_t>(), host.data(), host.size() * sizeof(int64_t));
-        return t.to(Device::CUDA);
+        return t.to(Device::GPU);
     }
 
     void expect_bounds_include_zero(const float* bb, const char* label) {
@@ -1571,7 +1571,7 @@ TEST(JointEncodeZero, Contiguous16BitMultiIndexSameBlock) {
     auto packed = upload_u8(packed_h);
     auto bounds = Tensor::from_vector(bounds_h,
                                       {static_cast<size_t>(n_blocks), size_t{4}},
-                                      Device::CUDA);
+                                      Device::GPU);
     auto idx = upload_i64(indices);
 
     fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
@@ -1682,7 +1682,7 @@ TEST(JointEncodeZero, SwizzledShN8BitMultiIndexSameBlock) {
     auto packed = upload_u8(packed_h);
     auto bounds = Tensor::from_vector(bounds_h,
                                       {static_cast<size_t>(n_blocks), size_t{4}},
-                                      Device::CUDA);
+                                      Device::GPU);
     auto idx = upload_i64(indices);
 
     fast_lfs::optimizer::joint_encode_zero_shN_at_indices(

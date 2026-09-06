@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
-#include "internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -17,7 +17,7 @@ namespace lfs::core {
     Tensor Tensor::linspace(float start, float end, size_t steps, Device device) {
         LFS_ASSERT_MSG(steps > 0,
                        "linspace steps must be positive");
-        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "linspace received an invalid device");
         LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end),
                        "linspace endpoints must be finite");
@@ -37,9 +37,14 @@ namespace lfs::core {
                           : end - step * static_cast<float>(steps - i - 1);
         }
 
-        if (device == Device::CUDA) {
-            LFS_CUDA_CHECK(cudaMemcpy(t.ptr<float>(), data.data(), steps * sizeof(float),
-                                      cudaMemcpyHostToDevice));
+        if (device == Device::GPU) {
+            internal::backend_ops_for(t).copy_host_to_device(internal::CopyRequest{
+                .src = internal::raw_storage_ref(data.data(), DataType::Float32),
+                .dst = internal::storage_ref(t),
+                .bytes = steps * sizeof(float),
+                .synchronous = true,
+                .context = internal::ExecContext{nullptr},
+            });
         } else {
             std::memcpy(t.ptr<float>(), data.data(), steps * sizeof(float));
         }
@@ -62,16 +67,15 @@ namespace lfs::core {
         }
 
         size_t n = diagonal.numel();
-        auto result = Tensor::zeros({n, n}, diagonal.device());
+        auto result = internal::allocate_zeros_like(
+            diagonal, TensorShape{n, n}, diagonal.dtype());
         if (n == 0) {
             return result;
         }
 
-        if (diagonal.device() == Device::CUDA) {
+        if (diagonal.device() == Device::GPU) {
             prepare_inputs_for_stream({&dense_diagonal}, result.stream());
-            LFS_CUDA_CHECK(cudaGetLastError());
-            tensor_ops::launch_diag(dense_diagonal.ptr<float>(), result.ptr<float>(), n, result.stream());
-            LFS_CUDA_CHECK(cudaGetLastError());
+            internal::backend_ops_for(dense_diagonal).diag(internal::storage_ref(dense_diagonal), internal::storage_ref(result), n, internal::ExecContext{result.stream()});
             // No sync - returns tensor
         } else {
             const float* diag_data = diagonal.ptr<float>();
@@ -90,17 +94,7 @@ namespace lfs::core {
 namespace lfs::core {
 
     MemoryInfo MemoryInfo::cuda() {
-        MemoryInfo info;
-
-        size_t free_bytes, total_bytes;
-        LFS_CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
-
-        info.free_bytes = free_bytes;
-        info.total_bytes = total_bytes;
-        info.allocated_bytes = total_bytes - free_bytes;
-        info.device_id = 0;
-
-        return info;
+        return internal::backend_ops(GpuBackend::CUDA).stats();
     }
 
     MemoryInfo MemoryInfo::cpu() {
@@ -132,9 +126,9 @@ namespace lfs::core::functional {
                        "functional::map currently supports only Float32");
         LFS_ASSERT_MSG(static_cast<bool>(func),
                        "functional::map requires a callable");
-        auto result = Tensor::empty(input.shape(), input.device());
+        auto result = internal::allocate_like(input, input.shape(), input.dtype());
 
-        if (input.device() == Device::CUDA) {
+        if (input.device() == Device::GPU) {
             auto cpu_input = input.to(Device::CPU);
             const float* src = cpu_input.ptr<float>();
             std::vector<float> dst_data(input.numel());
@@ -144,8 +138,15 @@ namespace lfs::core::functional {
             }
 
             if (!dst_data.empty()) {
-                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<float>(), dst_data.data(),
-                                          dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
+                internal::backend_ops_for(result).copy_host_to_device(
+                    internal::CopyRequest{
+                        .src = internal::raw_storage_ref(
+                            dst_data.data(), DataType::Float32),
+                        .dst = internal::storage_ref(result),
+                        .bytes = dst_data.size() * sizeof(float),
+                        .synchronous = true,
+                        .context = internal::ExecContext{nullptr},
+                    });
             }
         } else {
             const float* src = input.ptr<float>();
@@ -185,9 +186,9 @@ namespace lfs::core::functional {
                        "functional::filter currently supports only Float32");
         LFS_ASSERT_MSG(static_cast<bool>(predicate),
                        "functional::filter requires a callable");
-        auto result = Tensor::empty(input.shape(), input.device());
+        auto result = internal::allocate_like(input, input.shape(), input.dtype());
 
-        if (input.device() == Device::CUDA) {
+        if (input.device() == Device::GPU) {
             auto cpu_input = input.to(Device::CPU);
             const float* src = cpu_input.ptr<float>();
             std::vector<float> dst_data(input.numel());
@@ -197,8 +198,15 @@ namespace lfs::core::functional {
             }
 
             if (!dst_data.empty()) {
-                LFS_CUDA_CHECK(cudaMemcpy(result.ptr<float>(), dst_data.data(),
-                                          dst_data.size() * sizeof(float), cudaMemcpyHostToDevice));
+                internal::backend_ops_for(result).copy_host_to_device(
+                    internal::CopyRequest{
+                        .src = internal::raw_storage_ref(
+                            dst_data.data(), DataType::Float32),
+                        .dst = internal::storage_ref(result),
+                        .bytes = dst_data.size() * sizeof(float),
+                        .synchronous = true,
+                        .context = internal::ExecContext{nullptr},
+                    });
             }
         } else {
             const float* src = input.ptr<float>();

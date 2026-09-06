@@ -78,7 +78,7 @@ protected:
 TEST_F(TensorBitwiseTest, BitwiseNotBasic) {
     std::vector<bool> data = {true, false, true, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {4});
 
     auto result_custom = ~tensor_custom;
@@ -108,14 +108,14 @@ TEST_F(TensorBitwiseTest, BitwiseNotCPU) {
 TEST_F(TensorBitwiseTest, BitwiseNotCUDA) {
     std::vector<bool> data = {true, false, true, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {4}, torch::kCUDA);
 
     auto result_custom = ~tensor_custom;
     auto result_torch = ~tensor_torch;
 
     ASSERT_TRUE(result_custom.is_valid());
-    EXPECT_EQ(result_custom.device(), Device::CUDA);
+    EXPECT_EQ(result_custom.device(), Device::GPU);
 
     compare_bool_tensors(result_custom, result_torch, "BitwiseNotCUDA");
 }
@@ -123,7 +123,7 @@ TEST_F(TensorBitwiseTest, BitwiseNotCUDA) {
 TEST_F(TensorBitwiseTest, BitwiseNotMultiDimensional) {
     std::vector<bool> data = {true, false, false, true, true, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {2, 3});
 
     auto result_custom = ~tensor_custom;
@@ -138,7 +138,7 @@ TEST_F(TensorBitwiseTest, BitwiseNotMultiDimensional) {
 TEST_F(TensorBitwiseTest, BitwiseNotAllTrue) {
     std::vector<bool> data = {true, true, true, true, true};
 
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {5});
 
     auto result_custom = ~tensor_custom;
@@ -150,7 +150,7 @@ TEST_F(TensorBitwiseTest, BitwiseNotAllTrue) {
 TEST_F(TensorBitwiseTest, BitwiseNotAllFalse) {
     std::vector<bool> data = {false, false, false, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {4});
 
     auto result_custom = ~tensor_custom;
@@ -170,8 +170,8 @@ TEST_F(TensorBitwiseTest, BitwiseOrBasic) {
     std::vector<bool> data_a = {true, false, true, false};
     std::vector<bool> data_b = {true, true, false, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
 
@@ -204,8 +204,8 @@ TEST_F(TensorBitwiseTest, BitwiseOrCUDA) {
     std::vector<bool> data_a = {true, false, true, false};
     std::vector<bool> data_b = {true, true, false, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
 
@@ -220,8 +220,8 @@ TEST_F(TensorBitwiseTest, BitwiseOrMultiDimensional) {
     std::vector<bool> data_a = {true, false, false, true, true, false};
     std::vector<bool> data_b = {false, false, true, true, false, true};
 
-    auto a_custom = Tensor::from_vector(data_a, {2, 3}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {2, 3}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {2, 3}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {2, 3}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {2, 3});
     auto b_torch = create_torch_bool_tensor(data_b, {2, 3});
 
@@ -236,8 +236,8 @@ TEST_F(TensorBitwiseTest, BitwiseOrBroadcast) {
     std::vector<bool> data_a = {true, false};
     std::vector<bool> data_b = {true, false, true};
 
-    auto a_custom = Tensor::from_vector(data_a, {2, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {3}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {2, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {3}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {2, 1});
     auto b_torch = create_torch_bool_tensor(data_b, {3});
 
@@ -255,8 +255,8 @@ TEST_F(TensorBitwiseTest, BitwiseOrAllCombinations) {
     std::vector<bool> data_a = {true, true, false, false};
     std::vector<bool> data_b = {true, false, true, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
 
@@ -274,7 +274,7 @@ TEST_F(TensorBitwiseTest, BitwiseOrAllCombinations) {
 }
 
 TEST_F(TensorBitwiseTest, LogicalXorMatchesTruthTable) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         const auto lhs = Tensor::from_vector(
             std::vector<bool>{false, false, true, true}, {4}, device);
         const auto rhs = Tensor::from_vector(
@@ -297,8 +297,8 @@ TEST_F(TensorBitwiseTest, LogicalVsBitwiseOr) {
     std::vector<bool> data_a = {true, false, true, false};
     std::vector<bool> data_b = {true, true, false, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
 
@@ -322,8 +322,8 @@ TEST_F(TensorBitwiseTest, LogicalVsBitwiseAnd) {
     std::vector<bool> data_a = {true, false, true, false};
     std::vector<bool> data_b = {true, true, false, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
 
@@ -343,7 +343,7 @@ TEST_F(TensorBitwiseTest, LogicalVsBitwiseAnd) {
 TEST_F(TensorBitwiseTest, LogicalNot) {
     std::vector<bool> data = {true, false, true, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {4}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {4});
 
     // Using ! operator (logical not)
@@ -366,8 +366,8 @@ TEST_F(TensorBitwiseTest, DeMorgansLaw) {
     std::vector<bool> data_a = {true, false, true, false};
     std::vector<bool> data_b = {true, true, false, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
 
@@ -390,7 +390,7 @@ TEST_F(TensorBitwiseTest, DeMorgansLaw) {
 TEST_F(TensorBitwiseTest, DoubleNegation) {
     std::vector<bool> data = {true, false, true, false, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {5});
 
     // ~~a should equal a
@@ -407,9 +407,9 @@ TEST_F(TensorBitwiseTest, ComplexExpression) {
     std::vector<bool> data_b = {false, true, true, false};
     std::vector<bool> data_c = {true, true, false, false};
 
-    auto a_custom = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {4}, Device::CUDA);
-    auto c_custom = Tensor::from_vector(data_c, {4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {4}, Device::GPU);
+    auto c_custom = Tensor::from_vector(data_c, {4}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {4});
     auto b_torch = create_torch_bool_tensor(data_b, {4});
     auto c_torch = create_torch_bool_tensor(data_c, {4});
@@ -425,7 +425,7 @@ TEST_F(TensorBitwiseTest, ComplexExpression) {
 TEST_F(TensorBitwiseTest, BitwiseNotPreservesShape) {
     std::vector<bool> data = {true, false, true, false, false, true, true, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {2, 2, 2}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 2, 2}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {2, 2, 2});
 
     auto result_custom = ~tensor_custom;
@@ -453,10 +453,10 @@ TEST_F(TensorBitwiseTest, BitwiseOrPreservesDevice) {
     compare_bool_tensors(result_cpu, result_torch_cpu, "PreservesDevice_CPU");
 
     // CUDA test
-    auto cuda_a = Tensor::from_vector(data_a, {2}, Device::CUDA);
-    auto cuda_b = Tensor::from_vector(data_b, {2}, Device::CUDA);
+    auto cuda_a = Tensor::from_vector(data_a, {2}, Device::GPU);
+    auto cuda_b = Tensor::from_vector(data_b, {2}, Device::GPU);
     auto result_cuda = cuda_a | cuda_b;
-    EXPECT_EQ(result_cuda.device(), Device::CUDA);
+    EXPECT_EQ(result_cuda.device(), Device::GPU);
 
     auto torch_a_cuda = create_torch_bool_tensor(data_a, {2});
     auto torch_b_cuda = create_torch_bool_tensor(data_b, {2});
@@ -469,7 +469,7 @@ TEST_F(TensorBitwiseTest, BitwiseOrPreservesDevice) {
 TEST_F(TensorBitwiseTest, BitwiseNotEmptyTensor) {
     std::vector<bool> empty_data;
 
-    auto tensor_custom = Tensor::from_vector(empty_data, {0}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(empty_data, {0}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(empty_data, {0});
 
     auto result_custom = ~tensor_custom;
@@ -484,8 +484,8 @@ TEST_F(TensorBitwiseTest, BitwiseNotEmptyTensor) {
 TEST_F(TensorBitwiseTest, BitwiseOrEmptyTensor) {
     std::vector<bool> empty_data;
 
-    auto a_custom = Tensor::from_vector(empty_data, {0}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(empty_data, {0}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(empty_data, {0}, Device::GPU);
+    auto b_custom = Tensor::from_vector(empty_data, {0}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(empty_data, {0});
     auto b_torch = create_torch_bool_tensor(empty_data, {0});
 
@@ -504,7 +504,7 @@ TEST_F(TensorBitwiseTest, BitwiseNotLargeTensor) {
         data[i] = (i % 2 == 0);
     }
 
-    auto tensor_custom = Tensor::from_vector(data, {10000}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {10000}, Device::GPU);
     auto tensor_torch = create_torch_bool_tensor(data, {10000});
 
     auto result_custom = ~tensor_custom;
@@ -522,8 +522,8 @@ TEST_F(TensorBitwiseTest, BitwiseOrLargeTensor) {
         data_b[i] = (i % 5 == 0);
     }
 
-    auto a_custom = Tensor::from_vector(data_a, {5000}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {5000}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {5000}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {5000}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {5000});
     auto b_torch = create_torch_bool_tensor(data_b, {5000});
 
@@ -546,8 +546,8 @@ TEST_F(TensorBitwiseTest, RandomBitwiseOperations) {
         data_b[i] = (i * 11 + 5) % 2 == 0;
     }
 
-    auto a_custom = Tensor::from_vector(data_a, {10, 10}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(data_b, {10, 10}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(data_a, {10, 10}, Device::GPU);
+    auto b_custom = Tensor::from_vector(data_b, {10, 10}, Device::GPU);
     auto a_torch = create_torch_bool_tensor(data_a, {10, 10});
     auto b_torch = create_torch_bool_tensor(data_b, {10, 10});
 

@@ -64,7 +64,7 @@ namespace {
     };
 
     TEST_F(AssertHardeningExpectedFailTest, RejectsBrickCapacitySmallerThanLogicalRows) {
-        EXPECT_THROW((void)Tensor::zeros_direct({4, 3}, 3, Device::CUDA),
+        EXPECT_THROW((void)Tensor::zeros_direct({4, 3}, 3, Device::GPU),
                      std::runtime_error);
     }
 
@@ -221,7 +221,7 @@ namespace {
         values[0] = (int64_t{1} << 54) + 1;
         values[1] = -((int64_t{1} << 55) + 3);
 
-        const auto cuda = cpu.to(Device::CUDA);
+        const auto cuda = cpu.to(Device::GPU);
 
         EXPECT_EQ(cuda[0].item_int64(), values[0]);
         EXPECT_EQ(cuda[1].item_int64(), values[1]);
@@ -235,9 +235,9 @@ namespace {
 
         ASSERT_EQ(cudaGetLastError(), cudaSuccess);
 
-        const auto empty = Tensor::empty({0}, Device::CUDA);
+        const auto empty = Tensor::empty({0}, Device::GPU);
         const auto diagonal = Tensor::diag(empty);
-        const auto identity = Tensor::eye(0, Device::CUDA);
+        const auto identity = Tensor::eye(0, Device::GPU);
 
         EXPECT_EQ(diagonal.shape(), lfs::core::TensorShape({0, 0}));
         EXPECT_EQ(identity.shape(), lfs::core::TensorShape({0, 0}));

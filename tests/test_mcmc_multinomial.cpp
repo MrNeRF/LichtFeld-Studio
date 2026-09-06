@@ -30,15 +30,15 @@ namespace {
                                         const std::vector<int>& alive,
                                         const std::vector<float>& opacities,
                                         const std::vector<float>& scaling_raw) {
-        auto w = Tensor::from_vector(weights, TensorShape({weights.size()}), Device::CUDA);
-        auto a = Tensor::from_vector(alive, TensorShape({alive.size()}), Device::CUDA)
+        auto w = Tensor::from_vector(weights, TensorShape({weights.size()}), Device::GPU);
+        auto a = Tensor::from_vector(alive, TensorShape({alive.size()}), Device::GPU)
                      .to(DataType::Int64);
-        auto o = Tensor::from_vector(opacities, TensorShape({opacities.size()}), Device::CUDA);
-        auto s = Tensor::from_vector(scaling_raw, TensorShape({scaling_raw.size()}), Device::CUDA);
+        auto o = Tensor::from_vector(opacities, TensorShape({opacities.size()}), Device::GPU);
+        auto s = Tensor::from_vector(scaling_raw, TensorShape({scaling_raw.size()}), Device::GPU);
 
-        auto out_idx = Tensor::zeros({N_SAMPLES}, Device::CUDA, DataType::Int64);
-        auto out_opa = Tensor::zeros({N_SAMPLES}, Device::CUDA, DataType::Float32);
-        auto out_scale = Tensor::zeros({N_SAMPLES * 3}, Device::CUDA, DataType::Float32);
+        auto out_idx = Tensor::zeros({N_SAMPLES}, Device::GPU, DataType::Int64);
+        auto out_opa = Tensor::zeros({N_SAMPLES}, Device::GPU, DataType::Float32);
+        auto out_scale = Tensor::zeros({N_SAMPLES * 3}, Device::GPU, DataType::Float32);
 
         lfs::training::mcmc::launch_multinomial_sample_and_gather(
             w.ptr<float>(), o.ptr<float>(), s.ptr<float>(),
@@ -64,12 +64,12 @@ protected:
 };
 
 TEST_F(McmcMultinomialTest, ScratchAllocationFailureAbortsAndRecovers) {
-    auto weights = Tensor::ones({32}, Device::CUDA);
-    auto opacities = Tensor::ones({32}, Device::CUDA);
-    auto scales = Tensor::zeros({32, 3}, Device::CUDA);
-    auto out_indices = Tensor::zeros({8}, Device::CUDA, DataType::Int64);
-    auto out_opacities = Tensor::zeros({8}, Device::CUDA);
-    auto out_scales = Tensor::zeros({8, 3}, Device::CUDA);
+    auto weights = Tensor::ones({32}, Device::GPU);
+    auto opacities = Tensor::ones({32}, Device::GPU);
+    auto scales = Tensor::zeros({32, 3}, Device::GPU);
+    auto out_indices = Tensor::zeros({8}, Device::GPU, DataType::Int64);
+    auto out_opacities = Tensor::zeros({8}, Device::GPU);
+    auto out_scales = Tensor::zeros({8, 3}, Device::GPU);
 
     EXPECT_THROW(
         (void)lfs::training::cuda_scratch::DeviceBuffer(

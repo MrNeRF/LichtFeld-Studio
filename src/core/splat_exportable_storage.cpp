@@ -8,7 +8,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
@@ -496,7 +496,7 @@ namespace lfs::core {
             }
             Tensor t = Tensor::from_external_owner(data,
                                                    std::move(shape),
-                                                   Device::CUDA,
+                                                   Device::GPU,
                                                    dtype,
                                                    std::move(owner),
                                                    clamped,
@@ -667,7 +667,7 @@ namespace lfs::core {
                     dtype = source.dtype();
                     if (!aliases) {
                         source_cuda =
-                            source.device() == Device::CUDA ? source : source.cuda();
+                            source.device() == Device::GPU ? source : source.gpu();
                         if (!source_cuda.is_contiguous()) {
                             source_cuda = source_cuda.contiguous();
                         }
@@ -727,8 +727,8 @@ namespace lfs::core {
                 if (!aliases && !src_is_q16) {
                     // Densify expand path: preserve float/f16 temp; do not zero-fill.
                     shN = shN_src;
-                    if (shN.device() != Device::CUDA) {
-                        shN = shN.cuda();
+                    if (shN.device() != Device::GPU) {
+                        shN = shN.gpu();
                     }
                     if (!shN.is_contiguous()) {
                         shN = shN.contiguous();
@@ -744,8 +744,8 @@ namespace lfs::core {
                     dst.set_name("SplatData.shN");
                     if (!aliases && src_is_q16 && shN_src.is_valid() && shN_src.numel() > 0) {
                         Tensor src = shN_src;
-                        if (src.device() != Device::CUDA) {
-                            src = src.cuda();
+                        if (src.device() != Device::GPU) {
+                            src = src.gpu();
                         }
                         if (!src.is_contiguous()) {
                             src = src.contiguous();
@@ -766,8 +766,8 @@ namespace lfs::core {
                         tensor_aliases_exportable_block(bounds_src, block_ref);
                     if (!bounds_alias && bounds_src.is_valid() && bounds_src.numel() > 0) {
                         Tensor bsrc = bounds_src;
-                        if (bsrc.device() != Device::CUDA) {
-                            bsrc = bsrc.cuda();
+                        if (bsrc.device() != Device::GPU) {
+                            bsrc = bsrc.gpu();
                         }
                         if (!bsrc.is_contiguous()) {
                             bsrc = bsrc.contiguous();

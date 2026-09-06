@@ -334,9 +334,9 @@ TEST_F(TensorAccessorTest, AccessorWrongDimension) {
 }
 
 TEST_F(TensorAccessorTest, AccessorOnCUDAFails) {
-    auto t_custom = Tensor::zeros({3, 3}, Device::CUDA);
+    auto t_custom = Tensor::zeros({3, 3}, Device::GPU);
 
-    // Accessor should only work on CPU tensors - throws on CUDA like PyTorch
+    // Accessor should only work on CPU tensors - throws on GPU like PyTorch
     EXPECT_THROW((t_custom.accessor<float, 2>()), std::runtime_error);
 
     LOG_INFO("IMPLEMENTATION NOTE: CUDA tensor accessor throws, matching PyTorch behavior");

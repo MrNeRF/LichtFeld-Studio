@@ -65,7 +65,7 @@ protected:
 
 TEST_F(TensorStressTest, DeepOperationChain) {
     // Create a very deep chain of operations and compare with PyTorch
-    auto custom_t = Tensor::ones({100, 100}, Device::CUDA);
+    auto custom_t = Tensor::ones({100, 100}, Device::GPU);
     auto torch_t = torch::ones({100, 100}, torch::TensorOptions().device(torch::kCUDA));
 
     const int chain_length = 100; // Reduced for performance
@@ -108,8 +108,8 @@ TEST_F(TensorStressTest, LargeMatrixOperations) {
     for (auto& val : data_b)
         val = dist_(gen_);
 
-    auto custom_a = Tensor::from_vector(data_a, {dim, dim}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {dim, dim}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {dim, dim}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {dim, dim}, Device::GPU);
 
     auto torch_a = torch::from_blob(data_a.data(), {static_cast<long>(dim), static_cast<long>(dim)},
                                     torch::TensorOptions().dtype(torch::kFloat32))
@@ -147,7 +147,7 @@ TEST_F(TensorStressTest, ManySmallTensors) {
     torch_tensors.reserve(num_tensors);
 
     for (int i = 0; i < num_tensors; ++i) {
-        custom_tensors.emplace_back(Tensor::full({10}, static_cast<float>(i), Device::CUDA));
+        custom_tensors.emplace_back(Tensor::full({10}, static_cast<float>(i), Device::GPU));
         torch_tensors.push_back(torch::full({10}, static_cast<float>(i),
                                             torch::TensorOptions().device(torch::kCUDA)));
     }
@@ -176,7 +176,7 @@ TEST_F(TensorStressTest, ManySmallTensors) {
 
 TEST_F(TensorStressTest, ViewStress) {
     // Create complex view hierarchies
-    auto custom_original = Tensor::ones({24, 24}, Device::CUDA);
+    auto custom_original = Tensor::ones({24, 24}, Device::GPU);
     auto torch_original = torch::ones({24, 24}, torch::TensorOptions().device(torch::kCUDA));
 
     std::vector<Tensor> custom_views;
@@ -227,7 +227,7 @@ TEST_F(TensorStressTest, SliceStress) {
         }
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {size, size}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {size, size}, Device::GPU);
     auto torch_tensor = torch::from_blob(data.data(),
                                          {static_cast<long>(size), static_cast<long>(size)},
                                          torch::TensorOptions().dtype(torch::kFloat32))
@@ -265,7 +265,7 @@ TEST_F(TensorStressTest, ReductionStress) {
         data[i] = static_cast<float>(i % 100); // Repeating pattern 0-99
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {size}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {size}, Device::GPU);
     auto torch_tensor = torch::from_blob(data.data(), {static_cast<long>(size)},
                                          torch::TensorOptions().dtype(torch::kFloat32))
                             .clone()
@@ -290,7 +290,7 @@ TEST_F(TensorStressTest, ReductionStress) {
 }
 
 TEST_F(TensorStressTest, MultiDimensionalReductions) {
-    auto custom_t = Tensor::randn({10, 20, 30}, Device::CUDA);
+    auto custom_t = Tensor::randn({10, 20, 30}, Device::GPU);
 
     // Copy data to PyTorch
     auto data = custom_t.to_vector();
@@ -326,8 +326,8 @@ TEST_F(TensorStressTest, MixedDeviceStress) {
         auto torch_cpu = torch::full({static_cast<long>(size)}, static_cast<float>(i),
                                      torch::TensorOptions().device(torch::kCPU));
 
-        // Transfer to CUDA
-        auto custom_cuda = custom_cpu.to(Device::CUDA);
+        // Transfer to GPU
+        auto custom_cuda = custom_cpu.to(Device::GPU);
         auto torch_cuda = torch_cpu.to(torch::kCUDA);
 
         // Perform operation
@@ -353,7 +353,7 @@ TEST_F(TensorStressTest, NumericalStability) {
         data[i] = std::pow(1.01f, static_cast<float>(i));
     }
 
-    auto custom_tensor = Tensor::from_vector(data, {1000}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {1000}, Device::GPU);
     auto torch_tensor = torch::from_blob(data.data(), {1000},
                                          torch::TensorOptions().dtype(torch::kFloat32))
                             .clone()
@@ -373,7 +373,7 @@ TEST_F(TensorStressTest, NumericalStability) {
     compare_tensors(custom_exp_log, torch_exp_log, 1e-3f, 1e-3f, "ExpLog");
 
     // Test with very small values
-    auto custom_small = Tensor::full({1000}, 1e-30f, Device::CUDA);
+    auto custom_small = Tensor::full({1000}, 1e-30f, Device::GPU);
     auto torch_small = torch::full({1000}, 1e-30f,
                                    torch::TensorOptions().device(torch::kCUDA));
 
@@ -386,7 +386,7 @@ TEST_F(TensorStressTest, NumericalStability) {
 
 TEST_F(TensorStressTest, NormalizationStability) {
     // Test normalization with various distributions
-    auto custom_t = Tensor::randn({1000}, Device::CUDA);
+    auto custom_t = Tensor::randn({1000}, Device::GPU);
 
     auto data = custom_t.to_vector();
     auto torch_t = torch::from_blob(data.data(), {1000},
@@ -420,7 +420,7 @@ TEST_F(TensorStressTest, ConcurrentOperations) {
     for (int t = 0; t < num_threads; ++t) {
         threads.emplace_back([&custom_results, &torch_results, t, ops_per_thread]() {
             ASSERT_EQ(cudaSetDevice(0), cudaSuccess);
-            auto custom_tensor = Tensor::full({50, 50}, static_cast<float>(t), Device::CUDA);
+            auto custom_tensor = Tensor::full({50, 50}, static_cast<float>(t), Device::GPU);
             auto torch_tensor = torch::full({50, 50}, static_cast<float>(t),
                                             torch::TensorOptions().device(torch::kCUDA));
 
@@ -452,7 +452,7 @@ TEST_F(TensorStressTest, ConcurrentOperations) {
 // ============= Edge Cases =============
 
 TEST_F(TensorStressTest, EmptyTensorOperations) {
-    auto custom_empty = Tensor::empty({0}, Device::CUDA);
+    auto custom_empty = Tensor::empty({0}, Device::GPU);
     auto torch_empty = torch::empty({0}, torch::TensorOptions().device(torch::kCUDA));
 
     EXPECT_TRUE(custom_empty.is_valid());
@@ -471,7 +471,7 @@ TEST_F(TensorStressTest, LargeReduction) {
     // Very large tensor reduction
     const size_t size = 10000000; // 10M elements
 
-    auto custom_t = Tensor::ones({size}, Device::CUDA);
+    auto custom_t = Tensor::ones({size}, Device::GPU);
     auto torch_t = torch::ones({static_cast<long>(size)},
                                torch::TensorOptions().device(torch::kCUDA));
 
@@ -485,7 +485,7 @@ TEST_F(TensorStressTest, LargeReduction) {
 }
 
 TEST_F(TensorStressTest, ChainedReductions) {
-    auto custom_t = Tensor::randn({100, 100, 10}, Device::CUDA);
+    auto custom_t = Tensor::randn({100, 100, 10}, Device::GPU);
 
     auto data = custom_t.to_vector();
     auto torch_t = torch::from_blob(data.data(), {100, 100, 10},

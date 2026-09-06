@@ -66,7 +66,7 @@ namespace {
     // (a) sort along middle axis of [64, 1024, 64] float —
     // exercises launch_sort_2d nested host loop (~8192 checked launches).
     void bench_sort_middle_axis() {
-        auto t = Tensor::randn({64, 1024, 64}, Device::CUDA);
+        auto t = Tensor::randn({64, 1024, 64}, Device::GPU);
         // Warmup
         (void)t.sort(/*dim=*/1, /*descending=*/false);
         sync_device();
@@ -87,8 +87,8 @@ namespace {
     // (b) broadcast_binary add on broadcast-mismatched shapes
     // ([2,3,4] + [2,1,4] → generic broadcast_binary_kernel family).
     void bench_broadcast_binary_add() {
-        auto a = Tensor::randn({64, 128, 64}, Device::CUDA);
-        auto b = Tensor::randn({64, 1, 64}, Device::CUDA);
+        auto a = Tensor::randn({64, 128, 64}, Device::GPU);
+        auto b = Tensor::randn({64, 1, 64}, Device::GPU);
         // Warmup
         (void)a.add(b);
         sync_device();
@@ -108,8 +108,8 @@ namespace {
 
     // (c) tight loop of small masking-op launches (per-launch overhead floor).
     void bench_masking_op_loop() {
-        auto x = Tensor::randn({256}, Device::CUDA);
-        auto y = Tensor::randn({256}, Device::CUDA);
+        auto x = Tensor::randn({256}, Device::GPU);
+        auto y = Tensor::randn({256}, Device::GPU);
         // Warmup
         auto cond = x.gt(0.0f);
         (void)Tensor::where(cond, x, y);
@@ -129,8 +129,8 @@ namespace {
     }
 
     void bench_eager_binary_dispatch_tight_loop() {
-        auto a = Tensor::randn({16}, Device::CUDA);
-        auto b = Tensor::randn({16}, Device::CUDA);
+        auto a = Tensor::randn({16}, Device::GPU);
+        auto b = Tensor::randn({16}, Device::GPU);
         Tensor c;
         for (int k = 0; k < 64; ++k) {
             c = a.add(b);
@@ -150,7 +150,7 @@ namespace {
     }
 
     void bench_deferred_alias_copy_materialize() {
-        auto source = Tensor::randn({262144}, Device::CUDA);
+        auto source = Tensor::randn({262144}, Device::GPU);
         const auto run = [&] {
             Tensor deferred = source.add(1.0f).mul(2.0f).sub(3.0f);
             std::array<Tensor, 4> aliases{deferred, deferred, deferred, deferred};

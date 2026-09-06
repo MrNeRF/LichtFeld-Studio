@@ -830,7 +830,7 @@ namespace lfs::io {
             throw_if_load_cancel_requested(options, "Transforms PLY upload cancelled");
 
             // Move to CUDA for GPU rendering
-            return PointCloud(positions.cuda(), color_tensor.cuda());
+            return PointCloud(positions.gpu(), color_tensor.gpu());
 
         } catch (const std::exception& e) {
             throw std::runtime_error(std::format("Failed to load PLY file {}: {}", lfs::core::path_to_utf8(filepath), e.what()));

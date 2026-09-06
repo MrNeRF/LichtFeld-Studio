@@ -9,8 +9,10 @@
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "display_tensors.hpp"
 #include "gt_comparison_cache_utils.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
@@ -199,155 +201,11 @@ namespace lfs::vis {
             return frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS;
         }
 
-        [[nodiscard]] std::pair<float, float> robustDepthDisplayRange(const float* src, std::size_t count) {
-            std::vector<float> valid;
-            valid.reserve(count);
-            for (std::size_t i = 0; i < count; ++i) {
-                const float d = src[i];
-                if (std::isfinite(d) && d > 0.0f && d < 1.0e9f) {
-                    valid.push_back(d);
-                }
-            }
-            if (valid.size() < 2) {
-                return {0.0f, 0.0f};
-            }
-
-            constexpr float kLoQuantile = 0.02f;
-            constexpr float kHiQuantile = 0.98f;
-            const auto quantile = [&](float q) {
-                const auto n = static_cast<std::size_t>(q * static_cast<float>(valid.size() - 1));
-                std::nth_element(valid.begin(), valid.begin() + n, valid.end());
-                return valid[n];
-            };
-            return {quantile(kLoQuantile), quantile(kHiQuantile)};
-        }
-
-        [[nodiscard]] glm::vec3 depthPaletteForDisplay(float near_t) {
-            near_t = std::clamp(near_t, 0.0f, 1.0f);
-            const glm::vec3 far_0(0.050f, 0.040f, 0.150f);
-            const glm::vec3 far_1(0.060f, 0.195f, 0.500f);
-            const glm::vec3 mid_0(0.000f, 0.500f, 0.650f);
-            const glm::vec3 mid_1(0.360f, 0.735f, 0.410f);
-            const glm::vec3 near_0(0.965f, 0.820f, 0.300f);
-            const glm::vec3 near_1(0.985f, 0.430f, 0.125f);
-
-            if (near_t < 0.20f) {
-                return glm::mix(far_0, far_1, glm::smoothstep(0.00f, 0.20f, near_t));
-            }
-            if (near_t < 0.43f) {
-                return glm::mix(far_1, mid_0, glm::smoothstep(0.20f, 0.43f, near_t));
-            }
-            if (near_t < 0.67f) {
-                return glm::mix(mid_0, mid_1, glm::smoothstep(0.43f, 0.67f, near_t));
-            }
-            if (near_t < 0.86f) {
-                return glm::mix(mid_1, near_0, glm::smoothstep(0.67f, 0.86f, near_t));
-            }
-            return glm::mix(near_0, near_1, glm::smoothstep(0.86f, 1.00f, near_t));
-        }
-
-        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeDepthDisplayTensor(
-            const lfs::core::Tensor& depth,
-            const lfs::rendering::DepthVisualizationMode depth_visualization_mode,
-            const glm::vec3& background_color) {
-            if (!depth.is_valid() || depth.ndim() != 2) {
-                return {};
-            }
-
-            auto depth_cpu = depth.cpu().contiguous();
-            const int height = static_cast<int>(depth_cpu.size(0));
-            const int width = static_cast<int>(depth_cpu.size(1));
-            if (width <= 0 || height <= 0) {
-                return {};
-            }
-
-            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
-            std::vector<float> output(3 * pixel_count, 0.0f);
-            const float* const src = depth_cpu.ptr<float>();
-            if (!src) {
-                return {};
-            }
-
-            const auto [range_lo, range_hi] = robustDepthDisplayRange(src, pixel_count);
-            const float range_span = range_hi - range_lo;
-
-            const bool grayscale =
-                depth_visualization_mode == lfs::rendering::DepthVisualizationMode::Grayscale;
-            for (std::size_t idx = 0; idx < pixel_count; ++idx) {
-                const float d = src[idx];
-                glm::vec3 color = background_color;
-                if (std::isfinite(d) && d > 0.0f && d < 1.0e9f && range_span > 1.0e-6f) {
-                    const float depth_t = std::clamp((d - range_lo) / range_span, 0.0f, 1.0f);
-                    const float near_t = 1.0f - depth_t;
-                    color = grayscale ? glm::vec3(near_t) : depthPaletteForDisplay(near_t);
-                }
-                output[idx] = color.r;
-                output[pixel_count + idx] = color.g;
-                output[2 * pixel_count + idx] = color.b;
-            }
-
-            auto tensor = lfs::core::Tensor::from_vector(
-                output,
-                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
-                lfs::core::Device::CPU);
-            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
-        }
-
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeDepthDisplayTensor(
             const lfs::core::Tensor& depth,
             const RenderSettings& settings) {
-            return makeDepthDisplayTensor(
+            return lfs::vis::makeDepthDisplayTensor(
                 depth, settings.depth_visualization_mode, settings.background_color);
-        }
-
-        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeNormalDisplayTensor(
-            const lfs::core::Tensor& normal) {
-            if (!normal.is_valid() || normal.ndim() != 3) {
-                return {};
-            }
-            const auto layout = lfs::rendering::detectImageLayout(normal);
-            if (layout == lfs::rendering::ImageLayout::Unknown ||
-                lfs::rendering::imageChannels(normal, layout) < 3) {
-                return {};
-            }
-
-            auto normal_cpu = normal.cpu().contiguous();
-            if (layout == lfs::rendering::ImageLayout::HWC) {
-                normal_cpu = normal_cpu.permute({2, 0, 1}).contiguous();
-            }
-
-            const int height = static_cast<int>(normal_cpu.size(1));
-            const int width = static_cast<int>(normal_cpu.size(2));
-            if (width <= 0 || height <= 0) {
-                return {};
-            }
-
-            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
-            std::vector<float> output(3 * pixel_count, 0.5f);
-            const float* const src = normal_cpu.ptr<float>();
-            if (!src) {
-                return {};
-            }
-
-            for (std::size_t idx = 0; idx < pixel_count; ++idx) {
-                glm::vec3 n(src[idx], src[pixel_count + idx], src[2 * pixel_count + idx]);
-                const float len = glm::length(n);
-                if (std::isfinite(len) && len > 1.0e-6f) {
-                    n /= len;
-                    const glm::vec3 color = glm::clamp(n * 0.5f + glm::vec3(0.5f),
-                                                       glm::vec3(0.0f),
-                                                       glm::vec3(1.0f));
-                    output[idx] = color.r;
-                    output[pixel_count + idx] = color.g;
-                    output[2 * pixel_count + idx] = color.b;
-                }
-            }
-
-            auto tensor = lfs::core::Tensor::from_vector(
-                output,
-                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
-                lfs::core::Device::CPU);
-            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
 
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeNormalDisplayFromDepthTensor(
@@ -1397,6 +1255,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::gtComparisonImageWorkerLoop(const std::stop_token stop_token) {
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            return;
+        }
         if (const cudaError_t err = cudaStreamCreateWithFlags(
                 &gt_comparison_worker_stream_, cudaStreamNonBlocking);
             err != cudaSuccess) {
@@ -1481,8 +1342,8 @@ namespace lfs::vis {
                                 gt_layout == lfs::rendering::ImageLayout::CHW &&
                                 request.undistort_requested;
                             if (undistort_gt) {
-                                if (gt_tensor.device() != lfs::core::Device::CUDA) {
-                                    gt_tensor = gt_tensor.to(lfs::core::Device::CUDA, worker_stream);
+                                if (gt_tensor.device() != lfs::core::Device::GPU) {
+                                    gt_tensor = gt_tensor.to(lfs::core::Device::GPU, worker_stream);
                                 }
                                 if (gt_tensor.dtype() == lfs::core::DataType::UInt8) {
                                     gt_tensor = gt_tensor.to(lfs::core::DataType::Float32) / 255.0f;
@@ -1630,7 +1491,8 @@ namespace lfs::vis {
         if (!last_vulkan_context_) {
             return std::unexpected("VkSplat selection query requires an active Vulkan context");
         }
-        if (!last_vulkan_context_->externalMemoryInteropEnabled()) {
+        if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::Vulkan &&
+            !last_vulkan_context_->externalMemoryInteropEnabled()) {
             return std::unexpected("VkSplat selection query requires CUDA/Vulkan external-memory interop");
         }
         // Point-cloud mode renders with a separate graphics pipeline, but selection
@@ -2497,11 +2359,11 @@ namespace lfs::vis {
             if (!image || !image->is_valid()) {
                 return {};
             }
-            if (image->device() == lfs::core::Device::CUDA) {
+            if (image->device() == lfs::core::Device::GPU) {
                 return image;
             }
             auto cuda_image = image->cuda();
-            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
                 LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
                 return {};
             }
@@ -2530,7 +2392,7 @@ namespace lfs::vis {
                 split_left_image_generation_ =
                     (split_left_image_generation_ + 1) | SPLIT_LEFT_GENERATION_BIT;
             }
-            if (image->device() == lfs::core::Device::CUDA) {
+            if (image->device() == lfs::core::Device::GPU) {
                 return image;
             }
             if (gt_comparison_cuda_image_ && gt_comparison_cuda_source_ == image.get() &&
@@ -2540,7 +2402,7 @@ namespace lfs::vis {
                 return gt_comparison_cuda_image_;
             }
             auto cuda_image = image->cuda();
-            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
                 LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
                 return {};
             }
@@ -4874,6 +4736,18 @@ namespace lfs::vis {
     }
 
     lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return [](lfs::core::TensorShape shape,
+                      const size_t capacity,
+                      const lfs::core::DataType dtype,
+                      const std::string_view name) -> lfs::core::Tensor {
+                (void)capacity;
+                lfs::core::Tensor tensor =
+                    lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::GPU, dtype);
+                tensor.set_name(std::string{name});
+                return tensor;
+            };
+        }
         if (!last_vulkan_context_ || !last_vulkan_context_->externalMemoryInteropEnabled()) {
             return {};
         }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
-#include "core/tensor/internal/tensor_generic_ops.cuh"
+#include "core/tensor/backend/cuda/kernels/tensor_generic_ops.cuh"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"
@@ -593,7 +593,7 @@ namespace lfs::training::mrnf_strategy {
         cuda_scratch::DeviceBuffer sorted_indices_buffer;
 
         if (scratch) {
-            scratch->ensure_n(N, lfs::core::Device::CUDA);
+            scratch->ensure_n(N, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(scratch->n_capacity >= sort_count,
                            lfs::core::detail::format_cuda_safe(
                                "Gumbel scratch n_capacity must be >= sort_count (cap={}, sort_count={})",
@@ -668,7 +668,7 @@ namespace lfs::training::mrnf_strategy {
             size_t workspace_bytes = 0;
             LFS_CUDA_CHECK_MSG(sort_pairs(nullptr, workspace_bytes),
                                "MRNF Gumbel CUB workspace query");
-            scratch->ensure_cub(workspace_bytes, lfs::core::Device::CUDA);
+            scratch->ensure_cub(workspace_bytes, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(workspace_bytes == 0 ||
                                (scratch->cub.is_valid() && scratch->cub_bytes >= workspace_bytes &&
                                 scratch->cub.data_ptr() != nullptr),
@@ -1015,7 +1015,7 @@ namespace lfs::training::mrnf_strategy {
 
         cudaStream_t s = resolve_stream(stream);
         const int n_int = static_cast<int>(n);
-        scratch->ensure_n(n, lfs::core::Device::CUDA);
+        scratch->ensure_n(n, lfs::core::Device::GPU);
         LFS_ASSERT_MSG(scratch->n_capacity >= n &&
                            scratch->selected.is_valid() &&
                            scratch->sorted.is_valid(),
@@ -1034,7 +1034,7 @@ namespace lfs::training::mrnf_strategy {
         };
         size_t sort_bytes = 0;
         LFS_CUDA_CHECK_MSG(sort_op(nullptr, sort_bytes), "MRNF sorted-median sort size");
-        scratch->ensure_temps(0, sort_bytes, lfs::core::Device::CUDA);
+        scratch->ensure_temps(0, sort_bytes, lfs::core::Device::GPU);
         if (sort_bytes > 0) {
             LFS_ASSERT_MSG(scratch->sort_temp.is_valid() &&
                                scratch->sort_temp_bytes >= sort_bytes &&

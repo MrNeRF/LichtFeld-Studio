@@ -7,7 +7,7 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "rendering/rasterizer/vulkan/src/config.h"
 #include "vksplat_input_packer_cuda.hpp"
 
@@ -214,8 +214,8 @@ namespace lfs::vis::vksplat {
             if (sh0.dtype() != DataType::Float32) {
                 sh0 = sh0.to(DataType::Float32);
             }
-            if (sh0.device() != Device::CUDA) {
-                sh0 = sh0.to(Device::CUDA);
+            if (sh0.device() != Device::GPU) {
+                sh0 = sh0.to(Device::GPU);
             }
             if (sh0.ndim() == 2) {
                 sh0 = sh0.unsqueeze(1); // [N, 1, 3]
@@ -230,8 +230,8 @@ namespace lfs::vis::vksplat {
                 if (shN.dtype() != DataType::Float32) {
                     shN = shN.to(DataType::Float32);
                 }
-                if (shN.device() != Device::CUDA) {
-                    shN = shN.to(Device::CUDA);
+                if (shN.device() != Device::GPU) {
+                    shN = shN.to(Device::GPU);
                 }
                 if (!shN.is_contiguous()) {
                     shN = shN.contiguous();
@@ -245,7 +245,7 @@ namespace lfs::vis::vksplat {
                                            static_cast<std::size_t>(kShDim),
                                            static_cast<std::size_t>(SH_REORDER_SIZE),
                                            static_cast<std::size_t>(kShChunkFloats)},
-                                          Device::CUDA,
+                                          Device::GPU,
                                           DataType::Float32);
             lfs::core::sh_swizzled_pack_full_from_split(
                 sh0.ptr<float>(),
@@ -284,7 +284,7 @@ namespace lfs::vis::vksplat {
             if (tensor.dtype() != DataType::Float32) {
                 return std::unexpected(std::format("VkSplat {} tensor must be Float32", label));
             }
-            if (tensor.device() != Device::CUDA) {
+            if (tensor.device() != Device::GPU) {
                 return std::unexpected(std::format("VkSplat {} tensor must be CUDA-resident", label));
             }
             if (!tensor.is_contiguous()) {
@@ -511,7 +511,7 @@ namespace lfs::vis::vksplat {
             const Tensor& deleted = splat_data.deleted();
             const bool contract_ok =
                 deleted.dtype() == DataType::Bool &&
-                deleted.device() == Device::CUDA &&
+                deleted.device() == Device::GPU &&
                 deleted.is_contiguous() &&
                 static_cast<std::size_t>(deleted.numel()) == n;
             if (!contract_ok) {
@@ -528,7 +528,7 @@ namespace lfs::vis::vksplat {
                         "VkSplat soft-skipping stale deleted mask (dtype={}, device={}, "
                         "contiguous={}, numel={}, N={}); raw opacity used this frame",
                         static_cast<int>(deleted.dtype()),
-                        deleted.device() == Device::CUDA ? "CUDA" : "CPU",
+                        deleted.device() == Device::GPU ? "CUDA" : "CPU",
                         deleted.is_contiguous(),
                         deleted.numel(),
                         n);
@@ -591,8 +591,8 @@ namespace lfs::vis::vksplat {
                 if (out.dtype() != DataType::Float32) {
                     out = out.to(DataType::Float32);
                 }
-                if (out.device() != Device::CUDA) {
-                    out = out.to(Device::CUDA);
+                if (out.device() != Device::GPU) {
+                    out = out.to(Device::GPU);
                 }
                 return out.contiguous();
             };

@@ -18,12 +18,12 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     Tensor make_means(const std::vector<float>& xyz) {
         // xyz is a flat [N*3] list
-        return Tensor::from_vector(xyz, {xyz.size() / 3, 3}, Device::CUDA);
+        return Tensor::from_vector(xyz, {xyz.size() / 3, 3}, Device::GPU);
     }
 
 } // namespace
@@ -53,7 +53,7 @@ TEST_F(SelectionOpsCudaTest, GrowAndShrinkSuccessPathDoesNotThrow) {
     Tensor grown;
     EXPECT_NO_THROW(grown = lfs::core::cuda::selection_grow(mask, means, 1.0f, /*group_id=*/1));
     ASSERT_EQ(grown.numel(), 3u);
-    ASSERT_EQ(grown.device(), Device::CUDA);
+    ASSERT_EQ(grown.device(), Device::GPU);
 
     const auto grown_cpu = grown.cpu().to_vector_uint8();
     EXPECT_EQ(grown_cpu[0], 1);

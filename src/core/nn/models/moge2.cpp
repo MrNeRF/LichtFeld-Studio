@@ -6,8 +6,8 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/source_site.hpp"
-#include "internal/cuda_stream_context.hpp"
-#include "internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
@@ -147,7 +147,7 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Moge2> Moge2::load(const std::filesystem::path& weights, Device device,
                                    std::optional<DataType> compute) {
-        if (device != Device::CUDA) {
+        if (device != Device::GPU) {
             return moge_error(lfs::ErrorCode::InvalidArgument,
                               "MoGe-2 requires a CUDA device");
         }
@@ -394,7 +394,7 @@ namespace lfs::core::nn::models {
             return moge_error(lfs::ErrorCode::InvalidArgument,
                               "MoGe-2 image must be NCHW with 3 channels");
         }
-        if (image.device() != Device::CUDA) {
+        if (image.device() != Device::GPU) {
             return moge_error(lfs::ErrorCode::InvalidArgument, "MoGe-2 image must be on CUDA");
         }
         if (num_tokens <= 0) {

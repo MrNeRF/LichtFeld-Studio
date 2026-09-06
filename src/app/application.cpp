@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "app/application.hpp"
+#include "app/gpu_preflight.hpp"
 #include "app/headless_recovery_document.hpp"
 #include "app/headless_run_coordinator.hpp"
 #include "control/command_api.hpp"
@@ -23,6 +24,7 @@
 #include "core/scene.hpp"
 #include "core/session_breadcrumb.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
@@ -998,7 +1000,7 @@ namespace lfs::app {
                 auto* const bg_ptr = background.ptr<float>();
                 bg_ptr[0] = bg_ptr[1] = bg_ptr[2] = 0.0f;
             }
-            background = background.to(core::Device::CUDA);
+            background = background.to(core::Device::GPU);
 
             lfs::io::video::VideoEncoder encoder;
             lfs::io::video::VideoExportOptions options;
@@ -1059,8 +1061,8 @@ namespace lfs::app {
                 if (image.dtype() != core::DataType::Float32) {
                     image = image.to(core::DataType::Float32);
                 }
-                if (image.device() != core::Device::CUDA) {
-                    image = image.cuda();
+                if (image.device() != core::Device::GPU) {
+                    image = image.gpu();
                 }
                 auto image_hwc = image.permute({1, 2, 0}).contiguous();
 
@@ -1118,7 +1120,40 @@ namespace lfs::app {
     // kernels. Without this gate the first launch inside warmup_kernels dies with no
     // user-facing message (#1540). show_dialog is false for CLI-only modes: a modal in a
     // non-interactive process blocks it forever.
-    bool preflightGpu(const bool show_dialog) {
+    bool preflightGpu(const bool show_dialog, const bool viewer_only) {
+        const bool cuda_usable =
+            lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+        const bool vulkan_usable =
+            lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan);
+        switch (decide_gpu_preflight(viewer_only, cuda_usable, vulkan_usable)) {
+        case GpuPreflightDecision::UseVulkanViewer: {
+            const lfs::Status backend = lfs::core::set_default_gpu_backend(
+                lfs::core::GpuBackend::Vulkan);
+            if (!backend.has_value()) {
+                reportFatalStartupError(
+                    "LichtFeld Studio - No usable GPU",
+                    std::format("No usable NVIDIA GPU found, and the Vulkan tensor backend "
+                                "could not be selected ({}).",
+                                lfs::format_for_developer(backend.error())),
+                    show_dialog);
+                return false;
+            }
+            LOG_WARN("No usable NVIDIA GPU: training is unavailable, the viewer runs on the "
+                     "Vulkan tensor backend");
+            return true;
+        }
+        case GpuPreflightDecision::Fatal:
+            reportFatalStartupError(
+                "LichtFeld Studio - No usable GPU",
+                std::format("No usable NVIDIA GPU found. LichtFeld Studio requires an "
+                            "NVIDIA GPU with compute capability {}.{} or newer.{}",
+                            LFS_MIN_SM / 10, LFS_MIN_SM % 10, kMinGpuHint),
+                show_dialog);
+            return false;
+        case GpuPreflightDecision::UseCuda:
+            break;
+        }
+
         const auto info = lfs::core::check_cuda_version();
         if (info.query_failed) {
             LOG_WARN("Failed to query CUDA driver version");
@@ -1268,7 +1303,9 @@ namespace lfs::app {
             // module memory (the cuda.modules row). Without it the modules land in the
             // unattributed NVML residual. The pre-flight gate in run_mode covers
             // hardware compatibility before this warmup starts.
-            warmupCudaAsync();
+            if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                warmupCudaAsync();
+            }
 
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 

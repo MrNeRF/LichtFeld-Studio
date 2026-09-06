@@ -280,9 +280,9 @@ namespace lfs::training {
             Tensor scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
 
             // Allocate outputs
-            sampled_idxs = Tensor::empty({n_dead}, Device::CUDA, DataType::Int64);
-            sampled_opacities = Tensor::empty({n_dead}, Device::CUDA, DataType::Float32);
-            sampled_scales = Tensor::empty({n_dead, 3}, Device::CUDA, DataType::Float32);
+            sampled_idxs = Tensor::empty({n_dead}, Device::GPU, DataType::Int64);
+            sampled_opacities = Tensor::empty({n_dead}, Device::GPU, DataType::Float32);
+            sampled_scales = Tensor::empty({n_dead, 3}, Device::GPU, DataType::Float32);
 
             const uint64_t seed = deterministic_mcmc_seed(_current_iteration, 0x52454c4f43415445ULL);
 
@@ -319,8 +319,8 @@ namespace lfs::training {
         Tensor new_opacities, new_scales;
         {
             LOG_TIMER("relocate_cuda_kernel");
-            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::CUDA);
-            new_scales = Tensor::empty(sampled_scales.shape(), Device::CUDA);
+            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::GPU);
+            new_scales = Tensor::empty(sampled_scales.shape(), Device::GPU);
 
             mcmc::launch_relocation_kernel(
                 sampled_opacities.ptr<float>(),
@@ -464,9 +464,9 @@ namespace lfs::training {
             }
 
             // Allocate output tensors
-            sampled_idxs = Tensor::empty({n_new}, Device::CUDA, DataType::Int64);
-            sampled_opacities = Tensor::empty({n_new}, Device::CUDA, DataType::Float32);
-            sampled_scales = Tensor::empty({n_new, 3}, Device::CUDA, DataType::Float32);
+            sampled_idxs = Tensor::empty({n_new}, Device::GPU, DataType::Int64);
+            sampled_opacities = Tensor::empty({n_new}, Device::GPU, DataType::Float32);
+            sampled_scales = Tensor::empty({n_new, 3}, Device::GPU, DataType::Float32);
 
             // Generate random seed
             const auto seed = deterministic_mcmc_seed(_current_iteration, 0x4144445f4e4557ULL);
@@ -503,8 +503,8 @@ namespace lfs::training {
         Tensor new_opacities, new_scales;
         {
             LOG_TIMER("add_new_relocation_kernel");
-            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::CUDA);
-            new_scales = Tensor::empty(sampled_scales.shape(), Device::CUDA);
+            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::GPU);
+            new_scales = Tensor::empty(sampled_scales.shape(), Device::GPU);
 
             mcmc::launch_relocation_kernel(
                 sampled_opacities.ptr<float>(),
@@ -629,8 +629,8 @@ namespace lfs::training {
         Tensor new_opacities, new_scales;
         {
             LOG_TIMER("add_new_relocation");
-            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::CUDA);
-            new_scales = Tensor::empty(sampled_scales.shape(), Device::CUDA);
+            new_opacities = Tensor::empty(sampled_opacities.shape(), Device::GPU);
+            new_scales = Tensor::empty(sampled_scales.shape(), Device::GPU);
 
             mcmc::launch_relocation_kernel(
                 sampled_opacities.ptr<float>(),
@@ -710,7 +710,7 @@ namespace lfs::training {
         }
 
         // one fused kernel (curand + cov transform + add); no noise buffer.
-        const auto frozen_mask = make_frozen_mask(*_splat_data, n, Device::CUDA);
+        const auto frozen_mask = make_frozen_mask(*_splat_data, n, Device::GPU);
         const auto seed = deterministic_mcmc_seed(_current_iteration, 0x494e4a454354ULL);
         mcmc::launch_inject_noise_kernel(
             _splat_data->opacity_raw().ptr<float>(),
@@ -963,7 +963,7 @@ namespace lfs::training {
                     if (param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(
-                        param.shape(), required_capacity, Device::CUDA, param.dtype());
+                        param.shape(), required_capacity, Device::GPU, param.dtype());
                     cudaMemcpy(new_param.data_ptr(), param.data_ptr(),
                                param.numel() * dtype_size(param.dtype()),
                                cudaMemcpyDeviceToDevice);
@@ -995,7 +995,7 @@ namespace lfs::training {
         mcmc::init_relocation_coefficients(_n_max);
 
         if (_params->max_cap > 0) {
-            _ones_int32 = Tensor::ones({static_cast<size_t>(_params->max_cap)}, Device::CUDA, DataType::Int32);
+            _ones_int32 = Tensor::ones({static_cast<size_t>(_params->max_cap)}, Device::GPU, DataType::Int32);
         }
 
         _optimizer = create_optimizer(*_splat_data, *_params);

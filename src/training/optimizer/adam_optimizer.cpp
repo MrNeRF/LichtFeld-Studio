@@ -12,7 +12,7 @@
 #include "core/logger.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
@@ -135,8 +135,8 @@ namespace lfs::training {
             if (mask.dtype() != lfs::core::DataType::Bool || mask.ndim() != 1) {
                 throw std::runtime_error("AdamOptimizer frozen mask must be a 1D bool tensor");
             }
-            if (mask.device() != lfs::core::Device::CUDA) {
-                mask = mask.cuda();
+            if (mask.device() != lfs::core::Device::GPU) {
+                mask = mask.gpu();
             }
             if (!mask.is_contiguous()) {
                 mask = mask.contiguous();
@@ -161,8 +161,8 @@ namespace lfs::training {
             LFS_ASSERT_MSG(
                 mask.numel() == static_cast<size_t>(splat_data_.size()),
                 "AdamOptimizer crop damping mask must match the model row count");
-            if (mask.device() != lfs::core::Device::CUDA) {
-                mask = mask.cuda();
+            if (mask.device() != lfs::core::Device::GPU) {
+                mask = mask.gpu();
             }
             if (!mask.is_contiguous()) {
                 mask = mask.contiguous();
@@ -2042,14 +2042,14 @@ namespace lfs::training {
             (void)state_name;
             auto upload = [&](lfs::core::Tensor& tensor) {
                 if (!tensor.is_valid() ||
-                    tensor.device() == lfs::core::Device::CUDA) {
+                    tensor.device() == lfs::core::Device::GPU) {
                     return;
                 }
                 if (upload_stream != nullptr) {
-                    tensor = tensor.to(lfs::core::Device::CUDA, upload_stream);
+                    tensor = tensor.to(lfs::core::Device::GPU, upload_stream);
                     return;
                 }
-                tensor = tensor.to(lfs::core::Device::CUDA);
+                tensor = tensor.to(lfs::core::Device::GPU);
                 upload_stream = tensor.stream();
             };
             upload(state.exp_avg);

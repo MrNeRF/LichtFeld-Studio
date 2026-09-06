@@ -40,7 +40,7 @@ namespace {
         for (size_t i = 0; i < host.size(); ++i) {
             host[i] += 0.08f * std::sin(seed * 0.17f * static_cast<float>(i + 1));
         }
-        grid.grids().copy_from(Tensor::from_vector(host, grid.grids().shape(), Device::CUDA));
+        grid.grids().copy_from(Tensor::from_vector(host, grid.grids().shape(), Device::GPU));
         grid.project_mean(grid.parameterization() == BilateralGridParameterization::ExposureChroma);
     }
 
@@ -49,7 +49,7 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = 0.12f + 0.76f * std::fmod(seed * 0.173f * static_cast<float>(i + 1), 1.0f);
         }
-        return Tensor::from_vector(values, shape, Device::CUDA);
+        return Tensor::from_vector(values, shape, Device::GPU);
     }
 
     Tensor random_grad(const lfs::core::TensorShape& shape, const float seed) {
@@ -57,7 +57,7 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = 0.2f * std::sin(seed * 0.31f * static_cast<float>(i + 3));
         }
-        return Tensor::from_vector(values, shape, Device::CUDA);
+        return Tensor::from_vector(values, shape, Device::GPU);
     }
 
     void expect_rel_near(const std::vector<float>& got,
@@ -95,8 +95,8 @@ namespace {
         const std::vector<float> new_grid = cpu_copy(grid.grad_slice());
         const std::vector<float> new_rgb = cpu_copy(grad_rgb_new);
 
-        auto grad_grid_ref = Tensor::zeros(grid.grad_slice().shape(), Device::CUDA);
-        auto grad_rgb_ref = Tensor::empty(image.shape(), Device::CUDA);
+        auto grad_grid_ref = Tensor::zeros(grid.grad_slice().shape(), Device::GPU);
+        auto grad_rgb_ref = Tensor::empty(image.shape(), Device::GPU);
         const auto rgb_cont = image.contiguous();
         const auto gout_cont = grad_output.contiguous();
         const int h = chw ? static_cast<int>(image.shape()[1]) : static_cast<int>(image.shape()[0]);
@@ -137,7 +137,7 @@ namespace {
         return Tensor::from_vector(
             hwc,
             {static_cast<size_t>(height), static_cast<size_t>(width), size_t{3}},
-            Device::CUDA);
+            Device::GPU);
     }
 
     Tensor hwc_to_chw(const Tensor& hwc) {
@@ -155,7 +155,7 @@ namespace {
             }
         }
         return Tensor::from_vector(
-            chw, {size_t{3}, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CUDA);
+            chw, {size_t{3}, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::GPU);
     }
 
     TEST_F(BilateralGridBackwardTiledTest, RandomImageMatchesReferenceBothLayouts) {
@@ -268,8 +268,8 @@ namespace {
         auto run_param = [&](BilateralGridParameterization param, const char* name) {
             BilateralGrid grid(1, 16, 16, 8, 20, {}, param);
             fill_grid(grid, 4.1f);
-            auto grad_grid = Tensor::zeros(grid.grad_slice().shape(), Device::CUDA);
-            auto grad_rgb = Tensor::empty(chw.shape(), Device::CUDA);
+            auto grad_grid = Tensor::zeros(grid.grad_slice().shape(), Device::GPU);
+            auto grad_rgb = Tensor::empty(chw.shape(), Device::GPU);
             const float* grid_ptr = grid.grids().ptr<float>();
             const float* rgb_ptr = chw.ptr<float>();
             const float* gout_ptr = gout.ptr<float>();

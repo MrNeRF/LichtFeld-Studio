@@ -26,6 +26,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "scene/point_cloud_merge.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -341,38 +342,10 @@ namespace lfs::vis {
             for (const auto* node : visible_nodes) {
                 const auto& point_cloud = *node->point_cloud;
                 const glm::mat4 world_transform = scene.getWorldTransform(node->id);
-                auto means_cpu = point_cloud.means.to(core::DataType::Float32).cpu();
-                auto means_acc = means_cpu.accessor<float, 2>();
-                const size_t point_count = static_cast<size_t>(point_cloud.size());
-
-                for (size_t i = 0; i < point_count; ++i) {
-                    const glm::vec4 world_pos = world_transform * glm::vec4(
-                                                                      means_acc(i, 0),
-                                                                      means_acc(i, 1),
-                                                                      means_acc(i, 2),
-                                                                      1.0f);
-                    merged_means.push_back(world_pos.x);
-                    merged_means.push_back(world_pos.y);
-                    merged_means.push_back(world_pos.z);
-                }
-
-                if (point_cloud.colors.dtype() == core::DataType::UInt8) {
-                    auto colors_cpu = point_cloud.colors.cpu();
-                    auto colors_acc = colors_cpu.accessor<uint8_t, 2>();
-                    for (size_t i = 0; i < point_count; ++i) {
-                        merged_colors.push_back(static_cast<float>(colors_acc(i, 0)) / 255.0f);
-                        merged_colors.push_back(static_cast<float>(colors_acc(i, 1)) / 255.0f);
-                        merged_colors.push_back(static_cast<float>(colors_acc(i, 2)) / 255.0f);
-                    }
-                } else {
-                    auto colors_cpu = point_cloud.colors.to(core::DataType::Float32).cpu();
-                    auto colors_acc = colors_cpu.accessor<float, 2>();
-                    for (size_t i = 0; i < point_count; ++i) {
-                        merged_colors.push_back(colors_acc(i, 0));
-                        merged_colors.push_back(colors_acc(i, 1));
-                        merged_colors.push_back(colors_acc(i, 2));
-                    }
-                }
+                const auto means = transformPointsToWorld(point_cloud.means, world_transform).to_vector();
+                const auto colors = pointColorsAsFloat(point_cloud.colors).to_vector();
+                merged_means.insert(merged_means.end(), means.begin(), means.end());
+                merged_colors.insert(merged_colors.end(), colors.begin(), colors.end());
             }
 
             auto merged = std::make_shared<core::PointCloud>();
@@ -5045,14 +5018,14 @@ namespace lfs::vis {
         const auto& src = *gaussian_clipboard_;
         auto data = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
-            src.means_raw().cuda(), src.sh0_raw().cuda(),
-            src.shN_raw().is_valid() ? src.shN_raw().cuda() : lfs::core::Tensor{},
-            src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
+            src.means_raw().gpu(), src.sh0_raw().gpu(),
+            src.shN_raw().is_valid() ? src.shN_raw().gpu() : lfs::core::Tensor{},
+            src.scaling_raw().gpu(), src.rotation_raw().gpu(), src.opacity_raw().gpu(),
             src.get_scene_scale(),
             lfs::core::SplatData::ShNLayout::Swizzled);
         data->set_active_sh_degree(
             src.get_active_sh_degree(),
-            src.shN_value_quantized() ? src.shN_value_bounds().cuda() : lfs::core::Tensor{});
+            src.shN_value_quantized() ? src.shN_value_bounds().gpu() : lfs::core::Tensor{});
 
         const std::string name = makeUniqueCounterNodeName(scene_, "Selection", clipboard_counter_);
         if (auto allocator = makeExternalSplatAllocator()) {
@@ -5201,14 +5174,14 @@ namespace lfs::vis {
                 name = makeUniqueCounterNodeName(scene_, "Pasted", clipboard_counter_);
                 auto paste_data = std::make_unique<lfs::core::SplatData>(
                     entry.data->get_max_sh_degree(),
-                    entry.data->means_raw().cuda(), entry.data->sh0_raw().cuda(),
-                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().cuda() : lfs::core::Tensor{},
-                    entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
+                    entry.data->means_raw().gpu(), entry.data->sh0_raw().gpu(),
+                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().gpu() : lfs::core::Tensor{},
+                    entry.data->scaling_raw().gpu(), entry.data->rotation_raw().gpu(), entry.data->opacity_raw().gpu(),
                     entry.data->get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
                 paste_data->set_active_sh_degree(
                     entry.data->get_active_sh_degree(),
-                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().cuda()
+                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().gpu()
                                                       : lfs::core::Tensor{});
 
                 if (auto allocator = makeExternalSplatAllocator()) {
@@ -5586,14 +5559,14 @@ namespace lfs::vis {
             const auto inverted_active = active.logical_xor(other_selected.logical_not());
 
             const auto group_tensor = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
+            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             const auto active_values = group_tensor.where(inverted_active, zeros);
             new_mask = old_u8.where(other_selected, active_values);
         } else {
             // No active selection -> invert becomes select-all (into the active selection group).
             new_mask = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         }
 
         scene_.setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
@@ -5663,7 +5636,7 @@ namespace lfs::vis {
             const auto visible_values = visible_bool.to(lfs::core::DataType::UInt8) *
                                         lfs::core::Tensor::full(
                                             {visible_total}, static_cast<float>(group_id),
-                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             lfs::core::Tensor full_mask;
             const auto visible_indices = scene_.getVisibleSelectionIndices();
             if (visible_values.numel() == full_total && !visible_indices) {
@@ -5671,7 +5644,7 @@ namespace lfs::vis {
             } else if (visible_indices && visible_indices->is_valid() &&
                        visible_indices->numel() == visible_values.numel()) {
                 full_mask = lfs::core::Tensor::zeros(
-                    {full_total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    {full_total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                 full_mask.index_copy_(0, *visible_indices, visible_values);
             } else {
                 return;

@@ -5041,7 +5041,7 @@ namespace lfs::app {
                                 node->model->max_sh_coeffs_rest() == 0) {
                                 field_payloads[field_name] = tensor_payload_json(
                                     core::Tensor::zeros({static_cast<size_t>(resolved_indices.size()), 0, 3},
-                                                        core::Device::CUDA));
+                                                        core::Device::GPU));
                                 continue;
                             }
                             const auto rest_coefficients =

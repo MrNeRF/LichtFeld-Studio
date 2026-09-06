@@ -10,6 +10,7 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <array>
 #include <atomic>
@@ -95,14 +96,22 @@ namespace lfs::core {
 
     void teardown_gpu_before_exit() noexcept {
         try {
+            static_cast<void>(shutdown_gpu_backend(GpuBackend::Vulkan));
             // release every registered long-lived CUDA holder
             // (TLS FastGS sort workspaces, rasterizer image caches, PPISP shared
             // statics, mirror mult cache, nan-check scratch, …) while the pool
             // and CUDA context are still usable. After this returns, static/TLS
             // dtors must find empty holders — otherwise they free after the
             // Meyers-singleton pool is destroyed → SIGSEGV (exit 139).
-            run_gpu_pre_shutdown_hooks_once();
+            const bool cuda_usable = gpu_backend_available(GpuBackend::CUDA);
+            if (cuda_usable) {
+                run_gpu_pre_shutdown_hooks_once();
+            }
             g_gpu_process_teardown_started.store(true, std::memory_order_release);
+
+            if (!cuda_usable) {
+                return;
+            }
 
             // Drain dedicated DeviceFaultRecord slots (cudaMalloc-owned, never
             // pool memory) before the tensor memory

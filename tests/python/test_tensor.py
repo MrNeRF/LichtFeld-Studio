@@ -43,6 +43,7 @@ class TestTensorCreation:
         t = lf.Tensor.from_numpy(arr)
 
         assert t.device == "cpu"
+        assert t.backend == "cpu"
         assert not t.is_cuda
 
 
@@ -403,7 +404,33 @@ class TestTensorGPU:
 
         t_cuda = t_cpu.cuda()
         assert t_cuda.is_cuda
-        assert "cuda" in t_cuda.device
+        assert t_cuda.device == "cuda"
+        assert t_cuda.backend in ("cuda", "vulkan")
+
+    def test_cpu_to_gpu(self, lf, numpy, gpu_available):
+        """Test moving tensor from CPU to GPU via gpu()."""
+        if not gpu_available:
+            pytest.skip("GPU not available")
+
+        arr = numpy.array([1.0, 2.0, 3.0], dtype=numpy.float32)
+        t_cpu = lf.Tensor.from_numpy(arr)
+
+        t_gpu = t_cpu.gpu()
+        assert t_gpu.is_cuda
+        assert t_gpu.device == "cuda"
+        assert t_gpu.backend in ("cuda", "vulkan")
+        numpy.testing.assert_allclose(t_gpu.cpu().numpy(), arr)
+
+    def test_factory_device_gpu(self, lf, gpu_available):
+        """Test a factory called with device='gpu'."""
+        if not gpu_available:
+            pytest.skip("GPU not available")
+
+        t = lf.Tensor.zeros([3], device="gpu")
+        assert t.device == "cuda"
+        assert t.is_cuda
+        assert t.backend in ("cuda", "vulkan")
+        assert t.shape == (3,)
 
     def test_cuda_to_cpu(self, lf, numpy, gpu_available):
         """Test moving tensor from CUDA to CPU."""

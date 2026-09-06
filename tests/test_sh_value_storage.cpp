@@ -44,12 +44,12 @@ namespace {
     constexpr int kShDegree = 3;
 
     SplatData make_random_sh3(const size_t n, const uint32_t seed = 42) {
-        auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
-        auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN_can = Tensor::zeros({n, size_t{15}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto rotation = Tensor::zeros({n, size_t{4}}, Device::GPU, DataType::Float32);
+        auto opacity = Tensor::zeros({n, size_t{1}}, Device::GPU, DataType::Float32);
 
         {
             std::mt19937 rng(seed);
@@ -58,13 +58,13 @@ namespace {
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * 15 * 3; ++i)
                 p[i] = nd(rng);
-            shN_can = cpu.to(Device::CUDA);
+            shN_can = cpu.to(Device::GPU);
 
             auto rcpu = rotation.cpu();
             auto* r = rcpu.ptr<float>();
             for (size_t i = 0; i < n; ++i)
                 r[i * 4] = 1.0f;
-            rotation = rcpu.to(Device::CUDA);
+            rotation = rcpu.to(Device::GPU);
         }
 
         return SplatData(kShDegree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
@@ -118,7 +118,7 @@ namespace {
         auto* p = cpu.ptr<float>();
         for (size_t i = 0; i < cpu.numel(); ++i)
             p[i] = nd(rng);
-        t = cpu.to(Device::CUDA);
+        t = cpu.to(Device::GPU);
     }
 
     [[nodiscard]] double psnr_from_mse(double mse) {
@@ -167,7 +167,7 @@ namespace {
                                    const DataType dtype,
                                    std::string_view) {
             ++allocation_calls;
-            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::CUDA, dtype);
+            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::GPU, dtype);
             return retag_external(std::move(backing), "vulkan_external_buffer");
         };
     }
@@ -346,7 +346,7 @@ TEST(ShValueStorageTest, Q16DeletedMaskSceneMergeAndPlyExport) {
     deleted[1] = true;
     deleted[17] = true;
     deleted[63] = true;
-    splat.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+    splat.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::GPU);
     ASSERT_TRUE(splat.has_deleted_mask());
 
     auto merged = Scene::mergeSplatsWithTransforms(
@@ -560,7 +560,7 @@ TEST(ShValueStorageTest, KernelEncodeDecodeMatchesHost) {
     // Build float4-swizzled source with known pattern on active cells only.
     // Pad floats (48−45 per prim in the float4 layout) stay zero — encode/decode
     // only touch n_cells = coeffs_rest*3 pad-dropped cells.
-    Tensor src = Tensor::zeros({n_floats}, Device::CUDA, DataType::Float32);
+    Tensor src = Tensor::zeros({n_floats}, Device::GPU, DataType::Float32);
     {
         auto cpu = src.cpu();
         auto* p = cpu.ptr<float>();
@@ -579,12 +579,12 @@ TEST(ShValueStorageTest, KernelEncodeDecodeMatchesHost) {
                 p[f4_idx] = static_cast<float>(static_cast<int>(c % 17) - 8) * 0.05f;
             }
         }
-        src = cpu.to(Device::CUDA);
+        src = cpu.to(Device::GPU);
     }
 
-    Tensor u16 = Tensor::zeros({n_u16}, Device::CUDA, DataType::Float16);
-    Tensor bounds = Tensor::zeros({n_bounds * 2}, Device::CUDA, DataType::Float32);
-    Tensor dst = Tensor::zeros({n_floats}, Device::CUDA, DataType::Float32);
+    Tensor u16 = Tensor::zeros({n_u16}, Device::GPU, DataType::Float16);
+    Tensor bounds = Tensor::zeros({n_bounds * 2}, Device::GPU, DataType::Float32);
+    Tensor dst = Tensor::zeros({n_floats}, Device::GPU, DataType::Float32);
 
     sh_value::encode_shN_float4_to_u16(
         src.ptr<float>(),
@@ -611,7 +611,7 @@ TEST(ShValueStorageTest, LedgerBpsUnder307WithJoint) {
     // Large-N asymptotic: use N=1024 so bounds amortize.
     constexpr size_t n = 1024;
     auto splat = make_random_sh3(n);
-    splat._densification_info = Tensor::zeros({size_t{2}, n}, Device::CUDA, DataType::Float32);
+    splat._densification_info = Tensor::zeros({size_t{2}, n}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
 
     AdamOptimizer optimizer(splat, AdamConfig{});
@@ -643,7 +643,7 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
         const auto rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
         const auto cap_f = sh_swizzled_float_count(kCap, rest);
         if (splat.shN().capacity() < cap_f) {
-            auto grown = Tensor::zeros_direct(splat.shN().shape(), cap_f, Device::CUDA);
+            auto grown = Tensor::zeros_direct(splat.shN().shape(), cap_f, Device::GPU);
             if (splat.shN().numel() > 0) {
                 cudaMemcpy(grown.ptr<float>(), splat.shN().ptr<float>(),
                            splat.shN().numel() * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -668,11 +668,11 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
 
     std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::vector<float> T_data = {0, 0, 4};
-    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
     Camera camera(R, T, 100.f, 100.f, 32.f, 32.f, Tensor(), Tensor(), CameraModelType::PINHOLE,
                   "test", "", std::filesystem::path{}, 64, 64, 0);
-    Tensor bg = Tensor::zeros({3}, Device::CUDA);
+    Tensor bg = Tensor::zeros({3}, Device::GPU);
 
     {
         auto r = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false);
@@ -683,30 +683,30 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
     const auto rest = static_cast<uint32_t>(splat.max_sh_coeffs_rest());
     const size_t n1 = kN0 + kAppend;
     {
-        auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::CUDA);
+        auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::GPU);
         {
             auto cpu = append_means.cpu();
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < kAppend; ++i) {
                 p[i * 3 + 0] = static_cast<float>(i) * 0.05f - 0.5f;
             }
-            append_means = cpu.to(Device::CUDA);
+            append_means = cpu.to(Device::GPU);
         }
         opt.add_new_params(ParamType::Means, append_means, true);
         opt.add_new_params(ParamType::Sh0,
-                           Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.25f, Device::CUDA), true);
+                           Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.25f, Device::GPU), true);
         opt.add_new_params(ParamType::Scaling,
-                           Tensor::full({kAppend, size_t{3}}, -2.0f, Device::CUDA), true);
+                           Tensor::full({kAppend, size_t{3}}, -2.0f, Device::GPU), true);
         std::vector<float> rot(kAppend * 4, 0.f);
         for (size_t i = 0; i < kAppend; ++i)
             rot[i * 4] = 1.f;
         opt.add_new_params(
             ParamType::Rotation,
             Tensor::from_blob(rot.data(), {kAppend, size_t{4}}, Device::CPU, DataType::Float32)
-                .to(Device::CUDA),
+                .to(Device::GPU),
             true);
         opt.add_new_params(ParamType::Opacity,
-                           Tensor::full({kAppend, size_t{1}}, 2.0f, Device::CUDA), true);
+                           Tensor::full({kAppend, size_t{1}}, 2.0f, Device::GPU), true);
     }
     ASSERT_EQ(static_cast<size_t>(splat.size()), n1);
     {
@@ -715,7 +715,7 @@ TEST(ShValueStorageTest, PostDensifyReencodeThenFastGSForward) {
         if (shN.numel() < needed) {
             if (shN.capacity() < needed) {
                 auto grown = Tensor::zeros_direct(
-                    shN.shape(), sh_swizzled_float_count(kCap, rest), Device::CUDA);
+                    shN.shape(), sh_swizzled_float_count(kCap, rest), Device::GPU);
                 if (shN.numel() > 0) {
                     cudaMemcpy(grown.ptr<float>(), shN.ptr<float>(),
                                shN.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -785,7 +785,7 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
     sh0.copy_from(seed.sh0_raw());
     const size_t n_floats = sh_swizzled_float_count(kN0, rest);
     const size_t cap_floats = sh_swizzled_float_count(kCap, rest);
-    Tensor shN_float = Tensor::zeros_direct(TensorShape({n_floats}), cap_floats, Device::CUDA);
+    Tensor shN_float = Tensor::zeros_direct(TensorShape({n_floats}), cap_floats, Device::GPU);
     shN_float.copy_from(seed.shN_raw());
     SplatData model(kShDegree, std::move(means), std::move(sh0), std::move(shN_float),
                     std::move(scaling), std::move(rotation), std::move(opacity), 1.0f,
@@ -805,11 +805,11 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
 
     std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::vector<float> T_data = {0, 0, 4};
-    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
     Camera camera(R, T, 100.f, 100.f, 32.f, 32.f, Tensor(), Tensor(), CameraModelType::PINHOLE,
                   "test", "", std::filesystem::path{}, 64, 64, 0);
-    Tensor bg = Tensor::zeros({3}, Device::CUDA);
+    Tensor bg = Tensor::zeros({3}, Device::GPU);
 
     {
         auto r = fast_rasterize_forward(camera, model, bg, 0, 0, 0, 0, false);
@@ -824,22 +824,22 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
 
     const size_t n1 = kN0 + kAppend;
     {
-        auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::CUDA);
+        auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::GPU);
         opt.add_new_params(ParamType::Means, append_means, true);
         opt.add_new_params(ParamType::Sh0,
-                           Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.25f, Device::CUDA), true);
+                           Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.25f, Device::GPU), true);
         opt.add_new_params(ParamType::Scaling,
-                           Tensor::full({kAppend, size_t{3}}, -2.0f, Device::CUDA), true);
+                           Tensor::full({kAppend, size_t{3}}, -2.0f, Device::GPU), true);
         std::vector<float> rot(kAppend * 4, 0.f);
         for (size_t i = 0; i < kAppend; ++i)
             rot[i * 4] = 1.f;
         opt.add_new_params(
             ParamType::Rotation,
             Tensor::from_blob(rot.data(), {kAppend, size_t{4}}, Device::CPU, DataType::Float32)
-                .to(Device::CUDA),
+                .to(Device::GPU),
             true);
         opt.add_new_params(ParamType::Opacity,
-                           Tensor::full({kAppend, size_t{1}}, 2.0f, Device::CUDA), true);
+                           Tensor::full({kAppend, size_t{1}}, 2.0f, Device::GPU), true);
     }
     ASSERT_EQ(static_cast<size_t>(model.size()), n1);
     {
@@ -848,7 +848,7 @@ TEST(ShValueStorageTest, ExportableQ16DensifyThenFastGSForward) {
         if (shN.numel() < needed) {
             if (shN.capacity() < needed) {
                 auto grown = Tensor::zeros_direct(
-                    shN.shape(), sh_swizzled_float_count(kCap, rest), Device::CUDA);
+                    shN.shape(), sh_swizzled_float_count(kCap, rest), Device::GPU);
                 if (shN.numel() > 0) {
                     cudaMemcpy(grown.ptr<float>(), shN.ptr<float>(),
                                shN.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -1037,7 +1037,7 @@ TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
     sh0.copy_from(seed.sh0_raw());
     const size_t n_floats = sh_swizzled_float_count(kN0, rest);
     const size_t cap_floats = sh_swizzled_float_count(kCap, rest);
-    Tensor shN_float = Tensor::zeros_direct(TensorShape({n_floats}), cap_floats, Device::CUDA);
+    Tensor shN_float = Tensor::zeros_direct(TensorShape({n_floats}), cap_floats, Device::GPU);
     shN_float.copy_from(seed.shN_raw());
     SplatData model(kShDegree, std::move(means), std::move(sh0), std::move(shN_float),
                     std::move(scaling), std::move(rotation), std::move(opacity), 1.0f,
@@ -1055,11 +1055,11 @@ TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
 
     std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     std::vector<float> T_data = {0, 0, 4};
-    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
     Camera camera(R, T, 100.f, 100.f, 32.f, 32.f, Tensor(), Tensor(), CameraModelType::PINHOLE,
                   "coll", "", std::filesystem::path{}, 64, 64, 0);
-    Tensor bg = Tensor::zeros({3}, Device::CUDA);
+    Tensor bg = Tensor::zeros({3}, Device::GPU);
 
     // Two densify+degree-up cycles (simulates degree schedule colliding with refine).
     for (int cycle = 0; cycle < 2; ++cycle) {
@@ -1072,22 +1072,22 @@ TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
         model.means().reserve(std::min(kCap, n_before + kAppend * 2));
 
         {
-            auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::CUDA);
+            auto append_means = Tensor::zeros({kAppend, size_t{3}}, Device::GPU);
             opt.add_new_params(ParamType::Means, append_means, true);
             opt.add_new_params(ParamType::Sh0,
-                               Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.1f, Device::CUDA), true);
+                               Tensor::full({kAppend, size_t{1}, size_t{3}}, 0.1f, Device::GPU), true);
             opt.add_new_params(ParamType::Scaling,
-                               Tensor::full({kAppend, size_t{3}}, -2.0f, Device::CUDA), true);
+                               Tensor::full({kAppend, size_t{3}}, -2.0f, Device::GPU), true);
             std::vector<float> rot(kAppend * 4, 0.f);
             for (size_t i = 0; i < kAppend; ++i)
                 rot[i * 4] = 1.f;
             opt.add_new_params(
                 ParamType::Rotation,
                 Tensor::from_blob(rot.data(), {kAppend, size_t{4}}, Device::CPU, DataType::Float32)
-                    .to(Device::CUDA),
+                    .to(Device::GPU),
                 true);
             opt.add_new_params(ParamType::Opacity,
-                               Tensor::full({kAppend, size_t{1}}, 2.0f, Device::CUDA), true);
+                               Tensor::full({kAppend, size_t{1}}, 2.0f, Device::GPU), true);
         }
         const size_t n_after = static_cast<size_t>(model.size());
         {
@@ -1096,7 +1096,7 @@ TEST(ShDegreeCollisionTest, ExportableDegreeUpGrowSameBoundaryAllDegrees) {
             if (shN.numel() < needed) {
                 if (shN.capacity() < needed) {
                     auto grown = Tensor::zeros_direct(
-                        shN.shape(), sh_swizzled_float_count(kCap, rest), Device::CUDA);
+                        shN.shape(), sh_swizzled_float_count(kCap, rest), Device::GPU);
                     if (shN.numel() > 0) {
                         cudaMemcpy(grown.ptr<float>(), shN.ptr<float>(),
                                    shN.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
@@ -1334,9 +1334,9 @@ TEST(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedStay
     std::vector<int> dup_host(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(n_dup));
     std::vector<int> zero_host(order.begin() + static_cast<std::ptrdiff_t>(n_dup),
                                order.begin() + static_cast<std::ptrdiff_t>(n_dup + n_zero));
-    auto dup_idx = Tensor::from_vector(dup_host, TensorShape({n_dup}), Device::CUDA)
+    auto dup_idx = Tensor::from_vector(dup_host, TensorShape({n_dup}), Device::GPU)
                        .to(DataType::Int64);
-    auto zero_idx = Tensor::from_vector(zero_host, TensorShape({n_zero}), Device::CUDA)
+    auto zero_idx = Tensor::from_vector(zero_host, TensorShape({n_zero}), Device::GPU)
                         .to(DataType::Int64);
 
     const auto orig_codes = copy_u16_device(splat.shN());
@@ -1456,7 +1456,7 @@ TEST(ShValueStorageTest, ChunkedRefineMutationTouchedBlocksMatchOldUntouchedStay
     }
     mutated_host.insert(mutated_host.end(), zero_host.begin(), zero_host.end());
     auto mutated_idx =
-        Tensor::from_vector(mutated_host, TensorShape({mutated_host.size()}), Device::CUDA)
+        Tensor::from_vector(mutated_host, TensorShape({mutated_host.size()}), Device::GPU)
             .to(DataType::Int64);
     Tensor decoded_old;
     Tensor decoded_new;

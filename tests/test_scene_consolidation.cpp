@@ -215,7 +215,7 @@ TEST_F(SceneConsolidationExtractTest, SingleVisibleNodeAliasesWithoutAllocatorUs
                            lfs::core::DataType dtype,
                            std::string_view) {
             ++allocator_calls;
-            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+            return Tensor::empty(std::move(shape), Device::GPU, dtype);
         });
 
     const auto* combined = scene.getCombinedModel();
@@ -248,7 +248,7 @@ TEST_F(SceneConsolidationExtractTest, WorkerBuildMatchesSynchronousCombinedModel
             allocation_shape_rows.push_back(shape[0]);
             allocation_capacities.push_back(capacity);
             allocation_names.emplace_back(name);
-            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+            return Tensor::empty(std::move(shape), Device::GPU, dtype);
         };
 
     Tensor::trim_memory_pool();
@@ -336,7 +336,7 @@ TEST_F(SceneConsolidationExtractTest, SceneDestructionJoinsCombinedModelWorker) 
                 allocator_entered = true;
                 gate_changed.notify_all();
                 gate_changed.wait(lock, [&] { return release_allocator; });
-                return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+                return Tensor::empty(std::move(shape), Device::GPU, dtype);
             });
         scene.requestCombinedModelBuild(true);
     }
@@ -363,7 +363,7 @@ TEST_F(SceneConsolidationExtractTest, RemovingNodeRetiresModelUntilWorkerPoll) {
             allocator_entered = true;
             gate_changed.notify_all();
             gate_changed.wait(lock, [&] { return release_allocator; });
-            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+            return Tensor::empty(std::move(shape), Device::GPU, dtype);
         });
 
     scene.requestCombinedModelBuild(true);
@@ -415,7 +415,7 @@ TEST_F(SceneConsolidationExtractTest, ReplacingNodeModelRetiresPreviousUntilWork
             allocator_entered = true;
             gate_changed.notify_all();
             gate_changed.wait(lock, [&] { return release_allocator; });
-            return Tensor::empty(std::move(shape), Device::CUDA, dtype);
+            return Tensor::empty(std::move(shape), Device::GPU, dtype);
         });
 
     scene.requestCombinedModelBuild(true);

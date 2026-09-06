@@ -129,7 +129,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialBasicCUDA) {
     torch::manual_seed(456);
 
     std::vector<float> weights_data = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    auto custom_weights = Tensor::from_vector(weights_data, {5}, Device::CUDA);
+    auto custom_weights = Tensor::from_vector(weights_data, {5}, Device::GPU);
     auto torch_weights = torch::tensor(weights_data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_samples = Tensor::multinomial(custom_weights, 10, true);
@@ -138,7 +138,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialBasicCUDA) {
     ASSERT_TRUE(custom_samples.is_valid());
     EXPECT_EQ(custom_samples.dtype(), DataType::Int64);
     EXPECT_EQ(custom_samples.shape(), TensorShape({10}));
-    EXPECT_EQ(custom_samples.device(), Device::CUDA);
+    EXPECT_EQ(custom_samples.device(), Device::GPU);
 
     auto custom_values = custom_samples.to_vector_int64();
     for (int64_t v : custom_values) {
@@ -352,7 +352,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialReproducibilityCPU) {
 TEST_F(TensorRandomAdvancedTest, MultinomialReproducibilityCUDA) {
     std::vector<float> weights_data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f,
                                        6.0f, 7.0f, 8.0f, 9.0f, 10.0f};
-    auto weights = Tensor::from_vector(weights_data, {10}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {10}, Device::GPU);
 
     Tensor::manual_seed(12345);
     auto samples1 = Tensor::multinomial(weights, 20, true);
@@ -368,7 +368,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialReproducibilityCUDA) {
 
 TEST_F(TensorRandomAdvancedTest, MultinomialWithoutReplacementReproducibility) {
     std::vector<float> weights_data = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    auto weights = Tensor::from_vector(weights_data, {5}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {5}, Device::GPU);
 
     Tensor::manual_seed(67890);
     auto samples1 = Tensor::multinomial(weights, 3, false);
@@ -389,7 +389,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialUniformDistribution) {
 
     // Uniform weights
     std::vector<float> weights_data(10, 1.0f);
-    auto weights = Tensor::from_vector(weights_data, {10}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {10}, Device::GPU);
 
     auto samples = Tensor::multinomial(weights, 10000, true);
 
@@ -414,7 +414,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialSkewedDistribution) {
     for (int i = 1; i <= 10; ++i) {
         weights_data.push_back(static_cast<float>(i));
     }
-    auto weights = Tensor::from_vector(weights_data, {10}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {10}, Device::GPU);
 
     auto samples = Tensor::multinomial(weights, 5000, true);
 
@@ -438,12 +438,12 @@ TEST_F(TensorRandomAdvancedTest, MultinomialSkewedDistribution) {
 TEST_F(TensorRandomAdvancedTest, MultinomialLargeScaleCUDA) {
     Tensor::manual_seed(888);
 
-    auto weights = Tensor::ones({1000}, Device::CUDA);
+    auto weights = Tensor::ones({1000}, Device::GPU);
     auto samples = Tensor::multinomial(weights, 10000, true);
 
     ASSERT_TRUE(samples.is_valid());
     EXPECT_EQ(samples.numel(), 10000);
-    EXPECT_EQ(samples.device(), Device::CUDA);
+    EXPECT_EQ(samples.device(), Device::GPU);
 
     // Verify all samples are in valid range
     auto values = samples.to_vector_int64();
@@ -470,7 +470,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialLargeWeightsArray) {
     Tensor::manual_seed(999);
 
     // 10,000 uniform weights
-    auto weights = Tensor::ones({10000}, Device::CUDA);
+    auto weights = Tensor::ones({10000}, Device::GPU);
     auto samples = Tensor::multinomial(weights, 100, true);
 
     ASSERT_TRUE(samples.is_valid());
@@ -516,7 +516,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialGatherPattern) {
     auto embeddings = Tensor::arange(0.0f, 20.0f).reshape({5, 4});
 
     std::vector<float> weights_data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
-    auto weights = Tensor::from_vector(weights_data, {5}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {5}, Device::GPU);
     auto indices = Tensor::multinomial(weights, 3, false).cuda();
 
     // Gather rows based on multinomial indices
@@ -530,7 +530,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialBatchProcessing) {
     Tensor::manual_seed(3333);
 
     std::vector<float> weights_data = {1.0f, 2.0f, 3.0f, 4.0f};
-    auto weights = Tensor::from_vector(weights_data, {4}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {4}, Device::GPU);
 
     std::vector<Tensor> batch_samples;
     for (int i = 0; i < 5; ++i) {

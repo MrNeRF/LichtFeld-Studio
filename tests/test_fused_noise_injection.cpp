@@ -71,12 +71,12 @@ TEST(FusedNoiseInjectionTest, MeanAndVarMatchIdentityCovariance) {
 
     // Identity rotation (w=1), raw_scale=0 → S²=I → cov=I.
     // raw_opacity = −20 → opacity≈0 → noise_factor ≈ lr * kOpSigNearZero.
-    auto means = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    auto opacities = Tensor::full({N}, -20.f, Device::CUDA);
-    auto scales = Tensor::zeros({N, size_t{3}}, Device::CUDA);
+    auto means = Tensor::zeros({N, size_t{3}}, Device::GPU);
+    auto opacities = Tensor::full({N}, -20.f, Device::GPU);
+    auto scales = Tensor::zeros({N, size_t{3}}, Device::GPU);
     std::vector<float> quat_h;
     fill_identity_quat(quat_h, N);
-    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::CUDA);
+    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::GPU);
 
     mcmc::launch_inject_noise_kernel(
         opacities.ptr<float>(),
@@ -108,12 +108,12 @@ TEST(FusedNoiseInjectionTest, NormalityMomentsUnchanged) {
     constexpr float lr = 1.0f;
     constexpr uint64_t seed = 0xA11CEu;
 
-    auto means = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    auto opacities = Tensor::full({N}, -20.f, Device::CUDA);
-    auto scales = Tensor::zeros({N, size_t{3}}, Device::CUDA);
+    auto means = Tensor::zeros({N, size_t{3}}, Device::GPU);
+    auto opacities = Tensor::full({N}, -20.f, Device::GPU);
+    auto scales = Tensor::zeros({N, size_t{3}}, Device::GPU);
     std::vector<float> quat_h;
     fill_identity_quat(quat_h, N);
-    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::CUDA);
+    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::GPU);
 
     mcmc::launch_inject_noise_kernel(
         opacities.ptr<float>(), scales.ptr<float>(), quats.ptr<float>(),
@@ -140,9 +140,9 @@ TEST(FusedNoiseInjectionTest, MrnfNoiseMeanVarNormal) {
     constexpr float noise_weight = 0.5f;
     constexpr uint64_t seed = 0xB0A7u;
 
-    auto means = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    auto opacities = Tensor::full({N}, -20.f, Device::CUDA); // σ≈0 → inv_op≈1 → weight^150≈1
-    auto vis = Tensor::full({N}, 1.f, Device::CUDA);
+    auto means = Tensor::zeros({N, size_t{3}}, Device::GPU);
+    auto opacities = Tensor::full({N}, -20.f, Device::GPU); // σ≈0 → inv_op≈1 → weight^150≈1
+    auto vis = Tensor::full({N}, 1.f, Device::GPU);
 
     mrnf_strategy::launch_mrnf_noise_injection(
         means.ptr<float>(),
@@ -170,17 +170,17 @@ TEST(FusedNoiseInjectionTest, FrozenMaskBlocksNoise) {
     constexpr size_t N = 256;
     constexpr uint64_t seed = 42;
 
-    auto means = Tensor::zeros({N, size_t{3}}, Device::CUDA);
-    auto opacities = Tensor::full({N}, -20.f, Device::CUDA);
-    auto scales = Tensor::zeros({N, size_t{3}}, Device::CUDA);
+    auto means = Tensor::zeros({N, size_t{3}}, Device::GPU);
+    auto opacities = Tensor::full({N}, -20.f, Device::GPU);
+    auto scales = Tensor::zeros({N, size_t{3}}, Device::GPU);
     std::vector<float> quat_h;
     fill_identity_quat(quat_h, N);
-    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::CUDA);
+    auto quats = Tensor::from_vector(quat_h, {N, size_t{4}}, Device::GPU);
 
     std::vector<bool> frozen(N, false);
     for (size_t i = 0; i < N / 2; ++i)
         frozen[i] = true;
-    auto frozen_t = Tensor::from_vector(frozen, TensorShape({N}), Device::CUDA);
+    auto frozen_t = Tensor::from_vector(frozen, TensorShape({N}), Device::GPU);
 
     mcmc::launch_inject_noise_kernel(
         opacities.ptr<float>(),

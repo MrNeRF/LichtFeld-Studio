@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rendering/export_post_process.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "environment_image.hpp"
 #include "export_post_process_kernels.cuh"
 #include <cmath>
@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <format>
 #include <mutex>
+#include <vector>
 
 namespace lfs::rendering {
 
@@ -43,7 +44,7 @@ namespace lfs::rendering {
         }
 
         [[nodiscard]] ExportResult<void> validateBandU8Hwc(const lfs::core::Tensor& band, const char* const what) {
-            if (!band.is_valid() || band.device() != lfs::core::Device::CUDA ||
+            if (!band.is_valid() || band.device() != lfs::core::Device::GPU ||
                 band.dtype() != lfs::core::DataType::UInt8 || band.ndim() != 3 || !band.is_contiguous() ||
                 (band.size(2) != 3 && band.size(2) != 4) || band.size(0) <= 0 || band.size(1) <= 0) {
                 return std::unexpected(std::format("{} must be a contiguous CUDA u8 HWC RGB/RGBA tensor", what));
@@ -52,7 +53,7 @@ namespace lfs::rendering {
         }
 
         [[nodiscard]] ExportResult<void> validateRgbChw(const lfs::core::Tensor& rgb, const char* const what) {
-            if (!rgb.is_valid() || rgb.device() != lfs::core::Device::CUDA ||
+            if (!rgb.is_valid() || rgb.device() != lfs::core::Device::GPU ||
                 rgb.dtype() != lfs::core::DataType::Float32 || rgb.ndim() != 3 || !rgb.is_contiguous() ||
                 rgb.size(0) != 3 || rgb.size(1) <= 0 || rgb.size(2) <= 0) {
                 return std::unexpected(std::format("{} must be a contiguous CUDA float [3,H,W] tensor", what));
@@ -91,7 +92,7 @@ namespace lfs::rendering {
                 {static_cast<size_t>((*image)->height),
                  static_cast<size_t>((*image)->width),
                  size_t{3}},
-                lfs::core::Device::CUDA,
+                lfs::core::Device::GPU,
                 lfs::core::DataType::Float32);
         }
         if (!map->pixels.is_valid()) {
@@ -156,33 +157,22 @@ namespace lfs::rendering {
         const auto height = band_u8_hwc.size(0);
         const auto width = band_u8_hwc.size(1);
         const int channels = static_cast<int>(band_u8_hwc.size(2));
-        const int num_pixels = static_cast<int>(height * width);
-
-        rgb_chw_out = lfs::core::Tensor::empty(
-            {size_t{3}, static_cast<size_t>(height), static_cast<size_t>(width)},
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-        if (!rgb_chw_out.is_valid()) {
-            return std::unexpected("failed to allocate unpacked RGB band");
-        }
-
-        float* alpha_ptr = nullptr;
+        const cudaStream_t execution_stream = resolveExportStream(stream);
+        lfs::core::CUDAStreamGuard stream_guard(execution_stream);
+        band_u8_hwc.sync_to_stream(execution_stream);
+        const lfs::core::Tensor chw =
+            band_u8_hwc.to(lfs::core::DataType::Float32).mul(1.0f / 255.0f).permute({2, 0, 1});
+        rgb_chw_out = chw.slice(0, 0, 3).contiguous();
+        rgb_chw_out.sync_to_stream(execution_stream);
         if (alpha_out != nullptr) {
             *alpha_out = lfs::core::Tensor{};
             if (channels == 4) {
-                *alpha_out = lfs::core::Tensor::empty(
-                    {static_cast<size_t>(height), static_cast<size_t>(width)},
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-                if (!alpha_out->is_valid()) {
-                    return std::unexpected("failed to allocate unpacked alpha band");
-                }
-                alpha_ptr = alpha_out->ptr<float>();
+                *alpha_out = chw.slice(0, 3, 4).contiguous().reshape(
+                    {static_cast<int>(height), static_cast<int>(width)});
+                alpha_out->sync_to_stream(execution_stream);
             }
         }
-
-        return launchStatus("unpack_u8_hwc_kernel",
-                            exportpp::launchUnpackU8Hwc(band_u8_hwc.ptr<unsigned char>(), num_pixels, channels,
-                                                        rgb_chw_out.ptr<float>(), alpha_ptr,
-                                                        resolveExportStream(stream)));
+        return {};
     }
 
     ExportResult<void> packChwFloatBandToU8Hwc(const lfs::core::Tensor& rgb_chw,
@@ -198,24 +188,26 @@ namespace lfs::rendering {
         const int num_pixels = static_cast<int>(height * width);
         const bool has_alpha = alpha != nullptr && alpha->is_valid();
         if (has_alpha &&
-            (alpha->device() != lfs::core::Device::CUDA || alpha->dtype() != lfs::core::DataType::Float32 ||
+            (alpha->device() != lfs::core::Device::GPU || alpha->dtype() != lfs::core::DataType::Float32 ||
              !alpha->is_contiguous() || alpha->numel() != static_cast<size_t>(num_pixels))) {
             return std::unexpected("pack alpha must be a contiguous CUDA float tensor matching the band");
         }
-        const int channels = has_alpha ? 4 : 3;
-
-        band_u8_hwc_out = lfs::core::Tensor::empty(
-            {static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(channels)},
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-        if (!band_u8_hwc_out.is_valid()) {
-            return std::unexpected("failed to allocate packed u8 band");
+        const cudaStream_t execution_stream = resolveExportStream(stream);
+        lfs::core::CUDAStreamGuard stream_guard(execution_stream);
+        rgb_chw.sync_to_stream(execution_stream);
+        std::vector<lfs::core::Tensor> planes{rgb_chw};
+        if (has_alpha) {
+            alpha->sync_to_stream(execution_stream);
+            planes.push_back(alpha->reshape({1, static_cast<int>(height), static_cast<int>(width)}));
         }
-
-        return launchStatus("pack_chw_u8_hwc_kernel",
-                            exportpp::launchPackChwU8Hwc(rgb_chw.ptr<float>(),
-                                                         has_alpha ? alpha->ptr<float>() : nullptr,
-                                                         band_u8_hwc_out.ptr<unsigned char>(), num_pixels, channels,
-                                                         resolveExportStream(stream)));
+        const lfs::core::Tensor bytes = lfs::core::Tensor::cat(planes, 0)
+                                            .clamp(0.0f, 1.0f)
+                                            .mul(255.0f)
+                                            .add(0.5f)
+                                            .to(lfs::core::DataType::UInt8);
+        band_u8_hwc_out = bytes.permute({1, 2, 0}).contiguous();
+        band_u8_hwc_out.sync_to_stream(execution_stream);
+        return {};
     }
 
     ExportResult<void> compositeEnvironmentBand(const CudaEnvironmentMap& env,
@@ -228,7 +220,7 @@ namespace lfs::rendering {
             return valid;
         }
         if (env.width <= 0 || env.height <= 0 || !env.pixels.is_valid() ||
-            env.pixels.device() != lfs::core::Device::CUDA ||
+            env.pixels.device() != lfs::core::Device::GPU ||
             env.pixels.dtype() != lfs::core::DataType::Float32) {
             return std::unexpected("composite environment map is not resident on CUDA");
         }
@@ -236,7 +228,7 @@ namespace lfs::rendering {
         const auto height = rgb_chw.size(1);
         const auto width = rgb_chw.size(2);
         const int num_pixels = static_cast<int>(height * width);
-        if (!alpha.is_valid() || alpha.device() != lfs::core::Device::CUDA ||
+        if (!alpha.is_valid() || alpha.device() != lfs::core::Device::GPU ||
             alpha.dtype() != lfs::core::DataType::Float32 || !alpha.is_contiguous() ||
             alpha.numel() != static_cast<size_t>(num_pixels)) {
             return std::unexpected("composite alpha must be a contiguous CUDA float tensor matching the band");
@@ -248,7 +240,7 @@ namespace lfs::rendering {
 
         band_u8_hwc_out = lfs::core::Tensor::empty(
             {static_cast<size_t>(height), static_cast<size_t>(width), size_t{3}},
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         if (!band_u8_hwc_out.is_valid()) {
             return std::unexpected("failed to allocate composited u8 band");
         }

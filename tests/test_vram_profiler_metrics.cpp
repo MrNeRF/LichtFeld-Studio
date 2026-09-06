@@ -259,7 +259,7 @@ namespace {
         lfs::core::Tensor labeled;
         {
             LFS_LABEL_SCOPE("splat.positions.test");
-            labeled = lfs::core::Tensor::zeros({64, 3}, lfs::core::Device::CUDA,
+            labeled = lfs::core::Tensor::zeros({64, 3}, lfs::core::Device::GPU,
                                                lfs::core::DataType::Float32);
         }
         labeled.set_name("splat.positions.test");

@@ -75,12 +75,12 @@ namespace {
             rotation_data[i * 4 + 0] = 1.0f; // identity quaternion
         }
 
-        auto means = Tensor::from_vector(means_data, TensorShape({n, 3}), Device::CUDA);
-        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n, 1, 3}), Device::CUDA);
-        auto shN = Tensor::zeros(TensorShape({n, sh_rest, 3}), Device::CUDA);
-        auto scaling = Tensor::from_vector(scaling_data, TensorShape({n, 3}), Device::CUDA);
-        auto rotation = Tensor::from_vector(rotation_data, TensorShape({n, 4}), Device::CUDA);
-        auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::CUDA);
+        auto means = Tensor::from_vector(means_data, TensorShape({n, 3}), Device::GPU);
+        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n, 1, 3}), Device::GPU);
+        auto shN = Tensor::zeros(TensorShape({n, sh_rest, 3}), Device::GPU);
+        auto scaling = Tensor::from_vector(scaling_data, TensorShape({n, 3}), Device::GPU);
+        auto rotation = Tensor::from_vector(rotation_data, TensorShape({n, 4}), Device::GPU);
+        auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::GPU);
 
         return SplatData(sh_degree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
@@ -200,8 +200,8 @@ namespace {
                 }
             }
         }
-        state.exp_avg = packed.cuda();
-        state.joint_bounds = bounds.cuda();
+        state.exp_avg = packed.gpu();
+        state.joint_bounds = bounds.gpu();
     }
 
     void expect_shN_joint_row_zero(const AdamParamState& state, const size_t prim,
@@ -256,7 +256,7 @@ TEST(MRNFStrategyTest, EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores) {
     edge_scores_data[0] = 1.0f;
     edge_scores_data[1] = 10.0f;
     strategy._precomputed_edge_scores =
-        Tensor::from_vector(edge_scores_data, TensorShape({10}), Device::CUDA);
+        Tensor::from_vector(edge_scores_data, TensorShape({10}), Device::GPU);
     strategy._edge_precompute_valid = true;
 
     const auto guidance = strategy.edge_guidance_factor().cpu();
@@ -285,7 +285,7 @@ TEST(MRNFStrategyTest, EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward) {
         raw_values[i] = static_cast<float>(i + 1);
     }
     const auto raw = Tensor::from_vector(
-        raw_values, TensorShape({raw_values.size()}), Device::CUDA);
+        raw_values, TensorShape({raw_values.size()}), Device::GPU);
 
     const auto add_view = [&](const int iter, const float scale) {
         auto scratch = strategy.edge_score_scratch(iter);
@@ -334,8 +334,8 @@ TEST(CropDampingStrategyTest, MrnfRejectedRowsAreNotRefineCandidatesAtZeroScale)
     opt_params.max_cap = 32;
     opt_params.growth_grad_threshold = 0.5f;
     strategy.initialize(opt_params);
-    strategy._refine_weight_max = Tensor::ones({10}, Device::CUDA);
-    strategy._vis_count = Tensor::ones({10}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::ones({10}, Device::GPU);
+    strategy._vis_count = Tensor::ones({10}, Device::GPU);
 
     auto crop_mask = Tensor::zeros_bool({10}, Device::CPU);
     crop_mask.ptr<unsigned char>()[0] = 1;
@@ -400,12 +400,12 @@ TEST(MRNFStrategyTest, RemoveGaussiansKeepsOptimizerStateUsable) {
     opt_params.max_cap = 32;
 
     strategy.initialize(opt_params);
-    splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    splat_data._densification_info = Tensor::ones({2, static_cast<size_t>(splat_data.size())}, Device::GPU);
 
     const auto mask = Tensor::from_vector(
         std::vector<bool>{false, true, false, true, false, false, false, false, false, false},
         TensorShape({10}),
-        Device::CUDA);
+        Device::GPU);
 
     strategy.remove_gaussians(mask);
 
@@ -465,7 +465,7 @@ TEST(MRNFStrategyTest, RemoveGaussiansCompactsQuantizedAdamScalesAndPreservesShN
     const auto remove_mask = Tensor::from_vector(
         std::vector<bool>{false, true, false, true, false, false, false, false, false, false},
         TensorShape({initial_rows}),
-        Device::CUDA);
+        Device::GPU);
 
     strategy.remove_gaussians(remove_mask);
 
@@ -527,12 +527,12 @@ TEST(MRNFStrategyTest, GrowAndSplitResetsOptimizerStateForParents) {
 
     optimizer.get_grad(ParamType::Means).fill_(7.0f);
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
 
-    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -594,12 +594,12 @@ TEST(MRNFStrategyTest, SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth) {
         EXPECT_FALSE(fused.shN.enabled);
     });
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
 
-    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -705,10 +705,10 @@ TEST(MRNFStrategyTest, DirectAuxiliaryGrowthPreservesPrefix) {
     // Model the post-SfM state immediately before a reservation boundary:
     // every MRNF auxiliary is a direct-storage tensor with only SfM rows.
     strategy._free_mask = Tensor::zeros_direct(
-        {sfm_points}, sfm_points, Device::CUDA, DataType::Bool);
+        {sfm_points}, sfm_points, Device::GPU, DataType::Bool);
     const auto direct_float = [](const size_t n, const float value) {
-        auto tensor = Tensor::zeros_direct({n}, n, Device::CUDA, DataType::Float32);
-        tensor.copy_from(Tensor::full({n}, value, Device::CUDA));
+        auto tensor = Tensor::zeros_direct({n}, n, Device::GPU, DataType::Float32);
+        tensor.copy_from(Tensor::full({n}, value, Device::GPU));
         return tensor;
     };
     strategy._refine_weight_max = direct_float(sfm_points, 1.25f);
@@ -755,12 +755,12 @@ TEST(MRNFStrategyTest, GrowAndSplitUsesIgsPlusSplitRule) {
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
 
-    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -813,21 +813,21 @@ TEST(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
     strategy.initialize(opt_params);
 
     const size_t n = static_cast<size_t>(splat_data.size());
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({n}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({n}, Device::GPU);
 
-    const auto idx0 = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    const auto idx1 = Tensor::from_vector(std::vector<int>{1}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(idx0, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._refine_weight_max.index_put_(idx1, Tensor::full({1}, 10.0f, Device::CUDA));
-    strategy._vis_count.index_put_(idx0, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(idx1, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto idx0 = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    const auto idx1 = Tensor::from_vector(std::vector<int>{1}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(idx0, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._refine_weight_max.index_put_(idx1, Tensor::full({1}, 10.0f, Device::GPU));
+    strategy._vis_count.index_put_(idx0, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(idx1, Tensor::full({1}, 1.0f, Device::GPU));
 
     ASSERT_TRUE(splat_data._max_screen_share.is_valid());
     auto share_cpu = Tensor::zeros({n}, Device::CPU);
     share_cpu.ptr<float>()[0] = 0.9f;
     share_cpu.ptr<float>()[1] = 0.05f;
-    splat_data._max_screen_share = share_cpu.cuda();
+    splat_data._max_screen_share = share_cpu.gpu();
 
     const auto means_before = splat_data.means().cpu();
     const float* mb = means_before.ptr<float>();
@@ -906,12 +906,12 @@ TEST(MRNFStrategyTest, GrowAndSplitWithoutMaxCapExtendsBookkeepingMasks) {
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
 
-    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
 
     const size_t initial_size = splat_data.size();
     ASSERT_NO_THROW(strategy.grow_and_split(1, 0));
@@ -937,19 +937,19 @@ TEST(MRNFStrategyTest, DeletedMaskCapacityGrowthPreservesExistingRows) {
 
     const size_t initial_size = splat_data.size();
     splat_data.deleted() = Tensor::zeros_direct(
-        TensorShape({initial_size}), initial_size, Device::CUDA, DataType::Bool);
+        TensorShape({initial_size}), initial_size, Device::GPU, DataType::Bool);
     const auto deleted_index =
-        Tensor::from_vector(std::vector<int>{3}, TensorShape({1}), Device::CUDA)
+        Tensor::from_vector(std::vector<int>{3}, TensorShape({1}), Device::GPU)
             .to(DataType::Int64);
-    splat_data.deleted().index_put_(deleted_index, Tensor::ones_bool({1}, Device::CUDA));
+    splat_data.deleted().index_put_(deleted_index, Tensor::ones_bool({1}, Device::GPU));
 
-    strategy._refine_weight_max = Tensor::zeros({initial_size}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({initial_size}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({initial_size}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({initial_size}, Device::GPU);
     const auto split_index =
-        Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA)
+        Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU)
             .to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_index, Tensor::full({1}, 1.0f, Device::CUDA));
+    strategy._refine_weight_max.index_put_(split_index, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(split_index, Tensor::full({1}, 1.0f, Device::GPU));
 
     strategy.grow_and_split(1, 0);
 
@@ -973,16 +973,16 @@ TEST(MRNFStrategyTest, GrowAndSplitReplacementSkipsZeroWeightCandidates) {
     opt_params.grow_until_iter = 0;
     strategy.initialize(opt_params);
 
-    const auto free_indices = Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    const auto free_indices = Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::GPU).to(DataType::Int64);
     strategy.mark_as_free(free_indices);
-    auto true_vals = Tensor::ones_bool({2}, Device::CUDA);
+    auto true_vals = Tensor::ones_bool({2}, Device::GPU);
     strategy._splat_data->deleted().index_put_(free_indices, true_vals);
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
 
-    const auto visible_parent = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._vis_count.index_put_(visible_parent, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto visible_parent = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._vis_count.index_put_(visible_parent, Tensor::full({1}, 1.0f, Device::GPU));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(10'001, 2);
@@ -1005,17 +1005,17 @@ TEST(MRNFStrategyTest, GrowAndSplitReusesFreeSlotsBeforeAppending) {
     opt_params.grow_until_iter = 10'000;
     strategy.initialize(opt_params);
 
-    const auto free_indices = Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    const auto free_indices = Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::GPU).to(DataType::Int64);
     strategy.mark_as_free(free_indices);
-    auto true_vals = Tensor::ones_bool({2}, Device::CUDA);
+    auto true_vals = Tensor::ones_bool({2}, Device::GPU);
     strategy._splat_data->deleted().index_put_(free_indices, true_vals);
 
-    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({static_cast<size_t>(splat_data.size())}, Device::GPU);
 
-    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64);
-    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
-    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::CUDA));
+    const auto split_idx = Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64);
+    strategy._refine_weight_max.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
+    strategy._vis_count.index_put_(split_idx, Tensor::full({1}, 1.0f, Device::GPU));
 
     const size_t initial_size = splat_data.size();
     strategy.grow_and_split(1, 0);
@@ -1036,9 +1036,9 @@ TEST(MRNFStrategyTest, SerializeRoundTripPreservesFreeMask) {
     opt_params.max_cap = 32;
     strategy.initialize(opt_params);
 
-    const auto free_indices = Tensor::from_vector(std::vector<int>{1, 3}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+    const auto free_indices = Tensor::from_vector(std::vector<int>{1, 3}, TensorShape({2}), Device::GPU).to(DataType::Int64);
     strategy.mark_as_free(free_indices);
-    auto true_vals = Tensor::ones_bool({2}, Device::CUDA);
+    auto true_vals = Tensor::ones_bool({2}, Device::GPU);
     strategy._splat_data->deleted().index_put_(free_indices, true_vals);
 
     std::stringstream ss;
@@ -1161,8 +1161,8 @@ namespace {
     Camera make_explore_camera(int width, int height) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).cuda();
-        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).cuda();
+        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).gpu();
+        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).gpu();
         return Camera(R, T, 100.f, 100.f, width * 0.5f, height * 0.5f,
                       Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
                       std::filesystem::path{}, width, height, 0);
@@ -1171,8 +1171,8 @@ namespace {
     std::shared_ptr<Camera> make_hull_camera(float x, float y, float z, int uid) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {-x, -y, -z};
-        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).cuda();
-        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).cuda();
+        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).gpu();
+        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).gpu();
         return std::make_shared<Camera>(
             R, T, 100.f, 100.f, 4.f, 4.f, Tensor(), Tensor(),
             CameraModelType::PINHOLE, "hull", "", std::filesystem::path{}, 8, 8, uid);
@@ -1195,7 +1195,7 @@ namespace {
             means[i * 3 + 0] = static_cast<float>(i);
         }
         means[row * 3 + 0] = 8.5f;
-        auto fixed = Tensor::from_vector(means, TensorShape({static_cast<size_t>(n), 3}), Device::CUDA);
+        auto fixed = Tensor::from_vector(means, TensorShape({static_cast<size_t>(n), 3}), Device::GPU);
         splat_data.means().copy_(fixed);
     }
 
@@ -1205,7 +1205,7 @@ namespace {
             means[i * 3 + 0] = static_cast<float>(i);
         }
         means[7 * 3 + 0] = 8.5f;
-        auto fixed = Tensor::from_vector(means, TensorShape({8, 3}), Device::CUDA);
+        auto fixed = Tensor::from_vector(means, TensorShape({8, 3}), Device::GPU);
         splat_data.means().copy_(fixed);
     }
 
@@ -1223,11 +1223,11 @@ namespace {
         out.camera = &camera;
         out.width = width;
         out.height = height;
-        out.image = Tensor::zeros({3, static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CUDA);
+        out.image = Tensor::zeros({3, static_cast<size_t>(height), static_cast<size_t>(width)}, Device::GPU);
         out.target_image = Tensor::full(
-            {3, static_cast<size_t>(height), static_cast<size_t>(width)}, target_value, Device::CUDA);
-        out.alpha = Tensor::full({1, static_cast<size_t>(height), static_cast<size_t>(width)}, 0.2f, Device::CUDA);
-        out.depth = Tensor::full({1, static_cast<size_t>(height), static_cast<size_t>(width)}, 2.0f, Device::CUDA);
+            {3, static_cast<size_t>(height), static_cast<size_t>(width)}, target_value, Device::GPU);
+        out.alpha = Tensor::full({1, static_cast<size_t>(height), static_cast<size_t>(width)}, 0.2f, Device::GPU);
+        out.depth = Tensor::full({1, static_cast<size_t>(height), static_cast<size_t>(width)}, 2.0f, Device::GPU);
         return out;
     }
 
@@ -1252,21 +1252,21 @@ TEST(MRNFStrategyTest, ExploreSplitsAreDisjointAndRespectMaxCap) {
     strategy._scene_has_far_field = true;
 
     const auto free_indices =
-        Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+        Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::GPU).to(DataType::Int64);
     strategy.mark_as_free(free_indices);
-    splat_data.deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::CUDA));
+    splat_data.deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::GPU));
 
     const size_t n = splat_data.size();
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({n}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({n}, Device::GPU);
     strategy._vis_count.index_put_(
-        Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::CUDA).to(DataType::Int64),
-        Tensor::full({1}, 1.0f, Device::CUDA));
+        Tensor::from_vector(std::vector<int>{0}, TensorShape({1}), Device::GPU).to(DataType::Int64),
+        Tensor::full({1}, 1.0f, Device::GPU));
 
-    strategy._explore_score_sum = Tensor::zeros({n}, Device::CUDA);
+    strategy._explore_score_sum = Tensor::zeros({n}, Device::GPU);
     strategy._explore_score_sum.index_put_(
-        Tensor::from_vector(std::vector<int>{0, 2, 3}, TensorShape({3}), Device::CUDA).to(DataType::Int64),
-        Tensor::full({3}, 4.0f, Device::CUDA));
+        Tensor::from_vector(std::vector<int>{0, 2, 3}, TensorShape({3}), Device::GPU).to(DataType::Int64),
+        Tensor::full({3}, 4.0f, Device::GPU));
     strategy._explore_sample_count = 1;
 
     const auto scales_before = splat_data.scaling_raw().cpu();
@@ -1308,9 +1308,9 @@ TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
     strategy.refresh_far_field_mask(static_cast<size_t>(splat_data.size()));
 
     const size_t n = splat_data.size();
-    strategy._refine_weight_max = Tensor::zeros({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
-    auto far_scores = Tensor::zeros({n}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::zeros({n}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({n}, Device::GPU);
+    auto far_scores = Tensor::zeros({n}, Device::GPU);
     std::vector<int> far_rows;
     {
         const auto means0 = splat_data.means().cpu();
@@ -1323,8 +1323,8 @@ TEST(MRNFStrategyTest, FarGrowthCapConstrainsOutsideAllocations) {
     }
     ASSERT_FALSE(far_rows.empty());
     far_scores.index_put_(
-        Tensor::from_vector(far_rows, TensorShape({far_rows.size()}), Device::CUDA).to(DataType::Int64),
-        Tensor::full({far_rows.size()}, 4.0f, Device::CUDA));
+        Tensor::from_vector(far_rows, TensorShape({far_rows.size()}), Device::GPU).to(DataType::Int64),
+        Tensor::full({far_rows.size()}, 4.0f, Device::GPU));
     strategy._explore_score_sum = far_scores;
     strategy._explore_sample_count = 1;
 
@@ -1365,9 +1365,9 @@ TEST(MRNFStrategyTest, SeedFromViewInsertsRequestedRows) {
     strategy.refresh_far_field_mask(static_cast<size_t>(splat_data.size()));
 
     const auto free_indices =
-        Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::CUDA).to(DataType::Int64);
+        Tensor::from_vector(std::vector<int>{8, 9}, TensorShape({2}), Device::GPU).to(DataType::Int64);
     strategy.mark_as_free(free_indices);
-    splat_data.deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::CUDA));
+    splat_data.deleted().index_put_(free_indices, Tensor::ones_bool({2}, Device::GPU));
 
     const size_t active_before = strategy.active_count();
     RenderOutput invalid;
@@ -1500,8 +1500,8 @@ TEST(MRNFStrategyTest, ZeroVisibilityProducesNoGrowth) {
 
     const size_t n = splat_data.size();
     const size_t active = strategy.active_count();
-    strategy._refine_weight_max = Tensor::ones({n}, Device::CUDA);
-    strategy._vis_count = Tensor::zeros({n}, Device::CUDA);
+    strategy._refine_weight_max = Tensor::ones({n}, Device::GPU);
+    strategy._vis_count = Tensor::zeros({n}, Device::GPU);
     strategy.grow_and_split(100, 0);
     EXPECT_EQ(strategy.active_count(), active);
 }
@@ -1516,7 +1516,7 @@ namespace {
             packed[i * 3 + 1] = log_s[i];
             packed[i * 3 + 2] = log_s[i];
         }
-        splat.scaling_raw() = Tensor::from_vector(packed, TensorShape({n, 3}), Device::CUDA);
+        splat.scaling_raw() = Tensor::from_vector(packed, TensorShape({n, 3}), Device::GPU);
     }
 
     std::vector<float> means_xyz(const SplatData& splat) {
@@ -1810,8 +1810,8 @@ TEST(MRNFStrategyTest, ExploreStarvationWeights) {
 
     const size_t n = splat.size();
     strategy._vis_count = Tensor::from_vector(
-        std::vector<float>{0.0f, 4.0f, 1.0f, 4.0f, 4.0f}, TensorShape({n}), Device::CUDA);
-    strategy._explore_score_sum = Tensor::full({n}, 1.0f, Device::CUDA);
+        std::vector<float>{0.0f, 4.0f, 1.0f, 4.0f, 4.0f}, TensorShape({n}), Device::GPU);
+    strategy._explore_score_sum = Tensor::full({n}, 1.0f, Device::GPU);
     strategy._explore_sample_count = 1;
     strategy._far_starvation = 1.0f;
 

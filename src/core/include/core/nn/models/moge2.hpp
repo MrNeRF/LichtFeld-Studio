@@ -89,7 +89,7 @@ namespace lfs::core::nn::models {
         ActivationArena arena_;
         bool weights_on_stream_ = false;
         bool mempool_trimmed_ = false;
-        Device device_ = Device::CUDA;
+        Device device_ = Device::GPU;
         DataType compute_ = DataType::Float16;
     };
 

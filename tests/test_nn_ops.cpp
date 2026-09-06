@@ -30,7 +30,7 @@ namespace {
     lfs::core::Tensor upload(const std::vector<float>& data, const std::vector<std::size_t>& shape,
                              lfs::core::DataType dtype) {
         auto t = lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape),
-                                                lfs::core::Device::CUDA);
+                                                lfs::core::Device::GPU);
         if (dtype == lfs::core::DataType::Float16) {
             return t.to(lfs::core::DataType::Float16);
         }
@@ -791,7 +791,7 @@ TEST_F(NnOpsTest, UvGridMatchesCpuFormula) {
     const int height = 3, width = 5;
     const float aspect = 1.5f;
     auto t = lfs::core::nn::uv_grid(height, width, aspect, lfs::core::DataType::Float32,
-                                    lfs::core::Device::CUDA, nullptr);
+                                    lfs::core::Device::GPU, nullptr);
     const auto got = host_f32(t);
     const float span_x = aspect / std::sqrt(1.0f + aspect * aspect);
     const float span_y = 1.0f / std::sqrt(1.0f + aspect * aspect);
@@ -937,14 +937,14 @@ TEST_F(NnOpsTest, WeightFilePythonRoundTrip) {
     }
     auto file = lfs::core::nn::WeightFile::open(out);
     ASSERT_TRUE(file.has_value()) << std::string(file.error().detail());
-    auto w = file->load("w", lfs::core::Device::CUDA);
+    auto w = file->load("w", lfs::core::Device::GPU);
     ASSERT_TRUE(w.has_value()) << std::string(w.error().detail());
     EXPECT_EQ(w->shape()[0], 3u);
     EXPECT_EQ(w->dtype(), lfs::core::DataType::Float32);
     auto h = file->load("h", lfs::core::Device::CPU, lfs::core::DataType::Float32);
     ASSERT_TRUE(h.has_value());
     EXPECT_EQ(h->numel(), 8u);
-    auto b = file->load("b", lfs::core::Device::CUDA);
+    auto b = file->load("b", lfs::core::Device::GPU);
     ASSERT_TRUE(b.has_value());
     EXPECT_TRUE(all_close(host_f32(*b), {0.5f, -1.25f, 3.0f}, kF32Rtol, kF32Atol));
 }
@@ -1034,7 +1034,7 @@ TEST_F(NnOpsTest, FourierPe) {
     EXPECT_TRUE(all_close(host_f32(pe), peref, 1e-5f, 1e-5f));
 
     auto grid = lfs::core::nn::fourier_pe_grid(2, 3, G, lfs::core::DataType::Float32,
-                                               lfs::core::Device::CUDA, 0);
+                                               lfs::core::Device::GPU, 0);
     EXPECT_EQ(grid.shape()[1], 6u);
     EXPECT_EQ(grid.shape()[2], 2u);
     EXPECT_EQ(grid.shape()[3], 3u);

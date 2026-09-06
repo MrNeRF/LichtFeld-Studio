@@ -6,6 +6,7 @@
 #include "core/cuda/memory_arena.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "preferences.hpp"
 #include "rendering/export_post_process.hpp"
@@ -512,7 +513,9 @@ namespace lfs::vis {
             point_cloud_vulkan_renderer_->reset();
         }
         frame_lifecycle_service_.resetModelTracking();
-        lfs::core::Tensor::trim_memory_pool();
+        if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            lfs::core::Tensor::trim_memory_pool();
+        }
     }
 
     void RenderingManager::noteVksplatIdleFrame(const bool training_active) {
