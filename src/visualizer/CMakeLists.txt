@@ -143,6 +143,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Scene management
         scene/scene_manager.cpp
+        scene/point_cloud_merge.cpp
         scene/selection_state.cpp
         scene/viewer_splat_quantize.cpp
 
