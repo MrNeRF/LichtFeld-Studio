@@ -366,8 +366,12 @@ namespace lfs::core {
     }
 
     Tensor TensorLeaf::eval_impl() const {
-        // Materialize non-contiguous or offset tensors
-        if (tensor_ptr_->storage_offset() != 0 || !tensor_ptr_->is_contiguous()) {
+        // Deferred placeholders are stamped contiguous even when the
+        // materializer returns a broadcast or expand view. Resolve that
+        // before treating the leaf as a dense buffer.
+        tensor_ptr_->materialize_if_deferred();
+        if (tensor_ptr_->storage_offset() != 0 || !tensor_ptr_->is_contiguous() ||
+            tensor_ptr_->has_zero_stride()) {
             return tensor_ptr_->contiguous();
         }
         return *tensor_ptr_;

@@ -11,6 +11,7 @@
 #include "core/tensor_backend.hpp"
 #include <gtest/gtest.h>
 
+#include <array>
 #include <bit>
 #include <climits>
 #include <cmath>
@@ -312,5 +313,183 @@ TEST(TensorRandomPolicy, NormalDrawsAdvanceBetweenCalls) {
             EXPECT_NEAR(mean, 0.0, 0.15);
             EXPECT_NEAR(variance, 1.0, 0.25);
         }
+    }
+}
+
+TEST(TensorMaskPolicy, LeadingAxisMasksBroadcastInMaskedFillAndExpand) {
+    constexpr size_t channels = 3, rows = 4, cols = 5;
+    std::vector<bool> mask_values(rows * cols, false);
+    mask_values[1] = true;
+    mask_values[7] = true;
+    mask_values[rows * cols - 1] = true;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor mask = upload(Tensor::from_vector(mask_values, TensorShape{rows, cols}, Device::CPU), backend);
+        const Tensor expanded = mask.unsqueeze(0).expand({static_cast<int>(channels), static_cast<int>(rows), static_cast<int>(cols)}).contiguous();
+        const auto expanded_values = expanded.to_vector_bool();
+        ASSERT_EQ(expanded_values.size(), channels * rows * cols);
+        for (size_t c = 0; c < channels; ++c)
+            for (size_t i = 0; i < rows * cols; ++i)
+                EXPECT_EQ(expanded_values[c * rows * cols + i], mask_values[i]) << "channel=" << c << " index=" << i;
+
+        const Tensor filled = upload_float(std::vector<float>(channels * rows * cols, 1.0f), TensorShape{channels, rows, cols}, backend)
+                                  .masked_fill(mask.unsqueeze(0), 0.5f);
+        const auto filled_values = filled.to_vector();
+        for (size_t c = 0; c < channels; ++c)
+            for (size_t i = 0; i < rows * cols; ++i)
+                EXPECT_EQ(filled_values[c * rows * cols + i], mask_values[i] ? 0.5f : 1.0f) << "channel=" << c << " index=" << i;
+    }
+}
+
+TEST(TensorMaskPolicy, DeferredComparisonMasksBroadcastInMaskedFill) {
+    constexpr size_t channels = 3, rows = 4, cols = 5;
+    std::vector<float> scores(rows * cols);
+    for (size_t i = 0; i < scores.size(); ++i)
+        scores[i] = static_cast<float>(i % 3) * 0.4f;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor score = upload_float(scores, TensorShape{rows, cols}, backend);
+        const Tensor mask = score.isfinite().logical_and(score > 0.5f).logical_not().unsqueeze(0);
+        const Tensor filled = upload_float(std::vector<float>(channels * rows * cols, 1.0f), TensorShape{channels, rows, cols}, backend)
+                                  .masked_fill(mask, 0.5f);
+        const auto filled_values = filled.to_vector();
+        for (size_t c = 0; c < channels; ++c)
+            for (size_t i = 0; i < rows * cols; ++i)
+                EXPECT_EQ(filled_values[c * rows * cols + i], scores[i] > 0.5f ? 1.0f : 0.5f) << "channel=" << c << " index=" << i;
+    }
+}
+
+TEST(TensorBroadcastPolicy, LeadingAxisDivisionBroadcastsOverEveryChannel) {
+    constexpr size_t channels = 3, rows = 4, cols = 5;
+    std::vector<float> numerator(channels * rows * cols);
+    for (size_t i = 0; i < numerator.size(); ++i)
+        numerator[i] = static_cast<float>(i % 17) + 1.0f;
+    std::vector<float> denominator(rows * cols);
+    for (size_t i = 0; i < denominator.size(); ++i)
+        denominator[i] = static_cast<float>(i % 5) + 2.0f;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor n = upload_float(numerator, TensorShape{channels, rows, cols}, backend);
+        const Tensor d = upload_float(denominator, TensorShape{rows, cols}, backend);
+        const Tensor squared_length = (n * n).sum(0).sqrt();
+        ASSERT_EQ(squared_length.shape(), TensorShape({rows, cols}));
+        const auto quotient = n.div(d.unsqueeze(0)).to_vector();
+        const auto scaled = n.div(d.unsqueeze(0)).mul(0.5f).add(0.5f).to_vector();
+        for (size_t c = 0; c < channels; ++c) {
+            for (size_t i = 0; i < rows * cols; ++i) {
+                const float expected = numerator[c * rows * cols + i] / denominator[i];
+                EXPECT_NEAR(quotient[c * rows * cols + i], expected, 2.0e-7f * expected) << "channel=" << c << " index=" << i;
+                EXPECT_NEAR(scaled[c * rows * cols + i], expected * 0.5f + 0.5f, 2.0e-7f * expected) << "channel=" << c << " index=" << i;
+            }
+        }
+    }
+}
+
+TEST(TensorBroadcastPolicy, ClampAndMaskedFillAfterABroadcastDivisionKeepEveryChannel) {
+    constexpr size_t channels = 3, rows = 4, cols = 5;
+    std::vector<float> values(channels * rows * cols);
+    for (size_t i = 0; i < values.size(); ++i)
+        values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.3f;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor n = upload_float(values, TensorShape{channels, rows, cols}, backend);
+        const Tensor length = (n * n).sum(0).sqrt();
+        const Tensor degenerate = length.isfinite().logical_and(length > 1.0e-6f).logical_not().unsqueeze(0);
+        const Tensor color = n.div(length.unsqueeze(0)).mul(0.5f).add(0.5f).clamp(0.0f, 1.0f).masked_fill(degenerate, 0.5f);
+        const auto got = color.cpu().contiguous().to_vector();
+        ASSERT_EQ(got.size(), values.size());
+        for (size_t i = 0; i < rows * cols; ++i) {
+            const float x = values[i], y = values[rows * cols + i], z = values[2 * rows * cols + i];
+            const float len = std::sqrt(x * x + y * y + z * z);
+            const std::array<float, 3> expected = len > 1.0e-6f
+                                                      ? std::array<float, 3>{std::clamp(x / len * 0.5f + 0.5f, 0.0f, 1.0f), std::clamp(y / len * 0.5f + 0.5f, 0.0f, 1.0f), std::clamp(z / len * 0.5f + 0.5f, 0.0f, 1.0f)}
+                                                      : std::array<float, 3>{0.5f, 0.5f, 0.5f};
+            for (size_t c = 0; c < channels; ++c)
+                EXPECT_NEAR(got[c * rows * cols + i], expected[c], 1.0e-6f) << "channel=" << c << " index=" << i;
+        }
+    }
+}
+
+TEST(TensorBroadcastPolicy, FullRangeLeadingSliceKeepsEveryChannelThroughTheDisplayChain) {
+    constexpr size_t channels = 3, rows = 61, cols = 83;
+    std::vector<float> values(channels * rows * cols);
+    for (size_t i = 0; i < values.size(); ++i)
+        values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.3f;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        Tensor n = upload_float(values, TensorShape{channels, rows, cols}, backend).to(DataType::Float32);
+        n = n.slice(0, 0, 3).contiguous();
+        EXPECT_EQ(n.to_vector(), values);
+        const Tensor length = (n * n).sum(0).sqrt();
+        const Tensor degenerate = length.isfinite().logical_and(length > 1.0e-6f).logical_not().unsqueeze(0);
+        const Tensor color = n.div(length.unsqueeze(0)).mul(0.5f).add(0.5f).clamp(0.0f, 1.0f).masked_fill(degenerate, 0.5f);
+        const auto got = color.cpu().contiguous().to_vector();
+        for (size_t i = 0; i < rows * cols; ++i) {
+            const float x = values[i], y = values[rows * cols + i], z = values[2 * rows * cols + i];
+            const float len = std::sqrt(x * x + y * y + z * z);
+            for (size_t c = 0; c < channels; ++c) {
+                const float component = c == 0 ? x : c == 1 ? y
+                                                            : z;
+                const float expected = len > 1.0e-6f ? std::clamp(component / len * 0.5f + 0.5f, 0.0f, 1.0f) : 0.5f;
+                EXPECT_NEAR(got[c * rows * cols + i], expected, 1.0e-6f) << "channel=" << c << " index=" << i;
+            }
+        }
+    }
+}
+
+TEST(TensorBroadcastPolicy, DeferredLeadingBroadcastMaskFillsEveryChannel) {
+    constexpr size_t channels = 3, rows = 64, cols = 65;
+    std::vector<float> scores(rows * cols);
+    for (size_t i = 0; i < scores.size(); ++i)
+        scores[i] = static_cast<float>(i % 3) * 0.4f;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor score = upload_float(scores, TensorShape{rows, cols}, backend);
+        const Tensor mask = score.isfinite().logical_and(score > 0.5f).logical_not().unsqueeze(0);
+        const Tensor filled = upload_float(std::vector<float>(channels * rows * cols, 1.0f),
+                                           TensorShape{channels, rows, cols}, backend)
+                                  .masked_fill(mask, 0.5f);
+        const auto filled_values = filled.to_vector();
+        for (size_t c = 0; c < channels; ++c)
+            for (size_t i = 0; i < rows * cols; ++i)
+                EXPECT_EQ(filled_values[c * rows * cols + i], scores[i] > 0.5f ? 1.0f : 0.5f)
+                    << "channel=" << c << " index=" << i;
+    }
+}
+
+TEST(TensorBroadcastPolicy, DisplayChainStagesAtImageSize) {
+    constexpr size_t channels = 3, rows = 61, cols = 83;
+    const size_t pixels = rows * cols;
+    std::vector<float> values(channels * pixels);
+    for (size_t i = 0; i < values.size(); ++i)
+        values[i] = static_cast<float>(static_cast<int>(i % 11) - 5) * 0.3f + 0.05f;
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor n = upload_float(values, TensorShape{channels, rows, cols}, backend);
+        const Tensor length = (n * n).sum(0).sqrt();
+        const auto len = length.to_vector();
+        const Tensor quotient = n.div(length.unsqueeze(0));
+        const auto q = quotient.to_vector();
+        const Tensor scaled = quotient.mul(0.5f).add(0.5f);
+        const auto sc = scaled.to_vector();
+        const Tensor clamped = scaled.clamp(0.0f, 1.0f);
+        const auto cl = clamped.to_vector();
+        const Tensor mask = length.isfinite().logical_and(length > 1.0e-6f).logical_not().unsqueeze(0);
+        const auto filled = clamped.masked_fill(mask, 0.5f).to_vector();
+        size_t bad_q = 0, bad_sc = 0, bad_cl = 0, bad_fill = 0;
+        for (size_t c = 0; c < channels; ++c) {
+            for (size_t i = 0; i < pixels; ++i) {
+                const size_t k = c * pixels + i;
+                const float expected_q = values[k] / len[i];
+                bad_q += std::abs(q[k] - expected_q) > 1.0e-5f;
+                bad_sc += std::abs(sc[k] - (expected_q * 0.5f + 0.5f)) > 1.0e-5f;
+                bad_cl += std::abs(cl[k] - std::clamp(expected_q * 0.5f + 0.5f, 0.0f, 1.0f)) > 1.0e-5f;
+                bad_fill += std::abs(filled[k] - std::clamp(expected_q * 0.5f + 0.5f, 0.0f, 1.0f)) > 1.0e-5f;
+            }
+        }
+        EXPECT_EQ(bad_q, 0u) << "division";
+        EXPECT_EQ(bad_sc, 0u) << "mul add";
+        EXPECT_EQ(bad_cl, 0u) << "clamp";
+        EXPECT_EQ(bad_fill, 0u) << "masked_fill";
     }
 }

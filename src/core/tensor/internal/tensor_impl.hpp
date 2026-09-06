@@ -776,7 +776,11 @@ namespace lfs::core {
         }
 
         const Tensor& contiguous_read(Tensor& materialized) const {
-            if (is_contiguous()) {
+            // Deferred placeholders are stamped contiguous even when the
+            // materializer returns a broadcast or expand view. Resolve that
+            // before trusting the flag, matching contiguous().
+            materialize_if_deferred();
+            if (is_contiguous() && !has_zero_stride()) {
                 return *this;
             }
 
