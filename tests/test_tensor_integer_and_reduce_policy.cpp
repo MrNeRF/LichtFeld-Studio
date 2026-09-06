@@ -16,8 +16,10 @@
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -491,5 +493,63 @@ TEST(TensorBroadcastPolicy, DisplayChainStagesAtImageSize) {
         EXPECT_EQ(bad_sc, 0u) << "mul add";
         EXPECT_EQ(bad_cl, 0u) << "clamp";
         EXPECT_EQ(bad_fill, 0u) << "masked_fill";
+    }
+}
+
+TEST(TensorViewAs, Float32ToUInt8AppendsPackedDimAndRoundTripsBytes) {
+    const std::vector<float> values{1.0f, -2.0f, 3.5f, 0.0f};
+    std::vector<uint8_t> expected(values.size() * 4);
+    std::memcpy(expected.data(), values.data(), expected.size());
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor src = upload_float(values, TensorShape{values.size()}, backend);
+        const Tensor viewed = src.view_as(DataType::UInt8);
+        EXPECT_EQ(gpu_backend_of(viewed), gpu_backend_of(src));
+        EXPECT_EQ(viewed.stream(), src.stream());
+        EXPECT_EQ(viewed.data_ptr(), src.data_ptr());
+        ASSERT_EQ(viewed.dtype(), DataType::UInt8);
+        ASSERT_EQ(viewed.ndim(), 2u);
+        EXPECT_EQ(viewed.size(0), values.size());
+        EXPECT_EQ(viewed.size(1), 4u);
+        EXPECT_EQ(viewed.to_vector_uint8(), expected);
+        const Tensor back = viewed.view_as(DataType::Float32);
+        EXPECT_EQ(back.data_ptr(), src.data_ptr());
+        EXPECT_EQ(back.to_vector(), values);
+    }
+}
+
+TEST(TensorViewAs, UInt8PairToFloat16DropsTrailingDimAndRoundTripsBytes) {
+    const std::vector<uint8_t> bytes{0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        Tensor host = Tensor::empty(TensorShape{3, 2}, Device::CPU, DataType::UInt8);
+        std::memcpy(host.data_ptr(), bytes.data(), bytes.size());
+        const Tensor src = upload(host, backend);
+        const Tensor viewed = src.view_as(DataType::Float16);
+        EXPECT_EQ(gpu_backend_of(viewed), gpu_backend_of(src));
+        EXPECT_EQ(viewed.stream(), src.stream());
+        EXPECT_EQ(viewed.data_ptr(), src.data_ptr());
+        ASSERT_EQ(viewed.dtype(), DataType::Float16);
+        ASSERT_EQ(viewed.ndim(), 1u);
+        EXPECT_EQ(viewed.size(0), 3u);
+        const Tensor back = viewed.view_as(DataType::UInt8);
+        EXPECT_EQ(back.to_vector_uint8(), bytes);
+    }
+}
+
+TEST(TensorViewAs, RejectsNonContiguousAndUnalignedGrow) {
+    for (const GpuBackend backend : backends_under_test()) {
+        SCOPED_TRACE(label(backend));
+        const Tensor src = upload_float(std::vector<float>(16, 1.0f), TensorShape{4, 4}, backend);
+        const Tensor sliced = src.slice(1, 0, 2);
+        EXPECT_FALSE(sliced.is_contiguous());
+        EXPECT_THROW(sliced.view_as(DataType::UInt8), std::runtime_error);
+
+        Tensor host = Tensor::empty(TensorShape{8}, Device::CPU, DataType::UInt8);
+        std::vector<uint8_t> bytes(8, 7);
+        std::memcpy(host.data_ptr(), bytes.data(), bytes.size());
+        const Tensor u8 = upload(host, backend);
+        EXPECT_THROW(u8.view_as(DataType::Float16), std::runtime_error);
+        EXPECT_THROW(u8.view_as(DataType::Float32), std::runtime_error);
     }
 }

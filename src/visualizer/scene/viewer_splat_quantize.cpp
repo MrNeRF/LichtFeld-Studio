@@ -79,12 +79,6 @@ namespace lfs::vis {
 
         void encodeViewerSplatShNIfNeeded(const std::filesystem::path& path,
                                           lfs::core::SplatData& model) {
-            if (lfs::core::gpu_backend_of(model.means_raw()) == lfs::core::GpuBackend::Vulkan ||
-                lfs::core::gpu_backend_of(model.shN_raw()) == lfs::core::GpuBackend::Vulkan) {
-                LOG_INFO("SH value quantization stays off on the Vulkan tensor backend until its encode is ported");
-                return;
-            }
-
             if (!model.has_tensor_allocator()) {
                 LOG_WARN("Viewer SH q16 skipped for '{}': Vulkan-external storage is unavailable or degraded",
                          lfs::core::path_to_utf8(path));

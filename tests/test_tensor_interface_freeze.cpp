@@ -114,7 +114,7 @@ namespace {
     LFS_FREEZE(shutdown_gpu_backend, lfs::Status (*)(GpuBackend));
     LFS_FREEZE(gpu_backend_of, std::optional<GpuBackend> (*)(const T&));
 #undef LFS_FREEZE
-    constexpr size_t kExactSignatureCount = 40 + 262;
+    constexpr size_t kExactSignatureCount = 40 + 263;
     [[maybe_unused]] constexpr auto kSelectorAnchors = std::tuple{
         &default_gpu_backend, &set_default_gpu_backend, &gpu_backend_available,
         &gpu_backend_memory_info, &shutdown_gpu_backend, &gpu_backend_of};
@@ -384,6 +384,7 @@ namespace {
     LFS_FREEZE(T::can_broadcast_to, bool (T::*)(const S&) const);
     LFS_FREEZE(T::broadcast_shape, S (T::*)(const S&) const);
     LFS_FREEZE(T::try_reshape, std::optional<T> (T::*)(S) const);
+    LFS_FREEZE(T::view_as, T (T::*)(DataType) const);
     LFS_FREEZE(T::split_batch, std::vector<T> (*)(const T&, size_t));
     LFS_FREEZE(T::sign, T (T::*)() const);
     LFS_FREEZE(T::reciprocal, T (T::*)() const);
@@ -606,7 +607,7 @@ namespace {
     LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
     LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
 #undef LFS_FREEZE
-    constexpr size_t kMoreExactSignatureCount = 262;
+    constexpr size_t kMoreExactSignatureCount = 263;
     static_assert(kExactSignatureCount == 40 + kMoreExactSignatureCount);
 
     template <typename X>
@@ -660,6 +661,7 @@ namespace {
         ct.cuda();
         ct.reshape(dims);
         ct.reshape(shape);
+        ct.view_as(DataType::UInt8);
         ct.view(dims);
         ct.view(shape);
         ct.squeeze();

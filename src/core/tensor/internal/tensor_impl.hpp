@@ -2070,6 +2070,7 @@ namespace lfs::core {
             return reshape(std::span<const int>(sizes));
         }
         Tensor reshape(TensorShape new_shape) const;
+        Tensor view_as(DataType dtype) const;
 
         Tensor view(std::span<const int> sizes) const { return reshape(sizes); }
         Tensor view(std::initializer_list<int> sizes) const { return reshape(sizes); }

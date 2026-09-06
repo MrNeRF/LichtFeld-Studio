@@ -608,6 +608,7 @@ if(LFS_TENSOR_VULKAN)
         test_viewer_vulkan_load.cpp
         test_viewer_no_cuda.cpp
         test_selection_mask_ops.cpp
+        test_sh_quant_tensor_program.cpp
     )
 endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)

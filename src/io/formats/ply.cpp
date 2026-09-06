@@ -2218,8 +2218,7 @@ namespace lfs::io {
                 options.shN_q16 &&
                 static_cast<bool>(options.splat_tensor_allocator) &&
                 layout_rest > 0 &&
-                host.shN_swizzled.count > 0 &&
-                !dest_is_vulkan;
+                host.shN_swizzled.count > 0;
 
             Tensor sh0 = allocate_float_tensor(
                 host_span(host.sh0),
@@ -2228,7 +2227,8 @@ namespace lfs::io {
                 "SplatData.sh0");
             Tensor shN;
             Tensor shN_bounds;
-            if (encode_shN_q16) {
+            const bool cuda_q16 = encode_shN_q16 && !dest_is_vulkan;
+            if (cuda_q16) {
                 const size_t cap = means.is_valid() ? std::max(means.capacity(), N) : N;
                 const size_t cells =
                     lfs::core::sh_value_quant::sh_value_u16_count(cap, layout_rest);
@@ -2261,14 +2261,30 @@ namespace lfs::io {
             CudaUploadBatch uploads(lfs::core::getCurrentCUDAStream());
             uploads.enqueue(means, host_span(host.means), "SplatData.means");
             uploads.enqueue(sh0, host_span(host.sh0), "SplatData.sh0");
-            if (!encode_shN_q16) {
+            if (!cuda_q16) {
                 uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
             }
             uploads.enqueue(scaling, host_span(host.scaling), "SplatData.scaling");
             uploads.enqueue(rotation, host_span(host.rotation), "SplatData.rotation");
             uploads.enqueue(opacity, host_span(host.opacity), "SplatData.opacity");
             uploads.wait();
-            if (encode_shN_q16) {
+            if (encode_shN_q16 && dest_is_vulkan) {
+                Tensor encoded_codes;
+                Tensor encoded_bounds;
+                lfs::core::sh_value_quant::encode_shN_float4_to_u16_tensor(
+                    shN,
+                    N,
+                    lfs::core::sh_float4_slots_for_rest(layout_rest),
+                    lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest),
+                    encoded_codes,
+                    encoded_bounds);
+                shN = encoded_codes.contiguous().reshape(
+                    TensorShape({encoded_codes.numel()}));
+                shN.set_name("SplatData.shN");
+                shN_bounds = encoded_bounds.contiguous().reshape(
+                    TensorShape({encoded_bounds.numel()}));
+                shN_bounds.set_name("SplatData.shN_value_bounds");
+            } else if (cuda_q16) {
                 encode_host_shN_to_q16(
                     host.shN_swizzled, shN, shN_bounds, N, layout_rest);
             }

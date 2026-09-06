@@ -11,6 +11,8 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -22,6 +24,11 @@ namespace {
     using namespace lfs::core;
 
     [[nodiscard]] std::filesystem::path splat_ply_path() {
+        const std::filesystem::path campaign{
+            "/home/paja/projects/gaussian-splatting-cuda/output/splat_1581.ply"};
+        if (std::filesystem::exists(campaign)) {
+            return campaign;
+        }
         return std::filesystem::path(PROJECT_ROOT_PATH) / "output" / "splat_1581.ply";
     }
 
@@ -95,25 +102,61 @@ namespace {
 
 } // namespace
 
-TEST(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithoutQ16) {
+TEST(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     require_cuda();
     skip_if_missing_ply();
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }
+    ASSERT_TRUE(sh_value_quant::enabled());
+
+    SplatData cuda_model;
+    {
+        GpuBackendScope scope(GpuBackend::CUDA);
+        cuda_model = load_splat(viewer_load_options());
+    }
+    ASSERT_TRUE(cuda_model.means_raw().is_valid());
+    ASSERT_TRUE(cuda_model.shN_value_quantized());
 
     GpuBackendScope scope(GpuBackend::Vulkan);
     SplatData model = load_splat(viewer_load_options());
     ASSERT_TRUE(model.means_raw().is_valid());
     EXPECT_EQ(model.size(), 86976);
-    EXPECT_FALSE(model.shN_value_quantized());
+    EXPECT_TRUE(model.shN_value_quantized());
     expect_backend(model.means_raw(), GpuBackend::Vulkan, "means");
     expect_backend(model.sh0_raw(), GpuBackend::Vulkan, "sh0");
     expect_backend(model.scaling_raw(), GpuBackend::Vulkan, "scaling");
     expect_backend(model.rotation_raw(), GpuBackend::Vulkan, "rotation");
     expect_backend(model.opacity_raw(), GpuBackend::Vulkan, "opacity");
     expect_backend(model.shN_raw(), GpuBackend::Vulkan, "shN");
+    expect_backend(model.shN_value_bounds(), GpuBackend::Vulkan, "shN_value_bounds");
     expect_means_match_cpu_ply(model);
+
+    const Tensor vk_codes = model.shN_raw().contiguous().cpu();
+    const Tensor cu_codes = cuda_model.shN_raw().contiguous().cpu();
+    ASSERT_EQ(vk_codes.bytes(), cu_codes.bytes());
+    const auto* vk_u16 = static_cast<const std::uint16_t*>(vk_codes.data_ptr());
+    const auto* cu_u16 = static_cast<const std::uint16_t*>(cu_codes.data_ptr());
+    const size_t words = vk_codes.bytes() / sizeof(std::uint16_t);
+    size_t code_mismatches = 0;
+    size_t first_mismatch = words;
+    for (size_t i = 0; i < words; ++i) {
+        if (vk_u16[i] != cu_u16[i]) {
+            if (code_mismatches < 8) {
+                EXPECT_EQ(vk_u16[i], cu_u16[i]) << "q16 word " << i;
+            }
+            if (first_mismatch == words) {
+                first_mismatch = i;
+            }
+            ++code_mismatches;
+        }
+    }
+    EXPECT_EQ(code_mismatches, 0u) << "first mismatch at word " << first_mismatch;
+    const Tensor vk_bounds = model.shN_value_bounds().contiguous().cpu();
+    const Tensor cu_bounds = cuda_model.shN_value_bounds().contiguous().cpu();
+    ASSERT_EQ(vk_bounds.numel(), cu_bounds.numel());
+    ASSERT_EQ(vk_bounds.bytes(), cu_bounds.bytes());
+    EXPECT_EQ(std::memcmp(vk_bounds.data_ptr(), cu_bounds.data_ptr(), vk_bounds.bytes()), 0);
 }
 
 TEST(ViewerVulkanLoad, PlyCudaDefaultKeepsQ16) {
