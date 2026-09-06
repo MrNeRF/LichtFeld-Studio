@@ -2572,14 +2572,30 @@ namespace lfs::vis {
             transfer_queue_family_ = 0;
             has_dedicated_transfer_queue_ = false;
         }
+        // The tensor backend gets its own queue: the second queue of the compute
+        // family when it has one, else the second queue of the graphics family.
+        std::optional<uint32_t> tensor_queue_family;
+        {
+            uint32_t family_count = 0;
+            vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, nullptr);
+            std::vector<VkQueueFamilyProperties> family_props(family_count);
+            vkGetPhysicalDeviceQueueFamilyProperties(physical_device_, &family_count, family_props.data());
+            for (const uint32_t candidate : {compute_queue_family_, graphics_queue_family_}) {
+                if (candidate < family_count && family_props[candidate].queueCount >= 2 &&
+                    (family_props[candidate].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
+                    tensor_queue_family = candidate;
+                    break;
+                }
+            }
+        }
         std::vector<VkDeviceQueueCreateInfo> queue_infos;
-        constexpr float queue_priority = 1.0f;
+        static constexpr std::array<float, 2> queue_priorities{1.0f, 1.0f};
         for (const uint32_t family : unique_families) {
             VkDeviceQueueCreateInfo queue_info{};
             queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
             queue_info.queueFamilyIndex = family;
-            queue_info.queueCount = 1;
-            queue_info.pQueuePriorities = &queue_priority;
+            queue_info.queueCount = tensor_queue_family == family ? 2 : 1;
+            queue_info.pQueuePriorities = queue_priorities.data();
             queue_infos.push_back(queue_info);
         }
 
@@ -2766,6 +2782,7 @@ namespace lfs::vis {
         features12.timelineSemaphore = VK_TRUE;
         features12.shaderFloat16 = supported_features12.shaderFloat16;
         features12.bufferDeviceAddress = supported_features12.bufferDeviceAddress;
+        features12.storageBuffer8BitAccess = supported_features12.storageBuffer8BitAccess;
 
         // Optional feature structs are prepended to the Vulkan 1.2 chain.
         void* enabled_chain_head = features12.pNext;
@@ -2885,6 +2902,23 @@ namespace lfs::vis {
 
         vkGetDeviceQueue(device_, graphics_queue_family_, 0, &graphics_queue_);
         vkGetDeviceQueue(device_, present_queue_family_, 0, &present_queue_);
+        tensor_backend_device_ = {};
+        if (tensor_queue_family.has_value()) {
+            tensor_backend_device_.queue_family = *tensor_queue_family;
+            vkGetDeviceQueue(device_, *tensor_queue_family, 1, &tensor_backend_device_.queue);
+            tensor_backend_device_.shader_atomic_float =
+                atomic_float_features.shaderBufferFloat32AtomicAdd == VK_TRUE;
+            tensor_backend_device_.shader_float16 = features12.shaderFloat16 == VK_TRUE;
+            tensor_backend_device_.complete =
+                tensor_backend_device_.queue != VK_NULL_HANDLE &&
+                features2.features.shaderInt64 == VK_TRUE && features2.features.shaderInt16 == VK_TRUE &&
+                features11.storageBuffer16BitAccess == VK_TRUE && features12.storageBuffer8BitAccess == VK_TRUE &&
+                features12.timelineSemaphore == VK_TRUE && features12.bufferDeviceAddress == VK_TRUE &&
+                features13.synchronization2 == VK_TRUE;
+        }
+        LOG_INFO("Vulkan: tensor backend queue {} (family {})",
+                 tensor_backend_device_.complete ? "available" : "unavailable",
+                 tensor_backend_device_.queue_family);
         if (has_dedicated_compute_queue_) {
             vkGetDeviceQueue(device_, compute_queue_family_, 0, &compute_queue_);
             LOG_INFO("Vulkan: dedicated async-compute queue family {} (graphics family {})",

@@ -196,6 +196,37 @@ namespace lfs::core {
         return {};
     }
 
+    lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles) {
+#ifdef LFS_TENSOR_VULKAN
+        return internal::adopt_vulkan_context(internal::AdoptedDevice{
+            .instance = static_cast<VkInstance>(handles.instance),
+            .physical_device = static_cast<VkPhysicalDevice>(handles.physical_device),
+            .device = static_cast<VkDevice>(handles.device),
+            .queue = static_cast<VkQueue>(handles.queue),
+            .queue_family = handles.queue_family,
+            .shader_atomic_float = handles.shader_atomic_float,
+            .memory_budget = handles.memory_budget,
+            .shader_float16 = handles.shader_float16,
+        });
+#else
+        (void)handles;
+        return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+            .code = lfs::ErrorCode::Unsupported,
+            .domain = lfs::ErrorDomain::Vulkan,
+            .user_message = "this build has no Vulkan tensor backend",
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        }));
+#endif
+    }
+
+    bool vulkan_backend_adopted() {
+#ifdef LFS_TENSOR_VULKAN
+        return internal::vulkan_context_adopted();
+#else
+        return false;
+#endif
+    }
+
     namespace internal {
 
         void order_legacy_after_home(const Tensor& tensor) {

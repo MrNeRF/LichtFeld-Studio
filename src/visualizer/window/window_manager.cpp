@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor_backend.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -523,6 +524,7 @@ namespace lfs::vis {
             g_x11_error_owner = nullptr;
         }
 #endif
+        releaseTensorBackendDevice();
         vulkan_context_.reset();
         if (window_) {
             SDL_DestroyWindow(window_);
@@ -766,8 +768,10 @@ namespace lfs::vis {
             return false;
         }
         lfs::rendering::setExpectedVulkanDeviceUuid(vulkan_context_->deviceUUID());
+        adoptTensorBackendDevice();
         if (!vulkan_context_->presentBootstrapFrame(0.11f, 0.11f, 0.14f, 1.0f)) {
             std::cerr << "Failed to present Vulkan bootstrap frame: " << vulkan_context_->lastError() << std::endl;
+            releaseTensorBackendDevice();
             vulkan_context_.reset();
             SDL_DestroyWindow(window_);
             window_ = nullptr;
@@ -1815,6 +1819,41 @@ namespace lfs::vis {
 
         pending_titlebar_double_click_ = false;
         toggleMaximized();
+    }
+
+    void WindowManager::adoptTensorBackendDevice() {
+        const auto& device = vulkan_context_->tensorBackendDevice();
+        if (!device.complete) {
+            LOG_INFO("Tensor Vulkan backend keeps its own device: the window device has no spare compute queue or lacks a required feature");
+            return;
+        }
+        const lfs::core::VulkanDeviceHandles handles{
+            .instance = vulkan_context_->instance(),
+            .physical_device = vulkan_context_->physicalDevice(),
+            .device = vulkan_context_->device(),
+            .queue = device.queue,
+            .queue_family = device.queue_family,
+            .shader_atomic_float = device.shader_atomic_float,
+            .memory_budget = false,
+            .shader_float16 = device.shader_float16,
+        };
+        if (const auto status = lfs::core::adopt_vulkan_device(handles); !status) {
+            LOG_WARN("Tensor Vulkan backend keeps its own device: {}", lfs::format_for_developer(status.error()));
+            return;
+        }
+        tensor_backend_adopted_ = true;
+        LOG_INFO("Tensor Vulkan backend runs on the window device (queue family {})", device.queue_family);
+    }
+
+    void WindowManager::releaseTensorBackendDevice() {
+        if (!tensor_backend_adopted_) {
+            return;
+        }
+        tensor_backend_adopted_ = false;
+        if (const auto status = lfs::core::shutdown_gpu_backend(lfs::core::GpuBackend::Vulkan); !status) {
+            LOG_WARN("Tensor Vulkan backend shutdown failed before the window device is destroyed: {}",
+                     lfs::format_for_developer(status.error()));
+        }
     }
 
 } // namespace lfs::vis
