@@ -28,7 +28,7 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     std::shared_ptr<Tensor> make_screen_positions(const std::vector<float>& xy) {
@@ -118,9 +118,9 @@ TEST(SelectionMaskNormalizationTest, MatchesReferenceForSoftDeletedGroupedMillio
     auto* const node = scene.getNode("synthetic");
     ASSERT_NE(node, nullptr);
     ASSERT_NE(node->model, nullptr);
-    ASSERT_TRUE(node->model->soft_delete(deleted_cpu.cuda()).is_valid());
+    ASSERT_TRUE(node->model->soft_delete(deleted_cpu.gpu()).is_valid());
 
-    const auto input = mask_cpu.cuda();
+    const auto input = mask_cpu.gpu();
     const auto live = node->model->deleted().logical_not().to(Device::GPU).to(DataType::UInt8);
     const auto expected = input.where(
         live.ne(0), Tensor::zeros({kRows}, Device::GPU, DataType::UInt8));

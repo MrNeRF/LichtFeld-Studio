@@ -33,7 +33,7 @@ namespace {
         std::vector<float> host(n);
         for (size_t i = 0; i < n; ++i)
             host[i] = static_cast<float>((i % 97) + 1); // 1..97 cycle
-        return Tensor::from_vector(host, TensorShape(shape), Device::CPU).cuda();
+        return Tensor::from_vector(host, TensorShape(shape), Device::CPU).gpu();
     }
 
     /// Reference: permute reduce-dim to last, contiguous, reduce last.

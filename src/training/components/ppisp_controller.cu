@@ -389,40 +389,40 @@ namespace lfs::training {
         is >> fc3_w_ >> fc3_b_ >> fc3_w_m_ >> fc3_w_v_ >> fc3_b_m_ >> fc3_b_v_;
         is >> fc4_w_ >> fc4_b_ >> fc4_w_m_ >> fc4_w_v_ >> fc4_b_m_ >> fc4_b_v_;
 
-        conv1_w_ = conv1_w_.cuda();
-        conv1_b_ = conv1_b_.cuda();
-        conv2_w_ = conv2_w_.cuda();
-        conv2_b_ = conv2_b_.cuda();
-        conv3_w_ = conv3_w_.cuda();
-        conv3_b_ = conv3_b_.cuda();
+        conv1_w_ = conv1_w_.gpu();
+        conv1_b_ = conv1_b_.gpu();
+        conv2_w_ = conv2_w_.gpu();
+        conv2_b_ = conv2_b_.gpu();
+        conv3_w_ = conv3_w_.gpu();
+        conv3_b_ = conv3_b_.gpu();
 
-        fc1_w_ = fc1_w_.cuda();
-        fc1_b_ = fc1_b_.cuda();
-        fc1_w_m_ = fc1_w_m_.cuda();
-        fc1_w_v_ = fc1_w_v_.cuda();
-        fc1_b_m_ = fc1_b_m_.cuda();
-        fc1_b_v_ = fc1_b_v_.cuda();
+        fc1_w_ = fc1_w_.gpu();
+        fc1_b_ = fc1_b_.gpu();
+        fc1_w_m_ = fc1_w_m_.gpu();
+        fc1_w_v_ = fc1_w_v_.gpu();
+        fc1_b_m_ = fc1_b_m_.gpu();
+        fc1_b_v_ = fc1_b_v_.gpu();
 
-        fc2_w_ = fc2_w_.cuda();
-        fc2_b_ = fc2_b_.cuda();
-        fc2_w_m_ = fc2_w_m_.cuda();
-        fc2_w_v_ = fc2_w_v_.cuda();
-        fc2_b_m_ = fc2_b_m_.cuda();
-        fc2_b_v_ = fc2_b_v_.cuda();
+        fc2_w_ = fc2_w_.gpu();
+        fc2_b_ = fc2_b_.gpu();
+        fc2_w_m_ = fc2_w_m_.gpu();
+        fc2_w_v_ = fc2_w_v_.gpu();
+        fc2_b_m_ = fc2_b_m_.gpu();
+        fc2_b_v_ = fc2_b_v_.gpu();
 
-        fc3_w_ = fc3_w_.cuda();
-        fc3_b_ = fc3_b_.cuda();
-        fc3_w_m_ = fc3_w_m_.cuda();
-        fc3_w_v_ = fc3_w_v_.cuda();
-        fc3_b_m_ = fc3_b_m_.cuda();
-        fc3_b_v_ = fc3_b_v_.cuda();
+        fc3_w_ = fc3_w_.gpu();
+        fc3_b_ = fc3_b_.gpu();
+        fc3_w_m_ = fc3_w_m_.gpu();
+        fc3_w_v_ = fc3_w_v_.gpu();
+        fc3_b_m_ = fc3_b_m_.gpu();
+        fc3_b_v_ = fc3_b_v_.gpu();
 
-        fc4_w_ = fc4_w_.cuda();
-        fc4_b_ = fc4_b_.cuda();
-        fc4_w_m_ = fc4_w_m_.cuda();
-        fc4_w_v_ = fc4_w_v_.cuda();
-        fc4_b_m_ = fc4_b_m_.cuda();
-        fc4_b_v_ = fc4_b_v_.cuda();
+        fc4_w_ = fc4_w_.gpu();
+        fc4_b_ = fc4_b_.gpu();
+        fc4_w_m_ = fc4_w_m_.gpu();
+        fc4_w_v_ = fc4_w_v_.gpu();
+        fc4_b_m_ = fc4_b_m_.gpu();
+        fc4_b_v_ = fc4_b_v_.gpu();
 
         fc1_w_grad_ = zeros_like(fc1_w_);
         fc1_b_grad_ = zeros_like(fc1_b_);
@@ -467,21 +467,21 @@ namespace lfs::training {
         is >> fc3_w_ >> fc3_b_;
         is >> fc4_w_ >> fc4_b_;
 
-        conv1_w_ = conv1_w_.cuda();
-        conv1_b_ = conv1_b_.cuda();
-        conv2_w_ = conv2_w_.cuda();
-        conv2_b_ = conv2_b_.cuda();
-        conv3_w_ = conv3_w_.cuda();
-        conv3_b_ = conv3_b_.cuda();
+        conv1_w_ = conv1_w_.gpu();
+        conv1_b_ = conv1_b_.gpu();
+        conv2_w_ = conv2_w_.gpu();
+        conv2_b_ = conv2_b_.gpu();
+        conv3_w_ = conv3_w_.gpu();
+        conv3_b_ = conv3_b_.gpu();
 
-        fc1_w_ = fc1_w_.cuda();
-        fc1_b_ = fc1_b_.cuda();
-        fc2_w_ = fc2_w_.cuda();
-        fc2_b_ = fc2_b_.cuda();
-        fc3_w_ = fc3_w_.cuda();
-        fc3_b_ = fc3_b_.cuda();
-        fc4_w_ = fc4_w_.cuda();
-        fc4_b_ = fc4_b_.cuda();
+        fc1_w_ = fc1_w_.gpu();
+        fc1_b_ = fc1_b_.gpu();
+        fc2_w_ = fc2_w_.gpu();
+        fc2_b_ = fc2_b_.gpu();
+        fc3_w_ = fc3_w_.gpu();
+        fc3_b_ = fc3_b_.gpu();
+        fc4_w_ = fc4_w_.gpu();
+        fc4_b_ = fc4_b_.gpu();
     }
 
 } // namespace lfs::training

@@ -5018,14 +5018,14 @@ namespace lfs::vis {
         const auto& src = *gaussian_clipboard_;
         auto data = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
-            src.means_raw().cuda(), src.sh0_raw().cuda(),
-            src.shN_raw().is_valid() ? src.shN_raw().cuda() : lfs::core::Tensor{},
-            src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
+            src.means_raw().gpu(), src.sh0_raw().gpu(),
+            src.shN_raw().is_valid() ? src.shN_raw().gpu() : lfs::core::Tensor{},
+            src.scaling_raw().gpu(), src.rotation_raw().gpu(), src.opacity_raw().gpu(),
             src.get_scene_scale(),
             lfs::core::SplatData::ShNLayout::Swizzled);
         data->set_active_sh_degree(
             src.get_active_sh_degree(),
-            src.shN_value_quantized() ? src.shN_value_bounds().cuda() : lfs::core::Tensor{});
+            src.shN_value_quantized() ? src.shN_value_bounds().gpu() : lfs::core::Tensor{});
 
         const std::string name = makeUniqueCounterNodeName(scene_, "Selection", clipboard_counter_);
         if (auto allocator = makeExternalSplatAllocator()) {
@@ -5174,14 +5174,14 @@ namespace lfs::vis {
                 name = makeUniqueCounterNodeName(scene_, "Pasted", clipboard_counter_);
                 auto paste_data = std::make_unique<lfs::core::SplatData>(
                     entry.data->get_max_sh_degree(),
-                    entry.data->means_raw().cuda(), entry.data->sh0_raw().cuda(),
-                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().cuda() : lfs::core::Tensor{},
-                    entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
+                    entry.data->means_raw().gpu(), entry.data->sh0_raw().gpu(),
+                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().gpu() : lfs::core::Tensor{},
+                    entry.data->scaling_raw().gpu(), entry.data->rotation_raw().gpu(), entry.data->opacity_raw().gpu(),
                     entry.data->get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
                 paste_data->set_active_sh_degree(
                     entry.data->get_active_sh_degree(),
-                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().cuda()
+                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().gpu()
                                                       : lfs::core::Tensor{});
 
                 if (auto allocator = makeExternalSplatAllocator()) {

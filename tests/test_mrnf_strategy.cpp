@@ -200,8 +200,8 @@ namespace {
                 }
             }
         }
-        state.exp_avg = packed.cuda();
-        state.joint_bounds = bounds.cuda();
+        state.exp_avg = packed.gpu();
+        state.joint_bounds = bounds.gpu();
     }
 
     void expect_shN_joint_row_zero(const AdamParamState& state, const size_t prim,
@@ -827,7 +827,7 @@ TEST(MRNFStrategyTest, GrowAndSplitOversizeChannelPrefersOversizedError) {
     auto share_cpu = Tensor::zeros({n}, Device::CPU);
     share_cpu.ptr<float>()[0] = 0.9f;
     share_cpu.ptr<float>()[1] = 0.05f;
-    splat_data._max_screen_share = share_cpu.cuda();
+    splat_data._max_screen_share = share_cpu.gpu();
 
     const auto means_before = splat_data.means().cpu();
     const float* mb = means_before.ptr<float>();
@@ -1161,8 +1161,8 @@ namespace {
     Camera make_explore_camera(int width, int height) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).cuda();
-        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).cuda();
+        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).gpu();
+        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).gpu();
         return Camera(R, T, 100.f, 100.f, width * 0.5f, height * 0.5f,
                       Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
                       std::filesystem::path{}, width, height, 0);
@@ -1171,8 +1171,8 @@ namespace {
     std::shared_ptr<Camera> make_hull_camera(float x, float y, float z, int uid) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {-x, -y, -z};
-        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).cuda();
-        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).cuda();
+        auto R = Tensor::from_vector(R_data, TensorShape({3, 3}), Device::CPU).gpu();
+        auto T = Tensor::from_vector(T_data, TensorShape({3}), Device::CPU).gpu();
         return std::make_shared<Camera>(
             R, T, 100.f, 100.f, 4.f, 4.f, Tensor(), Tensor(),
             CameraModelType::PINHOLE, "hull", "", std::filesystem::path{}, 8, 8, uid);

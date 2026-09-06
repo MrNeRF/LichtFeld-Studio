@@ -230,7 +230,7 @@ namespace {
         }
         auto band = Tensor::from_blob(pixels.data(), {HEIGHT, WIDTH, 4},
                                       lfs::core::Device::CPU, lfs::core::DataType::UInt8)
-                        .cuda();
+                        .gpu();
 
         Tensor rgb_chw;
         Tensor alpha;

@@ -98,7 +98,7 @@ namespace lfs::rendering {
             for (std::size_t i = 0; i < mask.size(); ++i) {
                 ptr[i] = mask[i] ? 1 : 0;
             }
-            return tensor.cuda();
+            return tensor.gpu();
         }
 
         [[nodiscard]] bool nodeMaskRestrictsSelection(const std::vector<bool>& mask) {
@@ -863,7 +863,7 @@ namespace lfs::rendering {
                 model_transforms_contig = model_transforms_contig.to(lfs::core::DataType::Float32);
             }
             if (model_transforms_contig.device() != lfs::core::Device::GPU) {
-                model_transforms_contig = model_transforms_contig.cuda();
+                model_transforms_contig = model_transforms_contig.gpu();
             }
             if (!model_transforms_contig.is_contiguous()) {
                 model_transforms_contig = model_transforms_contig.contiguous();
@@ -881,7 +881,7 @@ namespace lfs::rendering {
                 transform_indices_contig = transform_indices_contig.to(lfs::core::DataType::Int32);
             }
             if (transform_indices_contig.device() != lfs::core::Device::GPU) {
-                transform_indices_contig = transform_indices_contig.cuda();
+                transform_indices_contig = transform_indices_contig.gpu();
             }
             if (!transform_indices_contig.is_contiguous()) {
                 transform_indices_contig = transform_indices_contig.contiguous();

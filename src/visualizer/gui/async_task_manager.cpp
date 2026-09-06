@@ -514,7 +514,7 @@ namespace lfs::vis::gui {
         }
         frame = frame.permute({2, 0, 1}).contiguous();
         if (frame.device() != lfs::core::Device::GPU) {
-            frame = frame.cuda();
+            frame = frame.gpu();
         }
         return frame.contiguous();
     }

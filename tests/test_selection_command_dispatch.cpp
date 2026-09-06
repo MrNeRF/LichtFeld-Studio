@@ -31,7 +31,7 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     std::shared_ptr<Tensor> make_screen_positions(const std::vector<float>& xy) {

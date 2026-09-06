@@ -240,7 +240,7 @@ namespace {
     Tensor make_uint8_mask(const std::vector<uint8_t>& values) {
         auto tensor = Tensor::empty({values.size()}, Device::CPU, DataType::UInt8);
         std::copy(values.begin(), values.end(), tensor.ptr<uint8_t>());
-        return tensor.cuda();
+        return tensor.gpu();
     }
 
     std::vector<uint8_t> selection_mask_values(const lfs::core::Scene& scene) {

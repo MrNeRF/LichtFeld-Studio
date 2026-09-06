@@ -743,7 +743,7 @@ namespace lfs::training {
                        static_cast<uint32_t>(error_map_2d.shape()[1]) == W &&
                        "pixel_error_map must have shape [H, W] or [1, H, W]");
                 if (error_map_2d.device() != core::Device::GPU) {
-                    error_map_2d = error_map_2d.cuda();
+                    error_map_2d = error_map_2d.gpu();
                 }
                 if (!error_map_2d.is_contiguous()) {
                     error_map_2d = error_map_2d.contiguous();

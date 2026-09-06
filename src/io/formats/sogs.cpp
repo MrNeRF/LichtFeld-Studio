@@ -942,12 +942,12 @@ namespace lfs::io {
 
             {
                 LOG_TIMER_DEBUG("SOG load: upload");
-                means = host_means.cuda();
-                scales = host_scales.cuda();
-                rotations = host_rotations.cuda();
-                opacity = host_opacity.cuda();
-                sh0 = host_sh0.cuda();
-                shN = host_shN.cuda();
+                means = host_means.gpu();
+                scales = host_scales.gpu();
+                rotations = host_rotations.gpu();
+                opacity = host_opacity.gpu();
+                sh0 = host_sh0.gpu();
+                shN = host_shN.gpu();
             }
 
             // Calculate SH degree
@@ -1337,7 +1337,7 @@ namespace lfs::io {
             if (tensor.device() == Device::GPU) {
                 return tensor.is_contiguous() ? tensor : tensor.contiguous();
             }
-            return tensor.cuda().contiguous();
+            return tensor.gpu().contiguous();
         }
 
         int nearest_centroid_1d(const std::vector<float>& centroids, float value) {
@@ -1775,7 +1775,7 @@ namespace lfs::io {
                                           options.output_path);
                     }
                     if (shN_canon.device() != Device::GPU) {
-                        shN_canon = shN_canon.cuda();
+                        shN_canon = shN_canon.gpu();
                     }
                     const size_t n = static_cast<size_t>(num_rows);
                     const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));

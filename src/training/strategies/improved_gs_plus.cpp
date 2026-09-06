@@ -1261,7 +1261,7 @@ namespace lfs::training {
                 throw std::runtime_error("Invalid ImprovedGSPlus checkpoint: free mask has incompatible schema");
             }
             if (_splat_data->means().device() == lfs::core::Device::GPU) {
-                free_mask = free_mask.cuda();
+                free_mask = free_mask.gpu();
             }
         } else {
             const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)

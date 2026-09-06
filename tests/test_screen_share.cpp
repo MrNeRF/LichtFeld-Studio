@@ -80,8 +80,8 @@ TEST_F(ScreenShareTest, HardClipShrinksOversizedLogScale) {
     s[2 * 3 + 1] = 0.90f;
     s[2 * 3 + 2] = 0.10f;
     sh[2] = 0.35f;
-    scales = scales_cpu.cuda();
-    share = share_cpu.cuda();
+    scales = scales_cpu.gpu();
+    share = share_cpu.gpu();
 
     ASSERT_EQ(scales.shape()[0], static_cast<size_t>(n));
     ASSERT_EQ(scales.shape()[1], static_cast<size_t>(3));
@@ -136,8 +136,8 @@ TEST_F(ScreenShareTest, OversizeSplitScoresKernelRanksCorrectly) {
     e[3] = 0.0f;
     sh[3] = 0.9f; // oversized, no error
 
-    auto error = error_cpu.cuda();
-    auto share = share_cpu.cuda();
+    auto error = error_cpu.gpu();
+    auto share = share_cpu.gpu();
     auto out = Tensor::zeros({static_cast<size_t>(n)}, Device::GPU);
     launch_oversize_split_scores(
         error.ptr<float>(), share.ptr<float>(), nullptr, 0, out.ptr<float>(), limit, n);

@@ -412,7 +412,7 @@ namespace lfs::io {
             std::memcpy(cpu_tensor.data_ptr(), img_data, static_cast<size_t>(height) * width * channels);
             free_image(img_data);
 
-            auto gpu_uint8 = cpu_tensor.cuda();
+            auto gpu_uint8 = cpu_tensor.gpu();
             const auto H = static_cast<size_t>(height);
             const auto W = static_cast<size_t>(width);
             const auto C = static_cast<size_t>(channels);

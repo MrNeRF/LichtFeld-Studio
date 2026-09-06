@@ -136,7 +136,7 @@ namespace lfs::training {
                 throw std::runtime_error("AdamOptimizer frozen mask must be a 1D bool tensor");
             }
             if (mask.device() != lfs::core::Device::GPU) {
-                mask = mask.cuda();
+                mask = mask.gpu();
             }
             if (!mask.is_contiguous()) {
                 mask = mask.contiguous();
@@ -162,7 +162,7 @@ namespace lfs::training {
                 mask.numel() == static_cast<size_t>(splat_data_.size()),
                 "AdamOptimizer crop damping mask must match the model row count");
             if (mask.device() != lfs::core::Device::GPU) {
-                mask = mask.cuda();
+                mask = mask.gpu();
             }
             if (!mask.is_contiguous()) {
                 mask = mask.contiguous();

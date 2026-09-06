@@ -6944,7 +6944,7 @@ namespace lfs::training {
                                     target_depth = target_depth.squeeze(0);
                                 }
                                 if (target_depth.device() != lfs::core::Device::GPU) {
-                                    target_depth = target_depth.cuda();
+                                    target_depth = target_depth.gpu();
                                 }
                                 if (!target_depth.is_contiguous()) {
                                     target_depth = target_depth.contiguous();
@@ -9142,7 +9142,7 @@ namespace lfs::training {
             return rgb;
         }
 
-        auto rgb_chw = rgb.device() == lfs::core::Device::GPU ? rgb : rgb.cuda();
+        auto rgb_chw = rgb.device() == lfs::core::Device::GPU ? rgb : rgb.gpu();
         if (rgb_chw.shape()[0] != 3 && rgb_chw.shape()[2] == 3) {
             rgb_chw = rgb_chw.permute({2, 0, 1}).contiguous();
         } else if (!rgb_chw.is_contiguous()) {

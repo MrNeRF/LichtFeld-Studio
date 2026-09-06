@@ -58,7 +58,7 @@ namespace {
             auto* p = cpu.ptr<float>();
             for (size_t i = 0; i < n * rest * 3; ++i)
                 p[i] = 0.02f * static_cast<float>((i % 11) + 1);
-            shN = cpu.cuda();
+            shN = cpu.gpu();
         }
         return SplatData(
             sh_degree,
@@ -207,7 +207,7 @@ TEST(DualRepOptimizer, JointEncodeZeroUnderBoundsExcludingZero) {
         auto* b = cpu.ptr<uint8_t>();
         for (size_t i = 0; i < cpu.numel(); ++i)
             b[i] = static_cast<uint8_t>(200);
-        packed = cpu.cuda();
+        packed = cpu.gpu();
     }
 
     std::vector<int64_t> idx_h = {0, 3, 7};
@@ -284,7 +284,7 @@ TEST(DualRepOptimizer, JointGrowZeroEncodesNewRows) {
             p[i * 4 + 2] = 0.25f;
             p[i * 4 + 3] = 1.0f;
         }
-        st->joint_bounds = b.cuda();
+        st->joint_bounds = b.gpu();
     }
 
     // Grow params + state
@@ -660,7 +660,7 @@ TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
         auto* bytes = packed_cpu.ptr<uint8_t>();
         for (size_t i = 0; i < packed_cpu.numel(); ++i)
             bytes[i] = static_cast<uint8_t>((i * 13 + 7) & 0xff);
-        means_st->exp_avg = packed_cpu.cuda();
+        means_st->exp_avg = packed_cpu.gpu();
     }
 
     // Densify via LAS_densify with uniform scores (must not abort on q16).
@@ -677,7 +677,7 @@ TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
         p[0] = true;
         p[1] = true;
         p[2] = true;
-        prune = cpu.cuda();
+        prune = cpu.gpu();
     }
     ASSERT_NO_THROW(strategy.remove_gaussians(prune));
 

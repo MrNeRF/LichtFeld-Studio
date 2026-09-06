@@ -43,8 +43,8 @@ namespace {
                 }
             }
         }
-        pred = pred_cpu.cuda();
-        gt = gt_cpu.cuda();
+        pred = pred_cpu.gpu();
+        gt = gt_cpu.gpu();
         return pred;
     }
 

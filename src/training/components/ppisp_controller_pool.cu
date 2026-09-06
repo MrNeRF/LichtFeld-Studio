@@ -545,7 +545,7 @@ namespace lfs::training {
             if (!tensor.is_valid() || tensor.dtype() != lfs::core::DataType::Float32 || tensor.shape() != shape)
                 throw std::runtime_error("Invalid PPISPControllerPool tensor: " + std::string(name));
             if (output)
-                *output = tensor.cuda();
+                *output = tensor.gpu();
         };
 
         read_tensor(destination ? &destination->conv1_w_ : nullptr, {CNN_CH1, 3}, "conv1 weights");
@@ -677,12 +677,12 @@ namespace lfs::training {
             throw std::runtime_error("Camera count mismatch");
 
         is >> conv1_w_ >> conv1_b_ >> conv2_w_ >> conv2_b_ >> conv3_w_ >> conv3_b_;
-        conv1_w_ = conv1_w_.cuda();
-        conv1_b_ = conv1_b_.cuda();
-        conv2_w_ = conv2_w_.cuda();
-        conv2_b_ = conv2_b_.cuda();
-        conv3_w_ = conv3_w_.cuda();
-        conv3_b_ = conv3_b_.cuda();
+        conv1_w_ = conv1_w_.gpu();
+        conv1_b_ = conv1_b_.gpu();
+        conv2_w_ = conv2_w_.gpu();
+        conv2_b_ = conv2_b_.gpu();
+        conv3_w_ = conv3_w_.gpu();
+        conv3_b_ = conv3_b_.gpu();
 
         for (int i = 0; i < num_cameras_; ++i) {
             is >> fc1_w_[i] >> fc1_b_[i];
@@ -690,14 +690,14 @@ namespace lfs::training {
             is >> fc3_w_[i] >> fc3_b_[i];
             is >> fc4_w_[i] >> fc4_b_[i];
 
-            fc1_w_[i] = fc1_w_[i].cuda();
-            fc1_b_[i] = fc1_b_[i].cuda();
-            fc2_w_[i] = fc2_w_[i].cuda();
-            fc2_b_[i] = fc2_b_[i].cuda();
-            fc3_w_[i] = fc3_w_[i].cuda();
-            fc3_b_[i] = fc3_b_[i].cuda();
-            fc4_w_[i] = fc4_w_[i].cuda();
-            fc4_b_[i] = fc4_b_[i].cuda();
+            fc1_w_[i] = fc1_w_[i].gpu();
+            fc1_b_[i] = fc1_b_[i].gpu();
+            fc2_w_[i] = fc2_w_[i].gpu();
+            fc2_b_[i] = fc2_b_[i].gpu();
+            fc3_w_[i] = fc3_w_[i].gpu();
+            fc3_b_[i] = fc3_b_[i].gpu();
+            fc4_w_[i] = fc4_w_[i].gpu();
+            fc4_b_[i] = fc4_b_[i].gpu();
         }
     }
 

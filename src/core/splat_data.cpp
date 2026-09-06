@@ -493,7 +493,7 @@ namespace {
                             .contiguous();
             src = truncated;
         }
-        Tensor src_cuda = src.device() == Device::GPU ? src : src.cuda();
+        Tensor src_cuda = src.device() == Device::GPU ? src : src.gpu();
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
         }
@@ -1758,7 +1758,7 @@ namespace lfs::core {
             _shN = allocate_swizzled_shN(n_now, cap_now, new_rest);
             if (canonical.is_valid() && canonical.numel() > 0 && n_now > 0 && new_rest > 0) {
                 if (canonical.device() != Device::GPU) {
-                    canonical = canonical.cuda();
+                    canonical = canonical.gpu();
                 }
                 const auto src_rest = static_cast<uint32_t>(canonical.size(1));
                 const auto copy_rest = std::min(src_rest, new_rest);
@@ -2763,7 +2763,7 @@ namespace lfs::core {
             auto result = std::make_unique<SplatData>();
             result->_tensor_allocator = std::move(tensor_allocator);
             const auto copy_param = [&](Tensor source, const std::string_view name) {
-                Tensor source_cuda = std::move(source).cuda();
+                Tensor source_cuda = std::move(source).gpu();
                 if (!result->_tensor_allocator) {
                     source_cuda.set_name(std::string(name));
                     return source_cuda;
@@ -2788,13 +2788,13 @@ namespace lfs::core {
                 result->_tensor_allocator, "SplatData.shN");
             if (shN_canonical.numel() > 0)
                 reorder_canonical_into_swizzled(
-                    shN_canonical.cuda(), result->_shN, n,
+                    shN_canonical.gpu(), result->_shN, n,
                     static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)),
                     static_cast<std::size_t>(sh_rest_coefficients_for_degree(max_sh_degree)));
             if (deleted.is_valid())
-                result->_deleted = std::move(deleted).to(DataType::Bool).cuda();
+                result->_deleted = std::move(deleted).to(DataType::Bool).gpu();
             if (densification.is_valid() && densification.numel() > 0)
-                result->_densification_info = std::move(densification).cuda();
+                result->_densification_info = std::move(densification).gpu();
             result->_frozen_ranges = std::move(frozen_ranges);
             return result;
         } catch (const std::exception& error) {
@@ -2865,8 +2865,8 @@ namespace lfs::core {
                 }
 
                 LOG_DEBUG("  Converting pcd.means to CUDA...");
-                positions = pcd.means.cuda();
-                LOG_DEBUG("  positions after .cuda(): is_valid={}, device={}, ptr={}, shape={}, numel={}",
+                positions = pcd.means.gpu();
+                LOG_DEBUG("  positions after .gpu(): is_valid={}, device={}, ptr={}, shape={}, numel={}",
                           positions.is_valid(),
                           positions.device() == Device::GPU ? "CUDA" : "CPU",
                           static_cast<void*>(positions.ptr<float>()),
@@ -2880,9 +2880,9 @@ namespace lfs::core {
                 LOG_DEBUG("  Converting pcd.colors (dtype={}) to float32...",
                           pcd.colors.dtype() == DataType::UInt8 ? "UInt8" : "Float32");
                 if (pcd.colors.dtype() == DataType::UInt8) {
-                    colors = pcd.colors.to(DataType::Float32).div(255.0f).cuda();
+                    colors = pcd.colors.to(DataType::Float32).div(255.0f).gpu();
                 } else {
-                    colors = pcd.colors.to(DataType::Float32).cuda();
+                    colors = pcd.colors.to(DataType::Float32).gpu();
                 }
                 LOG_DEBUG("  colors after conversion: is_valid={}, device={}, shape={}, numel={}",
                           colors.is_valid(),
@@ -3203,14 +3203,14 @@ namespace lfs::core {
                 // No capacity specified - use pool
                 Tensor means_temp;
                 if (params.optimization.random) {
-                    means_temp = positions.mul(scene_scale).cuda();
+                    means_temp = positions.mul(scene_scale).gpu();
                 } else {
-                    means_temp = positions.cuda();
+                    means_temp = positions.gpu();
                 }
 
                 Tensor scaling_temp;
                 if (lfs::core::param::is_mrnf_strategy(params.optimization.strategy)) {
-                    scaling_temp = compute_mrnf_knn_log_scales(means_temp).cuda();
+                    scaling_temp = compute_mrnf_knn_log_scales(means_temp).gpu();
                 } else {
                     auto nn_dist = compute_mean_neighbor_distances(means_temp).clamp_min(1e-7f);
                     std::vector<int> scale_expand_shape = {static_cast<int>(num_points), 3};
@@ -3219,7 +3219,7 @@ namespace lfs::core {
                                        .log()
                                        .unsqueeze(-1)
                                        .expand(std::span<const int>(scale_expand_shape))
-                                       .cuda();
+                                       .gpu();
                 }
 
                 auto ones_col = Tensor::ones({num_points, 1}, Device::GPU);
@@ -3228,7 +3228,7 @@ namespace lfs::core {
 
                 auto opacity_temp = Tensor::full({num_points, 1}, params.optimization.init_opacity, Device::GPU).logit();
 
-                auto colors_device = colors.cuda();
+                auto colors_device = colors.gpu();
                 auto fused_color = rgb_to_sh(colors_device);
 
                 auto shs = Tensor::zeros({fused_color.size(0), static_cast<size_t>(feature_shape), 3}, Device::GPU);
@@ -3244,7 +3244,7 @@ namespace lfs::core {
                     }
                 }
 
-                shs = shs_cpu_tmp.cuda();
+                shs = shs_cpu_tmp.gpu();
                 auto sh0_temp = shs.slice(1, 0, 1).contiguous();
                 Tensor shN_temp;
                 if (feature_shape > 1) {
@@ -3322,7 +3322,7 @@ namespace lfs::core {
             float_src = float_src.to(DataType::Float32);
         }
         if (float_src.device() != Device::GPU) {
-            float_src = float_src.cuda();
+            float_src = float_src.gpu();
         }
         if (!float_src.is_contiguous()) {
             float_src = float_src.contiguous();

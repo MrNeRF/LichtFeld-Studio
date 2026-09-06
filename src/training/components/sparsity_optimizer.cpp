@@ -105,9 +105,9 @@ namespace lfs::training {
     void ADMMSparsityOptimizer::deserialize(std::istream& is) {
         auto [z, u, opa_sigmoid] = read_serialized_state(is);
 
-        z_ = z.cuda();
-        u_ = u.cuda();
-        opa_sigmoid_ = opa_sigmoid.cuda();
+        z_ = z.gpu();
+        u_ = u.gpu();
+        opa_sigmoid_ = opa_sigmoid.gpu();
         initialized_ = true;
     }
 

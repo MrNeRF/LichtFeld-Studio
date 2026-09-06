@@ -1062,7 +1062,7 @@ namespace lfs::app {
                     image = image.to(core::DataType::Float32);
                 }
                 if (image.device() != core::Device::GPU) {
-                    image = image.cuda();
+                    image = image.gpu();
                 }
                 auto image_hwc = image.permute({1, 2, 0}).contiguous();
 

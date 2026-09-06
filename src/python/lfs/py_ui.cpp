@@ -219,7 +219,7 @@ namespace lfs::python {
                     throw std::invalid_argument("DynamicTexture channels must be 3 (RGB) or 4 (RGBA)");
 
                 if (t.device() == core::Device::CPU)
-                    t = t.cuda();
+                    t = t.gpu();
                 const auto orig_dtype = t.dtype();
                 if (orig_dtype != core::DataType::Float32)
                     t = t.to(core::DataType::Float32);

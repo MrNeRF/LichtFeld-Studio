@@ -426,7 +426,7 @@ namespace lfs::rendering {
 
             Tensor positions_cuda = positions_source;
             if (positions_cuda.device() != lfs::core::Device::GPU) {
-                positions_cuda = positions_cuda.cuda();
+                positions_cuda = positions_cuda.gpu();
             }
             positions_cuda = positions_cuda.contiguous();
 
@@ -438,7 +438,7 @@ namespace lfs::rendering {
                 colors_cuda = colors_cuda.to(lfs::core::DataType::Float32);
             }
             if (colors_cuda.device() != lfs::core::Device::GPU) {
-                colors_cuda = colors_cuda.cuda();
+                colors_cuda = colors_cuda.gpu();
             }
             colors_cuda = colors_cuda.contiguous();
 
@@ -451,7 +451,7 @@ namespace lfs::rendering {
                     transform_indices_cuda = transform_indices_cuda.to(lfs::core::DataType::Int32);
                 }
                 if (transform_indices_cuda.device() != lfs::core::Device::GPU) {
-                    transform_indices_cuda = transform_indices_cuda.cuda();
+                    transform_indices_cuda = transform_indices_cuda.gpu();
                 }
                 transform_indices_cuda = transform_indices_cuda.contiguous();
                 transform_indices_ptr = transform_indices_cuda.ptr<std::int32_t>();
@@ -473,7 +473,7 @@ namespace lfs::rendering {
                                       transforms_host,
                                       {transforms.size(), static_cast<size_t>(16)},
                                       lfs::core::Device::CPU)
-                                      .cuda()
+                                      .gpu()
                                       .contiguous();
                 transforms_device = transforms_cuda.ptr<float>();
             }
@@ -489,7 +489,7 @@ namespace lfs::rendering {
                                       mask_host,
                                       {mask_host.size()},
                                       lfs::core::Device::CPU)
-                                      .cuda()
+                                      .gpu()
                                       .to(lfs::core::DataType::UInt8)
                                       .contiguous();
                 visibility_device = visibility_cuda.ptr<std::uint8_t>();
@@ -503,7 +503,7 @@ namespace lfs::rendering {
                     deleted_mask_cuda = deleted_mask_cuda.to(lfs::core::DataType::Bool);
                 }
                 if (deleted_mask_cuda.device() != lfs::core::Device::GPU) {
-                    deleted_mask_cuda = deleted_mask_cuda.cuda();
+                    deleted_mask_cuda = deleted_mask_cuda.gpu();
                 }
                 deleted_mask_cuda = deleted_mask_cuda.contiguous();
                 deleted_mask_device = deleted_mask_cuda.ptr<bool>();
@@ -732,14 +732,14 @@ namespace lfs::rendering {
                            image,
                            {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
                            lfs::core::Device::CPU)
-                    .cuda();
+                    .gpu();
             }
 
             return Tensor::from_vector(
                        image,
                        {static_cast<size_t>(3), static_cast<size_t>(height), static_cast<size_t>(width)},
                        lfs::core::Device::CPU)
-                .cuda();
+                .gpu();
         }
     } // namespace
 

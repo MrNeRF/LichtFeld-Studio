@@ -3571,7 +3571,7 @@ namespace lfs::training {
                     throw std::runtime_error("Invalid MRNF checkpoint: free mask has incompatible schema");
                 }
                 if (free_mask.device() != lfs::core::Device::GPU)
-                    free_mask = free_mask.cuda();
+                    free_mask = free_mask.gpu();
                 _free_mask = std::move(free_mask);
             }
         }

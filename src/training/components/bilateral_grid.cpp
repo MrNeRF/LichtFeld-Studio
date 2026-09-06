@@ -710,9 +710,9 @@ namespace lfs::training {
             throw std::runtime_error("Invalid BilateralGrid checkpoint tensor schema");
         }
 
-        grids = grids.cuda();
-        exp_avg = exp_avg.cuda();
-        exp_avg_sq = exp_avg_sq.cuda();
+        grids = grids.gpu();
+        exp_avg = exp_avg.gpu();
+        exp_avg_sq = exp_avg_sq.gpu();
 
         const size_t spatial = static_cast<size_t>(grid_guidance) * static_cast<size_t>(grid_height) *
                                static_cast<size_t>(grid_width);

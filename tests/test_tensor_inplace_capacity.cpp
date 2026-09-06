@@ -206,7 +206,7 @@ TEST_F(TensorInplaceCapacityTest, MaskedFillInplace_PreservesCapacity) {
             cpu_mask.set_bool({i, j}, true);
         }
     }
-    mask = cpu_mask.cuda();
+    mask = cpu_mask.gpu();
 
     tensor_2d_.masked_fill_(mask, 999.0f);
     verifyCapacityPreserved(tensor_2d_, capacity_, "masked_fill_()");

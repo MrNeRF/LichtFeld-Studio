@@ -21,7 +21,7 @@ protected:
         p[2] = 1;
         p[3] = 0;
         p[4] = 1;
-        return device == Device::GPU ? mask.cuda() : mask;
+        return device == Device::GPU ? mask.gpu() : mask;
     }
 
     // Verify inverted pattern [0,1,0,1,0]
@@ -95,7 +95,7 @@ TEST_F(TensorUInt8InversionTest, LargeScale) {
     auto* p = mask.ptr<uint8_t>();
     for (size_t i = 0; i < N; i += 2)
         p[i] = 1;
-    mask = mask.cuda();
+    mask = mask.gpu();
 
     const auto ones = Tensor::ones({N}, Device::GPU, DataType::UInt8);
     const auto inverted = ones - mask;

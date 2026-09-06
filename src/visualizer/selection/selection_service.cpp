@@ -328,7 +328,7 @@ namespace lfs::vis {
         [[nodiscard]] core::Tensor ensureCudaBoolMask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             if (result.device() != core::Device::GPU) {
-                result = result.cuda();
+                result = result.gpu();
             }
             return result;
         }
@@ -499,7 +499,7 @@ namespace lfs::vis {
                         }
                         auto active_group = existing_mask->eq(group_id);
                         if (active_group.device() != core::Device::GPU) {
-                            active_group = active_group.cuda();
+                            active_group = active_group.gpu();
                         }
                         return selection.where(scope, active_group);
                     }
@@ -522,7 +522,7 @@ namespace lfs::vis {
             if (preserves_active_group) {
                 expanded = existing_mask->eq(group_id);
                 if (expanded.device() != core::Device::GPU) {
-                    expanded = expanded.cuda();
+                    expanded = expanded.gpu();
                 }
             } else {
                 expanded = core::Tensor::zeros({full_count}, core::Device::GPU, core::DataType::Bool);
@@ -562,7 +562,7 @@ namespace lfs::vis {
             const size_t full_count = scene.getSelectionGaussianCount();
             auto active_group = existing_mask->eq(group_id);
             if (active_group.device() != core::Device::GPU) {
-                active_group = active_group.cuda();
+                active_group = active_group.gpu();
             }
 
             if (selection_count == full_count) {
@@ -677,7 +677,7 @@ namespace lfs::vis {
                        transform_data,
                        {model_transforms.size(), size_t{4}, size_t{4}},
                        core::Device::CPU)
-                .cuda();
+                .gpu();
         }
 
         // Single source for the effective orthographic scale: the per-panel override when a
@@ -870,7 +870,7 @@ namespace lfs::vis {
                                 transform_indices_cuda = transform_indices_cuda.to(core::DataType::Int32);
                             }
                             if (transform_indices_cuda.device() != core::Device::GPU) {
-                                transform_indices_cuda = transform_indices_cuda.cuda();
+                                transform_indices_cuda = transform_indices_cuda.gpu();
                             }
                             if (!transform_indices_cuda.is_contiguous()) {
                                 transform_indices_cuda = transform_indices_cuda.contiguous();
@@ -1007,7 +1007,7 @@ namespace lfs::vis {
                         positions,
                         {count, size_t{2}},
                         core::Device::CPU)
-                        .cuda()
+                        .gpu()
                         .contiguous());
             } catch (const std::exception& e) {
                 LOG_WARN("SelectionService: failed to project Gaussian screen positions: {}", e.what());

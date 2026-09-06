@@ -671,7 +671,7 @@ namespace lfs::training {
                    checked_dim_to_int(grad_depth_2d.shape()[1], "grad_depth width") == W &&
                    "grad_depth must have shape [H, W] or [1, H, W]");
             if (grad_depth_2d.device() != core::Device::GPU) {
-                grad_depth_2d = grad_depth_2d.cuda();
+                grad_depth_2d = grad_depth_2d.gpu();
             }
             if (!grad_depth_2d.is_contiguous()) {
                 grad_depth_2d = grad_depth_2d.contiguous();
@@ -689,7 +689,7 @@ namespace lfs::training {
                    checked_dim_to_int(grad_normal_chw.shape()[2], "grad_normal width") == W &&
                    "grad_normal must have shape [3, H, W]");
             if (grad_normal_chw.device() != core::Device::GPU) {
-                grad_normal_chw = grad_normal_chw.cuda();
+                grad_normal_chw = grad_normal_chw.gpu();
             }
             if (!grad_normal_chw.is_contiguous()) {
                 grad_normal_chw = grad_normal_chw.contiguous();
@@ -716,7 +716,7 @@ namespace lfs::training {
                    checked_dim_to_int(error_map_2d.shape()[1], "error_map width") == W &&
                    "pixel_error_map must have shape [H, W] or [1, H, W]");
             if (error_map_2d.device() != core::Device::GPU) {
-                error_map_2d = error_map_2d.cuda();
+                error_map_2d = error_map_2d.gpu();
             }
             if (!error_map_2d.is_contiguous()) {
                 error_map_2d = error_map_2d.contiguous();

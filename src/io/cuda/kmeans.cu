@@ -139,12 +139,12 @@ namespace lfs::io {
             cudaEvent_t stop_ = nullptr;
         };
 
-        // Tensor::cuda() deep-copies CUDA tensors in this codebase; borrow when possible.
+        // Tensor::gpu() deep-copies GPU tensors in this codebase; borrow when possible.
         Tensor as_cuda_contiguous(const Tensor& data) {
             if (data.device() == Device::GPU) {
                 return data.is_contiguous() ? data : data.contiguous();
             }
-            return data.cuda().contiguous();
+            return data.gpu().contiguous();
         }
 
         __device__ __forceinline__ std::uint32_t shAt_device(
@@ -660,7 +660,7 @@ namespace lfs::io {
             if (n <= k) {
                 auto centroids = Tensor::zeros({static_cast<size_t>(n), static_cast<size_t>(N_DIMS)},
                                                Device::GPU, DataType::Float32);
-                auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
+                auto labels = Tensor::arange(n).to(DataType::Int32).gpu();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 const auto kmeans_ticket = ::lfs::core::cuda_record_range(
                     /*stream=*/nullptr, "io.kmeans.swizzled_gather_points");
@@ -1098,7 +1098,7 @@ namespace lfs::io {
             if (n <= k) {
                 auto centroids = Tensor::zeros({static_cast<size_t>(n), static_cast<size_t>(N_DIMS)},
                                                Device::GPU, DataType::Float32);
-                auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
+                auto labels = Tensor::arange(n).to(DataType::Int32).gpu();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 const auto kmeans_ticket = ::lfs::core::cuda_record_range(
                     /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_gather");

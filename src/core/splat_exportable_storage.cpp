@@ -667,7 +667,7 @@ namespace lfs::core {
                     dtype = source.dtype();
                     if (!aliases) {
                         source_cuda =
-                            source.device() == Device::GPU ? source : source.cuda();
+                            source.device() == Device::GPU ? source : source.gpu();
                         if (!source_cuda.is_contiguous()) {
                             source_cuda = source_cuda.contiguous();
                         }
@@ -728,7 +728,7 @@ namespace lfs::core {
                     // Densify expand path: preserve float/f16 temp; do not zero-fill.
                     shN = shN_src;
                     if (shN.device() != Device::GPU) {
-                        shN = shN.cuda();
+                        shN = shN.gpu();
                     }
                     if (!shN.is_contiguous()) {
                         shN = shN.contiguous();
@@ -745,7 +745,7 @@ namespace lfs::core {
                     if (!aliases && src_is_q16 && shN_src.is_valid() && shN_src.numel() > 0) {
                         Tensor src = shN_src;
                         if (src.device() != Device::GPU) {
-                            src = src.cuda();
+                            src = src.gpu();
                         }
                         if (!src.is_contiguous()) {
                             src = src.contiguous();
@@ -767,7 +767,7 @@ namespace lfs::core {
                     if (!bounds_alias && bounds_src.is_valid() && bounds_src.numel() > 0) {
                         Tensor bsrc = bounds_src;
                         if (bsrc.device() != Device::GPU) {
-                            bsrc = bsrc.cuda();
+                            bsrc = bsrc.gpu();
                         }
                         if (!bsrc.is_contiguous()) {
                             bsrc = bsrc.contiguous();

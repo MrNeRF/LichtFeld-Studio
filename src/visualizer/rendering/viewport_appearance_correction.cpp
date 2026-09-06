@@ -54,7 +54,7 @@ namespace lfs::vis {
             if (!input.is_valid() || input.device() == lfs::core::Device::GPU) {
                 return input;
             }
-            return input.cuda();
+            return input.gpu();
         }
 
         // Applies PPISP to an image regardless of who owns the component (standalone
@@ -270,7 +270,7 @@ namespace lfs::vis {
                     dst[2 * plane + d] = static_cast<float>(src[s + 2]) * kInv255;
                 }
             }
-            return thumbnail.cuda();
+            return thumbnail.gpu();
         }
 
     } // namespace
@@ -400,7 +400,7 @@ namespace lfs::vis {
                 const int band_height = std::min(band_rows, height - y0);
                 const auto band_cuda = image_u8_hwc_cpu
                                            .slice(0, static_cast<size_t>(y0), static_cast<size_t>(y0 + band_height))
-                                           .cuda();
+                                           .gpu();
 
                 lfs::core::Tensor rgb_chw;
                 lfs::core::Tensor alpha;

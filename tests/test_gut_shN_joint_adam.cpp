@@ -64,7 +64,7 @@ namespace {
                 p[i] = 0.02f * static_cast<float>((i % 11) + 1) *
                        (1.0f + 0.001f * static_cast<float>(i / 3));
             }
-            shN = cpu.cuda();
+            shN = cpu.gpu();
         }
         return SplatData(
             sh_degree,

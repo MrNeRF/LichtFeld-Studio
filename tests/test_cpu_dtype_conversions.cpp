@@ -121,7 +121,7 @@ TEST(CPUDtypeConversionTest, EveryDtypeRoundTripsThroughCuda) {
     for (const auto dtype : dtypes) {
         SCOPED_TRACE(dtype_name(dtype));
         const auto source = make_source(dtype);
-        const auto roundtrip = source.cuda().cpu();
+        const auto roundtrip = source.gpu().cpu();
         EXPECT_EQ(roundtrip.dtype(), dtype);
         EXPECT_EQ(roundtrip.shape(), source.shape());
         EXPECT_EQ(values_as_float(roundtrip), values_as_float(source));
@@ -213,9 +213,9 @@ TEST(CPUDtypeConversionTest, ProductionMuralPointCloudWorkflow) {
                                 color_data.data(), {num_points, 3}, Device::CPU, DataType::UInt8)
                                 .clone();
 
-    const auto means_gpu = means_cpu.cuda();
+    const auto means_gpu = means_cpu.gpu();
     const auto colors_cpu_float = colors_cpu.to(DataType::Float32);
-    const auto colors_gpu_float = colors_cpu.cuda().to(DataType::Float32);
+    const auto colors_gpu_float = colors_cpu.gpu().to(DataType::Float32);
 
     EXPECT_EQ(means_gpu.shape(), TensorShape({num_points, 3}));
     EXPECT_TRUE(colors_cpu_float.all_close(colors_gpu_float.cpu()));

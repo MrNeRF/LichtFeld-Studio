@@ -608,12 +608,12 @@ namespace {
             auto* bytes = packed_cpu.ptr<uint8_t>();
             for (size_t i = 0; i < packed_cpu.numel(); ++i)
                 bytes[i] = static_cast<uint8_t>((i * 17 + 3) & 0xff);
-            means_state->exp_avg = packed_cpu.cuda();
+            means_state->exp_avg = packed_cpu.gpu();
             auto bounds_cpu = means_state->joint_bounds.cpu();
             auto* b = bounds_cpu.ptr<float>();
             for (size_t i = 0; i < bounds_cpu.numel(); ++i)
                 b[i] = (i % 2 == 0) ? -0.5f : 0.5f;
-            means_state->joint_bounds = bounds_cpu.cuda();
+            means_state->joint_bounds = bounds_cpu.gpu();
         }
 
         auto shN_before = source_model->shN_canonical_cpu();

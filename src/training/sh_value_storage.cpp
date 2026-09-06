@@ -65,7 +65,7 @@ namespace lfs::training::sh_value {
                 out = out.to(DataType::Int64);
             }
             if (out.device() != Device::GPU) {
-                out = out.cuda();
+                out = out.gpu();
             }
             if (!out.is_contiguous()) {
                 out = out.contiguous();
@@ -97,7 +97,7 @@ namespace lfs::training::sh_value {
         [[nodiscard]] Tensor canonical_contiguous(const Tensor& src, cudaStream_t stream) {
             Tensor out = src;
             if (out.device() != Device::GPU) {
-                out = out.cuda();
+                out = out.gpu();
             }
             if (out.dtype() != DataType::Float32) {
                 out = out.to(DataType::Float32);
@@ -426,7 +426,7 @@ namespace lfs::training::sh_value {
         if (splat.shN_ieee_f16()) {
             Tensor fp32 = shN.to(DataType::Float32);
             if (fp32.device() != Device::GPU)
-                fp32 = fp32.cuda();
+                fp32 = fp32.gpu();
             if (!fp32.is_contiguous())
                 fp32 = fp32.contiguous();
             // Preserve capacity headroom when possible.

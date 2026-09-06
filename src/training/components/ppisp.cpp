@@ -1509,18 +1509,18 @@ namespace lfs::training {
             seen_frames[static_cast<size_t>(index)] = true;
         }
 
-        exposure_params = exposure_params.cuda();
-        exposure_exp_avg = exposure_exp_avg.cuda();
-        exposure_exp_avg_sq = exposure_exp_avg_sq.cuda();
-        vignetting_params = vignetting_params.cuda();
-        vignetting_exp_avg = vignetting_exp_avg.cuda();
-        vignetting_exp_avg_sq = vignetting_exp_avg_sq.cuda();
-        color_params = color_params.cuda();
-        color_exp_avg = color_exp_avg.cuda();
-        color_exp_avg_sq = color_exp_avg_sq.cuda();
-        crf_params = crf_params.cuda();
-        crf_exp_avg = crf_exp_avg.cuda();
-        crf_exp_avg_sq = crf_exp_avg_sq.cuda();
+        exposure_params = exposure_params.gpu();
+        exposure_exp_avg = exposure_exp_avg.gpu();
+        exposure_exp_avg_sq = exposure_exp_avg_sq.gpu();
+        vignetting_params = vignetting_params.gpu();
+        vignetting_exp_avg = vignetting_exp_avg.gpu();
+        vignetting_exp_avg_sq = vignetting_exp_avg_sq.gpu();
+        color_params = color_params.gpu();
+        color_exp_avg = color_exp_avg.gpu();
+        color_exp_avg_sq = color_exp_avg_sq.gpu();
+        crf_params = crf_params.gpu();
+        crf_exp_avg = crf_exp_avg.gpu();
+        crf_exp_avg_sq = crf_exp_avg_sq.gpu();
 
         auto exposure_grad = lfs::core::Tensor::zeros({exposure_size}, lfs::core::Device::GPU);
         auto vignetting_grad = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
@@ -1652,10 +1652,10 @@ namespace lfs::training {
         is >> color_params_;
         is >> crf_params_;
 
-        exposure_params_ = exposure_params_.cuda();
-        vignetting_params_ = vignetting_params_.cuda();
-        color_params_ = color_params_.cuda();
-        crf_params_ = crf_params_.cuda();
+        exposure_params_ = exposure_params_.gpu();
+        vignetting_params_ = vignetting_params_.gpu();
+        color_params_ = color_params_.gpu();
+        crf_params_ = crf_params_.gpu();
 
         camera_id_to_idx_.clear();
         uid_to_frame_idx_.clear();

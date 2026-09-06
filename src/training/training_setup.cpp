@@ -565,7 +565,7 @@ namespace lfs::training {
                         const std::string_view name) -> lfs::core::Tensor {
                     lfs::core::Tensor source_cuda = source.device() == lfs::core::Device::GPU
                                                         ? source
-                                                        : source.cuda();
+                                                        : source.gpu();
                     if (!source_cuda.is_contiguous()) {
                         source_cuda = source_cuda.contiguous();
                     }
@@ -621,7 +621,7 @@ namespace lfs::training {
                         // bitcasting float into half.
                         lfs::core::Tensor src_float = model.shN_raw();
                         if (src_float.device() != lfs::core::Device::GPU) {
-                            src_float = src_float.cuda();
+                            src_float = src_float.gpu();
                         }
                         if (!src_float.is_contiguous()) {
                             src_float = src_float.contiguous();
@@ -1015,12 +1015,12 @@ namespace lfs::training {
             if (point_cloud_to_use.size() > 0) {
                 auto means_cpu = point_cloud_to_use.means.cpu();
                 auto mean = means_cpu.mean({0});
-                scene_center = max_cap > 0 ? mean : mean.cuda();
+                scene_center = max_cap > 0 ? mean : mean.gpu();
             } else {
                 scene_center = lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU);
             }
         } else {
-            scene_center = max_cap > 0 ? scene_center.cpu() : scene_center.cuda();
+            scene_center = max_cap > 0 ? scene_center.cpu() : scene_center.gpu();
         }
 
         auto splat_result = lfs::core::init_model_from_pointcloud(

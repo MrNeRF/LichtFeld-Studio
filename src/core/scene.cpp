@@ -1095,7 +1095,7 @@ namespace lfs::core {
         }
 
         result.transform_indices = std::make_shared<Tensor>(
-            Tensor::from_vector(transform_indices_data, {total}, Device::CPU).cuda());
+            Tensor::from_vector(transform_indices_data, {total}, Device::CPU).gpu());
         if (total != full_selection_count) {
             std::vector<int> visible_indices(total);
             size_t visible_offset = 0;
@@ -1108,7 +1108,7 @@ namespace lfs::core {
                 visible_offset += size;
             }
             result.visible_selection_indices = std::make_shared<Tensor>(
-                Tensor::from_vector(visible_indices, {total}, Device::CPU).cuda());
+                Tensor::from_vector(visible_indices, {total}, Device::CPU).gpu());
         }
 
         result.model = std::make_shared<SplatData>(
@@ -1671,7 +1671,7 @@ namespace lfs::core {
                 transform_indices,
                 TensorShape({transform_indices.size()}),
                 Device::CPU)
-                .cuda());
+                .gpu());
     }
 
     std::vector<bool> Scene::getNodeVisibilityMask() const {
@@ -2502,7 +2502,7 @@ namespace lfs::core {
                 visible_indices[i] = static_cast<int>(single_node_selection_offset_ + i);
             }
             cached_visible_selection_indices_ = std::make_shared<lfs::core::Tensor>(
-                lfs::core::Tensor::from_vector(visible_indices, {n}, lfs::core::Device::CPU).cuda());
+                lfs::core::Tensor::from_vector(visible_indices, {n}, lfs::core::Device::CPU).gpu());
         }
         return cached_visible_selection_indices_;
     }
@@ -2757,7 +2757,7 @@ namespace lfs::core {
 
         size_t selected_count = 0;
         auto normalized = normalizeSelectionMask(
-            std::make_shared<lfs::core::Tensor>(mask_cpu.cuda()),
+            std::make_shared<lfs::core::Tensor>(mask_cpu.gpu()),
             total,
             &selected_count);
 

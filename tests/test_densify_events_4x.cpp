@@ -42,7 +42,7 @@ TEST(DensifyEvents4x, FillFreeSlotsFusedWritesAttrsAndZerosAdam) {
         auto host = free_mask.cpu();
         auto* p = host.ptr<bool>();
         p[1] = p[3] = p[5] = true;
-        free_mask = host.cuda();
+        free_mask = host.gpu();
     }
 
     auto src_means = Tensor::from_vector(
@@ -121,8 +121,8 @@ TEST(DensifyEvents4x, PackedRefineCountsMatchHost) {
             h0.ptr<bool>()[i] = b0[i] != 0;
             h1.ptr<bool>()[i] = b1[i] != 0;
         }
-        bool0 = h0.cuda();
-        bool1 = h1.cuda();
+        bool0 = h0.gpu();
+        bool1 = h1.gpu();
     }
     auto tf0 = Tensor::from_vector(f0, TensorShape({N}), Device::GPU);
     auto tf1 = Tensor::from_vector(f1, TensorShape({N}), Device::GPU);

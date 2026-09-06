@@ -58,7 +58,7 @@ namespace {
             std::vector<float> translation_values{0.0f, 0.0f, 4.0f};
             auto translation = Tensor::from_blob(
                                    translation_values.data(), {3}, Device::CPU, DataType::Float32)
-                                   .cuda();
+                                   .gpu();
             camera_ = std::make_unique<Camera>(
                 rotation, translation,
                 100.0f, 100.0f, 32.0f, 32.0f,
@@ -138,7 +138,7 @@ namespace {
             auto base = Tensor::from_vector(
                 std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CPU);
             if (device == Device::GPU) {
-                base = base.cuda();
+                base = base.gpu();
             }
 
             auto input = base.add(10.0f);
@@ -205,7 +205,7 @@ namespace {
                            return static_cast<float>(value) / 255.0f;
                        });
 
-        auto colors = colors_u8.to(DataType::Float32).div(255.0f).cuda();
+        auto colors = colors_u8.to(DataType::Float32).div(255.0f).gpu();
         auto [sorted_positions, sorted_indices] = positions.flatten().sort();
         (void)sorted_indices;
         ASSERT_GT(sorted_positions.numel(), 0u);

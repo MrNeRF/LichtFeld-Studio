@@ -615,7 +615,7 @@ TEST(SplatExportableStorageTest, RebindGrowRebindPreservesAllRegionPatterns) {
             for (size_t i = 0; i < n; ++i) {
                 hp[i] = f16_val(base, i);
             }
-            Tensor half = host_f.to(DataType::Float16).cuda();
+            Tensor half = host_f.to(DataType::Float16).gpu();
             ASSERT_EQ(cudaMemcpy(t.data_ptr(), half.data_ptr(), n * sizeof(std::uint16_t),
                                  cudaMemcpyDeviceToDevice),
                       cudaSuccess);
