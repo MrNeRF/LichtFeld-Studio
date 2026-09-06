@@ -20,7 +20,12 @@
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "training/control/command_api.hpp"
+#include "visualizer/ipc/render_settings_convert.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/rendering/depth_window_state.hpp"
+#include "visualizer/rendering/dirty_flags.hpp"
+#include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <array>
@@ -78,6 +83,17 @@ namespace {
 
         ~ScopedViewCallback() {
             lfs::vis::set_view_callback(nullptr);
+        }
+    };
+
+    struct ScopedRenderSettingsCallbacks {
+        ScopedRenderSettingsCallbacks(lfs::vis::GetRenderSettingsCallback get_cb,
+                                      lfs::vis::SetRenderSettingsCallback set_cb) {
+            lfs::vis::set_render_settings_callbacks(std::move(get_cb), std::move(set_cb));
+        }
+
+        ~ScopedRenderSettingsCallbacks() {
+            lfs::vis::set_render_settings_callbacks(nullptr, nullptr);
         }
     };
 
@@ -352,6 +368,16 @@ namespace {
         Py_XDECREF(value);
         Py_XDECREF(traceback);
         return message;
+    }
+
+    // Executes a snippet against a caller-owned globals dict so several snippets
+    // can share retained Python objects across C++ state changes.
+    void execPythonInGlobals(PyObject* globals, const std::string& script) {
+        PyObject* exec_result = PyRun_String(script.c_str(), Py_file_input, globals, globals);
+        if (!exec_result) {
+            throw std::runtime_error(consumePythonError());
+        }
+        Py_DECREF(exec_result);
     }
 
     PythonTensorResult runPythonTensorSnippet(const std::string& script) {
@@ -1313,6 +1339,130 @@ TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
     // guarantee against sibling tests in a shared process; it is covered by the
     // single-threaded forced-failure path instead.
     EXPECT_LE(consumer.count.load(), 1);
+}
+
+// Regression: a Python render-settings object retained across a split panel
+// focus change must not push its stale full snapshot back through the
+// render-settings callback. PyRenderSettings::set re-reads the live settings
+// immediately before applying the named property, so the outbound proxy already
+// carries the newly focused panel's depth window and the DirtyFlag::ALL callback
+// cannot back-route stale depth values onto that panel.
+TEST_F(PythonIntegrationTest, RetainedRenderSettingsMergeFreshStateBeforeCallback) {
+    using lfs::vis::DepthWindowState;
+    using lfs::vis::SplitViewPanelId;
+
+    lfs::vis::RenderingManager manager;
+    {
+        auto settings = manager.getSettings();
+        settings.split_view_mode = lfs::vis::SplitViewMode::IndependentDual;
+        settings.depth_filter_enabled = true;
+        manager.updateSettings(settings);
+    }
+    manager.setDepthWindowSync(false);
+
+    const DepthWindowState left_window{
+        .near_plane = 1.0f,
+        .far_plane = 10.0f,
+        .scale_x = 0.4f,
+        .scale_y = 0.4f,
+        .offset_x = 0.0f,
+        .offset_y = 0.0f};
+    const DepthWindowState right_window{
+        .near_plane = 2.0f,
+        .far_plane = 20.0f,
+        .scale_x = 0.5f,
+        .scale_y = 0.5f,
+        .offset_x = 0.0f,
+        .offset_y = 0.0f};
+    manager.setDepthWindowForPanel(SplitViewPanelId::Left, left_window);
+    manager.setDepthWindowForPanel(SplitViewPanelId::Right, right_window);
+
+    // The outbound proxy is captured exactly as PyRenderSettings::set produced
+    // it, before the adapter applies anything. That assertion is what proves the
+    // producer performed the fresh merge rather than the adapter masking it.
+    std::optional<lfs::vis::RenderSettingsProxy> outbound;
+    int callback_invocations = 0;
+    const ScopedRenderSettingsCallbacks scoped_callbacks(
+        [&manager]() -> std::optional<lfs::vis::RenderSettingsProxy> {
+            return lfs::vis::to_proxy(manager.getSettings());
+        },
+        [&manager, &outbound, &callback_invocations](const lfs::vis::RenderSettingsProxy& proxy,
+                                                     lfs::vis::RenderSettingsUpdateIntent) {
+            outbound = proxy;
+            ++callback_invocations;
+            auto settings = manager.getSettings();
+            lfs::vis::apply_proxy(settings, proxy);
+            manager.updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+        });
+
+    manager.setFocusedSplitPanel(SplitViewPanelId::Left);
+
+    PyObject* globals = nullptr;
+    {
+        const lfs::python::GilAcquire gil;
+        globals = PyDict_New();
+        ASSERT_NE(globals, nullptr);
+        PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
+        ASSERT_NO_THROW(execPythonInGlobals(globals, R"PY(
+import lichtfeld as lf
+retained = lf.get_render_settings()
+assert retained is not None
+retained_ok = True
+)PY"));
+    }
+
+    // The retained object holds Left's full snapshot (the depth-window fields are
+    // not exposed as Python properties, so it is captured by construction under
+    // Left focus rather than read back here).
+    {
+        const lfs::python::GilAcquire gil;
+        auto* const captured = PyDict_GetItemString(globals, "retained_ok");
+        ASSERT_NE(captured, nullptr);
+        EXPECT_TRUE(PyObject_IsTrue(captured));
+    }
+
+    manager.setFocusedSplitPanel(SplitViewPanelId::Right);
+
+    {
+        const lfs::python::GilAcquire gil;
+        ASSERT_NO_THROW(execPythonInGlobals(globals, R"PY(
+retained.set("background_color", (0.125, 0.25, 0.375))
+)PY"));
+        Py_DECREF(globals);
+    }
+
+    ASSERT_EQ(callback_invocations, 1);
+    ASSERT_TRUE(outbound.has_value());
+
+    // 1. The outbound proxy carries Right's fresh depth values, not Left's.
+    EXPECT_FLOAT_EQ(outbound->depth_filter_scale_x, right_window.scale_x);
+    EXPECT_FLOAT_EQ(outbound->depth_filter_scale_y, right_window.scale_y);
+    EXPECT_FLOAT_EQ(-outbound->depth_filter_max[2], right_window.near_plane);
+    EXPECT_FLOAT_EQ(-outbound->depth_filter_min[2], right_window.far_plane);
+
+    // 2. The named property applied.
+    const auto applied = manager.getSettings();
+    EXPECT_FLOAT_EQ(applied.background_color.x, 0.125f);
+    EXPECT_FLOAT_EQ(applied.background_color.y, 0.25f);
+    EXPECT_FLOAT_EQ(applied.background_color.z, 0.375f);
+
+    // 3. Right's stored depth window is untouched.
+    const auto stored_right = manager.getDepthWindowForPanel(SplitViewPanelId::Right);
+    EXPECT_FLOAT_EQ(stored_right.near_plane, right_window.near_plane);
+    EXPECT_FLOAT_EQ(stored_right.far_plane, right_window.far_plane);
+    EXPECT_FLOAT_EQ(stored_right.scale_x, right_window.scale_x);
+    EXPECT_FLOAT_EQ(stored_right.scale_y, right_window.scale_y);
+
+    // 4. The focused projection is still Right's.
+    EXPECT_FLOAT_EQ(applied.depth_filter_scale_x, right_window.scale_x);
+    EXPECT_FLOAT_EQ(-applied.depth_filter_max.z, right_window.near_plane);
+    EXPECT_FLOAT_EQ(-applied.depth_filter_min.z, right_window.far_plane);
+
+    // Left must not have been disturbed either.
+    const auto stored_left = manager.getDepthWindowForPanel(SplitViewPanelId::Left);
+    EXPECT_FLOAT_EQ(stored_left.near_plane, left_window.near_plane);
+    EXPECT_FLOAT_EQ(stored_left.far_plane, left_window.far_plane);
+    EXPECT_FLOAT_EQ(stored_left.scale_x, left_window.scale_x);
 }
 
 // NOTE: Tests that actually execute Python scripts require the lichtfeld module
