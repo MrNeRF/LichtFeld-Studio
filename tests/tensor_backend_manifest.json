@@ -5304,8 +5304,10 @@
     "line": 116,
     "eligibility": "cuda-only",
     "reason": "tests/test_cuda_event_pool.cpp:22: raw CUDA operation on tensor storage or CUDA-only fixture",
-    "launchers": [],
-    "launchers_source": "measured",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -8163,6 +8165,47 @@
     "skip_allowlisted": false
   },
   {
+    "name": "DisplayTensors.DepthDisplayMatchesThePerPixelReferenceInBothModesFromEitherDevice",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_display_tensors.cpp",
+    "line": 81,
+    "eligibility": "consumer",
+    "reason": "includes rendering/display_tensors.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "DisplayTensors.DepthWithoutValidPixelsIsAllBackground",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_display_tensors.cpp",
+    "line": 97,
+    "eligibility": "cpu-only",
+    "reason": "constructs and exercises only CPU tensor storage",
+    "launchers": [
+      "launch_strided_upload"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "DisplayTensors.NormalDisplayNormalizesAndGraysDegenerateNormalsInBothLayouts",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_display_tensors.cpp",
+    "line": 108,
+    "eligibility": "consumer",
+    "reason": "includes rendering/display_tensors.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "DualRepOptimizer.CheckpointRoundtripAfterFusedPrepareWithQuantOn",
     "executable": "lichtfeld_tests",
     "file": "tests/test_dual_rep_optimizer.cpp",
@@ -9377,6 +9420,34 @@
     "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ExportBandPack.PackRoundsClampsAndRoundTripsBytes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_export_band_pack.cpp",
+    "line": 64,
+    "eligibility": "consumer",
+    "reason": "includes rendering/export_post_process.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ExportBandPack.UnpackMatchesTheByteReferenceWithAndWithoutAlpha",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_export_band_pack.cpp",
+    "line": 37,
+    "eligibility": "consumer",
+    "reason": "includes rendering/export_post_process.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -24566,6 +24637,34 @@
     "skip_allowlisted": false
   },
   {
+    "name": "PointCloudMerge.ColorsScaleBytesAndKeepFloats",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_point_cloud_merge.cpp",
+    "line": 49,
+    "eligibility": "consumer",
+    "reason": "includes scene/point_cloud_merge.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "PointCloudMerge.TransformMatchesGlmForCpuAndGpuPoints",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_point_cloud_merge.cpp",
+    "line": 28,
+    "eligibility": "consumer",
+    "reason": "includes scene/point_cloud_merge.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "PreferencesMigration.AssetDirectoryWinsOverWorkingDirectoryAndErasesLegacyKeys",
     "executable": "lichtfeld_tests",
     "file": "tests/test_preferences_migration.cpp",
@@ -30329,6 +30428,59 @@
     "skip_allowlisted": false
   },
   {
+    "name": "SelectionAttributeOps.ColorThresholdMatchesTheDecodedReferenceOnBothLayouts",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_attribute_ops.cpp",
+    "line": 97,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionAttributeOps.EmptyInputsProduceEmptyMasks",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_attribute_ops.cpp",
+    "line": 130,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionAttributeOps.OpacityThresholdMatchesTheSigmoidReference",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_attribute_ops.cpp",
+    "line": 49,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionAttributeOps.ScaleThresholdUsesTheLargestAxis",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_attribute_ops.cpp",
+    "line": 75,
+    "eligibility": "consumer",
+    "reason": "includes core/cuda/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "SelectionChapterTest.BothDomainsGroupsAndSelectedNodeOrderRoundTrip",
     "executable": "lichtfeld_tests",
     "file": "tests/test_selection_chapter.cpp",
@@ -30717,6 +30869,34 @@
     "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionScreenOps.PickFindsTheNearestValidPositionAndBreaksTiesHigh",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_screen_ops.cpp",
+    "line": 79,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionScreenOps.RectangleSelectionAccumulatesAndSkipsInvalidPositions",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_screen_ops.cpp",
+    "line": 52,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -37087,6 +37267,130 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorBroadcastPolicy.ClampAndMaskedFillAfterABroadcastDivisionKeepEveryChannel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 388,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_masked_fill",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_clamp_scalar",
+      "launch_clamp_fused",
+      "launch_clamp_scalar_int",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBroadcastPolicy.DeferredLeadingBroadcastMaskFillsEveryChannel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 440,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_broadcast_binary",
+      "launch_masked_fill",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBroadcastPolicy.DisplayChainStagesAtImageSize",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 460,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_masked_fill",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_clamp_scalar",
+      "launch_clamp_fused",
+      "launch_clamp_scalar_int",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBroadcastPolicy.FullRangeLeadingSliceKeepsEveryChannelThroughTheDisplayChain",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 413,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_masked_fill",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_clamp_scalar",
+      "launch_clamp_fused",
+      "launch_clamp_scalar_int",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBroadcastPolicy.LeadingAxisDivisionBroadcastsOverEveryChannel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 362,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorBroadcastTest.Broadcast1DColumn",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_broadcast.cpp",
@@ -38877,6 +39181,21 @@
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorCountPolicy.CountNonzeroIsExactAboveTwentyFourBits",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 126,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_count_nonzero_bool",
+      "launch_count_nonzero_float",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -40784,6 +41103,55 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorIntegerPolicy.AbsAndSquareAreExactAboveTwentyFourBits",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 74,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorIntegerPolicy.ClampIsExactAboveTwentyFourBits",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 92,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_clamp_scalar",
+      "launch_clamp_fused",
+      "launch_clamp_scalar_int"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorIntegerPolicy.PowIsWrapAroundIntegerArithmetic",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 107,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorKMeansWorkflowTest.KMeansPlusPlusSelectionPipeline",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_kmeans_workflow.cpp",
@@ -42049,6 +42417,38 @@
     "reason": "constructs and exercises only CPU tensor storage",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorMaskPolicy.DeferredComparisonMasksBroadcastInMaskedFill",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 344,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_broadcast_binary",
+      "launch_masked_fill",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorMaskPolicy.LeadingAxisMasksBroadcastInMaskedFillAndExpand",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 319,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_masked_fill",
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -43790,6 +44190,21 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorMovementPolicy.Int32CopiesIntoFloatViewsOfEveryRank",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 256,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorMultiStreamTest.ArenaCrossStreamFrameHandoff",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_multistream.cpp",
@@ -45267,6 +45682,19 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorRandomPolicy.NormalDrawsAdvanceBetweenCalls",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 293,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorRandomTest.ArithmeticOnRandom",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_random.cpp",
@@ -45779,6 +46207,46 @@
       "launch_uniform"
     ],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorReducePolicy.ColumnAndStridedMaxMinKeepInfiniteAxes",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 144,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_max_scalar",
+      "direct_min_scalar",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorReducePolicy.ScalarMaxAndMinShareTheReducePolicy",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 203,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_max_scalar",
+      "direct_min_scalar",
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -46584,6 +47052,19 @@
     "eligibility": "vulkan",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorScatterPolicy.ByteScatterAddWithDuplicateIndicesIsAtomic",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_integer_and_reduce_policy.cpp",
+    "line": 236,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -48351,6 +48832,102 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanAdoption.BackendRunsOnAnAdoptedDevice",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_adoption.cpp",
+    "line": 300,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_sort_1d",
+      "launch_sort_2d",
+      "launch_sgemm",
+      "launch_sgemm_tn",
+      "launch_strided_upload"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanAdoption.RejectsIncompleteHandlesAndStaysUsable",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_adoption.cpp",
+    "line": 353,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_strided_upload"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanBufferQuery.CudaAndCpuTensorsReturnNullopt",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_buffer.cpp",
+    "line": 111,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_vulkan_buffer.cpp:115: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanBufferQuery.KeepAlivePinsStorageAfterTensorDrop",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_buffer.cpp",
+    "line": 84,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanBufferQuery.PendingValueIsSignalledAfterSynchronize",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_buffer.cpp",
+    "line": 55,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanBufferQuery.TimelineIsNullAfterShutdown",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_buffer.cpp",
+    "line": 122,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanBufferQuery.ViewOffsetBytesAndDeviceAddressMatchStorage",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_buffer.cpp",
+    "line": 70,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_strided_upload"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanIndex.BoundaryModesClampWrapAndAssert",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
@@ -48874,10 +49451,18 @@
     "line": 357,
     "eligibility": "vulkan",
     "launchers": [
+      "launch_reduce_op",
+      "launch_column_reduce",
+      "launch_strided_reduce_fast",
+      "launch_fused_transform_reduce",
+      "launch_fused_segmented_transform_reduce",
       "launch_cumsum",
-      "launch_reduce_op"
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_strided_upload",
+      "launch_convert_type"
     ],
-    "launchers_source": "measured",
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -49053,7 +49638,7 @@
     "eligibility": "not-tensor",
     "reason": "does not exercise the LichtFeld tensor API",
     "launchers": [],
-    "launchers_source": "measured",
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -49096,9 +49681,10 @@
     "line": 575,
     "eligibility": "vulkan",
     "launchers": [
+      "launch_strided_upload",
       "launch_convert_type"
     ],
-    "launchers_source": "measured",
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -49109,9 +49695,9 @@
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
-      "launch_load_op"
+      "launch_fill_strided"
     ],
-    "launchers_source": "measured",
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -49224,8 +49810,10 @@
     "file": "tests/test_tensor_vulkan_runtime.cpp",
     "line": 646,
     "eligibility": "vulkan",
-    "launchers": [],
-    "launchers_source": "measured",
+    "launchers": [
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -49236,9 +49824,9 @@
     "eligibility": "vulkan",
     "launchers": [
       "direct_sum_scalar",
-      "launch_load_op"
+      "launch_fill_strided"
     ],
-    "launchers_source": "measured",
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
