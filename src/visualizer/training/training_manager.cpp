@@ -1143,6 +1143,9 @@ namespace lfs::vis {
         // to gate initialization.
         applyPendingParams();
 
+        if (evaluation_weights_preparer_ && trainer_->getParams().optimization.enable_eval)
+            trainer_->set_lpips_weights_path(evaluation_weights_preparer_(!trainer_->getParams().no_download));
+
         std::optional<TrainingSceneInitializationRollback> scene_rollback;
         if (scene_) {
             // The snapshot is intentionally taken by the worker. It includes
@@ -1813,13 +1816,15 @@ namespace lfs::vis {
         return psnr_buffer_;
     }
 
-    void TrainerManager::updateEvaluationMetrics(int iteration, float psnr, float ssim) {
+    void TrainerManager::updateEvaluationMetrics(int iteration, float psnr, float ssim,
+                                                 std::optional<float> lpips) {
         updatePSNR(psnr);
         std::lock_guard<std::mutex> lock(eval_metrics_mutex_);
         last_eval_metrics_ = EvaluationMetricsSnapshot{
             .iteration = iteration,
             .psnr = psnr,
-            .ssim = ssim};
+            .ssim = ssim,
+            .lpips = lpips};
         const auto position = std::lower_bound(
             evaluation_history_.begin(),
             evaluation_history_.end(), iteration,
@@ -1965,6 +1970,7 @@ namespace lfs::vis {
                     .iteration = sample.iteration,
                     .psnr = sample.value,
                     .ssim = 0.0f,
+                    .lpips = std::nullopt,
                 });
                 if (index >= begin)
                     psnr_buffer_.push_back(
@@ -1981,6 +1987,7 @@ namespace lfs::vis {
                     .ssim =
                         metrics.last_evaluation
                             ->ssim,
+                    .lpips = std::nullopt,
                 };
                 if (!evaluation_history_.empty() &&
                     evaluation_history_.back()
@@ -2124,6 +2131,7 @@ namespace lfs::vis {
         if (const auto last = getLastEvaluationMetrics()) {
             store.eval_psnr.set(last->psnr);
             store.eval_ssim.set(last->ssim);
+            store.eval_lpips.set(last->lpips);
         }
 
         if (!trainer_) {
@@ -2359,7 +2367,8 @@ namespace lfs::vis {
 
         // Listen for evaluation completed events - update PSNR buffer
         state::EvaluationCompleted::when([this](const auto& event) {
-            updateEvaluationMetrics(event.iteration, event.psnr, event.ssim);
+            updateEvaluationMetrics(event.iteration, event.psnr, event.ssim,
+                                    event.lpips);
         });
     }
 

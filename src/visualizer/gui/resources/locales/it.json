@@ -732,6 +732,7 @@
     "eta": "Tempo Rimasto",
     "psnr": "PSNR",
     "ssim": "SSIM",
+    "lpips": "LPIPS",
     "unknown": "Sconosciuto",
     "dataset_no_trainer": "Dataset (Senza Trainer)",
     "dataset_ready": "Dataset (Pronto)",

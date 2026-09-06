@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include <array>
 #include <gtest/gtest.h>
+#include <numeric>
 #include <torch/torch.h>
 #include <vector>
 
@@ -423,6 +425,63 @@ TEST_F(TensorViewTest, ViewMetadataAndMaterializationOwnership) {
     EXPECT_FALSE(materialized.is_view());
     EXPECT_TRUE(materialized.is_contiguous());
     EXPECT_EQ(materialized.to_vector(), transposed.to_vector());
+}
+
+TEST_F(TensorViewTest, BroadcastPointwiseMaterializationDoesNotMutateViewSource) {
+    constexpr int height = 4;
+    constexpr int width = 5;
+    std::vector<float> values(3 * height * width);
+    std::iota(values.begin(), values.end(), -3.0f);
+    const auto make_channels = [](const std::array<float, 3>& channels) {
+        return Tensor::from_vector(
+            std::vector<float>(channels.begin(), channels.end()),
+            TensorShape({1, 3, 1, 1}), Device::CUDA);
+    };
+    const auto shift = make_channels({0.25f, -0.5f, 1.25f});
+    const auto scale = make_channels({0.5f, 2.0f, 4.0f});
+    const auto expected_source = values;
+    const auto base = Tensor::from_vector(values, TensorShape({3, height, width}), Device::CUDA);
+
+    auto run_case = [&](const char* name, const Tensor& input, const Tensor& expected_input,
+                        const Tensor& result) {
+        ASSERT_EQ(input.to_vector(), expected_input.to_vector()) << name;
+        const auto output = result.to_vector();
+        ASSERT_EQ(output.size(), values.size()) << name;
+        constexpr std::array<float, 3> shifts{0.25f, -0.5f, 1.25f};
+        constexpr std::array<float, 3> scales{0.5f, 2.0f, 4.0f};
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const auto channel = i / static_cast<std::size_t>(height * width);
+            const float expected = (values[i] - shifts[channel]) / scales[channel];
+            EXPECT_FLOAT_EQ(output[i], expected)
+                << name << " index=" << i;
+        }
+    };
+
+    const auto view = base.unsqueeze(0);
+    const auto direct_result = view.sub(shift).div(scale).contiguous();
+    run_case("unsqueeze view sub-div", base, Tensor::from_vector(expected_source, TensorShape({3, height, width}), Device::CUDA),
+             direct_result.squeeze(0));
+
+    auto materialized_view = view.sub(shift).div(scale).contiguous();
+    EXPECT_TRUE(materialized_view.owns_memory());
+    EXPECT_FALSE(materialized_view.is_view());
+    ASSERT_EQ(base.to_vector(), expected_source);
+
+    auto view_chain = base.unsqueeze(0);
+    view_chain = view_chain.mul(scale).sub(shift).contiguous();
+    EXPECT_EQ(base.to_vector(), view_chain.squeeze(0).to_vector());
+
+    auto write_through_view = base.unsqueeze(0);
+    const auto write_through_source = write_through_view.mul(scale).sub(shift).contiguous();
+    write_through_view = write_through_source;
+    EXPECT_EQ(base.to_vector(), write_through_source.squeeze(0).to_vector());
+
+    const auto batched = Tensor::from_vector(
+        values, TensorShape({1, 3, height, width}), Device::CUDA);
+    const auto batched_before = batched.to_vector();
+    const auto batched_result = batched.sub(shift).div(scale).contiguous();
+    ASSERT_EQ(batched.to_vector(), batched_before);
+    ASSERT_EQ(batched_result.squeeze(0).to_vector(), materialized_view.squeeze(0).to_vector());
 }
 
 TEST_F(TensorViewTest, PermuteBasic) {

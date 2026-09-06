@@ -410,6 +410,7 @@ namespace lfs::core {
             // belong to OptimizationParameters: saved training configurations
             // must not make a later normal launch enter safe mode.
             bool safe_mode = false;
+            bool no_download = false;
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;

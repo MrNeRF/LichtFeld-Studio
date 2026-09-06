@@ -18,6 +18,8 @@
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -71,6 +73,13 @@ namespace lfs::vis {
         [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control
+        using EvaluationWeightsPreparer =
+            std::function<std::optional<std::filesystem::path>(bool allow_download)>;
+
+        void set_evaluation_weights_preparer(EvaluationWeightsPreparer preparer) {
+            evaluation_weights_preparer_ = std::move(preparer);
+        }
+
         bool startTraining();
         // Wait for the off-thread initialization phase. Callers must not be the
         // viewer thread; the GUI start path intentionally returns in Starting.
@@ -146,11 +155,12 @@ namespace lfs::vis {
             int iteration = 0;
             float psnr = 0.0f;
             float ssim = 0.0f;
+            std::optional<float> lpips;
         };
 
         std::deque<float> getPSNRBuffer() const;
         void updatePSNR(float psnr);
-        void updateEvaluationMetrics(int iteration, float psnr, float ssim);
+        void updateEvaluationMetrics(int iteration, float psnr, float ssim, std::optional<float> lpips);
         std::optional<EvaluationMetricsSnapshot> getLastEvaluationMetrics() const;
         void clearEvaluationMetrics();
         [[nodiscard]] lfs::io::project::MetricsChapter
@@ -254,6 +264,7 @@ namespace lfs::vis {
 
         // Member variables
         std::unique_ptr<lfs::training::Trainer> trainer_;
+        EvaluationWeightsPreparer evaluation_weights_preparer_;
         std::unique_ptr<std::jthread> initialization_thread_;
         std::unique_ptr<std::jthread> training_thread_;
         std::optional<std::stop_source> training_stop_source_;

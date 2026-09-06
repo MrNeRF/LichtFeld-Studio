@@ -73,6 +73,7 @@ Write-Host "--------------------------------------------------------------------
 $total_psnr = 0
 $total_ssim = 0
 $total_lpips = 0
+$lpips_count = 0
 $total_gaussians = 0
 $valid_scenes = 0
 
@@ -87,14 +88,18 @@ foreach ($SCENE in $SCENE_LIST) {
         $iteration = $values[0]
         $psnr = [double]$values[1]
         $ssim = [double]$values[2]
-        $lpips = [double]$values[3]
+        if ([string]::IsNullOrWhiteSpace($values[3])) {
+            $lpips = $null
+        } else {
+            $lpips = [double]$values[3]
+        }
         $time_per_image = $values[4]
         $num_gaussians = [int]$values[5]
         
         # Format the numbers
         $psnr_fmt = Format-Number -num $psnr -decimals 4
         $ssim_fmt = Format-Number -num $ssim -decimals 6
-        $lpips_fmt = Format-Number -num $lpips -decimals 6
+        $lpips_fmt = if ($null -eq $lpips) { "n/a" } else { Format-Number -num $lpips -decimals 6 }
         $gaussians_fmt = Format-WithCommas -num $num_gaussians
         
         # Print formatted row
@@ -111,7 +116,10 @@ foreach ($SCENE in $SCENE_LIST) {
         # Accumulate for mean calculation
         $total_psnr += $psnr
         $total_ssim += $ssim
-        $total_lpips += $lpips
+        if ($null -ne $lpips) {
+            $total_lpips += $lpips
+            $lpips_count++
+        }
         $total_gaussians += $num_gaussians
         $valid_scenes++
     }
@@ -121,12 +129,12 @@ foreach ($SCENE in $SCENE_LIST) {
 if ($valid_scenes -gt 0) {
     $mean_psnr = $total_psnr / $valid_scenes
     $mean_ssim = $total_ssim / $valid_scenes
-    $mean_lpips = $total_lpips / $valid_scenes
+    $mean_lpips = if ($lpips_count -gt 0) { $total_lpips / $lpips_count } else { $null }
     $mean_gaussians = [int]($total_gaussians / $valid_scenes)
     
     $mean_psnr_fmt = Format-Number -num $mean_psnr -decimals 4
     $mean_ssim_fmt = Format-Number -num $mean_ssim -decimals 6
-    $mean_lpips_fmt = Format-Number -num $mean_lpips -decimals 6
+    $mean_lpips_fmt = if ($null -eq $mean_lpips) { "n/a" } else { Format-Number -num $mean_lpips -decimals 6 }
     $mean_gaussians_fmt = Format-WithCommas -num $mean_gaussians
     
     Write-Host "=============================================================================="

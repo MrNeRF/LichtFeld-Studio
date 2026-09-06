@@ -520,9 +520,13 @@ namespace lfs::core::nn {
         const bool implicit_3x3 = kh == 3 && kw == 3 && params.groups == 1 && params.stride_h == 1 &&
                                   params.stride_w == 1 && params.dilation_h == 1 &&
                                   params.dilation_w == 1 && params.pad_h == 1 && params.pad_w == 1 &&
-                                  dtype == DataType::Float16;
-        if (pointwise || implicit_3x3) {
+                                  (dtype == DataType::Float16 || dtype == DataType::Float32);
+        if (pointwise) {
             return 0;
+        }
+        if (implicit_3x3) {
+            return kernels::conv2d_weight_scratch_bytes(static_cast<int>(weight_shape[0]),
+                                                        static_cast<int>(weight_shape[1]), dtype);
         }
         const auto hw = conv2d_output_hw(static_cast<int>(input_shape[2]),
                                          static_cast<int>(input_shape[3]), kh, kw, params);
@@ -555,7 +559,7 @@ namespace lfs::core::nn {
     }
 
     Tensor conv2d(const Tensor& input, const Tensor& weight, const Tensor* bias,
-                  const Conv2dParams& params, Tensor* workspace) {
+                  const Conv2dParams& params, Tensor* workspace, const Tensor* weight_taps) {
         require_nn_tensor(input, "conv2d", "input");
         require_nn_tensor(weight, "conv2d", "weight");
         require_same_dtype_device(input, weight, "conv2d", "input", "weight");
@@ -582,11 +586,20 @@ namespace lfs::core::nn {
         const bool implicit_3x3 = kh == 3 && kw == 3 && params.groups == 1 && params.stride_h == 1 &&
                                   params.stride_w == 1 && params.dilation_h == 1 &&
                                   params.dilation_w == 1 && params.pad_h == 1 && params.pad_w == 1 &&
-                                  input.dtype() == DataType::Float16;
+                                  (input.dtype() == DataType::Float16 || input.dtype() == DataType::Float32);
 
         Tensor b_s;
         const Tensor in_c = input.contiguous();
         const Tensor w_c = weight.contiguous();
+        if (weight_taps != nullptr && weight_taps->is_valid()) {
+            require_nn_tensor(*weight_taps, "conv2d", "weight_taps");
+            require_same_dtype_device(in_c, *weight_taps, "conv2d", "input", "weight_taps");
+            LFS_ASSERT_MSG(implicit_3x3 && weight_taps->shape() ==
+                                               TensorShape(std::vector<std::size_t>{9u,
+                                                                                    static_cast<std::size_t>(cout),
+                                                                                    static_cast<std::size_t>(cin)}),
+                           "conv2d weight_taps must be [9,C_out,C_in] for 3x3 convolution");
+        }
         const Tensor* b_c = nullptr;
         if (bias != nullptr && bias->is_valid()) {
             require_nn_tensor(*bias, "conv2d", "bias");
@@ -597,7 +610,7 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
-        pin_operands({&in_c, &w_c});
+        pin_operands({&in_c, &w_c, b_c, weight_taps});
 
         if (pointwise) {
             auto nchw = empty_like_shape(
@@ -613,7 +626,8 @@ namespace lfs::core::nn {
             kernels::gemm(raw(in_c), raw(w_c), raw_mut(nchw), hw_n, cout, cin,
                           static_cast<long long>(cin) * hw_n, 0,
                           static_cast<long long>(cout) * hw_n, n, true, true,
-                          b_c ? raw(*b_c) : nullptr, 0, in_c.dtype(), stream, true);
+                          b_c ? raw(*b_c) : nullptr, static_cast<int>(params.activation),
+                          in_c.dtype(), stream, true);
             return nchw;
         }
 
@@ -624,14 +638,33 @@ namespace lfs::core::nn {
                                                            static_cast<std::size_t>(out_h),
                                                            static_cast<std::size_t>(out_w)}});
             const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nchw.stream());
+            if (b_c)
+                b_c->sync_to_stream(stream);
+            if (weight_taps)
+                weight_taps->sync_to_stream(stream);
             nchw.set_stream(stream);
-            kernels::conv2d_implicit(raw(in_c), raw(w_c), b_c ? raw(*b_c) : nullptr, raw_mut(nchw),
+            const std::size_t scratch_bytes =
+                weight_taps != nullptr
+                    ? 0
+                    : kernels::conv2d_weight_scratch_bytes(cout, cin, in_c.dtype());
+            Tensor scratch;
+            if (scratch_bytes > 0) {
+                scratch = ensure_workspace(workspace, scratch_bytes, in_c, "conv2d");
+                scratch.set_stream(stream);
+            }
+            kernels::conv2d_implicit(raw(in_c), raw(w_c),
+                                     weight_taps ? raw(*weight_taps) : nullptr,
+                                     b_c ? raw(*b_c) : nullptr,
+                                     raw_mut(nchw), scratch_bytes > 0 ? raw_mut(scratch) : nullptr,
                                      n, cin, h, w, cout, kh, kw, out_h, out_w, params.stride_h,
-                                     params.stride_w, params.pad_h, params.pad_w, params.dilation_h,
+                                     params.stride_w,
+                                     params.pad_h, params.pad_w, params.dilation_h,
                                      params.dilation_w, static_cast<int>(params.pad_mode),
-                                     in_c.dtype(), stream);
+                                     static_cast<int>(params.activation), in_c.dtype(), stream);
             return nchw;
         }
+        LFS_ASSERT_MSG(params.activation == Activation::None,
+                       "conv2d fused activation is only supported on the pointwise and 3x3 paths");
         const std::size_t bytes = conv2d_workspace_bytes(in_c.shape(), w_c.shape(), params, in_c.dtype());
         Tensor scratch = ensure_workspace(workspace, bytes, in_c, "conv2d");
         auto nhwc = empty_like_shape(

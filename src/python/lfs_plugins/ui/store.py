@@ -269,6 +269,7 @@ class RuntimeState:
     trainer_loaded = StateSignal[bool]("trainer_loaded", False)
     eval_psnr = StateSignal[float | None]("eval_psnr", None)
     eval_ssim = StateSignal[float | None]("eval_ssim", None)
+    eval_lpips = StateSignal[float | None]("eval_lpips", None)
     scene_generation = StateSignal[int]("scene_generation", 0)
     selection_generation = StateSignal[int]("selection_generation", 0)
     fps = StateSignal[float]("fps", 0.0)
@@ -344,6 +345,7 @@ class RuntimeState:
         cls.max_gaussians.value = 0
         cls.eval_psnr.value = None
         cls.eval_ssim.value = None
+        cls.eval_lpips.value = None
         cls.scene_generation.value = 0
         cls.selection_generation.value = 0
         cls.fps.value = 0.0

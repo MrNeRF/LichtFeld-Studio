@@ -26,11 +26,41 @@ namespace lfs::core::nn::kernels {
               int scatter_h = 0, int scatter_w = 0);
 
     // Implicit GEMM conv: A is gathered from NCHW input (never materialised).
-    // Output is NCHW. Weight is OIHW. Bias, if non-null, is [C_out].
-    void conv2d_implicit(const void* input, const void* weight, const void* bias, void* output,
-                         int n, int cin, int h, int w, int cout, int kh, int kw, int out_h,
-                         int out_w, int stride_h, int stride_w, int pad_h, int pad_w, int dil_h,
-                         int dil_w, int pad_mode, DataType dtype, cudaStream_t stream);
+    // Output is NCHW. Weight is OIHW. Bias, if non-null, is [C_out]. The
+    // tensor-core path needs a tap-major weight copy: either a prebuilt
+    // weight_taps, or weight_scratch of conv2d_weight_scratch_bytes() to build
+    // one per call. With neither the WMMA path runs.
+    void conv2d_implicit(const void* input, const void* weight, const void* weight_taps,
+                         const void* bias, void* output, void* weight_scratch, int n, int cin,
+                         int h, int w, int cout, int kh, int kw, int out_h, int out_w,
+                         int stride_h, int stride_w, int pad_h, int pad_w, int dil_h, int dil_w,
+                         int pad_mode, int activation, DataType dtype, cudaStream_t stream);
+
+    std::size_t conv2d_weight_scratch_bytes(int cout, int cin, DataType dtype);
+
+    // sm_80+ tensor-core path for the 3x3 implicit conv on tap-major
+    // ([9][C_out][C_in]) fp16 weights built by conv3x3_weight_taps from OIHW.
+    bool conv3x3_mma_available();
+    void conv3x3_weight_taps(const void* weight, void* weight_taps, int cout, int cin,
+                             cudaStream_t stream);
+    void conv2d_implicit_3x3_mma(const void* input, const void* weight_taps, const void* bias,
+                                 void* output, int n, int cin, int h, int w, int cout, int out_h,
+                                 int out_w, int pad_mode, int activation, cudaStream_t stream);
+
+    // LPIPS layer 1: fp32 RGB [N][3][H][W], per-channel ((2x-1 | x) - shift) / scale
+    // folded into the gather, 3x3 zero-padded conv with 64 fp16 OIHW filters,
+    // bias and ReLU, fp16 NCHW output.
+    void lpips_rgb_conv3x3(const float* input, const void* weight, const void* bias, void* output,
+                           const float* shift, const float* scale, bool official_scaling, int n,
+                           int h, int w, cudaStream_t stream);
+
+    // LPIPS block tail: channel-normalised, lin-weighted squared distance of two
+    // fp16 NCHW feature maps accumulated into *result (caller zeroes it), with
+    // an optional fused 2x2 stride-2 max pool of both maps into pooled_x/y.
+    void lpips_pool_reduce(const void* x, const void* y, const void* lin_weight, float* result,
+                           void* pooled_x, void* pooled_y, int n, int channels, int h, int w,
+                           int interior_y0, int interior_y1, int interior_x0, int interior_x1,
+                           float inv_count, cudaStream_t stream);
 
     void layer_norm(const void* x, const void* weight, const void* bias, void* y,
                     int rows, int cols, float eps, DataType dtype, cudaStream_t stream);

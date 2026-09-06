@@ -732,6 +732,7 @@
     "eta": "预计剩余时间",
     "psnr": "PSNR",
     "ssim": "SSIM",
+    "lpips": "LPIPS",
     "unknown": "未知",
     "dataset_no_trainer": "数据集（无训练器）",
     "dataset_ready": "数据集（就绪）",

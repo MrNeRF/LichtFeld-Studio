@@ -199,6 +199,10 @@ namespace lfs::vis {
         [[nodiscard]] virtual bool isOnViewerThread() const { return false; }
         [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
+        virtual void set_evaluation_weights_preparer(
+            std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) {
+            static_cast<void>(preparer);
+        }
         virtual std::expected<void, std::string> startTraining() = 0;
         [[nodiscard]] virtual std::optional<int>
         trainingStartOverwriteConflict() {

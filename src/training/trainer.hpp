@@ -310,6 +310,7 @@ namespace lfs::training {
             return params_;
         }
         void setParams(const lfs::core::param::TrainingParameters& params);
+        void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }
@@ -909,6 +910,7 @@ namespace lfs::training {
 
         // Metrics evaluator - handles all evaluation logic
         std::unique_ptr<lfs::training::MetricsEvaluator> evaluator_;
+        std::optional<std::filesystem::path> lpips_weights_path_;
 
         // Single mutex that protects the model during training
         mutable std::shared_mutex render_mutex_;

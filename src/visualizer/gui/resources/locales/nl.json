@@ -732,6 +732,7 @@
     "eta": "ETA",
     "psnr": "PSNR",
     "ssim": "SSIM",
+    "lpips": "LPIPS",
     "unknown": "Onbekend",
     "dataset_no_trainer": "Dataset (Geen Trainer)",
     "dataset_ready": "Dataset (Gereed)",

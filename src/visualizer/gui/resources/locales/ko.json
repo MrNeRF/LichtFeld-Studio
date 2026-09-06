@@ -732,6 +732,7 @@
     "eta": "남은 시간",
     "psnr": "PSNR",
     "ssim": "SSIM",
+    "lpips": "LPIPS",
     "unknown": "알 수 없음",
     "dataset_no_trainer": "데이터셋 (트레이너 없음)",
     "dataset_ready": "데이터셋 (준비됨)",

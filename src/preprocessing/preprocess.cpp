@@ -66,6 +66,11 @@ namespace {
         "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-moge2-v1/moge-2-vitb-normal.lfw";
     constexpr std::string_view kDefaultModelSha256 =
         "db1fbe8dcd6ff91f6cdb0369c3a31f9f04e1a71a8114573ef189593f10de9cd9";
+    constexpr std::string_view kLpipsModelFile = "lpips-vgg16-v0.1.lfw";
+    constexpr std::string_view kLpipsModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-lpips-v1/lpips-vgg16-v0.1.lfw";
+    constexpr std::string_view kLpipsModelSha256 =
+        "ea2f01796fbcf9950f9454f19b42e45568f166d879ec141ec100b9897a8cc769";
 
     void remove_file_if_exists(const fs::path& path);
     void replace_file(const fs::path& source, const fs::path& destination);
@@ -377,7 +382,8 @@ namespace {
 
     void download_verified_file(std::string_view url,
                                 const fs::path& destination,
-                                std::string_view expected_hash) {
+                                std::string_view expected_hash,
+                                std::string_view label) {
         fs::create_directories(destination.parent_path());
         fs::path tmp_path = destination;
         tmp_path += ".tmp";
@@ -400,6 +406,9 @@ namespace {
         curl_easy_setopt(curl, CURLOPT_URL, url_string.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "LichtFeld-Studio/preprocess");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output);
@@ -434,13 +443,59 @@ namespace {
         }
 
         try {
-            require_sha256(tmp_path, expected_hash, "Downloaded model");
+            require_sha256(tmp_path, expected_hash, label);
         } catch (...) {
             remove_file_if_exists(tmp_path);
             throw;
         }
 
         replace_file(tmp_path, destination);
+    }
+
+    fs::path cached_model_path(const std::string_view filename) {
+        return home_directory() / ".lichtfeld" / "onnx" / std::string(filename);
+    }
+
+    lfs::Result<fs::path> ensure_cached_model(const std::string_view filename,
+                                              const std::string_view url,
+                                              const std::string_view expected_hash,
+                                              const bool allow_download,
+                                              const std::string_view label) {
+        try {
+            const fs::path path = cached_model_path(filename);
+            if (fs::is_regular_file(path)) {
+                try {
+                    require_sha256(path, expected_hash, std::string("Cached ") + std::string(label));
+                    return path;
+                } catch (const DownloadIntegrityError& e) {
+                    if (!allow_download)
+                        throw;
+                    std::cerr << e.what() << "\n";
+                    remove_file_if_exists(path);
+                    std::cerr << "Removed untrusted cached " << label << "; re-downloading "
+                              << path_to_string(path) << "\n";
+                }
+            }
+            if (!allow_download)
+                throw std::runtime_error(std::string(label) + " is not cached: " + path_to_string(path));
+
+            std::cout << "Downloading " << label << " weights to " << path_to_string(path) << "\n";
+            download_verified_file(url, path, expected_hash,
+                                   std::string("Downloaded ") + std::string(label));
+            require_sha256(path, expected_hash, std::string("Cached ") + std::string(label));
+            std::cout << "Verified " << label << " SHA-256: " << expected_hash << "\n";
+            return path;
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): converts the exception text to a returned Result error.
+            return lfs::Result<fs::path>(lfs::make_legacy_error(
+                e.what(),
+                lfs::LegacyErrorContext{
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::Preprocess,
+                    .operation = "ensure_cached_model",
+                    .source = LFS_SOURCE_SITE_CURRENT(),
+                }));
+        }
     }
 
     fs::path ensure_default_model(bool no_download) {
@@ -482,11 +537,11 @@ namespace {
             }
         }
 
-        std::cout << "Downloading MoGe-2 ViT-B normal model weights (MIT license, (c) Microsoft) to "
-                  << path_to_string(path) << "\n";
-        download_verified_file(kDefaultModelUrl, path, kDefaultModelSha256);
-        require_sha256(path, kDefaultModelSha256, "Cached model");
-        return path;
+        auto ensured = ensure_cached_model(kDefaultModelFile, kDefaultModelUrl, kDefaultModelSha256,
+                                           !no_download, "MoGe-2 ViT-B normal model");
+        if (!ensured)
+            throw std::runtime_error(std::string(ensured.error().detail()));
+        return std::move(*ensured);
     }
 
     Image load_image_rgb(const fs::path& path) {
@@ -1180,6 +1235,11 @@ namespace {
 } // namespace
 
 namespace lfs::preprocessing {
+
+    lfs::Result<std::filesystem::path> ensure_lpips_weights(const bool allow_download) {
+        return ensure_cached_model(kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256,
+                                   allow_download, "LPIPS");
+    }
 
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,
                                           const PreprocessProgressCallback& progress) {

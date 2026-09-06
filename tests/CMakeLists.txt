@@ -462,7 +462,7 @@ set(TEST_FILES
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
     test_moge2.cpp
-    bench_nn_ops.cpp
+    test_lpips.cpp
     test_ppisp_controller.cpp
     test_ppisp_regularization.cpp
     test_ppisp_sidecar.cpp
@@ -1131,6 +1131,31 @@ target_include_directories(bench_tensor_launch_overhead PRIVATE
 )
 target_link_libraries(bench_tensor_launch_overhead PRIVATE
     lfs_core
+    CUDA::cudart
+)
+
+add_executable(bench_nn_ops EXCLUDE_FROM_ALL
+    bench_nn_ops.cpp
+)
+set_target_properties(bench_nn_ops PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+    CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+)
+target_include_directories(bench_nn_ops PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_compile_definitions(bench_nn_ops PRIVATE
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(bench_nn_ops PRIVATE
+    lfs_core
+    GTest::gtest_main
     CUDA::cudart
 )
 
