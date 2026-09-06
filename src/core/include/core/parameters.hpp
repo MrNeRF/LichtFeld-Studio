@@ -319,6 +319,9 @@ namespace lfs::core {
             static OptimizationParameters from_json(const nlohmann::json& j);
 
             [[nodiscard]] TrainingBackendConflict backend_conflict() const;
+            // Project presets may retain a backend-incompatible next-run choice so
+            // an older project can open and let the user correct it before Start.
+            [[nodiscard]] std::string validate_for_storage() const;
             [[nodiscard]] std::string validate() const;
 
             // Factory methods for strategy presets
