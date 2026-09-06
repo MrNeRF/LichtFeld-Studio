@@ -163,6 +163,25 @@ namespace lfs::core {
                 OptimizationParameters& params,
                 const nlohmann::json& json,
                 const bool skip_missing = false) {
+                std::optional<RasterBackendId> backend;
+                if (json.contains("raster_backend")) {
+                    const auto name = json.at("raster_backend").get<std::string>();
+                    backend = parse_training_backend(name);
+                    if (!backend)
+                        throw std::invalid_argument("Unknown training raster_backend: " + name);
+                    if (json.contains("gut")) {
+                        const bool legacy_gut = json.at("gut").get<bool>();
+                        const auto legacy_backend = legacy_gut
+                                                        ? RasterBackendId::ThreeDGUT
+                                                        : RasterBackendId::FastGS;
+                        if (*backend != legacy_backend) {
+                            LOG_WARN(
+                                "Conflicting raster_backend '{}' and legacy gut={}; using the legacy value for backward compatibility",
+                                name, legacy_gut);
+                            backend = legacy_backend;
+                        }
+                    }
+                }
                 if (json.contains("strategy")) {
                     const auto strategy = json.at("strategy").get<std::string>();
                     if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
@@ -172,6 +191,9 @@ namespace lfs::core {
                     }
                 }
                 read_registered_optimization_properties(json, params, skip_missing);
+
+                if (backend)
+                    params.set_raster_backend(*backend);
 
                 if (json.contains("eval_steps")) {
                     params.eval_steps.clear();
@@ -339,6 +361,7 @@ namespace lfs::core {
         nlohmann::json OptimizationParameters::to_json() const {
             nlohmann::json opt_json;
             write_registered_optimization_properties(opt_json, *this);
+            opt_json["raster_backend"] = training_backend_descriptor(raster_backend()).wire_name;
 
             const auto canonical_strategy = canonical_strategy_name(strategy);
             opt_json["strategy"] = canonical_strategy.empty() ? strategy : std::string(canonical_strategy);
@@ -358,17 +381,16 @@ namespace lfs::core {
         }
 
         TrainingBackendConflict OptimizationParameters::backend_conflict() const {
-            if (!gut)
-                return TrainingBackendConflict::None;
-            if (canonical_strategy_name(strategy) == kStrategyIGSPlus)
+            const auto& capabilities = training_backend_descriptor(raster_backend()).capabilities;
+            if (!capabilities.igs_plus && canonical_strategy_name(strategy) == kStrategyIGSPlus)
                 return TrainingBackendConflict::IGSPlus;
-            if (undistort)
+            if (!capabilities.undistort && undistort)
                 return TrainingBackendConflict::Undistort;
-            if (mip_filter)
+            if (!capabilities.mip_filter && mip_filter)
                 return TrainingBackendConflict::MipFilter;
-            if (use_depth_loss)
+            if (!capabilities.depth_supervision && use_depth_loss)
                 return TrainingBackendConflict::DepthSupervision;
-            if (use_normal_loss)
+            if (!capabilities.normal_supervision && use_normal_loss)
                 return TrainingBackendConflict::NormalSupervision;
             return TrainingBackendConflict::None;
         }

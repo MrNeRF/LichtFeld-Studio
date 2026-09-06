@@ -15,6 +15,30 @@ def clear_property_callbacks(lf):
 class TestOptimizationParams:
     """Tests for lf.optimization_params() and property introspection."""
 
+    def test_training_backend_alias_and_capabilities(self, lf):
+        params = lf.optimization_params()
+        original = params.gut
+        try:
+            params.raster_backend = "3dgut"
+            assert params.gut is True
+            assert params.get("raster_backend") == "3dgut"
+            assert params.backend_capabilities["depth_supervision"] is False
+            assert params.backend_capabilities["normal_supervision"] is False
+            params.gut = False
+            assert params.raster_backend == "fastgs"
+            assert params.backend_capabilities["depth_supervision"] is True
+            params.set("raster_backend", "3dgut")
+            assert params.gut is True
+            with pytest.raises(ValueError, match="Unknown training raster_backend"):
+                params.raster_backend = "unknown"
+            assert params.raster_backend == "3dgut"
+            descriptors = {item["id"]: item for item in lf.training_backends()}
+            assert descriptors["fastgs"]["viewer_backend"] == "3dgs"
+            assert descriptors["3dgut"]["viewer_backend"] == "3dgut"
+            assert descriptors["3dgut"]["capabilities"] == params.backend_capabilities
+        finally:
+            params.gut = original
+
     def test_optimization_params_exists(self, lf):
         """optimization_params() function should be available."""
         assert hasattr(lf, "optimization_params")

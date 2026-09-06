@@ -72,6 +72,72 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChangingFastGS) {
     }
 }
 
+TEST(ArgumentParserTest, ExplicitBackendSelectionAndLegacyAlias) {
+    const auto data = make_test_path("lfs_backend_identity_data");
+    const auto output = make_test_path("lfs_backend_identity_output");
+    for (const auto* name : {"fastgs", "3dgut", "unknown"}) {
+        SCOPED_TRACE(name);
+        const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                              "--strategy", "mcmc", "--raster-backend", name, "--gut"};
+        auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        if (std::string_view(name) == "unknown") {
+            ASSERT_FALSE(parsed.has_value());
+            EXPECT_NE(parsed.error().find("--raster-backend"), std::string::npos);
+            continue;
+        }
+        ASSERT_TRUE(parsed.has_value()) << parsed.error();
+        const bool gut = std::string_view(name) == "3dgut";
+        EXPECT_EQ((*parsed)->optimization.gut, gut);
+        // The explicit CLI selection must also survive checkpoint overrides.
+        lfs::core::param::TrainingParameters restored;
+        restored.optimization.gut = !gut;
+        apply_explicit_training_overrides(restored, (*parsed)->overrides);
+        EXPECT_EQ(restored.optimization.gut, gut);
+        const auto combined = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        EXPECT_EQ(combined.has_value(), gut);
+    }
+}
+
+TEST(ArgumentParserTest, BackendCliOverrideReplacesConfigAliasesTogether) {
+    const auto data = make_test_path("lfs_backend_config_data");
+    const auto output = make_test_path("lfs_backend_config_output");
+    const auto config = std::filesystem::path(output) / "backend.json";
+    auto params = lfs::core::param::OptimizationParameters::mcmc_defaults();
+    params.gut = true;
+    {
+        std::ofstream file(config);
+        file << params.to_json();
+    }
+    const auto config_text = config.string();
+    const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                          "--config", config_text.c_str(), "--raster-backend", "fastgs"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_FALSE((*parsed)->optimization.gut);
+    lfs::core::param::TrainingParameters restored;
+    restored.optimization.gut = true;
+    apply_explicit_training_overrides(restored, (*parsed)->overrides);
+    EXPECT_FALSE(restored.optimization.gut);
+}
+
+TEST(ArgumentParserTest, ViewerBackendSelectionSurvivesParameterDefaults) {
+    const auto directory = make_test_path("lfs_view_backend_identity");
+    const auto path = std::filesystem::path(directory) / "session.licht";
+    std::ofstream(path).put('\n');
+    const auto path_text = path.string();
+    for (const bool legacy : {false, true}) {
+        const char* argv[] = {"LichtFeld-Studio", "-v", path_text.c_str(),
+                              legacy ? "--gut" : "--raster-backend", "3dgut"};
+        const auto parsed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(argv)) - (legacy ? 1 : 0), argv);
+        ASSERT_TRUE(parsed.has_value()) << parsed.error();
+        EXPECT_TRUE((*parsed)->optimization.gut);
+        lfs::core::param::TrainingParameters restored;
+        apply_explicit_training_overrides(restored, (*parsed)->overrides);
+        EXPECT_TRUE(restored.optimization.gut);
+    }
+}
+
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
     const auto directory =

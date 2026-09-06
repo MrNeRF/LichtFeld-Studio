@@ -3418,7 +3418,7 @@ namespace lfs::training {
 
             try {
                 RenderOutput output;
-                if (params.optimization.gut) {
+                if (params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                     output = gsplat_rasterize(
                         camera, model, background,
                         1.0f, false, GsplatRenderMode::RGB, true);
@@ -5941,7 +5941,7 @@ namespace lfs::training {
                     profiler.sampleCudaMemory();
                 }
 
-                if (params_.optimization.gut) {
+                if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                     if (cam->camera_model_type() == core::CameraModelType::ORTHO) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
@@ -6046,7 +6046,7 @@ namespace lfs::training {
                     bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
                 }
 
-                const bool fastgs_path = !params_.optimization.gut;
+                const bool fastgs_path = params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::FastGS;
 
                 if (!loss_accumulator_.is_valid()) {
                     loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
@@ -6249,7 +6249,7 @@ namespace lfs::training {
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
                 const bool run_gut_gaussian_backward =
-                    params_.optimization.gut && update_gaussians_this_iter;
+                    params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT && update_gaussians_this_iter;
                 if (run_fastgs_gaussian_backward || run_gut_gaussian_backward) {
                     auto& model = strategy_->get_model();
                     edge_score_scratch = strategy_->edge_score_scratch(iter);
@@ -6389,7 +6389,7 @@ namespace lfs::training {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
                         LOG_VRAM_DIFF("train.rasterize_forward");
                         current_phase = StepPhase::Forward;
-                        if (params_.optimization.gut) {
+                        if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -8083,7 +8083,7 @@ namespace lfs::training {
                                 }
 
                                 RenderOutput rendered_timelapse_output;
-                                if (params_.optimization.gut) {
+                                if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
                                                                                  1.0f, false, GsplatRenderMode::RGB, true);
                                 } else {

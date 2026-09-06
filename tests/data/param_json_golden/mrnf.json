@@ -79,6 +79,7 @@
   "prune_opacity": 0.004999999888241291,
   "prune_ratio": 0.6000000238418579,
   "random": false,
+  "raster_backend": "fastgs",
   "refine_every": 200,
   "reset_every": 3000,
   "rotation_lr": 0.0020000000949949026,

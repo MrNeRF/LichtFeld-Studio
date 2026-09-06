@@ -174,6 +174,16 @@ namespace lfs::python {
         std::mutex python_property_subscriptions_mutex;
         std::set<size_t> python_property_subscriptions;
 
+        nb::dict python_backend_capabilities(const TrainingBackendCapabilities& capabilities) {
+            nb::dict result;
+            result["igs_plus"] = capabilities.igs_plus;
+            result["undistort"] = capabilities.undistort;
+            result["mip_filter"] = capabilities.mip_filter;
+            result["depth_supervision"] = capabilities.depth_supervision;
+            result["normal_supervision"] = capabilities.normal_supervision;
+            return result;
+        }
+
         void track_python_property_subscription(const size_t id) {
             std::lock_guard lock(python_property_subscriptions_mutex);
             python_property_subscriptions.insert(id);
@@ -252,6 +262,8 @@ namespace lfs::python {
     }
 
     nb::object PyOptimizationParams::get(const std::string& prop_id) const {
+        if (prop_id == "raster_backend")
+            return nb::cast(std::string(training_backend_descriptor(params().raster_backend()).wire_name));
         auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
         if (!meta) {
             throw std::runtime_error("Unknown property: " + prop_id);
@@ -280,6 +292,15 @@ namespace lfs::python {
     }
 
     void PyOptimizationParams::set(const std::string& prop_id, nb::object value) {
+        if (prop_id == "raster_backend") {
+            const auto name = nb::cast<std::string>(value);
+            const auto backend = parse_training_backend(name);
+            if (!backend)
+                throw std::invalid_argument("Unknown training raster_backend: " + name);
+            // Reuse the legacy property setter and its notification contract.
+            set("gut", nb::cast(*backend == RasterBackendId::ThreeDGUT));
+            return;
+        }
         auto meta = PropertyRegistry::instance().get_property("optimization", prop_id);
         if (!meta) {
             throw std::runtime_error("Unknown property: " + prop_id);
@@ -805,6 +826,18 @@ namespace lfs::python {
             .value("IMAGE", BackgroundMode::Image)
             .value("RANDOM", BackgroundMode::Random);
 
+        m.def("training_backends", [] {
+            nb::list result;
+            for (const auto& backend : core::param::kTrainingBackends) {
+                nb::dict item;
+                item["id"] = std::string(backend.wire_name);
+                item["label"] = std::string(backend.label);
+                item["viewer_backend"] = std::string(backend.viewer_name);
+                item["capabilities"] = python_backend_capabilities(backend.capabilities);
+                result.append(item);
+            }
+            return result; }, "Available training backends and their viewer mapping");
+
         nb::class_<PyOptimizationParams>(m, "OptimizationParams")
             .def(nb::init<>())
             .def_prop_ro(
@@ -991,6 +1024,20 @@ namespace lfs::python {
                 },
                 nb::arg("image_count"),
                 "Auto-scale steps for all strategies based on image count")
+            .def_prop_rw(
+                "raster_backend",
+                [](PyOptimizationParams& self) {
+                    return std::string(core::param::training_backend_descriptor(self.params().raster_backend()).wire_name);
+                },
+                [](PyOptimizationParams& self, const std::string& name) {
+                    self.set("raster_backend", nb::cast(name));
+                },
+                "Training raster backend: fastgs or 3dgut; shares storage with legacy gut")
+            .def_prop_ro(
+                "backend_capabilities",
+                [](PyOptimizationParams& self) {
+                    return python_backend_capabilities(core::param::training_backend_descriptor(self.params().raster_backend()).capabilities);
+                })
             .def_prop_rw(
                 "gut",
                 [](PyOptimizationParams& self) { return self.params().gut; },

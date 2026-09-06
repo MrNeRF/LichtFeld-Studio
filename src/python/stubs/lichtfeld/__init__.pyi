@@ -430,6 +430,10 @@ def trainer_eta_seconds() -> float:
 def trainer_strategy_type() -> str:
     """Get training strategy type (mcmc, default, etc.)"""
 
+def training_backends() -> list[dict[str, object]]:
+    """Available backends: id, label, viewer_backend, and capabilities."""
+
+
 def trainer_is_gut_enabled() -> bool:
     """Check if GUT is enabled"""
 
@@ -2193,6 +2197,17 @@ class OptimizationParams:
 
     def auto_scale_steps(self, image_count: int) -> None:
         """Auto-scale steps for all strategies based on image count"""
+
+    @property
+    def raster_backend(self) -> str:
+        """Training backend: fastgs or 3dgut; shares storage with legacy gut."""
+
+    @raster_backend.setter
+    def raster_backend(self, value: str) -> None: ...
+
+    @property
+    def backend_capabilities(self) -> dict[str, bool]:
+        """Verified training restrictions; absence of a key does not imply support."""
 
     @property
     def gut(self) -> bool:
