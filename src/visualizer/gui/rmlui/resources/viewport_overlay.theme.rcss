@@ -540,3 +540,14 @@
 .perf-hud-meter-track {
     background-color: @{statusbar.progress_bg};
 }
+
+/* Focused-panel chip (independent-dual split): a faint wash over the overlay
+   panel so the L/R letter reads as a chip without competing with the sliders
+   beside it. `text` is the palette's foreground, so alpha(text, 0.125) is the
+   themed form of the flat #ffffff20 this used to hard-code in the base RCSS --
+   and unlike that literal it follows a light theme instead of washing out on
+   it. The same alpha-over-foreground idiom is used by the toolbar icon-button
+   borders above. */
+#selection-block .viewport-selection-depth-panel-chip {
+    background-color: @{alpha(text,0.125)};
+}

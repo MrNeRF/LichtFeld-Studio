@@ -111,6 +111,9 @@
             </div>
         </div>
 
+        <!-- The per-viewport gizmo group stamps ITS OWN panel into the event: this
+             group lives in #primary-toolbar-root, so its buttons address 'left'
+             regardless of which panel currently has focus. -->
         <div id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -121,7 +124,7 @@
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
+                     data-event-click="toolbar_action(button.action, button.value, 'left')">
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
@@ -366,6 +369,9 @@
             </div>
         </div>
 
+        <!-- The secondary panel's own group: #secondary-toolbar-root, so 'right'.
+             Outside independent-dual split 'right' resolves to the one shared
+             camera, which is the pre-panel-addressing behavior. -->
         <div id="secondary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -376,7 +382,7 @@
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
+                     data-event-click="toolbar_action(button.action, button.value, 'right')">
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
@@ -686,6 +692,21 @@
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
                 <div class="depth-axis-group depth-axis-group-nf">
+                <!-- The chip rides INSIDE the Near/Far group, not beside it.
+                     As a direct child of the wrapping flex row it was a
+                     20dp item followed by a flex-basis:100% group, so below
+                     the wrap breakpoint it was pushed onto a line of its
+                     own -- and the absolutely pinned sync toggle (top:0)
+                     landed on that same otherwise-empty line. Inside the
+                     group it keeps its document position (leftmost, before
+                     Near) at every width, while the top line becomes the
+                     Near/Far row the sync toggle is pinned against. The
+                     chip itself stays a flow item at every width; it rides
+                     with the centred cluster rather than being pinned to
+                     the row's left edge. -->
+                <span class="viewport-selection-depth-panel-chip"
+                      data-if="selection_panel_chip_visible"
+                      data-tooltip="tooltip.selection_depth_panel_chip">{{selection_panel_chip_label}}</span>
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-near" data-tooltip="tooltip.selection_depth_near">
                     <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
@@ -779,8 +800,17 @@
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
                 </div>
-                <button class="icon-btn viewport-transform-action"
+                <button class="icon-btn viewport-transform-action viewport-selection-sync-action"
+                        data-if="selection_panel_chip_visible"
+                        data-attr-title="selection_depth_sync_label"
+                        data-tooltip="tooltip.selection_depth_sync"
+                        data-attrif-disabled="!selection_has_scene"
+                        data-event-click="selection_action('toggle_sync')">
+                    <img data-attr-src="selection_depth_sync_icon" />
+                </button>
+                <button class="icon-btn viewport-transform-action viewport-selection-viz-action"
                         data-attr-title="selection_viz_mode_label"
+                        data-tooltip="tooltip.selection_viz_mode"
                         data-attrif-disabled="!selection_has_scene"
                         data-event-click="selection_action('cycle_viz')">
                     <img data-attr-src="selection_viz_mode_icon" />

@@ -511,9 +511,15 @@ body {
     flex-shrink: 1;
 }
 
-/* Narrow-width behavior, breakpoint style: sliders and number inputs
-   compress first; below ~1150dp the row wraps to two lines; below ~700dp
-   the slider row hides, leaving the icon toolbar. */
+/* Narrow-width behavior, breakpoint style. The depth toolbar has EXACTLY
+   THREE width states -- a layout that cannot be fitted is hidden
+   outright rather than restacked into more lines:
+     > 1480dp       one line   (Near/Far and Size/X/Y side by side)
+     961 - 1480dp   two lines  (Near/Far above, Size/X/Y below)
+     <= 960dp       hidden     (icon toolbar only)
+   There is no stacked tier. A layout that cannot fit on two lines is not laid
+   out at all. Both numbers are derived from the effective cascade, not chosen
+   -- the derivations sit above each @media block below. */
 #selection-block .viewport-selection-depth-axis {
     flex-grow: 1;
     flex-shrink: 1;
@@ -541,21 +547,104 @@ body {
     min-width: 50dp;
 }
 
+/* Focused-panel chip: which split panel the depth sliders address. Present
+   only in independent-dual split, where two windows exist. It is a member of
+   the Near/Far group (viewport_overlay.rml), NOT a direct child of the
+   wrapping row: as a direct child it was a 20dp item ahead of a
+   flex-basis:100% group and therefore claimed a whole line of its own below
+   the wrap breakpoint, which the top-pinned sync toggle then shared. This
+   selector stays a descendant match, so the chip's appearance is unchanged
+   at every width. */
+#selection-block .viewport-selection-depth-panel-chip {
+    flex-grow: 0;
+    flex-shrink: 0;
+    width: 20dp;
+    height: 20dp;
+    line-height: 20dp;
+    text-align: center;
+    font-size: 12dp;
+    font-weight: bold;
+    border-radius: 4dp;
+    /* The chip's fill is a palette value, so it lives in the sibling theme file
+       (viewport_overlay.theme.rcss), not here -- docs/docs/development/
+       rmlui-styling.md "Theme Tokens". */
+}
+
 #selection-block .depth-axis-size > .number-input.viewport-selection-depth-input {
     /* Wide enough for the anisotropic "63x45%" Size readout at 1.5x UI scale. */
     width: 104dp;
     min-width: 104dp;
 }
 
-@media (max-width: 1150dp) {
+/* WRAP breakpoint, derived rather than chosen.
+
+   Both this rule and the hide rule below key on the SAME measure: RmlUi
+   evaluates `max-width` against the CONTEXT dimensions
+   (StyleSheetContainer::UpdateCompiledStyleSheet -> vp_dimensions.x), and this
+   overlay's context is set to the viewport plus the left dock
+   (gui_manager.cpp `overlay_size`, RmlViewportOverlay::setViewportBounds ->
+   SetDimensions). `#selection-block` is a top-level child of that context --
+   NOT a child of #primary-toolbar-root -- so its band is `left: 52dp;
+   right: 12dp` of the context in EVERY split mode, and the panel is 65% of
+   that band in every split mode too. There is no window-vs-band mismatch:
+   what was wrong was the NUMBER.
+
+   Above this breakpoint the row is `nowrap` and the two action buttons are in
+   flow, so ONE line must hold everything:
+     axis (Near/Far/X/Y) = label 24 + gap 6 + slider 56 + gap 6 + input 50 = 142
+     axis (Size)         = label 24 + gap 6 + slider 56 + gap 6 + input 104 = 196
+     Near/Far group      = chip 20 + gap 10 + 142 + gap 10 + 142            = 324
+     Size/X/Y group      = 196 + gap 10 + 142 + gap 10 + 142                = 500
+     row = 324 + 10 + 500 + 10 + btn 30 + 10 + btn 30                       = 914
+   Available (content-box: `width: 65%` already IS the content width):
+     A(M) = 0.65 * (M - 64)
+       M = 1150dp -> A =  705.9dp   (914 needed: the row was OVER-CONSTRAINED
+                                     by 208dp -- the reported collision)
+       M = 1470dp -> A =  913.9dp   (0.1dp short -- true threshold M = 1470.2dp)
+       M = 1471dp -> A =  914.6dp   (first whole dp that fits)
+       M = 1480dp -> A =  920.4dp   (CHOSEN, 6.4dp of content margin)
+   So the escaped band was 1151-1470dp: too narrow for one line, too wide to
+   wrap. Without the chip (Primary/Secondary split, where the sync button is
+   absent too) the row needs 844dp and the band was 1151-1362dp -- a subset,
+   so this one breakpoint closes both. (844 / 0.65 + 64 = 1362.46, so 1363dp is
+   the first whole dp that already fit; the band ends one below it.) */
+@media (max-width: 1480dp) {
     /* Deterministic 2+3 wrap: the Near/Far group takes the first line, the
        Size/X/Y group the second, each centered, with UNIFORM slider lengths
-       on both lines. The viz-mode button is pinned to the top-right
-       (document order would put it on the last line; this RmlUi has no
-       flex `order`). */
+       on both lines. The two action buttons are pinned to the right flank,
+       one per line (document order would put them both on the last line; this
+       RmlUi has no flex `order`).
+
+       Which button goes on which line follows their VISIBILITY, not taste.
+       The sync toggle carries `data-if="selection_panel_chip_visible"`, the
+       same condition as the focused-panel chip, and the chip is the leftmost
+       item of the Near/Far line. Putting the toggle on that line keeps the
+       two independent-dual-only controls together: outside that split mode
+       the top line loses both its flank occupants at once, instead of losing
+       one from each line. The viz-mode cycle, which is present in every split
+       mode, takes the Size/X/Y line. */
     #selection-block .viewport-selection-depth-fields {
         flex-wrap: wrap;
+        /* ONE 30dp pinned button per line -- the sync toggle rides the
+           Near/Far line, the viz-mode cycle the Size/X/Y line -- so the
+           reserve holds a single button plus the row's 6dp of breathing room,
+           not a side-by-side pair. When both were stacked horizontally on the
+           top line the reserve had to be 70dp; splitting them vertically is
+           what buys the 34dp back on each side.
+
+           The two paddings are EQUAL on purpose. Absolutely positioned
+           children are offset from the PADDING box, so `right: 0` keeps the
+           buttons on the row's right edge whatever the padding is, while both
+           `flex-basis: 100%` lines are laid out in the CONTENT box. With a
+           right reserve only, that content box -- and therefore both centred
+           lines -- sat left of the row's own centre while the buttons sat at
+           its right edge: three different centres. Mirroring the reserve on
+           the left gives the row one centre, with the chip's flank the same
+           width as the buttons'. It is charged to both lines (padding shrinks
+           the content box the `flex-basis: 100%` lines resolve against), which
+           is where the hide breakpoint below comes from. */
         padding-right: 36dp;
+        padding-left: 36dp;
     }
     #selection-block .depth-axis-group {
         flex-basis: 100%;
@@ -568,14 +657,116 @@ body {
     }
     #selection-block .viewport-selection-depth-fields > .viewport-transform-action {
         position: absolute;
-        top: 0;
         right: 0;
+    }
+    /* One button per wrapped line, on the same right edge. The row's content
+       box is 24 + row gap 10 + 24 = 58dp tall and a button is 30dp, so two
+       buttons cannot both sit flush against that box (30 + 30 > 58): pinning
+       one to `top: 0` and the other to `bottom: 0` would overlap them by 2dp.
+       Each is therefore CENTRED on its own line instead, by the same offset
+       the flex row would have given it: (line 24 - button 30) / 2 = -3dp from
+       that line's own outer edge. The two buttons then span y -3..27 and
+       31..61 in row coordinates -- 4dp apart, the row's own breathing room.
+
+       The 3dp of overhang at each end stays inside the panel: above, the 4dp
+       panel gap separates this row from the icon row; below, the panel's own
+       5dp bottom padding sits between the row's content box and its border.
+       Nothing leaves the flow, so the row is still 58dp tall and every
+       panel-bottom clearance below is unchanged. */
+    #selection-block .viewport-selection-depth-fields > .viewport-selection-sync-action {
+        top: -3dp;
+    }
+    #selection-block .viewport-selection-depth-fields > .viewport-selection-viz-action {
+        bottom: -3dp;
+    }
+    /* VERTICAL clearance for the per-viewport control group, derived rather
+       than chosen. Every wrapped tier makes the panel TALLER, and the panel is
+       z-index 9 with pointer-events: auto while each viewport's own top-right
+       control group (.viewport-gizmo-controls) is z-index 8 -- so wherever the
+       panel's box reaches that group, it both paints over it and swallows its
+       clicks. The 72dp reserve above protects only the panel's OWN pinned
+       sync/viz buttons; it does nothing for this EXTERNAL group.
+
+       Horizontal escape is not available: the panel is centred and 65% wide in
+       a band that spans the whole context, while in independent-dual split the
+       PRIMARY viewport's group rides the divider and can therefore sit at any
+       x. A shorter panel is not available either -- the chrome alone is 53dp,
+       so three or more 24dp lines cannot fit above 108dp. So the group moves
+       DOWN, and this is the only tier that needs it: above the wrap breakpoint
+       the panel bottom is 83dp (the single-line fields row is
+       max(axis 24, button 30) = 30dp, because the buttons are still in flow
+       there), which the stock 108dp already clears by 25dp with NO relocation.
+       Below the hide breakpoint the row is gone and the stock top is restored
+       there. Two relocations exist in this file and no more: this one, and the
+       restore.
+
+       Panel bottom = overlay top 5 + border 1 + padding 5 + icon row 32
+                      (30dp button + the tool group's 1dp border, both sides)
+                      + panel gap 4 + fields height + padding 5 + border 1.
+       Two-line tier: fields = 24 + row gap 10 + 24 = 58  ->  bottom = 111dp.
+       The stock 108dp top overlapped it by 3dp (pre-existing: this tier is
+       unchanged here). 120dp clears it by 9dp.
+
+       Splitting the two pinned buttons across the two lines does NOT change
+       any number here. Both are still absolutely positioned, so neither
+       contributes to the row's height; the row is 58dp in both arrangements
+       and the panel still ends at 111dp. The lower button's 3dp of overhang
+       reaches 108dp, still 3dp inside the panel's own border. */
+    .viewport-gizmo-controls {
+        top: 120dp;
     }
 }
 
-@media (max-width: 650dp) {
+/* HIDE breakpoint, derived rather than chosen, and it is the LAST tier: below
+   it the depth row is not laid out at all: a width that cannot hold two
+   lines gets nothing, not a taller stack.
+
+   The two-line tier's binding line is the SECOND one, the Size/X/Y group, at
+   500dp (the 104dp anisotropic Size readout makes it wider than the 324dp
+   Near/Far line, chip included). The line box in that tier is the row's
+   CONTENT box, so both of the row's paddings are charged to it:
+     L(M) = 0.65 * (M - 64) - 72   (72dp = a 36dp reserve on each side; the
+                                    right one holds ONE pinned button -- 30dp
+                                    plus 6dp of clearance -- because the two
+                                    buttons are now stacked one per line
+                                    rather than side by side, and the left one
+                                    mirrors it so the row has a single centre)
+     M =  944dp -> L = 500.0dp   (the exact threshold:
+                                  (500 + 72) / 0.65 + 64 = M = 944.0dp)
+     M =  960dp -> L = 510.4dp   (CHOSEN, 10.4dp of content margin -- the same
+                                  order of margin as the wrap tier's 6.4dp)
+   The group cannot be squeezed onto that line below 944.0dp: the slider is
+   already at its 56dp floor, so the group's minimum is 332 + 3 * 56 = 500dp
+   flat and no shrink is available.
+
+   Why the reserve halved. With both buttons pinned to the top-right the right
+   flank had to be as wide as the PAIR (a 30dp button at `right: 0` plus a
+   second at `right: 34dp`), i.e. 64dp plus clearance = 70dp, mirrored to
+   140dp; the threshold was then 1048.6dp and the row hid at or below 1060dp.
+   One button per line needs only 30dp plus the same clearance, so the reserve
+   is 36dp a side, 72dp charged, and the threshold falls 104.6dp to 944.0dp.
+
+   The other line, Near/Far, now shares its space with ONE pinned button
+   rather than two, and it must fit too. Axis minimum (EFFECTIVE cascade --
+   the ID-qualified `#selection-block .viewport-selection-depth-axis` wins with
+   gap 6dp / flex-shrink: 1, not the generic gap 3dp / flex-shrink: 0 further
+   down): label 24 + gap 6 + slider 56 + gap 6 + input 50 = 142dp; top line =
+   chip 20 + group gap 10 + 142 + 10 + 142 = 324dp, which first fits at
+   M = 673.2dp. 960dp clears it by a wide margin, so the top line is a floor
+   the chosen number passes rather than the number's source. Above 1480dp the
+   buttons are back in flow (the pinning lives inside that media query), so no
+   button-overlap question arises there. */
+@media (max-width: 960dp) {
     #selection-block .viewport-selection-depth-fields {
         display: none;
+    }
+    /* The slider row is gone, so the panel is back to the icon row alone:
+       bottom = 5 + 1 + 5 + 32 + 5 + 1 = 49dp. The wrap block above also matches
+       here (it is max-width), so its 120dp push MUST be undone or the controls
+       would sit 12dp low for a panel that is not there. Back to the stock
+       108dp, which clears the 49dp panel by 59dp. */
+    .viewport-gizmo-controls {
+        top: 108dp;
     }
 }
 
