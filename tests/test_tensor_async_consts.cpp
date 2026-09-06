@@ -47,7 +47,7 @@ namespace {
                                  const float value,
                                  const DataType dtype) {
         const Tensor cpu = Tensor::full(shape, value, Device::CPU, dtype);
-        const Tensor gpu = Tensor::full(shape, value, Device::CUDA, dtype);
+        const Tensor gpu = Tensor::full(shape, value, Device::GPU, dtype);
         expect_bytes_equal(gpu, cpu, "full");
     }
 
@@ -70,19 +70,19 @@ namespace {
         expect_full_matches_cpu({8}, 1.0f, DataType::UInt8);
         expect_full_matches_cpu({8}, 0.0f, DataType::UInt8);
 
-        expect_bytes_equal(Tensor::ones({16}, Device::CUDA, DataType::Int32),
+        expect_bytes_equal(Tensor::ones({16}, Device::GPU, DataType::Int32),
                            Tensor::ones({16}, Device::CPU, DataType::Int32),
                            "ones Int32");
-        expect_bytes_equal(Tensor::zeros({16}, Device::CUDA, DataType::Int64),
+        expect_bytes_equal(Tensor::zeros({16}, Device::GPU, DataType::Int64),
                            Tensor::zeros({16}, Device::CPU, DataType::Int64),
                            "zeros Int64");
-        expect_bytes_equal(Tensor::full_bool({16}, true, Device::CUDA),
+        expect_bytes_equal(Tensor::full_bool({16}, true, Device::GPU),
                            Tensor::full_bool({16}, true, Device::CPU),
                            "full_bool true");
-        expect_bytes_equal(Tensor::full_bool({16}, false, Device::CUDA),
+        expect_bytes_equal(Tensor::full_bool({16}, false, Device::GPU),
                            Tensor::full_bool({16}, false, Device::CPU),
                            "full_bool false");
-        expect_bytes_equal(Tensor::ones({16}, Device::CUDA, DataType::Float16),
+        expect_bytes_equal(Tensor::ones({16}, Device::GPU, DataType::Float16),
                            Tensor::ones({16}, Device::CPU, DataType::Float16),
                            "ones Float16");
     }
@@ -104,7 +104,7 @@ namespace {
                                    const float step,
                                    const DataType dtype) {
         const Tensor cpu = load_arange(start, end, step, Device::CPU, dtype);
-        const Tensor gpu = load_arange(start, end, step, Device::CUDA, dtype);
+        const Tensor gpu = load_arange(start, end, step, Device::GPU, dtype);
         char what[160];
         std::snprintf(what, sizeof(what), "arange start=%g end=%g step=%g dtype=%d count=%zu",
                       static_cast<double>(start), static_cast<double>(end),
@@ -173,10 +173,10 @@ namespace {
         arange_samples.reserve(static_cast<size_t>(kIters));
         for (int iter = 0; iter < kIters; ++iter) {
             const auto t0 = std::chrono::steady_clock::now();
-            Tensor ones = Tensor::ones({kCount}, Device::CUDA, DataType::Int32);
+            Tensor ones = Tensor::ones({kCount}, Device::GPU, DataType::Int32);
             sync_tensor(ones);
             const auto t1 = std::chrono::steady_clock::now();
-            Tensor flags = Tensor::full_bool({kCount}, true, Device::CUDA);
+            Tensor flags = Tensor::full_bool({kCount}, true, Device::GPU);
             sync_tensor(flags);
             const auto t2 = std::chrono::steady_clock::now();
             Tensor seq = Tensor::arange(0.0f, static_cast<float>(kCount));
@@ -211,7 +211,7 @@ namespace {
         for (size_t i = 0; i < n; ++i) {
             data[i] = static_cast<uint8_t>(dist(rng));
         }
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     void print_hover_bench(const char* const backend) {
@@ -264,7 +264,7 @@ TEST(TensorAsyncConsts, ArangeMatchesCpuOnVulkan) {
 TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadable) {
     SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
     GpuBackendScope scope(GpuBackend::CUDA);
-    Tensor live = Tensor::full({4096}, 3.5f, Device::CUDA, DataType::Float32);
+    Tensor live = Tensor::full({4096}, 3.5f, Device::GPU, DataType::Float32);
     Tensor::trim_memory_pool();
     expect_bytes_equal(live, Tensor::full({4096}, 3.5f, Device::CPU, DataType::Float32),
                        "cuda trim live");
@@ -273,7 +273,7 @@ TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadable) {
 TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadableOnVulkan) {
     SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
-    Tensor live = Tensor::ones({87040}, Device::CUDA, DataType::Int32);
+    Tensor live = Tensor::ones({87040}, Device::GPU, DataType::Int32);
     Tensor::trim_memory_pool();
     expect_bytes_equal(live, Tensor::ones({87040}, Device::CPU, DataType::Int32),
                        "vulkan trim live");
