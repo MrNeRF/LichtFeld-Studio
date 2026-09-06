@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
@@ -30,10 +31,12 @@
 #include <limits>
 #include <optional>
 #include <ostream>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -317,6 +320,147 @@ namespace {
             const auto crc_ab = crc32c(0, joined.data(), joined.size());
             EXPECT_EQ(crc32c_combine(crc_a, crc_b, suffix.size()), crc_ab)
                 << "n2=" << n2;
+        }
+    }
+
+    // Linux uses pread, so this also passes there without the Windows
+    // overlapped-I/O fix.
+    TEST(ProjectFileNativeFile, ConcurrentReadsOnOneHandleReturnTheirOwnBytes) {
+        constexpr std::uint64_t kInitialBytes = 64ull * 1024 * 1024;
+        constexpr std::uint64_t kTailBytes = 16ull * 1024 * 1024;
+        constexpr std::size_t kWriteBytes = 4ull * 1024 * 1024;
+        constexpr std::size_t kMinReadBytes = 64ull * 1024;
+        constexpr std::size_t kMaxReadBytes = 4ull * 1024 * 1024;
+        constexpr std::size_t kStripeBytes = 1ull * 1024 * 1024;
+        constexpr int kFirstReaderThreads = 16;
+        constexpr int kSecondReaderThreads = 8;
+        constexpr int kWriterThreads = 4;
+        constexpr int kReadsPerReader = 32;
+
+        TemporaryDirectory temporary;
+        const fs::path path = temporary.path / "native-file-overlapped.licht";
+
+        const auto make_pattern = [](const std::uint64_t offset,
+                                     const std::size_t bytes) {
+            std::vector<std::byte> result(bytes);
+            for (std::size_t index = 0; index < bytes; index += sizeof(std::uint64_t)) {
+                const std::uint64_t value = offset + index;
+                std::memcpy(result.data() + index, &value, sizeof(value));
+            }
+            return result;
+        };
+        const auto has_pattern = [](const std::span<const std::byte> bytes,
+                                    const std::uint64_t offset) {
+            if (bytes.size() % sizeof(std::uint64_t) != 0) {
+                return false;
+            }
+            for (std::size_t index = 0; index < bytes.size(); index += sizeof(std::uint64_t)) {
+                std::uint64_t value = 0;
+                std::memcpy(&value, bytes.data() + index, sizeof(value));
+                if (value != offset + index) {
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        auto created = require_result(detail::NativeFile::create_new(path));
+        for (std::uint64_t offset = 0; offset < kInitialBytes; offset += kWriteBytes) {
+            auto bytes = make_pattern(offset, kWriteBytes);
+            require_status(created->write_exact(offset, bytes));
+        }
+        created.reset();
+
+        auto read_file = require_result(detail::NativeFile::open_read(path));
+        std::atomic_bool first_reads_ok{true};
+        {
+            std::vector<std::jthread> readers;
+            readers.reserve(kFirstReaderThreads);
+            for (int reader = 0; reader < kFirstReaderThreads; ++reader) {
+                readers.emplace_back([&, reader] {
+                    std::mt19937_64 random(0x2038'0000ull + static_cast<std::uint64_t>(reader));
+                    std::uniform_int_distribution<std::size_t> length_distribution(
+                        kMinReadBytes / sizeof(std::uint64_t),
+                        kMaxReadBytes / sizeof(std::uint64_t));
+                    for (int read = 0; read < kReadsPerReader; ++read) {
+                        const std::size_t bytes =
+                            length_distribution(random) * sizeof(std::uint64_t);
+                        const auto maximum_word_offset =
+                            (kInitialBytes - bytes) / sizeof(std::uint64_t);
+                        const auto word_offset =
+                            std::uniform_int_distribution<std::uint64_t>(
+                                0, maximum_word_offset)(random);
+                        const std::uint64_t offset =
+                            word_offset * sizeof(std::uint64_t);
+                        std::vector<std::byte> destination(bytes);
+                        if (!read_file->read_exact(offset, destination) ||
+                            !has_pattern(destination, offset)) {
+                            first_reads_ok.store(false, std::memory_order_relaxed);
+                            return;
+                        }
+                    }
+                });
+            }
+        }
+        EXPECT_TRUE(first_reads_ok.load(std::memory_order_relaxed));
+        read_file.reset();
+
+        auto shared_file = require_result(detail::NativeFile::open_read_write(path));
+        std::atomic_bool second_phase_ok{true};
+        std::barrier start(kSecondReaderThreads + kWriterThreads);
+        {
+            std::vector<std::jthread> workers;
+            workers.reserve(kSecondReaderThreads + kWriterThreads);
+            for (int reader = 0; reader < kSecondReaderThreads; ++reader) {
+                workers.emplace_back([&, reader] {
+                    std::mt19937_64 random(0x2038'1000ull + static_cast<std::uint64_t>(reader));
+                    std::uniform_int_distribution<std::size_t> length_distribution(
+                        kMinReadBytes / sizeof(std::uint64_t),
+                        kMaxReadBytes / sizeof(std::uint64_t));
+                    start.arrive_and_wait();
+                    for (int read = 0; read < kReadsPerReader; ++read) {
+                        const std::size_t bytes =
+                            length_distribution(random) * sizeof(std::uint64_t);
+                        const auto maximum_word_offset =
+                            (kInitialBytes - bytes) / sizeof(std::uint64_t);
+                        const auto word_offset =
+                            std::uniform_int_distribution<std::uint64_t>(
+                                0, maximum_word_offset)(random);
+                        const std::uint64_t offset =
+                            word_offset * sizeof(std::uint64_t);
+                        std::vector<std::byte> destination(bytes);
+                        if (!shared_file->read_exact(offset, destination) ||
+                            !has_pattern(destination, offset)) {
+                            second_phase_ok.store(false, std::memory_order_relaxed);
+                            return;
+                        }
+                    }
+                });
+            }
+            for (int writer = 0; writer < kWriterThreads; ++writer) {
+                workers.emplace_back([&, writer] {
+                    start.arrive_and_wait();
+                    for (std::uint64_t stripe = writer;
+                         stripe * kStripeBytes < kTailBytes;
+                         stripe += kWriterThreads) {
+                        const std::uint64_t offset = kInitialBytes + stripe * kStripeBytes;
+                        auto bytes = make_pattern(offset, kStripeBytes);
+                        if (!shared_file->write_exact(offset, bytes)) {
+                            second_phase_ok.store(false, std::memory_order_relaxed);
+                            return;
+                        }
+                    }
+                });
+            }
+        }
+        EXPECT_TRUE(second_phase_ok.load(std::memory_order_relaxed));
+        EXPECT_EQ(require_result(shared_file->size()), kInitialBytes + kTailBytes);
+
+        std::vector<std::byte> tail(kStripeBytes);
+        for (std::uint64_t stripe = 0; stripe * kStripeBytes < kTailBytes; ++stripe) {
+            const std::uint64_t offset = kInitialBytes + stripe * kStripeBytes;
+            require_status(shared_file->read_exact(offset, tail));
+            EXPECT_TRUE(has_pattern(tail, offset)) << "tail stripe " << stripe;
         }
     }
 
