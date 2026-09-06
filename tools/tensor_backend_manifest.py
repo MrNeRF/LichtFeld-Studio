@@ -492,6 +492,9 @@ def factory_calls_are_cpu_only(text: str) -> bool:
     return found
 
 
+GPU_DEVICE_TOKEN = re.compile(r"\bDevice::(?:CUDA|GPU)\b")
+
+
 def shared_cuda_pointer(fragments: list[Fragment]):
     for fragment in fragments:
         masked = mask_cpp(fragment.text)
@@ -502,7 +505,7 @@ def shared_cuda_pointer(fragments: list[Fragment]):
                 close_pos = matching(masked, open_pos, "(", ")")
             except ValueError:
                 continue
-            if "Device::CUDA" in masked[open_pos:close_pos]:
+            if GPU_DEVICE_TOKEN.search(masked[open_pos:close_pos]):
                 tensor_pointers[match.group(1)] = match.start()
         for pointer, offset in tensor_pointers.items():
             for match in re.finditer(rf"\btorch::from_blob\s*\(\s*{re.escape(pointer)}\b", masked):
@@ -631,8 +634,8 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
             r"\b(?:thrust|cub)::[^;]*(?:\.ptr\s*<|\.data_ptr\s*\()",
             r"<<<[^>]*>>>",
             r"\bcudaSetDevice\s*\(",
-            r"\bTensor::from_blob\s*\([^;]*\bDevice::CUDA\b",
-            r"\bTensor::from_external_owner\s*\([^;]*\bDevice::CUDA\b",
+            r"\bTensor::from_blob\s*\([^;]*\bDevice::(?:CUDA|GPU)\b",
+            r"\bTensor::from_external_owner\s*\([^;]*\bDevice::(?:CUDA|GPU)\b",
         ),
     )
     if raw is None and re.search(r"(?:\.ptr\s*<|\.data_ptr\s*\()", masked):
@@ -683,7 +686,7 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
         return "not-tensor", "does not exercise the LichtFeld tensor API"
 
     cuda_indicator = re.search(
-        r"\bDevice::CUDA\b|\bCUDAStreamGuard\b|\.cuda\s*\(|\bgetCurrentCUDAStream\s*\(", masked
+        r"\bDevice::(?:CUDA|GPU)\b|\bCUDAStreamGuard\b|\.(?:cuda|gpu)\s*\(|\bgetCurrentCUDAStream\s*\(", masked
     )
     if not cuda_indicator and "Device::CPU" in masked and factory_calls_are_cpu_only(combined):
         return "cpu-only", "constructs and exercises only CPU tensor storage"
