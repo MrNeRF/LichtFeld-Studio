@@ -1134,7 +1134,8 @@ namespace lfs::vis {
                     });
                 rendering::poll_selection_group_count_readback(
                     pending.vulkan_ticket, pending.host_counts);
-            } catch (const std::exception&) {
+            } catch (const std::exception& error) {
+                LOG_WARN("SelectionService: Vulkan selection count drain failed: {}", error.what());
             }
             pending.vulkan_ticket = {};
         };
