@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_memory_guard.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>

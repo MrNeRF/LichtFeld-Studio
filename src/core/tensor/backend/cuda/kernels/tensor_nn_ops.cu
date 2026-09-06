@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_nn_ops.hpp"
 #include "internal/tensor_functors.hpp"
-#include "internal/tensor_nn_ops.hpp"
 #include <cassert>
 #include <cuda_runtime.h>
 #include <limits>

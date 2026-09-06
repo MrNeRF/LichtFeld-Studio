@@ -4,10 +4,10 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor_fwd.hpp"
-#include "internal/memory_pool.hpp"
 #include "internal/tensor_functors.hpp"
-#include "internal/tensor_ops.hpp"
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>

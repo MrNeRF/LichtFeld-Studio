@@ -4,7 +4,7 @@
 #include "core/nn/ops.hpp"
 
 #include "core/cuda_error.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "nn_kernels.hpp"
 

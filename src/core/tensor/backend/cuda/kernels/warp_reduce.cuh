@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "tensor_functors.hpp"
+#include "core/tensor/internal/tensor_functors.hpp"
 
 #include <cstdint>
 #include <cuda_runtime.h>

@@ -5,11 +5,11 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_ir.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cassert>

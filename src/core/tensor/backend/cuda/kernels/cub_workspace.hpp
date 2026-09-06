@@ -4,7 +4,7 @@
 #pragma once
 
 #include "core/cuda_allocation.hpp"
-#include "memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #include <cuda_runtime.h>
 #include <string>

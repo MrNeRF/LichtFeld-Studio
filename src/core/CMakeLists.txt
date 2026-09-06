@@ -27,11 +27,11 @@ add_subdirectory(logger)
 
 # Tensor C++ sources (merged from src/core/tensor/)
 set(TENSOR_SOURCES
-        tensor/cuda_event_pool.cpp
-        tensor/cuda_stream_context.cpp
-        tensor/stream_lifetime.cpp
-        tensor/gpu_slab_allocator.cpp
-        tensor/size_bucketed_pool.cpp
+        tensor/backend/cuda/runtime/cuda_event_pool.cpp
+        tensor/backend/cuda/runtime/cuda_stream_context.cpp
+        tensor/backend/cuda/runtime/stream_lifetime.cpp
+        tensor/backend/cuda/runtime/gpu_slab_allocator.cpp
+        tensor/backend/cuda/runtime/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
@@ -61,8 +61,8 @@ set(TENSOR_SOURCES
         tensor/tensor_advanced_ops.cpp
         tensor/tensor_row_proxy.cpp
         tensor/tensor_nn_ops.cpp
-        tensor/pinned_memory_allocator.cpp
-        tensor/tensor_exports.cu
+        tensor/backend/cuda/runtime/pinned_memory_allocator.cpp
+        tensor/backend/cuda/kernels/tensor_exports.cu
         nn/ops.cpp
         nn/weight_file.cpp
         nn/activation_arena.cpp

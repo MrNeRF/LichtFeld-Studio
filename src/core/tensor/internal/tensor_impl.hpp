@@ -34,14 +34,14 @@
 
 #include "../backend/gpu_backend_ops.hpp"
 #include "../backend/pointwise_lowering.hpp"
-#include "cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "lazy_config.hpp"
 #include "lazy_executor.hpp"
 #include "lazy_ir.hpp"
 #include "tensor_broadcast.hpp"
 #include "tensor_dtype_dispatch.hpp"
 #include "tensor_functors.hpp"
-#include "tensor_ops.hpp"
 
 #include "core/export.hpp"
 #include <cuda_fp16.h>

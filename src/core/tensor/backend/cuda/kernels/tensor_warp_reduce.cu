@@ -14,12 +14,12 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/packed128.cuh"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/warp_reduce.cuh"
 #include "internal/gpu_config.hpp"
-#include "internal/packed128.cuh"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
-#include "internal/warp_reduce.cuh"
 #include <algorithm>
 #include <cfloat>
 #include <cuda_runtime.h>

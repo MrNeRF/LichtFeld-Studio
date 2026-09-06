@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include <core/tensor/internal/memory_pool.hpp>
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #define LFS_TENSOR_LABEL_CONCAT_INNER(a, b) a##b
 #define LFS_TENSOR_LABEL_CONCAT(a, b)       LFS_TENSOR_LABEL_CONCAT_INNER(a, b)

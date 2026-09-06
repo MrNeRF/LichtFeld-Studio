@@ -2,12 +2,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/warp_reduce.cuh"
 #include "internal/gpu_config.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
-#include "internal/warp_reduce.cuh"
 #include <atomic>
 #include <cassert>
 #include <cfloat>

@@ -3,12 +3,12 @@
 
 #include "core/cuda_error.hpp"
 #include "core/device_fault.hpp"
-#include "internal/cub_workspace.hpp"
-#include "internal/cuda_memory_guard.hpp"
+#include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_vectorized_ops.cuh"
+#include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 #include "internal/gpu_config.hpp"
 #include "internal/tensor_functors.hpp"
-#include "internal/tensor_ops.hpp"
-#include "internal/tensor_vectorized_ops.cuh"
 #include <cfloat>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>

@@ -9,7 +9,7 @@
 #include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gt_comparison_cache_utils.hpp"
 #include "io/pipelined_image_loader.hpp"

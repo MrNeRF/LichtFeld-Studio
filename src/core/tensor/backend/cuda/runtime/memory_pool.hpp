@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include "allocation_profiler.hpp"
 #include "core/alloc_counter.hpp"
 #include "core/cuda_error.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/tensor/internal/allocation_profiler.hpp"
 #include "core/training_churn_metrics.hpp"
 #include "cuda_event_pool.hpp"
 #include "diagnostics/vram_profiler.hpp"

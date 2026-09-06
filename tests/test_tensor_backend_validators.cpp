@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <cuda_runtime.h>

@@ -4,7 +4,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 
 #include <cstddef> // for size_t
 #include <cstdint>

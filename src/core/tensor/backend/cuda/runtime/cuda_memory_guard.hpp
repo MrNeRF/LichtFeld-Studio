@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include "../backend/gpu_backend_ops.hpp"
 #include "core/cuda_error.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 
 #include <cuda_runtime.h>
 #include <memory>

@@ -6,8 +6,8 @@
 #include "../pointwise_lowering.hpp"
 
 #include "../../internal/tensor_impl.hpp"
-#include "../../internal/tensor_ops.hpp"
 #include "core/assert.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 
 #include <cstdint>
 #include <cuda_fp16.h>

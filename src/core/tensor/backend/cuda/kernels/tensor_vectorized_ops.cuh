@@ -8,9 +8,9 @@
 #pragma once
 
 #include "core/cuda_error.hpp"
-#include "gpu_config.hpp"
+#include "core/tensor/internal/gpu_config.hpp"
+#include "core/tensor/internal/tensor_functors.hpp"
 #include "packed128.cuh"
-#include "tensor_functors.hpp"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <type_traits>

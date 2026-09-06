@@ -6,9 +6,9 @@
 #include "core/cuda_error.hpp"
 #include "core/environment.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "diagnostics/vram_profiler.hpp"
-#include "internal/cuda_event_pool.hpp"
-#include "internal/stream_lifetime.hpp"
 
 #include <algorithm>
 #include <chrono>

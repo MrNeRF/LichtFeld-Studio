@@ -4,12 +4,12 @@
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
-#include "../../internal/cuda_event_pool.hpp"
-#include "../../internal/memory_pool.hpp"
 #include "../../internal/tensor_impl.hpp"
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #include <atomic>
 #include <cuda_runtime.h>

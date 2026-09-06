@@ -1,10 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/cuda_error.hpp"
-#include "internal/cuda_event_pool.hpp"
-#include "internal/stream_lifetime.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 #include "internal/tensor_impl.hpp"
 
 #include <format>

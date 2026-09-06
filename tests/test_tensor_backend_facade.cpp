@@ -2,10 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor/backend/pointwise_lowering.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <algorithm>

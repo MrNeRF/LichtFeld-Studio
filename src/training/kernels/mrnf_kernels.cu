@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda_error.hpp"
-#include "core/tensor/internal/tensor_generic_ops.cuh"
+#include "core/tensor/backend/cuda/kernels/tensor_generic_ops.cuh"
 #include "lfs/cuda_scratch.hpp"
 #include "lfs/training/refine_scratch.hpp"
 #include "mrnf_kernels.hpp"

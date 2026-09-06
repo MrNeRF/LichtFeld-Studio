@@ -3,8 +3,8 @@
 #pragma once
 
 #include "../../internal/tensor_impl.hpp"
-#include "../../internal/tensor_ops.hpp"
 #include "core/assert.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "vk_context.hpp"
 #include "vk_memory.hpp"
 

@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "internal/tensor_nn_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_nn_ops.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 
 #include <format>
 

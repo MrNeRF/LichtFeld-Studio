@@ -5,9 +5,9 @@
 #include "../gpu_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
-#include "../../internal/tensor_nn_ops.hpp"
-#include "../../internal/tensor_ops.hpp"
 #include "core/assert.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_nn_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 
 namespace lfs::core::internal {
     namespace {

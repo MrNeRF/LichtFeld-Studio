@@ -4,10 +4,10 @@
 #include "../facade_trace.hpp"
 #include "../gpu_backend_ops.hpp"
 
-#include "../../internal/cuda_memory_guard.hpp"
 #include "../../internal/tensor_impl.hpp"
-#include "../../internal/tensor_ops.hpp"
 #include "core/assert.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 
 #include <vector>
 

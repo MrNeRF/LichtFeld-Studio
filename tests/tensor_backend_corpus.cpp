@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/facade_trace.hpp"
 #include "core/tensor/backend/gpu_backend_ops.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <cuda_runtime.h>

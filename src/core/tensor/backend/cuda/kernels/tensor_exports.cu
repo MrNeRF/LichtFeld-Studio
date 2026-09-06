@@ -9,8 +9,8 @@
 
 #include "core/export.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_generic_ops.cuh"
 #include "internal/tensor_functors.hpp"
-#include "internal/tensor_generic_ops.cuh"
 #include <cuda_fp16.h>
 
 namespace lfs::core::tensor_ops {

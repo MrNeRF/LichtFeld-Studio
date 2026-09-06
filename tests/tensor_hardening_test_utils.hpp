@@ -4,7 +4,7 @@
 #pragma once
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor_backend.hpp"
 
 #include <cmath>

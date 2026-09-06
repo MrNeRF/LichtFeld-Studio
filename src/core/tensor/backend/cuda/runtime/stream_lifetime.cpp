@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "internal/stream_lifetime.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 
 #include <algorithm>
 #include <atomic>

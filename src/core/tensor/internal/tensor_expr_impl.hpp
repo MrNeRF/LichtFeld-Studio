@@ -6,7 +6,7 @@
 // This file contains template method implementations that require the full Tensor definition
 // It should be included at the END of tensor.hpp, after Tensor class is fully defined
 
-#include "cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "lazy_config.hpp"
 #include "lazy_executor.hpp"
 #include "lazy_ir.hpp"

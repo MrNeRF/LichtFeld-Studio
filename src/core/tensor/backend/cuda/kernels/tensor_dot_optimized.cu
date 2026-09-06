@@ -8,9 +8,9 @@
  */
 
 #include "core/cuda_error.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/warp_reduce.cuh"
 #include "internal/gpu_config.hpp"
-#include "internal/tensor_ops.hpp"
-#include "internal/warp_reduce.cuh"
 #include <cfloat>
 #include <cuda_runtime.h>
 
