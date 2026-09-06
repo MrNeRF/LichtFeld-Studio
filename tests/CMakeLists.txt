@@ -346,6 +346,7 @@ set(TEST_FILES
     test_tensor_integer_and_reduce_policy.cpp
     test_selection_attribute_ops.cpp
     test_selection_screen_ops.cpp
+    test_export_band_pack.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
     test_tensor_stress.cpp
