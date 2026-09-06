@@ -163,6 +163,17 @@ namespace lfs::vis {
         void onWindowFocusLost();
         bool focusSelection();
 
+        // Panel-addressed camera entry points. The panel identity travels
+        // with the click that raised the action, so a per-viewport toolbar button
+        // acts on ITS OWN panel's camera whichever panel currently has focus.
+        // Neither of these performs a focus write: the chrome focus veto stands
+        // and the focus chip must not flick when a gizmo button is pressed.
+        // Outside independent-dual split RenderingManager::resolvePanelViewport
+        // degrades to the primary viewport, so both panels' buttons then drive the
+        // one camera -- today's behavior, unchanged.
+        void resetCameraForPanel(SplitViewPanelId panel);
+        bool focusSelectionForPanel(SplitViewPanelId panel);
+
     private:
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
@@ -176,7 +187,20 @@ namespace lfs::vis {
         };
 
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
-        bool handleFocusSelection(Viewport& target_viewport);
+        // acted_panel carries the panel identity of the action that raised
+        // this camera move, or nullopt on every panel-less (legacy/keyboard/event)
+        // path. It only guards the shared-depth-anchor side effect in
+        // publishCameraMove; it never selects the viewport.
+        bool handleFocusSelection(Viewport& target_viewport,
+                                  std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // The shared reset-to-home body. The cmd::ResetCamera handler passes
+        // viewport_ (the pre-panel path, verbatim); resetCameraForPanel passes the
+        // resolved panel viewport.
+        void handleResetCameraHome(Viewport& target_viewport,
+                                   std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // The panel's viewport, or the primary one when rendering is unavailable
+        // or the mode is not independent-dual. Reads no focus state.
+        Viewport& panelViewport(SplitViewPanelId panel);
         bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
                                      bool use_percentile = false) const;
         float sceneExtent();
@@ -193,7 +217,16 @@ namespace lfs::vis {
         void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
-        void publishCameraMove(Viewport* target_viewport = nullptr);
+        void publishCameraMove(Viewport* target_viewport = nullptr,
+                               std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // depth_filter_transform and the depth box's x/y extents are ONE
+        // global camera anchor -- DepthWindowState has no per-panel anchor. So an
+        // off-focus panel-addressed Home/Eye must move that panel's camera without
+        // re-anchoring the shared box under the panel the user is looking through.
+        // True only when an acted-panel identity is present, independent-dual is
+        // active, and that identity differs from the focused panel. This focus read
+        // guards the side effect only: it never picks a viewport, never writes focus.
+        [[nodiscard]] bool shouldSkipDepthAnchorSync(std::optional<SplitViewPanelId> acted_panel) const;
         bool isNearSplitter(double x, double y) const;
         void refreshSplitDividerCache() const;
         int getModifierKeys() const;

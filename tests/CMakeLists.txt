@@ -490,12 +490,15 @@ set(TEST_FILES
     test_temporal_frame_tracker.cpp
     test_selection_rasterization_ops.cpp
     test_selection_screen_window.cpp
+    test_depth_window_panels.cpp
+    test_depth_window_panels_interaction.cpp
     test_rendering_refactor_services.cpp
     test_theme_registry.cpp
     test_preferences_migration.cpp
     test_viewport.cpp
     test_input_controller_focus.cpp
     test_input_controller_dataset_load.cpp
+    test_input_controller_panel_camera.cpp
     test_selection_service_interactions.cpp
     test_scene_graph_identity.cpp
     test_undo_history.cpp
