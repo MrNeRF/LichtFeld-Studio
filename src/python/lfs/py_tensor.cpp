@@ -4,8 +4,8 @@
 
 #include "py_tensor.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "python/python_runtime.hpp"
 
 #include <cstring>

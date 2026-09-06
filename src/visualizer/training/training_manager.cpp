@@ -16,8 +16,9 @@
 #include "core/services.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/size_bucketed_pool.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
@@ -407,6 +408,10 @@ namespace lfs::vis {
         splat_interop_allocator_ = {};
         splat_interop_parent_.reset();
         splat_storage_.reset();
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return lfs::Result<lfs::core::SplatTensorAllocator>(training_initialization_error(
+                "Training is not supported on the Vulkan tensor backend"));
+        }
         lfs::core::SplatTensorAllocator tensor_allocator;
 
         const std::size_t configured_capacity =
@@ -1104,6 +1109,19 @@ namespace lfs::vis {
 
         if (scene_ && !scene_->hasTrainingData()) {
             return reject_start("Scene has no cameras", lfs::ErrorCode::FailedPrecondition);
+        }
+
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return reject_start("Training is not supported on the Vulkan tensor backend",
+                                lfs::ErrorCode::FailedPrecondition);
+        }
+        if (scene_) {
+            if (const auto* model = scene_->getTrainingModel();
+                model && lfs::core::gpu_backend_of(model->means_raw()) ==
+                             lfs::core::GpuBackend::Vulkan) {
+                return reject_start("Training is not supported on a Vulkan-backend splat model",
+                                    lfs::ErrorCode::FailedPrecondition);
+            }
         }
 
         if (!state_machine_.transitionTo(TrainingState::Starting)) {

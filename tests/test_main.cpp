@@ -5,6 +5,7 @@
 #include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "tensor_backend_trace_listener.hpp"
 #include <gtest/gtest.h>
 #include <string>
 
@@ -29,6 +30,14 @@ int main(int argc, char** argv) {
     lfs::core::Logger::get().init(log_level);
 
     ::testing::InitGoogleTest(&argc, argv);
+
+    // LFS_TENSOR_FACADE_TRACE=path records the backend facade entries each test
+    // executes (one JSON line per test) for the tensor-backend manifest, and stops
+    // the run naming the test that leaves a sticky CUDA error behind.
+    if (const auto trace_path = lfs::core::environment::value("LFS_TENSOR_FACADE_TRACE")) {
+        ::testing::UnitTest::GetInstance()->listeners().Append(
+            new lfs::testing::FacadeTraceListener(std::string(*trace_path)));
+    }
 
     // Pre-warm pinned memory cache for fast CPU-GPU transfers
     // This eliminates cold-start penalties (e.g., 23.8ms for 4K allocations)

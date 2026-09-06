@@ -1,0 +1,14 @@
+[
+  {"name": "SogFormatTest.CompareWithOriginalPly", "reason": "SOG bundle fixture is not checked in", "reviewed": "2026-09-05"},
+  {"name": "SogFormatTest.CompareWithSplatTransformDecompression", "reason": "needs the external splat-transform node tool", "reviewed": "2026-09-05"},
+  {"name": "SpzFormatTest.RealPlyRoundtrip", "reason": "windmill.ply fixture is not checked in", "reviewed": "2026-09-05"},
+  {"name": "FastGSFuzzTest.EmptyScene_ZeroPrimitives", "reason": "rasterizer does not support zero gaussians; documented limitation", "reviewed": "2026-09-05"},
+  {"name": "NnOpsTest.ResizeMatchesNumpyFixture", "reason": "numpy fixture file is not checked in", "reviewed": "2026-09-05"},
+  {"name": "NnOpsTest.WeightFilePythonRoundTrip", "reason": "needs the vcpkg python writer on the path", "reviewed": "2026-09-05"},
+  {"name": "Moge2Test.FullModelParityIsOptIn", "reason": "opt-in through LFS_MOGE2_WEIGHTS", "reviewed": "2026-09-05"},
+  {"name": "Sam2Test.FullModelParityIsOptIn", "reason": "opt-in through LFS_SAM2_WEIGHTS", "reviewed": "2026-09-05"},
+  {"name": "ExportEnvCompositeTest.PerspectiveMatchesCpuReference", "reason": "environment asset is not checked in", "reviewed": "2026-09-05"},
+  {"name": "ExportEnvCompositeTest.EquirectangularViewMatchesCpuReference", "reason": "environment asset is not checked in", "reviewed": "2026-09-05"},
+  {"name": "ExportEnvCompositeTest.BandedEqualsFullImage", "reason": "environment asset is not checked in", "reviewed": "2026-09-05"},
+  {"name": "ExportEnvCompositeTest.UnpackPackRoundtripIsExact", "reason": "environment asset is not checked in", "reviewed": "2026-09-05"}
+]

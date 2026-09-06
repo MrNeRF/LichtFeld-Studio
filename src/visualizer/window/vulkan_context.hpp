@@ -241,6 +241,17 @@ namespace lfs::vis {
         [[nodiscard]] uint32_t transferQueueFamily() const { return transfer_queue_family_; }
         [[nodiscard]] bool hasDedicatedTransferQueue() const { return has_dedicated_transfer_queue_; }
         [[nodiscard]] const std::array<std::uint8_t, VK_UUID_SIZE>& deviceUUID() const { return device_uuid_; }
+        // A second queue and the feature set the tensor library's Vulkan backend
+        // needs to run on this device. `complete` is false when the device lacks a
+        // required feature or has no spare queue; the backend then keeps its own device.
+        struct TensorBackendDevice {
+            VkQueue queue = VK_NULL_HANDLE;
+            uint32_t queue_family = 0;
+            bool shader_atomic_float = false;
+            bool shader_float16 = false;
+            bool complete = false;
+        };
+        [[nodiscard]] const TensorBackendDevice& tensorBackendDevice() const { return tensor_backend_device_; }
         [[nodiscard]] bool externalMemoryDedicatedAllocationEnabled() const {
             return external_memory_dedicated_allocation_enabled_;
         }
@@ -484,6 +495,7 @@ namespace lfs::vis {
         VkQueue transfer_queue_ = VK_NULL_HANDLE;
         uint32_t transfer_queue_family_ = 0;
         bool has_dedicated_transfer_queue_ = false;
+        TensorBackendDevice tensor_backend_device_{};
 
         VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
         VkFormat swapchain_format_ = VK_FORMAT_UNDEFINED;

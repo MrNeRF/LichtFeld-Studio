@@ -6,7 +6,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/cuda_memory_guard.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 #include "lanczos_resize.hpp"
 
 #include <cmath>

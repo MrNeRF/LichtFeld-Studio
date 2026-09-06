@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <execution>
@@ -25,6 +25,73 @@ namespace lfs::core {
                                    new_shape.elements(), numel()));
 
         return create_view(new_shape);
+    }
+
+    Tensor Tensor::view_as(DataType new_dtype) const {
+        materialize_if_deferred();
+        LFS_ASSERT_MSG(is_valid(),
+                       "view_as requires a valid tensor");
+        LFS_ASSERT_MSG(is_contiguous() && !has_zero_stride(),
+                       "view_as requires a contiguous tensor");
+
+        const size_t src_size = dtype_size(dtype_);
+        const size_t dst_size = dtype_size(new_dtype);
+        LFS_ASSERT_MSG(src_size != 0 && dst_size != 0,
+                       std::format("view_as cannot reinterpret dtype {} as {}",
+                                   dtype_name(dtype_), dtype_name(new_dtype)));
+
+        const size_t src_bytes = bytes();
+        LFS_ASSERT_MSG(src_bytes % dst_size == 0,
+                       std::format("view_as cannot reinterpret {} bytes of {} as {}",
+                                   src_bytes, dtype_name(dtype_), dtype_name(new_dtype)));
+
+        const size_t byte_offset = storage_offset_ * src_size;
+        LFS_ASSERT_MSG(byte_offset % dst_size == 0,
+                       std::format("view_as storage offset {} is not aligned to {}",
+                                   byte_offset, dtype_name(new_dtype)));
+
+        std::vector<size_t> new_dims;
+        new_dims.reserve(shape_.rank() + 1);
+        for (size_t i = 0; i < shape_.rank(); ++i) {
+            new_dims.push_back(shape_[i]);
+        }
+
+        if (src_size > dst_size) {
+            LFS_ASSERT_MSG(src_size % dst_size == 0,
+                           std::format("view_as cannot rescale {}-byte {} to {}-byte {}",
+                                       src_size, dtype_name(dtype_), dst_size,
+                                       dtype_name(new_dtype)));
+            const size_t ratio = src_size / dst_size;
+            LFS_ASSERT_MSG(new_dims.size() < MAX_TENSOR_RANK,
+                           "view_as cannot append a packed dimension past MAX_TENSOR_RANK");
+            new_dims.push_back(ratio);
+        } else if (src_size < dst_size) {
+            LFS_ASSERT_MSG(dst_size % src_size == 0,
+                           std::format("view_as cannot rescale {}-byte {} to {}-byte {}",
+                                       src_size, dtype_name(dtype_), dst_size,
+                                       dtype_name(new_dtype)));
+            const size_t ratio = dst_size / src_size;
+            LFS_ASSERT_MSG(!new_dims.empty() && new_dims.back() == ratio,
+                           std::format("view_as cannot drop a trailing dimension of {} when "
+                                       "reinterpreting {} as {} (need trailing size {})",
+                                       new_dims.empty() ? 0 : new_dims.back(),
+                                       dtype_name(dtype_), dtype_name(new_dtype), ratio));
+            new_dims.pop_back();
+        }
+
+        const TensorShape new_shape =
+            new_dims.empty() ? TensorShape{} : TensorShape(new_dims);
+        LFS_ASSERT_MSG(new_shape.elements() * dst_size == src_bytes,
+                       std::format("view_as shape {} does not preserve {} source bytes",
+                                   new_shape.str(), src_bytes));
+
+        Tensor view(data_, new_shape, device_, new_dtype);
+        view.data_owner_ = data_owner_;
+        view.storage_offset_ = byte_offset / dst_size;
+        view.is_view_ = true;
+        view.is_contiguous_ = true;
+        propagate_view_meta(view);
+        return view;
     }
 
     Tensor Tensor::t() const {
@@ -100,7 +167,7 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_axes = std::move(deferred_axes)]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
@@ -219,7 +286,7 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_ranges = std::move(deferred_ranges)]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
@@ -277,7 +344,7 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), dim, start, end]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
@@ -362,12 +429,13 @@ namespace lfs::core {
                               const std::vector<size_t>& new_shape) const {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "non-contiguous slice copying currently supports only Float32");
-        auto result = empty(TensorShape(new_shape), device_, dtype_);
+        auto result = internal::allocate_like(*this, TensorShape(new_shape), dtype_);
 
         if (device_ == Device::CUDA) {
             auto cpu_copy = to(Device::CPU);
             auto cpu_result = cpu_copy.copy_slice(starts, ends, new_shape);
-            return cpu_result.to(Device::CUDA);
+            return internal::copy_to_backend(
+                cpu_result, gpu_backend_of(*this).value());
         } else {
             const float* src = ptr<float>();
             float* dst = result.ptr<float>();

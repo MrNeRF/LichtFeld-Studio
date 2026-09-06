@@ -8,8 +8,9 @@
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_backend.hpp"
 #include "gui/gui_manager.hpp"
 #include "internal/viewport.hpp"
 #include "operation/undo_entry.hpp"
@@ -405,8 +406,13 @@ namespace lfs::vis {
             if (!source.is_valid() || !output.is_valid() || source.numel() != output.numel()) {
                 return false;
             }
+            const auto src_backend = lfs::core::gpu_backend_of(source);
+            const auto dst_backend = lfs::core::gpu_backend_of(output);
+            const bool same_backend = src_backend == dst_backend;
             if (source.device() == core::Device::CUDA &&
                 output.device() == core::Device::CUDA &&
+                same_backend &&
+                src_backend != lfs::core::GpuBackend::Vulkan &&
                 source.dtype() == output.dtype() &&
                 source.is_contiguous() &&
                 output.is_contiguous()) {
@@ -435,7 +441,13 @@ namespace lfs::vis {
                 lfs::core::bridgeStreams(source_stream, output_stream);
                 return true;
             }
-            output.copy_from(source);
+            if (same_backend ||
+                source.device() == core::Device::CPU ||
+                output.device() == core::Device::CPU) {
+                output.copy_from(source);
+                return true;
+            }
+            output.copy_from(source.cpu());
             return true;
         }
 
@@ -833,7 +845,9 @@ namespace lfs::vis {
                 if (means.dtype() != core::DataType::Float32) {
                     means = means.to(core::DataType::Float32);
                 }
-                if (means.device() == core::Device::CUDA) {
+                if (means.device() == core::Device::CUDA &&
+                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
+                    lfs::core::gpu_backend_of(means) != lfs::core::GpuBackend::Vulkan) {
                     try {
                         if (!means.is_valid() || means.numel() == 0 ||
                             means.storage_ptr() == nullptr) {
@@ -1066,13 +1080,25 @@ namespace lfs::vis {
           rendering_manager_(rendering_manager) {
         assert(scene_manager_);
         assert(rendering_manager_);
+        const bool cuda_usable = lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+        const auto allocate_host_counts = [](int*& host_counts) {
+            host_counts = new int[selection::kSelectionGroupCount + 1]{};
+        };
         for (auto& pending : pending_selection_counts_) {
+            if (!cuda_usable) {
+                allocate_host_counts(pending.host_counts);
+                continue;
+            }
             if (cudaHostAlloc(reinterpret_cast<void**>(&pending.host_counts),
                               (selection::kSelectionGroupCount + 1) * sizeof(int),
                               cudaHostAllocPortable) != cudaSuccess ||
                 cudaEventCreateWithFlags(&pending.ready_event, cudaEventDisableTiming) != cudaSuccess) {
                 throw std::runtime_error("SelectionService: failed to allocate async count staging");
             }
+        }
+        if (!cuda_usable) {
+            allocate_host_counts(pending_passive_ring_count_.host_counts);
+            return;
         }
         if (cudaHostAlloc(reinterpret_cast<void**>(&pending_passive_ring_count_.host_counts),
                           (selection::kSelectionGroupCount + 1) * sizeof(int),
@@ -1083,6 +1109,18 @@ namespace lfs::vis {
     }
 
     SelectionService::~SelectionService() {
+        const bool cuda_usable = lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+        const auto release_host_counts = [cuda_usable](int*& host_counts, const char* const what) {
+            if (!host_counts) {
+                return;
+            }
+            if (cuda_usable) {
+                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(host_counts), nullptr, what);
+            } else {
+                delete[] host_counts;
+            }
+            host_counts = nullptr;
+        };
         for (auto& pending : pending_selection_counts_) {
             if (pending.ready_event) {
                 if (pending.pending) {
@@ -1092,10 +1130,7 @@ namespace lfs::vis {
                 LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending.ready_event), nullptr,
                                       "selection count teardown: destroy ready event");
             }
-            if (pending.host_counts) {
-                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(pending.host_counts), nullptr,
-                                      "selection count teardown: free pinned counts");
-            }
+            release_host_counts(pending.host_counts, "selection count teardown: free pinned counts");
         }
         if (pending_passive_ring_count_.ready_event) {
             if (pending_passive_ring_count_.pending) {
@@ -1105,10 +1140,8 @@ namespace lfs::vis {
             LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending_passive_ring_count_.ready_event), nullptr,
                                   "passive ring teardown: destroy ready event");
         }
-        if (pending_passive_ring_count_.host_counts) {
-            LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(pending_passive_ring_count_.host_counts), nullptr,
-                                  "passive ring teardown: free pinned counts");
-        }
+        release_host_counts(pending_passive_ring_count_.host_counts,
+                            "passive ring teardown: free pinned counts");
     }
 
     void SelectionService::completePendingSelectionCount(
@@ -1117,18 +1150,22 @@ namespace lfs::vis {
             return;
         }
 
-        const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
-                                        : cudaEventQuery(pending.ready_event);
-        if (status == cudaErrorNotReady) {
-            return;
-        }
-        if (status != cudaSuccess) {
-            LOG_WARN("SelectionService: async selection count failed: {}",
-                     cudaGetErrorString(status));
-            pending.pending = false;
-            pending.mask.reset();
-            pending.undo_entry.reset();
-            return;
+        if (pending.ready_event == nullptr) {
+            // Vulkan count path downloads synchronously in enqueue.
+        } else {
+            const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
+                                            : cudaEventQuery(pending.ready_event);
+            if (status == cudaErrorNotReady) {
+                return;
+            }
+            if (status != cudaSuccess) {
+                LOG_WARN("SelectionService: async selection count failed: {}",
+                         cudaGetErrorString(status));
+                pending.pending = false;
+                pending.mask.reset();
+                pending.undo_entry.reset();
+                return;
+            }
         }
 
         auto completed_mask = std::move(pending.mask);
@@ -1374,7 +1411,7 @@ namespace lfs::vis {
             const int hovered_id = *testing_hovered_gaussian_id_;
             if (hovered_id >= 0 && static_cast<size_t>(hovered_id) < total) {
                 auto& selection = resetBoolScratchBuffer(command_selection_buffer_, total);
-                rendering::set_selection_element(selection.ptr<bool>(), hovered_id, true);
+                rendering::set_selection_element(selection, hovered_id, true);
                 return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context,
                                        "selection.ring");
             }
@@ -1405,7 +1442,7 @@ namespace lfs::vis {
         const auto hovered_id = resolveCommandHoveredGaussianId(x, y, camera_index, filters, projection_context);
         if (hovered_id && *hovered_id >= 0 && static_cast<size_t>(*hovered_id) < total) {
             auto& selection = resetBoolScratchBuffer(command_selection_buffer_, total);
-            rendering::set_selection_element(selection.ptr<bool>(), *hovered_id, true);
+            rendering::set_selection_element(selection, *hovered_id, true);
             return commitSelection(selection, mode, effectiveNodeMask(true), filters, projection_context, "selection.ring");
         }
 
@@ -2521,7 +2558,7 @@ namespace lfs::vis {
         if (!exact_hit.has_value()) {
             const auto hovered_id = renderHoveredGaussianIdForViewerContext(*context, cursor_pos, filters, *projection_context);
             if (hovered_id && *hovered_id >= 0 && static_cast<size_t>(*hovered_id) < selection.numel()) {
-                rendering::set_selection_element(selection.ptr<bool>(), *hovered_id, true);
+                rendering::set_selection_element(selection, *hovered_id, true);
                 picked_ring_id = *hovered_id;
                 hit = true;
             }
@@ -3002,7 +3039,7 @@ namespace lfs::vis {
                 {activeSelectionGaussianCount(scene_manager_)},
                 core::Device::CUDA,
                 core::DataType::Bool);
-            rendering::set_selection_element(candidate.ptr<bool>(), hovered_id, true);
+            rendering::set_selection_element(candidate, hovered_id, true);
             if (!applyFilters(candidate, filters, effectiveNodeMask(filters.restrict_to_selected_nodes), projection_context)) {
                 return std::nullopt;
             }
@@ -3428,7 +3465,7 @@ namespace lfs::vis {
         const auto& session = interactive_selection_;
         int hovered_id = testing_hovered_gaussian_id_.value_or(-1);
         if (hovered_id >= 0 && static_cast<size_t>(hovered_id) < selection_out.numel()) {
-            rendering::set_selection_element(selection_out.ptr<bool>(), hovered_id, true);
+            rendering::set_selection_element(selection_out, hovered_id, true);
             if (picked_ring_id_out) {
                 *picked_ring_id_out = hovered_id;
             }
@@ -3460,7 +3497,7 @@ namespace lfs::vis {
             return !require_exact_ring_hit;
         }
 
-        rendering::set_selection_element(selection_out.ptr<bool>(), hovered_id, true);
+        rendering::set_selection_element(selection_out, hovered_id, true);
         if (picked_ring_id_out) {
             *picked_ring_id_out = hovered_id;
         }

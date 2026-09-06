@@ -13,9 +13,10 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_exportable_storage.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor_serialization_sink.hpp"
 #include "nanoflann.hpp"
 
@@ -3316,6 +3317,37 @@ namespace lfs::core {
         const auto n_bounds = sh_value_quant::n_bounds_for_prims(n);
         const auto n_bounds_cap = sh_value_quant::n_bounds_for_prims(cap);
 
+        Tensor float_src = shN;
+        if (float_src.dtype() == DataType::Float16) {
+            float_src = float_src.to(DataType::Float32);
+        }
+        if (float_src.device() != Device::CUDA) {
+            float_src = float_src.cuda();
+        }
+        if (!float_src.is_contiguous()) {
+            float_src = float_src.contiguous();
+        }
+
+        if (gpu_backend_of(float_src) == GpuBackend::Vulkan) {
+            Tensor encoded_codes;
+            Tensor encoded_bounds;
+            sh_value_quant::encode_shN_float4_to_u16_tensor(
+                float_src,
+                n,
+                sh_float4_slots_for_rest(rest),
+                sh_value_quant::n_value_cells_per_prim(rest),
+                encoded_codes,
+                encoded_bounds);
+            shN = encoded_codes.contiguous().reshape(TensorShape({n_cells}));
+            shN.set_name("splat.shN");
+            shN_value_bounds() =
+                encoded_bounds.contiguous().reshape(TensorShape({n_bounds * 2}));
+            shN_value_bounds().set_name("splat.shN_value_bounds");
+            LOG_DEBUG("SH value quant applied: N={} cap={} rest={} cells={} bounds={}",
+                      n, cap, rest, n_cells, n_bounds);
+            return true;
+        }
+
         Tensor u16 = allocate_named_param(
             TensorShape({n_cells}),
             std::max(n_cells, capacity_cells),
@@ -3328,17 +3360,6 @@ namespace lfs::core {
             "SplatData.shN_value_bounds");
         u16.set_name("splat.shN");
         bounds.set_name("splat.shN_value_bounds");
-
-        Tensor float_src = shN;
-        if (float_src.dtype() == DataType::Float16) {
-            float_src = float_src.to(DataType::Float32);
-        }
-        if (float_src.device() != Device::CUDA) {
-            float_src = float_src.cuda();
-        }
-        if (!float_src.is_contiguous()) {
-            float_src = float_src.contiguous();
-        }
 
         const cudaStream_t stream = getCurrentCUDAStream();
         if (u16.stream() != stream) {

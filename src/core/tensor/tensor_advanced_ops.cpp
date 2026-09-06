@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -18,6 +18,7 @@ namespace lfs::core {
                        "cdist currently supports only Float32 tensors");
         LFS_ASSERT_MSG(device_ == other.device(),
                        "cdist requires tensors on the same device");
+        internal::require_same_gpu_backend(*this, other, "cdist");
         LFS_ASSERT_MSG(ndim() == 2 && other.ndim() == 2,
                        "cdist requires rank-2 tensors");
         LFS_ASSERT_MSG(size(1) == other.size(1),
@@ -34,14 +35,16 @@ namespace lfs::core {
         size_t M = other.size(0);
         size_t D = size(1);
 
-        auto result = empty({N, M}, device_, dtype_);
+        auto result = internal::allocate_like(*this, TensorShape{N, M}, dtype_);
 
         if (device_ == Device::CUDA) {
             pin_operands({&lhs, &rhs});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&lhs, &rhs}, result.stream());
-            tensor_ops::launch_cdist(lhs.ptr<float>(), rhs.ptr<float>(),
-                                     result.ptr<float>(), N, M, D, p, execution_stream);
+            internal::backend_ops_for(lhs).cdist(
+                internal::storage_ref(lhs), internal::storage_ref(rhs),
+                internal::storage_ref(result), N, M, D, p,
+                internal::ExecContext{execution_stream});
             // No sync - returns tensor
         } else {
             pin_operands({&lhs, &rhs});
@@ -196,7 +199,9 @@ namespace lfs::core {
             }
 
             if (input.device() == Device::CUDA) {
-                return {values.to(Device::CUDA), indices.to(Device::CUDA)};
+                const GpuBackend backend = gpu_backend_of(input).value();
+                return {internal::copy_to_backend(values, backend),
+                        internal::copy_to_backend(indices, backend)};
             }
             return {values, indices};
         }
@@ -219,7 +224,9 @@ namespace lfs::core {
         if (ndim() == 0) {
             LFS_ASSERT_MSG(dim == 0 || dim == -1,
                            "scalar sort dimension is out of range");
-            return {clone(), Tensor::zeros(TensorShape{}, device_, DataType::Int64)};
+            Tensor indices = internal::allocate_zeros_like(
+                *this, TensorShape{}, DataType::Int64);
+            return {clone(), std::move(indices)};
         }
 
         dim = resolve_dim(dim);
@@ -231,16 +238,17 @@ namespace lfs::core {
 
         // Create output tensors on same device
         auto sorted = source.clone();
-        auto indices = Tensor::empty(shape_, device_, DataType::Int64);
+        auto indices = internal::allocate_like(*this, shape_, DataType::Int64);
         if (numel() == 0)
             return {sorted, indices};
 
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
             if (device_ == Device::CUDA) {
-                tensor_ops::launch_sort_1d(sorted.ptr<float>(),
-                                           reinterpret_cast<int64_t*>(indices.data_ptr()),
-                                           numel(), descending, 0);
+                internal::backend_ops_for(source).sort_1d(
+                    internal::storage_ref(sorted), internal::storage_ref(indices), numel(),
+                    internal::SortProgram{.dim_size = numel(), .descending = descending},
+                    internal::ExecContext{nullptr});
                 // No sync - returns tensors
             } else {
                 // CPU fallback
@@ -285,10 +293,16 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            tensor_ops::launch_sort_2d(sorted.ptr<float>(),
-                                       reinterpret_cast<int64_t*>(indices.data_ptr()),
-                                       outer_size, dim_size, inner_size,
-                                       dim, descending, 0);
+            internal::backend_ops_for(source).sort_2d(
+                internal::storage_ref(sorted), internal::storage_ref(indices),
+                internal::SortProgram{
+                    .outer_size = outer_size,
+                    .dim_size = dim_size,
+                    .inner_size = inner_size,
+                    .dim = dim,
+                    .descending = descending,
+                },
+                internal::ExecContext{nullptr});
             // No sync - returns tensors
         } else {
             // CPU implementation

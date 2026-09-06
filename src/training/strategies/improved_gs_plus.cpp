@@ -13,7 +13,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"

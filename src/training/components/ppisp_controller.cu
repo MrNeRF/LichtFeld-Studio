@@ -4,7 +4,7 @@
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/kernels/ppisp.cuh"
 #include "ppisp_controller.hpp"

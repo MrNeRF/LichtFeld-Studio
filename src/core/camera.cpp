@@ -10,7 +10,7 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>

@@ -1,13 +1,18 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <thread>
 #include <vector>
 
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 
 using namespace lfs::core;
 
@@ -108,6 +113,66 @@ TEST_F(CudaEventPoolTest, WaitOrdersCrossStreamWork) {
     cudaStreamDestroy(consumer);
 }
 
+TEST_F(CudaEventPoolTest, FreshStreamHandlesReuseRetiredValuesUntilTheyEnterTheApi) {
+    // The driver hands out the handle values of destroyed streams again, so the
+    // retired-stream registry (which lets bridgeStreams skip dead home streams
+    // without touching the driver) can name a live stream. Every entry point a
+    // caller-live handle passes through must drop it from the registry;
+    // otherwise a bridge from that stream is skipped and its consumer races.
+    std::vector<cudaStream_t> seeds(8);
+    for (auto& seed : seeds) {
+        ASSERT_EQ(cudaStreamCreateWithFlags(&seed, cudaStreamNonBlocking), cudaSuccess);
+        auto touched = Tensor::empty({64}, Device::CUDA);
+        touched.set_stream(seed);
+        touched.fill_(1.0f);
+    }
+    for (auto& seed : seeds) {
+        CudaMemoryPool::instance().release_stream(seed);
+        cudaStreamDestroy(seed);
+    }
+    cudaStream_t producer = nullptr;
+    cudaStream_t consumer = nullptr;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&consumer, cudaStreamNonBlocking), cudaSuccess);
+    const bool producer_reused =
+        std::find(seeds.begin(), seeds.end(), producer) != seeds.end();
+    if (producer_reused) {
+        EXPECT_TRUE(is_stream_retired(producer))
+            << "a reused handle still sits in the registry until it enters the API";
+    }
+
+    constexpr size_t kBytes = 64ull * 1024 * 1024;
+    void* buffer = nullptr;
+    ASSERT_EQ(cudaMalloc(&buffer, kBytes), cudaSuccess);
+    for (int pass = 0; pass < 16; ++pass) {
+        ASSERT_EQ(cudaMemsetAsync(buffer, 0x11, kBytes, producer), cudaSuccess);
+    }
+    ASSERT_EQ(cudaMemsetAsync(buffer, 0x6d, kBytes, producer), cudaSuccess);
+    waitForCUDAStream(consumer, producer);
+    EXPECT_FALSE(is_stream_retired(producer));
+    EXPECT_FALSE(is_stream_retired(consumer));
+
+    std::vector<unsigned char> host(kBytes);
+    ASSERT_EQ(cudaMemcpyAsync(host.data(), buffer, kBytes, cudaMemcpyDeviceToHost, consumer),
+              cudaSuccess);
+    ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
+    EXPECT_EQ(host.front(), 0x6d);
+    EXPECT_EQ(host[kBytes / 2], 0x6d);
+    EXPECT_EQ(host.back(), 0x6d);
+
+    {
+        cudaStream_t guarded = nullptr;
+        ASSERT_EQ(cudaStreamCreateWithFlags(&guarded, cudaStreamNonBlocking), cudaSuccess);
+        CUDAStreamGuard guard(guarded);
+        EXPECT_FALSE(is_stream_retired(guarded));
+        cudaStreamDestroy(guarded);
+    }
+
+    cudaFree(buffer);
+    cudaStreamDestroy(producer);
+    cudaStreamDestroy(consumer);
+}
+
 TEST_F(CudaEventPoolTest, EventAcquireFailureSynchronizesProducerFallback) {
     cudaStream_t producer, consumer;
     ASSERT_EQ(cudaStreamCreateWithFlags(&producer, cudaStreamNonBlocking), cudaSuccess);
@@ -118,8 +183,10 @@ TEST_F(CudaEventPoolTest, EventAcquireFailureSynchronizesProducerFallback) {
     ASSERT_EQ(cudaMalloc(&buffer, kBytes), cudaSuccess);
     ASSERT_EQ(cudaMemsetAsync(buffer, 0x6d, kBytes, producer), cudaSuccess);
 
+    // The public entry: bridgeStreams itself takes stored home streams and
+    // skips retired handles, and a fresh handle may reuse a retired value.
     set_cuda_event_acquire_failure_for_testing(true);
-    bridgeStreams(producer, consumer);
+    waitForCUDAStream(consumer, producer);
     set_cuda_event_acquire_failure_for_testing(false);
 
     std::vector<unsigned char> host(kBytes);

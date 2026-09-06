@@ -108,9 +108,10 @@ namespace lfs::vis {
                lfs::core::sh_value_quant::enabled();
     }
 
-    // One-tensor-per-VkBuffer allocator bound to the active window's Vulkan context, matching
-    // what the splat renderer binds. Empty when interop is unavailable (headless). Shared by the
-    // file loader and in-memory inserts (Python API).
+    // Plain Device::CUDA tensors (Vulkan storage) when the process default GPU backend is Vulkan.
+    // Otherwise one-tensor-per-VkBuffer CUDA-exportable VMM imported into the window context.
+    // Empty when interop is unavailable on the CUDA path (headless). Shared by the file loader
+    // and in-memory inserts (Python API).
     [[nodiscard]] LFS_VIS_API lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator();
 
 } // namespace lfs::vis

@@ -13,8 +13,9 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
 #include "tinyply.hpp"
@@ -41,6 +42,7 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <unordered_set>
@@ -176,6 +178,11 @@ namespace lfs::io {
                 return result;
             }
 
+            if (lfs::core::gpu_backend_of(source) == lfs::core::GpuBackend::Vulkan ||
+                !lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                LOG_WARN("PLY export is unavailable on the Vulkan tensor backend");
+                throw std::runtime_error("PLY export is unavailable on the Vulkan tensor backend");
+            }
             const cudaStream_t transfer_stream = lfs::core::prepare_inputs_for_stream({&source});
             LFS_CUDA_CHECK_MSG_STREAM(
                 cudaMemcpyAsync(result.data_ptr(), source.data_ptr(), source.bytes(),
@@ -1432,6 +1439,17 @@ namespace lfs::io {
                 return;
             }
 
+            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
+                Tensor host = Tensor::empty(tensor.shape(), Device::CPU, tensor.dtype());
+                LFS_ASSERT_MSG(host.bytes() == data.size_bytes(),
+                               std::format("PLY Vulkan upload size must match the destination "
+                                           "(name='{}', dest_bytes={}, staging_bytes={})",
+                                           name, host.bytes(), data.size_bytes()));
+                std::memcpy(host.data_ptr(), data.data(), data.size_bytes());
+                tensor.copy_from(host);
+                return;
+            }
+
             if (tensor.device() == Device::CUDA) {
                 const cudaError_t status = cudaMemcpyAsync(
                     tensor.data_ptr(),
@@ -2191,14 +2209,17 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating Tensor objects and uploading to CUDA");
 
+            Tensor means = allocate_float_tensor(
+                host_span(host.means), {N, 3}, options, "SplatData.means");
+            const bool dest_is_vulkan =
+                means.is_valid() &&
+                lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan;
             const bool encode_shN_q16 =
                 options.shN_q16 &&
                 static_cast<bool>(options.splat_tensor_allocator) &&
                 layout_rest > 0 &&
                 host.shN_swizzled.count > 0;
 
-            Tensor means = allocate_float_tensor(
-                host_span(host.means), {N, 3}, options, "SplatData.means");
             Tensor sh0 = allocate_float_tensor(
                 host_span(host.sh0),
                 {N, static_cast<size_t>(sh0_dim1), static_cast<size_t>(sh0_dim2)},
@@ -2206,7 +2227,8 @@ namespace lfs::io {
                 "SplatData.sh0");
             Tensor shN;
             Tensor shN_bounds;
-            if (encode_shN_q16) {
+            const bool cuda_q16 = encode_shN_q16 && !dest_is_vulkan;
+            if (cuda_q16) {
                 const size_t cap = means.is_valid() ? std::max(means.capacity(), N) : N;
                 const size_t cells =
                     lfs::core::sh_value_quant::sh_value_u16_count(cap, layout_rest);
@@ -2239,14 +2261,30 @@ namespace lfs::io {
             CudaUploadBatch uploads(lfs::core::getCurrentCUDAStream());
             uploads.enqueue(means, host_span(host.means), "SplatData.means");
             uploads.enqueue(sh0, host_span(host.sh0), "SplatData.sh0");
-            if (!encode_shN_q16) {
+            if (!cuda_q16) {
                 uploads.enqueue(shN, host_span(host.shN_swizzled), "SplatData.shN");
             }
             uploads.enqueue(scaling, host_span(host.scaling), "SplatData.scaling");
             uploads.enqueue(rotation, host_span(host.rotation), "SplatData.rotation");
             uploads.enqueue(opacity, host_span(host.opacity), "SplatData.opacity");
             uploads.wait();
-            if (encode_shN_q16) {
+            if (encode_shN_q16 && dest_is_vulkan) {
+                Tensor encoded_codes;
+                Tensor encoded_bounds;
+                lfs::core::sh_value_quant::encode_shN_float4_to_u16_tensor(
+                    shN,
+                    N,
+                    lfs::core::sh_float4_slots_for_rest(layout_rest),
+                    lfs::core::sh_value_quant::n_value_cells_per_prim(layout_rest),
+                    encoded_codes,
+                    encoded_bounds);
+                shN = encoded_codes.contiguous().reshape(
+                    TensorShape({encoded_codes.numel()}));
+                shN.set_name("SplatData.shN");
+                shN_bounds = encoded_bounds.contiguous().reshape(
+                    TensorShape({encoded_bounds.numel()}));
+                shN_bounds.set_name("SplatData.shN_value_bounds");
+            } else if (cuda_q16) {
                 encode_host_shN_to_q16(
                     host.shN_swizzled, shN, shN_bounds, N, layout_rest);
             }

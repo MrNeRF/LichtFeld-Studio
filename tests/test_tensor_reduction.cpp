@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cub_workspace.hpp"
+#include "core/tensor/backend/cuda/kernels/cub_workspace.hpp"
 #include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>

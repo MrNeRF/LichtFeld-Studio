@@ -1,0 +1,53 @@
+// IEEE binary16 <-> binary32 through integer arithmetic, so the modules that
+// compute in fp32 and only load or store Float16 storage carry no Float16
+// capability and give the same bits on every device: round to nearest even,
+// subnormals kept, infinities and NaNs preserved (a NaN never becomes an
+// infinity).
+
+float halfBitsToFloat(uint bits)
+{
+    const uint sign = (bits & 0x8000u) << 16;
+    const uint exponent = (bits >> 10) & 0x1Fu;
+    const uint mantissa = bits & 0x3FFu;
+    if (exponent == 0u)
+    {
+        if (mantissa == 0u)
+            return asfloat(sign);
+        // 2^-24 per unit of the subnormal mantissa; the product is exact.
+        return asfloat(sign | asuint(float(mantissa) * 5.9604644775390625e-8f));
+    }
+    if (exponent == 0x1Fu)
+        return asfloat(sign | 0x7F800000u | (mantissa << 13));
+    return asfloat(sign | ((exponent + 112u) << 23) | (mantissa << 13));
+}
+
+uint floatToHalfBits(float value)
+{
+    const uint bits = asuint(value);
+    const uint sign = (bits >> 16) & 0x8000u;
+    const uint magnitude = bits & 0x7FFFFFFFu;
+    if (magnitude > 0x7F800000u)
+        return sign | 0x7C00u | max((magnitude & 0x7FFFFFu) >> 13, 1u);
+    // 65520 and above (the tie between the largest half and infinity rounds
+    // to even, which is infinity) and the infinity itself.
+    if (magnitude >= 0x477FF000u)
+        return sign | 0x7C00u;
+    if (magnitude < 0x38800000u)
+    {
+        // Below the smallest normal half: the result is round(value * 2^24),
+        // which is zero below 2^-25 and reaches the smallest normal by carry.
+        if (magnitude < 0x33000000u)
+            return sign;
+        const uint shift = 126u - (magnitude >> 23);
+        const uint significand = (magnitude & 0x7FFFFFu) | 0x800000u;
+        const uint truncated = significand >> shift;
+        const uint remainder = significand & ((1u << shift) - 1u);
+        const uint halfway = 1u << (shift - 1u);
+        const bool roundUp = remainder > halfway || (remainder == halfway && (truncated & 1u) != 0u);
+        return sign | (truncated + (roundUp ? 1u : 0u));
+    }
+    // Normal range: rounding the 13 dropped bits to nearest even may carry
+    // into the exponent, which the shifted subtraction handles.
+    const uint rounded = magnitude + 0xFFFu + ((magnitude >> 13) & 1u);
+    return sign | ((rounded - 0x38000000u) >> 13);
+}
