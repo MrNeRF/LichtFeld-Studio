@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -502,6 +503,62 @@ namespace {
                 const auto [sorted, order] = source.sort(0, descending);
                 expect_sorted(sorted, order, values, descending,
                               std::string(descending ? "descending" : "ascending") + " n=" + std::to_string(count));
+            }
+        }
+    }
+
+    TEST_F(TensorVulkanSort, NaNsSortLastAscendingAndZerosOfBothSignsKeepInputOrder) {
+        // Owner decision 4: NaN (either sign) after every number in ascending
+        // order and before every number in descending order; -0 and +0 compare
+        // equal and keep their input order. Both the shared-memory path and the
+        // radix path are covered; a key that separates the zeros or lets a
+        // negative NaN sort first fails here.
+        for (const size_t count : {size_t{64}, size_t{5000}}) {
+            std::vector<float> values(count);
+            for (size_t i = 0; i < count; ++i) {
+                values[i] = static_cast<float>(static_cast<int>(i % 23) - 11) * 0.5f;
+            }
+            const uint32_t negative_nan_bits = 0xFFC00000u;
+            values[3] = std::numeric_limits<float>::quiet_NaN();
+            values[count / 2] = std::bit_cast<float>(negative_nan_bits);
+            values[count - 1] = std::numeric_limits<float>::quiet_NaN();
+            for (size_t i = 5; i < count; i += 7) {
+                values[i] = (i % 2 == 0) ? 0.0f : -0.0f;
+            }
+            std::vector<size_t> zero_positions;
+            for (size_t i = 0; i < count; ++i) {
+                if (values[i] == 0.0f) {
+                    zero_positions.push_back(i);
+                }
+            }
+            const Tensor source = upload_vulkan(Tensor::from_vector(values, {count}, Device::CPU));
+            for (const bool descending : {false, true}) {
+                const auto [sorted, order] = source.sort(0, descending);
+                const std::vector<float> out = sorted.cpu().to_vector();
+                const std::vector<int64_t> idx = order.cpu().to_vector_int64();
+                ASSERT_EQ(out.size(), count);
+                const std::string label = descending ? "descending" : "ascending";
+                for (size_t k = 0; k < 3; ++k) {
+                    const size_t position = descending ? k : count - 1 - k;
+                    EXPECT_TRUE(std::isnan(out[position])) << label << " n=" << count << " NaN slot " << position;
+                }
+                std::vector<size_t> zero_order;
+                for (size_t k = 0; k < count; ++k) {
+                    if (out[k] == 0.0f) {
+                        zero_order.push_back(static_cast<size_t>(idx[k]));
+                    }
+                }
+                EXPECT_EQ(zero_order, zero_positions) << label << " n=" << count << ": zeros must keep input order";
+                for (size_t k = 1; k < count; ++k) {
+                    if (std::isnan(out[k - 1]) || std::isnan(out[k])) {
+                        continue;
+                    }
+                    if (descending) {
+                        EXPECT_GE(out[k - 1], out[k]) << label << " n=" << count << " at " << k;
+                    } else {
+                        EXPECT_LE(out[k - 1], out[k]) << label << " n=" << count << " at " << k;
+                    }
+                }
             }
         }
     }
