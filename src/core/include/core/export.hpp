@@ -46,3 +46,12 @@
 #else
 #define LFS_CUDA_API __attribute__((visibility("default")))
 #endif
+
+// Guarantees multiply and add in the marked function are two rounded operations.
+#if defined(__clang__)
+#define LFS_NO_FP_CONTRACT
+#elif defined(__GNUC__)
+#define LFS_NO_FP_CONTRACT __attribute__((optimize("fp-contract=off")))
+#else
+#define LFS_NO_FP_CONTRACT
+#endif

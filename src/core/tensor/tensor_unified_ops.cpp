@@ -3,6 +3,7 @@
 
 #include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
+#include "core/export.hpp"
 #include "core/logger.hpp"
 #include "core/nn/activation_arena.hpp"
 #include "core/pinned_memory_allocator.hpp"
@@ -30,6 +31,27 @@
 namespace lfs::core {
 
     namespace {
+        LFS_NO_FP_CONTRACT static void write_host_arange(void* const data,
+                                                         const size_t count,
+                                                         const float start,
+                                                         const float step,
+                                                         const DataType dtype) {
+#if defined(__clang__)
+#pragma clang fp contract(off)
+#endif
+            if (dtype == DataType::Float32) {
+                float* const data_ptr = static_cast<float*>(data);
+                for (size_t i = 0; i < count; ++i) {
+                    data_ptr[i] = start + i * step;
+                }
+            } else {
+                int* const data_ptr = static_cast<int*>(data);
+                for (size_t i = 0; i < count; ++i) {
+                    data_ptr[i] = static_cast<int>(start + i * step);
+                }
+            }
+        }
+
         Tensor empty_on_tensor_stream(const TensorShape& shape, Device device, DataType dtype, const Tensor& tensor) {
             if (device != Device::GPU) {
                 return internal::allocate_like(tensor, shape, dtype);
@@ -712,17 +734,7 @@ namespace lfs::core {
                 });
                 result.data_ = result.data_owner_.get();
 
-                if (result.dtype_ == DataType::Float32) {
-                    float* data_ptr = static_cast<float*>(result.data_);
-                    for (size_t i = 0; i < count; ++i) {
-                        data_ptr[i] = start + i * step;
-                    }
-                } else if (result.dtype_ == DataType::Int32) {
-                    int* data_ptr = static_cast<int*>(result.data_);
-                    for (size_t i = 0; i < count; ++i) {
-                        data_ptr[i] = static_cast<int>(start + i * step);
-                    }
-                }
+                write_host_arange(result.data_, count, start, step, result.dtype_);
             }
             break;
         }
