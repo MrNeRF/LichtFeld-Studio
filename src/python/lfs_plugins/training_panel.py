@@ -173,6 +173,11 @@ RENDER_SYNC = {
 
 SECTIONS = [
     "basic_params",
+    "camera",
+    "masking",
+    "supervision",
+    "background",
+    "appearance",
     "advanced_params",
     "dataset",
     "optimization",
@@ -222,6 +227,7 @@ class TrainingPanel(Panel):
         self._pv_bindings = ()
         self._pv_binding_by_prop = {}
         self._pv_search_query = ""
+        self._appearance_custom_empty = False
         self._pv_publish_pending = []
         self._pv_publish_pending_ids = set()
         self._pv_publish_scheduled = False
@@ -286,6 +292,7 @@ class TrainingPanel(Panel):
     def apply_chrome(self, payload):
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._pv_search_query = ""
+        self._appearance_custom_empty = False
         self._auto_scale_steps_locked = True
         if not isinstance(payload, dict):
             if self._handle:
@@ -315,6 +322,7 @@ class TrainingPanel(Panel):
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
         self._bind_dataset_bools(model, d)
+        self._bind_backend_and_appearance(model)
         self._bind_select_props(model, p, d)
         self._bind_text_props(model, p)
         self._bind_bespoke_num_props(model, p, d)
@@ -330,6 +338,7 @@ class TrainingPanel(Panel):
             value_setter=self._set_property_view_value,
             search_accessor=lambda: self._pv_search_query,
             visibility_predicate=self._property_view_condition_visible,
+            bespoke_predicate=self._bespoke_section_visible,
         )
         self._pv_binding_by_prop = {
             row["id"]: binding
@@ -338,6 +347,10 @@ class TrainingPanel(Panel):
         }
         self._bind_events(model)
         self._handle = model.get_handle()
+        self._handle.update_record_list("training_backend_options", [
+            {"id": item["id"], "label": item["label"]}
+            for item in lf.training_backends()
+        ])
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
         self._sync_panel_label()
@@ -484,6 +497,8 @@ class TrainingPanel(Panel):
         model.bind_func("btn_start", _btn_start)
 
     def _bind_property_search(self, model):
+        for name in self._BESPOKE_SEARCH:
+            model.bind_func(f"pv_show_{name}", lambda n=name: self._bespoke_matches(n))
         model.bind(
             "pv_search_query",
             lambda: self._pv_search_query,
@@ -492,6 +507,140 @@ class TrainingPanel(Panel):
         model.bind_func(
             "pv_search_active", lambda: bool(self._pv_search_query.strip())
         )
+
+    _BESPOKE_SEARCH = {
+        "strategy": ("basic_params", "strategy mrnf igs+ mcmc", ("training_params.strategy",)),
+        "backend": ("basic_params", "raster backend fastgs 3dgut gut", ("training.backend",)),
+        "sh_degree": ("basic_params", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
+        "depth_loss_mode": ("supervision", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
+        "background_fields": ("background", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
+        "appearance": ("appearance", "appearance correction off managed custom exposure bilateral ppisp", ("training.appearance_mode", "training.appearance.managed", "training.appearance.custom")),
+        "appearance_fields": ("appearance", "ppisp sidecar path controller activation step", ("training.tooltip.ppisp_sidecar_path", "training.tooltip.ppisp_activation_step")),
+        "dataset_fields": ("dataset", "dataset path images output resize_factor max_width cpu_cache use_16bit_color test_every evaluation", ("training.tooltip.dataset_path", "training.tooltip.dataset_images", "training.tooltip.resize_factor", "training.tooltip.max_width", "training.tooltip.cpu_cache", "training.tooltip.use_16bit_color", "training.tooltip.test_every", "training.tooltip.dataset_output")),
+        "lambda_dssim": ("losses", "lambda_dssim ssim", ("training.tooltip.lambda_dssim",)),
+        "init_opacity": ("init", "init_opacity", ("training.tooltip.init_opacity",)),
+        "prune_ratio": ("sparsity", "prune_ratio", ("training.tooltip.prune_ratio",)),
+        "save_steps": ("save_steps", "save_steps eval_steps", ("training_panel.save_eval_steps",)),
+    }
+
+    def _bespoke_matches(self, name):
+        _section, tokens, keys = self._BESPOKE_SEARCH[name]
+        return property_view.row_matches_query(
+            tokens, " ".join(tr(key) for key in keys), self._pv_search_query
+        )
+
+    def _bespoke_section_visible(self, section):
+        if not self._pv_search_query.strip():
+            return True
+        if section == "advanced_params":
+            return any(self._bespoke_matches(name) for name in ("lambda_dssim", "init_opacity", "prune_ratio", "save_steps"))
+        return any(
+            owner == section and self._bespoke_matches(name)
+            for name, (owner, _tokens, _keys) in self._BESPOKE_SEARCH.items()
+        )
+
+    def _bind_backend_and_appearance(self, model):
+        model.bind_record_list("training_backend_options")
+        model.bind("training_backend", self._training_backend, self._set_training_backend)
+        model.bind_func("backend_notice", self._backend_notice)
+        model.bind_func("start_error", self._start_error)
+        model.bind_func("start_fix_hint", lambda: tr("training.start_fix_settings"))
+        model.bind_func("start_blocked", lambda: bool(self._start_error()))
+        model.bind_func("start_conflicts", lambda: self._backend_notice(selected_only=True))
+        model.bind("appearance_mode", self._appearance_mode, self._set_appearance_mode)
+        model.bind_func("appearance_custom", lambda: self._appearance_mode() == "custom")
+
+    @staticmethod
+    def _can_edit_configuration():
+        return RuntimeState.trainer_state.value == "ready" and RuntimeState.iteration.value == 0
+
+    @staticmethod
+    def _training_backend():
+        params = lf.optimization_params()
+        return params.raster_backend if params and params.has_params() else "fastgs"
+
+    def _set_training_backend(self, name):
+        params = lf.optimization_params()
+        if not params or not params.has_params() or not self._can_edit_configuration():
+            return
+        backend = next((item for item in lf.training_backends() if item["id"] == name), None)
+        if backend is None:
+            return
+        params.set("raster_backend", name)
+        settings = lf.get_render_settings()
+        if settings:
+            settings.set("raster_backend", backend["viewer_backend"])
+        self._refresh_strategy_values()
+
+    @staticmethod
+    def _validation_error():
+        params = lf.optimization_params()
+        return params.validate() if params and params.has_params() else ""
+
+    def _start_error(self):
+        # Next-run settings must not gate Resume of an initialized/stored trainer.
+        if RuntimeState.trainer_state.value != "ready":
+            return ""
+        return self._validation_error()
+
+    def _sync_start_feedback(self):
+        error = self._start_error()
+        feedback = (error, self._backend_notice(selected_only=True) if error else "")
+        if feedback == getattr(self, "_last_start_feedback", None):
+            return False
+        self._last_start_feedback = feedback
+        for name in ("start_error", "start_blocked", "start_conflicts"):
+            self._handle.dirty(name)
+        return True
+
+    def _backend_notice(self, selected_only=False):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return ""
+        labels = {
+            "igs_plus": "IGS+",
+            "undistort": tr("training_params.undistort"),
+            "mip_filter": tr("training_params.mip_filter"),
+            "depth_supervision": tr("training_params.use_depth_loss"),
+            "normal_supervision": tr("training_params.use_normal_loss"),
+        }
+        selected = {
+            "igs_plus": getattr(params, "strategy", "").lower() in ("igs+", "igs_plus"),
+            "undistort": getattr(params, "undistort", False),
+            "mip_filter": getattr(params, "mip_filter", False),
+            "depth_supervision": getattr(params, "use_depth_loss", False),
+            "normal_supervision": getattr(params, "use_normal_loss", False),
+        } if selected_only else None
+        unsupported = [label.rstrip(":") for key, label in labels.items()
+                       if params.backend_capabilities.get(key) is False
+                       and (selected is None or selected[key])]
+        return (tr("training.backend_unsupported") + ": " + ", ".join(unsupported)) if unsupported else ""
+
+    def _appearance_mode(self):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return "off"
+        if params.use_exposure_correction:
+            return "managed"
+        if params.use_bilateral_grid or params.ppisp or params.ppisp_use_controller or params.ppisp_freeze_from_sidecar:
+            return "custom"
+        return "custom" if self._appearance_custom_empty else "off"
+
+    def _set_appearance_mode(self, mode):
+        params = lf.optimization_params()
+        if mode not in ("off", "managed", "custom") or not params or not params.has_params():
+            return
+        if not self._can_edit_configuration():
+            return
+        # Selecting an empty custom stack should expose both independent toggles
+        # without activating a module or changing saved tuning parameters.
+        self._appearance_custom_empty = mode == "custom"
+        params.use_exposure_correction = False
+        if mode != "custom":
+            for prop in ("use_bilateral_grid", "ppisp", "ppisp_use_controller", "ppisp_freeze_from_sidecar"):
+                self._set_bool_prop(prop, False)
+        params.use_exposure_correction = mode == "managed"
+        self._refresh_strategy_values()
 
     def _set_property_search_query(self, value):
         query = str(value or "")
@@ -1474,6 +1623,7 @@ class TrainingPanel(Panel):
 
         dirty = self._flush_pv_publish()
         dirty |= self._refresh_native_backend_controls()
+        dirty = self._sync_start_feedback() or dirty
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -2228,6 +2378,7 @@ class TrainingPanel(Panel):
             "pv_search_query",
             "pv_search_active",
             *property_view.SEARCH_VISIBILITY_MODEL_KEYS,
+            *(f"pv_show_{name}" for name in self._BESPOKE_SEARCH),
         ):
             self._handle.dirty(key)
 
@@ -2334,7 +2485,7 @@ class TrainingPanel(Panel):
             header, arrow, content = self._get_section_elements(name)
             if content:
                 search_expanded = search_active and property_view.section_is_visible(
-                    self._pv_bindings, name
+                    self._pv_bindings, name, self._bespoke_section_visible
                 )
                 w.sync_section_state(
                     content,
@@ -2349,7 +2500,7 @@ class TrainingPanel(Panel):
             return
         name = str(args[0])
         if self._pv_search_query.strip() and property_view.section_is_visible(
-            self._pv_bindings, name
+            self._pv_bindings, name, self._bespoke_section_visible
         ):
             self._sync_section_states()
             return
@@ -2490,6 +2641,11 @@ class TrainingPanel(Panel):
             return
         params = lf.optimization_params()
 
+        # Recheck before asking overwrite/save consent, including direct events.
+        if self._validation_error():
+            self._start_after_consent()
+            return
+
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
 
@@ -2502,7 +2658,7 @@ class TrainingPanel(Panel):
 
     def _start_after_consent(self):
         params = lf.optimization_params()
-        error = params.validate() if params and params.has_params() else ""
+        error = self._validation_error()
         if error:
             raw_context = getattr(params, "backend_conflict_context", {})
             context = raw_context if isinstance(raw_context, dict) else {}

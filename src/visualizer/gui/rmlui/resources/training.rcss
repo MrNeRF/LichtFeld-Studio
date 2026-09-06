@@ -133,6 +133,12 @@ body {
     margin-top: 4dp;
 }
 
+.training-panel-block > .section-header {
+    margin-top: 4dp;
+    padding-top: 6dp;
+    border-top-width: 1dp;
+}
+
 .training-subsection {
     margin-top: 0;
 }

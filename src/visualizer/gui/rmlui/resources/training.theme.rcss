@@ -1,5 +1,9 @@
 /* Training panel theme overrides. */
 
+.training-panel-block > .section-header {
+    border-top-color: @{panel.primary_border_faint};
+}
+
 .training-panel-title {
     color: @{text};
     border-top-color: @{panel.primary_border_soft};

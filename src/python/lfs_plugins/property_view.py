@@ -98,6 +98,8 @@ MIGRATED_PROP_IDS = NUMBER_PROPS + BOOL_PROPS + SELECT_PROPS
 # These registered properties are intentionally represented by bespoke widgets or
 # are runtime-only. Keep the reasons here so registry auto-placement stays auditable.
 BESPOKE_OR_HIDDEN = {
+    "gut": "backend selector through the compatibility adapter",
+    "use_exposure_correction": "appearance mode selector",
     "sh_degree": "finite-value select with bespoke labels and tooltips",
     "lambda_dssim": "scrub slider",
     "init_opacity": "scrub slider",
@@ -136,10 +138,6 @@ BASIC_RUNS = (
     _run("basic_struct", "iterations", "max_cap"),
     _run("basic_background", "background_improvements", visibility_condition_id="dep_mrnf"),
     _run(
-        "basic_exposure_correction",
-        "use_exposure_correction",
-    ),
-    _run(
         "basic_bilateral_toggle",
         "use_bilateral_grid",
     ),
@@ -148,20 +146,12 @@ BASIC_RUNS = (
         "mask_mode",
     ),
     _run(
-        "basic_depth_toggle",
-        "use_depth_loss",
-        disabled_condition_id="gut_depth_supervision_disabled",
-    ),
-    _run(
         "basic_depth_weight",
         "depth_loss_weight",
         visibility_condition_id="dep_depth_loss",
     ),
-    _run(
-        "basic_normal_toggle",
-        "use_normal_loss",
-        disabled_condition_id="gut_normal_supervision_disabled",
-    ),
+    _run("basic_depth_toggle", "use_depth_loss", disabled_condition_id="gut_depth_supervision_disabled"),
+    _run("basic_normal_toggle", "use_normal_loss", disabled_condition_id="gut_normal_supervision_disabled"),
     _run(
         "basic_normal_weights",
         "normal_auto_generate",
@@ -191,13 +181,8 @@ BASIC_RUNS = (
         visibility_condition_id="dep_mask_segment",
     ),
     _run("basic_sparsity_toggle", "enable_sparsity"),
-    _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),
     _run("basic_undistort", "undistort"),
-    _run(
-        "basic_mip_filter",
-        "mip_filter",
-        disabled_condition_id="gut_mip_filter_disabled",
-    ),
+    _run("basic_mip_filter", "mip_filter", disabled_condition_id="gut_mip_filter_disabled"),
     _run(
         "basic_ppisp_toggle",
         "ppisp",
@@ -302,41 +287,58 @@ SPARSITY_RUNS = (
     ),
 )
 
+# Keep row definitions and their editing/lock contracts; only move ownership.
+def _basic_runs(*ids):
+    by_id = {run.id: run for run in BASIC_RUNS}
+    return tuple(by_id[name] for name in ids)
+
+
+METHOD_RUNS = _basic_runs("basic_struct", "basic_background")
+CAMERA_RUNS = _basic_runs("basic_undistort", "basic_mip_filter")
+MASK_RUNS = _basic_runs("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties")
+SUPERVISION_RUNS = _basic_runs("basic_depth_toggle", "basic_depth_weight", "basic_normal_toggle", "basic_normal_weights")
+BACKGROUND_RUNS = _basic_runs("bg_mode")
+APPEARANCE_RUNS = _basic_runs(
+    "basic_bilateral_toggle", "basic_ppisp_toggle", "ppisp_exif", "ppisp_freeze",
+    "ppisp_controller", "ppisp_controller_tail",
+) + BILATERAL_RUNS + (
+    _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
+         visibility_condition_id="dep_ppisp_params"),
+)
+SPARSITY_RUNS = _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS
+
 SECTIONS = (
-    SectionSpec("basic_params", "training.section.basic_params", BASIC_RUNS),
-    SectionSpec("advanced_params", "training.section.advanced_params"),
+    SectionSpec("basic_params", "training.section.method", METHOD_RUNS),
+    SectionSpec("camera", "training.section.camera", CAMERA_RUNS),
+    SectionSpec("masking", "training.section.masking", MASK_RUNS),
+    SectionSpec("supervision", "training.section.supervision", SUPERVISION_RUNS),
+    SectionSpec("background", "training.section.background", BACKGROUND_RUNS),
+    SectionSpec("appearance", "training.section.appearance", APPEARANCE_RUNS),
+    SectionSpec("bilateral", "training.section.bilateral_grid"),
     SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
+    SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
     SectionSpec("refinement", "training.section.refinement"),
-    SectionSpec("bilateral", "training.section.bilateral_grid", BILATERAL_RUNS),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
     SectionSpec("init", "training.section.initialization", INIT_RUNS),
     SectionSpec("sparsity", "training_panel.sparsity", SPARSITY_RUNS),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
-    SectionSpec(
-        "advanced_registry",
-        "training.section.advanced_registry",
-        (_run(AUTO_ADVANCED_RUN_ID),),
-    ),
+    SectionSpec("advanced_registry", "training.section.advanced_registry", (_run(AUTO_ADVANCED_RUN_ID),)),
 )
 
 RUNS = tuple(run for section in SECTIONS for run in section.runs)
-
 SEARCH_SECTION_RUN_IDS = {
-    "basic_params": tuple(run.id for run in BASIC_RUNS),
-    "advanced_registry": (AUTO_ADVANCED_RUN_ID,),
-    "dataset": tuple(run.id for run in DATASET_RUNS),
-    "optimization": tuple(run.id for run in OPTIMIZATION_RUNS),
-    "learning_rates": ("learning_rates",),
-    "refinement": tuple(
-        run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"
-    ),
-    "bilateral": tuple(run.id for run in BILATERAL_RUNS),
-    "losses": tuple(run.id for run in LOSS_RUNS),
-    "init": tuple(run.id for run in INIT_RUNS),
-    "sparsity": tuple(run.id for run in SPARSITY_RUNS),
+    section.id: tuple(run.id for run in section.runs)
+    for section in SECTIONS if section.id != "advanced_params"
 }
+SEARCH_SECTION_RUN_IDS.update(
+    dataset=tuple(run.id for run in DATASET_RUNS),
+    learning_rates=("learning_rates",),
+    refinement=tuple(run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"),
+    bilateral=tuple(run.id for run in BILATERAL_RUNS),
+)
+ADVANCED_SECTIONS = ("optimization", "losses", "init", "sparsity", "save_steps", "advanced_registry")
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)
@@ -934,29 +936,27 @@ def bind_run(
     return binding
 
 
-def section_is_visible(bindings, section_id):
+def section_is_visible(bindings, section_id, bespoke_predicate=None):
+    if callable(bespoke_predicate) and bespoke_predicate(section_id):
+        return True
     run_ids = set(SEARCH_SECTION_RUN_IDS.get(str(section_id), ()))
     selected = [binding for binding in bindings if binding.section_id in run_ids]
     return any(binding.is_visible() for binding in selected)
 
 
-def _bind_search_visibility(model, bindings, search_accessor):
+def _bind_search_visibility(model, bindings, search_accessor, bespoke_predicate=None):
     for section_id in SEARCH_SECTION_RUN_IDS:
         model.bind_func(
             f"pv_section_{section_id}_visible",
-            lambda section=section_id: section_is_visible(bindings, section),
+            lambda section=section_id: section_is_visible(bindings, section, bespoke_predicate),
         )
 
-    advanced_sections = tuple(
-        section_id
-        for section_id in SEARCH_SECTION_RUN_IDS
-        if section_id != "basic_params"
-    )
+    advanced_sections = ADVANCED_SECTIONS
     model.bind_func(
         "pv_section_advanced_params_visible",
         lambda: (
             not str(search_accessor() or "").strip()
-            or any(section_is_visible(bindings, section) for section in advanced_sections)
+            or any(section_is_visible(bindings, section, bespoke_predicate) for section in advanced_sections)
         ),
     )
 
@@ -969,6 +969,7 @@ def bind_sections(
     value_setter=None,
     search_accessor=None,
     visibility_predicate=None,
+    bespoke_predicate=None,
 ):
     """Bind the complete training property-view schema."""
     bind_headers(model)
@@ -989,5 +990,5 @@ def bind_sections(
     )
     if not callable(search_accessor):
         search_accessor = lambda: ""
-    _bind_search_visibility(model, bindings, search_accessor)
+    _bind_search_visibility(model, bindings, search_accessor, bespoke_predicate)
     return bindings

@@ -45,6 +45,68 @@ def _install_lf_stub(monkeypatch):
     return lf_stub
 
 
+def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, validate=lambda: "invalid combination",
+        strategy="igs+", undistort=True, mip_filter=False,
+        use_depth_loss=True, use_normal_loss=False,
+        backend_capabilities=dict.fromkeys(
+            ("igs_plus", "undistort", "mip_filter", "depth_supervision", "normal_supervision"), False),
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "ready")
+    dirty = []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    before = vars(params).copy()
+    assert panel._start_error() == "invalid combination"
+    notice = panel._backend_notice(selected_only=True)
+    assert "IGS+" in notice and "undistort" in notice and "use_depth_loss" in notice
+    assert "mip_filter" not in notice and "use_normal_loss" not in notice
+    assert panel._sync_start_feedback()
+    assert set(dirty) == {"start_error", "start_blocked", "start_conflicts"}
+    assert not panel._sync_start_feedback()
+    assert vars(params) == before
+    params.validate = lambda: ""
+    assert panel._sync_start_feedback()
+    assert panel._start_error() == ""
+
+
+@pytest.mark.parametrize("state", ["paused", "running", "idle", "completed", "error"])
+def test_next_run_validation_does_not_gate_resume(training_panel_module, monkeypatch, state):
+    panel = training_panel_module.TrainingPanel()
+    monkeypatch.setattr(training_panel_module.RuntimeState.trainer_state, "value", state)
+    monkeypatch.setattr(panel, "_validation_error", lambda: pytest.fail("Not a new Start"))
+    assert panel._start_error() == ""
+
+
+def test_invalid_start_is_rejected_before_overwrite_consent(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    monkeypatch.setattr(module, "_restore_stored_session_if_needed", lambda **_kw: False)
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(panel, "_validation_error", lambda: "invalid numeric parameter")
+    monkeypatch.setattr(module.lf, "training_start_overwrite_conflict",
+                        lambda: pytest.fail("Must reject before consent"))
+    errors = []
+    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: errors.append(args), raising=False)
+    panel._action_start()
+    assert errors[0][1] == "invalid numeric parameter"
+
+
+def test_only_start_is_disabled_and_feedback_is_outside_search():
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = root.find(".//*[@id='controls']")
+    buttons = {node.get("data-event-click"): node for node in controls.iter("button")}
+    assert buttons["action('start')"].get("data-attrif-disabled") == "start_blocked"
+    assert buttons["action('resume')"].get("data-attrif-disabled") is None
+    feedback = controls.find(".//*[@data-if='start_blocked']")
+    assert "{{start_error}}" in "".join(feedback.itertext())
+    assert "{{start_conflicts}}" in "".join(feedback.itertext())
+
+
 def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
@@ -52,6 +114,7 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     for locale_path in locale_dir.glob("*.json"):
         data = json.loads(locale_path.read_text())
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
+        assert data["training"]["start_fix_settings"]
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
         assert data["training"]["overwrite.btn_save_as_start"]
@@ -365,6 +428,139 @@ class _HandleStub:
 
     def request_update(self):
         self.request_update_count += 1
+
+
+def _configuration_panel(module, monkeypatch):
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, raster_backend="fastgs",
+        use_exposure_correction=False, use_bilateral_grid=False, ppisp=False,
+        ppisp_use_controller=False, ppisp_freeze_from_sidecar=False,
+        ppisp_controller_lr=0.003, ppisp_sidecar_path="saved.ppisp",
+    )
+    params.set = lambda key, value: setattr(params, key, value)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: True)
+    monkeypatch.setattr(panel, "_refresh_strategy_values", lambda: None)
+    return panel, params
+
+
+def test_backend_selector_uses_available_descriptors_and_syncs_viewer(training_panel_module, monkeypatch):
+    panel, params = _configuration_panel(training_panel_module, monkeypatch)
+    updates = []
+    monkeypatch.setattr(training_panel_module.lf, "training_backends", lambda: [
+        {"id": "fastgs", "label": "FastGS", "viewer_backend": "3dgs"},
+        {"id": "3dgut", "label": "3DGUT", "viewer_backend": "3dgut"},
+    ], raising=False)
+    monkeypatch.setattr(training_panel_module.lf, "get_render_settings",
+                        lambda: SimpleNamespace(set=lambda *args: updates.append(args)))
+    panel._set_training_backend("3dgut")
+    assert params.raster_backend == "3dgut"
+    assert updates == [("raster_backend", "3dgut")]
+    panel._set_training_backend("nonexistent")
+    assert params.raster_backend == "3dgut"
+    assert len(updates) == 1
+    panel._set_training_backend("fastgs")
+    assert updates[-1] == ("raster_backend", "3dgs")
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
+    panel._set_training_backend("3dgut")
+    assert params.raster_backend == "fastgs"
+    assert len(updates) == 2
+
+
+def test_appearance_modes_preserve_custom_combinations_and_tuning(training_panel_module, monkeypatch):
+    panel, params = _configuration_panel(training_panel_module, monkeypatch)
+    assert panel._appearance_mode() == "off"
+    panel._set_appearance_mode("custom")
+    assert panel._appearance_mode() == "custom"
+    assert not params.ppisp and not params.use_bilateral_grid
+    panel._set_bool_prop("use_bilateral_grid", True)
+    panel._set_bool_prop("ppisp", True)
+    params.ppisp_use_controller = True
+    params.ppisp_freeze_from_sidecar = True
+    assert panel._appearance_mode() == "custom"
+    assert params.ppisp and params.use_bilateral_grid
+    panel._set_appearance_mode("managed")
+    assert panel._appearance_mode() == "managed"
+    assert params.use_exposure_correction
+    assert not any((params.ppisp, params.use_bilateral_grid,
+                    params.ppisp_use_controller, params.ppisp_freeze_from_sidecar))
+    assert params.ppisp_controller_lr == 0.003
+    assert params.ppisp_sidecar_path == "saved.ppisp"
+    panel._set_appearance_mode("off")
+    assert panel._appearance_mode() == "off"
+    assert not params.use_exposure_correction
+    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
+    panel._set_appearance_mode("managed")
+    assert panel._appearance_mode() == "off"
+
+
+@pytest.mark.parametrize("query,section,field", [
+    ("FastGS", "basic_params", "backend"),
+    ("strategy", "basic_params", "strategy"),
+    ("SH_degree", "basic_params", "sh_degree"),
+    ("bg_image", "background", "background_fields"),
+    ("custom", "appearance", "appearance"),
+    ("resize_factor", "dataset", "dataset_fields"),
+    ("save_steps", "save_steps", "save_steps"),
+])
+def test_search_keeps_bespoke_controls_reachable(training_panel_module, query, section, field):
+    panel = training_panel_module.TrainingPanel()
+    panel._pv_search_query = query
+    assert panel._bespoke_matches(field)
+    assert panel._bespoke_section_visible(section)
+    assert training_panel_module.property_view.section_is_visible(
+        (), section, panel._bespoke_section_visible)
+    panel._pv_search_query = "no-such-setting"
+    assert not panel._bespoke_matches(field)
+    assert not panel._bespoke_section_visible(section)
+
+
+def test_redesigned_rml_preserves_locks_and_groups_all_controls():
+    from xml.etree import ElementTree
+    root = Path(__file__).resolve().parents[2]
+    document = ElementTree.parse(root / "src/visualizer/gui/rmlui/resources/training.rml").getroot()
+    ids = [node.attrib["id"] for node in document.iter() if "id" in node.attrib]
+    assert len(ids) == len(set(ids))
+    by_id = {node.attrib["id"]: node for node in document.iter() if "id" in node.attrib}
+    assert by_id["training-backend"].attrib["data-value"] == "training_backend"
+    assert by_id["appearance-mode"].attrib["data-value"] == "appearance_mode"
+    assert {node.attrib.get("value") for node in by_id["appearance-mode"]} == {"off", "managed", "custom"}
+    assert any(node.attrib.get("data-event-click") == "toggle_step_scaling_lock"
+               for node in document.iter("button"))
+    assert any(node.attrib.get("data-class-disabled-overlay") == "step_scaling_params_locked"
+               for node in document.iter("div"))
+    for section, runs in {
+        "camera": ("basic_after_gut",),
+        "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
+        "supervision": ("basic_depth_toggle", "basic_depth_weight", "basic_normal_toggle", "basic_normal_weights"),
+        "background": ("bg_mode",),
+        "appearance": ("basic_bilateral_toggle", "basic_ppisp_toggle", "bilateral", "appearance_tuning"),
+    }.items():
+        mounted = {node.attrib.get("data-for") for node in by_id[f"sec-{section}"].iter()}
+        assert all(f"row : pv_{run}_rows" in mounted for run in runs)
+
+
+@pytest.mark.parametrize("state,iteration,editable", [
+    ("ready", 0, True), ("ready", 20, False), ("running", 20, False),
+    ("paused", 20, False), ("starting", 0, False), ("completed", 20, False),
+    ("error", 0, False), ("stopping", 20, False),
+])
+def test_new_selectors_follow_training_edit_lock(training_panel_module, monkeypatch, state, iteration, editable):
+    monkeypatch.setattr(training_panel_module, "RuntimeState", SimpleNamespace(
+        trainer_state=SimpleNamespace(value=state),
+        iteration=SimpleNamespace(value=iteration),
+    ))
+    assert training_panel_module.TrainingPanel._can_edit_configuration() is editable
+
+
+def test_bespoke_search_models_are_bound(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_property_search(model)
+    panel._pv_search_query = "3dgut"
+    assert model.bindings["pv_show_backend"][0]()
+    assert not model.bindings["pv_show_sh_degree"][0]()
 
 
 def _make_signal(value):
