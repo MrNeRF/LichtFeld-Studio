@@ -344,6 +344,7 @@ set(TEST_FILES
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
     test_tensor_integer_and_reduce_policy.cpp
+    test_selection_attribute_ops.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
     test_tensor_stress.cpp
