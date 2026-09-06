@@ -162,8 +162,9 @@ namespace lfs::training {
         void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
         [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
 
-        void set_lpips_weights_path(std::filesystem::path path) {
+        void set_lpips_weights_path(std::optional<std::filesystem::path> path) {
             _lpips_weights_path = std::move(path);
+            _lpips_metric.reset();
             _lpips_load_attempted = false;
         }
 

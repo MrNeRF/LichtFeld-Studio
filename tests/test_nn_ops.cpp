@@ -2,18 +2,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <memory>
 #include <numeric>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -237,6 +241,43 @@ protected:
         ASSERT_GT(devices, 0);
     }
 };
+
+TEST_F(NnOpsTest, ConvWaitsForPrecomputedWeightTaps) {
+    using namespace lfs::core;
+    struct Streams {
+        cudaStream_t producer = nullptr, consumer = nullptr;
+        ~Streams() {
+            for (auto stream : {producer, consumer}) {
+                if (stream) {
+                    cudaStreamSynchronize(stream);
+                    cudaStreamDestroy(stream);
+                }
+            }
+        }
+    } streams;
+    ASSERT_EQ(cudaStreamCreateWithFlags(&streams.producer, cudaStreamNonBlocking), cudaSuccess);
+    ASSERT_EQ(cudaStreamCreateWithFlags(&streams.consumer, cudaStreamNonBlocking), cudaSuccess);
+    CUDAStreamGuard guard(streams.consumer);
+    auto input = Tensor::ones({1, 8, 5, 7}, Device::CUDA, DataType::Float16);
+    auto weight = Tensor::ones({8, 8, 3, 3}, Device::CUDA, DataType::Float16);
+    auto taps = Tensor::zeros({9, 8, 8}, Device::CUDA, DataType::Float16);
+    nn::Conv2dParams params;
+    params.pad_h = params.pad_w = 1;
+    const auto expected = host_f32(nn::conv2d(input, weight, nullptr, params));
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    uint16_t* raw_host = nullptr;
+    ASSERT_EQ(cudaMallocHost(reinterpret_cast<void**>(&raw_host), taps.bytes()), cudaSuccess);
+    const std::unique_ptr<uint16_t, decltype(&cudaFreeHost)> host(raw_host, cudaFreeHost);
+    std::fill_n(raw_host, taps.numel(), uint16_t{0x3c00}); // fp16 1.0
+    taps.set_stream(streams.producer);
+    ASSERT_EQ(cudaLaunchHostFunc(streams.producer, [](void*) { std::this_thread::sleep_for(std::chrono::milliseconds(100)); }, nullptr), cudaSuccess);
+    ASSERT_EQ(cudaMemcpyAsync(taps.data_ptr(), raw_host, taps.bytes(), cudaMemcpyHostToDevice,
+                              streams.producer),
+              cudaSuccess);
+    const auto actual = host_f32(nn::conv2d(input, weight, nullptr, params, nullptr, &taps));
+    EXPECT_TRUE(all_close(actual, expected, kF16Rtol, kF16Atol));
+    ASSERT_EQ(cudaStreamSynchronize(streams.producer), cudaSuccess);
+}
 
 TEST_F(NnOpsTest, GemmOddShapesFp32AndFp16) {
     const int shapes[][3] = {{17, 19, 13}, {1, 8, 3}, {64, 64, 32}, {137, 65, 17}};

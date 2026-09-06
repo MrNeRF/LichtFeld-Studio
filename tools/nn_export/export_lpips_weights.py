@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Export LPIPS v0.1 VGG16 weights and generate the native parity fixture.
+"""Export LPIPS v0.1 VGG16 weights.
+
+Pass --fixture tests/data/nn/lpips_ref_fixture.json to also regenerate
+parity fixtures and lossless crops from the local data/bicycle dataset.
 
 The synthetic pair is 1x3x64x96.  For pixel (x,y), image A has channels
 ((x+2*y)/(95+2*63), (x%17)/16, ((3*x+5*y)%29)/28), while image B has
@@ -90,24 +93,12 @@ def export(args: argparse.Namespace) -> None:
     import torchvision
     import lpips
 
-    pair_a, pair_b = synthetic_pair()
-    ta = torch.from_numpy(pair_a)
-    tb = torch.from_numpy(pair_b)
-
     pip_model = lpips.LPIPS(net="vgg", version="0.1")
     pip_model.eval()
     pip_linears = list(pip_model.lin) if hasattr(pip_model, "lin") else [getattr(pip_model, f"lin{i}") for i in range(5)]
 
     def linear_conv(layer):
         return layer[1] if hasattr(layer, "__getitem__") else layer.model[1]
-
-    with torch.no_grad():
-        identity_value, identity_res = pip_model(ta, tb, retPerLayer=True, normalize=False)
-        normalize_value, normalize_res = pip_model(ta, tb, retPerLayer=True, normalize=True)
-        identity_features_a = pip_model.net(pip_model.scaling_layer(ta))
-        normalize_features_a = pip_model.net(pip_model.scaling_layer(ta * 2 - 1))
-        identity_taps = [lpips.normalize_tensor(x).detach().cpu().numpy() for x in identity_features_a]
-        normalize_taps = [lpips.normalize_tensor(x).detach().cpu().numpy() for x in normalize_features_a]
 
     features = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1).features
     tensors: dict[str, np.ndarray] = {
@@ -135,6 +126,21 @@ def export(args: argparse.Namespace) -> None:
         "lpips_package_source_sha256": sha256_bytes(source_lpips),
     }
     write_lfw(args.out, tensors, meta)
+    print(f"wrote {args.out} sha256={sha256_bytes(args.out.read_bytes())}")
+    if args.fixture is None:
+        return
+
+    pair_a, pair_b = synthetic_pair()
+    ta = torch.from_numpy(pair_a)
+    tb = torch.from_numpy(pair_b)
+
+    with torch.no_grad():
+        identity_value, identity_res = pip_model(ta, tb, retPerLayer=True, normalize=False)
+        normalize_value, normalize_res = pip_model(ta, tb, retPerLayer=True, normalize=True)
+        identity_features_a = pip_model.net(pip_model.scaling_layer(ta))
+        normalize_features_a = pip_model.net(pip_model.scaling_layer(ta * 2 - 1))
+        identity_taps = [lpips.normalize_tensor(x).detach().cpu().numpy() for x in identity_features_a]
+        normalize_taps = [lpips.normalize_tensor(x).detach().cpu().numpy() for x in normalize_features_a]
 
     real_files = sorted((args.repo / "data/bicycle/images_4").glob("*.JPG"))
     first = args.repo / "data/bicycle/images_4/_DSC8679.JPG"
@@ -178,7 +184,7 @@ def export(args: argparse.Namespace) -> None:
         "model": meta,
         "synthetic": {
             "input_shape": [1, 3, 64, 96],
-            "formula": __doc__.split("\n\n", 1)[1].strip(),
+            "formula": __doc__.split("\n\n", 2)[2].strip(),
             "identity": {
                 "normalized_taps": [sampled(tap) for tap in identity_taps],
                 "per_tap_scalars": [float(value.item()) for value in identity_res],
@@ -209,7 +215,6 @@ def export(args: argparse.Namespace) -> None:
     args.fixture.write_text(json.dumps(fixture, indent=2) + "\n", encoding="utf-8")
     if args.fixture.stat().st_size >= FIXTURE_BUDGET:
         raise RuntimeError(f"fixture is {args.fixture.stat().st_size} bytes, over budget")
-    print(f"wrote {args.out} sha256={sha256_bytes(args.out.read_bytes())}")
     print(f"wrote {args.fixture} bytes={args.fixture.stat().st_size}")
     print(f"real pair={first.name} vs {real_next.name}")
     print(f"wrote {crop_a_path} and {crop_b_path}")
@@ -218,7 +223,7 @@ def export(args: argparse.Namespace) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path, default=Path.home() / ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw")
-    parser.add_argument("--fixture", type=Path, default=Path("tests/data/nn/lpips_ref_fixture.json"))
+    parser.add_argument("--fixture", type=Path, help="Also regenerate parity fixtures; requires data/bicycle")
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[2])
     args = parser.parse_args()
     export(args)

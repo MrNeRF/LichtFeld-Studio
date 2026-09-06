@@ -610,7 +610,7 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
-        pin_operands({&in_c, &w_c});
+        pin_operands({&in_c, &w_c, b_c, weight_taps});
 
         if (pointwise) {
             auto nchw = empty_like_shape(
@@ -638,6 +638,10 @@ namespace lfs::core::nn {
                                                            static_cast<std::size_t>(out_h),
                                                            static_cast<std::size_t>(out_w)}});
             const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nchw.stream());
+            if (b_c)
+                b_c->sync_to_stream(stream);
+            if (weight_taps)
+                weight_taps->sync_to_stream(stream);
             nchw.set_stream(stream);
             const std::size_t scratch_bytes =
                 weight_taps != nullptr

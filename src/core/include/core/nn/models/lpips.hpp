@@ -23,11 +23,6 @@ namespace lfs::core::nn::models {
         Normalize,
     };
 
-    enum class LpipsComputeMode {
-        Exact,
-        Fast,
-    };
-
     struct LpipsTaps {
         std::array<Tensor, 5> normalized_features{};
         std::array<float, 5> scalars{};
@@ -49,15 +44,13 @@ namespace lfs::core::nn::models {
                                                  std::optional<InputScaling> scaling = std::nullopt);
 
         [[nodiscard]] DataType compute_dtype() const { return compute_; }
-        [[nodiscard]] LpipsComputeMode compute_mode() const {
-            return compute_ == DataType::Float16 ? LpipsComputeMode::Fast : LpipsComputeMode::Exact;
-        }
         [[nodiscard]] Device device() const { return device_; }
         [[nodiscard]] std::size_t weights_bytes() const;
         [[nodiscard]] std::size_t arena_bytes() const { return arena_.capacity(); }
         [[nodiscard]] std::size_t workspace_bytes() const { return workspace_.bytes(); }
         [[nodiscard]] std::size_t activation_budget_bytes() const { return activation_budget_bytes_; }
         [[nodiscard]] std::size_t tile_size_for(int height, int width) const;
+        // Extra free VRAM needed for the next call; includes allocator rounding.
         [[nodiscard]] std::size_t estimated_peak_bytes(int height, int width) const;
         void release_activations();
 
@@ -68,8 +61,6 @@ namespace lfs::core::nn::models {
                                        InputScaling scaling, LpipsTaps* taps);
         lfs::Result<float> run_tiled(const Tensor& pred, const Tensor& target,
                                      InputScaling scaling);
-        lfs::Result<float> run_tiled_fast(const Tensor& pred, const Tensor& target,
-                                          InputScaling scaling);
         // Fast mode without taps: fused kernels writing ping-pong feature buffers,
         // no activation arena, no intermediate copies.
         lfs::Result<float> run_fast(const Tensor& pred, const Tensor& target,

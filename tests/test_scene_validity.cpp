@@ -753,6 +753,8 @@ namespace lfs::python {
 
         auto trainer = std::make_unique<training::Trainer>(scene);
         auto params = trainer->getParams();
+        params.optimization.enable_eval = false;
+        params.no_download = true;
         params.init_path = (std::filesystem::temp_directory_path() /
                             "lichtfeld-missing-training-init.ply")
                                .string();
@@ -762,6 +764,16 @@ namespace lfs::python {
         lfs::vis::TrainerManager manager;
         manager.setScene(&scene);
         manager.setTrainer(std::move(trainer));
+        manager.getEditableOptParams().enable_eval = true;
+
+        const auto caller_thread = std::this_thread::get_id();
+        std::atomic<bool> weights_prepared{false};
+        manager.set_evaluation_weights_preparer([&](const bool allow_download) -> std::optional<std::filesystem::path> {
+            EXPECT_NE(std::this_thread::get_id(), caller_thread);
+            EXPECT_FALSE(allow_download);
+            weights_prepared = true;
+            return std::nullopt;
+        });
 
         std::promise<void> completion;
         auto completion_future = completion.get_future();
@@ -774,8 +786,10 @@ namespace lfs::python {
 
         ASSERT_TRUE(manager.startTraining());
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Starting);
+        EXPECT_FALSE(weights_prepared);
         initialization_lock.unlock();
         ASSERT_FALSE(manager.waitForInitialization());
+        EXPECT_TRUE(weights_prepared);
         ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
 
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Finished);

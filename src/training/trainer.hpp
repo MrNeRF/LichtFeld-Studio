@@ -310,7 +310,7 @@ namespace lfs::training {
             return params_;
         }
         void setParams(const lfs::core::param::TrainingParameters& params);
-        void set_lpips_weights_path(std::filesystem::path path);
+        void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);
         }

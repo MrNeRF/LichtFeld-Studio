@@ -48,10 +48,8 @@ namespace {
             device);
     }
 
-    std::pair<Tensor, Tensor> synthetic_pair() {
-        constexpr int height = 64;
-        constexpr int width = 96;
-        constexpr std::size_t pixels = static_cast<std::size_t>(height) * width;
+    std::pair<Tensor, Tensor> synthetic_pair(const int height = 64, const int width = 96) {
+        const std::size_t pixels = static_cast<std::size_t>(height) * width;
         std::vector<float> a(3 * pixels), b(3 * pixels);
         for (int y = 0; y < height; ++y) {
             for (int x = 0; x < width; ++x) {
@@ -82,34 +80,6 @@ namespace {
         }
         lfs::core::free_image(data);
         return chw_tensor(chw, height, width);
-    }
-
-    std::pair<Tensor, Tensor> load_side_by_side(const fs::path& path) {
-        auto [data, width, height, channels] = lfs::core::load_image(path);
-        if (!data || channels != 3 || width < 2 * 1237 + 4 || height != 822)
-            throw std::runtime_error("failed to load LPIPS side-by-side image " + path.string());
-        constexpr int image_width = 1237;
-        constexpr int separator = 4;
-        std::vector<float> left(3 * static_cast<std::size_t>(height) * image_width);
-        std::vector<float> right(left.size());
-        for (int y = 0; y < height; ++y) {
-            for (int x = 0; x < image_width; ++x) {
-                const auto left_pixel = static_cast<std::size_t>(y) * width + x;
-                const auto right_pixel = static_cast<std::size_t>(y) * width + image_width + separator + x;
-                for (int c = 0; c < 3; ++c) {
-                    left[static_cast<std::size_t>(c) * height * image_width +
-                         static_cast<std::size_t>(y) * image_width + x] =
-                        static_cast<float>(data[3 * left_pixel + c]) / 255.0f;
-                    right[static_cast<std::size_t>(c) * height * image_width +
-                          static_cast<std::size_t>(y) * image_width + x] =
-                        static_cast<float>(data[3 * right_pixel + c]) / 255.0f;
-                }
-            }
-        }
-        lfs::core::free_image(data);
-        const lfs::core::TensorShape shape({1, 3, static_cast<std::size_t>(height), image_width});
-        return {Tensor::from_vector(left, shape, Device::CUDA),
-                Tensor::from_vector(right, shape, Device::CUDA)};
     }
 
     nlohmann::json fixture() {
@@ -151,15 +121,38 @@ namespace {
         return std::move(*loaded);
     }
 
-    void skip_without_weights() {
-        if (!fs::is_regular_file(weights_path()))
-            GTEST_SKIP() << "LPIPS weights absent; set LFS_LPIPS_WEIGHTS or provide "
-                         << weights_path();
-    }
+    class LpipsTest : public ::testing::Test {
+        void SetUp() override {
+            if (!fs::is_regular_file(weights_path()))
+                GTEST_SKIP() << "LPIPS weights absent: " << weights_path();
+        }
+    };
+
+    class ScopedConvPath {
+    public:
+        explicit ScopedConvPath(const char* path) {
+            if (const char* previous = std::getenv("LFS_LPIPS_CONV"))
+                previous_ = previous;
+            set(path);
+        }
+        ~ScopedConvPath() { set(previous_ ? previous_->c_str() : nullptr); }
+
+    private:
+        static void set(const char* value) {
+#ifdef _WIN32
+            _putenv_s("LFS_LPIPS_CONV", value ? value : "");
+#else
+            if (value)
+                setenv("LFS_LPIPS_CONV", value, 1);
+            else
+                unsetenv("LFS_LPIPS_CONV");
+#endif
+        }
+        std::optional<std::string> previous_;
+    };
 } // namespace
 
-TEST(LpipsTest, FixtureParity) {
-    skip_without_weights();
+TEST_F(LpipsTest, FixtureParity) {
     if (!fs::is_regular_file(repo_root() / "tests/data/nn/lpips_ref_fixture.json"))
         GTEST_SKIP() << "LPIPS reference fixture is absent";
     auto reference = fixture();
@@ -184,8 +177,7 @@ TEST(LpipsTest, FixtureParity) {
     }
 }
 
-TEST(LpipsTest, RealPairReference) {
-    skip_without_weights();
+TEST_F(LpipsTest, RealPairReference) {
     if (!fs::is_regular_file(bicycle_a()) || !fs::is_regular_file(bicycle_b()))
         GTEST_SKIP() << "data/bicycle is absent";
     auto reference = fixture().at("real");
@@ -201,8 +193,7 @@ TEST(LpipsTest, RealPairReference) {
     EXPECT_NEAR(*normalize, reference.at("normalize").get<float>(), 3e-3f);
 }
 
-TEST(LpipsTest, LosslessCropPairMatchesReference) {
-    skip_without_weights();
+TEST_F(LpipsTest, LosslessCropPairMatchesReference) {
     const auto [crop_a_path, crop_b_path] = crop_pair_paths();
     if (!fs::is_regular_file(crop_a_path) || !fs::is_regular_file(crop_b_path))
         GTEST_SKIP() << "LPIPS lossless crop pair is absent";
@@ -232,22 +223,22 @@ TEST(LpipsTest, LosslessCropPairMatchesReference) {
     auto identity16 = model16->forward(
         a, b, lfs::core::nn::models::InputScaling::Identity);
     ASSERT_TRUE(identity16.has_value()) << identity16.error().detail();
+    EXPECT_NEAR(*identity16, *identity, 5e-4f);
     std::cout << "LPIPS_CROP fp32=" << *identity << " fp16=" << *identity16
               << " abs_delta=" << std::abs(*identity - *identity16) << std::endl;
 }
 
-TEST(LpipsTest, TiledMatchesUntiled) {
-    skip_without_weights();
-    auto [a, b] = synthetic_pair();
+TEST_F(LpipsTest, TiledMatchesUntiled) {
+    auto [a, b] = synthetic_pair(257, 319);
     auto untiled = load_model();
-    constexpr std::size_t small_budget = 4ULL * 1024ULL * 1024ULL;
+    constexpr std::size_t small_budget = 64ULL * 1024ULL * 1024ULL;
     auto tiled_loaded = Lpips::load(
         weights_path(), Device::CUDA, DataType::Float32,
         lfs::core::nn::models::InputScaling::Identity, small_budget);
     ASSERT_TRUE(untiled.has_value());
     ASSERT_TRUE(tiled_loaded.has_value()) << tiled_loaded.error().detail();
     auto tiled = std::move(*tiled_loaded);
-    ASSERT_LT(tiled.tile_size_for(64, 96), 96U);
+    ASSERT_LT(tiled.tile_size_for(257, 319) + 224, 319U);
     auto expected = untiled->forward(a, b);
     auto actual = tiled.forward(a, b);
     ASSERT_TRUE(expected.has_value()) << expected.error().detail();
@@ -257,8 +248,63 @@ TEST(LpipsTest, TiledMatchesUntiled) {
     tiled.release_activations();
 }
 
-TEST(LpipsTest, TiledRealPairMatchesUntiled) {
-    skip_without_weights();
+TEST_F(LpipsTest, FastTilingCoversOddSyntheticImage) {
+    auto [a, b] = synthetic_pair(257, 319);
+    auto untiled = load_model(DataType::Float16);
+    auto tiled = Lpips::load(weights_path(), Device::CUDA, DataType::Float16,
+                             lfs::core::nn::models::InputScaling::Identity, 24ULL * 1024 * 1024);
+    ASSERT_TRUE(untiled);
+    ASSERT_TRUE(tiled);
+    ASSERT_LT(tiled->tile_size_for(257, 319) + 224, 319U);
+    for (const auto scaling : {lfs::core::nn::models::InputScaling::Identity,
+                               lfs::core::nn::models::InputScaling::Normalize}) {
+        auto expected = untiled->forward(a, b, scaling);
+        auto actual = tiled->forward(a, b, scaling);
+        ASSERT_TRUE(expected);
+        ASSERT_TRUE(actual);
+        EXPECT_NEAR(*actual, *expected, 1e-5f);
+    }
+}
+
+TEST_F(LpipsTest, WideImageEstimateCoversNewDeviceAllocations) {
+    auto model = load_model(DataType::Float16);
+    ASSERT_TRUE(model);
+    auto [a, b] = synthetic_pair(512, 6000);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    Tensor::trim_memory_pool();
+    const auto required = model->estimated_peak_bytes(512, 6000);
+    std::size_t free_before, free_after, total;
+    ASSERT_EQ(cudaMemGetInfo(&free_before, &total), cudaSuccess);
+    if (free_before < required)
+        GTEST_SKIP() << "Not enough free VRAM for the allocation regression";
+    auto value = model->forward(a, b);
+    ASSERT_TRUE(value) << value.error().detail();
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    ASSERT_EQ(cudaMemGetInfo(&free_after, &total), cudaSuccess);
+    if (free_after < free_before)
+        EXPECT_LE(free_before - free_after, required);
+    EXPECT_LT(model->estimated_peak_bytes(512, 6000), required);
+    model->release_activations();
+    EXPECT_EQ(model->estimated_peak_bytes(512, 6000), required);
+    Tensor::trim_memory_pool();
+}
+
+TEST_F(LpipsTest, RejectsInputsThatCannotReachAllVggStages) {
+    for (const auto dtype : {DataType::Float32, DataType::Float16}) {
+        auto model = load_model(dtype);
+        ASSERT_TRUE(model);
+        for (const auto shape : {lfs::core::TensorShape({1, 3, 8, 32}),
+                                 lfs::core::TensorShape({1, 3, 32, 8}),
+                                 lfs::core::TensorShape({2, 3, 32, 32})}) {
+            auto image = Tensor::zeros(shape, Device::CUDA);
+            auto result = model->forward(image, image);
+            ASSERT_FALSE(result);
+            EXPECT_EQ(result.error().code(), lfs::ErrorCode::InvalidArgument);
+        }
+    }
+}
+
+TEST_F(LpipsTest, TiledRealPairMatchesUntiled) {
     if (fs::is_regular_file(bicycle_a()) && fs::is_regular_file(bicycle_b())) {
         auto real_a = load_rgb(bicycle_a());
         auto real_b = load_rgb(bicycle_b());
@@ -285,8 +331,7 @@ TEST(LpipsTest, TiledRealPairMatchesUntiled) {
     GTEST_SKIP() << "data/bicycle is absent";
 }
 
-TEST(LpipsTest, TiledFastMatchesUntiled) {
-    skip_without_weights();
+TEST_F(LpipsTest, TiledFastMatchesUntiled) {
     if (!fs::is_regular_file(bicycle_a()) || !fs::is_regular_file(bicycle_b()))
         GTEST_SKIP() << "data/bicycle is absent";
     auto real_a = load_rgb(bicycle_a());
@@ -312,8 +357,7 @@ TEST(LpipsTest, TiledFastMatchesUntiled) {
     tiled.release_activations();
 }
 
-TEST(LpipsTest, IdentityIsZero) {
-    skip_without_weights();
+TEST_F(LpipsTest, IdentityIsZero) {
     if (!fs::is_regular_file(bicycle_a()))
         GTEST_SKIP() << "data/bicycle is absent";
     auto model = load_model();
@@ -324,8 +368,7 @@ TEST(LpipsTest, IdentityIsZero) {
     EXPECT_LE(*value, 1e-6f);
 }
 
-TEST(LpipsTest, BlurIsMonotonic) {
-    skip_without_weights();
+TEST_F(LpipsTest, BlurIsMonotonic) {
     if (!fs::is_regular_file(bicycle_a()))
         GTEST_SKIP() << "data/bicycle is absent";
     auto model = load_model();
@@ -366,8 +409,7 @@ TEST(LpipsTest, BlurIsMonotonic) {
     EXPECT_LT(values[1], values[2]);
 }
 
-TEST(LpipsTest, Float16ComputeMatchesFloat32) {
-    skip_without_weights();
+TEST_F(LpipsTest, Float16ComputeMatchesFloat32) {
     if (!fs::is_regular_file(bicycle_a()) || !fs::is_regular_file(bicycle_b()))
         GTEST_SKIP() << "data/bicycle is absent";
     auto a = load_rgb(bicycle_a());
@@ -378,115 +420,21 @@ TEST(LpipsTest, Float16ComputeMatchesFloat32) {
     ASSERT_TRUE(model16.has_value());
     auto value32 = model32->forward(a, b);
     ASSERT_TRUE(value32.has_value()) << value32.error().detail();
-    const auto time_forward = [&](auto& model) {
-        if (!model.forward(a, b).has_value()) {
-            ADD_FAILURE() << "LPIPS warmup forward failed";
-            return 0.0;
-        }
-        constexpr int repeats = 3;
-        const auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < repeats; ++i) {
-            if (!model.forward(a, b).has_value()) {
-                ADD_FAILURE() << "LPIPS timed forward failed";
-                return 0.0;
-            }
-        }
-        const auto elapsed = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - start);
-        return elapsed.count() / repeats;
-    };
-    const double ms32 = time_forward(*model32);
-    const double ms16 = time_forward(*model16);
     auto value16 = model16->forward(a, b);
     ASSERT_TRUE(value16.has_value()) << value16.error().detail();
-    std::cout << "LPIPS_PERF ms_per_image_fp32=" << ms32
-              << " ms_per_image_fp16=" << ms16
-              << " arena_bytes_fp32=" << model32->arena_bytes()
-              << " arena_bytes_fp16=" << model16->arena_bytes()
-              << " weights_bytes=" << model32->weights_bytes() << std::endl;
     EXPECT_LE(std::abs(*value32 - *value16), 5e-4f);
     model32->release_activations();
     model16->release_activations();
 }
 
-TEST(LpipsTest, FastNumericsGate) {
-    skip_without_weights();
-    auto exact = load_model(DataType::Float32);
-    auto fast = load_model(DataType::Float16);
-    ASSERT_TRUE(exact.has_value());
-    ASSERT_TRUE(fast.has_value());
-
-    auto crop = crop_pair_paths();
-    if (fs::is_regular_file(crop.first) && fs::is_regular_file(crop.second)) {
-        auto a = load_rgb(crop.first);
-        auto b = load_rgb(crop.second);
-        auto exact_value = exact->forward(a, b);
-        auto fast_value = fast->forward(a, b);
-        ASSERT_TRUE(exact_value.has_value());
-        ASSERT_TRUE(fast_value.has_value());
-        std::cout << "LPIPS_GATE crop_abs_delta=" << std::abs(*fast_value - *exact_value)
-                  << std::endl;
-        EXPECT_LE(std::abs(*fast_value - *exact_value), 5e-4f);
-    }
-
-    if (!fs::is_regular_file(bicycle_a()) || !fs::is_regular_file(bicycle_b()))
-        GTEST_SKIP() << "data/bicycle is absent";
-    auto real_a = load_rgb(bicycle_a());
-    auto real_b = load_rgb(bicycle_b());
-    auto exact_real = exact->forward(real_a, real_b);
-    auto fast_real = fast->forward(real_a, real_b);
-    ASSERT_TRUE(exact_real.has_value());
-    ASSERT_TRUE(fast_real.has_value());
-    std::cout << "LPIPS_GATE real_abs_delta=" << std::abs(*fast_real - *exact_real)
-              << std::endl;
-    EXPECT_LE(std::abs(*fast_real - *exact_real), 5e-4f);
-
-    const auto directory = repo_root() /
-                           ".codex_tmp/lpips_native/runs/bicycle_current_r2/eval_step_30001";
-    std::vector<fs::path> images;
-    if (fs::is_directory(directory)) {
-        for (const auto& entry : fs::directory_iterator(directory)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".png" &&
-                entry.path().stem().string().find("_normals") == std::string::npos)
-                images.push_back(entry.path());
-        }
-    }
-    std::sort(images.begin(), images.end());
-    if (images.size() != 25)
-        GTEST_SKIP() << "25-image arm-B gate directory is absent";
-    double sum = 0.0;
-    float maximum = 0.0f;
-    for (const auto& image : images) {
-        auto [pred, target] = load_side_by_side(image);
-        auto exact_value = exact->forward(pred, target);
-        auto fast_value = fast->forward(pred, target);
-        ASSERT_TRUE(exact_value.has_value());
-        ASSERT_TRUE(fast_value.has_value());
-        const float delta = std::abs(*fast_value - *exact_value);
-        sum += delta;
-        maximum = std::max(maximum, delta);
-    }
-    std::cout << "LPIPS_GATE arm_b_count=" << images.size()
-              << " mean_abs_delta=" << sum / static_cast<double>(images.size())
-              << " max_abs_delta=" << maximum << std::endl;
-    EXPECT_LE(maximum, 5e-4f);
-    EXPECT_LE(sum / static_cast<double>(images.size()), 2e-4);
-    exact->release_activations();
-    fast->release_activations();
-}
-
-TEST(LpipsTest, ConvPathsAgree) {
-    skip_without_weights();
+TEST_F(LpipsTest, ConvPathsAgree) {
     auto fast = load_model(DataType::Float16);
     auto exact = load_model(DataType::Float32);
     ASSERT_TRUE(fast.has_value());
     ASSERT_TRUE(exact.has_value());
 
     const auto run_forced = [&](const char* path, const Tensor& a, const Tensor& b) {
-        if (setenv("LFS_LPIPS_CONV", path, 1) != 0) {
-            ADD_FAILURE() << "failed to set LFS_LPIPS_CONV";
-            return 0.0f;
-        }
+        const ScopedConvPath forced(path);
         auto value = fast->forward(a, b);
         if (!value) {
             ADD_FAILURE() << value.error().detail();
@@ -497,7 +445,6 @@ TEST(LpipsTest, ConvPathsAgree) {
     const auto check_pair = [&](const Tensor& a, const Tensor& b) {
         const float tensor = run_forced("tensor", a, b);
         const float simt = run_forced("simt", a, b);
-        unsetenv("LFS_LPIPS_CONV");
         auto exact_value = exact->forward(a, b);
         if (!exact_value) {
             ADD_FAILURE() << exact_value.error().detail();
@@ -517,13 +464,11 @@ TEST(LpipsTest, ConvPathsAgree) {
         check_pair(load_rgb(crop_a_path), load_rgb(crop_b_path));
     if (fs::is_regular_file(bicycle_a()) && fs::is_regular_file(bicycle_b()))
         check_pair(load_rgb(bicycle_a()), load_rgb(bicycle_b()));
-    unsetenv("LFS_LPIPS_CONV");
     exact->release_activations();
     fast->release_activations();
 }
 
-TEST(LpipsTest, DispatchFallbackPicksFaster) {
-    skip_without_weights();
+TEST_F(LpipsTest, FallbackDispatchMatchesReference) {
     const auto [crop_a_path, crop_b_path] = crop_pair_paths();
     if (!fs::is_regular_file(crop_a_path) || !fs::is_regular_file(crop_b_path))
         GTEST_SKIP() << "LPIPS lossless crop pair is absent";
@@ -531,14 +476,13 @@ TEST(LpipsTest, DispatchFallbackPicksFaster) {
     ASSERT_TRUE(model.has_value());
     auto a = load_rgb(crop_a_path);
     auto b = load_rgb(crop_b_path);
-    ASSERT_EQ(setenv("LFS_LPIPS_CONV", "auto75", 1), 0);
+    const ScopedConvPath forced("auto75");
     auto value = model->forward(a, b, lfs::core::nn::models::InputScaling::Identity);
-    unsetenv("LFS_LPIPS_CONV");
     ASSERT_TRUE(value.has_value()) << value.error().detail();
-    EXPECT_TRUE(std::isfinite(*value));
+    EXPECT_NEAR(*value, fixture().at("crop_pair").at("lpips_identity").get<float>(), 5e-4f);
 }
 
-TEST(LpipsTest, ConvKernelShapeSweep) {
+TEST(LpipsKernelTest, ConvKernelShapeSweep) {
     struct Case {
         int n, cin, cout, h, w;
         lfs::core::nn::ConvPadMode pad;
@@ -573,9 +517,10 @@ TEST(LpipsTest, ConvKernelShapeSweep) {
         params.pad_w = 1;
         params.pad_mode = c.pad;
         params.activation = c.act;
-        ASSERT_EQ(setenv("LFS_LPIPS_CONV", "simt", 1), 0);
-        const auto reference = host_values(lfs::core::nn::conv2d(input, weight, &bias, params));
-        unsetenv("LFS_LPIPS_CONV");
+        const auto reference = [&] {
+            const ScopedConvPath forced("simt");
+            return host_values(lfs::core::nn::conv2d(input, weight, &bias, params));
+        }();
         const auto actual = host_values(lfs::core::nn::conv2d(input, weight, &bias, params));
         ASSERT_EQ(reference.size(), actual.size());
         float max_delta = 0.0f;
@@ -592,8 +537,7 @@ TEST(LpipsTest, ConvKernelShapeSweep) {
     }
 }
 
-TEST(LpipsTest, ForwardDoesNotMutateInputs) {
-    skip_without_weights();
+TEST_F(LpipsTest, ForwardDoesNotMutateInputs) {
     auto [batched_pred, batched_target] = synthetic_pair();
     const auto checksum = [](const Tensor& tensor) {
         const auto values = host_values(tensor);

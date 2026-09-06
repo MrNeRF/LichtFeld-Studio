@@ -814,7 +814,7 @@ namespace lfs::core::nn::kernels {
                 LFS_CUDA_CHECK(cudaEventElapsedTime(&wmma_ms, begin, wmma_done));
                 LFS_CUDA_CHECK(cudaEventElapsedTime(&simt_ms, wmma_done, simt_done));
                 auto_choice[device].store(wmma_ms <= simt_ms ? 1 : 2, std::memory_order_relaxed);
-                LOG_DEBUG("NN FP16 conv dispatch device=%d: %s (WMMA %.3f ms, SIMT %.3f ms)",
+                LOG_DEBUG("NN FP16 conv dispatch device={}: {} (WMMA {:.3f} ms, SIMT {:.3f} ms)",
                           device, auto_choice[device].load(std::memory_order_relaxed) == 1 ? "wmma" : "simt", wmma_ms, simt_ms);
                 LFS_CUDA_CHECK(cudaEventDestroy(begin));
                 LFS_CUDA_CHECK(cudaEventDestroy(wmma_done));

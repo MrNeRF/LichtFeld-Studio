@@ -207,6 +207,8 @@ namespace lfs::core::nn::models {
                                              static_cast<int>(tensor.shape()[1]), taps.stream());
                 model.weight_taps_.emplace(name, std::move(taps));
             }
+            if (!model.weight_taps_.empty())
+                LFS_CUDA_CHECK(cudaStreamSynchronize(model.weight_taps_.begin()->second.stream()));
         }
         const std::array<const char*, 8> required = {
             "encoder.image_mean",

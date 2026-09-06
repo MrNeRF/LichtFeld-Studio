@@ -82,18 +82,18 @@ namespace {
 
     std::pair<lfs::core::Tensor, lfs::core::Tensor> load_lpips_bench_pair() {
         namespace fs = std::filesystem;
-        const fs::path path = std::getenv("LFS_LPIPS_BENCH_PNG")
-                                  ? fs::path(std::getenv("LFS_LPIPS_BENCH_PNG"))
-                                  : fs::path(PROJECT_ROOT_PATH) /
-                                        ".codex_tmp/lpips_native/runs/xcheck_withlpips_r2_nomempool/"
-                                        "eval_step_30001/0.png";
+        const char* input = std::getenv("LFS_LPIPS_BENCH_PNG");
+        if (!input || !*input)
+            throw std::runtime_error("Set LFS_LPIPS_BENCH_PNG to an evaluation comparison PNG");
+        const fs::path path(input);
         auto [data, width, height, channels] = lfs::core::load_image(path);
-        if (!data || channels != 3 || width < 2 * 1237 + 4 || height != 822) {
-            throw std::runtime_error("LPIPS benchmark PNG is missing or has unexpected dimensions: " +
-                                     path.string());
-        }
-        constexpr int image_width = 1237;
         constexpr int separator = 4;
+        if (!data || channels != 3 || width < 36 || height < 16 || (width - separator) % 2 != 0) {
+            if (data)
+                lfs::core::free_image(data);
+            throw std::runtime_error("Invalid LPIPS benchmark comparison PNG: " + path.string());
+        }
+        const int image_width = (width - separator) / 2;
         std::vector<float> left(3 * static_cast<std::size_t>(height) * image_width);
         std::vector<float> right(left.size());
         for (int y = 0; y < height; ++y) {
@@ -111,7 +111,7 @@ namespace {
             }
         }
         lfs::core::free_image(data);
-        const lfs::core::TensorShape shape({1, 3, static_cast<std::size_t>(height), image_width});
+        const lfs::core::TensorShape shape({1, 3, static_cast<std::size_t>(height), static_cast<std::size_t>(image_width)});
         return {lfs::core::Tensor::from_vector(left, shape, lfs::core::Device::CUDA),
                 lfs::core::Tensor::from_vector(right, shape, lfs::core::Device::CUDA)};
     }
@@ -289,10 +289,9 @@ TEST(NnBench, DISABLED_LpipsFullResolution) {
     if (!benches_enabled() && testing::GTEST_FLAG(also_run_disabled_tests) == false) {
         GTEST_SKIP();
     }
-    const auto weights = std::getenv("LFS_LPIPS_WEIGHTS")
-                             ? std::filesystem::path(std::getenv("LFS_LPIPS_WEIGHTS"))
-                             : std::filesystem::path(std::getenv("HOME")) /
-                                   ".lichtfeld/onnx/lpips-vgg16-v0.1.lfw";
+    const char* weights = std::getenv("LFS_LPIPS_WEIGHTS");
+    if (!weights || !*weights || !std::getenv("LFS_LPIPS_BENCH_PNG"))
+        GTEST_SKIP() << "Set LFS_LPIPS_WEIGHTS and LFS_LPIPS_BENCH_PNG to run the LPIPS benchmark";
     auto pair = load_lpips_bench_pair();
     const char* const only_dtype = std::getenv("LFS_NN_BENCH_DTYPE");
     for (const auto dtype : {lfs::core::DataType::Float32, lfs::core::DataType::Float16}) {

@@ -3672,10 +3672,10 @@ namespace lfs::training {
         apply_param_side_effects(params, bg_image_path_changed);
     }
 
-    void Trainer::set_lpips_weights_path(std::filesystem::path path) {
+    void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {
         lpips_weights_path_ = std::move(path);
         if (evaluator_)
-            evaluator_->set_lpips_weights_path(*lpips_weights_path_);
+            evaluator_->set_lpips_weights_path(lpips_weights_path_);
     }
 
     void Trainer::apply_pending_params_at_safe_point() {

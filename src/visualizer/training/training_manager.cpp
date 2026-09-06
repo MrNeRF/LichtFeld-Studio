@@ -1073,11 +1073,6 @@ namespace lfs::vis {
 
         clearEvaluationMetrics();
 
-        if (evaluation_weights_preparer_ && trainer_->getParams().optimization.enable_eval) {
-            if (auto path = evaluation_weights_preparer_(!trainer_->getParams().no_download))
-                trainer_->set_lpips_weights_path(std::move(*path));
-        }
-
         const auto reject_start = [this](std::string message, const lfs::ErrorCode code) {
             LOG_ERROR("Cannot start training: {}", message);
             last_error_ = std::move(message);
@@ -1147,6 +1142,9 @@ namespace lfs::vis {
         // so startTraining() can acknowledge Starting while that mutex is used
         // to gate initialization.
         applyPendingParams();
+
+        if (evaluation_weights_preparer_ && trainer_->getParams().optimization.enable_eval)
+            trainer_->set_lpips_weights_path(evaluation_weights_preparer_(!trainer_->getParams().no_download));
 
         std::optional<TrainingSceneInitializationRollback> scene_rollback;
         if (scene_) {

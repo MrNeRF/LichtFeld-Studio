@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "internal/cuda_stream_context.hpp"
+#include "internal/size_bucketed_pool.hpp"
 #include "nn_kernels.hpp"
 
 #include <algorithm>
@@ -23,8 +24,36 @@ namespace lfs::core::nn::models {
         constexpr std::size_t kTileHalo = 112;
         constexpr std::size_t kExactBytesPerPixel = 1400;
         constexpr std::size_t kFastBytesPerPixel = 560;
+        struct Layer {
+            int index;
+            int cin;
+            int cout;
+        };
+        constexpr std::array<Layer, 13> kLayers{{{0, 3, 64},
+                                                 {2, 64, 64},
+                                                 {5, 64, 128},
+                                                 {7, 128, 128},
+                                                 {10, 128, 256},
+                                                 {12, 256, 256},
+                                                 {14, 256, 256},
+                                                 {17, 256, 512},
+                                                 {19, 512, 512},
+                                                 {21, 512, 512},
+                                                 {24, 512, 512},
+                                                 {26, 512, 512},
+                                                 {28, 512, 512}}};
+        constexpr std::array<int, kBlocks> kStageLayers{2, 2, 3, 3, 3};
+
         TensorShape shape_of(std::initializer_list<std::size_t> dims) {
             return TensorShape(std::vector<std::size_t>(dims));
+        }
+
+        std::size_t fast_activation_bytes(const std::size_t height, const std::size_t width,
+                                          const bool tiled) {
+            const auto pixels = height * width;
+            return 4 * SizeBucketedPool::get_bucket_size(64 * pixels * sizeof(uint16_t)) +
+                   (tiled ? 2 * SizeBucketedPool::get_bucket_size(3 * pixels * sizeof(float)) : 0) +
+                   SizeBucketedPool::get_bucket_size(kBlocks * sizeof(float));
         }
 
         lfs::Error lpips_error(const lfs::ErrorCode code, std::string detail) {
@@ -88,20 +117,29 @@ namespace lfs::core::nn::models {
                                    std::format("weight file is missing {}", name));
             }
         }
-        for (const int index : {0, 2, 5, 7, 10, 12, 14, 17, 19, 21, 24, 26, 28}) {
-            const auto prefix = std::format("vgg.features.{}", index);
+        for (const auto& layer : kLayers) {
+            const auto prefix = std::format("vgg.features.{}", layer.index);
             for (const char* suffix : {"weight", "bias"}) {
                 if (!model.weights_.contains(prefix + "." + suffix)) {
                     return lpips_error(lfs::ErrorCode::NotFound,
                                        std::format("weight file is missing {}.{}", prefix, suffix));
                 }
             }
+            if (model.w(prefix + ".weight").shape() != shape_of({static_cast<std::size_t>(layer.cout),
+                                                                 static_cast<std::size_t>(layer.cin), 3, 3}) ||
+                model.w(prefix + ".bias").shape() != shape_of({static_cast<std::size_t>(layer.cout)}))
+                return lpips_error(lfs::ErrorCode::InvalidArgument,
+                                   std::format("invalid VGG16 weight shape for {}", prefix));
         }
         for (int i = 0; i < kBlocks; ++i) {
             if (!model.weights_.contains(std::format("lin{}.weight", i))) {
                 return lpips_error(lfs::ErrorCode::NotFound,
                                    std::format("weight file is missing lin{}.weight", i));
             }
+            constexpr std::array<std::size_t, kBlocks> channels{64, 128, 256, 512, 512};
+            if (model.w(std::format("lin{}.weight", i)).shape() != shape_of({1, channels[i], 1, 1}))
+                return lpips_error(lfs::ErrorCode::InvalidArgument,
+                                   std::format("invalid LPIPS linear weight shape for lin{}", i));
         }
         const auto shift = model.w("scaling.shift").to(DataType::Float32).to(Device::CPU).contiguous().to_vector();
         const auto scale = model.w("scaling.scale").to(DataType::Float32).to(Device::CPU).contiguous().to_vector();
@@ -121,7 +159,10 @@ namespace lfs::core::nn::models {
         const std::size_t bytes_per_pixel = compute_ == DataType::Float16
                                                 ? kFastBytesPerPixel
                                                 : kExactBytesPerPixel;
-        if (pixels * bytes_per_pixel <= activation_budget_bytes_)
+        const auto untiled_bytes = compute_ == DataType::Float16
+                                       ? fast_activation_bytes(height, width, false)
+                                       : pixels * bytes_per_pixel;
+        if (untiled_bytes <= activation_budget_bytes_)
             return std::max(static_cast<std::size_t>(height), static_cast<std::size_t>(width));
         if (activation_budget_bytes_ <= bytes_per_pixel * kTileHalo * kTileHalo)
             return 16;
@@ -130,7 +171,14 @@ namespace lfs::core::nn::models {
             static_cast<double>(max_crop_pixels)));
         if (max_crop_edge <= 2 * kTileHalo + 16)
             return 16;
-        return std::max<std::size_t>(16, ((max_crop_edge - 2 * kTileHalo) / 16) * 16);
+        auto tile = std::max<std::size_t>(16, ((max_crop_edge - 2 * kTileHalo) / 16) * 16);
+        if (compute_ == DataType::Float16) {
+            while (tile > 16 && fast_activation_bytes(std::min<std::size_t>(height, tile + 2 * kTileHalo),
+                                                      std::min<std::size_t>(width, tile + 2 * kTileHalo), true) >
+                                    activation_budget_bytes_)
+                tile -= 16;
+        }
+        return tile;
     }
 
     std::size_t Lpips::estimated_peak_bytes(const int height, const int width) const {
@@ -141,10 +189,30 @@ namespace lfs::core::nn::models {
         const std::size_t tile_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile);
         const std::size_t crop_h = std::min<std::size_t>(static_cast<std::size_t>(height), tile_h + 2 * kTileHalo);
         const std::size_t crop_w = std::min<std::size_t>(static_cast<std::size_t>(width), tile_w + 2 * kTileHalo);
-        const std::size_t bytes_per_pixel = compute_ == DataType::Float16
-                                                ? kFastBytesPerPixel
-                                                : kExactBytesPerPixel;
-        return crop_h * crop_w * bytes_per_pixel;
+        if (compute_ == DataType::Float32)
+            return crop_h * crop_w * kExactBytesPerPixel;
+
+        // Count new allocations, including pool rounding. Existing buffers are
+        // already reflected in cudaMemGetInfo; they need no second reservation.
+        constexpr std::size_t driver_reserve = 64ULL * 1024 * 1024;
+        std::size_t bytes = driver_reserve;
+        const auto feature_elems = 64 * crop_h * crop_w;
+        for (const auto& buffer : fast_features_) {
+            if (!buffer.is_valid() || buffer.numel() < feature_elems)
+                bytes += SizeBucketedPool::get_bucket_size(feature_elems * sizeof(uint16_t));
+        }
+        if (tile < static_cast<std::size_t>(std::max(height, width)))
+            bytes += 2 * SizeBucketedPool::get_bucket_size(3 * crop_h * crop_w * sizeof(float));
+        if (!fast_scores_.is_valid())
+            bytes += SizeBucketedPool::get_bucket_size(kBlocks * sizeof(float));
+        if (!fast_weight_taps_.is_valid()) {
+            std::size_t taps_bytes = 0;
+            for (std::size_t i = 1; i < kLayers.size(); ++i)
+                taps_bytes += kernels::conv2d_weight_scratch_bytes(kLayers[i].cout, kLayers[i].cin, compute_);
+            if (taps_bytes > 0)
+                bytes += SizeBucketedPool::get_bucket_size(taps_bytes);
+        }
+        return bytes;
     }
 
     std::size_t Lpips::weights_bytes() const {
@@ -215,8 +283,9 @@ namespace lfs::core::nn::models {
     }
 
     Tensor Lpips::normalize_feature(const Tensor& x) {
-        const auto norm = x.mul(x).sum(1, true).to(DataType::Float32).add(kNormEps).sqrt();
-        return x.div(norm).to(x.dtype());
+        const auto fp32 = x.to(DataType::Float32);
+        const auto norm = fp32.mul(fp32).sum(1, true).add(kNormEps).sqrt();
+        return fp32.div(norm).to(x.dtype());
     }
 
     lfs::Result<float> Lpips::forward(const Tensor& pred, const Tensor& target,
@@ -239,10 +308,10 @@ namespace lfs::core::nn::models {
             (pred.ndim() == 3 || pred.ndim() == 4) && pred.shape() == target.shape()) {
             const int height = static_cast<int>(pred.shape()[pred.ndim() - 2]);
             const int width = static_cast<int>(pred.shape()[pred.ndim() - 1]);
-            if (tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width)))
-                return run_tiled(pred, target, scaling);
             if (compute_ == DataType::Float16)
                 return run_fast(pred, target, scaling);
+            if (tile_size_for(height, width) < static_cast<std::size_t>(std::max(height, width)))
+                return run_tiled(pred, target, scaling);
         }
         return run_untiled(pred, target, scaling, taps);
     }
@@ -258,6 +327,10 @@ namespace lfs::core::nn::models {
             target.device() != Device::CUDA)
             return lpips_error(lfs::ErrorCode::InvalidArgument,
                                "LPIPS target must match the CUDA fp32 prediction shape");
+        if ((pred.ndim() == 4 && pred.shape()[0] != 1) ||
+            pred.shape()[pred.ndim() - 2] < 16 || pred.shape()[pred.ndim() - 1] < 16)
+            return lpips_error(lfs::ErrorCode::InvalidArgument,
+                               "LPIPS requires one image with height and width at least 16");
         return std::nullopt;
     }
 
@@ -275,148 +348,8 @@ namespace lfs::core::nn::models {
                                        const InputScaling scaling) {
         if (auto error = validate_pair(pred, target))
             return std::move(*error);
-        const Tensor x_in = as_batch(pred).contiguous();
-        const Tensor y_in = as_batch(target).contiguous();
-        const int n = static_cast<int>(x_in.shape()[0]);
-        const int height = static_cast<int>(x_in.shape()[2]);
-        const int width = static_cast<int>(x_in.shape()[3]);
-        const cudaStream_t stream = x_in.stream();
-        lfs::core::CUDAStreamGuard stream_guard(stream);
-        if (y_in.stream() != stream) {
-            cudaEvent_t ready = nullptr;
-            LFS_CUDA_CHECK(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming));
-            LFS_CUDA_CHECK(cudaEventRecord(ready, y_in.stream()));
-            LFS_CUDA_CHECK(cudaStreamWaitEvent(stream, ready, 0));
-            LFS_CUDA_CHECK(cudaEventDestroy(ready));
-        }
-        bind_weights_to_stream(stream);
-
-        struct Layer {
-            int index;
-            int cin;
-            int cout;
-        };
-        constexpr std::array<Layer, 13> kLayers{{{0, 3, 64},
-                                                 {2, 64, 64},
-                                                 {5, 64, 128},
-                                                 {7, 128, 128},
-                                                 {10, 128, 256},
-                                                 {12, 256, 256},
-                                                 {14, 256, 256},
-                                                 {17, 256, 512},
-                                                 {19, 512, 512},
-                                                 {21, 512, 512},
-                                                 {24, 512, 512},
-                                                 {26, 512, 512},
-                                                 {28, 512, 512}}};
-        constexpr std::array<int, kBlocks> kStageLayers{2, 2, 3, 3, 3};
-
-        const std::size_t feature_elems =
-            static_cast<std::size_t>(n) * 64 * static_cast<std::size_t>(height) * static_cast<std::size_t>(width);
-        for (auto& buffer : fast_features_) {
-            if (!buffer.is_valid() || buffer.numel() < feature_elems)
-                buffer = Tensor::empty(shape_of({feature_elems}), Device::CUDA, DataType::Float16);
-            buffer.set_stream(stream);
-        }
-        if (!fast_scores_.is_valid())
-            fast_scores_ = Tensor::empty(shape_of({kBlocks}), Device::CUDA, DataType::Float32);
-        fast_scores_.set_stream(stream);
-        auto* scores = fast_scores_.ptr<float>();
-        LFS_CUDA_CHECK(cudaMemsetAsync(scores, 0, kBlocks * sizeof(float), stream));
-
-        std::size_t taps_bytes = 0;
-        for (std::size_t i = 1; i < kLayers.size(); ++i) {
-            fast_weight_tap_offsets_[i] = taps_bytes;
-            taps_bytes += kernels::conv2d_weight_scratch_bytes(kLayers[i].cout, kLayers[i].cin,
-                                                               DataType::Float16);
-        }
-        if (taps_bytes > 0 && !fast_weight_taps_.is_valid()) {
-            fast_weight_taps_ = Tensor::empty(shape_of({taps_bytes / sizeof(uint16_t)}), Device::CUDA,
-                                              DataType::Float16);
-            fast_weight_taps_.set_stream(stream);
-            auto* taps = static_cast<unsigned char*>(fast_weight_taps_.data_ptr());
-            for (std::size_t i = 1; i < kLayers.size(); ++i) {
-                kernels::conv3x3_weight_taps(
-                    w(std::format("vgg.features.{}.weight", kLayers[i].index)).data_ptr(),
-                    taps + fast_weight_tap_offsets_[i], kLayers[i].cout, kLayers[i].cin, stream);
-            }
-        }
-        if (fast_weight_taps_.is_valid())
-            fast_weight_taps_.set_stream(stream);
-        const auto* taps_base = taps_bytes > 0
-                                    ? static_cast<const unsigned char*>(fast_weight_taps_.data_ptr())
-                                    : nullptr;
-
-        const void* inputs[2] = {x_in.data_ptr(), y_in.data_ptr()};
-        void* cur[2] = {fast_features_[0].data_ptr(), fast_features_[1].data_ptr()};
-        void* next[2] = {fast_features_[2].data_ptr(), fast_features_[3].data_ptr()};
-        int cur_h = height;
-        int cur_w = width;
-        int layer = 0;
-        for (int stage = 0; stage < kBlocks; ++stage) {
-            for (int i = 0; i < kStageLayers[static_cast<std::size_t>(stage)]; ++i, ++layer) {
-                const auto& spec = kLayers[static_cast<std::size_t>(layer)];
-                const auto& weight = w(std::format("vgg.features.{}.weight", spec.index));
-                const auto& bias = w(std::format("vgg.features.{}.bias", spec.index));
-                for (int side = 0; side < 2; ++side) {
-                    if (layer == 0) {
-                        kernels::lpips_rgb_conv3x3(static_cast<const float*>(inputs[side]),
-                                                   weight.data_ptr(), bias.data_ptr(), next[side],
-                                                   scaling_shift_.data(), scaling_scale_.data(),
-                                                   scaling == InputScaling::Normalize, n, cur_h,
-                                                   cur_w, stream);
-                    } else {
-                        const void* taps = taps_base
-                                               ? taps_base + fast_weight_tap_offsets_[static_cast<std::size_t>(layer)]
-                                               : nullptr;
-                        kernels::conv2d_implicit(cur[side], weight.data_ptr(), taps, bias.data_ptr(),
-                                                 next[side], nullptr, n, spec.cin, cur_h, cur_w,
-                                                 spec.cout, 3, 3, cur_h, cur_w, 1, 1, 1, 1, 1, 1, 0,
-                                                 static_cast<int>(Activation::Relu),
-                                                 DataType::Float16, stream);
-                    }
-                }
-                std::swap(cur[0], next[0]);
-                std::swap(cur[1], next[1]);
-            }
-            const bool last = stage + 1 == kBlocks;
-            const int channels = kLayers[static_cast<std::size_t>(layer - 1)].cout;
-            kernels::lpips_pool_reduce(cur[0], cur[1], w(std::format("lin{}.weight", stage)).data_ptr(),
-                                       scores + stage, last ? nullptr : next[0],
-                                       last ? nullptr : next[1], n, channels, cur_h, cur_w, 0, cur_h,
-                                       0, cur_w,
-                                       1.0f / (static_cast<float>(n) * static_cast<float>(cur_h) *
-                                               static_cast<float>(cur_w)),
-                                       stream);
-            if (!last) {
-                std::swap(cur[0], next[0]);
-                std::swap(cur[1], next[1]);
-                cur_h /= 2;
-                cur_w /= 2;
-            }
-        }
-        std::array<float, kBlocks> values{};
-        LFS_CUDA_CHECK(cudaMemcpyAsync(values.data(), scores, kBlocks * sizeof(float),
-                                       cudaMemcpyDeviceToHost, stream));
-        LFS_CUDA_CHECK(cudaStreamSynchronize(stream));
-        float total = 0.0f;
-        for (const float value : values)
-            total += value;
-        if (!std::isfinite(total))
-            return lpips_error(lfs::ErrorCode::Internal, "LPIPS produced a non-finite value");
-        return total;
-    }
-
-    lfs::Result<float> Lpips::run_tiled_fast(const Tensor& pred, const Tensor& target,
-                                             const InputScaling scaling) {
-        if (auto error = validate_pair(pred, target))
-            return std::move(*error);
-        const Tensor x_in = as_batch(pred).contiguous();
-        const Tensor y_in = as_batch(target).contiguous();
-        const int n = static_cast<int>(x_in.shape()[0]);
-        if (n != 1)
-            return lpips_error(lfs::ErrorCode::InvalidArgument,
-                               "LPIPS fast tiling requires a single image");
+        Tensor x_in = as_batch(pred).contiguous();
+        Tensor y_in = as_batch(target).contiguous();
         const int height = static_cast<int>(x_in.shape()[2]);
         const int width = static_cast<int>(x_in.shape()[3]);
         const std::size_t tile = tile_size_for(height, width);
@@ -437,26 +370,6 @@ namespace lfs::core::nn::models {
         }
         bind_weights_to_stream(stream);
 
-        struct Layer {
-            int index;
-            int cin;
-            int cout;
-        };
-        constexpr std::array<Layer, 13> kLayers{{{0, 3, 64},
-                                                 {2, 64, 64},
-                                                 {5, 64, 128},
-                                                 {7, 128, 128},
-                                                 {10, 128, 256},
-                                                 {12, 256, 256},
-                                                 {14, 256, 256},
-                                                 {17, 256, 512},
-                                                 {19, 512, 512},
-                                                 {21, 512, 512},
-                                                 {24, 512, 512},
-                                                 {26, 512, 512},
-                                                 {28, 512, 512}}};
-        constexpr std::array<int, kBlocks> kStageLayers{2, 2, 3, 3, 3};
-
         std::size_t taps_bytes = 0;
         for (std::size_t i = 1; i < kLayers.size(); ++i) {
             fast_weight_tap_offsets_[i] = taps_bytes;
@@ -480,15 +393,15 @@ namespace lfs::core::nn::models {
                                     ? static_cast<const unsigned char*>(fast_weight_taps_.data_ptr())
                                     : nullptr;
 
-        Tensor tile_x = Tensor::empty(shape_of({1, 3, tile + 2 * kTileHalo, tile + 2 * kTileHalo}),
-                                      Device::CUDA, DataType::Float32);
-        Tensor tile_y = Tensor::empty(shape_of({1, 3, tile + 2 * kTileHalo, tile + 2 * kTileHalo}),
-                                      Device::CUDA, DataType::Float32);
-        tile_x.set_stream(stream);
-        tile_y.set_stream(stream);
-
-        const std::size_t max_feature_elems =
-            64ULL * (tile + 2 * kTileHalo) * (tile + 2 * kTileHalo);
+        const bool tiled = tile < static_cast<std::size_t>(std::max(height, width));
+        const auto crop_height = std::min<std::size_t>(height, tile + 2 * kTileHalo);
+        const auto crop_width = std::min<std::size_t>(width, tile + 2 * kTileHalo);
+        Tensor tile_x, tile_y;
+        if (tiled) {
+            tile_x = Tensor::empty(shape_of({1, 3, crop_height, crop_width}), Device::CUDA);
+            tile_y = Tensor::empty(tile_x.shape(), Device::CUDA);
+        }
+        const std::size_t max_feature_elems = 64ULL * crop_height * crop_width;
         for (auto& buffer : fast_features_) {
             if (!buffer.is_valid() || buffer.numel() < max_feature_elems)
                 buffer = Tensor::empty(shape_of({max_feature_elems}), Device::CUDA, DataType::Float16);
@@ -528,10 +441,12 @@ namespace lfs::core::nn::models {
                 const int cx1 = std::min(width, x1 + static_cast<int>(kTileHalo));
                 const int crop_h = cy1 - cy0;
                 const int crop_w = cx1 - cx0;
-                copy_tile(x_in, tile_x, cy0, cx0, crop_h, crop_w);
-                copy_tile(y_in, tile_y, cy0, cx0, crop_h, crop_w);
-
-                void* cur[2] = {tile_x.data_ptr(), tile_y.data_ptr()};
+                if (tiled) {
+                    copy_tile(x_in, tile_x, cy0, cx0, crop_h, crop_w);
+                    copy_tile(y_in, tile_y, cy0, cx0, crop_h, crop_w);
+                }
+                void* cur[2] = {tiled ? tile_x.data_ptr() : x_in.data_ptr(),
+                                tiled ? tile_y.data_ptr() : y_in.data_ptr()};
                 void* next[2] = {fast_features_[0].data_ptr(), fast_features_[1].data_ptr()};
                 int cur_h = crop_h;
                 int cur_w = crop_w;
@@ -611,8 +526,6 @@ namespace lfs::core::nn::models {
 
     lfs::Result<float> Lpips::run_tiled(const Tensor& pred, const Tensor& target,
                                         const InputScaling scaling) {
-        if (compute_ == DataType::Float16)
-            return run_tiled_fast(pred, target, scaling);
         if (pred.ndim() != 3 && pred.ndim() != 4)
             return lpips_error(lfs::ErrorCode::InvalidArgument, "LPIPS tiled inputs must be rank 3 or 4");
         const int height = static_cast<int>(pred.shape()[pred.ndim() - 2]);

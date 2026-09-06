@@ -22,7 +22,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -122,16 +121,6 @@ namespace lfs::training {
                                       : mask_f.unsqueeze(0).unsqueeze(0).expand({static_cast<int>(image.shape()[0]), channels, height, width});
             return image * expanded;
         }
-
-        std::filesystem::path default_lpips_weights_path() {
-            if (const char* home = std::getenv("HOME"); home && home[0])
-                return std::filesystem::path(home) / ".lichtfeld" / "onnx" /
-                       "lpips-vgg16-v0.1.lfw";
-            return std::filesystem::temp_directory_path() / "lichtfeld" / "lpips-vgg16-v0.1.lfw";
-        }
-
-        constexpr std::string_view kLpipsWeightsUrl =
-            "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-lpips-v1/lpips-vgg16-v0.1.lfw";
 
         struct FreeImageBuffer {
             void operator()(unsigned char* p) const noexcept {
@@ -682,18 +671,14 @@ namespace lfs::training {
         size_t evaluated_images = 0;
         size_t saved_images = 0;
         std::optional<std::pair<int, int>> lpips_preflight_size;
-        bool lpips_preflight_ok = false;
         cudaEvent_t lpips_start_event = nullptr;
         cudaEvent_t lpips_stop_event = nullptr;
         double lpips_elapsed_ms = 0.0;
         std::size_t lpips_timed_images = 0;
 
-        if (!_lpips_load_attempted) {
+        if (!_lpips_load_attempted && _lpips_weights_path) {
             _lpips_load_attempted = true;
-            const char* env_path = std::getenv("LFS_LPIPS_WEIGHTS");
-            const std::filesystem::path weights_path = env_path && env_path[0]
-                                                           ? std::filesystem::path(env_path)
-                                                           : _lpips_weights_path.value_or(default_lpips_weights_path());
+            const auto& weights_path = *_lpips_weights_path;
             try {
                 auto loaded = lfs::core::nn::models::Lpips::load(
                     weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
@@ -701,13 +686,12 @@ namespace lfs::training {
                 if (loaded) {
                     _lpips_metric.emplace(std::move(*loaded));
                 } else {
-                    LOG_WARN("Eval: LPIPS unavailable at '{}' ({}); download it from {}",
-                             lfs::core::path_to_utf8(weights_path), loaded.error().detail(),
-                             kLpipsWeightsUrl);
+                    LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
+                             lfs::core::path_to_utf8(weights_path), loaded.error().detail());
                 }
             } catch (const std::exception& e) {
-                LOG_WARN("Eval: LPIPS unavailable at '{}' ({}); download it from {}",
-                         lfs::core::path_to_utf8(weights_path), e.what(), kLpipsWeightsUrl);
+                LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
+                         lfs::core::path_to_utf8(weights_path), e.what());
             }
         }
         if (_lpips_metric) {
@@ -761,29 +745,6 @@ namespace lfs::training {
                 LOG_WARN("Eval: skipping camera '{}' (failed to load GT image: {})", cam->image_name(), e.what());
                 skipped_images++;
                 continue;
-            }
-
-            if (_lpips_metric) {
-                const int image_height = static_cast<int>(gt_image.shape()[1]);
-                const int image_width = static_cast<int>(gt_image.shape()[2]);
-                const std::pair<int, int> image_size{image_height, image_width};
-                if (!lpips_preflight_size || *lpips_preflight_size != image_size) {
-                    lpips_preflight_size = image_size;
-                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
-                    std::size_t free_bytes = 0;
-                    std::size_t total_bytes = 0;
-                    const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
-                    lpips_preflight_ok = status == cudaSuccess && free_bytes >= required;
-                    if (!lpips_preflight_ok) {
-                        const auto shortfall = required > free_bytes ? required - free_bytes : 0;
-                        LOG_WARN("Eval: LPIPS skipped for this image size; tile={} required={} free={} shortfall={} bytes",
-                                 _lpips_metric->tile_size_for(image_height, image_width), required,
-                                 free_bytes, shortfall);
-                    } else {
-                        LOG_DEBUG("Eval: LPIPS preflight passed; tile={} required={} free={} bytes",
-                                  _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
-                    }
-                }
             }
 
             lfs::core::Tensor mask;
@@ -844,45 +805,72 @@ namespace lfs::training {
 
             const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
             std::optional<float> lpips;
-            if (_lpips_metric && lpips_preflight_ok) {
+            if (_lpips_metric) {
                 try {
                     const auto pred_lpips = mask_image_for_lpips(r_output.image, mask);
                     const auto target_lpips = mask_image_for_lpips(
                         gt_float.to(lfs::core::Device::CUDA), mask);
-                    const cudaStream_t lpips_stream = pred_lpips.stream();
-                    const bool timed_lpips = lpips_start_event != nullptr &&
-                                             cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
-                    auto value = _lpips_metric->forward(
-                        pred_lpips, target_lpips,
-                        lfs::core::nn::models::InputScaling::Identity);
-                    const bool lpips_event_complete =
-                        timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
-                        cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
-                    if (value && std::isfinite(*value)) {
-                        if (lpips_event_complete) {
-                            float elapsed_ms = 0.0f;
-                            if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
-                                    cudaSuccess &&
-                                std::isfinite(elapsed_ms)) {
-                                lpips_elapsed_ms += elapsed_ms;
-                                lpips_timed_images++;
+                    const int image_height = static_cast<int>(gt_image.shape()[1]);
+                    const int image_width = static_cast<int>(gt_image.shape()[2]);
+                    const std::pair<int, int> image_size{image_height, image_width};
+                    const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
+                    lpips_preflight_size = image_size;
+                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
+                    std::size_t free_bytes = 0;
+                    std::size_t total_bytes = 0;
+                    const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
+                    const bool lpips_preflight_ok = status == cudaSuccess && free_bytes >= required;
+                    if (!lpips_preflight_ok && size_changed) {
+                        const auto shortfall = required > free_bytes ? required - free_bytes : 0;
+                        LOG_WARN("Eval: LPIPS skipped for this image size; tile={} required={} free={} shortfall={} bytes",
+                                 _lpips_metric->tile_size_for(image_height, image_width), required,
+                                 free_bytes, shortfall);
+                    } else if (lpips_preflight_ok && size_changed) {
+                        LOG_DEBUG("Eval: LPIPS preflight passed; tile={} required={} free={} bytes",
+                                  _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
+                    }
+                    if (lpips_preflight_ok) {
+                        const cudaStream_t lpips_stream = pred_lpips.stream();
+                        const bool timed_lpips = lpips_start_event != nullptr &&
+                                                 cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
+                        auto value = _lpips_metric->forward(
+                            pred_lpips, target_lpips,
+                            lfs::core::nn::models::InputScaling::Identity);
+                        const bool lpips_event_complete =
+                            timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
+                            cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
+                        if (value && std::isfinite(*value)) {
+                            if (lpips_event_complete) {
+                                float elapsed_ms = 0.0f;
+                                if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
+                                        cudaSuccess &&
+                                    std::isfinite(elapsed_ms)) {
+                                    lpips_elapsed_ms += elapsed_ms;
+                                    lpips_timed_images++;
+                                }
                             }
+                            lpips = *value;
+                            lpips_values.push_back(*value);
+                        } else if (!value) {
+                            LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
+                                     value.error().detail());
+                        } else {
+                            LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
+                                     cam->image_name());
                         }
-                        lpips = *value;
-                        lpips_values.push_back(*value);
-                    } else if (!value) {
-                        LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
-                                 value.error().detail());
-                    } else {
-                        LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
-                                 cam->image_name());
                     }
                 } catch (const std::exception& e) {
                     LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(), e.what());
                 }
             }
             if (per_image_csv) {
-                per_image_csv << cam->image_name() << "," << std::fixed << std::setprecision(6)
+                per_image_csv << '"';
+                for (const char ch : cam->image_name()) {
+                    if (ch == '"')
+                        per_image_csv << '"';
+                    per_image_csv << ch;
+                }
+                per_image_csv << "\"," << std::fixed << std::setprecision(6)
                               << psnr << "," << ssim << ",";
                 if (lpips)
                     per_image_csv << *lpips;

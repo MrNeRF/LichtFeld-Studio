@@ -406,6 +406,9 @@ namespace {
         curl_easy_setopt(curl, CURLOPT_URL, url_string.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "LichtFeld-Studio/preprocess");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output);
