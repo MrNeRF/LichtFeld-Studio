@@ -242,6 +242,14 @@ namespace {
         EXPECT_EQ(target.getDatasetConfig().images, "images_project");
         EXPECT_FALSE(target.consumeDirty());
 
+        auto backend_conflict = *captured;
+        backend_conflict.mrnf_current.gut = true;
+        backend_conflict.mrnf_current.use_normal_loss = true;
+        EXPECT_TRUE(target.restorePendingProjectState(backend_conflict));
+        EXPECT_TRUE(target.getCurrentParams("mrnf").gut);
+        EXPECT_TRUE(target.getCurrentParams("mrnf").use_normal_loss);
+        EXPECT_FALSE(target.getCurrentParams("mrnf").validate().empty());
+
         auto invalid = *captured;
         invalid.mcmc_current =
             lfs::core::param::OptimizationParameters::mrnf_defaults();

@@ -7,6 +7,7 @@
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
 
+#include "core/checkpoint_format.hpp"
 #include <algorithm>
 #include <any>
 #include <array>
@@ -249,6 +250,7 @@ namespace {
             {"enable_save_eval_images", "evaluation image output is not a registry property"},
             {"eval_steps", "vector-valued evaluation schedule is managed separately"},
             {"ppisp_sidecar_path", "PPISP sidecar path uses its dedicated Python binding"},
+            {"raster_backend", "explicit backend name is an adapter over the legacy gut property"},
             {"save_steps", "vector-valued save schedule is managed separately"},
         };
 
@@ -311,6 +313,72 @@ namespace {
         auto json = OptimizationParameters::mrnf_defaults().to_json();
         json.erase("iterations");
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
+    }
+
+    TEST_F(TrainingParametersTest, BackendConflictsPreserveFastGSAndRejectUnsupportedGutFeatures) {
+        using Conflict = lfs::core::param::TrainingBackendConflict;
+        struct Case {
+            bool OptimizationParameters::* flag;
+            Conflict conflict;
+            const char* field;
+        };
+        const std::array cases{
+            Case{&OptimizationParameters::undistort, Conflict::Undistort, "undistort"},
+            Case{&OptimizationParameters::mip_filter, Conflict::MipFilter, "mip_filter"},
+            Case{&OptimizationParameters::use_depth_loss, Conflict::DepthSupervision, "use_depth_loss"},
+            Case{&OptimizationParameters::use_normal_loss, Conflict::NormalSupervision, "use_normal_loss"},
+        };
+        for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
+            for (const auto& item : cases) {
+                SCOPED_TRACE(std::string(strategy) + ": " + item.field);
+                auto params = OptimizationParameters::defaults_for_strategy(strategy);
+                params.*item.flag = true;
+                EXPECT_EQ(params.backend_conflict(), Conflict::None);
+                EXPECT_TRUE(params.validate().empty());
+                params.gut = true;
+                const auto expected = std::string_view(strategy) == "igs+" ? Conflict::IGSPlus : item.conflict;
+                EXPECT_EQ(params.backend_conflict(), expected);
+                EXPECT_FALSE(params.validate().empty());
+                if (expected != Conflict::IGSPlus)
+                    EXPECT_NE(params.validate().find(item.field), std::string::npos);
+                const auto restored = OptimizationParameters::from_json(params.to_json());
+                EXPECT_EQ(restored.backend_conflict(), expected);
+                EXPECT_EQ(restored.validate(), params.validate());
+                lfs::core::param::TrainingParameters training;
+                training.optimization = params;
+                EXPECT_EQ(training.validate(), params.validate());
+            }
+        }
+    }
+
+    TEST_F(TrainingParametersTest, GutConflictValidationDoesNotNormalizeSettings) {
+        using Conflict = lfs::core::param::TrainingBackendConflict;
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        EXPECT_EQ(params.backend_conflict(), Conflict::None);
+        EXPECT_TRUE(params.validate().empty());
+        params.undistort = true;
+        params.use_depth_loss = true;
+        const auto before = params.to_json();
+        EXPECT_EQ(params.backend_conflict(), Conflict::Undistort);
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_EQ(params.to_json(), before);
+        params.undistort = false;
+        EXPECT_EQ(params.backend_conflict(), Conflict::DepthSupervision);
+        params.gut = false;
+        EXPECT_TRUE(params.validate().empty());
+    }
+
+    TEST_F(TrainingParametersTest, StoredBackendConflictPreservesSettingsButStillRejectsInvalidNumbers) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        params.use_depth_loss = true;
+        const auto before = params.to_json();
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_TRUE(params.validate_for_storage().empty());
+        EXPECT_EQ(params.to_json(), before);
+        params.refine_every = 0;
+        EXPECT_NE(params.validate_for_storage().find("refine_every"), std::string::npos);
     }
 
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
@@ -505,6 +573,51 @@ namespace {
         EXPECT_FALSE(params.normal_supervision_active(scaled_start - 1));
         EXPECT_TRUE(params.normal_supervision_active(scaled_start));
         EXPECT_TRUE(params.normal_supervision_active(scaled_total));
+    }
+
+    TEST_F(TrainingParametersTest, BackendIdentityCompatibility) {
+        using namespace lfs::core::param;
+        for (const bool gut : {false, true}) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.gut = gut;
+            const auto json = params.to_json();
+            EXPECT_EQ(json.at("raster_backend"), gut ? "3dgut" : "fastgs");
+            EXPECT_EQ(OptimizationParameters::from_json(json).gut, gut);
+            auto legacy = json;
+            legacy.erase("raster_backend");
+            EXPECT_EQ(OptimizationParameters::from_json(legacy).gut, gut);
+            const auto checkpoint = lfs::core::parse_checkpoint_params_json(
+                nlohmann::json{{"optimization", legacy}}.dump());
+            EXPECT_EQ(checkpoint.optimization.gut, gut);
+            EXPECT_EQ(lfs::core::parse_checkpoint_params_json(
+                          nlohmann::json{{"optimization", json}}.dump())
+                          .optimization.gut,
+                      gut);
+            auto explicit_only = json;
+            explicit_only.erase("gut");
+            EXPECT_EQ(OptimizationParameters::from_json(explicit_only).gut, gut);
+            auto conflict = json;
+            conflict["gut"] = !gut;
+            EXPECT_EQ(OptimizationParameters::from_json(conflict).gut, !gut);
+
+            TrainingParameters target;
+            target.optimization = params;
+            ExplicitTrainingOverrides overrides;
+            overrides.optimization_json = nlohmann::json{{"gut", !gut}}.dump();
+            apply_explicit_training_overrides(target, overrides);
+            EXPECT_EQ(target.optimization.gut, !gut);
+            overrides.optimization_json = nlohmann::json{{"raster_backend", gut ? "3dgut" : "fastgs"}}.dump();
+            apply_explicit_training_overrides(target, overrides);
+            EXPECT_EQ(target.optimization.gut, gut);
+        }
+        auto json = OptimizationParameters::mrnf_defaults().to_json();
+        json["raster_backend"] = "future_backend";
+        EXPECT_THROW((void)OptimizationParameters::from_json(json), std::invalid_argument);
+        json["raster_backend"] = nullptr;
+        EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::type_error);
+        EXPECT_FALSE(parse_training_backend("future_backend").has_value());
+        EXPECT_EQ(training_backend_descriptor(RasterBackendId::FastGS).viewer_name, "3dgs");
+        EXPECT_EQ(training_backend_descriptor(RasterBackendId::ThreeDGUT).viewer_name, "3dgut");
     }
 
     TEST_F(TrainingParametersTest, OldNewToJsonParity) {

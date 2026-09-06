@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/training_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,15 @@
 
 namespace lfs::core {
     namespace param {
+        enum class TrainingBackendConflict {
+            None,
+            IGSPlus,
+            Undistort,
+            MipFilter,
+            DepthSupervision,
+            NormalSupervision,
+        };
+
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -309,6 +319,21 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
+            // Compatibility storage remains gut until all legacy writers migrate.
+            [[nodiscard]] RasterBackendId raster_backend() const {
+                return gut ? RasterBackendId::ThreeDGUT : RasterBackendId::FastGS;
+            }
+            void set_raster_backend(RasterBackendId backend) {
+                switch (backend) {
+                case RasterBackendId::FastGS: gut = false; return;
+                case RasterBackendId::ThreeDGUT: gut = true; return;
+                }
+                throw std::invalid_argument("Unsupported training raster backend");
+            }
+            [[nodiscard]] TrainingBackendConflict backend_conflict() const;
+            // Project presets may retain a backend-incompatible next-run choice so
+            // an older project can open and let the user correct it before Start.
+            [[nodiscard]] std::string validate_for_storage() const;
             [[nodiscard]] std::string validate() const;
 
             // Factory methods for strategy presets

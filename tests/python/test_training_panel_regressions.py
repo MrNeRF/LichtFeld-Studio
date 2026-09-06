@@ -74,6 +74,76 @@ def training_panel_module(monkeypatch):
     return import_module("lfs_plugins.training_panel")
 
 
+@pytest.mark.parametrize("error", [
+    "GUT and igs+ strategy cannot be used together",
+    "3DGUT does not support depth supervision (use_depth_loss)",
+    "3DGUT does not support normal supervision (use_normal_loss)",
+    "3DGUT does not support undistort",
+    "3DGUT does not support mip_filter",
+    "iterations must be within [1, 2147483647]",
+    "exposure correction replaces the standalone bilateral grid and PPISP options",
+])
+def test_start_validation_shows_actual_error_without_mutating_or_starting(
+    training_panel_module, monkeypatch, error
+):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(has_params=lambda: True, validate=lambda: error, gut=True)
+    starts, dialogs, offers = [], [], []
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "start_training", lambda: starts.append(True))
+    monkeypatch.setattr(panel, "_should_offer_pc_save", lambda: offers.append(True))
+    monkeypatch.setattr(training_panel_module.lf.ui, "confirm_dialog",
+                        lambda *args: dialogs.append(args), raising=False)
+
+    panel._start_after_consent()
+
+    assert len(dialogs) == 1
+    title, message, buttons, callback = dialogs[0]
+    assert title == "status.error"
+    assert message == error
+    assert buttons == ["common.ok"]
+    callback(buttons[0])
+    assert starts == []
+    assert offers == []
+    assert params.gut is True
+
+
+@pytest.mark.parametrize("offer_save", [False, True])
+def test_valid_start_preserves_point_cloud_save_flow(
+    training_panel_module, monkeypatch, offer_save
+):
+    panel = training_panel_module.TrainingPanel()
+    actions = []
+    params = SimpleNamespace(has_params=lambda: True, validate=lambda: "")
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "start_training", lambda: actions.append("start"))
+    monkeypatch.setattr(panel, "_should_offer_pc_save", lambda: offer_save)
+    monkeypatch.setattr(panel, "_show_save_pc_dialog", lambda: actions.append("save"))
+    panel._start_after_consent()
+    assert actions == (["save"] if offer_save else ["start"])
+
+
+def test_igs_conflict_resolution_synchronizes_viewer(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = _StrategyParamsStub()
+    params.gut = True
+    dialogs, updates = [], []
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "get_render_settings",
+                        lambda: SimpleNamespace(set=lambda *args: updates.append(args)))
+    monkeypatch.setattr(training_panel_module.lf.ui, "confirm_dialog",
+                        lambda *args: dialogs.append(args), raising=False)
+    monkeypatch.setattr(panel, "_refresh_strategy_values", lambda: None)
+    panel._set_strategy("igs+")
+    dialogs[0][3]("training.conflict.btn_cancel")
+    assert params.gut is True
+    assert updates == []
+    dialogs[0][3]("training.conflict.btn_disable_gut")
+    assert params.gut is False
+    assert params.strategy == "igs+"
+    assert updates == [("raster_backend", "3dgs")]
+
+
 class _HandleStub:
     def __init__(self):
         self.dirty_fields = []
@@ -1640,7 +1710,9 @@ def test_save_modified_pc_unbound_writes_dataset_ply(training_panel_module, monk
 
     training_panel_module.TrainingPanel()._save_modified_pc()
 
-    assert ply_calls == [(pc, "/data/scene_a/sparse/0/points3D.ply")]
+    assert len(ply_calls) == 1
+    assert ply_calls[0][0] is pc
+    assert Path(ply_calls[0][1]) == Path(info.sparse_path) / "points3D.ply"
     assert scene.is_point_cloud_modified is False
 
 

@@ -642,7 +642,7 @@ namespace lfs::training {
             mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore;
 
         bool render_normal = false;
-        if (!_params.optimization.gut) {
+        if (_params.optimization.raster_backend() == lfs::core::param::RasterBackendId::FastGS) {
             for (size_t image_idx = 0; image_idx < val_dataset_size; ++image_idx) {
                 if (val_dataset->get_camera(image_idx)->has_normal()) {
                     render_normal = true;
@@ -684,7 +684,7 @@ namespace lfs::training {
 
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             RenderOutput r_output;
-            if (_params.optimization.gut) {
+            if (_params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                 r_output = gsplat_rasterize(*cam, splatData_mutable, background,
                                             1.0f, false, GsplatRenderMode::RGB, true);
             } else {
