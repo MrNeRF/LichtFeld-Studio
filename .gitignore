@@ -30,6 +30,7 @@ tests/data/nn/*
 *.pt
 *.py
 !scripts/lichtfeld_mcp_bridge.py
+!scripts/verify_video_orientation.py
 !tools/gdb/lfs_pretty_printers.py
 !src/python/_lfs_panel_contract.py
 !src/python/lfs_splat_lod_hierarchy.py
