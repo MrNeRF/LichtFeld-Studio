@@ -343,6 +343,7 @@ set(TEST_FILES
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
+    test_tensor_integer_and_reduce_policy.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
     test_tensor_stress.cpp

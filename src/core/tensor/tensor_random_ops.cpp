@@ -201,18 +201,22 @@ namespace lfs::core {
         size_t n = numel();
 
         if (device_ == Device::CUDA) {
+            const uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
+            const internal::RandomProgram program{
+                .count = n,
+                .first = mean,
+                .second = std,
+                .seed = seed};
             if (n % 2 == 1) {
                 auto scratch = internal::allocate_like(
                     *this, TensorShape{n + 1}, DataType::Float32);
                 internal::backend_ops_for(*this).normal(
                     internal::storage_ref(*this), internal::storage_ref(scratch),
-                    internal::RandomProgram{.count = n, .first = mean, .second = std},
-                    internal::ExecContext{stream()});
+                    program, internal::ExecContext{stream()});
             } else {
                 internal::backend_ops_for(*this).normal(
                     internal::storage_ref(*this), internal::storage_ref(*this),
-                    internal::RandomProgram{.count = n, .first = mean, .second = std},
-                    internal::ExecContext{stream()});
+                    program, internal::ExecContext{stream()});
             }
         } else {
             // CPU uses stateful generator

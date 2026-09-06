@@ -141,9 +141,9 @@ namespace lfs::core::internal {
         const StorageRef output, StorageRef, const RandomProgram& program, ExecContext) {
         LFS_FACADE_TRACE(normal);
         // The CUDA path draws from the process generator's stream; Vulkan draws
-        // every element from its own Philox block under the next generator seed,
-        // so odd counts need no scratch.
-        draw_elements(kNormal, output, program, RandomGenerator::instance().get_next_cuda_seed());
+        // every element from its own Philox block under the program seed, so odd
+        // counts need no scratch.
+        draw_elements(kNormal, output, program, program.seed);
     }
 
     void VulkanBackendOps::multinomial(

@@ -1073,7 +1073,17 @@ namespace lfs::core::tensor_ops {
 
     template <>
     __device__ inline void scatter_add<uint8_t>(uint8_t* dst, uint8_t value) {
-        *dst = static_cast<uint8_t>(*dst + value);
+        const size_t address = reinterpret_cast<size_t>(dst);
+        unsigned int* word = reinterpret_cast<unsigned int*>(address & ~size_t{3});
+        const unsigned int shift = static_cast<unsigned int>(address & size_t{3}) * 8u;
+        const unsigned int lane_mask = 0xffu << shift;
+        unsigned int observed = *word;
+        unsigned int assumed;
+        do {
+            assumed = observed;
+            const unsigned int byte = (((assumed & lane_mask) >> shift) + value) & 0xffu;
+            observed = atomicCAS(word, assumed, (assumed & ~lane_mask) | (byte << shift));
+        } while (observed != assumed);
     }
 
     template <typename T>

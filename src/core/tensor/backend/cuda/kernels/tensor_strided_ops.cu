@@ -106,8 +106,8 @@ namespace lfs::core {
             const void* input, void* output,
             const size_t* shape, const size_t* strides,
             const size_t rank, const size_t n, cudaStream_t stream) {
-            if (rank != 2)
-                return;
+            LFS_ASSERT_MSG(rank == 2,
+                           "fused Int32 to Float32 strided scatter requires a rank-2 layout");
             const int blocks = static_cast<int>(std::min(
                 (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
                 static_cast<size_t>(MAX_GRID)));
