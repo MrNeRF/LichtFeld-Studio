@@ -315,7 +315,9 @@ namespace lfs::core::internal {
             buffer_info.size = record->allocated_size;
             buffer_info.usage = kStorageUsage;
             buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-            if (exports_memory_ && !host_visible) {
+            const bool pooled_export =
+                exports_memory_ && !host_visible && record->allocated_size <= kPoolBlockSize;
+            if (pooled_export) {
                 buffer_info.pNext = &external_buffer;
             }
             VmaAllocationCreateInfo allocation_info{};
@@ -329,10 +331,11 @@ namespace lfs::core::internal {
             } else {
                 allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
                 allocation_info.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-                // Dedicated+export returns VK_ERROR_FEATURE_NOT_PRESENT on this
-                // device. The exportable pool still holds large tensors; VMA
-                // only allocates a dedicated block when size exceeds blockSize.
-                if (exports_memory_ || !direct) {
+                // A custom VMA pool cannot hold an allocation above its block
+                // size and the driver refuses dedicated exportable memory, so
+                // only allocations that fit a block are pooled (and exportable);
+                // larger ones stay direct and are not exportable.
+                if (!direct || pooled_export) {
                     allocation_info.pool = device_pool_;
                 }
             }
@@ -454,6 +457,8 @@ namespace lfs::core::internal {
             .block_size = info.blockSize,
             .dedicated = info.dedicatedMemory == VK_TRUE,
             .host_visible = record.host_visible,
+            .exportable = exports_memory_ && !record.host_visible &&
+                          record.allocated_size <= kPoolBlockSize,
         };
     }
 

@@ -485,3 +485,17 @@ namespace {
     }
 
 } // namespace
+
+TEST_F(TensorVulkanCudaBridge, DirectLargeAllocationsAreNotExportableButStayUsable) {
+    if (!vulkan_backend_exports_memory()) {
+        GTEST_SKIP() << "Vulkan tensor backend does not export memory";
+    }
+    GpuBackendScope scope(GpuBackend::Vulkan);
+    constexpr size_t count = size_t{100} * 1024 * 1024 / sizeof(float);
+    Tensor large = Tensor::ones({count}, Device::CUDA, DataType::Float32);
+    EXPECT_FLOAT_EQ(large.sum_scalar(), static_cast<float>(count));
+    const auto view = cuda_view_of_vulkan_tensor(large, nullptr);
+    ASSERT_FALSE(view.has_value());
+    EXPECT_EQ(view.error().code(), lfs::ErrorCode::Unsupported);
+    EXPECT_FLOAT_EQ((large * 2.0f).sum_scalar(), 2.0f * static_cast<float>(count));
+}

@@ -413,6 +413,11 @@ namespace lfs::core {
                 lfs::ErrorCode::Unsupported, lfs::ErrorDomain::Vulkan,
                 "CUDA view of host-visible Vulkan readback storage is not supported");
         }
+        if (!block->exportable) {
+            return cuda_view_error(
+                lfs::ErrorCode::Unsupported, lfs::ErrorDomain::Vulkan,
+                "CUDA view needs pool-backed Vulkan storage; direct (large) allocations are not exportable");
+        }
         auto imported = context->cuda_imports()->import_memory(
             block->memory, block->block_size, block->dedicated);
         if (!imported) {

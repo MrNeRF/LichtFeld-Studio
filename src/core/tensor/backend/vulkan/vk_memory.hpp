@@ -62,6 +62,7 @@ namespace lfs::core::internal {
             VkDeviceSize block_size = 0;
             bool dedicated = false;
             bool host_visible = false;
+            bool exportable = false;
         };
         [[nodiscard]] std::optional<CudaBlockInfo> cuda_block_info(StorageRef storage) const;
         void shutdown();
