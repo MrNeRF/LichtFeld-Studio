@@ -367,6 +367,18 @@ namespace {
         EXPECT_TRUE(params.validate().empty());
     }
 
+    TEST_F(TrainingParametersTest, StoredBackendConflictPreservesSettingsButStillRejectsInvalidNumbers) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        params.use_depth_loss = true;
+        const auto before = params.to_json();
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_TRUE(params.validate_for_storage().empty());
+        EXPECT_EQ(params.to_json(), before);
+        params.refine_every = 0;
+        EXPECT_NE(params.validate_for_storage().find("refine_every"), std::string::npos);
+    }
+
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
         auto params = OptimizationParameters::mcmc_defaults();
         EXPECT_FALSE(params.use_exposure_correction);

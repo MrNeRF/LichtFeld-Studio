@@ -107,7 +107,7 @@ namespace lfs::vis {
             &snapshot.igs_current,
         };
         for (const auto* value : params) {
-            if (const std::string error = value->validate(); !error.empty()) {
+            if (const std::string error = value->validate_for_storage(); !error.empty()) {
                 return lfs::Result<void>::failure(parameter_project_error(
                     lfs::ErrorCode::InvalidArgument,
                     "Pending project parameters are invalid: " + error));

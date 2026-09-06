@@ -2914,7 +2914,7 @@ namespace lfs::io::project {
                 result.config_file.clear();
                 result.bg_image_path.clear();
                 result.ppisp_sidecar_path.clear();
-                if (const std::string invalid = result.validate(); !invalid.empty()) {
+                if (const std::string invalid = result.validate_for_storage(); !invalid.empty()) {
                     return fail<ParsedParameterPreset>(
                         lfs::ErrorCode::DataLoss,
                         "A pending parameter preset is invalid.",
@@ -3237,7 +3237,7 @@ namespace lfs::io::project {
                                 field, params->strategy),
                     "PRMS", std::format("presets.{}", field));
             }
-            if (const std::string invalid = params->validate();
+            if (const std::string invalid = params->validate_for_storage();
                 !invalid.empty()) {
                 return fail<void>(
                     lfs::ErrorCode::InvalidArgument,

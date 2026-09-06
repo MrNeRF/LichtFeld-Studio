@@ -373,6 +373,12 @@ namespace lfs::core {
             return TrainingBackendConflict::None;
         }
 
+        std::string OptimizationParameters::validate_for_storage() const {
+            auto compatible_probe = *this;
+            compatible_probe.gut = false;
+            return compatible_probe.validate();
+        }
+
         std::string OptimizationParameters::validate() const {
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)

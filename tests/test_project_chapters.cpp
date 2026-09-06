@@ -456,6 +456,22 @@ namespace {
                 .background_image_reference->to_string());
     }
 
+    TEST(ProjectChapterTest, BackendConflictIsPreservedAsCorrectableStoredState) {
+        ParametersChapter chapter;
+        auto snapshot = parameter_snapshot();
+        snapshot.mrnf_current.gut = true;
+        snapshot.mrnf_current.use_depth_loss = true;
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed) << lfs::format_for_developer(reparsed.error());
+        auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored);
+        EXPECT_TRUE(restored->mrnf_current.gut);
+        EXPECT_TRUE(restored->mrnf_current.use_depth_loss);
+        EXPECT_FALSE(restored->mrnf_current.validate().empty());
+    }
+
     TEST(ProjectChapterTest, PathReferenceMintAndResolveRoundTrip) {
         TemporaryDirectory temporary;
         const fs::path project_root = temporary.path / "project";
