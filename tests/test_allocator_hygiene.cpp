@@ -8,8 +8,8 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/gpu_slab_allocator.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #include <atomic>
 #include <cuda_runtime.h>

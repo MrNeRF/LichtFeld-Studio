@@ -3,9 +3,9 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <limits>
 #include <numeric>
@@ -323,6 +323,7 @@ namespace lfs::core {
                                "cat movement tensor ranks must match");
                 LFS_ASSERT_MSG(device_ == other.device(),
                                "cat movement tensors must share a device");
+                internal::require_same_gpu_backend(*this, other, "cat movement");
                 LFS_ASSERT_MSG(dtype_ == other.dtype(),
                                "cat movement tensor dtypes must match");
 
@@ -339,33 +340,33 @@ namespace lfs::core {
                 std::vector<size_t> result_dims = shape_.dims();
                 result_dims[dim] = shape_[dim] + other.shape()[dim];
 
-                auto result = empty(TensorShape(result_dims), device_, dtype_);
+                auto result = internal::allocate_like(
+                    *this, TensorShape(result_dims), dtype_);
 
                 size_t self_bytes = bytes();
                 size_t other_bytes = other.bytes();
 
                 if (device_ == Device::CUDA) {
                     pin_operands({this, &other});
+                    auto& backend_ops = internal::backend_ops_for(*this);
                     if (self_bytes > 0) {
-                        const cudaError_t self_status =
-                            cudaMemcpy(result.data_ptr(), data_ptr(), self_bytes,
-                                       cudaMemcpyDeviceToDevice);
-                        LFS_ENSURE_CUDA_SUCCESS_MSG(
-                            self_status, "cudaMemcpy(cat movement destination)",
-                            std::format("bytes={}, destination_shape={}, result_shape={}",
-                                        self_bytes, shape_.str(), result.shape().str()));
+                        backend_ops.copy_device_to_device(internal::CopyRequest{
+                            .src = internal::storage_ref(*this),
+                            .dst = internal::storage_ref(result),
+                            .bytes = self_bytes,
+                            .synchronous = true,
+                            .context = internal::ExecContext{nullptr},
+                        });
                     }
                     if (other_bytes > 0) {
-                        const cudaError_t other_status =
-                            cudaMemcpy(static_cast<char*>(result.data_ptr()) + self_bytes,
-                                       other.data_ptr(), other_bytes,
-                                       cudaMemcpyDeviceToDevice);
-                        LFS_ENSURE_CUDA_SUCCESS_MSG(
-                            other_status, "cudaMemcpy(cat movement source)",
-                            std::format("bytes={}, source_shape={}, result_shape={}, "
-                                        "destination_offset={}",
-                                        other_bytes, other.shape().str(), result.shape().str(),
-                                        self_bytes));
+                        backend_ops.copy_device_to_device(internal::CopyRequest{
+                            .src = internal::storage_ref(other),
+                            .dst = internal::offset_storage_ref(
+                                internal::storage_ref(result), self_bytes),
+                            .bytes = other_bytes,
+                            .synchronous = true,
+                            .context = internal::ExecContext{nullptr},
+                        });
                     }
                 } else {
                     pin_operands({this, &other});
@@ -402,15 +403,19 @@ namespace lfs::core {
                     new_shape[i] += pad_before[i] + pad_after[i];
                 }
 
-                auto result = zeros(TensorShape(new_shape), device_, dtype_);
+                auto result = internal::allocate_zeros_like(
+                    *this, TensorShape(new_shape), dtype_);
 
                 if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
                     pin_operands({this});
-                    tensor_ops::launch_pad(
-                        ptr<float>(), result.ptr<float>(),
-                        shape_.dims().data(), strides_.data(),
-                        new_shape.data(), pad_before.data(),
-                        shape_.rank(), numel(), result.stream());
+                    std::array<size_t, MAX_TENSOR_RANK> pad_before_descriptor{};
+                    std::copy(pad_before.begin(), pad_before.end(),
+                              pad_before_descriptor.begin());
+                    internal::backend_ops_for(*this).pad(
+                        internal::storage_ref(*this), internal::storage_ref(result),
+                        internal::strided_layout(*this),
+                        internal::strided_layout(result), pad_before_descriptor,
+                        internal::ExecContext{result.stream()});
                 } else if (device_ == Device::CPU && dtype_ == DataType::Float32) {
                     if (!is_contiguous())
                         return contiguous().movement(op, args);

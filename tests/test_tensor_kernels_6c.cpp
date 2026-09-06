@@ -3,9 +3,9 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>

@@ -6,7 +6,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "rendering/render_constants.hpp"
 
 #include <algorithm>

@@ -342,17 +342,16 @@ namespace lfs::core {
                 });
                 if (parsed.payload_bytes > 0) {
                     run_timed(&TensorLoadTiming::read_ms, [&] {
-                        LFS_CUDA_CHECK_MSG_STREAM_ARGS(
-                            cudaMemcpyAsync(
-                                loaded.data_ptr(), remaining.data(),
-                                static_cast<std::size_t>(parsed.payload_bytes),
-                                cudaMemcpyHostToDevice, stream),
-                            stream,
-                            reinterpret_cast<uintptr_t>(loaded.data_ptr()),
-                            reinterpret_cast<uintptr_t>(remaining.data()),
-                            static_cast<std::size_t>(parsed.payload_bytes),
-                            "while uploading serialized tensor payload shape={} dtype={} to CUDA",
-                            parsed.shape.str(), dtype_name(parsed.dtype));
+                        internal::backend_ops_for(loaded).copy_host_to_device(
+                            internal::CopyRequest{
+                                .src = internal::raw_storage_ref(
+                                    const_cast<void*>(static_cast<const void*>(remaining.data())),
+                                    parsed.dtype),
+                                .dst = internal::storage_ref(loaded),
+                                .bytes = static_cast<std::size_t>(parsed.payload_bytes),
+                                .synchronous = false,
+                                .context = internal::ExecContext{stream},
+                            });
                         loaded.record_stream(stream);
                     });
                 }

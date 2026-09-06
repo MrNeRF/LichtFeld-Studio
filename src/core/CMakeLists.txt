@@ -8,6 +8,11 @@
 # Tensor CUDA kernels (STATIC, linked privately)
 add_subdirectory(tensor)
 
+option(LFS_TENSOR_VULKAN "Build the Vulkan tensor backend" ON)
+if(LFS_TENSOR_VULKAN)
+    include(tensor/backend/vulkan/CMakeLists.txt)
+endif()
+
 # Neural inference kernels (STATIC, linked privately)
 add_subdirectory(nn)
 
@@ -22,14 +27,26 @@ add_subdirectory(logger)
 
 # Tensor C++ sources (merged from src/core/tensor/)
 set(TENSOR_SOURCES
-        tensor/cuda_event_pool.cpp
-        tensor/cuda_stream_context.cpp
-        tensor/stream_lifetime.cpp
-        tensor/gpu_slab_allocator.cpp
-        tensor/size_bucketed_pool.cpp
+        tensor/backend/cuda/runtime/cuda_event_pool.cpp
+        tensor/backend/cuda/runtime/cuda_stream_context.cpp
+        tensor/backend/cuda/runtime/stream_lifetime.cpp
+        tensor/backend/cuda/runtime/gpu_slab_allocator.cpp
+        tensor/backend/cuda/runtime/size_bucketed_pool.cpp
         tensor/lazy_config.cpp
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
+        tensor/tensor_backend.cpp
+        tensor/backend/backend_registry.cpp
+        tensor/backend/facade_trace.cpp
+        tensor/backend/cuda/cuda_ops_pointwise.cpp
+        tensor/backend/cuda/cuda_ops_reduce.cpp
+        tensor/backend/cuda/cuda_ops_scan_sort.cpp
+        tensor/backend/cuda/cuda_ops_matrix_nn.cpp
+        tensor/backend/cuda/cuda_ops_random.cpp
+        tensor/backend/cuda/cuda_ops_index_mask.cpp
+        tensor/backend/cuda/cuda_ops_movement.cpp
+        tensor/backend/cuda/cuda_services.cpp
+        tensor/backend/vulkan/vma_implementation.cpp
         tensor/tensor.cpp
         tensor/tensor_serialization.cpp
         tensor/tensor_factory.cpp
@@ -44,14 +61,33 @@ set(TENSOR_SOURCES
         tensor/tensor_advanced_ops.cpp
         tensor/tensor_row_proxy.cpp
         tensor/tensor_nn_ops.cpp
-        tensor/pinned_memory_allocator.cpp
-        tensor/tensor_exports.cu
+        tensor/backend/cuda/runtime/pinned_memory_allocator.cpp
+        tensor/backend/cuda/kernels/tensor_exports.cu
         nn/ops.cpp
         nn/weight_file.cpp
         nn/activation_arena.cpp
         nn/models/moge2.cpp
         nn/models/sam2.cpp
 )
+
+if(LFS_TENSOR_VULKAN)
+    list(APPEND TENSOR_SOURCES
+        tensor/backend/vulkan/vk_context.cpp
+        tensor/backend/vulkan/vk_memory.cpp
+        tensor/backend/vulkan/vk_recorder.cpp
+        tensor/backend/vulkan/vk_pipelines.cpp
+        tensor/backend/vulkan/vk_ops_pointwise.cpp
+        tensor/backend/vulkan/vk_ops_movement.cpp
+        tensor/backend/vulkan/vk_ops_reduce.cpp
+        tensor/backend/vulkan/vk_ops_index.cpp
+        tensor/backend/vulkan/vk_ops_mask.cpp
+        tensor/backend/vulkan/vk_ops_sort.cpp
+        tensor/backend/vulkan/vk_ops_matrix.cpp
+        tensor/backend/vulkan/vk_ops_nn.cpp
+        tensor/backend/vulkan/vk_ops_random.cpp
+        tensor/backend/vulkan/vk_services.cpp
+    )
+endif()
 
 # Core module sources
 set(CORE_SOURCES
@@ -112,6 +148,12 @@ set(CORE_SOURCES
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 
+if(LFS_TENSOR_VULKAN)
+    add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
+    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE})
+    target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
+endif()
+
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS)
 
 target_include_directories(lfs_core
@@ -142,6 +184,8 @@ target_link_libraries(lfs_core
         CUDA::cudart
         CUDA::curand
         spdlog::spdlog
+        Vulkan::Vulkan
+        GPUOpen::VulkanMemoryAllocator
     PRIVATE
         lfs_core_cuda
         lfs_tensor_kernels

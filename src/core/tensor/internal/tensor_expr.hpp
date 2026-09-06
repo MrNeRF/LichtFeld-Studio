@@ -4,11 +4,12 @@
 #pragma once
 
 #include "core/export.hpp"
-#include "cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 
 #include <cstddef> // for size_t
 #include <cstdint>
-#include <memory>    // for std::shared_ptr
+#include <memory> // for std::shared_ptr
+#include <optional>
 #include <stdexcept> // for std::runtime_error
 #include <string>    // MUST be outside namespace!
 #include <type_traits>
@@ -61,6 +62,7 @@ namespace lfs::core {
         Device device() const { return derived().device_impl(); }
         DataType dtype() const { return derived().dtype_impl(); }
         cudaStream_t stream_hint() const { return derived().stream_hint_impl(); }
+        std::optional<GpuBackend> gpu_backend() const { return derived().gpu_backend_impl(); }
 
         Derived snapshot() const { return derived().snapshot_impl(); }
     };
@@ -84,6 +86,7 @@ namespace lfs::core {
         const TensorShape& shape_impl() const;
         Device device_impl() const;
         DataType dtype_impl() const;
+        std::optional<GpuBackend> gpu_backend_impl() const;
         cudaStream_t stream_hint_impl() const;
 
         // Enable chaining of operations (template methods must be defined in header)
@@ -139,6 +142,7 @@ namespace lfs::core {
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }
         DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return input_.gpu_backend(); }
         cudaStream_t stream_hint_impl() const { return input_.stream_hint(); }
     };
 
@@ -184,6 +188,7 @@ namespace lfs::core {
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }
         DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return inner_expr_.gpu_backend(); }
         cudaStream_t stream_hint_impl() const { return inner_expr_.stream_hint(); }
     };
 
@@ -229,6 +234,10 @@ namespace lfs::core {
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }
         DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const {
+            const auto lhs = left_.gpu_backend();
+            return lhs ? lhs : right_.gpu_backend();
+        }
         cudaStream_t stream_hint_impl() const {
             if (cudaStream_t current = getCurrentCUDAStream()) {
                 return current;
@@ -279,6 +288,7 @@ namespace lfs::core {
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }
         DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return input_.gpu_backend(); }
         cudaStream_t stream_hint_impl() const { return input_.stream_hint(); }
     };
 
@@ -326,6 +336,7 @@ namespace lfs::core {
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }
         DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return input_.gpu_backend(); }
         cudaStream_t stream_hint_impl() const {
             if (cudaStream_t current = getCurrentCUDAStream()) {
                 return current;
@@ -370,6 +381,7 @@ namespace lfs::core {
         const TensorShape& shape_impl() const { return shape_; }
         Device device_impl() const { return device_; }
         DataType dtype_impl() const { return dtype_; }
+        std::optional<GpuBackend> gpu_backend_impl() const { return perm_expr_.gpu_backend(); }
         cudaStream_t stream_hint_impl() const { return perm_expr_.stream_hint(); }
     };
 

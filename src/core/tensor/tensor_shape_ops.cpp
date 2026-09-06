@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <execution>
@@ -100,7 +100,7 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_axes = std::move(deferred_axes)]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
@@ -219,7 +219,7 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), deferred_ranges = std::move(deferred_ranges)]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
@@ -277,7 +277,7 @@ namespace lfs::core {
                 deferred_inputs.push_back(source_id);
             }
             Tensor deferred = make_deferred_expr_tensor(
-                deferred_shape, device_, dtype_,
+                deferred_shape, device_, dtype_, internal::gpu_backend_tag(*this),
                 [source = std::move(source), dim, start, end]() mutable {
                     Tensor materialized = source;
                     materialized.materialize_if_deferred();
@@ -362,12 +362,13 @@ namespace lfs::core {
                               const std::vector<size_t>& new_shape) const {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
                        "non-contiguous slice copying currently supports only Float32");
-        auto result = empty(TensorShape(new_shape), device_, dtype_);
+        auto result = internal::allocate_like(*this, TensorShape(new_shape), dtype_);
 
         if (device_ == Device::CUDA) {
             auto cpu_copy = to(Device::CPU);
             auto cpu_result = cpu_copy.copy_slice(starts, ends, new_shape);
-            return cpu_result.to(Device::CUDA);
+            return internal::copy_to_backend(
+                cpu_result, gpu_backend_of(*this).value());
         } else {
             const float* src = ptr<float>();
             float* dst = result.ptr<float>();

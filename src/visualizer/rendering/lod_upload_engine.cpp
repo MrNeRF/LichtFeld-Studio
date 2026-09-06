@@ -5,7 +5,7 @@
 #include "lod_upload_engine.hpp"
 
 #include "core/logger.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #include "lod_page_dequant_cuda.hpp"
 
