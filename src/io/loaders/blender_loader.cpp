@@ -26,6 +26,19 @@
 
 namespace lfs::io {
 
+    namespace {
+        std::string mask_lookup_name(const std::filesystem::path& image_path,
+                                     const std::filesystem::path& absolute_dataset_path) {
+            auto relative = std::filesystem::absolute(image_path).lexically_normal().lexically_relative(absolute_dataset_path);
+            if (relative.empty() || *relative.begin() == "..")
+                return lfs::core::path_to_utf8(image_path.filename());
+            // Masks mirror the path below images/, or the dataset root for Blender layouts.
+            if (detail::normalize_lookup_key(*relative.begin()) == "images")
+                relative = relative.lexically_relative(*relative.begin());
+            return lfs::core::path_to_utf8(relative);
+        }
+    } // namespace
+
     // Import types from lfs::core for convenience
     using lfs::core::DataType;
     using lfs::core::Device;
@@ -201,7 +214,8 @@ namespace lfs::io {
                 LOG_INFO("mask maps present but unused (mask usage disabled)");
             }
 
-            MaskDirCache mask_cache(base_path, options.cancel_requested);
+            const auto absolute_base_path = std::filesystem::absolute(transforms_file).parent_path().lexically_normal();
+            std::optional<MaskDirCache> mask_cache;
             DepthDirCache depth_cache(base_path, options.cancel_requested);
             NormalDirCache normal_cache(base_path, options.cancel_requested);
 
@@ -212,20 +226,34 @@ namespace lfs::io {
                 const auto& info = camera_infos[i];
 
                 try {
-                    std::filesystem::path mask_path;
-                    if (auto mask_lookup = mask_cache.lookup(info._image_name); mask_lookup.found()) {
-                        mask_path = std::move(mask_lookup.path);
-                    } else if (mask_lookup.ambiguous()) {
-                        if (options.load_masks) {
-                            return make_error(
-                                ErrorCode::INVALID_DATASET,
-                                std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
-                                            "Keep masks in the same relative subdirectories as the images or rename them uniquely.",
-                                            info._image_name),
-                                base_path);
+                    std::filesystem::path mask_path = info._mask_path;
+                    if (!mask_path.empty()) {
+                        // Explicit metadata is authoritative, including when the referenced
+                        // file is missing. Never substitute a guessed sidecar in that case.
+                        if (info._has_image && options.load_masks && !safe_is_regular_file(mask_path)) {
+                            return make_error(ErrorCode::MISSING_REQUIRED_FILES,
+                                              std::format("Explicit mask_path for image '{}' does not reference a regular file",
+                                                          lfs::core::path_to_utf8(info._image_path)),
+                                              mask_path);
                         }
-                        LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
-                                 info._image_name);
+                    } else {
+                        if (!mask_cache)
+                            mask_cache.emplace(base_path, options.cancel_requested);
+                        const auto lookup_name = mask_lookup_name(info._image_path, absolute_base_path);
+                        if (auto mask_lookup = mask_cache->lookup(lookup_name); mask_lookup.found()) {
+                            mask_path = std::move(mask_lookup.path);
+                        } else if (mask_lookup.ambiguous()) {
+                            if (options.load_masks) {
+                                return make_error(
+                                    ErrorCode::INVALID_DATASET,
+                                    std::format("Mask for image '{}' is ambiguous across the dataset mask folders. "
+                                                "Keep masks in the same relative subdirectories as the images or rename them uniquely.",
+                                                lookup_name),
+                                    base_path);
+                            }
+                            LOG_WARN("Mask for image '{}' is ambiguous; skipping sidecar because mask usage is disabled",
+                                     lookup_name);
+                        }
                     }
 
                     std::filesystem::path depth_path;

@@ -1010,20 +1010,26 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
+            auto* const viewer = lfs::python::get_visualizer();
+            // Capture the caller's thread before marshalling the command. UI
+            // callbacks must return so initialization can post work back to
+            // the viewer; off-thread scripts retain the synchronous contract.
+            const bool called_on_viewer = viewer && viewer->isOnViewerThread();
             auto* const trainer_manager = lfs::python::get_trainer_manager();
             emit_project_cmd_marshaled(
                 "python.start_training", [] {
                     lfs::core::events::cmd::StartTraining{}
                         .emit();
                 });
-            if (trainer_manager) {
+            if (trainer_manager && !called_on_viewer) {
                 if (auto initialized = trainer_manager->waitForInitialization();
                     !initialized) {
                     throw std::runtime_error(lfs::format_for_developer(initialized.error()));
                 }
             }
         },
-        "Start training with current parameters; waits for off-thread initialization");
+        "Start training with current parameters. Returns after dispatch on the viewer thread; "
+        "other callers wait for initialization. Asynchronous failures are reported through training state.");
     m.def(
         "training_start_overwrite_conflict",
         []() -> std::optional<int> {

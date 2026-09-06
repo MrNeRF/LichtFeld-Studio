@@ -1938,13 +1938,20 @@ namespace lfs::vis {
         };
         refresh_content_flags();
         size_t model_ptr = reinterpret_cast<size_t>(model);
+        // Edit-mode handoff moves the same SplatData into a scene node. Its
+        // address does not change, but the trainer's GPU handshake is gone.
+        // Use dataset ownership, not Running/Paused, so completion alone does
+        // not reset the renderer while the trainer still owns its fences.
+        const auto model_source = scene_manager && scene_manager->hasDataset()
+                                      ? ViewportFrameLifecycleService::ModelSource::Training
+                                      : ViewportFrameLifecycleService::ModelSource::Scene;
 
         // Skip model-change tracking while the step-boundary lock is contended:
         // model_ptr is null only because densify holds exclusive, not because the
         // scene dropped the model. Treating it as a change would wipe the retained
         // last splat image (the whole point of the cadence path).
         if (!render_lock_contended) {
-            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
                 model_change.changed) {
                 invalidateGTComparisonImageCache();
                 clearVulkanViewportImageState();
@@ -2065,7 +2072,7 @@ namespace lfs::vis {
                 sample_model_under_lock();
                 refresh_content_flags();
                 model_ptr = reinterpret_cast<size_t>(model);
-                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
             }
         }
         // Scene state is authoritative here (contended frames returned above): nothing

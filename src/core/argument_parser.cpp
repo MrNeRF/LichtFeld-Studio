@@ -487,7 +487,7 @@ namespace {
             // =============================================================================
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
-            ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data", {'d', "data-path"});
+            ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data: a dataset folder or an untrained .licht project", {'d', "data-path"});
             ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
@@ -992,19 +992,44 @@ namespace {
                     parser.Help()));
             }
 
-            // Training/resume mode requires both data-path and output-path
-            // Exception: resume mode can work without explicit paths (extracted from checkpoint)
-            if (has_data_path && has_output_path) {
-                params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
-                params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
+            // An untrained .licht on --data-path is a dataset source and, unless
+            // --output-path redirects the result, also the project the run trains into.
+            const auto data_path_value = has_data_path
+                                             ? lfs::core::utf8_to_path(::args::get(data_path))
+                                             : std::filesystem::path{};
+            auto data_extension = data_path_value.extension().string();
+            std::ranges::transform(
+                data_extension, data_extension.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            const bool data_path_is_project = data_extension == ".licht";
 
-                // Create output directory
-                std::error_code ec;
-                std::filesystem::create_directories(params.dataset.output_path, ec);
-                if (ec) {
-                    return std::unexpected(std::format(
-                        "Failed to create output directory '{}': {}",
-                        lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+            // Training mode requires both data-path and output-path.
+            // Exceptions: a .licht carries its own destination, and resume mode
+            // can work without explicit paths (extracted from checkpoint).
+            if (has_data_path && (has_output_path || data_path_is_project)) {
+                if (data_path_is_project) {
+                    if (!lfs::io::project::isPublishedLichtPath(data_path_value)) {
+                        return std::unexpected(
+                            lfs::io::project::unpublishedLichtUserMessage(data_path_value));
+                    }
+                    params.dataset_project = data_path_value;
+                } else {
+                    params.dataset.data_path = data_path_value;
+                }
+
+                if (has_output_path) {
+                    params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
+
+                    // Create output directory
+                    std::error_code ec;
+                    std::filesystem::create_directories(params.dataset.output_path, ec);
+                    if (ec) {
+                        return std::unexpected(std::format(
+                            "Failed to create output directory '{}': {}",
+                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    }
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
                 // Only require both if not in resume mode

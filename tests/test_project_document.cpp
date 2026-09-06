@@ -5,6 +5,7 @@
 
 #include "app/headless_recovery_document.hpp"
 #include "core/image_io.hpp"
+#include "io/embedded_dataset.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
@@ -6081,6 +6082,103 @@ namespace {
             EXPECT_EQ(require_result(compacted_reader.read_chunk(*row)),
                       read_file_bytes(dataset / entry.rel_path));
         }
+    }
+
+    // Covers lfs::io::project::extract_embedded_dataset, the headless side of
+    // dataset embedding: DSRC chunks are written back to disk byte-for-byte,
+    // guarded by the manifest hash, into a caller-chosen cache folder.
+    TEST(ProjectDocumentTest, ExtractEmbeddedDatasetRestoresFilesIntoCache) {
+        TemporaryDirectory temporary;
+        // A minimal dataset with a downscaled images folder, so the test also
+        // exercises a non-default images_folder in the manifest.
+        const auto dataset = temporary.path / "dataset";
+        const auto image = dataset / "images_2" / "frame.bin";
+        const auto sparse = dataset / "sparse" / "0" / "cameras.bin";
+        std::filesystem::create_directories(image.parent_path());
+        std::filesystem::create_directories(sparse.parent_path());
+        const std::vector<std::byte> image_bytes{
+            std::byte{0x10}, std::byte{0x20}, std::byte{0x30}};
+        const std::vector<std::byte> sparse_bytes{std::byte{0x01}, std::byte{0x03}};
+        write_file_bytes(image, image_bytes);
+        write_file_bytes(sparse, sparse_bytes);
+
+        // The project references the dataset folder like a GUI save would.
+        auto document = require_result_ptr(ProjectDocument::create(
+            fixed_uuid(2501), 100));
+        bind_dataset(*document, dataset);
+        const auto project_path = temporary.path / "extract.licht";
+        (void)require_result(document->save(project_path, save_options(2502, 200)));
+
+        const auto entry_for = [](const fs::path& path,
+                                  const std::string& rel,
+                                  const std::string& kind,
+                                  const Uuid& uuid) {
+            const auto bytes = read_file_bytes(path);
+            return EmbeddedDatasetEntry{
+                .rel_path = rel,
+                .kind = kind,
+                .chunk_uuid = uuid,
+                .bytes = bytes.size(),
+                .xxh3_128 = xxh3_128(bytes),
+            };
+        };
+        const auto image_entry = entry_for(
+            image, "images_2/frame.bin", "image", fixed_uuid(2503));
+        const auto sparse_entry = entry_for(
+            sparse, "sparse/0/cameras.bin", "sparse", fixed_uuid(2504));
+        const std::array sources{
+            DatasetEmbedSource{.entry = image_entry, .source_path = image},
+            DatasetEmbedSource{.entry = sparse_entry, .source_path = sparse},
+        };
+        const auto cache = temporary.path / "cache";
+
+        // Embed only the image first. Extraction must refuse a manifest that is
+        // not marked complete and leave the cache without a ".complete" marker.
+        const EmbeddedDatasetManifest partial_manifest{
+            .schema_version = 1,
+            .images_folder = "images_2",
+            .complete = false,
+            .entries = {image_entry},
+        };
+        (void)require_result(document->embed_dataset_batch(
+            partial_manifest, std::span(sources).first(1),
+            save_options(2505, 300)));
+        EXPECT_FALSE(require_result(lfs::io::project::extract_embedded_dataset(
+                                        *document, cache))
+                         .has_value());
+        EXPECT_FALSE(fs::exists(cache / ".complete"));
+
+        const EmbeddedDatasetManifest manifest{
+            .schema_version = 1,
+            .images_folder = "images_2",
+            .complete = true,
+            .entries = {image_entry, sparse_entry},
+        };
+        (void)require_result(document->embed_dataset_batch(
+            manifest, std::span(sources).subspan(1),
+            save_options(2506, 400)));
+
+        // Reopen from disk so the DSRC chunks are read as lazy file-backed
+        // sources, the way headless training sees them.
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto extracted = require_result(
+            lfs::io::project::extract_embedded_dataset(*reopened, cache));
+        ASSERT_TRUE(extracted);
+        EXPECT_EQ(*extracted, cache);
+        EXPECT_TRUE(fs::is_regular_file(cache / ".complete"));
+        EXPECT_EQ(read_file_bytes(cache / "images_2" / "frame.bin"), image_bytes);
+        EXPECT_EQ(read_file_bytes(cache / "sparse" / "0" / "cameras.bin"),
+                  sparse_bytes);
+        EXPECT_EQ(require_result(lfs::io::project::hash_dataset_file(
+                      cache / "images_2" / "frame.bin")),
+                  image_entry.xxh3_128);
+
+        // Extraction is idempotent: a cached file that no longer matches its
+        // manifest hash is rewritten, while matching files would be reused.
+        write_file_bytes(cache / "images_2" / "frame.bin", sparse_bytes);
+        (void)require_result(
+            lfs::io::project::extract_embedded_dataset(*reopened, cache));
+        EXPECT_EQ(read_file_bytes(cache / "images_2" / "frame.bin"), image_bytes);
     }
 
 } // namespace

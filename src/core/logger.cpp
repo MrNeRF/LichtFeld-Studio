@@ -21,6 +21,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include "windows_console.hpp"
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -313,6 +314,19 @@ namespace lfs::core {
 
                 std::string output_msg = is_perf ? strip_perf_prefix(msg_view) : std::string(msg_view);
 
+#ifdef _WIN32
+                const auto console = detail::console_output_handle(target_);
+                if (console != INVALID_HANDLE_VALUE) {
+                    const auto line = std::format("[{:02}:{:02}:{:02}.{:03}] {}[{}]{} {}:{}  {}\n",
+                                                  tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(millis),
+                                                  color, level_str, ANSI_RESET, filename, msg.source.line, output_msg);
+                    // Flush earlier CRT writes before bypassing stdio. WriteConsoleW
+                    // does not depend on or change the shared console code page.
+                    std::fflush(target_);
+                    if (detail::write_console_utf8(console, line))
+                        return;
+                }
+#endif
                 std::fprintf(target_, "[%02d:%02d:%02d.%03d] %s[%s]%s %.*s:%d  %s\n",
                              tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<int>(millis),
                              color, level_str, ANSI_RESET,
@@ -590,6 +604,14 @@ namespace lfs::core {
         impl_->logger->flush_on(spdlog::level::err);
         spdlog::set_default_logger(impl_->logger);
         spdlog::flush_every(std::chrono::seconds(2));
+
+#ifdef _WIN32
+        // Deliberately keep a small, visible probe near the top of every Windows
+        // startup log. It exercises the same UTF-8 -> UTF-16 console path as a
+        // real diagnostic without changing the terminal's shared code page.
+        impl_->logger->log(spdlog::source_loc{__FILE__, __LINE__, __func__}, spdlog::level::info,
+                           "LichtFeld logger initialized \xE2\x80\x94 UTF-8 console: \xE2\x9C\x93");
+#endif
 
         global_level_ = static_cast<uint8_t>(console_level);
         capture_all_to_file_ = !log_file.empty();

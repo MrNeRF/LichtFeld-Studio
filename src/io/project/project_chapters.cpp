@@ -3702,4 +3702,31 @@ namespace lfs::io::project {
             std::move(*result), parameters);
     }
 
+    void adopt_project_training_parameters(
+        lfs::core::param::TrainingParameters& params,
+        ParameterManagerSnapshot snapshot,
+        std::filesystem::path dataset_root,
+        std::string images_folder) {
+
+        // Take the stored options and supply the resolved and command-line locations.
+        auto dataset = std::move(snapshot.dataset);
+        dataset.data_path = std::move(dataset_root);
+        dataset.images = std::move(images_folder);
+        dataset.output_path = params.dataset.output_path;
+        dataset.output_path_explicit = params.dataset.output_path_explicit;
+        dataset.output_name = params.dataset.output_name;
+        params.dataset = std::move(dataset);
+
+        // The pending block of the active strategy is what the GUI would
+        // train with next. The three process flags describe this launch,
+        // not the project, so they always come from the command line.
+        auto optimization = snapshot.active_optimization();
+        optimization.headless = params.optimization.headless;
+        optimization.auto_train = params.optimization.auto_train;
+        optimization.no_splash = params.optimization.no_splash;
+        params.optimization = std::move(optimization);
+
+        lfs::core::param::apply_explicit_training_overrides(params, params.overrides);
+    }
+
 } // namespace lfs::io::project

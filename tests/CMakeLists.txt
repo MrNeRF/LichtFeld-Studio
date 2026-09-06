@@ -423,6 +423,7 @@ set(TEST_FILES
     test_extended_unary_ops_vs_torch.cpp
     test_scene_validity.cpp
     test_scene_consolidation.cpp
+    test_scene_graph_fuzz.cpp
     test_uuid.cpp
     test_render_settings_defaults.cpp
     test_scene_upscaler_registry.cpp
@@ -567,6 +568,10 @@ list(APPEND TEST_SOURCES
 # Create test executable
 add_executable(lichtfeld_tests ${TEST_SOURCES})
 
+# test_assert_hardening.cpp includes the generated ABI header directly. Ensure
+# the build-time tripwire has run before this target starts compiling.
+add_dependencies(lichtfeld_tests lfs_core_abi_stamp)
+
 # Python integration tests import the in-tree extension at runtime.
 add_dependencies(lichtfeld_tests lfs_py)
 
@@ -581,6 +586,7 @@ set_target_properties(lichtfeld_tests PROPERTIES
 
 # Include directories
 target_include_directories(lichtfeld_tests PRIVATE
+    ${LFS_CORE_ABI_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_BINARY_DIR}/include
     ${CMAKE_SOURCE_DIR}/tests
@@ -894,6 +900,7 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
 set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_asset_identity.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_bug_report.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_core_abi_stamp.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_event_keypad_mapping.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_export_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_gizmo_context.py
@@ -923,6 +930,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_scripts_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_selection_groups_panel.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_shader_header_target.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_splat_lod_hierarchy.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_store_subscriptions.py
@@ -935,6 +943,7 @@ set(LFS_PYTHON_FAST_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_transform_controls_panel.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_undo.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_viewport_overlay_hooks.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_windows_build_preflight.py
 )
 
 set(LFS_PYTHON_SLOW_TESTS
@@ -961,6 +970,7 @@ set(LFS_PYTHON_SLOW_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_signals.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_toolbar_hooks.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_orthographic_regressions.py
+    ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_overlay_storage.py
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_vksplat_output_lifetime_regressions.py
 )
 
@@ -974,6 +984,15 @@ set(LFS_PYTHON_NIGHTLY_TESTS
     ${CMAKE_CURRENT_SOURCE_DIR}/python/test_unicode_path_bindings.py
 )
 
+add_test(NAME lichtfeld.cmake.vcpkg_profiles
+    COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test_vcpkg_profiles.cmake"
+)
+set_tests_properties(lichtfeld.cmake.vcpkg_profiles PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS "fast"
+    TIMEOUT 60
+)
+
 add_test(NAME lichtfeld.python.fast
     COMMAND ${Python_EXECUTABLE} -m pytest -q
         -m "not gpu and not slow and not integration"
@@ -983,6 +1002,7 @@ set_tests_properties(lichtfeld.python.fast PROPERTIES
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     LABELS "fast"
     TIMEOUT 60
+    ENVIRONMENT_MODIFICATION "CMAKE_COMMAND=set:${CMAKE_COMMAND}"
 )
 
 add_test(NAME lichtfeld.python.slow

@@ -1772,8 +1772,8 @@ namespace lfs::core {
                 const float* const download_src = ptr<float>();
                 const size_t download_bytes = bytes();
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(download_dst, download_src, download_bytes,
-                               cudaMemcpyDeviceToHost),
+                    memcpy_ordered(download_dst, download_src, download_bytes,
+                                   cudaMemcpyDeviceToHost, stream()),
                     reinterpret_cast<uintptr_t>(download_dst),
                     reinterpret_cast<uintptr_t>(download_src),
                     download_bytes,
@@ -1789,8 +1789,8 @@ namespace lfs::core {
                 unsigned char* const upload_dst = result.ptr<unsigned char>();
                 const size_t upload_bytes = numel();
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(upload_dst, dst_cpu, upload_bytes,
-                               cudaMemcpyHostToDevice),
+                    memcpy_ordered(upload_dst, dst_cpu, upload_bytes,
+                                   cudaMemcpyHostToDevice, result.stream()),
                     reinterpret_cast<uintptr_t>(upload_dst),
                     reinterpret_cast<uintptr_t>(dst_cpu),
                     upload_bytes,
@@ -1899,8 +1899,8 @@ namespace lfs::core {
                 const int* const download_src = ptr<int>();
                 const size_t download_bytes = bytes();
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(download_dst, download_src, download_bytes,
-                               cudaMemcpyDeviceToHost),
+                    memcpy_ordered(download_dst, download_src, download_bytes,
+                                   cudaMemcpyDeviceToHost, stream()),
                     reinterpret_cast<uintptr_t>(download_dst),
                     reinterpret_cast<uintptr_t>(download_src),
                     download_bytes,
@@ -1917,8 +1917,8 @@ namespace lfs::core {
                 const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
                 const size_t upload_bytes = numel() * sizeof(unsigned char);
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(upload_dst, upload_src, upload_bytes,
-                               cudaMemcpyHostToDevice),
+                    memcpy_ordered(upload_dst, upload_src, upload_bytes,
+                                   cudaMemcpyHostToDevice, result.stream()),
                     reinterpret_cast<uintptr_t>(upload_dst),
                     reinterpret_cast<uintptr_t>(upload_src),
                     upload_bytes,
@@ -1990,8 +1990,8 @@ namespace lfs::core {
                 const int64_t* const download_src = ptr<int64_t>();
                 const size_t download_bytes = bytes();
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(download_dst, download_src, download_bytes,
-                               cudaMemcpyDeviceToHost),
+                    memcpy_ordered(download_dst, download_src, download_bytes,
+                                   cudaMemcpyDeviceToHost, stream()),
                     reinterpret_cast<uintptr_t>(download_dst),
                     reinterpret_cast<uintptr_t>(download_src),
                     download_bytes,
@@ -2008,8 +2008,8 @@ namespace lfs::core {
                 const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
                 const size_t upload_bytes = numel() * sizeof(unsigned char);
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(upload_dst, upload_src, upload_bytes,
-                               cudaMemcpyHostToDevice),
+                    memcpy_ordered(upload_dst, upload_src, upload_bytes,
+                                   cudaMemcpyHostToDevice, result.stream()),
                     reinterpret_cast<uintptr_t>(upload_dst),
                     reinterpret_cast<uintptr_t>(upload_src),
                     upload_bytes,
@@ -2064,8 +2064,8 @@ namespace lfs::core {
                 const __half* const download_src = ptr<__half>();
                 const size_t download_bytes = bytes();
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(download_dst, download_src, download_bytes,
-                               cudaMemcpyDeviceToHost),
+                    memcpy_ordered(download_dst, download_src, download_bytes,
+                                   cudaMemcpyDeviceToHost, stream()),
                     reinterpret_cast<uintptr_t>(download_dst),
                     reinterpret_cast<uintptr_t>(download_src),
                     download_bytes,
@@ -2090,8 +2090,8 @@ namespace lfs::core {
                 const unsigned char* const upload_src = result_cpu.ptr<unsigned char>();
                 const size_t upload_bytes = numel() * sizeof(unsigned char);
                 LFS_CUDA_CHECK_MSG_ARGS(
-                    cudaMemcpy(upload_dst, upload_src, upload_bytes,
-                               cudaMemcpyHostToDevice),
+                    memcpy_ordered(upload_dst, upload_src, upload_bytes,
+                                   cudaMemcpyHostToDevice, result.stream()),
                     reinterpret_cast<uintptr_t>(upload_dst),
                     reinterpret_cast<uintptr_t>(upload_src),
                     upload_bytes,
@@ -2275,7 +2275,7 @@ namespace lfs::core {
             unsigned char bool_val = (value != 0.0f) ? 1 : 0;
             if (device_ == Device::CUDA) {
                 std::vector<unsigned char> temp(numel(), bool_val);
-                LFS_CUDA_CHECK(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(memcpy_ordered(dest, temp.data(), bytes(), cudaMemcpyHostToDevice, stream()));
             } else {
                 unsigned char* data = static_cast<unsigned char*>(dest);
                 std::fill(data, data + numel(), bool_val);
@@ -2288,7 +2288,7 @@ namespace lfs::core {
             int int_val = static_cast<int>(value);
             if (device_ == Device::CUDA) {
                 std::vector<int> temp(numel(), int_val);
-                LFS_CUDA_CHECK(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(memcpy_ordered(dest, temp.data(), bytes(), cudaMemcpyHostToDevice, stream()));
             } else {
                 int* data = static_cast<int*>(dest);
                 std::fill(data, data + numel(), int_val);
@@ -2299,7 +2299,7 @@ namespace lfs::core {
         // Handle Float32 dtype (original code)
         if (device_ == Device::CUDA) {
             std::vector<float> temp(numel(), value);
-            LFS_CUDA_CHECK(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+            LFS_CUDA_CHECK(memcpy_ordered(dest, temp.data(), bytes(), cudaMemcpyHostToDevice, stream()));
         } else {
             float* data = static_cast<float*>(dest);
             std::fill(data, data + numel(), value);
@@ -2427,10 +2427,10 @@ namespace lfs::core {
                                                cudaMemcpyDeviceToDevice, execution_stream));
             } else if (device_ == Device::CUDA && src.device_ == Device::CPU) {
                 prepare_inputs_for_stream({this, &src}, stream());
-                LFS_CUDA_CHECK(cudaMemcpy(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(memcpy_ordered(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyHostToDevice, stream()));
             } else if (device_ == Device::CPU && src.device_ == Device::CUDA) {
                 prepare_inputs_for_stream({this, &src}, src.stream());
-                LFS_CUDA_CHECK(cudaMemcpy(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+                LFS_CUDA_CHECK(memcpy_ordered(data_ptr(), src.data_ptr(), bytes(), cudaMemcpyDeviceToHost, src.stream()));
             } else {
                 std::memcpy(data_ptr(), src.data_ptr(), bytes());
             }
@@ -3111,7 +3111,8 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             LOG_DEBUG("Copying from CUDA to CPU, bytes: {}", bytes());
-            LFS_CUDA_CHECK(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(memcpy_ordered(result.data(), data_ptr(), bytes(),
+                                          cudaMemcpyDeviceToHost, stream()));
             LOG_DEBUG("CUDA copy complete");
         } else {
             LOG_DEBUG("Copying from CPU memory, bytes: {}", bytes());
@@ -3156,7 +3157,8 @@ namespace lfs::core {
         std::vector<int> result(numel());
 
         if (device_ == Device::CUDA) {
-            LFS_CUDA_CHECK(cudaMemcpy(result.data(), data_ptr(), bytes(), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(memcpy_ordered(result.data(), data_ptr(), bytes(),
+                                          cudaMemcpyDeviceToHost, stream()));
         } else {
             std::memcpy(result.data(), data_ptr(), bytes());
         }

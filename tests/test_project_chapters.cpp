@@ -779,4 +779,46 @@ namespace {
         EXPECT_TRUE((*found)->camera->has_image);
     }
 
+    // Headless training from an untrained .licht has no checkpoint to restore
+    // from, so the run is assembled from the PRMS snapshot and the command
+    // line. This pins the three merge rules: stored values (active strategy,
+    // its iterations, loading settings) replace the CLI defaults; the process
+    // flags describe this launch and stay with the CLI; and flags the user
+    // typed explicitly, recorded as overrides, beat the stored values. The
+    // resolved dataset location and the CLI output location must survive
+    // because PRMS never stores paths.
+    TEST(ProjectChapterTest, AdoptProjectTrainingParametersMergesSnapshotAndCliFlags) {
+        using lfs::core::param::OptimizationParameters;
+        ParameterManagerSnapshot snapshot;
+        snapshot.active_strategy = "mcmc";
+        snapshot.mcmc_current = OptimizationParameters::mcmc_defaults();
+        snapshot.mcmc_current.iterations = 1234;
+        snapshot.dataset.images = "images_4";
+        snapshot.dataset.test_every = 8;
+        snapshot.dataset.loading_params.use_cpu_memory = false;
+
+        // As parsed from: --headless -o out --images images --test-every 4
+        lfs::core::param::TrainingParameters params;
+        params.optimization.headless = true;
+        params.dataset.output_path = "out";
+        params.dataset.output_path_explicit = true;
+        params.overrides.dataset_json = R"({"images":"images","test_every":4})";
+
+        adopt_project_training_parameters(params, snapshot, "/data/scene", "images_4");
+
+        // Stored strategy, iterations and loading settings win over CLI defaults.
+        EXPECT_EQ(params.optimization.strategy, "mcmc");
+        EXPECT_EQ(params.optimization.iterations, 1234u);
+        EXPECT_FALSE(params.dataset.loading_params.use_cpu_memory);
+        // Process flags stay with the command line.
+        EXPECT_TRUE(params.optimization.headless);
+        // Explicit CLI dataset flags win over stored values.
+        EXPECT_EQ(params.dataset.images, "images");
+        EXPECT_EQ(params.dataset.test_every, 4);
+        // Resolved dataset location and CLI output location are kept.
+        EXPECT_EQ(params.dataset.data_path, std::filesystem::path("/data/scene"));
+        EXPECT_EQ(params.dataset.output_path, std::filesystem::path("out"));
+        EXPECT_TRUE(params.dataset.output_path_explicit);
+    }
+
 } // namespace

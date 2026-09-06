@@ -148,6 +148,7 @@ namespace lfs::python {
             .mode = vis::op::SceneGraphCaptureMode::FULL,
             .include_selected_nodes = include_selected_nodes,
             .include_scene_context = include_scene_context,
+            .payload_uuids = std::vector<core::Uuid>{},
         };
     }
 
@@ -174,6 +175,10 @@ namespace lfs::python {
     // PySceneNode implementation
     void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
+    }
+
+    nb::tuple PySceneNode::local_transform() const {
+        return mat4_to_tuple(node_->local_transform.get());
     }
 
     nb::tuple PySceneNode::world_transform() const {
@@ -1159,6 +1164,7 @@ namespace lfs::python {
             .def_prop_ro("children", &PySceneNode::children, "List of child node IDs")
             .def_prop_ro("type", &PySceneNode::type, "Node type (SPLAT, GROUP, CAMERA, etc.)")
             // Transform (special conversion to tuple/ndarray)
+            .def_prop_ro("local_transform", &PySceneNode::local_transform, "Local transform as 4x4 row-major tuple")
             .def_prop_ro("world_transform", &PySceneNode::world_transform, "World-space transform as 4x4 row-major tuple")
             .def("set_local_transform", &PySceneNode::set_local_transform, "Set local transform from a [4, 4] ndarray")
             // Metadata (read-only)

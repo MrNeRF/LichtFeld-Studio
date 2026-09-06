@@ -35,6 +35,31 @@ namespace {
 
 } // namespace
 
+// An untrained .licht on --data-path is its own destination, so
+// --output-path is optional and the project stays bound for the run.
+TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
+    const auto directory =
+        make_test_path("lfs_arg_parser_dataset_project");
+    const auto project =
+        std::filesystem::path(directory) / "project.licht";
+    std::ofstream(project).put('\n');
+    const auto project_text = project.string();
+
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "--headless",
+        "-d",
+        project_text.c_str(),
+    };
+    auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    EXPECT_EQ((*parsed)->dataset_project, project);
+    EXPECT_TRUE((*parsed)->dataset.data_path.empty());
+    EXPECT_TRUE((*parsed)->dataset.output_path.empty());
+    EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
+}
+
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
     const auto directory =

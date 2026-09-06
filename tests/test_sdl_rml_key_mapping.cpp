@@ -19,6 +19,19 @@ namespace {
         EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(SDL_SCANCODE_EQUALS), Rml::Input::KI_OEM_PLUS);
     }
 
+    TEST(SdlRmlKeyMappingTest, ScancodeAndKeycodeMappingsStayInSync) {
+        for (int value = 0; value < SDL_SCANCODE_COUNT; ++value) {
+            const auto scancode = static_cast<SDL_Scancode>(value);
+            const auto keycode = SDL_GetKeyFromScancode(scancode, SDL_KMOD_NONE, false);
+            const auto keycode_mapping = lfs::vis::gui::sdlKeycodeToRml(keycode);
+            if (keycode_mapping == Rml::Input::KI_UNKNOWN)
+                continue;
+
+            EXPECT_EQ(lfs::vis::gui::sdlScancodeToRml(scancode), keycode_mapping)
+                << "scancode=" << value << " keycode=" << keycode;
+        }
+    }
+
     TEST(SdlKeyMappingTest, NumpadScancodesMapToAppKeys) {
         EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_0), lfs::vis::input::KEY_KP_0);
         EXPECT_EQ(lfs::vis::input::sdlScancodeToAppKey(SDL_SCANCODE_KP_1), lfs::vis::input::KEY_KP_1);
