@@ -30672,6 +30672,119 @@
     "skip_allowlisted": false
   },
   {
+    "name": "SelectionMaskOpsTest.ApplyGroupEmptyAllLockedAndSingleNode",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 240,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_selection_mask_ops.cpp:79: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.ApplyGroupMatchesKernelOnRandomInputs",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 163,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_selection_mask_ops.cpp:79: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.CropFilterMatchesKernel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 393,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.EmptySelectionIsNoOp",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 537,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.IndexedApplyMatchesKernelOnRandomInputs",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 291,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_selection_mask_ops.cpp:79: raw CUDA operation on tensor storage or CUDA-only fixture",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.MergeOrMatchesKernel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 347,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.NodeFilterMatchesKernel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 372,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "SelectionMaskOpsTest.ScreenWindowMatchesKernel",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_selection_mask_ops.cpp",
+    "line": 468,
+    "eligibility": "consumer",
+    "reason": "includes rendering/selection_ops.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_upload",
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "SelectionOperatorModalTest.ClosedPolygonShiftAddsVertexAndCtrlRemovesVertex",
     "executable": "lichtfeld_tests",
     "file": "tests/test_selection_operator_modal.cpp",
@@ -36254,6 +36367,31 @@
     "reason": "tests/test_tensor_backend_selection.cpp:147: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
     "launchers": [],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelftest.CudaSucceeds",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selftest.cpp",
+    "line": 16,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorBackendSelftest.VulkanSucceedsWhenAvailableAndLeavesBackendUsable",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_backend_selftest.cpp",
+    "line": 21,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_unary_op_generic",
+      "launch_strided_upload",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
@@ -48928,6 +49066,109 @@
     "skip_allowlisted": false
   },
   {
+    "name": "TensorVulkanCudaBridge.AdoptedDeviceWithExternalMemoryTakesView",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 451,
+    "eligibility": "vulkan",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "direct_sum_scalar",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanCudaBridge.CpuAndCudaSourcesReturnError",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 398,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_vulkan_cuda_bridge.cpp:408: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanCudaBridge.DirectLargeAllocationsAreNotExportableButStayUsable",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 489,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanCudaBridge.ShutdownReleasesImportsWhileViewAlive",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 429,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanCudaBridge.SliceViewHasTensorByteOffset",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 343,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_strided_upload",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanCudaBridge.ViewKeepsVulkanStorageAlive",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 365,
+    "eligibility": "vulkan",
+    "launchers": [
+      "direct_sum_scalar",
+      "launch_fill_strided"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "TensorVulkanCudaBridge.ViewReadsPendingVulkanWrite",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_tensor_vulkan_cuda_bridge.cpp",
+    "line": 304,
+    "eligibility": "cuda-only",
+    "reason": "tests/test_tensor_vulkan_cuda_bridge.cpp:322: asserts a CUDA backend contract (backend tag, stream identity, pool accounting or launch counters)",
+    "launchers": [
+      "launch_binary_op_generic",
+      "launch_scalar_op_generic",
+      "launch_broadcast_binary",
+      "direct_sum_scalar",
+      "launch_fill_strided",
+      "launch_fused_pointwise_chain"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "TensorVulkanIndex.BoundaryModesClampWrapAndAssert",
     "executable": "lichtfeld_tests",
     "file": "tests/test_tensor_vulkan_index.cpp",
@@ -55192,6 +55433,63 @@
     "skip_allowlisted": false
   },
   {
+    "name": "ViewerNoCuda.HoverGroupCountTensorProgramMatchesCpu",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_no_cuda.cpp",
+    "line": 42,
+    "eligibility": "consumer",
+    "reason": "includes app/gpu_preflight.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_convert_type"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ViewerNoCuda.PreflightTrainingCudaUnusableIsFatal",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_no_cuda.cpp",
+    "line": 37,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ViewerNoCuda.PreflightTrainingCudaUsableUsesCuda",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_no_cuda.cpp",
+    "line": 33,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ViewerNoCuda.PreflightViewerOnlyCudaUnusableUsesVulkanWhenAvailable",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_no_cuda.cpp",
+    "line": 29,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ViewerNoCuda.PreflightViewerOnlyCudaUsableUsesCuda",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_no_cuda.cpp",
+    "line": 24,
+    "eligibility": "not-tensor",
+    "reason": "does not exercise the LichtFeld tensor API",
+    "launchers": [],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
     "name": "ViewerShZerocopyTriad.Fp32VsF16VsQ16MeanAbs",
     "executable": "lichtfeld_tests",
     "file": "tests/test_viewer_sh_zerocopy_triad.cpp",
@@ -55202,6 +55500,36 @@
       "launch_convert_type"
     ],
     "launchers_source": "measured",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ViewerVulkanLoad.PlyCudaDefaultKeepsQ16",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_vulkan_load.cpp",
+    "line": 119,
+    "eligibility": "consumer",
+    "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_load_op"
+    ],
+    "launchers_source": "inferred",
+    "skip_allowlisted": false
+  },
+  {
+    "name": "ViewerVulkanLoad.PlyLoadsOnVulkanBackendWithoutQ16",
+    "executable": "lichtfeld_tests",
+    "file": "tests/test_viewer_vulkan_load.cpp",
+    "line": 98,
+    "eligibility": "consumer",
+    "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
+    "launchers": [
+      "launch_strided_copy",
+      "launch_strided_copy_immediate",
+      "launch_load_op"
+    ],
+    "launchers_source": "inferred",
     "skip_allowlisted": false
   },
   {
