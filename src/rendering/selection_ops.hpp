@@ -26,6 +26,9 @@ namespace lfs::rendering {
         size_t changed_count = 0;
     };
 
+    // Screen positions below this on either axis are the projection's invalid marker.
+    constexpr float kInvalidScreenPositionThreshold = -1000.0f;
+
     enum class ScreenWindowCameraModel : std::uint32_t {
         Pinhole = 0,
         Orthographic = 1,
@@ -38,15 +41,6 @@ namespace lfs::rendering {
         float mouse_y,
         float radius,
         uint8_t* selection_out,
-        int n_primitives);
-
-    void rect_select(
-        const float2* positions,
-        float x0,
-        float y0,
-        float x1,
-        float y1,
-        bool* selection,
         int n_primitives);
 
     void polygon_select(

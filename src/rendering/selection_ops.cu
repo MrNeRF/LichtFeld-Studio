@@ -19,7 +19,6 @@
 
 namespace lfs::rendering {
     namespace {
-        constexpr float kInvalidScreenPositionThreshold = -1000.0f;
         constexpr int kBlockSize = 256;
         constexpr int kCountMaxBlocks = 4096;
         constexpr int kSelectionGroupCount = 256;
@@ -270,137 +269,6 @@ namespace lfs::rendering {
             output[idx] = make_float2(
                 cx + view_x * pixel_focal_x / depth,
                 cy - view_y * pixel_focal_y / depth);
-        }
-
-        __device__ __forceinline__ bool betterPickCandidate(
-            const float dist_sq,
-            const int index,
-            const float best_dist_sq,
-            const int best_index) {
-            return index >= 0 &&
-                   (best_index < 0 ||
-                    dist_sq < best_dist_sq ||
-                    (dist_sq == best_dist_sq && index > best_index));
-        }
-
-        __global__ void pickProjectedGaussianBlocksKernel(
-            const float2* __restrict__ positions,
-            const float x,
-            const float y,
-            const float max_dist_sq,
-            float* __restrict__ block_dist_sq,
-            int* __restrict__ block_index,
-            const int n) {
-            __shared__ float shared_dist[kBlockSize];
-            __shared__ int shared_index[kBlockSize];
-
-            float best_dist_sq = max_dist_sq;
-            int best_index = -1;
-            for (int idx = blockIdx.x * blockDim.x + threadIdx.x;
-                 idx < n;
-                 idx += blockDim.x * gridDim.x) {
-                const float2 pos = positions[idx];
-                if (pos.x < kInvalidScreenPositionThreshold ||
-                    pos.y < kInvalidScreenPositionThreshold ||
-                    !isfinite(pos.x) ||
-                    !isfinite(pos.y)) {
-                    continue;
-                }
-
-                const float dx = pos.x - x;
-                const float dy = pos.y - y;
-                const float dist_sq = dx * dx + dy * dy;
-                if (dist_sq <= max_dist_sq &&
-                    betterPickCandidate(dist_sq, idx, best_dist_sq, best_index)) {
-                    best_dist_sq = dist_sq;
-                    best_index = idx;
-                }
-            }
-
-            shared_dist[threadIdx.x] = best_dist_sq;
-            shared_index[threadIdx.x] = best_index;
-            __syncthreads();
-
-            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-                if (threadIdx.x < stride) {
-                    const float other_dist = shared_dist[threadIdx.x + stride];
-                    const int other_index = shared_index[threadIdx.x + stride];
-                    if (betterPickCandidate(
-                            other_dist, other_index, shared_dist[threadIdx.x], shared_index[threadIdx.x])) {
-                        shared_dist[threadIdx.x] = other_dist;
-                        shared_index[threadIdx.x] = other_index;
-                    }
-                }
-                __syncthreads();
-            }
-
-            if (threadIdx.x == 0) {
-                block_dist_sq[blockIdx.x] = shared_dist[0];
-                block_index[blockIdx.x] = shared_index[0];
-            }
-        }
-
-        __global__ void reduceProjectedGaussianPickKernel(
-            const float* __restrict__ block_dist_sq,
-            const int* __restrict__ block_index,
-            int* __restrict__ result_index,
-            const int block_count) {
-            __shared__ float shared_dist[kBlockSize];
-            __shared__ int shared_index[kBlockSize];
-
-            float best_dist_sq = 0.0f;
-            int best_index = -1;
-            for (int idx = threadIdx.x; idx < block_count; idx += blockDim.x) {
-                const int candidate = block_index[idx];
-                const float dist_sq = block_dist_sq[idx];
-                if (betterPickCandidate(dist_sq, candidate, best_dist_sq, best_index)) {
-                    best_dist_sq = dist_sq;
-                    best_index = candidate;
-                }
-            }
-
-            shared_dist[threadIdx.x] = best_dist_sq;
-            shared_index[threadIdx.x] = best_index;
-            __syncthreads();
-
-            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-                if (threadIdx.x < stride) {
-                    const float other_dist = shared_dist[threadIdx.x + stride];
-                    const int other_index = shared_index[threadIdx.x + stride];
-                    if (betterPickCandidate(
-                            other_dist, other_index, shared_dist[threadIdx.x], shared_index[threadIdx.x])) {
-                        shared_dist[threadIdx.x] = other_dist;
-                        shared_index[threadIdx.x] = other_index;
-                    }
-                }
-                __syncthreads();
-            }
-
-            if (threadIdx.x == 0) {
-                result_index[0] = shared_index[0];
-            }
-        }
-
-        __global__ void rectSelectKernel(
-            const float2* __restrict__ positions,
-            const float x0,
-            const float y0,
-            const float x1,
-            const float y1,
-            bool* __restrict__ selection,
-            const int n) {
-            const int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) {
-                return;
-            }
-
-            const float2 pos = positions[idx];
-            if (pos.x < kInvalidScreenPositionThreshold || pos.y < kInvalidScreenPositionThreshold) {
-                return;
-            }
-            if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1) {
-                selection[idx] = true;
-            }
         }
 
         __global__ void polygonSelectKernel(
@@ -847,23 +715,6 @@ namespace lfs::rendering {
         LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(), "render.selection.brush");
     }
 
-    void rect_select(
-        const float2* const positions,
-        const float x0,
-        const float y0,
-        const float x1,
-        const float y1,
-        bool* const selection,
-        const int n_primitives) {
-        if (n_primitives <= 0) {
-            return;
-        }
-        const int grid_size = (n_primitives + kBlockSize - 1) / kBlockSize;
-        rectSelectKernel<<<grid_size, kBlockSize, 0, currentSelectionStream()>>>(
-            positions, x0, y0, x1, y1, selection, n_primitives);
-        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(), "render.selection.rect");
-    }
-
     void polygon_select(
         const float2* const positions,
         const float2* const polygon,
@@ -1053,50 +904,6 @@ namespace lfs::rendering {
         return output;
     }
 
-    int pick_projected_gaussian_tensor(
-        const Tensor& screen_positions,
-        const float x,
-        const float y,
-        const float radius) {
-        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
-            return -1;
-        }
-        if (screen_positions.device() != lfs::core::Device::CUDA ||
-            screen_positions.dtype() != lfs::core::DataType::Float32 ||
-            screen_positions.ndim() != 2 ||
-            screen_positions.size(1) != 2) {
-            throw std::runtime_error("pick_projected_gaussian_tensor expects a CUDA Float32 [N, 2] tensor");
-        }
-
-        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
-        const int block_count = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
-        Tensor block_dist_sq = Tensor::empty(
-            {static_cast<std::size_t>(block_count)}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-        Tensor block_index = Tensor::empty(
-            {static_cast<std::size_t>(block_count)}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
-        Tensor result_index = Tensor::empty({1}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
-
-        const cudaStream_t stream = currentSelectionStream(&screen_positions);
-        pickProjectedGaussianBlocksKernel<<<block_count, kBlockSize, 0, stream>>>(
-            reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
-            x,
-            y,
-            radius * radius,
-            block_dist_sq.ptr<float>(),
-            block_index.ptr<int>(),
-            n);
-        LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.pick_blocks");
-        reduceProjectedGaussianPickKernel<<<1, kBlockSize, 0, stream>>>(
-            block_dist_sq.ptr<float>(),
-            block_index.ptr<int>(),
-            result_index.ptr<int>(),
-            block_count);
-        LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.pick_reduce");
-
-        const auto result_cpu = result_index.cpu().contiguous();
-        return result_cpu.ptr<int>()[0];
-    }
-
     void brush_select_tensor(
         const Tensor& screen_positions,
         const float mouse_x,
@@ -1113,26 +920,6 @@ namespace lfs::rendering {
                      radius,
                      reinterpret_cast<uint8_t*>(selection_out.ptr<bool>()),
                      n);
-    }
-
-    void rect_select_tensor(
-        const Tensor& screen_positions,
-        const float x0,
-        const float y0,
-        const float x1,
-        const float y1,
-        Tensor& selection_out) {
-        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
-            return;
-        }
-        const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
-        rect_select(reinterpret_cast<const float2*>(screen_positions.ptr<float>()),
-                    x0,
-                    y0,
-                    x1,
-                    y1,
-                    selection_out.ptr<bool>(),
-                    n);
     }
 
     void polygon_select_tensor(
