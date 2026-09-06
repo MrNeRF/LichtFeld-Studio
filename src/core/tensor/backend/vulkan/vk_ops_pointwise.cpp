@@ -182,7 +182,7 @@ namespace lfs::core::internal {
                 return pattern;
             }
             case DataType::Float16: {
-                const __half converted = __float2half_rn(scalar_float(value));
+                const __half converted = __float2half(scalar_float(value));
                 std::memcpy(&pattern, &converted, sizeof(converted));
                 return pattern;
             }
@@ -551,6 +551,49 @@ namespace lfs::core::internal {
         layout.strides[0] = 1;
         layout.element_count = count;
         dispatch_fill(output, layout, value);
+    }
+
+    void VulkanBackendOps::load_arange(const StorageRef output, const size_t count,
+                                       const ScalarOperand start,
+                                       const ScalarOperand step, ExecContext) {
+        LFS_FACADE_TRACE(load_arange);
+        if (count == 0) {
+            return;
+        }
+        LFS_ASSERT_MSG(output.dtype == DataType::Float32 ||
+                           output.dtype == DataType::Int32,
+                       "Vulkan load_arange supports Float32 and Int32");
+        LFS_ASSERT_MSG(start.kind == ScalarKind::Float &&
+                           step.kind == ScalarKind::Float,
+                       "Vulkan load_arange start and step are float scalars");
+        struct ArangePush {
+            uint64_t output_address;
+            float start;
+            float step;
+            uint32_t count;
+            uint32_t padding;
+        };
+        static_assert(sizeof(ArangePush) == 24);
+        const ArangePush push{
+            .output_address = address(output),
+            .start = start.value.float_value,
+            .step = step.value.float_value,
+            .count = checked_u32(count, "Vulkan arange count exceeds uint32"),
+        };
+        const std::array constants{static_cast<uint32_t>(output.dtype)};
+        const auto context = acquire_vulkan_context();
+        const VulkanPipeline& pipeline =
+            context->pipelines().specialized("arange", sizeof(ArangePush), constants);
+        const std::array writes{output};
+        context->recorders().record(
+            {}, writes, [&](const VkCommandBuffer command) {
+                vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                  pipeline.pipeline);
+                vkCmdPushConstants(command, pipeline.layout,
+                                   VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                   sizeof(push), &push);
+                vkCmdDispatch(command, dispatch_groups(*context, count), 1, 1);
+            });
     }
 
 } // namespace lfs::core::internal

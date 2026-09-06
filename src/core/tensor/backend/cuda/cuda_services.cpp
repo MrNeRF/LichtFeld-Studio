@@ -12,8 +12,11 @@
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 #include <atomic>
+#include <cstring>
 #include <cuda_runtime.h>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::core {
@@ -72,6 +75,16 @@ namespace lfs::core {
             const void* cuda_const_address(const StorageRef storage) {
                 return cuda_address(storage);
             }
+
+            struct CudaReadback {
+                void* host = nullptr;
+                cudaEvent_t event = nullptr;
+                size_t bytes = 0;
+            };
+
+            std::mutex g_cuda_readback_mutex;
+            std::unordered_map<uint64_t, CudaReadback> g_cuda_readbacks;
+            std::atomic<uint64_t> g_cuda_readback_ids{1};
 
             void require_host(const StorageRef storage, const char* const role) {
                 LFS_ASSERT_MSG((storage.flags & STORAGE_REF_HOST_MEMORY) != 0,
@@ -253,6 +266,58 @@ namespace lfs::core {
         void CudaBackendOps::copy_device_to_device(const CopyRequest& request) {
             LFS_FACADE_TRACE(service_copy_device_to_device);
             copy_cuda(request, cudaMemcpyDeviceToDevice);
+        }
+
+        ReadbackTicket CudaBackendOps::enqueue_readback(
+            const StorageRef src, const size_t bytes, const ExecContext context) {
+            LFS_FACADE_TRACE(service_enqueue_readback);
+            ReadbackTicket ticket;
+            ticket.backend = GpuBackend::CUDA;
+            ticket.bytes = bytes;
+            if (bytes == 0) {
+                return ticket;
+            }
+            void* host = nullptr;
+            LFS_CUDA_CHECK(cudaMallocHost(&host, bytes));
+            cudaEvent_t event = nullptr;
+            LFS_CUDA_CHECK(cudaEventCreateWithFlags(&event, cudaEventDisableTiming));
+            LFS_CUDA_CHECK(cudaMemcpyAsync(
+                host, cuda_const_address(src), bytes, cudaMemcpyDeviceToHost,
+                context.cuda_stream));
+            LFS_CUDA_CHECK(cudaEventRecord(event, context.cuda_stream));
+            ticket.id = g_cuda_readback_ids.fetch_add(1, std::memory_order_relaxed);
+            std::lock_guard lock(g_cuda_readback_mutex);
+            g_cuda_readbacks.emplace(ticket.id, CudaReadback{host, event, bytes});
+            return ticket;
+        }
+
+        bool CudaBackendOps::readback_poll(const ReadbackTicket& ticket, void* const dst) {
+            LFS_FACADE_TRACE(service_readback_poll);
+            if (ticket.id == 0) {
+                return true;
+            }
+            CudaReadback pending;
+            {
+                std::lock_guard lock(g_cuda_readback_mutex);
+                const auto it = g_cuda_readbacks.find(ticket.id);
+                if (it == g_cuda_readbacks.end()) {
+                    return false;
+                }
+                pending = it->second;
+            }
+            const cudaError_t status = cudaEventQuery(pending.event);
+            if (status == cudaErrorNotReady) {
+                return false;
+            }
+            LFS_CUDA_CHECK(status);
+            if (dst != nullptr && pending.host != nullptr) {
+                std::memcpy(dst, pending.host, pending.bytes);
+            }
+            LFS_CUDA_CHECK(cudaEventDestroy(pending.event));
+            LFS_CUDA_CHECK(cudaFreeHost(pending.host));
+            std::lock_guard lock(g_cuda_readback_mutex);
+            g_cuda_readbacks.erase(ticket.id);
+            return true;
         }
 
         void CudaBackendOps::memset(const FillRequest& request) {

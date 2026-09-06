@@ -211,7 +211,7 @@ namespace lfs::core::internal {
         ensure_staging(bytes + alignment);
         VkDeviceSize offset = align_up(staging_head_, std::max<size_t>(alignment, 4));
         if (offset + bytes > staging_size_) {
-            context_.recorders().wait_all();
+            context_.recorders().flush_all();
             if (staging_retire_value_ != 0) {
                 context_.wait(staging_retire_value_);
             }
@@ -685,8 +685,83 @@ namespace lfs::core::internal {
         }
     }
 
+    ReadbackTicket VulkanMemory::enqueue_readback(const StorageRef src,
+                                                  const size_t bytes) {
+        ReadbackTicket ticket;
+        ticket.backend = GpuBackend::Vulkan;
+        ticket.bytes = bytes;
+        if (bytes == 0) {
+            return ticket;
+        }
+        const StorageRef dst = allocate_readback(bytes);
+        const std::array reads{src};
+        const std::array writes{dst};
+        const uint64_t value = context_.recorders().record(
+            reads, writes, [&](const VkCommandBuffer command) {
+                const VkBufferCopy region{
+                    .srcOffset = offset_for(src),
+                    .dstOffset = offset_for(dst),
+                    .size = bytes,
+                };
+                vkCmdCopyBuffer(command, buffer_for(src), buffer_for(dst), 1,
+                                &region);
+                const VkMemoryBarrier2 host_read{
+                    .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+                    .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                    .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                    .dstStageMask = VK_PIPELINE_STAGE_2_HOST_BIT,
+                    .dstAccessMask = VK_ACCESS_2_HOST_READ_BIT,
+                };
+                const VkDependencyInfo dependency{
+                    .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                    .memoryBarrierCount = 1,
+                    .pMemoryBarriers = &host_read,
+                };
+                vkCmdPipelineBarrier2(command, &dependency);
+            });
+        context_.recorders().flush_current();
+        std::lock_guard lock(readback_mutex_);
+        ticket.id = next_readback_id_++;
+        ticket.timeline_value = value;
+        pending_readbacks_.emplace(
+            ticket.id, PendingReadback{dst, value, bytes});
+        return ticket;
+    }
+
+    bool VulkanMemory::readback_poll(const ReadbackTicket& ticket, void* const dst) {
+        if (ticket.id == 0) {
+            return true;
+        }
+        PendingReadback pending;
+        {
+            std::lock_guard lock(readback_mutex_);
+            const auto it = pending_readbacks_.find(ticket.id);
+            if (it == pending_readbacks_.end()) {
+                return false;
+            }
+            if (context_.completed_timeline() < it->second.timeline_value) {
+                return false;
+            }
+            pending = it->second;
+            pending_readbacks_.erase(it);
+        }
+        const std::byte* source = nullptr;
+        {
+            std::lock_guard lock(allocations_mutex_);
+            const AllocationRecord& record = allocation_for(pending.storage);
+            LFS_ASSERT_MSG(record.host_visible && record.mapped != nullptr,
+                           "enqueue_readback requires host-visible Vulkan storage");
+            source = record.mapped + pending.storage.byte_offset;
+        }
+        if (dst != nullptr && source != nullptr) {
+            std::memcpy(dst, source, pending.bytes);
+        }
+        deallocate(pending.storage);
+        return true;
+    }
+
     void VulkanMemory::trim() {
-        context_.recorders().wait_all();
+        context_.recorders().flush_all();
         std::lock_guard lock(allocations_mutex_);
         collect_retired_locked(context_.completed_timeline());
         destroy_free_locked();

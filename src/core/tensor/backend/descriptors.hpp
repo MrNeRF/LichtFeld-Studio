@@ -232,6 +232,13 @@ namespace lfs::core {
             uintptr_t native = 0;
         };
 
+        struct ReadbackTicket {
+            GpuBackend backend = GpuBackend::CUDA;
+            uint64_t timeline_value = 0;
+            uint64_t id = 0;
+            size_t bytes = 0;
+        };
+
         enum class PointerClass : uint8_t {
             Device,
             Host,
@@ -254,6 +261,7 @@ namespace lfs::core {
         static_assert(std::is_trivially_copyable_v<CopyRequest>);
         static_assert(std::is_trivially_copyable_v<FillRequest>);
         static_assert(std::is_trivially_copyable_v<SyncToken>);
+        static_assert(std::is_trivially_copyable_v<ReadbackTicket>);
 
         inline StorageRef raw_storage_ref(void* const pointer,
                                           const DataType dtype = DataType::UInt8) {

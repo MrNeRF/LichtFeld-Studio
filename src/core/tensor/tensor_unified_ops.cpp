@@ -534,53 +534,36 @@ namespace lfs::core {
                             asynchronous ? result.stream() : nullptr},
                     });
                 };
-                const auto upload = [&](void* const data) {
-                    backend_ops.copy_host_to_device(internal::CopyRequest{
-                        .src = internal::raw_storage_ref(data, result.dtype_),
-                        .dst = internal::storage_ref(result),
-                        .bytes = result.bytes(),
-                        .synchronous = true,
-                        .context = internal::ExecContext{nullptr},
-                    });
-                };
-                if (result.dtype_ == DataType::Float32) {
-                    if (value == 0.0f) {
-                        fill_bytes(0, true);
-                    } else {
-                        internal::backend_ops_for(result).load_fill(
-                            internal::storage_ref(result), result.numel(),
-                            internal::scalar_operand(value),
-                            internal::ExecContext{result.stream()});
-                        // No sync - tensor operation
+                if (value == 0.0f) {
+                    fill_bytes(0, true);
+                } else {
+                    internal::ScalarOperand operand{};
+                    switch (result.dtype_) {
+                    case DataType::Float32:
+                    case DataType::Float16:
+                        operand = internal::scalar_operand(value);
+                        break;
+                    case DataType::Int32:
+                        operand = internal::scalar_operand(static_cast<int32_t>(value));
+                        break;
+                    case DataType::Int64:
+                        operand = internal::scalar_operand(static_cast<int64_t>(value));
+                        break;
+                    case DataType::Bool:
+                        operand = internal::scalar_operand(value != 0.0f);
+                        break;
+                    case DataType::UInt8:
+                        operand = internal::scalar_operand(static_cast<int32_t>(
+                            std::clamp(value, 0.0f, 255.0f)));
+                        break;
+                    case DataType::UInt32:
+                        operand = internal::scalar_operand(
+                            static_cast<int64_t>(static_cast<uint32_t>(value)));
+                        break;
                     }
-                } else if (result.dtype_ == DataType::Float16) {
-                    if (value == 0.0f) {
-                        fill_bytes(0, true);
-                    } else {
-                        // Create Float16 values on CPU, then copy to GPU
-                        std::vector<__half> temp(result.numel(), __float2half(value));
-                        upload(temp.data());
-                    }
-                } else if (result.dtype_ == DataType::Bool) {
-                    unsigned char fill_val = (value != 0.0f) ? 1 : 0;
-                    fill_bytes(fill_val, false);
-                } else if (result.dtype_ == DataType::Int32) {
-                    if (value == 0.0f) {
-                        fill_bytes(0, false);
-                    } else {
-                        std::vector<int> temp(result.numel(), static_cast<int>(value));
-                        upload(temp.data());
-                    }
-                } else if (result.dtype_ == DataType::Int64) {
-                    if (value == 0.0f) {
-                        fill_bytes(0, false);
-                    } else {
-                        std::vector<int64_t> temp(result.numel(), static_cast<int64_t>(value));
-                        upload(temp.data());
-                    }
-                } else if (result.dtype_ == DataType::UInt8) {
-                    const uint8_t fill_val = static_cast<uint8_t>(std::clamp(value, 0.0f, 255.0f));
-                    fill_bytes(fill_val, false);
+                    backend_ops.load_fill(
+                        internal::storage_ref(result), result.numel(), operand,
+                        internal::ExecContext{result.stream()});
                 }
             } else {
                 if (result.dtype_ == DataType::Float32) {
@@ -709,31 +692,11 @@ namespace lfs::core {
                         internal::storage_ref(result), internal::strided_layout(result), bytes);
                 }
 
-                if (result.dtype_ == DataType::Float32) {
-                    std::vector<float> data(count);
-                    for (size_t i = 0; i < count; ++i) {
-                        data[i] = start + i * step;
-                    }
-                    backend_ops.copy_host_to_device(internal::CopyRequest{
-                        .src = internal::raw_storage_ref(data.data(), result.dtype_),
-                        .dst = internal::storage_ref(result),
-                        .bytes = bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{nullptr},
-                    });
-                } else if (result.dtype_ == DataType::Int32) {
-                    std::vector<int> data(count);
-                    for (size_t i = 0; i < count; ++i) {
-                        data[i] = static_cast<int>(start + i * step);
-                    }
-                    backend_ops.copy_host_to_device(internal::CopyRequest{
-                        .src = internal::raw_storage_ref(data.data(), result.dtype_),
-                        .dst = internal::storage_ref(result),
-                        .bytes = bytes,
-                        .synchronous = true,
-                        .context = internal::ExecContext{nullptr},
-                    });
-                }
+                backend_ops.load_arange(
+                    internal::storage_ref(result), count,
+                    internal::scalar_operand(start),
+                    internal::scalar_operand(step),
+                    internal::ExecContext{s});
             } else {
                 void* ptr = PinnedMemoryAllocator::instance().allocate(bytes);
                 if (!ptr) {

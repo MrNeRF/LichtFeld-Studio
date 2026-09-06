@@ -80,6 +80,17 @@ namespace lfs::core::internal {
         acquire_vulkan_context()->memory().memset(request);
     }
 
+    ReadbackTicket VulkanBackendOps::enqueue_readback(
+        const StorageRef src, const size_t bytes, ExecContext) {
+        LFS_FACADE_TRACE(service_enqueue_readback);
+        return acquire_vulkan_context()->memory().enqueue_readback(src, bytes);
+    }
+
+    bool VulkanBackendOps::readback_poll(const ReadbackTicket& ticket, void* const dst) {
+        LFS_FACADE_TRACE(service_readback_poll);
+        return acquire_vulkan_context()->memory().readback_poll(ticket, dst);
+    }
+
     void VulkanBackendOps::synchronize_stream(ExecContext) {
         LFS_FACADE_TRACE(service_synchronize_stream);
         const auto context = acquire_vulkan_context();

@@ -57,6 +57,9 @@ namespace lfs::core {
                                       ScalarOperand value, ExecContext context) = 0;
             virtual void load_fill(StorageRef output, size_t count,
                                    ScalarOperand value, ExecContext context) = 0;
+            virtual void load_arange(StorageRef output, size_t count,
+                                     ScalarOperand start, ScalarOperand step,
+                                     ExecContext context) = 0;
 
             // Sub-lane B appends reductions, scan, sort, matrix, NN and random here.
             // These four scalar reductions synchronize before returning the host value.
@@ -265,6 +268,9 @@ namespace lfs::core {
             virtual void copy_device_to_host(const CopyRequest& request) = 0;
             virtual void copy_device_to_device(const CopyRequest& request) = 0;
             virtual void memset(const FillRequest& request) = 0;
+            virtual ReadbackTicket enqueue_readback(StorageRef src, size_t bytes,
+                                                    ExecContext context) = 0;
+            virtual bool readback_poll(const ReadbackTicket& ticket, void* dst) = 0;
 
             virtual void synchronize_stream(ExecContext context) = 0;
             virtual void synchronize_device() = 0;
@@ -312,6 +318,9 @@ namespace lfs::core {
                               ScalarOperand value, ExecContext context) override;
             void load_fill(StorageRef output, size_t count,
                            ScalarOperand value, ExecContext context) override;
+            void load_arange(StorageRef output, size_t count,
+                             ScalarOperand start, ScalarOperand step,
+                             ExecContext context) override;
 
             // Sub-lane B: reductions, scan, sort, matrix, NN and random.
             float sum_scalar(StorageRef input, size_t count, ExecContext context) override;
@@ -506,6 +515,9 @@ namespace lfs::core {
             void copy_device_to_host(const CopyRequest& request) override;
             void copy_device_to_device(const CopyRequest& request) override;
             void memset(const FillRequest& request) override;
+            ReadbackTicket enqueue_readback(StorageRef src, size_t bytes,
+                                            ExecContext context) override;
+            bool readback_poll(const ReadbackTicket& ticket, void* dst) override;
             void synchronize_stream(ExecContext context) override;
             void synchronize_device() override;
             void wait_for(SyncToken token) override;

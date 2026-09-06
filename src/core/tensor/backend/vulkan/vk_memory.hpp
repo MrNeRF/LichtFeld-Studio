@@ -46,6 +46,8 @@ namespace lfs::core::internal {
         void copy_device_to_host(const CopyRequest& request);
         void copy_device_to_device(const CopyRequest& request);
         void memset(const FillRequest& request);
+        [[nodiscard]] ReadbackTicket enqueue_readback(StorageRef src, size_t bytes);
+        [[nodiscard]] bool readback_poll(const ReadbackTicket& ticket, void* dst);
         void mark_used(std::span<const StorageRef> reads,
                        std::span<const StorageRef> writes,
                        uint64_t timeline_value);
@@ -106,6 +108,14 @@ namespace lfs::core::internal {
         VkDeviceSize staging_head_ = 0;
         uint64_t staging_retire_value_ = 0;
         bool shutting_down_ = false;
+        struct PendingReadback {
+            StorageRef storage{};
+            uint64_t timeline_value = 0;
+            size_t bytes = 0;
+        };
+        std::mutex readback_mutex_;
+        std::unordered_map<uint64_t, PendingReadback> pending_readbacks_;
+        uint64_t next_readback_id_ = 1;
         static std::atomic<uint64_t> g_last_shutdown_live_allocations;
     };
 

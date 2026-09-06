@@ -145,6 +145,8 @@ namespace lfs::core::tensor_ops {
     LFS_CORE_API void launch_load_op(void* output, const size_t* shape, size_t rank,
                                      LoadOp op, const void* args,
                                      DataType dtype, cudaStream_t stream);
+    LFS_CORE_API void launch_load_arange(void* output, size_t count, float start,
+                                         float step, DataType dtype, cudaStream_t stream);
 
     // Unified Type Conversion Template
     template <typename SrcT, typename DstT>

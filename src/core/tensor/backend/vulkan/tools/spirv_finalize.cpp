@@ -355,6 +355,48 @@ namespace {
         }
     }
 
+    void decorate_fp_no_contraction(Module& module) {
+        std::set<uint32_t> results;
+        std::set<uint32_t> decorated;
+        for (const Instruction& instruction : module.instructions) {
+            if ((instruction.opcode == spv::OpFMul || instruction.opcode == spv::OpFAdd) &&
+                instruction.operands.size() >= 2) {
+                results.insert(instruction.operands[1]);
+            }
+            if (instruction.opcode == spv::OpDecorate &&
+                instruction.operands.size() >= 2 &&
+                instruction.operands[1] == static_cast<uint32_t>(spv::DecorationNoContraction)) {
+                decorated.insert(instruction.operands[0]);
+            }
+        }
+        auto& instructions = module.instructions;
+        auto position = instructions.end();
+        for (auto current = instructions.begin(); current != instructions.end(); ++current) {
+            if (current->opcode == spv::OpDecorate ||
+                current->opcode == spv::OpMemberDecorate ||
+                current->opcode == spv::OpDecorationGroup ||
+                current->opcode == spv::OpGroupDecorate) {
+                position = current;
+            }
+        }
+        if (position == instructions.end()) {
+            for (auto current = instructions.begin(); current != instructions.end(); ++current) {
+                if (current->opcode == spv::OpName || current->opcode == spv::OpMemberName) {
+                    position = current;
+                }
+            }
+        }
+        for (const uint32_t id : results) {
+            if (decorated.contains(id)) {
+                continue;
+            }
+            position = instructions.insert(
+                position == instructions.end() ? instructions.begin() : position + 1,
+                Instruction{spv::OpDecorate,
+                            {id, static_cast<uint32_t>(spv::DecorationNoContraction)}});
+        }
+    }
+
     void validate(const std::vector<uint32_t>& words) {
 #ifdef LFS_SPIRV_FINALIZE_HAS_TOOLS
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_3);
@@ -519,6 +561,7 @@ namespace {
         }
         Module module = parse(read_words(argv[1]));
         declare_float_controls(module, analyze(module));
+        decorate_fp_no_contraction(module);
         const std::vector<uint32_t> words = serialize(module);
         const Analysis finished = analyze(module);
         for (const uint32_t width : finished.float_widths) {
