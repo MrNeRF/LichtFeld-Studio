@@ -22,11 +22,14 @@ namespace {
 
     using namespace lfs::core;
 
-    void skip_if_backend_unavailable(const GpuBackend backend) {
-        if (!gpu_backend_available(backend)) {
-            GTEST_SKIP() << gpu_backend_name(backend) << " backend unavailable";
-        }
-    }
+#define SKIP_IF_BACKEND_UNAVAILABLE(backend)               \
+    do {                                                   \
+        const GpuBackend skip_backend = (backend);         \
+        if (!gpu_backend_available(skip_backend)) {        \
+            GTEST_SKIP() << gpu_backend_name(skip_backend) \
+                         << " backend unavailable";        \
+        }                                                  \
+    } while (false)
 
     void expect_bytes_equal(const Tensor& actual, const Tensor& expected, const char* const what) {
         const Tensor actual_cpu = actual.cpu().contiguous();
@@ -102,7 +105,11 @@ namespace {
                                    const DataType dtype) {
         const Tensor cpu = load_arange(start, end, step, Device::CPU, dtype);
         const Tensor gpu = load_arange(start, end, step, Device::CUDA, dtype);
-        expect_bytes_equal(gpu, cpu, "arange");
+        char what[160];
+        std::snprintf(what, sizeof(what), "arange start=%g end=%g step=%g dtype=%d count=%zu",
+                      static_cast<double>(start), static_cast<double>(end),
+                      static_cast<double>(step), static_cast<int>(dtype), cpu.numel());
+        expect_bytes_equal(gpu, cpu, what);
     }
 
     void run_arange_suite() {
@@ -110,10 +117,18 @@ namespace {
         expect_arange_matches_cpu(0.0f, 87040.0f, 1.0f, DataType::Float32);
         expect_arange_matches_cpu(-4.0f, 4.0f, 0.5f, DataType::Float32);
         expect_arange_matches_cpu(10.0f, -10.0f, -1.25f, DataType::Float32);
+        expect_arange_matches_cpu(-3.0f, 8701.0f, 0.1f, DataType::Float32);
+        expect_arange_matches_cpu(0.5f, 26112.5f, 0.3f, DataType::Float32);
+        expect_arange_matches_cpu(100.25f, -60827.75f, -0.7f, DataType::Float32);
+        expect_arange_matches_cpu(0.0f, 87040.0f / 3.0f, 1.0f / 3.0f, DataType::Float32);
         expect_arange_matches_cpu(0.0f, 16.0f, 1.0f, DataType::Int32);
         expect_arange_matches_cpu(0.0f, 87040.0f, 1.0f, DataType::Int32);
         expect_arange_matches_cpu(-20.0f, 20.0f, 3.0f, DataType::Int32);
         expect_arange_matches_cpu(50.0f, -50.0f, -7.0f, DataType::Int32);
+        expect_arange_matches_cpu(-3.0f, 8701.0f, 0.1f, DataType::Int32);
+        expect_arange_matches_cpu(0.5f, 26112.5f, 0.3f, DataType::Int32);
+        expect_arange_matches_cpu(100.25f, -60827.75f, -0.7f, DataType::Int32);
+        expect_arange_matches_cpu(0.0f, 87040.0f / 3.0f, 1.0f / 3.0f, DataType::Int32);
         expect_bytes_equal(Tensor::arange(0.0f, 87040.0f),
                            load_arange(0.0f, 87040.0f, 1.0f, Device::CPU, DataType::Float32),
                            "public arange");
@@ -124,12 +139,38 @@ namespace {
             internal::ExecContext{tensor.stream()});
     }
 
+    double elapsed_us(const std::chrono::steady_clock::time_point start,
+                      const std::chrono::steady_clock::time_point stop) {
+        return std::chrono::duration<double, std::micro>(stop - start).count();
+    }
+
+    void print_sample_stats(const char* const backend,
+                            const char* const what,
+                            const std::vector<double>& samples) {
+        if (samples.empty()) {
+            return;
+        }
+        std::vector<double> sorted = samples;
+        std::sort(sorted.begin(), sorted.end());
+        const double first = samples.front();
+        const double min_us = sorted.front();
+        const double median_us = sorted[sorted.size() / 2];
+        std::printf("TensorAsyncConsts bench-detail %s %s first=%.3f us min=%.3f us median=%.3f us n=%zu\n",
+                    backend, what, first, min_us, median_us, samples.size());
+    }
+
     void print_factory_bench(const char* const backend) {
         constexpr size_t kCount = 87040;
         constexpr int kIters = 200;
         double ones_us = 0.0;
         double bool_us = 0.0;
         double arange_us = 0.0;
+        std::vector<double> ones_samples;
+        std::vector<double> bool_samples;
+        std::vector<double> arange_samples;
+        ones_samples.reserve(static_cast<size_t>(kIters));
+        bool_samples.reserve(static_cast<size_t>(kIters));
+        arange_samples.reserve(static_cast<size_t>(kIters));
         for (int iter = 0; iter < kIters; ++iter) {
             const auto t0 = std::chrono::steady_clock::now();
             Tensor ones = Tensor::ones({kCount}, Device::CUDA, DataType::Int32);
@@ -141,9 +182,15 @@ namespace {
             Tensor seq = Tensor::arange(0.0f, static_cast<float>(kCount));
             sync_tensor(seq);
             const auto t3 = std::chrono::steady_clock::now();
-            ones_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
-            bool_us += std::chrono::duration<double, std::micro>(t2 - t1).count();
-            arange_us += std::chrono::duration<double, std::micro>(t3 - t2).count();
+            const double ones_iter = elapsed_us(t0, t1);
+            const double bool_iter = elapsed_us(t1, t2);
+            const double arange_iter = elapsed_us(t2, t3);
+            ones_us += ones_iter;
+            bool_us += bool_iter;
+            arange_us += arange_iter;
+            ones_samples.push_back(ones_iter);
+            bool_samples.push_back(bool_iter);
+            arange_samples.push_back(arange_iter);
         }
         std::printf(
             "TensorAsyncConsts bench %s ones_int32=%.3f us full_bool=%.3f us arange=%.3f us\n",
@@ -151,6 +198,9 @@ namespace {
             ones_us / kIters,
             bool_us / kIters,
             arange_us / kIters);
+        print_sample_stats(backend, "ones_int32", ones_samples);
+        print_sample_stats(backend, "full_bool", bool_samples);
+        print_sample_stats(backend, "arange", arange_samples);
     }
 
     Tensor random_group_mask(const size_t n, const uint32_t seed) {
@@ -188,28 +238,31 @@ namespace {
 } // namespace
 
 TEST(TensorAsyncConsts, FullMatchesCpuOnDefaultBackend) {
+    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
     GpuBackendScope scope(GpuBackend::CUDA);
     run_full_suite();
 }
 
 TEST(TensorAsyncConsts, FullMatchesCpuOnVulkan) {
-    skip_if_backend_unavailable(GpuBackend::Vulkan);
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     run_full_suite();
 }
 
 TEST(TensorAsyncConsts, ArangeMatchesCpuOnDefaultBackend) {
+    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
     GpuBackendScope scope(GpuBackend::CUDA);
     run_arange_suite();
 }
 
 TEST(TensorAsyncConsts, ArangeMatchesCpuOnVulkan) {
-    skip_if_backend_unavailable(GpuBackend::Vulkan);
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     run_arange_suite();
 }
 
 TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadable) {
+    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
     GpuBackendScope scope(GpuBackend::CUDA);
     Tensor live = Tensor::full({4096}, 3.5f, Device::CUDA, DataType::Float32);
     Tensor::trim_memory_pool();
@@ -218,7 +271,7 @@ TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadable) {
 }
 
 TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadableOnVulkan) {
-    skip_if_backend_unavailable(GpuBackend::Vulkan);
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     Tensor live = Tensor::ones({87040}, Device::CUDA, DataType::Int32);
     Tensor::trim_memory_pool();
@@ -227,24 +280,25 @@ TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadableOnVulkan) {
 }
 
 TEST(TensorAsyncConsts, FactoryMicrobenchDefaultBackend) {
+    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
     GpuBackendScope scope(GpuBackend::CUDA);
     print_factory_bench("cuda");
 }
 
 TEST(TensorAsyncConsts, FactoryMicrobenchVulkan) {
-    skip_if_backend_unavailable(GpuBackend::Vulkan);
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     print_factory_bench("vulkan");
 }
 
 TEST(TensorAsyncConsts, HoverMicrobenchVulkan) {
-    skip_if_backend_unavailable(GpuBackend::Vulkan);
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     print_hover_bench("vulkan");
 }
 
 TEST(SelectionGroupCount, AsyncReadbackMatchesCountSelectionGroupsOnVulkan) {
-    skip_if_backend_unavailable(GpuBackend::Vulkan);
+    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
     GpuBackendScope scope(GpuBackend::Vulkan);
     constexpr size_t n = 87040;
     Tensor mask = random_group_mask(n, 20260906);
