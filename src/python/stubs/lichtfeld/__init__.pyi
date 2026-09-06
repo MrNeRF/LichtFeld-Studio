@@ -561,12 +561,31 @@ def load_icon(name: str) -> int:
 def free_icon(texture_id: int) -> None:
     """Free an icon texture"""
 
-def reset_camera() -> None:
-    """Reset camera to default position and orientation"""
-
-def focus_selection() -> bool:
+def reset_camera(*, panel: str | None = None) -> None:
     """
-    Focus the active viewport on the selection, or the whole scene when nothing is selected
+    Reset camera to default position and orientation.
+
+    panel (keyword-only) selects which split panel's camera is reset:
+    - None (default): the command path, addressed at the primary viewport
+      exactly as before.
+    - 'main': the panel that currently has focus. This is NOT the same as
+      None here, because the panel-less path is primary-addressed.
+    - 'left' / 'right': that panel's own camera. Outside independent-dual
+      split every token resolves to the primary camera, because there is
+      only one. Addressing a panel never changes which panel has focus.
+    """
+
+def focus_selection(*, panel: str | None = None) -> bool:
+    """
+    Focus the active viewport on the selection, or the whole scene when nothing is selected.
+
+    panel (keyword-only) selects which split panel's camera is moved:
+    - None (default): the focused panel, exactly as before.
+    - 'main': the panel that currently has focus, requested explicitly.
+      Same panel as None here, reached through the panel-addressed path.
+    - 'left' / 'right': that panel's own camera. Outside independent-dual
+      split every token resolves to the primary camera, because there is
+      only one. Addressing a panel never changes which panel has focus.
     """
 
 def get_camera_navigation_mode() -> str:

@@ -2843,6 +2843,66 @@ def get_git_commit() -> str:
 def get_split_view_info() -> dict:
     """Get split view info"""
 
+def get_focused_split_panel() -> str:
+    """
+    Get the focused split-view panel ('left' or 'right').
+    Outside independent-dual split this reports the panel the depth
+    toolbar would address; it is 'left' with no rendering manager.
+    """
+
+def get_depth_window_sync() -> bool:
+    """
+    Is the per-panel depth-window sync flag on? While on, a depth-window
+    edit in either split panel writes both panels.
+    """
+
+def get_depth_window_collapse_source() -> str:
+    """
+    Which panel the last LINEAGE EVENT took its surviving window from
+    ('left' or 'right') -- not only a collapse. Leaving independent-dual
+    copies the PRE-transition focused panel's depth window into the
+    single remaining one, and the split service resets the observable
+    focus to Left in the same transition, so a poller cannot recover
+    that panel from get_focused_split_panel(). A sync-ON copy and a
+    project or sync-undo restore overwrite this field too, so it names
+    the source of whichever write stamped LAST; use
+    get_depth_window_collapse_record() to learn which kind that was.
+    Only meaningful once such a write has happened; it reports 'left'
+    before the first one and with no rendering manager.
+    """
+
+def get_depth_window_collapse_record() -> tuple:
+    """
+    The last depth-window reference-lineage stamp, as
+    ('left'|'right', generation, kind).
+    kind is 'leave_collapse', 'sync_copy' or 'project_restore', naming
+    the four writes that invalidate slot-derived per-panel state (a
+    sync undo/redo restore also reports 'project_restore'). The
+    generation counts them, so a poller whose delta exceeds the
+    transitions it observed slept through boundaries and cannot replay
+    anything it cached; the kind says how to recover from the ones it
+    missed. 'leave_collapse' and 'sync_copy' leave ONE window, so every
+    cached reference recovers from it; 'project_restore' means
+    'fresh-baseline required' and can leave the two panel windows
+    DIFFERING, so a per-panel consumer must re-read each panel with
+    selection.get_depth_filter_window(panel=...) rather than reuse the
+    projection. source is the panel the surviving window came from and
+    is meaningful for 'leave_collapse' (the PRE-transition focus, which
+    get_focused_split_panel() can no longer report) and for 'sync_copy'
+    (the panel copied FROM); a 'project_restore' takes its windows from
+    the restored state, not from a panel. The generation is 0 before
+    the first such write and with no rendering manager.
+    """
+
+def set_depth_window_sync(sync: bool) -> bool:
+    """
+    Set the per-panel depth-window sync flag. Turning it on with
+    differing panels copies the focused panel's window to the other as
+    one undo step. The call is silently ignored while a depth-window
+    drag is in flight; the return value is the flag's ACTUAL state
+    after the call, not the requested one.
+    """
+
 def get_current_camera_id() -> int:
     """Get current camera ID for GT comparison"""
 
