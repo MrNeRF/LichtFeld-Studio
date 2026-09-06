@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "vk_cuda_bridge.hpp"
 #include "vk_memory.hpp"
@@ -357,7 +358,9 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::initialize_runtime() {
-        cuda_imports_ = std::make_unique<VulkanCudaImportRegistry>(*this);
+        if (gpu_backend_available(GpuBackend::CUDA)) {
+            cuda_imports_ = std::make_unique<VulkanCudaImportRegistry>(*this);
+        }
         create_allocator();
         VkExportSemaphoreCreateInfo export_info{
             VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
@@ -377,7 +380,9 @@ namespace lfs::core::internal {
                  vkCreateSemaphore(device_, &semaphore_info, nullptr, &timeline_),
                  "vkCreateSemaphore(timeline)");
         if (export_timeline) {
-            cuda_imports_->import_timeline(timeline_);
+            if (cuda_imports_) {
+                cuda_imports_->import_timeline(timeline_);
+            }
         }
         create_pipeline_cache();
         recorders_ = std::make_unique<VulkanRecorderRegistry>(*this);
