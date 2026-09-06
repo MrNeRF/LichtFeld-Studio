@@ -850,17 +850,19 @@ namespace lfs::core {
 
             if (result.device_ == Device::CUDA) {
                 size_t n = result.numel();
+                const uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
+                const internal::RandomProgram program{.count = n, .first = mean, .second = std, .seed = seed};
                 if (n % 2 == 1) {
                     auto scratch = internal::allocate_like(
                         result, TensorShape{n + 1}, DataType::Float32);
                     internal::backend_ops_for(result).normal(
                         internal::storage_ref(result), internal::storage_ref(scratch),
-                        internal::RandomProgram{.count = n, .first = mean, .second = std},
+                        program,
                         internal::ExecContext{result.stream()});
                 } else {
                     internal::backend_ops_for(result).normal(
                         internal::storage_ref(result), internal::storage_ref(result),
-                        internal::RandomProgram{.count = n, .first = mean, .second = std},
+                        program,
                         internal::ExecContext{result.stream()});
                 }
             } else {
