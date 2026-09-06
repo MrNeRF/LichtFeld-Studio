@@ -807,7 +807,8 @@ def generated_files(trace_path: Path | None = None) -> tuple[dict[Path, bytes], 
                 })
                 record["launchers"] = measured
                 record["launchers_source"] = "measured"
-                record["entries"] = dict(sorted(trace[name].items()))
+                # Only the set of entries is recorded: counts vary with loop
+                # iterations and timing, and --check is a classification gate.
                 moved_storage = any(
                     count for entry_name, count in trace[name].items()
                     if entry_name.startswith("service_"))
