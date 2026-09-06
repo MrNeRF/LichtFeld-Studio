@@ -313,6 +313,72 @@ namespace {
         EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::out_of_range);
     }
 
+    TEST_F(TrainingParametersTest, BackendConflictsPreserveFastGSAndRejectUnsupportedGutFeatures) {
+        using Conflict = lfs::core::param::TrainingBackendConflict;
+        struct Case {
+            bool OptimizationParameters::* flag;
+            Conflict conflict;
+            const char* field;
+        };
+        const std::array cases{
+            Case{&OptimizationParameters::undistort, Conflict::Undistort, "undistort"},
+            Case{&OptimizationParameters::mip_filter, Conflict::MipFilter, "mip_filter"},
+            Case{&OptimizationParameters::use_depth_loss, Conflict::DepthSupervision, "use_depth_loss"},
+            Case{&OptimizationParameters::use_normal_loss, Conflict::NormalSupervision, "use_normal_loss"},
+        };
+        for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
+            for (const auto& item : cases) {
+                SCOPED_TRACE(std::string(strategy) + ": " + item.field);
+                auto params = OptimizationParameters::defaults_for_strategy(strategy);
+                params.*item.flag = true;
+                EXPECT_EQ(params.backend_conflict(), Conflict::None);
+                EXPECT_TRUE(params.validate().empty());
+                params.gut = true;
+                const auto expected = std::string_view(strategy) == "igs+" ? Conflict::IGSPlus : item.conflict;
+                EXPECT_EQ(params.backend_conflict(), expected);
+                EXPECT_FALSE(params.validate().empty());
+                if (expected != Conflict::IGSPlus)
+                    EXPECT_NE(params.validate().find(item.field), std::string::npos);
+                const auto restored = OptimizationParameters::from_json(params.to_json());
+                EXPECT_EQ(restored.backend_conflict(), expected);
+                EXPECT_EQ(restored.validate(), params.validate());
+                lfs::core::param::TrainingParameters training;
+                training.optimization = params;
+                EXPECT_EQ(training.validate(), params.validate());
+            }
+        }
+    }
+
+    TEST_F(TrainingParametersTest, GutConflictValidationDoesNotNormalizeSettings) {
+        using Conflict = lfs::core::param::TrainingBackendConflict;
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        EXPECT_EQ(params.backend_conflict(), Conflict::None);
+        EXPECT_TRUE(params.validate().empty());
+        params.undistort = true;
+        params.use_depth_loss = true;
+        const auto before = params.to_json();
+        EXPECT_EQ(params.backend_conflict(), Conflict::Undistort);
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_EQ(params.to_json(), before);
+        params.undistort = false;
+        EXPECT_EQ(params.backend_conflict(), Conflict::DepthSupervision);
+        params.gut = false;
+        EXPECT_TRUE(params.validate().empty());
+    }
+
+    TEST_F(TrainingParametersTest, StoredBackendConflictPreservesSettingsButStillRejectsInvalidNumbers) {
+        auto params = OptimizationParameters::mrnf_defaults();
+        params.gut = true;
+        params.use_depth_loss = true;
+        const auto before = params.to_json();
+        EXPECT_FALSE(params.validate().empty());
+        EXPECT_TRUE(params.validate_for_storage().empty());
+        EXPECT_EQ(params.to_json(), before);
+        params.refine_every = 0;
+        EXPECT_NE(params.validate_for_storage().find("refine_every"), std::string::npos);
+    }
+
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {
         auto params = OptimizationParameters::mcmc_defaults();
         EXPECT_FALSE(params.use_exposure_correction);

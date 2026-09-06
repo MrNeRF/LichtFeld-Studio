@@ -35,6 +35,43 @@ namespace {
 
 } // namespace
 
+TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChangingFastGS) {
+    const auto data_path = make_test_path("lfs_backend_validation_data");
+    const auto output_path = make_test_path("lfs_backend_validation_output");
+    struct Case {
+        const char* flag;
+        const char* field;
+    };
+    const Case cases[] = {
+        {"--undistort", "undistort"},
+        {"--enable-mip", "mip_filter"},
+        {"--use-depth-loss", "use_depth_loss"},
+        {"--use-normal-loss", "use_normal_loss"},
+    };
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.flag);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "-d",
+            data_path.c_str(),
+            "-o",
+            output_path.c_str(),
+            "--strategy",
+            "mcmc",
+            test.flag,
+            "--gut",
+        };
+        const auto gut = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(gut.has_value());
+        EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
+        EXPECT_NE(gut.error().find(test.field), std::string::npos);
+
+        const auto fastgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        ASSERT_TRUE(fastgs.has_value()) << fastgs.error();
+        EXPECT_FALSE((*fastgs)->optimization.gut);
+    }
+}
+
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
     const auto directory =

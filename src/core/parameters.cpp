@@ -357,6 +357,28 @@ namespace lfs::core {
             return opt_json;
         }
 
+        TrainingBackendConflict OptimizationParameters::backend_conflict() const {
+            if (!gut)
+                return TrainingBackendConflict::None;
+            if (canonical_strategy_name(strategy) == kStrategyIGSPlus)
+                return TrainingBackendConflict::IGSPlus;
+            if (undistort)
+                return TrainingBackendConflict::Undistort;
+            if (mip_filter)
+                return TrainingBackendConflict::MipFilter;
+            if (use_depth_loss)
+                return TrainingBackendConflict::DepthSupervision;
+            if (use_normal_loss)
+                return TrainingBackendConflict::NormalSupervision;
+            return TrainingBackendConflict::None;
+        }
+
+        std::string OptimizationParameters::validate_for_storage() const {
+            auto compatible_probe = *this;
+            compatible_probe.gut = false;
+            return compatible_probe.validate();
+        }
+
         std::string OptimizationParameters::validate() const {
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)
@@ -478,8 +500,20 @@ namespace lfs::core {
                                    static_cast<uint64_t>(bilateral_grid_W))
                 return std::format("bilateral grid dimensions are too large ({}x{}x{})",
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
-            if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
+            switch (backend_conflict()) {
+            case TrainingBackendConflict::IGSPlus:
                 return "GUT and igs+ strategy cannot be used together";
+            case TrainingBackendConflict::Undistort:
+                return "3DGUT (gut=true) does not support undistort; disable undistort or select FastGS (gut=false)";
+            case TrainingBackendConflict::MipFilter:
+                return "3DGUT (gut=true) does not support mip_filter; disable mip_filter or select FastGS (gut=false)";
+            case TrainingBackendConflict::DepthSupervision:
+                return "3DGUT (gut=true) does not support depth supervision (use_depth_loss); disable use_depth_loss or select FastGS (gut=false)";
+            case TrainingBackendConflict::NormalSupervision:
+                return "3DGUT (gut=true) does not support normal supervision (use_normal_loss); disable use_normal_loss or select FastGS (gut=false)";
+            case TrainingBackendConflict::None:
+                break;
+            }
             if (use_exposure_correction &&
                 (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
                 return "use_exposure_correction cannot be combined with use_bilateral_grid, "

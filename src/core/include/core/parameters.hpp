@@ -22,6 +22,15 @@
 
 namespace lfs::core {
     namespace param {
+        enum class TrainingBackendConflict {
+            None,
+            IGSPlus,
+            Undistort,
+            MipFilter,
+            DepthSupervision,
+            NormalSupervision,
+        };
+
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -309,6 +318,10 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
+            [[nodiscard]] TrainingBackendConflict backend_conflict() const;
+            // Project presets may retain a backend-incompatible next-run choice so
+            // an older project can open and let the user correct it before Start.
+            [[nodiscard]] std::string validate_for_storage() const;
             [[nodiscard]] std::string validate() const;
 
             // Factory methods for strategy presets
