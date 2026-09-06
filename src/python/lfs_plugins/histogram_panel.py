@@ -2053,7 +2053,7 @@ class HistogramPanel(Panel):
 
     @staticmethod
     def _to_device(tensor: lf.Tensor, device: str) -> lf.Tensor:
-        if device == "cuda":
+        if device == "cuda" or device == "gpu":
             return tensor if tensor.is_cuda else tensor.cuda()
         return tensor.cpu() if tensor.is_cuda else tensor
 

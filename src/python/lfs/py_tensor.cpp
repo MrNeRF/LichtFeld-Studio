@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_tensor.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
@@ -218,7 +219,18 @@ namespace lfs::python {
     }
 
     std::string PyTensor::device() const {
-        return tensor_.device() == Device::CUDA ? "cuda" : "cpu";
+        return tensor_.device() == Device::GPU ? "cuda" : "cpu";
+    }
+
+    std::string PyTensor::backend() const {
+        if (tensor_.device() != Device::GPU) {
+            return "cpu";
+        }
+        const auto backend = lfs::core::gpu_backend_of(tensor_);
+        if (backend == lfs::core::GpuBackend::Vulkan) {
+            return "vulkan";
+        }
+        return "cuda";
     }
 
     std::string PyTensor::dtype() const {
@@ -238,7 +250,7 @@ namespace lfs::python {
     }
 
     bool PyTensor::is_cuda() const {
-        return tensor_.device() == Device::CUDA;
+        return tensor_.is_gpu();
     }
 
     size_t PyTensor::size(int dim) const {
@@ -262,10 +274,14 @@ namespace lfs::python {
     }
 
     PyTensor PyTensor::cuda() const {
-        if (tensor_.device() == Device::CUDA) {
+        return gpu();
+    }
+
+    PyTensor PyTensor::gpu() const {
+        if (tensor_.device() == Device::GPU) {
             return PyTensor(tensor_);
         }
-        return PyTensor(tensor_.cuda());
+        return PyTensor(tensor_.gpu());
     }
 
     PyTensor PyTensor::contiguous() const {
@@ -1534,7 +1550,7 @@ namespace lfs::python {
     namespace {
         Device parse_device(const std::string& device) {
             if (device == "cuda" || device == "gpu")
-                return Device::CUDA;
+                return Device::GPU;
             if (device == "cpu")
                 return Device::CPU;
             throw std::runtime_error("Unknown device: " + device);
@@ -1597,7 +1613,7 @@ namespace lfs::python {
                               const std::string& device,
                               const std::string& dtype) {
         auto t = Tensor::arange(start, end, step);
-        if (device != "cuda") {
+        if (device != "cuda" && device != "gpu") {
             t = t.to(parse_device(device));
         }
         if (dtype != "float32") {
@@ -1716,7 +1732,10 @@ namespace lfs::python {
             .def_prop_ro("shape", &PyTensor::shape, "Tensor shape as tuple")
             .def_prop_ro("ndim", &PyTensor::ndim, "Number of dimensions")
             .def_prop_ro("numel", &PyTensor::numel, "Total number of elements")
-            .def_prop_ro("device", &PyTensor::device, "Device: 'cpu' or 'cuda'")
+            .def_prop_ro("device", &PyTensor::device,
+                         "Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend")
+            .def_prop_ro("backend", &PyTensor::backend,
+                         "Backend: 'cpu' for CPU tensors, 'cuda' or 'vulkan' for GPU tensors")
             .def_prop_ro("dtype", &PyTensor::dtype, "Data type")
             .def_prop_ro("is_contiguous", &PyTensor::is_contiguous, "Whether memory is contiguous")
             .def_prop_ro("is_cuda", &PyTensor::is_cuda, "Whether tensor is on CUDA")
@@ -1725,6 +1744,7 @@ namespace lfs::python {
             .def("clone", &PyTensor::clone, "Deep copy of tensor")
             .def("cpu", &PyTensor::cpu, "Move tensor to CPU")
             .def("cuda", &PyTensor::cuda, "Move tensor to CUDA")
+            .def("gpu", &PyTensor::gpu, "Move tensor to GPU")
             .def("contiguous", &PyTensor::contiguous, "Make tensor contiguous")
             .def("sync", &PyTensor::sync, "Synchronize CUDA stream")
             .def("size", &PyTensor::size, nb::arg("dim"), "Size of dimension")

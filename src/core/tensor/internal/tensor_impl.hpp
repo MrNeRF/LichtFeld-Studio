@@ -2058,7 +2058,10 @@ namespace lfs::core {
         }
 
         Tensor cpu() const { return to(Device::CPU); }
-        Tensor cuda() const { return to(Device::CUDA); }
+        Tensor gpu() const { return to(Device::GPU); }
+        Tensor cuda() const { return gpu(); }
+        bool is_gpu() const { return device() == Device::GPU; }
+        bool is_cuda() const { return is_gpu(); }
 
         // ============= SHAPE OPERATIONS =============
         Tensor reshape(std::span<const int> sizes) const {
