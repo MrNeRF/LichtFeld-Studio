@@ -5289,7 +5289,10 @@ namespace lfs::vis {
                 !result) {
                 return result;
             }
-        } else {
+        }
+        // The Vulkan-side query completion serves the Vulkan-aux path with or
+        // without CUDA, so it exists whenever the renderer does.
+        {
             VkSemaphoreTypeCreateInfo query_type{};
             query_type.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
             query_type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -8972,14 +8975,11 @@ namespace lfs::vis {
                         last_vulkan_tensor_input_wait_value_ = query_max_pending;
                     }
                 }
-                if (cudaBackendUsable() && selection_query_timeline_.cuda_semaphore.valid()) {
-                    auto& timeline = selection_query_timeline_;
-                    selection_query_complete_value = ++timeline.value;
-                    query_signal_semaphore = timeline.vk_semaphore.semaphore;
-                } else {
-                    selection_query_complete_value = ++vulkan_query_complete_value_;
-                    query_signal_semaphore = vulkan_query_complete_timeline_;
-                }
+                // The query output is a Vulkan tensor read by the host, so its
+                // completion is waited on the host through the Vulkan timeline;
+                // a CUDA stream wait would not order that read.
+                selection_query_complete_value = ++vulkan_query_complete_value_;
+                query_signal_semaphore = vulkan_query_complete_timeline_;
             } else {
                 auto& timeline = selection_query_timeline_;
                 const std::uint64_t upload_ready_value = ++timeline.value;
@@ -9051,7 +9051,8 @@ namespace lfs::vis {
         }
         {
             LOG_TIMER_THRESHOLD("VksplatViewportRenderer::buildSelectionMask.dispatch.cuda_wait", 1.0);
-            if (cudaBackendUsable() &&
+            if (query_signal_semaphore == selection_query_timeline_.vk_semaphore.semaphore &&
+                cudaBackendUsable() &&
                 selection_query_timeline_.cuda_semaphore.valid() &&
                 selection_query_stream != nullptr) {
                 if (!selection_query_timeline_.cuda_semaphore.cudaWait(selection_query_complete_value,
