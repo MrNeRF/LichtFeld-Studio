@@ -1094,10 +1094,10 @@ namespace lfs::app {
                 const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
                 const auto cam_state = timeline.evaluate(t);
 
-                // CameraState is camera-to-world; Camera's R/T are world-to-camera, so invert.
-                const glm::mat3 r_c2w = glm::mat3_cast(cam_state.rotation);
-                const glm::mat3 r_w2c = glm::transpose(r_c2w);
-                const glm::vec3 t_w2c = -(r_w2c * cam_state.position);
+                const glm::mat4 data_view = rendering::dataWorldToCameraFromVisualizerPose(
+                    glm::mat3_cast(cam_state.rotation), cam_state.position);
+                const glm::mat3 r_w2c(data_view);
+                const glm::vec3 t_w2c(data_view[3]);
 
                 std::vector<float> r_flat(9);
                 for (int row = 0; row < 3; ++row) {

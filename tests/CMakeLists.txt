@@ -895,6 +895,27 @@ set_tests_properties(lichtfeld.discovery PROPERTIES
     TIMEOUT 1800
 )
 
+# The pixel regression uses an independent decoder, not our video player.
+# Set LFS_VIDEO_TEST_FFMPEG explicitly when ffmpeg is outside PATH.
+find_program(LFS_VIDEO_TEST_FFMPEG NAMES ffmpeg)
+if(LFS_VIDEO_TEST_FFMPEG)
+    add_test(NAME video.orientation
+        COMMAND ${Python_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/verify_video_orientation.py
+            --executable $<TARGET_FILE:${PROJECT_NAME}>
+            --ffmpeg ${LFS_VIDEO_TEST_FFMPEG}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/video-orientation
+    )
+    set_tests_properties(video.orientation PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        LABELS "slow;gpu;video"
+        TIMEOUT 600
+        RUN_SERIAL TRUE
+    )
+else()
+    message(STATUS "Skipping video.orientation: set LFS_VIDEO_TEST_FFMPEG to enable decoded-video regression")
+endif()
+
 # Keep every Python tier explicit so new modules cannot silently drift out of
 # the curated suite.
 set(LFS_PYTHON_FAST_TESTS
