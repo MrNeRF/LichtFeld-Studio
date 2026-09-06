@@ -5,6 +5,7 @@
 #include "selection_ops.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "rendering/render_constants.hpp"
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -43,6 +45,14 @@ namespace lfs::rendering {
         template <std::size_t N>
         void copySelectionCountsToHost(const Tensor& counts_scratch,
                                        std::array<int, N>& host_counts) {
+            if (lfs::core::gpu_backend_of(counts_scratch) == lfs::core::GpuBackend::Vulkan) {
+                const Tensor host = counts_scratch.cpu().contiguous();
+                if (!host.is_valid() || host.numel() < N || host.ptr<int>() == nullptr) {
+                    throw std::runtime_error("invalid Vulkan selection-count scratch");
+                }
+                std::memcpy(host_counts.data(), host.ptr<int>(), sizeof(host_counts));
+                return;
+            }
             const cudaStream_t stream = currentSelectionStream(&counts_scratch);
             if (const cudaError_t status = cudaMemcpyAsync(host_counts.data(),
                                                            counts_scratch.ptr<int>(),
@@ -910,6 +920,15 @@ namespace lfs::rendering {
         const float mouse_y,
         const float radius,
         Tensor& selection_out) {
+        if (lfs::core::gpu_backend_of(screen_positions) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(selection_out) == lfs::core::GpuBackend::Vulkan) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARN("Brush selection is unavailable on the Vulkan tensor backend");
+            }
+            return;
+        }
         if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
             return;
         }
@@ -926,6 +945,16 @@ namespace lfs::rendering {
         const Tensor& screen_positions,
         const Tensor& polygon_vertices,
         Tensor& selection_out) {
+        if (lfs::core::gpu_backend_of(screen_positions) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(polygon_vertices) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(selection_out) == lfs::core::GpuBackend::Vulkan) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARN("Polygon selection is unavailable on the Vulkan tensor backend");
+            }
+            return;
+        }
         if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
             return;
         }
@@ -1084,8 +1113,12 @@ namespace lfs::rendering {
         if (selection_mask.device() != lfs::core::Device::CUDA) {
             throw std::runtime_error("count_selection_groups_async requires a CUDA mask");
         }
+        if (lfs::core::gpu_backend_of(selection_mask) == lfs::core::GpuBackend::Vulkan) {
+            count_selection_groups_tensor_program(selection_mask, counts_scratch);
+            return;
+        }
 
-        prepareSelectionGroupCountsScratch(counts_scratch);
+        prepare_cuda_selection_group_counts_scratch(counts_scratch);
 
         const int n = checkedToInt(selection_mask.numel(), "selection mask size exceeds int range");
         const int grid_size = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
@@ -1099,7 +1132,24 @@ namespace lfs::rendering {
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* const pinned_host_counts,
                                             const cudaEvent_t ready_event) {
-        if (!counts_scratch.is_valid() || pinned_host_counts == nullptr || ready_event == nullptr) {
+        if (!counts_scratch.is_valid() || pinned_host_counts == nullptr) {
+            throw std::runtime_error("invalid asynchronous selection-count destination");
+        }
+        if (lfs::core::gpu_backend_of(counts_scratch) == lfs::core::GpuBackend::Vulkan) {
+            const Tensor host = counts_scratch.cpu().contiguous();
+            if (!host.is_valid() || host.numel() < kSelectionGroupScratchWords ||
+                host.ptr<int>() == nullptr) {
+                throw std::runtime_error("invalid Vulkan selection-count scratch");
+            }
+            std::memcpy(pinned_host_counts,
+                        host.ptr<int>(),
+                        kSelectionGroupScratchWords * sizeof(int));
+            if (ready_event != nullptr) {
+                LFS_CUDA_CHECK(cudaEventRecord(ready_event, nullptr));
+            }
+            return;
+        }
+        if (ready_event == nullptr) {
             throw std::runtime_error("invalid asynchronous selection-count destination");
         }
         const cudaStream_t stream = currentSelectionStream(&counts_scratch);

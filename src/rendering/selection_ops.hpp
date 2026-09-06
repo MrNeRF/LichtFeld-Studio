@@ -158,6 +158,9 @@ namespace lfs::rendering {
     // poll/synchronize their own event later.
     void count_selection_groups_async(const Tensor& selection_mask,
                                       Tensor& counts_scratch);
+    void count_selection_groups_tensor_program(const Tensor& selection_mask,
+                                               Tensor& counts_scratch);
+    void prepare_cuda_selection_group_counts_scratch(Tensor& counts_scratch);
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* pinned_host_counts,
                                             cudaEvent_t ready_event);

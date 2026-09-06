@@ -103,8 +103,15 @@ namespace lfs::core {
             // and CUDA context are still usable. After this returns, static/TLS
             // dtors must find empty holders — otherwise they free after the
             // Meyers-singleton pool is destroyed → SIGSEGV (exit 139).
-            run_gpu_pre_shutdown_hooks_once();
+            const bool cuda_usable = gpu_backend_available(GpuBackend::CUDA);
+            if (cuda_usable) {
+                run_gpu_pre_shutdown_hooks_once();
+            }
             g_gpu_process_teardown_started.store(true, std::memory_order_release);
+
+            if (!cuda_usable) {
+                return;
+            }
 
             // Drain dedicated DeviceFaultRecord slots (cudaMalloc-owned, never
             // pool memory) before the tensor memory

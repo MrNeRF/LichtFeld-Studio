@@ -392,6 +392,13 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
             lfs::core::Tensor copy_keep_alive;
+            lfs::core::Tensor vulkan_selection_mask;
+            lfs::core::Tensor vulkan_preview_mask;
+            lfs::core::Tensor vulkan_selection_colors;
+            lfs::core::Tensor vulkan_transform_indices;
+            lfs::core::Tensor vulkan_node_mask;
+            lfs::core::Tensor vulkan_overlay_params;
+            lfs::core::Tensor vulkan_model_transforms;
             std::array<std::size_t, kOverlayRegionCount> region_offset{};
             std::array<std::size_t, kOverlayRegionCount> region_bytes{};
             lfs::core::Tensor selection_source;
@@ -425,6 +432,13 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer buffer{};
             lfs::core::Tensor copy_keep_alive;
+            lfs::core::Tensor vulkan_transform_indices;
+            lfs::core::Tensor vulkan_node_mask;
+            lfs::core::Tensor vulkan_primitives;
+            lfs::core::Tensor vulkan_model_transforms;
+            lfs::core::Tensor vulkan_polygon_vertices;
+            lfs::core::Tensor vulkan_polygon_mask;
+            lfs::core::Tensor vulkan_ring_pick;
             std::array<std::size_t, kSelectionQueryRegionCount> region_offset{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_bytes{};
             std::array<std::size_t, kSelectionQueryRegionCount> region_capacity_bytes{};
@@ -747,6 +761,8 @@ namespace lfs::vis {
         // borrow value" GPU-side before its next in-place parameter writes.
         VulkanContext::ExternalSemaphore render_complete_external_{};
         lfs::rendering::CudaTimelineSemaphore render_complete_cuda_{};
+        VkSemaphore vulkan_query_complete_timeline_ = VK_NULL_HANDLE;
+        std::uint64_t vulkan_query_complete_value_ = 0;
 
         // The last completion value whose frame read the persistent (non-ring)
         // lod_page_inputs_ buffer; next-frame page uploads wait on it GPU-side.

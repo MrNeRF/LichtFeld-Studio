@@ -4,6 +4,7 @@
 
 #include "app/application.hpp"
 #include "app/converter.hpp"
+#include "app/gpu_preflight.hpp"
 #include "core/abi.hpp"
 #include "core/argument_parser.hpp"
 #include "core/crash_handler.hpp"
@@ -13,6 +14,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/session_breadcrumb.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
@@ -63,8 +65,8 @@ namespace {
     // Every mode that touches CUDA gates here, before the primary context exists: with
     // CUDA_MODULE_LOADING=EAGER pre-set in the environment, context creation itself loads
     // modules the card cannot run, which would beat the check to the crash.
-    void preflightGpuOrExit(const bool show_dialog) {
-        if (!lfs::app::preflightGpu(show_dialog)) {
+    void preflightGpuOrExit(const bool show_dialog, const bool viewer_only = false) {
+        if (!lfs::app::preflightGpu(show_dialog, viewer_only)) {
             lfs::core::teardown_gpu_before_exit();
             lfs::core::flush_and_exit(1);
         }
@@ -164,13 +166,16 @@ namespace {
 
                 const bool interactive =
                     !mode.params->optimization.headless && !mode.params->render_path;
-                preflightGpuOrExit(interactive);
+                const bool viewer_only = lfs::app::training_params_are_viewer_only(*mode.params);
+                preflightGpuOrExit(interactive, viewer_only);
 
                 // Probe and decompose the CUDA driver's context-creation cost only for the
                 // GPU app path. CLI-only modes such as --help, convert, preprocess,
                 // plugin, and mesh2splat must not create a CUDA primary context just
                 // for HUD metrics.
-                analyzeCudaContextDistribution();
+                if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                    analyzeCudaContextDistribution();
+                }
                 if (mode.params->optimization.debug_python) {
                     lfs::python::start_debugpy(mode.params->optimization.debug_python_port);
                 }

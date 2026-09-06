@@ -13,6 +13,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -773,9 +774,11 @@ namespace lfs::core {
         training_model_uuid_ = {};
         training_model_node_.clear();
 
-        cudaDeviceSynchronize();
-        lfs::core::Tensor::trim_memory_pool();
-        lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+        if (gpu_backend_available(GpuBackend::CUDA)) {
+            cudaDeviceSynchronize();
+            lfs::core::Tensor::trim_memory_pool();
+            lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+        }
 
         notifyMutation(MutationType::CLEARED);
     }

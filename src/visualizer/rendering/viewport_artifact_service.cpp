@@ -4,6 +4,8 @@
 
 #include "viewport_artifact_service.hpp"
 #include "core/cuda_error.hpp"
+#include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "rendering/rendering.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
@@ -231,6 +233,11 @@ namespace lfs::vis {
                 scaled_y = (depth_height - 1) - scaled_y;
 
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
+                    if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) ||
+                        lfs::core::gpu_backend_of(*depth_ptr) == lfs::core::GpuBackend::Vulkan) {
+                        LOG_WARN("Depth sample capture is unavailable on the Vulkan tensor backend");
+                        return -1.0f;
+                    }
                     float d;
                     const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
                     const cudaStream_t stream = depth_ptr->stream();

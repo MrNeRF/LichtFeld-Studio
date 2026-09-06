@@ -10,6 +10,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "display_tensors.hpp"
 #include "gt_comparison_cache_utils.hpp"
@@ -1254,6 +1255,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::gtComparisonImageWorkerLoop(const std::stop_token stop_token) {
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            return;
+        }
         if (const cudaError_t err = cudaStreamCreateWithFlags(
                 &gt_comparison_worker_stream_, cudaStreamNonBlocking);
             err != cudaSuccess) {
@@ -1487,7 +1491,8 @@ namespace lfs::vis {
         if (!last_vulkan_context_) {
             return std::unexpected("VkSplat selection query requires an active Vulkan context");
         }
-        if (!last_vulkan_context_->externalMemoryInteropEnabled()) {
+        if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::Vulkan &&
+            !last_vulkan_context_->externalMemoryInteropEnabled()) {
             return std::unexpected("VkSplat selection query requires CUDA/Vulkan external-memory interop");
         }
         // Point-cloud mode renders with a separate graphics pipeline, but selection
@@ -4731,6 +4736,18 @@ namespace lfs::vis {
     }
 
     lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {
+        if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::Vulkan) {
+            return [](lfs::core::TensorShape shape,
+                      const size_t capacity,
+                      const lfs::core::DataType dtype,
+                      const std::string_view name) -> lfs::core::Tensor {
+                (void)capacity;
+                lfs::core::Tensor tensor =
+                    lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::CUDA, dtype);
+                tensor.set_name(std::string{name});
+                return tensor;
+            };
+        }
         if (!last_vulkan_context_ || !last_vulkan_context_->externalMemoryInteropEnabled()) {
             return {};
         }

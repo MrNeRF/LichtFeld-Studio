@@ -42,6 +42,7 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <unordered_set>
@@ -177,6 +178,11 @@ namespace lfs::io {
                 return result;
             }
 
+            if (lfs::core::gpu_backend_of(source) == lfs::core::GpuBackend::Vulkan ||
+                !lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                LOG_WARN("PLY export is unavailable on the Vulkan tensor backend");
+                throw std::runtime_error("PLY export is unavailable on the Vulkan tensor backend");
+            }
             const cudaStream_t transfer_stream = lfs::core::prepare_inputs_for_stream({&source});
             LFS_CUDA_CHECK_MSG_STREAM(
                 cudaMemcpyAsync(result.data_ptr(), source.data_ptr(), source.bytes(),

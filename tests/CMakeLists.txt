@@ -604,6 +604,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_buffer.cpp
         test_tensor_backend_parity.cpp
         test_viewer_vulkan_load.cpp
+        test_viewer_no_cuda.cpp
     )
 endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)

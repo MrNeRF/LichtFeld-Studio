@@ -3,6 +3,7 @@
 
 #include "core/cuda/selection_ops.hpp"
 #include "core/cuda_error.hpp"
+#include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include <cassert>
 #include <cfloat>
@@ -334,6 +335,15 @@ namespace lfs::core::cuda {
     } // namespace
 
     Tensor selection_grow(const Tensor& mask, const Tensor& means, float radius, uint8_t group_id) {
+        if (lfs::core::gpu_backend_of(mask) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARN("Selection grow is unavailable on the Vulkan tensor backend");
+            }
+            return mask;
+        }
         assert(mask.device() == Device::CUDA);
         assert(means.device() == Device::CUDA);
         assert(mask.dtype() == DataType::UInt8);
@@ -368,6 +378,15 @@ namespace lfs::core::cuda {
     }
 
     Tensor selection_shrink(const Tensor& mask, const Tensor& means, float radius) {
+        if (lfs::core::gpu_backend_of(mask) == lfs::core::GpuBackend::Vulkan ||
+            lfs::core::gpu_backend_of(means) == lfs::core::GpuBackend::Vulkan) {
+            static bool logged = false;
+            if (!logged) {
+                logged = true;
+                LOG_WARN("Selection shrink is unavailable on the Vulkan tensor backend");
+            }
+            return mask;
+        }
         assert(mask.device() == Device::CUDA);
         assert(means.device() == Device::CUDA);
         assert(mask.dtype() == DataType::UInt8);

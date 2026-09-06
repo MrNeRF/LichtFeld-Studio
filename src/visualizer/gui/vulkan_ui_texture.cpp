@@ -7,6 +7,7 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -135,14 +136,15 @@ namespace lfs::vis::gui {
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
         if (context == nullptr) {
-            if (!g_texture_upload_stream.synchronize()) {
+            if (g_texture_upload_stream.valid() && !g_texture_upload_stream.synchronize()) {
                 LOG_WARN("CUDA/Vulkan UI texture stream synchronization failed during shutdown: {}",
                          g_texture_upload_stream.lastError());
             }
             g_texture_upload_stream.reset();
-        } else if (!g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
-            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
-                      g_texture_upload_stream.lastError());
+        } else if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
+                   !g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
+            LOG_WARN("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
+                     g_texture_upload_stream.lastError());
         }
         g_texture_context = context;
     }

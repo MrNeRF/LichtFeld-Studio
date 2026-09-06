@@ -845,7 +845,9 @@ namespace lfs::vis {
                 if (means.dtype() != core::DataType::Float32) {
                     means = means.to(core::DataType::Float32);
                 }
-                if (means.device() == core::Device::CUDA) {
+                if (means.device() == core::Device::CUDA &&
+                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
+                    lfs::core::gpu_backend_of(means) != lfs::core::GpuBackend::Vulkan) {
                     try {
                         if (!means.is_valid() || means.numel() == 0 ||
                             means.storage_ptr() == nullptr) {
@@ -1078,13 +1080,25 @@ namespace lfs::vis {
           rendering_manager_(rendering_manager) {
         assert(scene_manager_);
         assert(rendering_manager_);
+        const bool cuda_usable = lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+        const auto allocate_host_counts = [](int*& host_counts) {
+            host_counts = new int[selection::kSelectionGroupCount + 1]{};
+        };
         for (auto& pending : pending_selection_counts_) {
+            if (!cuda_usable) {
+                allocate_host_counts(pending.host_counts);
+                continue;
+            }
             if (cudaHostAlloc(reinterpret_cast<void**>(&pending.host_counts),
                               (selection::kSelectionGroupCount + 1) * sizeof(int),
                               cudaHostAllocPortable) != cudaSuccess ||
                 cudaEventCreateWithFlags(&pending.ready_event, cudaEventDisableTiming) != cudaSuccess) {
                 throw std::runtime_error("SelectionService: failed to allocate async count staging");
             }
+        }
+        if (!cuda_usable) {
+            allocate_host_counts(pending_passive_ring_count_.host_counts);
+            return;
         }
         if (cudaHostAlloc(reinterpret_cast<void**>(&pending_passive_ring_count_.host_counts),
                           (selection::kSelectionGroupCount + 1) * sizeof(int),
@@ -1095,6 +1109,18 @@ namespace lfs::vis {
     }
 
     SelectionService::~SelectionService() {
+        const bool cuda_usable = lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA);
+        const auto release_host_counts = [cuda_usable](int*& host_counts, const char* const what) {
+            if (!host_counts) {
+                return;
+            }
+            if (cuda_usable) {
+                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(host_counts), nullptr, what);
+            } else {
+                delete[] host_counts;
+            }
+            host_counts = nullptr;
+        };
         for (auto& pending : pending_selection_counts_) {
             if (pending.ready_event) {
                 if (pending.pending) {
@@ -1104,10 +1130,7 @@ namespace lfs::vis {
                 LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending.ready_event), nullptr,
                                       "selection count teardown: destroy ready event");
             }
-            if (pending.host_counts) {
-                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(pending.host_counts), nullptr,
-                                      "selection count teardown: free pinned counts");
-            }
+            release_host_counts(pending.host_counts, "selection count teardown: free pinned counts");
         }
         if (pending_passive_ring_count_.ready_event) {
             if (pending_passive_ring_count_.pending) {
@@ -1117,10 +1140,8 @@ namespace lfs::vis {
             LFS_CUDA_LOG_TEARDOWN(cudaEventDestroy(pending_passive_ring_count_.ready_event), nullptr,
                                   "passive ring teardown: destroy ready event");
         }
-        if (pending_passive_ring_count_.host_counts) {
-            LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(pending_passive_ring_count_.host_counts), nullptr,
-                                  "passive ring teardown: free pinned counts");
-        }
+        release_host_counts(pending_passive_ring_count_.host_counts,
+                            "passive ring teardown: free pinned counts");
     }
 
     void SelectionService::completePendingSelectionCount(
@@ -1129,18 +1150,22 @@ namespace lfs::vis {
             return;
         }
 
-        const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
-                                        : cudaEventQuery(pending.ready_event);
-        if (status == cudaErrorNotReady) {
-            return;
-        }
-        if (status != cudaSuccess) {
-            LOG_WARN("SelectionService: async selection count failed: {}",
-                     cudaGetErrorString(status));
-            pending.pending = false;
-            pending.mask.reset();
-            pending.undo_entry.reset();
-            return;
+        if (pending.ready_event == nullptr) {
+            // Vulkan count path downloads synchronously in enqueue.
+        } else {
+            const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
+                                            : cudaEventQuery(pending.ready_event);
+            if (status == cudaErrorNotReady) {
+                return;
+            }
+            if (status != cudaSuccess) {
+                LOG_WARN("SelectionService: async selection count failed: {}",
+                         cudaGetErrorString(status));
+                pending.pending = false;
+                pending.mask.reset();
+                pending.undo_entry.reset();
+                return;
+            }
         }
 
         auto completed_mask = std::move(pending.mask);
