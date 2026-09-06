@@ -21,11 +21,11 @@ namespace {
     Tensor u8_mask_from(const std::vector<uint8_t>& data, size_t H, size_t W) {
         auto t = Tensor::empty({H, W}, Device::CPU, DataType::UInt8);
         std::copy(data.begin(), data.end(), t.ptr<uint8_t>());
-        return t.to(Device::CUDA);
+        return t.to(Device::GPU);
     }
 
     Tensor f32_from(const std::vector<float>& data, size_t H, size_t W) {
-        return Tensor::from_vector(data, {H, W}, Device::CUDA);
+        return Tensor::from_vector(data, {H, W}, Device::GPU);
     }
 
     /// Reference: SegmentAndIgnore photometric remap (old trainer chain) + ROI compose.

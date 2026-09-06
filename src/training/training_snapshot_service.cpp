@@ -431,7 +431,7 @@ namespace lfs::training {
                     .payload_bytes = bytes,
                 });
                 if (source.device() ==
-                    lfs::core::Device::CUDA) {
+                    lfs::core::Device::GPU) {
                     if (bytes >
                         std::numeric_limits<std::uint64_t>::max() -
                             device_bytes_) {
@@ -478,7 +478,7 @@ namespace lfs::training {
                     return;
                 }
                 if (source.device() !=
-                        lfs::core::Device::CUDA ||
+                        lfs::core::Device::GPU ||
                     source.ndim() != 1 ||
                     descriptor.dtype !=
                         lfs::core::DataType::Float32 ||
@@ -527,7 +527,7 @@ namespace lfs::training {
                     !auxiliary_source->is_valid() ||
                     !auxiliary_source->is_contiguous() ||
                     auxiliary_source->device() !=
-                        lfs::core::Device::CUDA ||
+                        lfs::core::Device::GPU ||
                     auxiliary_source->dtype() !=
                         lfs::core::DataType::Float32 ||
                     auxiliary_source->numel() <
@@ -831,12 +831,12 @@ namespace lfs::training {
             }
             for (const auto& witness : layout) {
                 if (witness.source_device ==
-                        lfs::core::Device::CUDA &&
+                        lfs::core::Device::GPU &&
                     witness.source_stream) {
                     streams.insert(witness.source_stream);
                 }
                 if (witness.auxiliary_source_device ==
-                        lfs::core::Device::CUDA &&
+                        lfs::core::Device::GPU &&
                     witness.auxiliary_source_stream) {
                     streams.insert(
                         witness.auxiliary_source_stream);
@@ -851,7 +851,7 @@ namespace lfs::training {
                 layout, std::less{},
                 [](const TensorLayoutWitness& witness) {
                     return witness.source_device ==
-                                       lfs::core::Device::CUDA &&
+                                       lfs::core::Device::GPU &&
                                    witness.source_pointer &&
                                    witness.payload_bytes > 0
                                ? source_raw_bytes(witness)
@@ -859,7 +859,7 @@ namespace lfs::training {
                 });
             if (source == layout.end() ||
                 source->source_device !=
-                    lfs::core::Device::CUDA ||
+                    lfs::core::Device::GPU ||
                 !source->source_pointer ||
                 source->payload_bytes == 0) {
                 measured_bandwidth =
@@ -872,7 +872,7 @@ namespace lfs::training {
                         config.calibration_bytes,
                         config.band_bytes),
                     source->source_device ==
-                            lfs::core::Device::CUDA
+                            lfs::core::Device::GPU
                         ? source_raw_bytes(*source)
                         : 0));
             if (bytes == 0) {
@@ -2218,13 +2218,13 @@ namespace lfs::training {
             for (const auto& witness :
                  prepared.impl_->layout) {
                 if (witness.source_device ==
-                        lfs::core::Device::CUDA &&
+                        lfs::core::Device::GPU &&
                     witness.source_stream) {
                     streams.insert(
                         witness.source_stream);
                 }
                 if (witness.auxiliary_source_device ==
-                        lfs::core::Device::CUDA &&
+                        lfs::core::Device::GPU &&
                     witness.auxiliary_source_stream) {
                     streams.insert(
                         witness.auxiliary_source_stream);

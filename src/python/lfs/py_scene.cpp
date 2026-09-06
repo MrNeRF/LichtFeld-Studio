@@ -259,8 +259,8 @@ namespace lfs::python {
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
 
-        pc_->means = pts.to(core::Device::CUDA);
-        pc_->colors = cols.to(core::Device::CUDA);
+        pc_->means = pts.to(core::Device::GPU);
+        pc_->colors = cols.to(core::Device::GPU);
 
         const int64_t n = pc_->size();
         if (node_) {
@@ -281,7 +281,7 @@ namespace lfs::python {
         const auto& cols = colors.tensor();
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(cols.shape()[0] == pc_->size());
-        pc_->colors = cols.to(core::Device::CUDA);
+        pc_->colors = cols.to(core::Device::GPU);
         if (scene_) {
             scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -292,7 +292,7 @@ namespace lfs::python {
         const auto& pts = points.tensor();
         assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
         assert(pts.shape()[0] == pc_->size());
-        pc_->means = pts.to(core::Device::CUDA);
+        pc_->means = pts.to(core::Device::GPU);
         if (node_ && pc_->size() > 0) {
             auto centroid = pc_->means.mean(0).cpu();
             auto acc = centroid.accessor<float, 1>();
@@ -461,7 +461,7 @@ namespace lfs::python {
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
 
-        auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
+        auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::GPU), cols.to(core::Device::GPU));
         const int32_t node_id = scene_->addPointCloud(name, std::move(pc), parent);
         if (node_id == core::NULL_NODE) {
             return core::NULL_NODE;
@@ -746,7 +746,7 @@ namespace lfs::python {
     void PyScene::set_node_transform_tensor(const std::string& name, const PyTensor& transform) {
         const auto& t = transform.tensor();
         assert(t.ndim() == 2 && t.size(0) == 4 && t.size(1) == 4);
-        auto cpu_t = t.device() == core::Device::CUDA ? t.cpu() : t;
+        auto cpu_t = t.device() == core::Device::GPU ? t.cpu() : t;
         auto contiguous = cpu_t.contiguous();
         const float* data = contiguous.ptr<float>();
         glm::mat4 m;

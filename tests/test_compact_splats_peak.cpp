@@ -46,12 +46,12 @@ namespace {
         }
         const size_t sh_rest = sh_rest_coefficients_for_degree(sh_degree);
 
-        auto means = Tensor::from_vector(means_data, TensorShape({n, 3}), Device::CUDA);
-        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n, 1, 3}), Device::CUDA);
-        auto shN = Tensor::zeros(TensorShape({n, sh_rest, 3}), Device::CUDA);
-        auto scaling = Tensor::from_vector(scaling_data, TensorShape({n, 3}), Device::CUDA);
-        auto rotation = Tensor::from_vector(rotation_data, TensorShape({n, 4}), Device::CUDA);
-        auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::CUDA);
+        auto means = Tensor::from_vector(means_data, TensorShape({n, 3}), Device::GPU);
+        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({n, 1, 3}), Device::GPU);
+        auto shN = Tensor::zeros(TensorShape({n, sh_rest, 3}), Device::GPU);
+        auto scaling = Tensor::from_vector(scaling_data, TensorShape({n, 3}), Device::GPU);
+        auto rotation = Tensor::from_vector(rotation_data, TensorShape({n, 4}), Device::GPU);
+        auto opacity = Tensor::from_vector(opacity_data, TensorShape({n, 1}), Device::GPU);
         return SplatData(sh_degree, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -60,16 +60,16 @@ namespace {
         for (size_t i = 0; i < new_n; ++i) {
             idx_host[i] = static_cast<int>(i * 2); // keep even rows
         }
-        return Tensor::from_vector(idx_host, TensorShape({new_n}), Device::CUDA);
+        return Tensor::from_vector(idx_host, TensorShape({new_n}), Device::GPU);
     }
 
     Tensor make_src(const size_t old_n, const size_t max_cap, const size_t cols) {
-        auto src = Tensor::zeros_direct(TensorShape({old_n, cols}), max_cap, Device::CUDA);
+        auto src = Tensor::zeros_direct(TensorShape({old_n, cols}), max_cap, Device::GPU);
         std::vector<float> host(old_n * cols);
         for (size_t i = 0; i < old_n * cols; ++i) {
             host[i] = static_cast<float>(i % 97);
         }
-        auto fill = Tensor::from_vector(host, TensorShape({old_n, cols}), Device::CUDA);
+        auto fill = Tensor::from_vector(host, TensorShape({old_n, cols}), Device::GPU);
         src.copy_from(fill);
         return src;
     }
@@ -93,7 +93,7 @@ TEST(CompactSplatPeakPattern, NewPathStaysWithinTwoX) {
     auto src = make_src(max_cap, max_cap, cols);
     auto indices = make_indices(new_n);
     auto ref = src.index_select(0, indices).contiguous();
-    auto dest = Tensor::zeros_direct(TensorShape({new_n, cols}), max_cap, Device::CUDA);
+    auto dest = Tensor::zeros_direct(TensorShape({new_n, cols}), max_cap, Device::GPU);
     src.index_select_into(dest, 0, indices, BoundaryMode::Assert);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
@@ -127,7 +127,7 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
         keep_idx[i] = static_cast<int>(i * 2);
         keep_mask_host[i * 2] = 1;
     }
-    auto keep_indices = Tensor::from_vector(keep_idx, TensorShape({keep_n}), Device::CUDA);
+    auto keep_indices = Tensor::from_vector(keep_idx, TensorShape({keep_n}), Device::GPU);
     auto ref_means = splat_data.means().index_select(0, keep_indices).contiguous();
     auto ref_sh0 = splat_data.sh0().index_select(0, keep_indices).contiguous();
     auto ref_opacity = splat_data.opacity_raw().index_select(0, keep_indices).contiguous();
@@ -139,7 +139,7 @@ TEST(MRNFStrategyTest, CompactSplatsCorrectAndPeakBelowThreeX) {
             p[i] = keep_mask_host[i];
         }
     }
-    auto keep_mask = keep_mask_cpu.to(Device::CUDA);
+    auto keep_mask = keep_mask_cpu.to(Device::GPU);
 
     // Peak / alloc probe around compact.
     Tensor::trim_memory_pool();
@@ -225,7 +225,7 @@ TEST(MRNFStrategyTest, CompactSplatsFusedPathLeavesGradsEmpty) {
         keep_idx[i] = static_cast<int>(i * 2);
         keep_mask_host[i * 2] = 1;
     }
-    auto keep_indices = Tensor::from_vector(keep_idx, TensorShape({keep_n}), Device::CUDA);
+    auto keep_indices = Tensor::from_vector(keep_idx, TensorShape({keep_n}), Device::GPU);
     auto ref_means = splat_data.means().index_select(0, keep_indices).contiguous();
 
     auto keep_mask_cpu = Tensor::zeros_bool(TensorShape({old_n}), Device::CPU);
@@ -235,7 +235,7 @@ TEST(MRNFStrategyTest, CompactSplatsFusedPathLeavesGradsEmpty) {
             p[i] = keep_mask_host[i];
         }
     }
-    auto keep_mask = keep_mask_cpu.to(Device::CUDA);
+    auto keep_mask = keep_mask_cpu.to(Device::GPU);
 
     strategy.compact_splats(keep_mask);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);

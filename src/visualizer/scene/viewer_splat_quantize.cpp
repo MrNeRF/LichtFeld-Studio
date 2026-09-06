@@ -9,6 +9,7 @@
 #include "core/sh_value_quant.hpp"
 #include "core/shareable_allocation_limit.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 
 #include <algorithm>
@@ -29,6 +30,9 @@ namespace lfs::vis {
 
         [[nodiscard]] bool rendererReady(const lfs::core::Tensor& tensor) {
             if (!tensor.is_valid() || tensor.numel() == 0) {
+                return true;
+            }
+            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
                 return true;
             }
             return tensor.is_external_storage() &&

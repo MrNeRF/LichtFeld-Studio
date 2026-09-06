@@ -124,7 +124,7 @@ TEST_F(TensorSerializationTest, UInt8) {
 }
 
 TEST_F(TensorSerializationTest, CudaTensor) {
-    const auto t = Tensor::randn({32, 32}, Device::CUDA);
+    const auto t = Tensor::randn({32, 32}, Device::GPU);
     std::stringstream ss;
     ss << t;
     Tensor loaded;
@@ -134,7 +134,7 @@ TEST_F(TensorSerializationTest, CudaTensor) {
 }
 
 TEST_F(TensorSerializationTest, FileIO) {
-    const auto t = Tensor::randn({64, 64}, Device::CUDA);
+    const auto t = Tensor::randn({64, 64}, Device::GPU);
     save_tensor(t, temp_file("t.lft"));
     const auto loaded = load_tensor(temp_file("t.lft"));
     check_float(t, loaded, 1e-5f);
@@ -179,7 +179,7 @@ TEST_F(TensorSerializationTest, NaN) {
 }
 
 TEST_F(TensorSerializationTest, LargeTensor) {
-    const auto t = Tensor::randn({1000, 1000}, Device::CUDA);
+    const auto t = Tensor::randn({1000, 1000}, Device::GPU);
     std::stringstream ss;
     ss << t;
     Tensor loaded;
@@ -308,7 +308,7 @@ TEST_F(TensorSerializationTest, Slice) {
 }
 
 TEST_F(TensorSerializationTest, RoundTripCuda) {
-    const auto t = Tensor::randn({64, 64}, Device::CUDA);
+    const auto t = Tensor::randn({64, 64}, Device::GPU);
     std::stringstream ss;
     ss << t;
     Tensor loaded;

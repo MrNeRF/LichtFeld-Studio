@@ -10,7 +10,7 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -44,8 +44,8 @@ namespace lfs::core {
             w2c_acc(i, 3) = t_acc(i);
         }
 
-        // Return as [1, 4, 4] on CUDA
-        return w2c_cpu.to(Device::CUDA).unsqueeze(0).contiguous();
+        // Return as [1, 4, 4] on GPU
+        return w2c_cpu.to(Device::GPU).unsqueeze(0).contiguous();
     }
 
     static std::array<float, 9> camera_rotation_to_cpu_array(const Tensor& R) {
@@ -131,7 +131,7 @@ namespace lfs::core {
         auto R_T = R_part.transpose(0, 1);
         auto cam_pos = R_T.matmul(t_part.unsqueeze(1)).squeeze(1).neg();
 
-        _cam_position = cam_pos.to(Device::CUDA).contiguous();
+        _cam_position = cam_pos.to(Device::GPU).contiguous();
 
         _FoVx = focal2fov(_focal_x, _camera_width);
         _FoVy = focal2fov(_focal_y, _camera_height);
@@ -379,8 +379,8 @@ namespace lfs::core {
             _image_size_loaded = true;
         }
 
-        if (image.device() != Device::CUDA) {
-            image = image.to(Device::CUDA, _stream);
+        if (image.device() != Device::GPU) {
+            image = image.to(Device::GPU, _stream);
             if (_stream) {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "image upload sync");
             }
@@ -537,8 +537,8 @@ namespace lfs::core {
             // at the image's on-disk resolution; further resize_factor /
             // max_width handling is the trainer's responsibility upstream.
             mask = _in_memory_mask_raw;
-            if (mask.device() != Device::CUDA) {
-                mask = mask.to(Device::CUDA, _stream);
+            if (mask.device() != Device::GPU) {
+                mask = mask.to(Device::GPU, _stream);
                 if (_stream) {
                     LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
                 }
@@ -563,8 +563,8 @@ namespace lfs::core {
 
             mask = load_image_cached(params);
 
-            if (mask.device() != Device::CUDA) {
-                mask = mask.to(Device::CUDA, _stream);
+            if (mask.device() != Device::GPU) {
+                mask = mask.to(Device::GPU, _stream);
                 if (_stream) {
                     LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "mask upload sync");
                 }
@@ -628,7 +628,7 @@ namespace lfs::core {
                 gray,
                 TensorShape({static_cast<size_t>(native_h), static_cast<size_t>(native_w)}),
                 Device::CPU, DataType::Float32);
-            depth = cpu_depth.to(Device::CUDA, _stream);
+            depth = cpu_depth.to(Device::GPU, _stream);
             if (_stream) {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
             }
@@ -664,8 +664,8 @@ namespace lfs::core {
 
             depth = load_image_cached(params);
 
-            if (depth.device() != Device::CUDA) {
-                depth = depth.to(Device::CUDA, _stream);
+            if (depth.device() != Device::GPU) {
+                depth = depth.to(Device::GPU, _stream);
                 if (_stream) {
                     LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
                 }
@@ -722,7 +722,7 @@ namespace lfs::core {
                 rgb,
                 TensorShape({static_cast<size_t>(native_h), static_cast<size_t>(native_w), 3}),
                 Device::CPU, DataType::Float32);
-            normal = cpu_normal.to(Device::CUDA, _stream);
+            normal = cpu_normal.to(Device::GPU, _stream);
             if (_stream) {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
             }
@@ -735,8 +735,8 @@ namespace lfs::core {
 
             normal = load_image_cached(params);
 
-            if (normal.is_valid() && normal.device() != Device::CUDA) {
-                normal = normal.to(Device::CUDA, _stream);
+            if (normal.is_valid() && normal.device() != Device::GPU) {
+                normal = normal.to(Device::GPU, _stream);
                 if (_stream) {
                     LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
                 }
@@ -796,7 +796,7 @@ namespace lfs::core {
                     pixel_count,
                     world_to_camera);
             }
-            normal = normal_cpu.to(Device::CUDA, _stream);
+            normal = normal_cpu.to(Device::GPU, _stream);
             if (_stream) {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal upload sync");
             }
@@ -911,7 +911,7 @@ namespace lfs::core {
 
         _T = Tensor::from_vector(T_new, {3}, Device::CPU);
         _world_view_transform = world_to_view(_R, _T);
-        _cam_position = _cam_position + trans.to(Device::CUDA).contiguous();
+        _cam_position = _cam_position + trans.to(Device::GPU).contiguous();
         for (auto& observation : _sfm_observations) {
             observation.x += t_acc(0);
             observation.y += t_acc(1);

@@ -661,6 +661,9 @@ def on_pre_optimizer_step(callback: Callable) -> Callable:
 def on_training_end(callback: Callable) -> Callable:
     """Decorator for training end handler"""
 
+def tensor_backend_selftest(backend: str) -> None:
+    """Allocate, dispatch a small corpus, read back, shut the backend down, and reinitialize"""
+
 class Tensor:
     def __init__(self) -> None: ...
 
@@ -678,7 +681,11 @@ class Tensor:
 
     @property
     def device(self) -> str:
-        """Device: 'cpu' or 'cuda'"""
+        """Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend"""
+
+    @property
+    def backend(self) -> str:
+        """Backend: 'cpu' for CPU tensors, 'cuda' or 'vulkan' for GPU tensors"""
 
     @property
     def dtype(self) -> str:
@@ -700,6 +707,9 @@ class Tensor:
 
     def cuda(self) -> Tensor:
         """Move tensor to CUDA"""
+
+    def gpu(self) -> Tensor:
+        """Move tensor to GPU"""
 
     def contiguous(self) -> Tensor:
         """Make tensor contiguous"""

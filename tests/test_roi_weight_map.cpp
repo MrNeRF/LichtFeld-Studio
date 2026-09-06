@@ -75,12 +75,12 @@ namespace {
         const std::vector<float> camera_position_values{
             camera_position.x, camera_position.y, camera_position.z};
         const auto w2c = lfs::core::Tensor::from_vector(
-            world_to_camera_values, {size_t{4}, size_t{4}}, lfs::core::Device::CUDA);
+            world_to_camera_values, {size_t{4}, size_t{4}}, lfs::core::Device::GPU);
         const auto camera_pos = lfs::core::Tensor::from_vector(
-            camera_position_values, {size_t{3}}, lfs::core::Device::CUDA);
+            camera_position_values, {size_t{3}}, lfs::core::Device::GPU);
         auto output = lfs::core::Tensor::empty(
             {size_t{height}, size_t{width}},
-            lfs::core::Device::CUDA,
+            lfs::core::Device::GPU,
             lfs::core::DataType::Float32);
 
         lfs::training::kernels::launch_roi_weight_map(

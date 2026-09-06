@@ -1735,9 +1735,9 @@ namespace lfs::io {
             colors[i * 3 + 2] = points[i].color[2];
         }
 
-        Tensor means = Tensor::from_vector(positions, {N, 3}, Device::CUDA);
+        Tensor means = Tensor::from_vector(positions, {N, 3}, Device::GPU);
         Tensor colors_tensor = Tensor::from_blob(colors.data(), {N, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA)
+                                   .to(Device::GPU)
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));
@@ -2504,9 +2504,9 @@ namespace lfs::io {
             return {};
         }
 
-        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::CUDA);
+        Tensor means = Tensor::from_vector(data.positions, {data.point_count, 3}, Device::GPU);
         Tensor colors_tensor = Tensor::from_blob(data.colors.data(), {data.point_count, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA)
+                                   .to(Device::GPU)
                                    .contiguous();
 
         PointCloud cloud(std::move(means), std::move(colors_tensor));

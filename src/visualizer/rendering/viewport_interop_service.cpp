@@ -5,6 +5,7 @@
 #include "viewport_interop_service.hpp"
 
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "output_image_pool.hpp"
 #include "passes/vulkan_viewport_pass.hpp"
 #include "window/vulkan_context.hpp"
@@ -140,9 +141,12 @@ namespace lfs::vis {
             return;
         }
         upload_stream_init_attempted_ = true;
+        if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+            return;
+        }
         if (!upload_stream_.init()) {
-            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan GUI upload stream: {}",
-                      upload_stream_.lastError());
+            LOG_WARN("Could not create the non-blocking CUDA/Vulkan GUI upload stream: {}",
+                     upload_stream_.lastError());
         }
     }
 
@@ -174,7 +178,7 @@ namespace lfs::vis {
     bool ViewportInteropService::sourceOk(const Channel& channel) const {
         return channel.source_image &&
                channel.source_image->is_valid() &&
-               channel.source_image->device() == lfs::core::Device::CUDA &&
+               channel.source_image->device() == lfs::core::Device::GPU &&
                channel.source_size.x > 0 &&
                channel.source_size.y > 0;
     }

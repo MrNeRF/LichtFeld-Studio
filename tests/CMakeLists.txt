@@ -343,6 +343,12 @@ set(TEST_FILES
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
+    test_tensor_integer_and_reduce_policy.cpp
+    test_selection_attribute_ops.cpp
+    test_selection_screen_ops.cpp
+    test_export_band_pack.cpp
+    test_point_cloud_merge.cpp
+    test_display_tensors.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
     test_tensor_stress.cpp
@@ -520,6 +526,11 @@ set(TEST_FILES
     test_rml_static_style_boundaries.cpp
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
+    test_tensor_backend_selection.cpp
+    test_tensor_backend_selftest.cpp
+    test_tensor_seam_regressions.cpp
+    test_tensor_backend_facade.cpp
+    test_tensor_backend_facade_c.cpp
     test_modal_registry_regression.cpp
     test_tensor_nn_ops.cpp
     test_nn_ops.cpp
@@ -583,6 +594,25 @@ set(TEST_FILES
     test_error_envelope.cpp
     test_plugin_localization.cpp
 )
+if(LFS_TENSOR_VULKAN)
+    list(APPEND TEST_FILES
+        test_tensor_backend_validators.cpp
+        test_tensor_vulkan_runtime.cpp
+        test_tensor_vulkan_adoption.cpp
+        test_tensor_vulkan_pointwise.cpp
+        test_tensor_vulkan_reduce.cpp
+        test_tensor_vulkan_index.cpp
+        test_tensor_vulkan_matrix_nn.cpp
+        test_tensor_vulkan_random.cpp
+        test_tensor_vulkan_buffer.cpp
+        test_tensor_vulkan_cuda_bridge.cpp
+        test_tensor_backend_parity.cpp
+        test_viewer_vulkan_load.cpp
+        test_viewer_no_cuda.cpp
+        test_selection_mask_ops.cpp
+        test_sh_quant_tensor_program.cpp
+    )
+endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)
 list(APPEND TEST_FILES test_viewer_sh_zerocopy_triad.cpp)
 # Phase 7A: bounded-wait machine + SubmissionState + QW-6 (GPU-free).
@@ -1207,6 +1237,43 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     lfs_core
     CUDA::cudart
 )
+
+add_executable(tensor_backend_corpus
+    tensor_backend_corpus.cpp
+)
+set_target_properties(tensor_backend_corpus PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(tensor_backend_corpus PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(tensor_backend_corpus PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+
+add_executable(tensor_interface_freeze
+    test_tensor_interface_freeze.cpp
+)
+set_target_properties(tensor_interface_freeze PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(tensor_interface_freeze PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+target_link_libraries(tensor_interface_freeze PRIVATE
+    lfs_core
+    CUDA::cudart
+)
+add_test(NAME tensor_interface_freeze COMMAND tensor_interface_freeze)
 
 # Phase 6C-P3 negative nvcc TU fixtures (Ruling 1 / §1.11) live under
 # tests/cuda_fixtures/ and are intentionally NOT listed in any target SOURCES.

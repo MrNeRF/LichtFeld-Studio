@@ -16,7 +16,7 @@ TEST(TensorReserveInplaceCat, BasicReserveAndCat) {
     auto t1_data = std::vector<float>(10);
     for (int i = 0; i < 10; i++)
         t1_data[i] = static_cast<float>(i);
-    auto t1 = Tensor::from_vector(t1_data, {10, 1}, Device::CUDA);
+    auto t1 = Tensor::from_vector(t1_data, {10, 1}, Device::GPU);
 
     // Reserve capacity for 100 rows
     t1.reserve(100);
@@ -30,7 +30,7 @@ TEST(TensorReserveInplaceCat, BasicReserveAndCat) {
     auto t2_data = std::vector<float>(10);
     for (int i = 0; i < 10; i++)
         t2_data[i] = static_cast<float>(i + 10);
-    auto t2 = Tensor::from_vector(t2_data, {10, 1}, Device::CUDA);
+    auto t2 = Tensor::from_vector(t2_data, {10, 1}, Device::GPU);
 
     // Concatenate - should use in-place path
     auto result = Tensor::cat({t1, t2}, 0);
@@ -53,7 +53,7 @@ TEST(TensorReserveInplaceCat, IndexSelectThenCat) {
     std::vector<float> attr_data(100);
     for (int i = 0; i < 100; i++)
         attr_data[i] = static_cast<float>(i);
-    auto attributes = Tensor::from_vector(attr_data, {10, 10}, Device::CUDA);
+    auto attributes = Tensor::from_vector(attr_data, {10, 10}, Device::GPU);
     attributes.reserve(100); // Reserve for 100 rows
 
     EXPECT_EQ(attributes.capacity(), 100);
@@ -61,7 +61,7 @@ TEST(TensorReserveInplaceCat, IndexSelectThenCat) {
 
     // Simulate index_select (what happens in add_new_gs)
     std::vector<int> indices_data = {0, 2, 4};
-    auto indices = Tensor::from_vector(indices_data, TensorShape({3}), Device::CUDA);
+    auto indices = Tensor::from_vector(indices_data, TensorShape({3}), Device::GPU);
     auto selected = attributes.index_select(0, indices);
 
     // Selected tensor should NOT have capacity (it's a new tensor)
@@ -79,8 +79,8 @@ TEST(TensorReserveInplaceCat, IndexSelectThenCat) {
 
 TEST(TensorReserveInplaceCat, GradientPattern) {
     // Simulate the gradient reserve pattern
-    auto attrs = Tensor::zeros({10, 3}, Device::CUDA);
-    auto grads = Tensor::zeros({10, 3}, Device::CUDA);
+    auto attrs = Tensor::zeros({10, 3}, Device::GPU);
+    auto grads = Tensor::zeros({10, 3}, Device::GPU);
 
     // Reserve both
     attrs.reserve(100);
@@ -93,8 +93,8 @@ TEST(TensorReserveInplaceCat, GradientPattern) {
     EXPECT_EQ(grads.logical_size(), 10);
 
     // Create new data to add
-    auto new_attrs = Tensor::ones({5, 3}, Device::CUDA);
-    auto new_grads = Tensor::ones({5, 3}, Device::CUDA);
+    auto new_attrs = Tensor::ones({5, 3}, Device::GPU);
+    auto new_grads = Tensor::ones({5, 3}, Device::GPU);
 
     // Cat both
     auto attrs_result = Tensor::cat({attrs, new_attrs}, 0);
@@ -109,24 +109,24 @@ TEST(TensorReserveInplaceCat, DeviceConsistencyCheck) {
     // Test to expose device corruption bug
     // This test verifies that all tensors maintain correct device throughout cat operation
 
-    auto t1 = Tensor::zeros({10, 5}, Device::CUDA);
+    auto t1 = Tensor::zeros({10, 5}, Device::GPU);
     t1.reserve(100);
 
     // Verify t1 device BEFORE cat
-    EXPECT_EQ(t1.device(), Device::CUDA);
+    EXPECT_EQ(t1.device(), Device::GPU);
     std::cout << "t1 device before cat: " << static_cast<int>(t1.device()) << std::endl;
 
-    auto t2 = Tensor::ones({5, 5}, Device::CUDA);
+    auto t2 = Tensor::ones({5, 5}, Device::GPU);
 
     // Verify t2 device
-    EXPECT_EQ(t2.device(), Device::CUDA);
+    EXPECT_EQ(t2.device(), Device::GPU);
     std::cout << "t2 device: " << static_cast<int>(t2.device()) << std::endl;
 
     // This should use in-place cat
     auto result = Tensor::cat({t1, t2}, 0);
 
     // Verify result device
-    EXPECT_EQ(result.device(), Device::CUDA);
+    EXPECT_EQ(result.device(), Device::GPU);
     std::cout << "result device after cat: " << static_cast<int>(result.device()) << std::endl;
 
     // Verify shape
@@ -140,21 +140,21 @@ TEST(TensorReserveInplaceCat, DeviceConsistencyCheck) {
 
 TEST(TensorReserveInplaceCat, MultipleInplaceCats) {
     // Test multiple sequential in-place cats to see if device gets corrupted
-    auto base = Tensor::zeros({10, 3}, Device::CUDA);
+    auto base = Tensor::zeros({10, 3}, Device::GPU);
     base.reserve(200);
 
-    EXPECT_EQ(base.device(), Device::CUDA);
+    EXPECT_EQ(base.device(), Device::GPU);
     std::cout << "Initial base device: " << static_cast<int>(base.device()) << std::endl;
 
     // Do multiple cats in sequence
     for (int i = 0; i < 5; i++) {
-        auto addition = Tensor::ones({5, 3}, Device::CUDA);
-        EXPECT_EQ(addition.device(), Device::CUDA);
+        auto addition = Tensor::ones({5, 3}, Device::GPU);
+        EXPECT_EQ(addition.device(), Device::GPU);
         std::cout << "Iteration " << i << " - addition device: " << static_cast<int>(addition.device()) << std::endl;
 
         base = Tensor::cat({base, addition}, 0);
 
-        EXPECT_EQ(base.device(), Device::CUDA) << "Device mismatch at iteration " << i;
+        EXPECT_EQ(base.device(), Device::GPU) << "Device mismatch at iteration " << i;
         std::cout << "Iteration " << i << " - base device after cat: " << static_cast<int>(base.device()) << std::endl;
         std::cout << "Iteration " << i << " - base shape: " << base.shape()[0] << std::endl;
     }
@@ -169,7 +169,7 @@ TEST(TensorReserveInplaceCat, MultipleInplaceCats) {
 
 TEST(TensorReserveInplaceCat, AllocationFailurePreservesInstalledStorage) {
     auto tensor = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::GPU);
     void* const original_ptr = tensor.data_ptr();
     const size_t original_capacity = tensor.capacity();
     const size_t original_logical_size = tensor.logical_size();
@@ -196,7 +196,7 @@ TEST(TensorReserveInplaceCat, AllocationFailurePreservesInstalledStorage) {
 }
 
 TEST(TensorReserveInplaceCat, OverflowFailurePreservesInstalledStorage) {
-    auto tensor = Tensor::ones({1, 2}, Device::CUDA);
+    auto tensor = Tensor::ones({1, 2}, Device::GPU);
     void* const original_ptr = tensor.data_ptr();
     const size_t original_capacity = tensor.capacity();
     const size_t original_logical_size = tensor.logical_size();
@@ -213,11 +213,11 @@ TEST(TensorReserveInplaceCat, OverflowFailurePreservesInstalledStorage) {
 }
 
 TEST(TensorReserveInplaceCat, MultidimensionalAppendUsesReservedStorage) {
-    auto tensor = Tensor::zeros({2, 2, 3}, Device::CUDA);
+    auto tensor = Tensor::zeros({2, 2, 3}, Device::GPU);
     tensor.reserve(8);
     void* const reserved_ptr = tensor.data_ptr();
 
-    const auto addition = Tensor::ones({3, 2, 3}, Device::CUDA);
+    const auto addition = Tensor::ones({3, 2, 3}, Device::GPU);
     tensor = tensor.cat({addition}, 0);
 
     EXPECT_EQ(tensor.data_ptr(), reserved_ptr);
@@ -229,9 +229,9 @@ TEST(TensorReserveInplaceCat, MultidimensionalAppendUsesReservedStorage) {
 }
 
 TEST(TensorReserveInplaceCat, GrowthBeyondCapacityPreservesValues) {
-    auto tensor = Tensor::full({2, 3}, 5.0f, Device::CUDA);
+    auto tensor = Tensor::full({2, 3}, 5.0f, Device::GPU);
     tensor.reserve(4);
-    const auto addition = Tensor::full({5, 3}, 7.0f, Device::CUDA);
+    const auto addition = Tensor::full({5, 3}, 7.0f, Device::GPU);
 
     tensor = tensor.cat({addition}, 0);
 
@@ -253,10 +253,10 @@ TEST(TensorReserveInplaceCat, AggregateOwnedSliceCopyPreservesOutsideRegion) {
         Tensor first;
         Tensor second;
     } tensors{
-        .first = Tensor::full({6, 2}, 5.0f, Device::CUDA),
-        .second = Tensor::zeros({6, 2}, Device::CUDA)};
+        .first = Tensor::full({6, 2}, 5.0f, Device::GPU),
+        .second = Tensor::zeros({6, 2}, Device::GPU)};
 
-    const auto replacement = Tensor::full({2, 2}, 7.0f, Device::CUDA);
+    const auto replacement = Tensor::full({2, 2}, 7.0f, Device::GPU);
     tensors.first.slice(0, 2, 4).copy_(replacement);
 
     EXPECT_EQ(tensors.first.cpu().to_vector(),

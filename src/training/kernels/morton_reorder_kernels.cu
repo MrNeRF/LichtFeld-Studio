@@ -285,7 +285,7 @@ namespace lfs::training::kernels {
         using lfs::core::Tensor;
 
         if (!means.is_valid() || means.ndim() != 2 || means.size(1) != 3 ||
-            means.dtype() != DataType::Float32 || means.device() != Device::CUDA) {
+            means.dtype() != DataType::Float32 || means.device() != Device::GPU) {
             LOG_ERROR("morton permutation: means must be CUDA Float32 [N, 3]");
             return {};
         }
@@ -324,8 +324,8 @@ namespace lfs::training::kernels {
         const float ymul = (ylen == 0.0f) ? 0.0f : 1024.0f / ylen;
         const float zmul = (zlen == 0.0f) ? 0.0f : 1024.0f / zlen;
 
-        auto codes = Tensor::empty({static_cast<std::size_t>(n)}, Device::CUDA, DataType::Int32);
-        auto indices = Tensor::empty({static_cast<std::size_t>(n)}, Device::CUDA, DataType::Int64);
+        auto codes = Tensor::empty({static_cast<std::size_t>(n)}, Device::GPU, DataType::Int32);
+        auto indices = Tensor::empty({static_cast<std::size_t>(n)}, Device::GPU, DataType::Int64);
         codes.set_stream(stream);
         indices.set_stream(stream);
 

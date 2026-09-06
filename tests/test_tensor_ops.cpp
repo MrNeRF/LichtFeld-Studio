@@ -105,7 +105,7 @@ TEST_F(TensorOpsTest, ScalarAdd) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({3, 4});
 
@@ -126,7 +126,7 @@ TEST_F(TensorOpsTest, ScalarSubtract) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 5});
 
@@ -147,7 +147,7 @@ TEST_F(TensorOpsTest, ScalarMultiply) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {4, 3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {4, 3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({4, 3});
 
@@ -168,7 +168,7 @@ TEST_F(TensorOpsTest, ScalarDivide) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {3, 3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3, 3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({3, 3});
 
@@ -187,7 +187,7 @@ TEST_F(TensorOpsTest, ScalarDivide) {
 TEST_F(TensorOpsTest, ScalarPower) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 2}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 2});
 
@@ -202,7 +202,7 @@ TEST_F(TensorOpsTest, ScalarPower) {
 TEST_F(TensorOpsTest, ScalarModulo) {
     std::vector<float> data = {10.5f, 7.3f, 15.8f, 22.1f};
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 2}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 2});
 
@@ -221,7 +221,7 @@ TEST_F(TensorOpsTest, Negation) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 4});
 
@@ -238,7 +238,7 @@ TEST_F(TensorOpsTest, Negation) {
 TEST_F(TensorOpsTest, Abs) {
     std::vector<float> data = {-5.0f, 3.0f, -2.0f, 7.0f, -1.0f, 4.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {6}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.abs();
@@ -250,7 +250,7 @@ TEST_F(TensorOpsTest, Abs) {
 TEST_F(TensorOpsTest, Sqrt) {
     std::vector<float> data = {1.0f, 4.0f, 9.0f, 16.0f, 25.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.sqrt();
@@ -262,7 +262,7 @@ TEST_F(TensorOpsTest, Sqrt) {
 TEST_F(TensorOpsTest, Square) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.square();
@@ -274,7 +274,7 @@ TEST_F(TensorOpsTest, Square) {
 TEST_F(TensorOpsTest, Exp) {
     std::vector<float> data = {0.0f, 1.0f, 2.0f, -1.0f, -2.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.exp();
@@ -286,7 +286,7 @@ TEST_F(TensorOpsTest, Exp) {
 TEST_F(TensorOpsTest, Log) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 10.0f, 100.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.log();
@@ -300,7 +300,7 @@ TEST_F(TensorOpsTest, Sigmoid) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {10}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {10}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.sigmoid();
@@ -312,7 +312,7 @@ TEST_F(TensorOpsTest, Sigmoid) {
 TEST_F(TensorOpsTest, Relu) {
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 1.0f, 3.0f, 10.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {6}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.relu();
@@ -326,7 +326,7 @@ TEST_F(TensorOpsTest, Tanh) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {8}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {8}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.tanh();
@@ -338,7 +338,7 @@ TEST_F(TensorOpsTest, Tanh) {
 TEST_F(TensorOpsTest, Sin) {
     std::vector<float> data = {0.0f, M_PI / 6, M_PI / 4, M_PI / 3, M_PI / 2};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.sin();
@@ -350,7 +350,7 @@ TEST_F(TensorOpsTest, Sin) {
 TEST_F(TensorOpsTest, Cos) {
     std::vector<float> data = {0.0f, M_PI / 6, M_PI / 4, M_PI / 3, M_PI / 2};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.cos();
@@ -362,7 +362,7 @@ TEST_F(TensorOpsTest, Cos) {
 TEST_F(TensorOpsTest, Tan) {
     std::vector<float> data = {0.0f, M_PI / 6, M_PI / 4, M_PI / 3};
 
-    const auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    const auto custom_tensor = Tensor::from_vector(data, {4}, Device::GPU);
     const auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     compare_tensors(custom_tensor.tan(), torch::tan(torch_tensor), 1e-5f, 1e-6f, "Tan");
@@ -371,7 +371,7 @@ TEST_F(TensorOpsTest, Tan) {
 TEST_F(TensorOpsTest, Floor) {
     std::vector<float> data = {1.2f, 2.7f, -1.3f, -2.8f, 0.5f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.floor();
@@ -383,7 +383,7 @@ TEST_F(TensorOpsTest, Floor) {
 TEST_F(TensorOpsTest, Ceil) {
     std::vector<float> data = {1.2f, 2.7f, -1.3f, -2.8f, 0.5f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.ceil();
@@ -397,7 +397,7 @@ TEST_F(TensorOpsTest, Round) {
     // PyTorch uses "round half to even", while many implementations use "round half away from zero"
     std::vector<float> data = {1.2f, 1.7f, 2.3f, 2.8f, -1.3f, -1.7f, -2.2f, -2.9f};
 
-    auto custom_tensor = Tensor::from_vector(data, {8}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {8}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.round();
@@ -409,7 +409,7 @@ TEST_F(TensorOpsTest, Round) {
 TEST_F(TensorOpsTest, Sign) {
     std::vector<float> data = {-5.0f, -1.0f, 0.0f, 1.0f, 5.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_tensor.sign();
@@ -427,8 +427,8 @@ TEST_F(TensorOpsTest, ElementWiseAdd) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {3, 4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {3, 4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 4});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 4});
@@ -450,8 +450,8 @@ TEST_F(TensorOpsTest, ElementWiseSubtract) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {2, 5}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {2, 5}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {2, 5}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {2, 5}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 5});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 5});
@@ -473,8 +473,8 @@ TEST_F(TensorOpsTest, ElementWiseMultiply) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {4, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4, 3}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4, 3}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({4, 3});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({4, 3});
@@ -496,8 +496,8 @@ TEST_F(TensorOpsTest, ElementWiseDivide) {
     for (auto& val : data_b)
         val = dist(gen) + 2.0f; // Avoid division by zero
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {3, 3}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {3, 3}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 3});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 3});
@@ -516,8 +516,8 @@ TEST_F(TensorOpsTest, ElementWisePower) {
     std::vector<float> data_base = {2.0f, 3.0f, 4.0f, 5.0f};
     std::vector<float> data_exp = {2.0f, 3.0f, 2.0f, 1.0f};
 
-    auto custom_base = Tensor::from_vector(data_base, {2, 2}, Device::CUDA);
-    auto custom_exp = Tensor::from_vector(data_exp, {2, 2}, Device::CUDA);
+    auto custom_base = Tensor::from_vector(data_base, {2, 2}, Device::GPU);
+    auto custom_exp = Tensor::from_vector(data_exp, {2, 2}, Device::GPU);
 
     auto torch_base = torch::tensor(data_base, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 2});
     auto torch_exp = torch::tensor(data_exp, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 2});
@@ -532,8 +532,8 @@ TEST_F(TensorOpsTest, Maximum) {
     std::vector<float> data_a = {1.0f, 5.0f, 3.0f, 8.0f};
     std::vector<float> data_b = {2.0f, 4.0f, 6.0f, 7.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -548,8 +548,8 @@ TEST_F(TensorOpsTest, Minimum) {
     std::vector<float> data_a = {1.0f, 5.0f, 3.0f, 8.0f};
     std::vector<float> data_b = {2.0f, 4.0f, 6.0f, 7.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -567,7 +567,7 @@ TEST_F(TensorOpsTest, InPlaceScalarAdd) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {3, 4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3, 4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({3, 4});
 
@@ -584,7 +584,7 @@ TEST_F(TensorOpsTest, InPlaceScalarMultiply) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({2, 3});
 
@@ -603,8 +603,8 @@ TEST_F(TensorOpsTest, InPlaceElementWiseAdd) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 3}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {3, 3}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 3}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {3, 3}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 3});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 3});
@@ -622,8 +622,8 @@ TEST_F(TensorOpsTest, InPlaceElementWiseSubtract) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {2, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {2, 4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {2, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {2, 4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 4});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 4});
@@ -641,8 +641,8 @@ TEST_F(TensorOpsTest, InPlaceElementWiseMultiply) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {3, 2}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {3, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {3, 2}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {3, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 2});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({3, 2});
@@ -660,8 +660,8 @@ TEST_F(TensorOpsTest, InPlaceElementWiseDivide) {
     for (auto& val : data_b)
         val = dist(gen) + 2.0f; // Avoid division by zero
 
-    auto custom_a = Tensor::from_vector(data_a, {2, 2}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {2, 2}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {2, 2}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {2, 2}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 2});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({2, 2});
@@ -678,8 +678,8 @@ TEST_F(TensorOpsTest, Equal) {
     std::vector<float> data_a = {1.0f, 2.0f, 3.0f, 4.0f};
     std::vector<float> data_b = {1.0f, 3.0f, 3.0f, 5.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -698,8 +698,8 @@ TEST_F(TensorOpsTest, NotEqual) {
     std::vector<float> data_a = {1.0f, 2.0f, 3.0f, 4.0f};
     std::vector<float> data_b = {1.0f, 3.0f, 3.0f, 5.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -718,8 +718,8 @@ TEST_F(TensorOpsTest, LessThan) {
     std::vector<float> data_a = {1.0f, 2.0f, 3.0f, 4.0f};
     std::vector<float> data_b = {2.0f, 2.0f, 2.0f, 3.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -738,8 +738,8 @@ TEST_F(TensorOpsTest, LessEqual) {
     std::vector<float> data_a = {1.0f, 2.0f, 3.0f, 4.0f};
     std::vector<float> data_b = {2.0f, 2.0f, 2.0f, 3.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -758,8 +758,8 @@ TEST_F(TensorOpsTest, GreaterThan) {
     std::vector<float> data_a = {1.0f, 2.0f, 3.0f, 4.0f};
     std::vector<float> data_b = {2.0f, 2.0f, 2.0f, 3.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -778,8 +778,8 @@ TEST_F(TensorOpsTest, GreaterEqual) {
     std::vector<float> data_a = {1.0f, 2.0f, 3.0f, 4.0f};
     std::vector<float> data_b = {2.0f, 2.0f, 2.0f, 3.0f};
 
-    auto custom_a = Tensor::from_vector(data_a, {4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA));
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA));
@@ -797,7 +797,7 @@ TEST_F(TensorOpsTest, GreaterEqual) {
 TEST_F(TensorOpsTest, ComparisonWithScalar) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float threshold = 3.0f;
@@ -818,7 +818,7 @@ TEST_F(TensorOpsTest, ComparisonWithScalar) {
 TEST_F(TensorOpsTest, Clamp) {
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 3.0f, 8.0f, 12.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {6}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float min_val = -1.0f;
@@ -833,7 +833,7 @@ TEST_F(TensorOpsTest, Clamp) {
 TEST_F(TensorOpsTest, ClampMin) {
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 3.0f, 8.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float min_val = 0.0f;
@@ -847,7 +847,7 @@ TEST_F(TensorOpsTest, ClampMin) {
 TEST_F(TensorOpsTest, ClampMax) {
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 3.0f, 8.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float max_val = 5.0f;
@@ -861,7 +861,7 @@ TEST_F(TensorOpsTest, ClampMax) {
 TEST_F(TensorOpsTest, InPlaceClamp) {
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 3.0f, 8.0f, 12.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {6}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {6}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     float min_val = -1.0f;
@@ -880,7 +880,7 @@ TEST_F(TensorOpsTest, ChainedOperations) {
     for (auto& val : data)
         val = dist(gen);
 
-    auto custom_tensor = Tensor::from_vector(data, {3, 3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3, 3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA))
                             .reshape({3, 3});
 
@@ -898,8 +898,8 @@ TEST_F(TensorOpsTest, ComplexExpression) {
     for (auto& val : data_b)
         val = dist(gen);
 
-    auto custom_a = Tensor::from_vector(data_a, {4, 4}, Device::CUDA);
-    auto custom_b = Tensor::from_vector(data_b, {4, 4}, Device::CUDA);
+    auto custom_a = Tensor::from_vector(data_a, {4, 4}, Device::GPU);
+    auto custom_b = Tensor::from_vector(data_b, {4, 4}, Device::GPU);
 
     auto torch_a = torch::tensor(data_a, torch::TensorOptions().device(torch::kCUDA)).reshape({4, 4});
     auto torch_b = torch::tensor(data_b, torch::TensorOptions().device(torch::kCUDA)).reshape({4, 4});
@@ -916,7 +916,7 @@ TEST_F(TensorOpsTest, MathematicalIdentity) {
     for (auto& val : data)
         val = std::abs(dist(gen));
 
-    auto custom_tensor = Tensor::from_vector(data, {10}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {10}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     // Test: log(exp(x)) ≈ x
@@ -929,7 +929,7 @@ TEST_F(TensorOpsTest, MathematicalIdentity) {
 // ============= Edge Cases =============
 
 TEST_F(TensorOpsTest, ZeroTensor) {
-    auto custom_zero = Tensor::zeros({4, 4}, Device::CUDA);
+    auto custom_zero = Tensor::zeros({4, 4}, Device::GPU);
     auto torch_zero = torch::zeros({4, 4}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_zero + 5.0f;
@@ -939,7 +939,7 @@ TEST_F(TensorOpsTest, ZeroTensor) {
 }
 
 TEST_F(TensorOpsTest, OneTensor) {
-    auto custom_one = Tensor::ones({3, 3}, Device::CUDA);
+    auto custom_one = Tensor::ones({3, 3}, Device::GPU);
     auto torch_one = torch::ones({3, 3}, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_result = custom_one * 10.0f - 5.0f;
@@ -951,7 +951,7 @@ TEST_F(TensorOpsTest, OneTensor) {
 TEST_F(TensorOpsTest, NegativeValues) {
     std::vector<float> data = {-1.0f, -2.0f, -3.0f, -4.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {4}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_abs = custom_tensor.abs();
@@ -968,7 +968,7 @@ TEST_F(TensorOpsTest, NegativeValues) {
 TEST_F(TensorOpsTest, MixedSignValues) {
     std::vector<float> data = {-3.0f, -1.0f, 0.0f, 1.0f, 3.0f};
 
-    auto custom_tensor = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {5}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     // Test operations on mixed sign values
@@ -986,7 +986,7 @@ TEST_F(TensorOpsTest, MixedSignValues) {
 TEST_F(TensorOpsTest, LargeValues) {
     std::vector<float> data = {1e6f, 1e7f, 1e8f};
 
-    auto custom_tensor = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_div = custom_tensor / 1e6f;
@@ -998,7 +998,7 @@ TEST_F(TensorOpsTest, LargeValues) {
 TEST_F(TensorOpsTest, SmallValues) {
     std::vector<float> data = {1e-6f, 1e-7f, 1e-8f};
 
-    auto custom_tensor = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto custom_tensor = Tensor::from_vector(data, {3}, Device::GPU);
     auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
 
     auto custom_mul = custom_tensor * 1e6f;
@@ -1023,7 +1023,7 @@ TEST_F(TensorOpsTest, CPUOperations) {
 
 TEST_F(TensorOpsTest, NormalizeProducesZeroMeanAndUnitDeviation) {
     const auto tensor = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, {5}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, {5}, Device::GPU);
     const auto normalized = tensor.normalize();
 
     EXPECT_NEAR(normalized.mean_scalar(), 0.0f, 1e-5f);
@@ -1032,7 +1032,7 @@ TEST_F(TensorOpsTest, NormalizeProducesZeroMeanAndUnitDeviation) {
 
 TEST_F(TensorOpsTest, Int32ScalarEqualityProducesExactBoolMask) {
     const auto labels = Tensor::from_vector(
-        std::vector<int>{0, 1, 2, 1, 0, 2}, {6}, Device::CUDA);
+        std::vector<int>{0, 1, 2, 1, 0, 2}, {6}, Device::GPU);
 
     const auto mask = labels.eq(1);
 

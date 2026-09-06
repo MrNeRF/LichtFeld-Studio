@@ -7,6 +7,7 @@
 #include "config.h"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/rmlui_vk_backend.hpp"
 #include "rendering/cuda_vulkan_interop.hpp"
@@ -109,7 +110,7 @@ namespace lfs::vis::gui {
             lfs::core::Tensor formatted = (layout == lfs::rendering::ImageLayout::HWC)
                                               ? image
                                               : image.permute({1, 2, 0}).contiguous();
-            if (formatted.device() == lfs::core::Device::CUDA) {
+            if (formatted.device() == lfs::core::Device::GPU) {
                 formatted = formatted.cpu();
             }
             if (formatted.dtype() != lfs::core::DataType::UInt8) {
@@ -135,14 +136,15 @@ namespace lfs::vis::gui {
 
     void setVulkanUiTextureContext(VulkanContext* const context) {
         if (context == nullptr) {
-            if (!g_texture_upload_stream.synchronize()) {
+            if (g_texture_upload_stream.valid() && !g_texture_upload_stream.synchronize()) {
                 LOG_WARN("CUDA/Vulkan UI texture stream synchronization failed during shutdown: {}",
                          g_texture_upload_stream.lastError());
             }
             g_texture_upload_stream.reset();
-        } else if (!g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
-            LOG_ERROR("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
-                      g_texture_upload_stream.lastError());
+        } else if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) &&
+                   !g_texture_upload_stream.valid() && !g_texture_upload_stream.init()) {
+            LOG_WARN("Could not create the non-blocking CUDA/Vulkan UI texture stream: {}",
+                     g_texture_upload_stream.lastError());
         }
         g_texture_context = context;
     }
@@ -813,7 +815,7 @@ namespace lfs::vis::gui {
                                                 const int expected_width,
                                                 const int expected_height,
                                                 const bool flip_y) {
-            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::CUDA) {
+            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::GPU) {
                 return false;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
@@ -1248,7 +1250,7 @@ namespace lfs::vis::gui {
         if (!impl_) {
             impl_ = new Impl();
         }
-        if (image.is_valid() && image.device() == lfs::core::Device::CUDA &&
+        if (image.is_valid() && image.device() == lfs::core::Device::GPU &&
             impl_->mode != Impl::Mode::Cpu) {
             if (impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y))
                 return true;

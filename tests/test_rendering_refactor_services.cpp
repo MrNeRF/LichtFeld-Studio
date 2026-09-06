@@ -2257,14 +2257,14 @@ namespace lfs::vis {
                               std::vector<float>(512, 1.0f),
                               {size_t{1}, size_t{1}, size_t{512}},
                               lfs::core::Device::CPU)
-                              .cuda();
+                              .gpu();
         auto right_values = std::vector<float>(512, 2.0f);
         right_values[256] = 42.0f;
         auto right_depth = lfs::core::Tensor::from_vector(
                                right_values,
                                {size_t{1}, size_t{1}, size_t{512}},
                                lfs::core::Device::CPU)
-                               .cuda();
+                               .gpu();
 
         FrameResources resources;
         resources.cached_metadata = CachedRenderMetadata{
@@ -2751,12 +2751,12 @@ namespace lfs::vis {
 
             const std::vector<float> means_data{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
             const std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
-            auto means = lfs::core::Tensor::from_vector(means_data, {size_t{2}, size_t{3}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
-            auto sh0 = lfs::core::Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            auto shN = lfs::core::Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            auto scaling = lfs::core::Tensor::zeros({size_t{2}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-            auto rotation = lfs::core::Tensor::from_vector(rotation_data, {size_t{2}, size_t{4}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
-            auto opacity = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto means = lfs::core::Tensor::from_vector(means_data, {size_t{2}, size_t{3}}, lfs::core::Device::GPU).to(lfs::core::DataType::Float32);
+            auto sh0 = lfs::core::Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            auto shN = lfs::core::Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            auto scaling = lfs::core::Tensor::zeros({size_t{2}, size_t{3}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+            auto rotation = lfs::core::Tensor::from_vector(rotation_data, {size_t{2}, size_t{4}}, lfs::core::Device::GPU).to(lfs::core::DataType::Float32);
+            auto opacity = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
             viewer_->getSceneManager()->getScene().addSplat(
                 "depth_window_test",
                 std::make_unique<lfs::core::SplatData>(1, std::move(means), std::move(sh0), std::move(shN), std::move(scaling), std::move(rotation), std::move(opacity), 1.0f));

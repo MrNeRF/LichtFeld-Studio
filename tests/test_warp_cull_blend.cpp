@@ -24,8 +24,8 @@ namespace {
     Camera make_camera(int w, int h) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         return Camera(R, T, /*fx=*/120.f, /*fy=*/120.f, /*cx=*/w * 0.5f, /*cy=*/h * 0.5f,
                       Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
                       std::filesystem::path{}, w, h, 0);
@@ -33,7 +33,7 @@ namespace {
 
     // Small synthetic cloud: compact Gaussians so some tiles see only a subset.
     std::unique_ptr<SplatData> make_synthetic_splat(int n) {
-        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
+        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::GPU);
         if (n > 0) {
             auto cpu = means.to(Device::CPU);
             float* p = cpu.ptr<float>();
@@ -43,25 +43,25 @@ namespace {
                 p[i * 3 + 1] = ((i / 8) % 8 - 3.5f) * 0.35f;
                 p[i * 3 + 2] = 0.0f;
             }
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
-        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.55f, Device::CUDA);
-        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::CUDA);
+        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.55f, Device::GPU);
+        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::GPU);
         // Modest scales → small on-screen footprints (partial tile coverage).
-        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -1.8f, Device::CUDA);
+        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -1.8f, Device::GPU);
         std::vector<float> rot(static_cast<size_t>(n) * 4, 0.f);
         for (int i = 0; i < n; ++i) {
             rot[static_cast<size_t>(i) * 4] = 1.f;
         }
         auto rotation = Tensor::from_blob(rot.data(), {static_cast<size_t>(n), 4}, Device::CPU, DataType::Float32)
-                            .to(Device::CUDA);
-        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.5f, Device::CUDA);
+                            .to(Device::GPU);
+        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.5f, Device::GPU);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
     // Denser / larger footprints — closer to a real-scene stress case.
     std::unique_ptr<SplatData> make_dense_splat(int n) {
-        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
+        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::GPU);
         if (n > 0) {
             auto cpu = means.to(Device::CPU);
             float* p = cpu.ptr<float>();
@@ -72,19 +72,19 @@ namespace {
                 p[i * 3 + 1] = (v - 0.5f) * 2.5f;
                 p[i * 3 + 2] = ((i / 256) % 3) * 0.15f;
             }
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
-        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.4f, Device::CUDA);
-        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::CUDA);
-        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -1.2f, Device::CUDA);
+        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.4f, Device::GPU);
+        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::GPU);
+        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -1.2f, Device::GPU);
         std::vector<float> rot(static_cast<size_t>(n) * 4, 0.f);
         for (int i = 0; i < n; ++i) {
             rot[static_cast<size_t>(i) * 4] = 1.f;
             rot[static_cast<size_t>(i) * 4 + 1] = 0.1f * ((i % 5) - 2);
         }
         auto rotation = Tensor::from_blob(rot.data(), {static_cast<size_t>(n), 4}, Device::CPU, DataType::Float32)
-                            .to(Device::CUDA);
-        auto opacity = Tensor::full({static_cast<size_t>(n)}, 1.8f, Device::CUDA);
+                            .to(Device::GPU);
+        auto opacity = Tensor::full({static_cast<size_t>(n)}, 1.8f, Device::GPU);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -141,7 +141,7 @@ namespace {
 class WarpCullBlendTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        bg_ = Tensor::zeros({3}, Device::CUDA);
+        bg_ = Tensor::zeros({3}, Device::GPU);
         camera_ = std::make_unique<Camera>(make_camera(64, 64));
         synthetic_ = make_synthetic_splat(48);
         dense_ = make_dense_splat(512);

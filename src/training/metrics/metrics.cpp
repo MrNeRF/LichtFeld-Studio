@@ -134,7 +134,7 @@ namespace lfs::training {
             image_data.reset();
 
             cam.set_image_dimensions(width, height);
-            return chw.to(lfs::core::Device::CUDA);
+            return chw.to(lfs::core::Device::GPU);
         }
     } // namespace
 
@@ -562,15 +562,15 @@ namespace lfs::training {
         auto cpu_tensor = lfs::core::Tensor::from_blob(
             img_data, lfs::core::TensorShape({H, W, 4}),
             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
         lfs::core::free_image(img_data);
 
         auto rgb = lfs::core::Tensor::zeros(
             lfs::core::TensorShape({3, H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         auto mask = lfs::core::Tensor::zeros(
             lfs::core::TensorShape({H, W}),
-            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
         lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
             gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(),
@@ -590,7 +590,7 @@ namespace lfs::training {
             auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
             rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
             auto rgb_uint8 = lfs::core::Tensor::empty(
-                rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                rgb_float.shape(), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             lfs::io::cuda::launch_float32_chw_to_uint8_chw(
                 rgb_float.ptr<float>(),
                 rgb_uint8.ptr<uint8_t>(),

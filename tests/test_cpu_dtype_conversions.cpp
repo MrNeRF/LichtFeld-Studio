@@ -121,7 +121,7 @@ TEST(CPUDtypeConversionTest, EveryDtypeRoundTripsThroughCuda) {
     for (const auto dtype : dtypes) {
         SCOPED_TRACE(dtype_name(dtype));
         const auto source = make_source(dtype);
-        const auto roundtrip = source.cuda().cpu();
+        const auto roundtrip = source.gpu().cpu();
         EXPECT_EQ(roundtrip.dtype(), dtype);
         EXPECT_EQ(roundtrip.shape(), source.shape());
         EXPECT_EQ(values_as_float(roundtrip), values_as_float(source));
@@ -138,10 +138,10 @@ TEST(CPUDtypeConversionTest, EveryDtypePairHasExactArithmeticAndPromotion) {
             SCOPED_TRACE(std::string(dtype_name(lhs_dtype)) + " with " +
                          std::string(dtype_name(rhs_dtype)));
             const auto lhs = Tensor::from_vector(
-                                 std::vector<float>{0.0f, 2.0f}, {2}, Device::CUDA)
+                                 std::vector<float>{0.0f, 2.0f}, {2}, Device::GPU)
                                  .to(lhs_dtype);
             const auto rhs = Tensor::from_vector(
-                                 std::vector<float>{0.0f, 1.0f}, {2}, Device::CUDA)
+                                 std::vector<float>{0.0f, 1.0f}, {2}, Device::GPU)
                                  .to(rhs_dtype);
 
             if (lhs_dtype == DataType::Bool && rhs_dtype == DataType::Bool) {
@@ -175,9 +175,9 @@ TEST(CPUDtypeConversionTest, EveryDtypePairHasExactArithmeticAndPromotion) {
 
 TEST(CPUDtypeConversionTest, MixedDtypeBroadcastPromotesAndExpands) {
     const auto mask = Tensor::from_vector(
-        std::vector<bool>{true}, {1}, Device::CUDA);
+        std::vector<bool>{true}, {1}, Device::GPU);
     const auto values = Tensor::from_vector(
-                            std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA)
+                            std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU)
                             .to(DataType::Float16);
 
     const auto result = mask * values;
@@ -189,7 +189,7 @@ TEST(CPUDtypeConversionTest, MixedDtypeBroadcastPromotesAndExpands) {
 
 TEST(CPUDtypeConversionTest, Float16ToBoolHasExactValues) {
     const auto values = Tensor::from_vector(
-                            std::vector<float>{0.0f, 1.0f, -2.0f}, {3}, Device::CUDA)
+                            std::vector<float>{0.0f, 1.0f, -2.0f}, {3}, Device::GPU)
                             .to(DataType::Float16);
 
     const auto result = values.to(DataType::Bool);
@@ -213,9 +213,9 @@ TEST(CPUDtypeConversionTest, ProductionMuralPointCloudWorkflow) {
                                 color_data.data(), {num_points, 3}, Device::CPU, DataType::UInt8)
                                 .clone();
 
-    const auto means_gpu = means_cpu.cuda();
+    const auto means_gpu = means_cpu.gpu();
     const auto colors_cpu_float = colors_cpu.to(DataType::Float32);
-    const auto colors_gpu_float = colors_cpu.cuda().to(DataType::Float32);
+    const auto colors_gpu_float = colors_cpu.gpu().to(DataType::Float32);
 
     EXPECT_EQ(means_gpu.shape(), TensorShape({num_points, 3}));
     EXPECT_TRUE(colors_cpu_float.all_close(colors_gpu_float.cpu()));

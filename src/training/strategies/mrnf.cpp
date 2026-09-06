@@ -58,7 +58,7 @@ namespace lfs::training {
 
         [[nodiscard]] bool is_cuda_image(const lfs::core::Tensor& tensor) {
             return tensor.is_valid() &&
-                   tensor.device() == lfs::core::Device::CUDA &&
+                   tensor.device() == lfs::core::Device::GPU &&
                    (tensor.dtype() == lfs::core::DataType::Float32 ||
                     tensor.dtype() == lfs::core::DataType::UInt8);
         }
@@ -81,12 +81,12 @@ namespace lfs::training {
 
         void ensure_cuda_float(lfs::core::Tensor& tensor, const lfs::core::TensorShape& shape) {
             if (tensor.is_valid() &&
-                tensor.device() == lfs::core::Device::CUDA &&
+                tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.shape() == shape) {
                 return;
             }
-            tensor = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            tensor = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         }
 
         void copy_into_cached(lfs::core::Tensor& dst, const lfs::core::Tensor& src) {
@@ -158,14 +158,14 @@ namespace lfs::training {
 
         [[nodiscard]] std::size_t tensor_vram_required_bytes(
             const lfs::core::Tensor& tensor) noexcept {
-            return tensor.is_valid() && tensor.device() == lfs::core::Device::CUDA
+            return tensor.is_valid() && tensor.device() == lfs::core::Device::GPU
                        ? tensor.bytes()
                        : 0;
         }
 
         [[nodiscard]] std::size_t tensor_vram_allocated_bytes(
             const lfs::core::Tensor& tensor) noexcept {
-            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::CUDA) {
+            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::GPU) {
                 return 0;
             }
             if (tensor.capacity() == 0 || tensor.ndim() == 0) {
@@ -217,7 +217,7 @@ namespace lfs::training {
 
             const auto kind = tensor.external_storage_kind();
             const bool direct_cuda_storage =
-                tensor.device() == lfs::core::Device::CUDA &&
+                tensor.device() == lfs::core::Device::GPU &&
                 (tensor.is_external_storage() || !kind.empty());
             if (!direct_cuda_storage) {
                 tensor.reserve(desired_capacity);
@@ -550,7 +550,7 @@ namespace lfs::training {
         void normalize_by_positive_median_inplace(
             lfs::core::Tensor& tensor,
             PositiveMedianScratch* scratch = nullptr) {
-            if (tensor.device() == lfs::core::Device::CUDA &&
+            if (tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
                 if (scratch) {
@@ -972,7 +972,7 @@ namespace lfs::training {
         if (!is_cuda_image(render_output.image) ||
             !is_cuda_image(render_output.target_image) ||
             !render_output.alpha.is_valid() ||
-            render_output.alpha.device() != Device::CUDA ||
+            render_output.alpha.device() != Device::GPU ||
             !same_spatial(render_output.image, render_output.target_image)) {
             return;
         }
@@ -980,7 +980,7 @@ namespace lfs::training {
         copy_into_cached(_cached_seed_image, render_output.image);
         copy_into_cached(_cached_seed_target, render_output.target_image);
         copy_into_cached(_cached_seed_alpha, render_output.alpha);
-        if (render_output.depth.is_valid() && render_output.depth.device() == Device::CUDA) {
+        if (render_output.depth.is_valid() && render_output.depth.device() == Device::GPU) {
             copy_into_cached(_cached_seed_depth, render_output.depth);
         } else {
             _cached_seed_depth = Tensor();
@@ -1015,7 +1015,7 @@ namespace lfs::training {
 
         if (!fill_mean_abs_error_hw(render_output.image, render_output.target_image, _explore_error_hw) ||
             !_explore_error_hw.is_valid() || _explore_error_hw.ndim() != 2 ||
-            _explore_error_hw.device() != Device::CUDA ||
+            _explore_error_hw.device() != Device::GPU ||
             _explore_error_hw.dtype() != DataType::Float32) {
             return;
         }
@@ -1035,8 +1035,8 @@ namespace lfs::training {
         Tensor radii;
         bool used_render_buffers = false;
         if (render_output.means2d.is_valid() && render_output.radii.is_valid() &&
-            render_output.means2d.device() == Device::CUDA &&
-            render_output.radii.device() == Device::CUDA &&
+            render_output.means2d.device() == Device::GPU &&
+            render_output.radii.device() == Device::GPU &&
             render_output.means2d.numel() > 0 &&
             render_output.radii.numel() > 0) {
             means2d = squeeze_leading_ones(render_output.means2d);
@@ -1339,7 +1339,7 @@ namespace lfs::training {
             const float log_max_allowed = std::log(max_allowed);
             auto center = Tensor::from_vector(
                 {_bounds.center[0], _bounds.center[1], _bounds.center[2]},
-                TensorShape({1, 3}), Device::CUDA);
+                TensorShape({1, 3}), Device::GPU);
             auto dist_from_center = (means - center).abs().max(1);
             prune_mask = prune_mask |
                          (scale_max > log_max_allowed) |
@@ -1353,7 +1353,7 @@ namespace lfs::training {
         prune_mask = exclude_frozen_from_mask(*_splat_data, prune_mask);
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
-            _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+            _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
         kernels::launch_packed_refine_counts(
             prune_mask.ptr<bool>(), n,
@@ -1604,7 +1604,7 @@ namespace lfs::training {
                          n_now, _scene_has_far_field ? "active" : "inert");
             } else {
                 if (!_far_field_mask.is_valid() || _far_field_mask.numel() != n_now) {
-                    _far_field_mask = lfs::core::Tensor::zeros_bool({n_now}, lfs::core::Device::CUDA);
+                    _far_field_mask = lfs::core::Tensor::zeros_bool({n_now}, lfs::core::Device::GPU);
                 }
                 mrnf_strategy::launch_far_field_mask(
                     _splat_data->means().ptr<float>(),
@@ -1736,10 +1736,10 @@ namespace lfs::training {
             return;
         }
         if (!_far_field_mask.is_valid() ||
-            _far_field_mask.device() != Device::CUDA ||
+            _far_field_mask.device() != Device::GPU ||
             _far_field_mask.dtype() != DataType::Bool ||
             _far_field_mask.numel() != n) {
-            _far_field_mask = Tensor::zeros_bool({n}, Device::CUDA);
+            _far_field_mask = Tensor::zeros_bool({n}, Device::GPU);
         }
         mrnf_strategy::launch_far_field_mask(
             _splat_data->means().ptr<float>(),
@@ -1808,10 +1808,10 @@ namespace lfs::training {
         }
 
         const size_t n = weights.numel();
-        _gumbel_scratch.ensure_n(n, Device::CUDA);
+        _gumbel_scratch.ensure_n(n, Device::GPU);
         if (!_far_growth.active || !_far_growth.outside_mask.is_valid() ||
             _far_growth.outside_mask.numel() != n) {
-            auto indices = Tensor::empty({static_cast<size_t>(k)}, Device::CUDA, DataType::Int64);
+            auto indices = Tensor::empty({static_cast<size_t>(k)}, Device::GPU, DataType::Int64);
             mrnf_strategy::launch_gumbel_topk(
                 weights.ptr<float>(), n, static_cast<size_t>(k), seed, indices.ptr<int64_t>(),
                 nullptr, true, &_gumbel_scratch, known_nnz);
@@ -1820,7 +1820,7 @@ namespace lfs::training {
         }
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
-            _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+            _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
 
         auto weights_out = weights.masked_fill(_far_growth.outside_mask.logical_not(), 0.0f);
@@ -1855,14 +1855,14 @@ namespace lfs::training {
         Tensor out_inds;
         Tensor in_inds;
         if (k_out > 0) {
-            out_inds = Tensor::empty({static_cast<size_t>(k_out)}, Device::CUDA, DataType::Int64);
+            out_inds = Tensor::empty({static_cast<size_t>(k_out)}, Device::GPU, DataType::Int64);
             mrnf_strategy::launch_gumbel_topk(
                 weights_out.ptr<float>(), n, static_cast<size_t>(k_out), seed,
                 out_inds.ptr<int64_t>(), nullptr, true, &_gumbel_scratch,
                 static_cast<size_t>(selectable_out));
         }
         if (k_in > 0) {
-            in_inds = Tensor::empty({static_cast<size_t>(k_in)}, Device::CUDA, DataType::Int64);
+            in_inds = Tensor::empty({static_cast<size_t>(k_in)}, Device::GPU, DataType::Int64);
             mrnf_strategy::launch_gumbel_topk(
                 weights_in.ptr<float>(), n, static_cast<size_t>(k_in), seed + 17,
                 in_inds.ptr<int64_t>(), nullptr, true, &_gumbel_scratch,
@@ -1915,7 +1915,7 @@ namespace lfs::training {
         const lfs::core::Tensor& growth_inds) {
         using namespace lfs::core;
         auto log_scales = _splat_data->scaling_raw();
-        auto score_mean = Tensor::zeros({n}, Device::CUDA);
+        auto score_mean = Tensor::zeros({n}, Device::GPU);
         if (_explore_score_sum.is_valid() &&
             _explore_score_sum.ndim() == 1 &&
             _explore_score_sum.numel() == n) {
@@ -1938,8 +1938,8 @@ namespace lfs::training {
             explore_weights = explore_weights.masked_fill(replace_mask, 0.0f);
         }
         if (growth_inds.is_valid() && growth_inds.numel() > 0) {
-            auto growth_mask = Tensor::zeros_bool({n}, Device::CUDA);
-            auto true_vals = Tensor::ones_bool({growth_inds.numel()}, Device::CUDA);
+            auto growth_mask = Tensor::zeros_bool({n}, Device::GPU);
+            auto true_vals = Tensor::ones_bool({growth_inds.numel()}, Device::GPU);
             growth_mask.index_put_(growth_inds, true_vals);
             explore_weights = explore_weights.masked_fill(growth_mask, 0.0f);
         }
@@ -1958,7 +1958,7 @@ namespace lfs::training {
         // densify N-scratch pre-sized to the parameter reservation; views avoid
         // per-refine driver allocs (post-refine trim_memory_pool would otherwise force
         // pool misses on every growing exact size).
-        _densify_n_scratch.ensure_n(n, Device::CUDA);
+        _densify_n_scratch.ensure_n(n, Device::GPU);
         if (PerfBenchCollector::enabled()) {
             PerfBenchCollector::instance().set_densify_workspace_bytes(
                 _densify_n_scratch.resident_bytes());
@@ -2004,7 +2004,7 @@ namespace lfs::training {
         }
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
-            _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+            _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
         kernels::launch_packed_refine_counts(
             refine_candidates.ptr<bool>(), n,
@@ -2043,7 +2043,7 @@ namespace lfs::training {
             actual_replace = std::min(requested_replace, selectable_replace);
             if (actual_replace > 0) {
                 // grow-only index/mask scratch (no per-refine driver alloc).
-                _densify_n_scratch.ensure_n(n, Device::CUDA);
+                _densify_n_scratch.ensure_n(n, Device::GPU);
                 replace_inds = sample_gumbel_with_far_guard(
                     replace_weights, actual_replace, seed,
                     static_cast<size_t>(selectable_replace));
@@ -2051,7 +2051,7 @@ namespace lfs::training {
                 if (actual_replace > 0) {
                     replace_mask = _densify_n_scratch.bool_a_view(n);
                     replace_mask.zero_();
-                    auto true_vals = Tensor::ones_bool({static_cast<size_t>(actual_replace)}, Device::CUDA);
+                    auto true_vals = Tensor::ones_bool({static_cast<size_t>(actual_replace)}, Device::GPU);
                     replace_mask.index_put_(replace_inds, true_vals);
                 }
             }
@@ -2086,7 +2086,7 @@ namespace lfs::training {
                     error_score = apply_crop_damping_to_scores(*_optimizer, error_score);
                 }
                 error_score = error_score.contiguous();
-                Tensor oversize_weights = Tensor::zeros({n}, Device::CUDA);
+                Tensor oversize_weights = Tensor::zeros({n}, Device::GPU);
                 const bool* frozen = nullptr;
                 size_t frozen_n = 0;
                 if (_optimizer) {
@@ -2131,9 +2131,9 @@ namespace lfs::training {
                     actual_oversize =
                         oversize_inds.is_valid() ? static_cast<int>(oversize_inds.numel()) : 0;
                     if (actual_oversize > 0) {
-                        oversize_mask = Tensor::zeros_bool({n}, Device::CUDA);
+                        oversize_mask = Tensor::zeros_bool({n}, Device::GPU);
                         auto true_vals = Tensor::ones_bool(
-                            {static_cast<size_t>(actual_oversize)}, Device::CUDA);
+                            {static_cast<size_t>(actual_oversize)}, Device::GPU);
                         oversize_mask.index_put_(oversize_inds, true_vals);
                         LFS_COUNTER_ADD("strategy.mrnf.oversize_split", actual_oversize);
                     }
@@ -2284,7 +2284,7 @@ namespace lfs::training {
         // event so its Tensor owners return storage to the CUDA pool before
         // the next phase; no later refine reads the prior children.
         DensifyChildWorkspace densify_ws;
-        densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::CUDA);
+        densify_ws.ensure(K, sh_rest, use_shN, /*sh0_flat_layout=*/false, Device::GPU);
         _densify_child_required_peak_bytes = std::max(
             _densify_child_required_peak_bytes, densify_ws.required_bytes());
         _densify_child_allocated_peak_bytes = std::max(
@@ -2505,7 +2505,7 @@ namespace lfs::training {
                     const size_t logical_bytes = logical_floats * static_cast<size_t>(bpc);
                     const size_t cap_bytes = cap_floats * static_cast<size_t>(bpc);
                     state->exp_avg = Tensor::zeros_direct(
-                        TensorShape({logical_bytes}), cap_bytes, Device::CUDA, DataType::UInt8);
+                        TensorShape({logical_bytes}), cap_bytes, Device::GPU, DataType::UInt8);
                     state->size = logical_floats;
                     state->capacity = cap_floats;
                 } else {
@@ -2515,7 +2515,7 @@ namespace lfs::training {
                 }
                 // grow-only zero bounds (free-zero moments after compact).
                 ensure_joint_bounds_capacity(state->joint_bounds, new_size, cap,
-                                             Device::CUDA, /*zero_all=*/true);
+                                             Device::GPU, /*zero_all=*/true);
             } else if (pt == ParamType::ShN) {
                 compact_shN_swizzled(state->exp_avg, cap, 128);
                 state->size = lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
@@ -2536,7 +2536,7 @@ namespace lfs::training {
                     const size_t logical_floats =
                         lfs::core::sh_swizzled_float_count(new_size, layout_rest_u32);
                     state->grad = Tensor::zeros_direct(
-                        TensorShape({logical_floats}), state->capacity, Device::CUDA);
+                        TensorShape({logical_floats}), state->capacity, Device::GPU);
                 } else {
                     state->grad = {};
                 }
@@ -2737,7 +2737,7 @@ namespace lfs::training {
 
         if (keep_budget > 0) {
             if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
-                _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+                _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
             }
             kernels::launch_packed_refine_counts(
                 nullptr, 0, nullptr, 0,
@@ -2749,8 +2749,8 @@ namespace lfs::training {
                 cudaMemcpy(host_counts, _refine_counts_dev.ptr<int64_t>(),
                            4 * sizeof(int64_t), cudaMemcpyDeviceToHost),
                 "MRNF enforce_max_cap nnz D2H");
-            auto keep_indices = Tensor::empty({keep_budget}, Device::CUDA, DataType::Int64);
-            _gumbel_scratch.ensure_n(n, Device::CUDA);
+            auto keep_indices = Tensor::empty({keep_budget}, Device::GPU, DataType::Int64);
+            _gumbel_scratch.ensure_n(n, Device::GPU);
             mrnf_strategy::launch_gumbel_topk(
                 opacities.ptr<float>(), n, keep_budget, seed,
                 keep_indices.ptr<int64_t>(), nullptr, true, &_gumbel_scratch,
@@ -3048,7 +3048,7 @@ namespace lfs::training {
                                 is_cuda_image(image) &&
                                 is_cuda_image(target) &&
                                 alpha.is_valid() &&
-                                alpha.device() == Device::CUDA &&
+                                alpha.device() == Device::GPU &&
                                 same_spatial(image, target);
         if (!live_valid) {
             if (_cached_seed_valid && _cached_seed_camera) {
@@ -3109,7 +3109,7 @@ namespace lfs::training {
         }
 
         if (!_refine_counts_dev.is_valid() || _refine_counts_dev.numel() < 4) {
-            _refine_counts_dev = Tensor::zeros({4}, Device::CUDA, DataType::Int64);
+            _refine_counts_dev = Tensor::zeros({4}, Device::GPU, DataType::Int64);
         }
         kernels::launch_packed_refine_counts(
             nullptr, 0, nullptr, 0,
@@ -3128,24 +3128,24 @@ namespace lfs::training {
 
         auto seed = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
-        auto pixel_inds = Tensor::empty({static_cast<size_t>(n_seed)}, Device::CUDA, DataType::Int64);
-        _gumbel_scratch.ensure_n(hw, Device::CUDA);
+        auto pixel_inds = Tensor::empty({static_cast<size_t>(n_seed)}, Device::GPU, DataType::Int64);
+        _gumbel_scratch.ensure_n(hw, Device::GPU);
         mrnf_strategy::launch_gumbel_topk(
             seed_weights.ptr<float>(), hw, static_cast<size_t>(n_seed), seed,
             pixel_inds.ptr<int64_t>(), nullptr, false, &_gumbel_scratch, hw);
 
         Tensor depth_flat;
-        if (depth.is_valid() && depth.device() == Device::CUDA && depth.numel() > 0) {
+        if (depth.is_valid() && depth.device() == Device::GPU && depth.numel() > 0) {
             auto depth_f = to_float01_cuda(depth);
             depth_flat = flatten_hw(depth_f);
         }
         if (!depth_flat.is_valid() || depth_flat.numel() != hw) {
-            depth_flat = Tensor::zeros({hw}, Device::CUDA);
+            depth_flat = Tensor::zeros({hw}, Device::GPU);
         }
 
-        auto rgb = Tensor::empty({static_cast<size_t>(n_seed), 3}, Device::CUDA, DataType::Float32);
-        auto seed_alpha = Tensor::empty({static_cast<size_t>(n_seed)}, Device::CUDA, DataType::Float32);
-        auto seed_depth = Tensor::empty({static_cast<size_t>(n_seed)}, Device::CUDA, DataType::Float32);
+        auto rgb = Tensor::empty({static_cast<size_t>(n_seed), 3}, Device::GPU, DataType::Float32);
+        auto seed_alpha = Tensor::empty({static_cast<size_t>(n_seed)}, Device::GPU, DataType::Float32);
+        auto seed_depth = Tensor::empty({static_cast<size_t>(n_seed)}, Device::GPU, DataType::Float32);
         const int channels = static_cast<int>(target.shape()[0]);
         mrnf_strategy::launch_gather_seed_payloads(
             pixel_inds.ptr<int64_t>(),
@@ -3281,14 +3281,14 @@ namespace lfs::training {
         }
 
         const size_t kept_n = static_cast<size_t>(kept);
-        auto pos = Tensor::from_vector(means_h, TensorShape({kept_n, 3}), Device::CUDA);
-        auto rot = Tensor::from_vector(rotations_h, TensorShape({kept_n, 4}), Device::CUDA);
-        auto scl = Tensor::from_vector(scales_h, TensorShape({kept_n, 3}), Device::CUDA);
-        auto sh0 = Tensor::from_vector(sh0_h, TensorShape({kept_n, 1, 3}), Device::CUDA);
-        auto opa = Tensor::from_vector(opac_h, TensorShape({kept_n}), Device::CUDA);
+        auto pos = Tensor::from_vector(means_h, TensorShape({kept_n, 3}), Device::GPU);
+        auto rot = Tensor::from_vector(rotations_h, TensorShape({kept_n, 4}), Device::GPU);
+        auto scl = Tensor::from_vector(scales_h, TensorShape({kept_n, 3}), Device::GPU);
+        auto sh0 = Tensor::from_vector(sh0_h, TensorShape({kept_n, 1, 3}), Device::GPU);
+        auto opa = Tensor::from_vector(opac_h, TensorShape({kept_n}), Device::GPU);
         Tensor shN;
         if (sh_rest > 0) {
-            shN = Tensor::zeros({kept_n, sh_rest, 3}, Device::CUDA);
+            shN = Tensor::zeros({kept_n, sh_rest, 3}, Device::GPU);
         }
 
         lfs::training::sh_value::ShNMutationBatch shn_batch(*_splat_data);
@@ -3570,8 +3570,8 @@ namespace lfs::training {
                     free_mask.numel() > max_capacity) {
                     throw std::runtime_error("Invalid MRNF checkpoint: free mask has incompatible schema");
                 }
-                if (free_mask.device() != lfs::core::Device::CUDA)
-                    free_mask = free_mask.cuda();
+                if (free_mask.device() != lfs::core::Device::GPU)
+                    free_mask = free_mask.gpu();
                 _free_mask = std::move(free_mask);
             }
         }

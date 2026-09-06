@@ -12,14 +12,14 @@ using namespace lfs::core;
 class TensorStorageVersionTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        base_ = Tensor::zeros({100, 3}, Device::CUDA);
+        base_ = Tensor::zeros({100, 3}, Device::GPU);
     }
 
     Tensor base_;
 };
 
 TEST_F(TensorStorageVersionTest, FreshAllocationHasStorageMeta) {
-    auto t = Tensor::zeros({10, 3}, Device::CUDA);
+    auto t = Tensor::zeros({10, 3}, Device::GPU);
     EXPECT_TRUE(t.is_valid());
 }
 
@@ -45,7 +45,7 @@ TEST_F(TensorStorageVersionTest, CloneGetsIndependentStorageMeta) {
 }
 
 TEST_F(TensorStorageVersionTest, ReserveBumpsGenerationBeforeNewStorage) {
-    auto with_capacity = Tensor::zeros({10, 3}, Device::CUDA);
+    auto with_capacity = Tensor::zeros({10, 3}, Device::GPU);
     auto view_before = with_capacity.slice(0, 0, 5);
 
     // View should be valid before reserve
@@ -91,7 +91,7 @@ TEST_F(TensorStorageVersionTest, NestedViewsShareSameGenerationCounter) {
 }
 
 TEST_F(TensorStorageVersionTest, PermuteProducesValidView) {
-    auto t = Tensor::zeros({10, 3, 4}, Device::CUDA);
+    auto t = Tensor::zeros({10, 3, 4}, Device::GPU);
     auto permuted = t.permute({2, 0, 1});
 
     EXPECT_TRUE(permuted.is_view());
@@ -99,7 +99,7 @@ TEST_F(TensorStorageVersionTest, PermuteProducesValidView) {
 }
 
 TEST_F(TensorStorageVersionTest, TransposeProducesValidView) {
-    auto t = Tensor::zeros({10, 20}, Device::CUDA);
+    auto t = Tensor::zeros({10, 20}, Device::GPU);
     auto transposed = t.transpose(0, 1);
 
     EXPECT_TRUE(transposed.is_view());
@@ -107,7 +107,7 @@ TEST_F(TensorStorageVersionTest, TransposeProducesValidView) {
 }
 
 TEST_F(TensorStorageVersionTest, SqueezeUnsqueezeProduceValidViews) {
-    auto t = Tensor::zeros({1, 10, 3}, Device::CUDA);
+    auto t = Tensor::zeros({1, 10, 3}, Device::GPU);
 
     auto squeezed = t.squeeze(0);
     EXPECT_NE(squeezed.data_ptr(), nullptr);
@@ -153,7 +153,7 @@ TEST_F(TensorStorageVersionTest, FromBlobHasStorageMeta) {
 }
 
 TEST_F(TensorStorageVersionTest, ZerosDirectHasStorageMeta) {
-    auto t = Tensor::zeros_direct({10, 3}, 100, Device::CUDA);
+    auto t = Tensor::zeros_direct({10, 3}, 100, Device::GPU);
 
     EXPECT_NE(t.ptr<float>(), nullptr);
 }
@@ -241,7 +241,7 @@ TEST_F(TensorStorageVersionTest, ExternalStorageAppendWithinCapacityIsAllowed) {
 class TensorRowProxyTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        t_ = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {2, 3}, Device::CUDA);
+        t_ = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}, {2, 3}, Device::GPU);
     }
 
     Tensor t_;
@@ -320,7 +320,7 @@ TEST_F(TensorRowProxyTest, CudaConstSubscriptSeesPendingWrite) {
 }
 
 TEST_F(TensorStorageVersionTest, StaleViewDetectedOnReserve) {
-    auto with_capacity = Tensor::zeros({10, 3}, Device::CUDA);
+    auto with_capacity = Tensor::zeros({10, 3}, Device::GPU);
     auto view = with_capacity.slice(0, 0, 5);
 
     // Reserve causes reallocation => bumps generation

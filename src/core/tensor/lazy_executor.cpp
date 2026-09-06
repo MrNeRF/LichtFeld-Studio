@@ -5,11 +5,11 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_ir.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -436,12 +436,16 @@ namespace lfs::core::internal {
                     return false;
                 }
                 Tensor rhs = *op.rhs;
-                const float* rhs_probe = rhs.ptr<float>();
-                if (rhs_probe == nullptr ||
-                    rhs.dtype() != DataType::Float32 ||
+                if (rhs.dtype() != DataType::Float32 ||
                     !rhs.is_contiguous() ||
                     rhs.shape() != source.shape() ||
                     rhs.device() != source.device()) {
+                    return false;
+                }
+                internal::require_same_gpu_backend(
+                    source, rhs, "lazy pointwise fusion");
+                const float* rhs_probe = rhs.ptr<float>();
+                if (rhs_probe == nullptr) {
                     return false;
                 }
                 rhs_storage.push_back(std::move(rhs));
@@ -455,14 +459,18 @@ namespace lfs::core::internal {
                 chain.ops[i].kind = static_cast<uint8_t>(recipe.ops[i].kind);
                 chain.ops[i].scalar = recipe.ops[i].scalar;
                 if (is_tensor_binary_kind(recipe.ops[i].kind)) {
-                    chain.ops[i].rhs = rhs_storage[rhs_i].ptr<float>();
+                    chain.ops[i].rhs =
+                        rhs_storage[rhs_i].device() == Device::GPU
+                            ? internal::chain_operand_address(
+                                  internal::storage_ref(rhs_storage[rhs_i]))
+                            : rhs_storage[rhs_i].ptr<float>();
                     ++rhs_i;
                 } else {
                     chain.ops[i].rhs = nullptr;
                 }
             }
 
-            if (source.device() == Device::CUDA) {
+            if (source.device() == Device::GPU) {
                 const float* in_ptr = source.ptr<float>();
                 assert(in_ptr != nullptr);
                 // prepare_inputs_for_stream only takes initializer_list; pin source then each rhs.
@@ -471,10 +479,18 @@ namespace lfs::core::internal {
                     execution_stream = prepare_inputs_for_stream({&r}, execution_stream);
                 }
                 CUDAStreamGuard guard(execution_stream);
-                Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
+                Tensor out = internal::allocate_like(
+                    source, source.shape(), DataType::Float32);
                 float* out_ptr = out.ptr<float>();
                 assert(out_ptr != nullptr);
-                tensor_ops::launch_fused_pointwise_chain(in_ptr, out_ptr, n, chain, out.stream());
+                std::vector<StorageRef> rhs_refs;
+                rhs_refs.reserve(rhs_storage.size());
+                for (const auto& r : rhs_storage) {
+                    rhs_refs.push_back(storage_ref(r));
+                }
+                backend_ops_for(source).fused_pointwise_chain(
+                    storage_ref(source), storage_ref(out), n, chain, rhs_refs,
+                    ExecContext{out.stream()});
                 materialized = std::move(out);
                 return true;
             }
@@ -482,7 +498,8 @@ namespace lfs::core::internal {
             const float* in_ptr = source.ptr<float>();
             if (in_ptr == nullptr)
                 return false;
-            Tensor out = Tensor::empty(source.shape(), Device::CPU, DataType::Float32);
+            Tensor out = internal::allocate_like(
+                source, source.shape(), DataType::Float32);
             float* out_ptr = out.ptr<float>();
             if (out_ptr == nullptr)
                 return false;

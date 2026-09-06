@@ -76,32 +76,32 @@ namespace {
         auto shN_tensor =
             rest == 0
                 ? lfs::core::Tensor::zeros(
-                      {0}, lfs::core::Device::CUDA,
+                      {0}, lfs::core::Device::GPU,
                       lfs::core::DataType::Float32)
                 : lfs::core::Tensor::from_vector(
                       shN,
                       {count, rest, std::size_t{3}},
-                      lfs::core::Device::CUDA);
+                      lfs::core::Device::GPU);
         auto result =
             std::make_unique<lfs::core::SplatData>(
                 sh_degree,
                 lfs::core::Tensor::from_vector(
                     means, {count, 3},
-                    lfs::core::Device::CUDA),
+                    lfs::core::Device::GPU),
                 lfs::core::Tensor::from_vector(
                     sh0, {count, 1, 3},
-                    lfs::core::Device::CUDA),
+                    lfs::core::Device::GPU),
                 std::move(shN_tensor),
                 lfs::core::Tensor::zeros(
                     {count, 3},
-                    lfs::core::Device::CUDA,
+                    lfs::core::Device::GPU,
                     lfs::core::DataType::Float32),
                 lfs::core::Tensor::from_vector(
                     rotations, {count, 4},
-                    lfs::core::Device::CUDA),
+                    lfs::core::Device::GPU),
                 lfs::core::Tensor::zeros(
                     {count, 1},
-                    lfs::core::Device::CUDA,
+                    lfs::core::Device::GPU,
                     lfs::core::DataType::Float32),
                 1.0f);
         EXPECT_EQ(result->means().shape(),

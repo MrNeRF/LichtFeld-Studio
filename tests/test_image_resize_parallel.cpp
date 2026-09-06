@@ -52,7 +52,7 @@ TEST(ImageResizeParallelTest, LoadImagesWithResize) {
 
         auto tensor = loader.load_cached_image(path, params);
         ASSERT_GT(tensor.numel(), 0);
-        ASSERT_EQ(tensor.device(), Device::CUDA);
+        ASSERT_EQ(tensor.device(), Device::GPU);
 
         LOG_INFO("Loaded {} shape: [{},{},{}]",
                  path.filename().string(),

@@ -722,7 +722,7 @@ namespace {
     class NativeMogeSession {
     public:
         explicit NativeMogeSession(const fs::path& lfw_path) {
-            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::CUDA);
+            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::GPU);
             if (!loaded)
                 throw std::runtime_error("Failed to load native MoGe-2 weights from " +
                                          path_to_string(lfw_path) + ": " +
@@ -738,7 +738,7 @@ namespace {
             if (!input_.is_valid() || input_.dtype() != lfs::core::DataType::Float32 ||
                 input_.ndim() != 4 || input_.shape()[2] != static_cast<std::size_t>(image.height) ||
                 input_.shape()[3] != static_cast<std::size_t>(image.width)) {
-                input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA,
+                input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU,
                                                   lfs::core::DataType::Float32);
             }
             LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
@@ -897,7 +897,7 @@ namespace {
                 LOG_INFO("Depth anchors: empty point cloud; skipping");
                 return;
             }
-            means = means.to(lfs::core::Device::CUDA);
+            means = means.to(lfs::core::Device::GPU);
 
             const auto fingerprint = lfs::training::computeAnchorFingerprint(scene->cameras);
 

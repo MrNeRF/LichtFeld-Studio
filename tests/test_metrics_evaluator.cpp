@@ -109,14 +109,14 @@ namespace {
         std::vector<float> means_data{0.0f, 0.0f, 1.0f};
         std::vector<float> scaling_data{2.0f, 1.5f, -3.0f};
         std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f};
-        auto means = Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto sh0 = Tensor::zeros({1, 1, 3}, Device::CUDA);
-        auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-        auto scaling = Tensor::from_blob(scaling_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto rotation = Tensor::from_blob(rotation_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto means = Tensor::from_blob(means_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto sh0 = Tensor::zeros({1, 1, 3}, Device::GPU);
+        auto shN = Tensor::zeros({1, 0, 3}, Device::GPU);
+        auto scaling = Tensor::from_blob(scaling_data.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto rotation = Tensor::from_blob(rotation_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
         const float opacity_value = 0.99f;
         const float raw_opacity = std::log(opacity_value / (1.0f - opacity_value));
-        auto opacity = Tensor::full({1}, raw_opacity, Device::CUDA);
+        auto opacity = Tensor::full({1}, raw_opacity, Device::GPU);
         return SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -124,9 +124,9 @@ namespace {
                                              const std::filesystem::path& normal_path,
                                              const int width,
                                              const int height) {
-        auto R = Tensor::eye(3, Device::CUDA);
+        auto R = Tensor::eye(3, Device::GPU);
         std::vector<float> t_data{0.0f, 0.0f, 4.0f};
-        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         const float fx = static_cast<float>(width);
         const float fy = static_cast<float>(height);
         const float cx = 0.5f * static_cast<float>(width);
@@ -274,7 +274,7 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto splat = make_front_facing_splat();
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
     auto params = make_eval_params(tmp / "out");
     std::filesystem::create_directories(params.dataset.output_path);
 
@@ -312,7 +312,7 @@ TEST(MetricsEvaluatorGeom, RotatedPriorReportsKnownAngle) {
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto splat = make_front_facing_splat();
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
     auto params = make_eval_params(tmp / "out");
     std::filesystem::create_directories(params.dataset.output_path);
 
@@ -348,7 +348,7 @@ TEST(MetricsEvaluatorGeom, SparsePointAbsRelAgainstRenderedDepth) {
     auto dataset = std::make_shared<CameraDataset>(
         std::vector<std::shared_ptr<Camera>>{cam}, DatasetConfig{}, CameraDataset::Split::ALL);
     auto splat = make_front_facing_splat();
-    auto background = Tensor::zeros({3}, Device::CUDA);
+    auto background = Tensor::zeros({3}, Device::GPU);
     auto params = make_eval_params(tmp / "out");
     std::filesystem::create_directories(params.dataset.output_path);
 

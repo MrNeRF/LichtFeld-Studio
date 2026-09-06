@@ -195,9 +195,9 @@ namespace lfs::python {
 
         lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
         auto cpu_image = core::Tensor::ones({3, 2, 2}, core::Device::CPU);
-        auto wrong_channels = core::Tensor::ones({2, 2, 2}, core::Device::CUDA);
-        auto image = core::Tensor::ones({3, 2, 2}, core::Device::CUDA);
-        auto wrong_grad = core::Tensor::ones({3, 2, 1}, core::Device::CUDA);
+        auto wrong_channels = core::Tensor::ones({2, 2, 2}, core::Device::GPU);
+        auto image = core::Tensor::ones({3, 2, 2}, core::Device::GPU);
+        auto wrong_grad = core::Tensor::ones({3, 2, 1}, core::Device::GPU);
 
         EXPECT_THROW((void)grid.apply(cpu_image, 0), std::invalid_argument);
         EXPECT_THROW((void)grid.apply(wrong_channels, 0), std::invalid_argument);
@@ -206,8 +206,8 @@ namespace lfs::python {
 
     TEST(BilateralGridValidationTest, SingletonImageAxesRemainFinite) {
         lfs::training::BilateralGrid grid(1, 2, 2, 2, 100);
-        auto image = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
-        auto grad = core::Tensor::ones({3, 1, 1}, core::Device::CUDA);
+        auto image = core::Tensor::ones({3, 1, 1}, core::Device::GPU);
+        auto grad = core::Tensor::ones({3, 1, 1}, core::Device::GPU);
 
         const auto output = grid.apply(image, 0).cpu().to_vector();
         const auto grad_input = grid.backward(image, grad, 0).cpu().to_vector();
@@ -224,12 +224,12 @@ namespace lfs::python {
         std::vector<float> rotation{1.0f, 0.0f, 0.0f, 0.0f};
         return std::make_unique<core::SplatData>(
             0,
-            core::Tensor::zeros({n, 3}, core::Device::CUDA),
-            core::Tensor::zeros({n, 1, 3}, core::Device::CUDA),
-            core::Tensor::zeros({n, 0, 3}, core::Device::CUDA),
-            core::Tensor::zeros({n, 3}, core::Device::CUDA),
-            core::Tensor::from_vector(rotation, {n, 4}, core::Device::CUDA),
-            core::Tensor::zeros({n, 1}, core::Device::CUDA),
+            core::Tensor::zeros({n, 3}, core::Device::GPU),
+            core::Tensor::zeros({n, 1, 3}, core::Device::GPU),
+            core::Tensor::zeros({n, 0, 3}, core::Device::GPU),
+            core::Tensor::zeros({n, 3}, core::Device::GPU),
+            core::Tensor::from_vector(rotation, {n, 4}, core::Device::GPU),
+            core::Tensor::zeros({n, 1}, core::Device::GPU),
             1.0f);
     }
 
@@ -602,7 +602,7 @@ namespace lfs::python {
 
         std::shared_ptr<core::MeshData> make_test_mesh(const core::Device device = core::Device::CPU) {
             auto mesh = std::make_shared<core::MeshData>(make_test_mesh_data());
-            if (device == core::Device::CUDA) {
+            if (device == core::Device::GPU) {
                 mesh->vertices = mesh->vertices.to(device);
                 mesh->indices = mesh->indices.to(device);
             }
@@ -1273,7 +1273,7 @@ namespace lfs::python {
                     const std::string_view name) {
                 EXPECT_EQ(dtype, core::DataType::Float32);
                 calls->push_back({std::string{name}, requested_capacity});
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1327,7 +1327,7 @@ namespace lfs::python {
                     const std::string_view name) {
                 EXPECT_EQ(dtype, core::DataType::Float32);
                 calls->push_back({std::string{name}, requested_capacity});
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1402,7 +1402,7 @@ namespace lfs::python {
                                 const core::DataType,
                                 const std::string_view) {
                 ++allocation_calls;
-                return core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                return core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
             };
 
         auto* training_model = dummy_scene_.getTrainingModel();
@@ -1448,7 +1448,7 @@ namespace lfs::python {
                                 const core::DataType,
                                 const std::string_view name) {
                 ++allocation_calls;
-                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::CUDA);
+                auto tensor = core::Tensor::zeros_direct(std::move(shape), requested_capacity, core::Device::GPU);
                 tensor.set_name(std::string{name});
                 return tensor;
             };
@@ -1651,7 +1651,7 @@ namespace lfs::python {
 
     TEST_F(SceneValidityTest, SceneManagerClearReleasesMeshRayPickCpuCache) {
         lfs::vis::SceneManager scene_manager;
-        auto mesh = make_test_mesh(core::Device::CUDA);
+        auto mesh = make_test_mesh(core::Device::GPU);
         ASSERT_NE(scene_manager.getScene().addMesh("Triangle", mesh), core::NULL_NODE);
         const auto before_pick = core::PinnedMemoryAllocator::instance().get_stats();
 

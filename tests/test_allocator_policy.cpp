@@ -1,9 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor/internal/gpu_slab_allocator.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
-#include "core/tensor/internal/size_bucketed_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/gpu_slab_allocator.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 

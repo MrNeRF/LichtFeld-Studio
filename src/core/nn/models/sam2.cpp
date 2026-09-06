@@ -6,8 +6,8 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/source_site.hpp"
-#include "internal/cuda_stream_context.hpp"
-#include "internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
@@ -140,7 +140,7 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Sam2> Sam2::load(const std::filesystem::path& weights, Device device,
                                  std::optional<DataType> compute) {
-        if (device != Device::CUDA) {
+        if (device != Device::GPU) {
             return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 requires a CUDA device");
         }
         auto file = WeightFile::open(weights);
@@ -561,7 +561,7 @@ namespace lfs::core::nn::models {
                 sam_error(lfs::ErrorCode::InvalidArgument,
                           "SAM2 image must be NCHW with 3 channels"));
         }
-        if (image.device() != Device::CUDA) {
+        if (image.device() != Device::GPU) {
             return lfs::Result<void>::failure(
                 sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 image must be on CUDA"));
         }

@@ -17,7 +17,7 @@
 #include "core/sh_value_quant_kernels.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
 #include "io/atomic_output.hpp"
@@ -942,12 +942,12 @@ namespace lfs::io {
 
             {
                 LOG_TIMER_DEBUG("SOG load: upload");
-                means = host_means.cuda();
-                scales = host_scales.cuda();
-                rotations = host_rotations.cuda();
-                opacity = host_opacity.cuda();
-                sh0 = host_sh0.cuda();
-                shN = host_shN.cuda();
+                means = host_means.gpu();
+                scales = host_scales.gpu();
+                rotations = host_rotations.gpu();
+                opacity = host_opacity.gpu();
+                sh0 = host_sh0.gpu();
+                shN = host_shN.gpu();
             }
 
             // Calculate SH degree
@@ -1334,10 +1334,10 @@ namespace lfs::io {
         }
 
         Tensor as_cuda_contiguous(const Tensor& tensor) {
-            if (tensor.device() == Device::CUDA) {
+            if (tensor.device() == Device::GPU) {
                 return tensor.is_contiguous() ? tensor : tensor.contiguous();
             }
-            return tensor.cuda().contiguous();
+            return tensor.gpu().contiguous();
         }
 
         int nearest_centroid_1d(const std::vector<float>& centroids, float value) {
@@ -1738,7 +1738,7 @@ namespace lfs::io {
                     const uint32_t k = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
                     shN_float_swizzled = Tensor::empty(
-                        {float_count}, Device::CUDA, lfs::core::DataType::Float32);
+                        {float_count}, Device::GPU, lfs::core::DataType::Float32);
 
                     const cudaStream_t stream = lfs::core::getCurrentCUDAStream();
                     if (shN_float_swizzled.stream() != stream)
@@ -1774,13 +1774,13 @@ namespace lfs::io {
                                           "Failed to materialise float SH for SOG export",
                                           options.output_path);
                     }
-                    if (shN_canon.device() != Device::CUDA) {
-                        shN_canon = shN_canon.cuda();
+                    if (shN_canon.device() != Device::GPU) {
+                        shN_canon = shN_canon.gpu();
                     }
                     const size_t n = static_cast<size_t>(num_rows);
                     const uint32_t k = static_cast<uint32_t>(shN_canon.size(1));
                     const size_t float_count = lfs::core::sh_swizzled_float_count(n, k);
-                    shN_float_swizzled = Tensor::zeros({float_count}, Device::CUDA, lfs::core::DataType::Float32);
+                    shN_float_swizzled = Tensor::zeros({float_count}, Device::GPU, lfs::core::DataType::Float32);
                     lfs::core::reorder_sh_to_swizzled(
                         shN_canon.ptr<float>(),
                         shN_float_swizzled.ptr<float>(),

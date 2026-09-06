@@ -94,7 +94,7 @@ namespace {
                         const DataType dtype,
                         const std::string_view name) {
             calls.push_back(AllocCall{std::string{name}, dtype});
-            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::CUDA, dtype);
+            Tensor backing = Tensor::zeros_direct(shape, capacity, Device::GPU, dtype);
             return retag_external(std::move(backing), "vulkan_external_buffer");
         };
     }

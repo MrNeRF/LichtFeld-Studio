@@ -159,7 +159,7 @@ TEST_F(TensorIndexingAdvancedTest, RowProxyAssignmentAcrossRanksAndDevices) {
               (std::vector<float>{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
                                   1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}));
 
-    auto cross_device = Tensor::zeros({2, 3}, Device::CUDA);
+    auto cross_device = Tensor::zeros({2, 3}, Device::GPU);
     cross_device[1] = Tensor::from_vector(
         std::vector<float>{8.0f, 9.0f, 10.0f}, {3}, Device::CPU);
     EXPECT_EQ(cross_device.cpu().to_vector(),
@@ -228,15 +228,15 @@ TEST_F(TensorIndexingAdvancedTest, IndexAdd2D) {
 }
 
 TEST_F(TensorIndexingAdvancedTest, IndexAddCUDA) {
-    auto t_custom = Tensor::zeros({5}, Device::CUDA);
+    auto t_custom = Tensor::zeros({5}, Device::GPU);
     auto t_torch = torch::zeros({5}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
     auto indices_vec = std::vector<int>{0, 2, 4};
-    auto indices_custom = Tensor::from_vector(indices_vec, {3}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_vec, {3}, Device::GPU);
     auto indices_torch = torch::tensor(indices_vec, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
     auto values_vec = std::vector<float>{1.0f, 2.0f, 3.0f};
-    auto values_custom = Tensor::from_vector(values_vec, {3}, Device::CUDA);
+    auto values_custom = Tensor::from_vector(values_vec, {3}, Device::GPU);
     auto values_torch = torch::tensor(values_vec, torch::TensorOptions().device(torch::kCUDA));
 
     t_custom.index_add_(0, indices_custom, values_custom);
@@ -337,16 +337,16 @@ TEST_F(TensorIndexingAdvancedTest, IndexPutVectorOfTensors) {
 }
 
 TEST_F(TensorIndexingAdvancedTest, IndexPutVectorOfTensorsInt64CUDA) {
-    auto t_custom = Tensor::zeros({3, 3}, Device::CUDA);
+    auto t_custom = Tensor::zeros({3, 3}, Device::GPU);
     auto t_torch = torch::zeros({3, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
-    auto row_idx_custom = Tensor::from_vector({0, -1, 1}, {3}, Device::CUDA).to(DataType::Int64);
-    auto col_idx_custom = Tensor::from_vector({1, 0, -1}, {3}, Device::CUDA).to(DataType::Int64);
+    auto row_idx_custom = Tensor::from_vector({0, -1, 1}, {3}, Device::GPU).to(DataType::Int64);
+    auto col_idx_custom = Tensor::from_vector({1, 0, -1}, {3}, Device::GPU).to(DataType::Int64);
 
     auto row_idx_torch = torch::tensor({0, -1, 1}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
     auto col_idx_torch = torch::tensor({1, 0, -1}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
-    auto values_custom = Tensor::from_vector({10.0f, 20.0f, 30.0f}, {3}, Device::CUDA);
+    auto values_custom = Tensor::from_vector({10.0f, 20.0f, 30.0f}, {3}, Device::GPU);
     auto values_torch = torch::tensor({10.0f, 20.0f, 30.0f}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
     std::vector<Tensor> indices_custom{row_idx_custom, col_idx_custom};
@@ -363,7 +363,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithClampMode) {
     auto t_torch = torch::arange(0, 5, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{-1, 0, 3, 10};
-    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::GPU);
 
     // PyTorch clamps by default in index_select when indices are clamped manually
     std::vector<int64_t> indices_clamped;
@@ -383,7 +383,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithWrapMode) {
     auto t_torch = torch::arange(0, 5, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{-1, 0, 5, 7};
-    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::GPU);
 
     // PyTorch wraps with modulo
     std::vector<int64_t> indices_wrapped;
@@ -483,7 +483,7 @@ TEST_F(TensorIndexingAdvancedTest, NonzeroAllOnes) {
 
 TEST_F(TensorIndexingAdvancedTest, NonzeroCUDA) {
     std::vector<float> data_vec = {0.0f, 1.0f, 0.0f, 2.0f};
-    auto t_custom = Tensor::from_vector(data_vec, {4}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data_vec, {4}, Device::GPU);
     auto t_torch = torch::tensor(data_vec, torch::kCUDA);
 
     auto result_custom = t_custom.nonzero();
@@ -571,7 +571,7 @@ TEST_F(TensorIndexingAdvancedTest, GatherBasic) {
     auto t_torch = torch::arange(0, 10, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{0, 2, 4, 6, 8};
-    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::GPU);
     auto indices_torch = torch::tensor(indices_vec, torch::kInt64);
 
     auto result_custom = t_custom.gather(0, indices_custom);
@@ -628,7 +628,7 @@ TEST_F(TensorIndexingAdvancedTest, ComplexIndexingChain) {
 
     // Select specific rows
     auto row_vec = std::vector<int>{0, 5, 9};
-    auto row_idx_custom = Tensor::from_vector(row_vec, {3}, Device::CUDA);
+    auto row_idx_custom = Tensor::from_vector(row_vec, {3}, Device::GPU);
     auto row_idx_torch = torch::tensor(row_vec, torch::kInt64);
 
     auto rows_custom = t_custom.index_select(0, row_idx_custom);
@@ -636,7 +636,7 @@ TEST_F(TensorIndexingAdvancedTest, ComplexIndexingChain) {
 
     // Then select specific columns
     auto col_vec = std::vector<int>{0, 5, 9};
-    auto col_idx_custom = Tensor::from_vector(col_vec, {3}, Device::CUDA);
+    auto col_idx_custom = Tensor::from_vector(col_vec, {3}, Device::GPU);
     auto col_idx_torch = torch::tensor(col_vec, torch::kInt64);
 
     auto result_custom = rows_custom.index_select(1, col_idx_custom);
@@ -650,7 +650,7 @@ TEST_F(TensorIndexingAdvancedTest, ScatterGatherRoundtrip) {
     auto original_torch = torch::arange(0, 10, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{0, 2, 4, 6, 8};
-    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::GPU);
     auto indices_torch = torch::tensor(indices_vec, torch::kInt64);
 
     // Gather
@@ -658,7 +658,7 @@ TEST_F(TensorIndexingAdvancedTest, ScatterGatherRoundtrip) {
     auto gathered_torch = original_torch.gather(0, indices_torch);
 
     // Scatter back
-    auto result_custom = Tensor::zeros({10}, Device::CUDA);
+    auto result_custom = Tensor::zeros({10}, Device::GPU);
     auto result_torch = torch::zeros({10});
 
     result_custom.scatter_(0, indices_custom, gathered_custom);
@@ -673,7 +673,7 @@ TEST_F(TensorIndexingAdvancedTest, EmptyIndices) {
     auto t_custom = Tensor::arange(0.0f, 10.0f);
     auto t_torch = torch::arange(0, 10, torch::kFloat32);
 
-    auto indices_custom = Tensor::from_vector(std::vector<int>{}, {0}, Device::CUDA);
+    auto indices_custom = Tensor::from_vector(std::vector<int>{}, {0}, Device::GPU);
     auto indices_torch = torch::tensor({}, torch::kInt64);
 
     auto result_custom = t_custom.gather(0, indices_custom);
@@ -701,11 +701,11 @@ TEST_F(TensorIndexingAdvancedTest, IndexCopyUpdatesColumnsFromSlicedExpressions)
         std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f,
                            5.0f, 6.0f, 7.0f, 8.0f,
                            9.0f, 10.0f, 11.0f, 12.0f},
-        {3, 4}, Device::CUDA);
+        {3, 4}, Device::GPU);
 
     for (int column = 0; column < 4; ++column) {
         const auto index = Tensor::from_vector(
-                               std::vector<int>{column}, {1}, Device::CUDA)
+                               std::vector<int>{column}, {1}, Device::GPU)
                                .to(DataType::Int32);
         const auto values = tensor.slice(1, column, column + 1).mul(2.0f).add(1.0f);
         tensor.index_copy_(1, index, values);
@@ -724,7 +724,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexCopyQuaternionCompositionRegression) {
         -1.2682f, -0.0383f, -0.1029f, 1.4400f,
         -0.4705f, 1.1624f, 0.3058f, 0.5276f,
         -0.5726f, 1.8732f, -0.6816f, -0.2104f};
-    auto rotation = Tensor::from_vector(input, {3, 4}, Device::CUDA);
+    auto rotation = Tensor::from_vector(input, {3, 4}, Device::GPU);
 
     const auto w = rotation.slice(1, 0, 1).squeeze(1);
     const auto x = rotation.slice(1, 1, 2).squeeze(1);
@@ -738,7 +738,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexCopyQuaternionCompositionRegression) {
 
     for (int column = 0; column < 4; ++column) {
         const auto index = Tensor::from_vector(
-                               std::vector<int>{column}, {1}, Device::CUDA)
+                               std::vector<int>{column}, {1}, Device::GPU)
                                .to(DataType::Int32);
         rotation.index_copy_(1, index, components[column].unsqueeze(1));
     }
@@ -765,7 +765,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectHundredThousandRowsPreservesValues
     std::vector<int> index_values(selected_rows);
     std::iota(index_values.begin(), index_values.end(), 0);
     const auto indices = Tensor::from_vector(
-        index_values, {selected_rows}, Device::CUDA);
+        index_values, {selected_rows}, Device::GPU);
 
     const auto selected = source.index_select(0, indices).cpu().to_vector();
 

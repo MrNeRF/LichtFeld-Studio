@@ -214,7 +214,7 @@ namespace lfs::python {
                 {
                     nb::gil_scoped_release release;
                     ensure_loaded();
-                    Tensor gpu = hwc.cuda();
+                    Tensor gpu = hwc.gpu();
                     if (gpu.dtype() == DataType::UInt8) {
                         gpu = gpu.to(DataType::Float32).mul(1.0f / 255.0f);
                     }
@@ -267,7 +267,7 @@ namespace lfs::python {
                 } else {
                     path = lfs::preprocessing::ensure_sam2_weights();
                 }
-                auto loaded = unwrap(Sam2::load(path, Device::CUDA));
+                auto loaded = unwrap(Sam2::load(path, Device::GPU));
                 model_ = std::make_unique<Sam2>(std::move(loaded));
             }
 

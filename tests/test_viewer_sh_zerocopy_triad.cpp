@@ -36,12 +36,12 @@ namespace {
         const auto rest = lfs::core::sh_rest_coefficients_for_degree(3);
         const size_t floats = lfs::core::sh_swizzled_float_count(n, rest);
 
-        Tensor means = Tensor::zeros({n, 3}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({n, 1, 3}, Device::CUDA);
-        Tensor shN = Tensor::zeros_direct(TensorShape({floats}), floats, Device::CUDA);
-        Tensor scaling = Tensor::zeros({n, 3}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({n, 4}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({n, 1}, Device::CUDA);
+        Tensor means = Tensor::zeros({n, 3}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({n, 1, 3}, Device::GPU);
+        Tensor shN = Tensor::zeros_direct(TensorShape({floats}), floats, Device::GPU);
+        Tensor scaling = Tensor::zeros({n, 3}, Device::GPU);
+        Tensor rotation = Tensor::zeros({n, 4}, Device::GPU);
+        Tensor opacity = Tensor::zeros({n, 1}, Device::GPU);
 
         std::vector<float> host(floats);
         for (size_t i = 0; i < floats; ++i) {

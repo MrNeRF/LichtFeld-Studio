@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
+#include "core/tensor_backend.hpp"
 #include "io/error.hpp"
 #include "io/formats/rad.hpp"
 #include "io/loaders/blender_loader.hpp"
@@ -48,7 +49,9 @@ namespace lfs::io {
             if (!tensor.is_valid() || tensor.numel() == 0) {
                 return true; // empty/absent — nothing to migrate
             }
-            // Match what the Vulkan splat renderer actually binds (vksplat requires this kind).
+            if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
+                return true;
+            }
             return tensor.is_external_storage() &&
                    tensor.external_storage_kind() == "vulkan_external_buffer";
         }

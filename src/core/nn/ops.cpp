@@ -4,7 +4,7 @@
 #include "core/nn/ops.hpp"
 
 #include "core/cuda_error.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "nn_kernels.hpp"
 
@@ -22,7 +22,7 @@ namespace lfs::core::nn {
             tensor_contract::require_valid(tensor, op, role, LFS_SOURCE_SITE_CURRENT());
             tensor_contract::require_dtype(tensor, {DataType::Float32, DataType::Float16}, op,
                                            role, LFS_SOURCE_SITE_CURRENT());
-            LFS_ASSERT_MSG(tensor.device() == Device::CUDA,
+            LFS_ASSERT_MSG(tensor.device() == Device::GPU,
                            std::format("{} requires CUDA {} (device={})", op, role,
                                        device_name(tensor.device())));
         }
@@ -949,7 +949,7 @@ namespace lfs::core::nn {
                            Device device, cudaStream_t stream) {
         require_nn_tensor(gaussian, "fourier_pe_grid", "gaussian");
         LFS_ASSERT_MSG(height > 0 && width > 0, "fourier_pe_grid size must be positive");
-        LFS_ASSERT_MSG(device == Device::CUDA, "fourier_pe_grid requires CUDA");
+        LFS_ASSERT_MSG(device == Device::GPU, "fourier_pe_grid requires CUDA");
         LFS_ASSERT_MSG(dtype == DataType::Float16 || dtype == DataType::Float32,
                        "fourier_pe_grid dtype must be float16 or float32");
         LFS_ASSERT_MSG(gaussian.ndim() == 2 && gaussian.shape()[0] == 2,
@@ -1152,7 +1152,7 @@ namespace lfs::core::nn {
     Tensor uv_grid(int height, int width, float aspect, DataType dtype, Device device,
                    cudaStream_t stream) {
         LFS_ASSERT_MSG(height > 0 && width > 0, "uv_grid size must be positive");
-        LFS_ASSERT_MSG(device == Device::CUDA, "uv_grid requires CUDA");
+        LFS_ASSERT_MSG(device == Device::GPU, "uv_grid requires CUDA");
         LFS_ASSERT_MSG(dtype == DataType::Float16 || dtype == DataType::Float32,
                        "uv_grid dtype must be float16 or float32");
         const float span_x = aspect / std::sqrt(1.0f + aspect * aspect);

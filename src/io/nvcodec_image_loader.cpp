@@ -1254,12 +1254,12 @@ namespace lfs::io {
         if (is_grayscale) {
             image_tensor_aux = Tensor::empty(
                 TensorShape({static_cast<size_t>(src_height), static_cast<size_t>(src_width)}),
-                Device::CUDA,
+                Device::GPU,
                 DataType::UInt8);
         } else {
             image_tensor_aux = Tensor::empty(
                 TensorShape({static_cast<size_t>(src_height), static_cast<size_t>(src_width), 3}),
-                Device::CUDA,
+                Device::GPU,
                 tensor_datatype);
         }
 
@@ -1353,7 +1353,7 @@ namespace lfs::io {
             u16_as_float.emplace(Tensor::empty(
                 TensorShape({static_cast<size_t>(src_height), static_cast<size_t>(src_width),
                              static_cast<size_t>(num_channels)}),
-                Device::CUDA,
+                Device::GPU,
                 DataType::Float32));
 
             cuda::launch_uint16_hwc_to_float32_hwc(
@@ -1373,7 +1373,7 @@ namespace lfs::io {
                 output_tensor = lanczos_resize(resize_input_image, target_height, target_width,
                                                LANCZOS_KERNEL_SIZE, static_cast<cudaStream_t>(cuda_stream));
                 if (output_uint8) {
-                    auto output_uint8_tensor = Tensor::empty(output_tensor.shape(), Device::CUDA, DataType::UInt8);
+                    auto output_uint8_tensor = Tensor::empty(output_tensor.shape(), Device::GPU, DataType::UInt8);
                     cuda::launch_float32_chw_to_uint8_chw(
                         output_tensor.ptr<float>(),
                         output_uint8_tensor.ptr<uint8_t>(),
@@ -1388,7 +1388,7 @@ namespace lfs::io {
             if (is_grayscale) {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1];
-                output_tensor = Tensor::empty(TensorShape({H, W}), Device::CUDA, DataType::Float32);
+                output_tensor = Tensor::empty(TensorShape({H, W}), Device::GPU, DataType::Float32);
                 cuda::launch_uint8_hw_to_float32_hw(
                     reinterpret_cast<const uint8_t*>(image_tensor_aux.data_ptr()),
                     reinterpret_cast<float*>(output_tensor.data_ptr()),
@@ -1397,7 +1397,7 @@ namespace lfs::io {
                 const auto shape = image_tensor_aux.shape();
                 const size_t H = shape[0], W = shape[1], C = shape[2];
                 if (output_uint8) {
-                    output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
+                    output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::UInt8);
                     if (decode_u16) {
                         cuda::launch_uint16_hwc_to_uint8_chw(
                             reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
@@ -1410,7 +1410,7 @@ namespace lfs::io {
                             H, W, C, static_cast<cudaStream_t>(cuda_stream));
                     }
                 } else {
-                    output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
+                    output_tensor = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::Float32);
                     if (decode_u16) {
                         cuda::launch_uint16_hwc_to_float32_chw(
                             reinterpret_cast<const uint16_t*>(image_tensor_aux.data_ptr()),
@@ -1528,11 +1528,11 @@ namespace lfs::io {
                 if (reusable_hwc && i < reusable_hwc->size() && (*reusable_hwc)[i] &&
                     (*reusable_hwc)[i]->is_valid() &&
                     (*reusable_hwc)[i]->shape() == hwc_shape &&
-                    (*reusable_hwc)[i]->device() == Device::CUDA &&
+                    (*reusable_hwc)[i]->device() == Device::GPU &&
                     (*reusable_hwc)[i]->dtype() == DataType::UInt8) {
                     hwc[i] = *(*reusable_hwc)[i];
                 } else {
-                    hwc[i] = Tensor::empty(hwc_shape, Device::CUDA, DataType::UInt8);
+                    hwc[i] = Tensor::empty(hwc_shape, Device::GPU, DataType::UInt8);
                 }
                 if (cuda_stream) {
                     hwc[i].set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -1560,7 +1560,7 @@ namespace lfs::io {
                 output.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
                 output.buffer = hwc[i].data_ptr();
                 if (impl_->sentinel_test_skipped_member == static_cast<int>(i)) {
-                    primary_discard = Tensor::empty(hwc_shape, Device::CUDA, DataType::UInt8);
+                    primary_discard = Tensor::empty(hwc_shape, Device::GPU, DataType::UInt8);
                     if (cuda_stream) {
                         primary_discard.set_stream(static_cast<cudaStream_t>(cuda_stream));
                     }
@@ -1689,7 +1689,7 @@ namespace lfs::io {
                         impl_->sentinel_test_skipped_member == static_cast<int>(member)) {
                         retry_discard = Tensor::empty(
                             TensorShape({heights[member], widths[member], size_t{3}}),
-                            Device::CUDA, DataType::UInt8);
+                            Device::GPU, DataType::UInt8);
                         if (cuda_stream) {
                             retry_discard.set_stream(stream);
                         }
@@ -1754,11 +1754,11 @@ namespace lfs::io {
                     if (reusable_outputs && i < reusable_outputs->size() && (*reusable_outputs)[i] &&
                         (*reusable_outputs)[i]->is_valid() &&
                         (*reusable_outputs)[i]->shape() == output_shape &&
-                        (*reusable_outputs)[i]->device() == Device::CUDA &&
+                        (*reusable_outputs)[i]->device() == Device::GPU &&
                         (*reusable_outputs)[i]->dtype() == DataType::UInt8) {
                         output = *(*reusable_outputs)[i];
                     } else {
-                        output = Tensor::empty(output_shape, Device::CUDA, DataType::UInt8);
+                        output = Tensor::empty(output_shape, Device::GPU, DataType::UInt8);
                     }
                     if (cuda_stream) {
                         output.set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -1776,11 +1776,11 @@ namespace lfs::io {
                     if (reusable_outputs && i < reusable_outputs->size() && (*reusable_outputs)[i] &&
                         (*reusable_outputs)[i]->is_valid() &&
                         (*reusable_outputs)[i]->shape() == output_shape &&
-                        (*reusable_outputs)[i]->device() == Device::CUDA &&
+                        (*reusable_outputs)[i]->device() == Device::GPU &&
                         (*reusable_outputs)[i]->dtype() == DataType::Float32) {
                         output = *(*reusable_outputs)[i];
                     } else {
-                        output = Tensor::empty(output_shape, Device::CUDA, DataType::Float32);
+                        output = Tensor::empty(output_shape, Device::GPU, DataType::Float32);
                     }
                     if (cuda_stream) {
                         output.set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -1844,8 +1844,8 @@ namespace lfs::io {
                             : image.to(DataType::UInt8);
         }
 
-        if (hwc_uint8.device() != Device::CUDA) {
-            hwc_uint8 = hwc_uint8.to(Device::CUDA);
+        if (hwc_uint8.device() != Device::GPU) {
+            hwc_uint8 = hwc_uint8.to(Device::GPU);
         }
         hwc_uint8 = hwc_uint8.contiguous();
 
@@ -1944,7 +1944,7 @@ namespace lfs::io {
             throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
         }
 
-        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
+        if (image.dtype() != DataType::Float32 || image.device() != Device::GPU) {
             throw std::runtime_error("encode_to_jpeg2k expects a Float32 CUDA tensor");
         }
 
@@ -1959,7 +1959,7 @@ namespace lfs::io {
         const Tensor hwc_float = is_chw ? image.permute({1, 2, 0}).contiguous()
                                         : image.contiguous();
         Tensor hwc_uint16 = Tensor::empty(
-            TensorShape({height, width, channels}), Device::CUDA, DataType::Float16);
+            TensorShape({height, width, channels}), Device::GPU, DataType::Float16);
         cuda::launch_float32_hwc_to_uint16_hwc(
             hwc_float.ptr<float>(),
             reinterpret_cast<uint16_t*>(hwc_uint16.data_ptr()),
@@ -2085,7 +2085,7 @@ namespace lfs::io {
         if (shape.rank() != 2) {
             throw std::runtime_error("Expected 2D tensor, got " + std::to_string(shape.rank()) + "D");
         }
-        if (image.dtype() != DataType::Float32 || image.device() != Device::CUDA) {
+        if (image.dtype() != DataType::Float32 || image.device() != Device::GPU) {
             throw std::runtime_error("encode_grayscale_to_jpeg2k expects a Float32 CUDA tensor");
         }
 
@@ -2096,7 +2096,7 @@ namespace lfs::io {
         const Tensor hw_float = image.contiguous();
         Tensor encoded = eight_bit
                              ? (hw_float * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
-                             : Tensor::empty(TensorShape({height, width}), Device::CUDA, DataType::Float16);
+                             : Tensor::empty(TensorShape({height, width}), Device::GPU, DataType::Float16);
         if (!eight_bit) {
             cuda::launch_float32_hwc_to_uint16_hwc(
                 hw_float.ptr<float>(),
@@ -2275,7 +2275,7 @@ namespace lfs::io {
         Tensor decoded_tensor = Tensor::empty(
             is_grayscale ? TensorShape({height, width})
                          : TensorShape({height, width, num_components}),
-            Device::CUDA,
+            Device::GPU,
             decode_uint8 ? DataType::UInt8 : DataType::Float16);
         if (cuda_stream) {
             decoded_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -2375,7 +2375,7 @@ namespace lfs::io {
         Tensor output_tensor = Tensor::empty(
             is_grayscale ? TensorShape({height, width})
                          : TensorShape({height, width, num_components}),
-            Device::CUDA,
+            Device::GPU,
             DataType::Float32);
         if (cuda_stream) {
             output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -2486,7 +2486,7 @@ namespace lfs::io {
                     components[i] == 1
                         ? TensorShape({heights[i], widths[i]})
                         : TensorShape({heights[i], widths[i], components[i]}),
-                    Device::CUDA,
+                    Device::GPU,
                     DataType::Float16);
                 if (cuda_stream) {
                     decoded_tensors[i].set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -2560,7 +2560,7 @@ namespace lfs::io {
                     components[i] == 1
                         ? TensorShape({heights[i], widths[i]})
                         : TensorShape({heights[i], widths[i], components[i]}),
-                    Device::CUDA,
+                    Device::GPU,
                     DataType::Float32);
                 if (cuda_stream) {
                     output.set_stream(static_cast<cudaStream_t>(cuda_stream));
@@ -2620,8 +2620,8 @@ namespace lfs::io {
             hw_uint8 = image.to(DataType::UInt8);
         }
 
-        if (hw_uint8.device() != Device::CUDA) {
-            hw_uint8 = hw_uint8.to(Device::CUDA);
+        if (hw_uint8.device() != Device::GPU) {
+            hw_uint8 = hw_uint8.to(Device::GPU);
         }
         hw_uint8 = hw_uint8.contiguous();
 
