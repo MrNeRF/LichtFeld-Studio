@@ -53,7 +53,7 @@ namespace lfs::core {
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
 
         // GPU: use tiled CUDA sgemm kernel
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&a, &b});
             auto result = internal::allocate_like(*this, TensorShape{m, n}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());
@@ -99,7 +99,7 @@ namespace lfs::core {
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
 
         // GPU: use tiled CUDA batched sgemm kernel
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&a, &b});
             auto result = internal::allocate_like(
                 *this, TensorShape{batch_size, m, n}, dtype_);
@@ -258,7 +258,7 @@ namespace lfs::core {
         const size_t n = a.shape_[0];
 
         // GPU: Use optimized CUDA kernel
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&a, &b});
             auto result = internal::allocate_like(*this, TensorShape{}, dtype_);
             prepare_inputs_for_stream({&a, &b}, result.stream());

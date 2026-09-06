@@ -185,7 +185,7 @@ namespace lfs::core::nn {
             return cpu;
         }
         if (dest_dtype == found->dtype) {
-            auto gpu = Tensor::empty(found->shape, Device::CUDA, dest_dtype);
+            auto gpu = Tensor::empty(found->shape, Device::GPU, dest_dtype);
             if (found->length > 0) {
                 LFS_CUDA_CHECK(cudaMemcpyAsync(gpu.data_ptr(), src,
                                                static_cast<std::size_t>(found->length),
@@ -193,7 +193,7 @@ namespace lfs::core::nn {
             }
             return gpu;
         }
-        auto tmp = Tensor::empty(found->shape, Device::CUDA, found->dtype);
+        auto tmp = Tensor::empty(found->shape, Device::GPU, found->dtype);
         if (found->length > 0) {
             LFS_CUDA_CHECK(cudaMemcpyAsync(tmp.data_ptr(), src, static_cast<std::size_t>(found->length),
                                            cudaMemcpyHostToDevice, tmp.stream()));
@@ -212,7 +212,7 @@ namespace lfs::core::nn {
             }
             out.emplace(name, std::move(*tensor));
         }
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             LFS_CUDA_CHECK(cudaDeviceSynchronize());
         }
         return out;

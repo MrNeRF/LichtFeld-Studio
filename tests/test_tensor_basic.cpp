@@ -76,7 +76,7 @@ protected:
 
 TEST_F(TensorBasicTest, EmptyTensorCreation) {
     // Create empty tensors
-    auto tensor_custom = Tensor::empty({2, 3, 4}, Device::CUDA);
+    auto tensor_custom = Tensor::empty({2, 3, 4}, Device::GPU);
     auto tensor_torch = torch::empty({2, 3, 4},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -96,7 +96,7 @@ TEST_F(TensorBasicTest, EmptyTensorCreation) {
 
 TEST_F(TensorBasicTest, ZerosTensorCreation) {
     // Create zeros tensors
-    auto tensor_custom = Tensor::zeros({3, 4}, Device::CUDA);
+    auto tensor_custom = Tensor::zeros({3, 4}, Device::GPU);
     auto tensor_torch = torch::zeros({3, 4},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -105,7 +105,7 @@ TEST_F(TensorBasicTest, ZerosTensorCreation) {
 
 TEST_F(TensorBasicTest, OnesTensorCreation) {
     // Create ones tensors
-    auto tensor_custom = Tensor::ones({5, 2}, Device::CUDA);
+    auto tensor_custom = Tensor::ones({5, 2}, Device::GPU);
     auto tensor_torch = torch::ones({5, 2},
                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -115,7 +115,7 @@ TEST_F(TensorBasicTest, OnesTensorCreation) {
 TEST_F(TensorBasicTest, FullTensorCreation) {
     float fill_value = 3.14f;
 
-    auto tensor_custom = Tensor::full({2, 3, 2}, fill_value, Device::CUDA);
+    auto tensor_custom = Tensor::full({2, 3, 2}, fill_value, Device::GPU);
     auto tensor_torch = torch::full({2, 3, 2}, fill_value,
                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -140,13 +140,13 @@ TEST_F(TensorBasicTest, ArangeTensorCreation) {
 
 TEST_F(TensorBasicTest, EyeTensorCreation) {
     // Square identity matrix
-    auto tensor_custom1 = Tensor::eye(5, Device::CUDA);
+    auto tensor_custom1 = Tensor::eye(5, Device::GPU);
     auto tensor_torch1 = torch::eye(5, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
     compare_tensors(tensor_custom1, tensor_torch1, 1e-6f, 1e-7f, "Eye_Square");
 
     // Rectangular identity matrix
-    auto tensor_custom2 = Tensor::eye(3, 5, Device::CUDA);
+    auto tensor_custom2 = Tensor::eye(3, 5, Device::GPU);
     auto tensor_torch2 = torch::eye(3, 5, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
     compare_tensors(tensor_custom2, tensor_torch2, 1e-6f, 1e-7f, "Eye_Rectangular");
@@ -155,7 +155,7 @@ TEST_F(TensorBasicTest, EyeTensorCreation) {
 TEST_F(TensorBasicTest, FromVectorCreation) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
 
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
 
     // Create PyTorch tensor from same data
     auto tensor_torch = torch::from_blob(
@@ -182,7 +182,7 @@ TEST_F(TensorBasicTest, FromBlobCreation) {
     cudaMemcpy(cuda_data, host_data.data(), num_elements * sizeof(float), cudaMemcpyHostToDevice);
 
     // Create tensor from blob
-    auto tensor_custom = Tensor::from_blob(cuda_data, {3, 4}, Device::CUDA, DataType::Float32);
+    auto tensor_custom = Tensor::from_blob(cuda_data, {3, 4}, Device::GPU, DataType::Float32);
     auto tensor_torch = torch::from_blob(cuda_data, {3, 4},
                                          torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -197,8 +197,8 @@ TEST_F(TensorBasicTest, FromBlobCreation) {
 // ============= Device Transfer Tests =============
 
 TEST_F(TensorBasicTest, DeviceTransferCUDAToCPU) {
-    // Create CUDA tensor
-    auto cuda_custom = Tensor::full({3, 3}, 2.5f, Device::CUDA);
+    // Create GPU tensor
+    auto cuda_custom = Tensor::full({3, 3}, 2.5f, Device::GPU);
     auto cuda_torch = torch::full({3, 3}, 2.5f,
                                   torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -218,19 +218,19 @@ TEST_F(TensorBasicTest, DeviceTransferCPUToCUDA) {
     auto cpu_torch = torch::full({4, 2}, 1.5f,
                                  torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCPU));
 
-    // Transfer to CUDA
-    auto cuda_custom = cpu_custom.to(Device::CUDA);
+    // Transfer to GPU
+    auto cuda_custom = cpu_custom.to(Device::GPU);
     auto cuda_torch = cpu_torch.to(torch::kCUDA);
 
-    EXPECT_EQ(cuda_custom.device(), Device::CUDA);
+    EXPECT_EQ(cuda_custom.device(), Device::GPU);
     EXPECT_TRUE(cuda_torch.device().is_cuda());
 
     compare_tensors(cuda_custom, cuda_torch, 1e-6f, 1e-7f, "DeviceTransfer_CPU_to_CUDA");
 }
 
 TEST_F(TensorBasicTest, DeviceTransferRoundTrip) {
-    // Create CUDA tensor
-    auto cuda_custom = Tensor::full({3, 3}, 2.5f, Device::CUDA);
+    // Create GPU tensor
+    auto cuda_custom = Tensor::full({3, 3}, 2.5f, Device::GPU);
     auto cuda_torch = torch::full({3, 3}, 2.5f,
                                   torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -258,7 +258,7 @@ TEST_F(TensorBasicTest, Clone) {
         data[i] = dist(gen);
     }
 
-    auto original_custom = Tensor::from_vector(data, {4, 5}, Device::CUDA);
+    auto original_custom = Tensor::from_vector(data, {4, 5}, Device::GPU);
     auto original_torch = torch::from_blob(
                               const_cast<float*>(data.data()),
                               {4, 5},
@@ -286,7 +286,7 @@ TEST_F(TensorBasicTest, Clone) {
 }
 
 TEST_F(TensorBasicTest, CloneModifyIndependence) {
-    auto original_custom = Tensor::ones({2, 3}, Device::CUDA);
+    auto original_custom = Tensor::ones({2, 3}, Device::GPU);
     auto original_torch = torch::ones({2, 3},
                                       torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -315,8 +315,8 @@ TEST_F(TensorBasicTest, CloneModifyIndependence) {
 // ============= Copy Tests =============
 
 TEST_F(TensorBasicTest, CopyFrom) {
-    auto tensor1_custom = Tensor::ones({2, 3}, Device::CUDA);
-    auto tensor2_custom = Tensor::zeros({2, 3}, Device::CUDA);
+    auto tensor1_custom = Tensor::ones({2, 3}, Device::GPU);
+    auto tensor2_custom = Tensor::zeros({2, 3}, Device::GPU);
 
     auto tensor1_torch = torch::ones({2, 3},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
@@ -343,7 +343,7 @@ TEST_F(TensorBasicTest, CopyFrom) {
 // ============= Fill Operations Tests =============
 
 TEST_F(TensorBasicTest, FillOperations) {
-    auto tensor_custom = Tensor::empty({3, 4}, Device::CUDA);
+    auto tensor_custom = Tensor::empty({3, 4}, Device::GPU);
     auto tensor_torch = torch::empty({3, 4},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -361,7 +361,7 @@ TEST_F(TensorBasicTest, FillOperations) {
 }
 
 TEST_F(TensorBasicTest, UniformFillOperation) {
-    auto tensor_custom = Tensor::empty({100}, Device::CUDA);
+    auto tensor_custom = Tensor::empty({100}, Device::GPU);
     auto tensor_torch = torch::empty({100},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -386,7 +386,7 @@ TEST_F(TensorBasicTest, UniformFillOperation) {
 }
 
 TEST_F(TensorBasicTest, NormalFillOperation) {
-    auto tensor_custom = Tensor::empty({1000}, Device::CUDA);
+    auto tensor_custom = Tensor::empty({1000}, Device::GPU);
     auto tensor_torch = torch::empty({1000},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -412,7 +412,7 @@ TEST_F(TensorBasicTest, NormalFillOperation) {
 // ============= Move Semantics Tests =============
 
 TEST_F(TensorBasicTest, MoveConstructor) {
-    auto tensor1 = Tensor::ones({2, 2}, Device::CUDA);
+    auto tensor1 = Tensor::ones({2, 2}, Device::GPU);
     void* original_ptr = tensor1.data_ptr();
 
     Tensor tensor2(std::move(tensor1));
@@ -424,10 +424,10 @@ TEST_F(TensorBasicTest, MoveConstructor) {
 }
 
 TEST_F(TensorBasicTest, MoveAssignment) {
-    auto tensor1 = Tensor::ones({2, 2}, Device::CUDA);
+    auto tensor1 = Tensor::ones({2, 2}, Device::GPU);
     void* original_ptr = tensor1.data_ptr();
 
-    auto tensor2 = Tensor::zeros({2, 2}, Device::CUDA);
+    auto tensor2 = Tensor::zeros({2, 2}, Device::GPU);
 
     tensor2 = std::move(tensor1);
 
@@ -439,7 +439,7 @@ TEST_F(TensorBasicTest, MoveAssignment) {
 
 TEST_F(TensorBasicTest, SelfMoveAssignmentPreservesStorage) {
     auto tensor = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU);
     const auto* original_data = tensor.ptr<float>();
 
     tensor = std::move(tensor);
@@ -452,7 +452,7 @@ TEST_F(TensorBasicTest, SelfMoveAssignmentPreservesStorage) {
 // ============= Properties Tests =============
 
 TEST_F(TensorBasicTest, Properties) {
-    auto tensor_custom = Tensor::full({2, 3, 4}, 1.0f, Device::CUDA);
+    auto tensor_custom = Tensor::full({2, 3, 4}, 1.0f, Device::GPU);
     auto tensor_torch = torch::full({2, 3, 4}, 1.0f,
                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -473,7 +473,7 @@ TEST_F(TensorBasicTest, Properties) {
 }
 
 TEST_F(TensorBasicTest, SizeMethod) {
-    auto tensor_custom = Tensor::full({2, 3, 4}, 1.0f, Device::CUDA);
+    auto tensor_custom = Tensor::full({2, 3, 4}, 1.0f, Device::GPU);
     auto tensor_torch = torch::full({2, 3, 4}, 1.0f,
                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -497,7 +497,7 @@ TEST_F(TensorBasicTest, InvalidTensor) {
 }
 
 TEST_F(TensorBasicTest, EmptyTensor) {
-    auto tensor_custom = Tensor::empty({0}, Device::CUDA);
+    auto tensor_custom = Tensor::empty({0}, Device::GPU);
     auto tensor_torch = torch::empty({0},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -510,10 +510,10 @@ TEST_F(TensorBasicTest, EmptyTensor) {
 // ============= AllClose Tests =============
 
 TEST_F(TensorBasicTest, AllClose) {
-    auto tensor1_custom = Tensor::full({3, 3}, 1.0f, Device::CUDA);
-    auto tensor2_custom = Tensor::full({3, 3}, 1.0f, Device::CUDA);
-    auto tensor3_custom = Tensor::full({3, 3}, 1.00001f, Device::CUDA);
-    auto tensor4_custom = Tensor::full({3, 3}, 2.0f, Device::CUDA);
+    auto tensor1_custom = Tensor::full({3, 3}, 1.0f, Device::GPU);
+    auto tensor2_custom = Tensor::full({3, 3}, 1.0f, Device::GPU);
+    auto tensor3_custom = Tensor::full({3, 3}, 1.00001f, Device::GPU);
+    auto tensor4_custom = Tensor::full({3, 3}, 2.0f, Device::GPU);
 
     auto tensor1_torch = torch::full({3, 3}, 1.0f,
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
@@ -540,7 +540,7 @@ TEST_F(TensorBasicTest, AllClose) {
 // ============= Item Tests =============
 
 TEST_F(TensorBasicTest, ItemScalar) {
-    auto tensor_custom = Tensor::full({1}, 3.14f, Device::CUDA);
+    auto tensor_custom = Tensor::full({1}, 3.14f, Device::GPU);
     auto tensor_torch = torch::full({1}, 3.14f,
                                     torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -553,20 +553,20 @@ TEST_F(TensorBasicTest, ItemScalar) {
 
 TEST_F(TensorBasicTest, ItemTemplate) {
     // Float
-    auto tensor_float = Tensor::full({1}, 2.5f, Device::CUDA);
+    auto tensor_float = Tensor::full({1}, 2.5f, Device::GPU);
     auto torch_float = torch::full({1}, 2.5f,
                                    torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     EXPECT_FLOAT_EQ(tensor_float.item<float>(), torch_float.item<float>());
 
     // Int
-    auto tensor_int = Tensor::full({1}, 42.0f, Device::CUDA, DataType::Int32);
+    auto tensor_int = Tensor::full({1}, 42.0f, Device::GPU, DataType::Int32);
     auto torch_int = torch::full({1}, 42,
                                  torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
     EXPECT_EQ(tensor_int.item<int>(), torch_int.item<int>());
 }
 
 TEST_F(TensorBasicTest, ItemTemplateRejectsDtypeMismatch) {
-    const auto value = Tensor::ones_bool({1}, Device::CUDA);
+    const auto value = Tensor::ones_bool({1}, Device::GPU);
 
     EXPECT_THROW((void)value.item<int>(), std::runtime_error);
 }
@@ -575,7 +575,7 @@ TEST_F(TensorBasicTest, FullPreservesNonFiniteFloatingValues) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
     const float infinity = std::numeric_limits<float>::infinity();
 
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         EXPECT_TRUE(std::isnan(Tensor::full({1}, nan, device).item<float>()));
         EXPECT_EQ(Tensor::full({1}, infinity, device).item<float>(), infinity);
         EXPECT_EQ(Tensor::full({1}, -infinity, device).item<float>(), -infinity);
@@ -595,7 +595,7 @@ TEST_F(TensorBasicTest, FullPreservesNonFiniteFloatingValues) {
 
     EXPECT_THROW(Tensor::full({1}, nan, Device::CPU, DataType::Int32),
                  std::runtime_error);
-    EXPECT_THROW(Tensor::full({1}, infinity, Device::CUDA, DataType::Bool),
+    EXPECT_THROW(Tensor::full({1}, infinity, Device::GPU, DataType::Bool),
                  std::runtime_error);
 }
 
@@ -603,21 +603,21 @@ TEST_F(TensorBasicTest, FullPreservesNonFiniteFloatingValues) {
 
 TEST_F(TensorBasicTest, DataTypes) {
     // Float32
-    auto tensor_f32 = Tensor::zeros({2, 2}, Device::CUDA, DataType::Float32);
+    auto tensor_f32 = Tensor::zeros({2, 2}, Device::GPU, DataType::Float32);
     auto torch_f32 = torch::zeros({2, 2},
                                   torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
     EXPECT_EQ(tensor_f32.dtype(), DataType::Float32);
     EXPECT_EQ(dtype_size(tensor_f32.dtype()), sizeof(float));
 
     // Int32
-    auto tensor_i32 = Tensor::zeros({2, 2}, Device::CUDA, DataType::Int32);
+    auto tensor_i32 = Tensor::zeros({2, 2}, Device::GPU, DataType::Int32);
     auto torch_i32 = torch::zeros({2, 2},
                                   torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
     EXPECT_EQ(tensor_i32.dtype(), DataType::Int32);
     EXPECT_EQ(dtype_size(tensor_i32.dtype()), sizeof(int32_t));
 
     // Bool
-    auto tensor_bool = Tensor::zeros_bool({2, 2}, Device::CUDA);
+    auto tensor_bool = Tensor::zeros_bool({2, 2}, Device::GPU);
     auto torch_bool = torch::zeros({2, 2},
                                    torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
     EXPECT_EQ(tensor_bool.dtype(), DataType::Bool);
@@ -629,7 +629,7 @@ TEST_F(TensorBasicTest, DataTypes) {
 TEST_F(TensorBasicTest, ToVector) {
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f};
 
-    auto tensor_custom = Tensor::from_vector(data, {2, 2}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 2}, Device::GPU);
     auto tensor_torch = torch::from_blob(
                             const_cast<float*>(data.data()),
                             {2, 2},
@@ -652,7 +652,7 @@ TEST_F(TensorBasicTest, ToVector) {
 TEST_F(TensorBasicTest, ToVectorInt) {
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
 
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
     auto tensor_torch = torch::from_blob(
                             const_cast<int*>(data.data()),
                             {2, 3},
@@ -675,7 +675,7 @@ TEST_F(TensorBasicTest, ToVectorInt) {
 TEST_F(TensorBasicTest, ToVectorBool) {
     std::vector<bool> data = {true, false, true, false, true, false};
 
-    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {2, 3}, Device::GPU);
 
     // PyTorch bool handling
     std::vector<uint8_t> uint8_data(data.size());
@@ -703,7 +703,7 @@ TEST_F(TensorBasicTest, ToVectorBool) {
 
 TEST_F(TensorBasicTest, ComprehensiveWorkflow) {
     // Create -> Fill -> Clone -> Transfer -> Compare
-    auto tensor_custom = Tensor::empty({10, 10}, Device::CUDA);
+    auto tensor_custom = Tensor::empty({10, 10}, Device::GPU);
     auto tensor_torch = torch::empty({10, 10},
                                      torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
 
@@ -741,7 +741,7 @@ TEST_F(TensorBasicTest, ComprehensiveWorkflow) {
 
 TEST_F(TensorBasicTest, MoveLeavesConsistentEmptyMetadata) {
     auto source = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU);
     const auto* original_data = source.ptr<float>();
 
     auto destination = std::move(source);
@@ -764,7 +764,7 @@ TEST_F(TensorBasicTest, MoveThroughExpectedAndConstructorPreservesTensor) {
 
     const auto create_wrapped = []() -> std::expected<Wrapper, std::string> {
         return Wrapper(Tensor::from_vector(
-            std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA));
+            std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU));
     };
 
     auto result = create_wrapped();

@@ -80,14 +80,14 @@ namespace {
         const auto rest = q16_sh1_rest();
         const size_t cells = sh_value_quant::sh_value_u16_count(kQ16Sh1N, rest);
         const size_t bounds_n = sh_value_quant::n_bounds_for_prims(kQ16Sh1N) * 2u;
-        Tensor means = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({kQ16Sh1N, 1, 3}, Device::CUDA);
-        Tensor scaling = Tensor::zeros({kQ16Sh1N, 3}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({kQ16Sh1N, 4}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({kQ16Sh1N, 1}, Device::CUDA);
+        Tensor means = Tensor::zeros({kQ16Sh1N, 3}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({kQ16Sh1N, 1, 3}, Device::GPU);
+        Tensor scaling = Tensor::zeros({kQ16Sh1N, 3}, Device::GPU);
+        Tensor rotation = Tensor::zeros({kQ16Sh1N, 4}, Device::GPU);
+        Tensor opacity = Tensor::zeros({kQ16Sh1N, 1}, Device::GPU);
         Tensor shN = Tensor::zeros_direct(
-            TensorShape({cells}), cells, Device::CUDA, DataType::Float16);
-        Tensor bounds = Tensor::zeros({bounds_n}, Device::CUDA, DataType::Float32);
+            TensorShape({cells}), cells, Device::GPU, DataType::Float16);
+        Tensor bounds = Tensor::zeros({bounds_n}, Device::GPU, DataType::Float32);
         SplatData model(kQ16Sh1Degree,
                         std::move(means),
                         std::move(sh0),
@@ -1063,15 +1063,15 @@ TEST(SplatExportableStorageTest, MigrateFloatSwizzledShNFallsBackToQ16AtFullCapa
         auto storage = std::move(*storage_result);
 
         const auto rest = sh_rest_coefficients_for_degree(sh_degree);
-        Tensor means = Tensor::zeros({kCap, 3}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({kCap, 1, 3}, Device::CUDA);
-        Tensor scaling = Tensor::zeros({kCap, 3}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({kCap, 4}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({kCap, 1}, Device::CUDA);
+        Tensor means = Tensor::zeros({kCap, 3}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({kCap, 1, 3}, Device::GPU);
+        Tensor scaling = Tensor::zeros({kCap, 3}, Device::GPU);
+        Tensor rotation = Tensor::zeros({kCap, 4}, Device::GPU);
+        Tensor opacity = Tensor::zeros({kCap, 1}, Device::GPU);
         Tensor shN = Tensor::zeros_direct(
             TensorShape({sh_swizzled_float_count(kCap, rest)}),
             sh_swizzled_float_count(kCap, rest),
-            Device::CUDA);
+            Device::GPU);
 
         SplatData model(sh_degree,
                         std::move(means),
@@ -1198,7 +1198,7 @@ TEST(SplatExportableStorageTest, ForcedGrowFailureLeavesModelUntouched) {
     EXPECT_EQ(model.scaling_raw().capacity(), scaling_cap_before);
 
     // add_new_params must also throw without mutating when ensure fails.
-    auto new_means = Tensor::zeros({n_new, 3}, Device::CUDA);
+    auto new_means = Tensor::zeros({n_new, 3}, Device::GPU);
     EXPECT_THROW(
         opt.add_new_params(lfs::training::ParamType::Means, new_means, true),
         std::runtime_error);
@@ -1768,7 +1768,7 @@ TEST(ExportableStorageTest, MakeVulkanExternalTensorShapedBlockSplitsChunksAndIs
     auto tensor = Tensor::from_external_owner(
         block->device_ptr,
         TensorShape({kBytes}),
-        Device::CUDA,
+        Device::GPU,
         DataType::UInt8,
         std::shared_ptr<void>(block),
         kBytes,
@@ -1800,13 +1800,13 @@ namespace {
                                                   const int sh_degree,
                                                   const float shN_fill) {
         const auto rest = static_cast<size_t>(sh_rest_coefficients_for_degree(sh_degree));
-        Tensor means = Tensor::zeros({n, size_t{3}}, Device::CUDA);
-        Tensor sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA);
-        Tensor shN = rest > 0 ? Tensor::zeros({n, rest, size_t{3}}, Device::CUDA)
-                              : Tensor::zeros({0}, Device::CUDA);
-        Tensor scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA);
-        Tensor rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA);
-        Tensor opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA);
+        Tensor means = Tensor::zeros({n, size_t{3}}, Device::GPU);
+        Tensor sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU);
+        Tensor shN = rest > 0 ? Tensor::zeros({n, rest, size_t{3}}, Device::GPU)
+                              : Tensor::zeros({0}, Device::GPU);
+        Tensor scaling = Tensor::zeros({n, size_t{3}}, Device::GPU);
+        Tensor rotation = Tensor::zeros({n, size_t{4}}, Device::GPU);
+        Tensor opacity = Tensor::zeros({n, size_t{1}}, Device::GPU);
 
         std::vector<float> host_means(n * 3, 0.0f);
         std::vector<float> host_rot(n * 4, 0.0f);
@@ -1990,7 +1990,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableQ16ModelConsistent) 
     for (size_t i = 0; i < kN; i += 2) {
         host_mask[i] = 1;
     }
-    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::GPU);
     model->soft_delete(mask);
     ASSERT_TRUE(model->has_deleted_mask());
 
@@ -2035,7 +2035,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedThenMergeKeepsMaskLengthConsistent)
     for (size_t i = 0; i < kN / 2; ++i) {
         host_mask[i] = 1;
     }
-    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::GPU);
     model->soft_delete(mask);
     ASSERT_TRUE(model->has_deleted_mask());
 
@@ -2089,7 +2089,7 @@ TEST(SplatExportableStorageTest, ApplyDeletedKeepsExportableFloatShNWhenQ16Disab
     for (size_t i = 0; i < kN; i += 2) {
         host_mask[i] = 1;
     }
-    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::CUDA);
+    Tensor mask = Tensor::from_blob(host_mask.data(), {kN}, Device::CPU, DataType::Bool).to(Device::GPU);
     model->soft_delete(mask);
     ASSERT_TRUE(model->has_deleted_mask());
 

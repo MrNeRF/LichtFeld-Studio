@@ -418,14 +418,14 @@ namespace lfs::io {
             const auto C = static_cast<size_t>(channels);
 
             if (params.output_uint8) {
-                auto output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::UInt8);
+                auto output = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::UInt8);
                 lfs::io::cuda::launch_uint8_hwc_to_uint8_chw(
                     gpu_uint8.ptr<uint8_t>(), output.ptr<uint8_t>(), H, W, C,
                     static_cast<cudaStream_t>(params.cuda_stream));
                 return output;
             }
 
-            auto output = Tensor::empty(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
+            auto output = Tensor::empty(TensorShape({C, H, W}), Device::GPU, DataType::Float32);
             lfs::io::cuda::launch_uint8_hwc_to_float32_chw(
                 gpu_uint8.ptr<uint8_t>(), output.ptr<float>(), H, W, C,
                 static_cast<cudaStream_t>(params.cuda_stream));
@@ -496,7 +496,7 @@ namespace lfs::io {
                     tensor = lfs::core::undistort_image(
                         tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
                     if (restore_uint8) {
-                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::CUDA, DataType::UInt8);
+                        auto uint8_tensor = Tensor::empty(tensor.shape(), Device::GPU, DataType::UInt8);
                         lfs::io::cuda::launch_float32_chw_to_uint8_chw(
                             tensor.ptr<float>(),
                             uint8_tensor.ptr<uint8_t>(),

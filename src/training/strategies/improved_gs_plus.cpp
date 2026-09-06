@@ -53,7 +53,7 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
-            if (tensor.device() == lfs::core::Device::CUDA &&
+            if (tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
                 kernels::launch_normalize_by_positive_median(
@@ -1260,7 +1260,7 @@ namespace lfs::training {
                 free_mask.numel() > max_capacity) {
                 throw std::runtime_error("Invalid ImprovedGSPlus checkpoint: free mask has incompatible schema");
             }
-            if (_splat_data->means().device() == lfs::core::Device::CUDA) {
+            if (_splat_data->means().device() == lfs::core::Device::GPU) {
                 free_mask = free_mask.cuda();
             }
         } else {

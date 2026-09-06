@@ -63,7 +63,7 @@ namespace lfs::rendering {
         if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
             return -1;
         }
-        if (screen_positions.device() != Device::CUDA ||
+        if (screen_positions.device() != Device::GPU ||
             screen_positions.dtype() != DataType::Float32 ||
             screen_positions.ndim() != 2 ||
             screen_positions.size(1) != 2) {

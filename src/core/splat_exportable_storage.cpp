@@ -496,7 +496,7 @@ namespace lfs::core {
             }
             Tensor t = Tensor::from_external_owner(data,
                                                    std::move(shape),
-                                                   Device::CUDA,
+                                                   Device::GPU,
                                                    dtype,
                                                    std::move(owner),
                                                    clamped,
@@ -667,7 +667,7 @@ namespace lfs::core {
                     dtype = source.dtype();
                     if (!aliases) {
                         source_cuda =
-                            source.device() == Device::CUDA ? source : source.cuda();
+                            source.device() == Device::GPU ? source : source.cuda();
                         if (!source_cuda.is_contiguous()) {
                             source_cuda = source_cuda.contiguous();
                         }
@@ -727,7 +727,7 @@ namespace lfs::core {
                 if (!aliases && !src_is_q16) {
                     // Densify expand path: preserve float/f16 temp; do not zero-fill.
                     shN = shN_src;
-                    if (shN.device() != Device::CUDA) {
+                    if (shN.device() != Device::GPU) {
                         shN = shN.cuda();
                     }
                     if (!shN.is_contiguous()) {
@@ -744,7 +744,7 @@ namespace lfs::core {
                     dst.set_name("SplatData.shN");
                     if (!aliases && src_is_q16 && shN_src.is_valid() && shN_src.numel() > 0) {
                         Tensor src = shN_src;
-                        if (src.device() != Device::CUDA) {
+                        if (src.device() != Device::GPU) {
                             src = src.cuda();
                         }
                         if (!src.is_contiguous()) {
@@ -766,7 +766,7 @@ namespace lfs::core {
                         tensor_aliases_exportable_block(bounds_src, block_ref);
                     if (!bounds_alias && bounds_src.is_valid() && bounds_src.numel() > 0) {
                         Tensor bsrc = bounds_src;
-                        if (bsrc.device() != Device::CUDA) {
+                        if (bsrc.device() != Device::GPU) {
                             bsrc = bsrc.cuda();
                         }
                         if (!bsrc.is_contiguous()) {

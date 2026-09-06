@@ -199,7 +199,7 @@ namespace lfs::core {
                                       : &bias;
 
         // GPU path: Output[C_out, S] = Weight[C_out, C_in] @ Input[C_in, S]
-        if (device_ == Device::CUDA && N == 1) {
+        if (device_ == Device::GPU && N == 1) {
             pin_operands({&weight_cont, &input_cont});
             auto output = internal::allocate_like(
                 *this, TensorShape{N, C_out, H, W}, dtype_);
@@ -218,7 +218,7 @@ namespace lfs::core {
         }
 
         // Batched GPU path for N > 1: process each batch
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&weight_cont, &input_cont});
             auto output = internal::allocate_like(
                 *this, TensorShape{N, C_out, H, W}, dtype_);
@@ -318,7 +318,7 @@ namespace lfs::core {
                         static_cast<size_t>(H_out), static_cast<size_t>(W_out)},
             dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             const internal::PoolProgram program{
                 .batch = N,
                 .channels = C,
@@ -367,7 +367,7 @@ namespace lfs::core {
                         static_cast<size_t>(output_h), static_cast<size_t>(output_w)},
             dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             const internal::PoolProgram program{
                 .batch = N,
                 .channels = C,
@@ -431,7 +431,7 @@ namespace lfs::core {
                                       : &bias;
 
         // GPU path: Output[batch, out] = Input[batch, in] @ Weight^T[in, out]
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&input_cont, &weight_cont});
             auto output = internal::allocate_like(
                 *this, TensorShape{batch_size, out_features}, dtype_);
@@ -498,7 +498,7 @@ namespace lfs::core {
                                    "(input_channels={}, weight_input_channels={}, "
                                    "input_shape={}, weight_shape={})",
                                    shape_[1], weight.shape_[1], shape_.str(), weight.shape_.str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("conv1x1_bias_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -566,7 +566,7 @@ namespace lfs::core {
                        std::format("relu_out output element count must match input "
                                    "(input_numel={}, output_numel={}, input_shape={}, output_shape={})",
                                    numel(), output.numel(), shape_.str(), output.shape().str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("relu_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -594,7 +594,7 @@ namespace lfs::core {
                                    "(input_channels={}, weight_input_channels={}, "
                                    "input_shape={}, weight_shape={})",
                                    shape_[1], weight.shape_[1], shape_.str(), weight.shape_.str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("conv1x1_bias_relu_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -669,7 +669,7 @@ namespace lfs::core {
                        std::format("max_pool2d_out input must be 4D [N,C,H,W] "
                                    "(input_shape={}, input_rank={})",
                                    shape_.str(), shape_.rank()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("max_pool2d_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -729,7 +729,7 @@ namespace lfs::core {
                        std::format("adaptive_avg_pool2d_out input must be 4D [N,C,H,W] "
                                    "(input_shape={}, input_rank={})",
                                    shape_.str(), shape_.rank()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("adaptive_avg_pool2d_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -787,7 +787,7 @@ namespace lfs::core {
                                    "input_shape={}, weight_shape={})",
                                    shape_[shape_.rank() - 1], weight.shape()[1],
                                    shape_.str(), weight.shape().str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("linear_bias_relu_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -872,7 +872,7 @@ namespace lfs::core {
                                    "input_shape={}, weight_shape={})",
                                    shape_[shape_.rank() - 1], weight.shape()[1],
                                    shape_.str(), weight.shape().str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("linear_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));

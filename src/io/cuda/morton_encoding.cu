@@ -122,7 +122,7 @@ namespace lfs::io {
                 return false;
             }
 
-            if (positions.device() != Device::CUDA) {
+            if (positions.device() != Device::GPU) {
                 LOG_ERROR("{}: Positions must be on CUDA", op_name);
                 return false;
             }
@@ -176,8 +176,8 @@ namespace lfs::io {
         const int n_positions = static_cast<int>(positions.size(0));
         const MortonParams params = compute_morton_params(positions, n_positions);
 
-        auto morton_codes = Tensor::empty({static_cast<size_t>(n_positions)}, Device::CUDA, DataType::Int64);
-        auto indices = Tensor::empty({static_cast<size_t>(n_positions)}, Device::CUDA, DataType::Int32);
+        auto morton_codes = Tensor::empty({static_cast<size_t>(n_positions)}, Device::GPU, DataType::Int64);
+        auto indices = Tensor::empty({static_cast<size_t>(n_positions)}, Device::GPU, DataType::Int32);
 
         constexpr int BLOCK_SIZE = 256;
         const int grid_size = (n_positions + BLOCK_SIZE - 1) / BLOCK_SIZE;

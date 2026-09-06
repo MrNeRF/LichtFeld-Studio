@@ -23,7 +23,7 @@ namespace {
 
     Tensor upload_vulkan(const Tensor& cpu) {
         GpuBackendScope scope(GpuBackend::Vulkan);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     std::vector<float> pattern(const size_t count, const size_t period = 97) {

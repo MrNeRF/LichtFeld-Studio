@@ -31,7 +31,7 @@ TEST(PointCloudMerge, TransformMatchesGlmForCpuAndGpuPoints) {
     world = glm::rotate(world, 0.7f, glm::normalize(glm::vec3(0.3f, 1.0f, -0.2f)));
     world = glm::scale(world, glm::vec3(1.25f, 0.8f, 1.1f));
     const Tensor cpu = Tensor::from_vector(values, TensorShape{kPoints, 3}, Device::CPU);
-    for (const Tensor& means : {cpu, cpu.to(Device::CUDA)}) {
+    for (const Tensor& means : {cpu, cpu.to(Device::GPU)}) {
         const Tensor transformed = lfs::vis::transformPointsToWorld(means, world);
         ASSERT_EQ(transformed.device(), Device::CPU);
         ASSERT_EQ(transformed.shape(), TensorShape({kPoints, size_t{3}}));
@@ -57,7 +57,7 @@ TEST(PointCloudMerge, ColorsScaleBytesAndKeepFloats) {
         EXPECT_EQ(scaled[i], static_cast<float>(bytes[i]) * (1.0f / 255.0f)) << "index=" << i;
 
     const auto floats = points();
-    const Tensor float_colors = Tensor::from_vector(floats, TensorShape{kPoints, 3}, Device::CPU).to(Device::CUDA);
+    const Tensor float_colors = Tensor::from_vector(floats, TensorShape{kPoints, 3}, Device::CPU).to(Device::GPU);
     EXPECT_EQ(lfs::vis::pointColorsAsFloat(float_colors).to_vector(), floats);
     EXPECT_EQ(lfs::vis::pointColorsAsFloat(Tensor{}).numel(), 0u);
 }

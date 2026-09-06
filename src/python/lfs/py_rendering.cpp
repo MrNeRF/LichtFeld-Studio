@@ -163,7 +163,7 @@ namespace lfs::python {
             scene_state.transform_indices = std::make_shared<core::Tensor>(
                 core::Tensor::zeros(
                     {static_cast<std::size_t>(splat.size())},
-                    core::Device::CUDA,
+                    core::Device::GPU,
                     core::DataType::Int32));
             scene_state.node_visibility_mask = {true};
             scene_state.selected_node_mask = {true};
@@ -215,7 +215,7 @@ namespace lfs::python {
             auto transform_indices = std::make_shared<core::Tensor>(
                 core::Tensor::zeros(
                     {static_cast<std::size_t>(point_cloud.size())},
-                    core::Device::CUDA,
+                    core::Device::GPU,
                     core::DataType::Int32));
 
             rendering::PointCloudRenderRequest request{};

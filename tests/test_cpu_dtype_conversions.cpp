@@ -138,10 +138,10 @@ TEST(CPUDtypeConversionTest, EveryDtypePairHasExactArithmeticAndPromotion) {
             SCOPED_TRACE(std::string(dtype_name(lhs_dtype)) + " with " +
                          std::string(dtype_name(rhs_dtype)));
             const auto lhs = Tensor::from_vector(
-                                 std::vector<float>{0.0f, 2.0f}, {2}, Device::CUDA)
+                                 std::vector<float>{0.0f, 2.0f}, {2}, Device::GPU)
                                  .to(lhs_dtype);
             const auto rhs = Tensor::from_vector(
-                                 std::vector<float>{0.0f, 1.0f}, {2}, Device::CUDA)
+                                 std::vector<float>{0.0f, 1.0f}, {2}, Device::GPU)
                                  .to(rhs_dtype);
 
             if (lhs_dtype == DataType::Bool && rhs_dtype == DataType::Bool) {
@@ -175,9 +175,9 @@ TEST(CPUDtypeConversionTest, EveryDtypePairHasExactArithmeticAndPromotion) {
 
 TEST(CPUDtypeConversionTest, MixedDtypeBroadcastPromotesAndExpands) {
     const auto mask = Tensor::from_vector(
-        std::vector<bool>{true}, {1}, Device::CUDA);
+        std::vector<bool>{true}, {1}, Device::GPU);
     const auto values = Tensor::from_vector(
-                            std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA)
+                            std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU)
                             .to(DataType::Float16);
 
     const auto result = mask * values;
@@ -189,7 +189,7 @@ TEST(CPUDtypeConversionTest, MixedDtypeBroadcastPromotesAndExpands) {
 
 TEST(CPUDtypeConversionTest, Float16ToBoolHasExactValues) {
     const auto values = Tensor::from_vector(
-                            std::vector<float>{0.0f, 1.0f, -2.0f}, {3}, Device::CUDA)
+                            std::vector<float>{0.0f, 1.0f, -2.0f}, {3}, Device::GPU)
                             .to(DataType::Float16);
 
     const auto result = values.to(DataType::Bool);

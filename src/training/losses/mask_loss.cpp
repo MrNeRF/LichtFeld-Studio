@@ -21,13 +21,13 @@ namespace lfs::training::losses {
             return;
         }
         photometric_weight = lfs::core::Tensor::empty(
-            {H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {H, W}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         grad_alpha = lfs::core::Tensor::empty(
-            {H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {H, W}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         loss_scalar = lfs::core::Tensor::empty(
-            {1}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {1}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         reduce_temp = lfs::core::Tensor::empty(
-            {1024}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            {1024}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         allocated_h = H;
         allocated_w = W;
     }
@@ -60,7 +60,7 @@ namespace lfs::training::losses {
 
         LFS_ASSERT_MSG(user_mask.ndim() == 2, "photometric mask must be 2D");
         LFS_ASSERT_MSG(
-            user_mask.device() == lfs::core::Device::CUDA,
+            user_mask.device() == lfs::core::Device::GPU,
             "photometric mask must be CUDA");
         LFS_ASSERT_MSG(
             user_mask.dtype() == lfs::core::DataType::Float32 ||

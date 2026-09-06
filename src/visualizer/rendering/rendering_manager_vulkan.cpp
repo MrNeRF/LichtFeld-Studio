@@ -1342,8 +1342,8 @@ namespace lfs::vis {
                                 gt_layout == lfs::rendering::ImageLayout::CHW &&
                                 request.undistort_requested;
                             if (undistort_gt) {
-                                if (gt_tensor.device() != lfs::core::Device::CUDA) {
-                                    gt_tensor = gt_tensor.to(lfs::core::Device::CUDA, worker_stream);
+                                if (gt_tensor.device() != lfs::core::Device::GPU) {
+                                    gt_tensor = gt_tensor.to(lfs::core::Device::GPU, worker_stream);
                                 }
                                 if (gt_tensor.dtype() == lfs::core::DataType::UInt8) {
                                     gt_tensor = gt_tensor.to(lfs::core::DataType::Float32) / 255.0f;
@@ -2359,11 +2359,11 @@ namespace lfs::vis {
             if (!image || !image->is_valid()) {
                 return {};
             }
-            if (image->device() == lfs::core::Device::CUDA) {
+            if (image->device() == lfs::core::Device::GPU) {
                 return image;
             }
             auto cuda_image = image->cuda();
-            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
                 LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
                 return {};
             }
@@ -2392,7 +2392,7 @@ namespace lfs::vis {
                 split_left_image_generation_ =
                     (split_left_image_generation_ + 1) | SPLIT_LEFT_GENERATION_BIT;
             }
-            if (image->device() == lfs::core::Device::CUDA) {
+            if (image->device() == lfs::core::Device::GPU) {
                 return image;
             }
             if (gt_comparison_cuda_image_ && gt_comparison_cuda_source_ == image.get() &&
@@ -2402,7 +2402,7 @@ namespace lfs::vis {
                 return gt_comparison_cuda_image_;
             }
             auto cuda_image = image->cuda();
-            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::GPU) {
                 LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
                 return {};
             }
@@ -4743,7 +4743,7 @@ namespace lfs::vis {
                       const std::string_view name) -> lfs::core::Tensor {
                 (void)capacity;
                 lfs::core::Tensor tensor =
-                    lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::CUDA, dtype);
+                    lfs::core::Tensor::empty(std::move(shape), lfs::core::Device::GPU, dtype);
                 tensor.set_name(std::string{name});
                 return tensor;
             };

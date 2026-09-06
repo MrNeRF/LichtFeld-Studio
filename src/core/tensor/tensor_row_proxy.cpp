@@ -52,7 +52,7 @@ namespace lfs::core {
         if (cuda_staging_slots_.empty()) {
             return;
         }
-        if (!tensor_ || !tensor_->is_valid() || tensor_->device() != Device::CUDA) {
+        if (!tensor_ || !tensor_->is_valid() || tensor_->device() != Device::GPU) {
             return;
         }
         if (tensor_->dtype() != DataType::Float32) {
@@ -118,7 +118,7 @@ namespace lfs::core {
         // Use actual strides for proper indexing on non-contiguous tensors
         size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
-        if (tensor_->device() == Device::CUDA) {
+        if (tensor_->device() == Device::GPU) {
             float value = 0.0f;
             copy_scalar_from_cuda(*tensor_, linear_idx, &value, sizeof(float));
             return value;
@@ -148,7 +148,7 @@ namespace lfs::core {
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);
 
-        if (tensor_->device() == Device::CUDA) {
+        if (tensor_->device() == Device::GPU) {
             float value = 0.0f;
             copy_scalar_from_cuda(*tensor_, linear_idx, &value, sizeof(float));
             return value;
@@ -228,7 +228,7 @@ namespace lfs::core {
             Tensor other_copy;
             if (other.device() == tensor_->device()) {
                 other_copy = other.clone();
-            } else if (tensor_->device() == Device::CUDA) {
+            } else if (tensor_->device() == Device::GPU) {
                 other_copy = internal::copy_to_backend(
                     other, gpu_backend_of(*tensor_).value());
             } else {
@@ -289,7 +289,7 @@ namespace lfs::core {
             // Use stride for proper indexing on non-contiguous 1D tensors
             size_t linear_idx = row_index_ * tensor_->stride(0);
 
-            if (tensor_->device() == Device::CUDA) {
+            if (tensor_->device() == Device::GPU) {
                 copy_scalar_to_cuda(*tensor_, linear_idx, &val, sizeof(float));
             } else {
                 tensor_->ptr<float>()[linear_idx] = val;
@@ -311,7 +311,7 @@ namespace lfs::core {
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);
 
-        if (tensor_->device() == Device::CUDA) {
+        if (tensor_->device() == Device::GPU) {
             copy_scalar_to_cuda(*tensor_, linear_idx, &value, sizeof(float));
         } else {
             tensor_->ptr<float>()[linear_idx] = value;

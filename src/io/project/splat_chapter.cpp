@@ -459,7 +459,7 @@ namespace lfs::io::project {
         std::size_t device_bytes = 0;
         bool has_cuda_tensor = false;
         for (const auto* tensor : tensors) {
-            if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
+            if (!tensor->is_valid() || tensor->device() != lfs::core::Device::GPU) {
                 continue;
             }
             has_cuda_tensor = true;
@@ -608,7 +608,7 @@ namespace lfs::io::project {
             source.push_back(describe(0, model.means().contiguous()));
             source.push_back(describe(1, model.sh0().contiguous()));
             const auto& resident_sh = model.shN();
-            if (resident_sh.device() == lfs::core::Device::CUDA &&
+            if (resident_sh.device() == lfs::core::Device::GPU &&
                 resident_sh.dtype() == lfs::core::DataType::Float32) {
                 SourceTensor item;
                 item.id = 2;
@@ -674,7 +674,7 @@ namespace lfs::io::project {
             constexpr std::size_t window_bytes = 64ull * 1024ull * 1024ull;
             const bool has_cuda_source = std::ranges::any_of(
                 source, [](const SourceTensor& item) {
-                    return item.tensor.device() == lfs::core::Device::CUDA;
+                    return item.tensor.device() == lfs::core::Device::GPU;
                 });
             if (has_cuda_source) {
                 const auto status = cudaStreamCreateWithFlags(
@@ -730,7 +730,7 @@ namespace lfs::io::project {
             lfs::core::Tensor sh_scratch;
             if (std::ranges::any_of(source, &SourceTensor::sh_range)) {
                 sh_scratch = lfs::core::Tensor::empty(
-                    {window_bytes}, lfs::core::Device::CUDA,
+                    {window_bytes}, lfs::core::Device::GPU,
                     lfs::core::DataType::UInt8, false);
             }
             const auto flush_slot = [&](StagingSlot& slot) -> lfs::Result<void> {
@@ -758,7 +758,7 @@ namespace lfs::io::project {
                         count -= count % sizeof(float);
                     auto* const destination =
                         result.data() + data_offset + offset;
-                    if (item.tensor.device() == lfs::core::Device::CUDA) {
+                    if (item.tensor.device() == lfs::core::Device::GPU) {
                         auto& slot = staging[staging_index++ % staging.size()];
                         if (auto flushed = flush_slot(slot); !flushed)
                             return std::move(flushed).error();

@@ -618,8 +618,8 @@ TEST(TensorLazyIrTest, OnModeMixedTransferThenHostBoundaryMaterializesOnlyOnce) 
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before = Tensor::lazy_telemetry_snapshot();
-    auto gpu = deferred.to(Device::CUDA);
-    EXPECT_EQ(gpu.device(), Device::CUDA);
+    auto gpu = deferred.to(Device::GPU);
+    EXPECT_EQ(gpu.device(), Device::GPU);
 
     const auto after_transfer = Tensor::lazy_telemetry_snapshot();
     EXPECT_GT(after_transfer.materializations - before.materializations, 0u);
@@ -692,8 +692,8 @@ TEST(TensorLazyIrTest, OnModeDeviceTransferBoundaryMaterializes) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
 
-    auto gpu = deferred.to(Device::CUDA);
-    EXPECT_EQ(gpu.device(), Device::CUDA);
+    auto gpu = deferred.to(Device::GPU);
+    EXPECT_EQ(gpu.device(), Device::GPU);
     auto back_to_cpu = gpu.to(Device::CPU);
     const auto values = back_to_cpu.to_vector();
     ASSERT_EQ(values.size(), 4u);
@@ -1068,7 +1068,7 @@ TEST(TensorLazyIrTest, OnModeGpuPointwiseFusionValueParity) {
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
-    auto x = Tensor::ones({4096}, Device::CUDA, DataType::Float32);
+    auto x = Tensor::ones({4096}, Device::GPU, DataType::Float32);
     auto y = x.add(3.0f).mul(2.0f).sub(1.0f).div(4.0f);
 
     auto cpu_result = y.to(Device::CPU).to_vector();
@@ -1097,7 +1097,7 @@ TEST(TensorLazyIrTest, OnModeGpuPointwiseFusionReducesLaunches) {
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
-        auto x = Tensor::ones({2048}, Device::CUDA, DataType::Float32);
+        auto x = Tensor::ones({2048}, Device::GPU, DataType::Float32);
         auto step1 = x.add(1.5f);
         auto step2 = step1.mul(2.0f);
         auto step3 = step2.sub(3.0f);
@@ -1149,7 +1149,7 @@ TEST(TensorLazyIrTest, OnModeGpuAffineFoldIdentityIsCorrect) {
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
-    auto x = Tensor::full({512}, 42.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({512}, 42.0f, Device::GPU, DataType::Float32);
     auto y = x.mul(1.0f).add(0.0f).mul(1.0f).add(0.0f);
 
     auto cpu_result = y.to(Device::CPU).to_vector();
@@ -1244,7 +1244,7 @@ TEST(TensorLazyIrTest, OnModeGpuPureUnaryChainFusesWithParity) {
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
-        auto x = Tensor::full({2048}, 4.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 4.0f, Device::GPU, DataType::Float32);
         auto y = x.abs().sqrt().exp();
 
         struct Result {
@@ -1277,7 +1277,7 @@ TEST(TensorLazyIrTest, OnModeGpuMixedChainFusesWithParity) {
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
-        auto x = Tensor::full({2048}, -3.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, -3.0f, Device::GPU, DataType::Float32);
         auto y = x.add(1.0f).mul(2.0f).abs().sigmoid();
 
         struct Result {
@@ -1436,7 +1436,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceSumGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({4096}, 3.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({4096}, 3.0f, Device::GPU, DataType::Float32);
         auto result = x.add(1.0f).mul(2.0f).sum();
         unfused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1447,7 +1447,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceSumGPU) {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
-        auto x = Tensor::full({4096}, 3.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({4096}, 3.0f, Device::GPU, DataType::Float32);
         auto result = x.add(1.0f).mul(2.0f).sum();
         fused_val = result.to(Device::CPU).to_vector()[0];
 
@@ -1467,7 +1467,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMeanGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({2048}, 5.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 5.0f, Device::GPU, DataType::Float32);
         auto result = x.mul(2.0f).abs().mean();
         unfused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1476,7 +1476,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMeanGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::full({2048}, 5.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 5.0f, Device::GPU, DataType::Float32);
         auto result = x.mul(2.0f).abs().mean();
         fused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1493,7 +1493,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMaxGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA);
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::GPU);
         auto result = x.add(-1.0f).max();
         unfused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1502,7 +1502,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMaxGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA);
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::GPU);
         auto result = x.add(-1.0f).max();
         fused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1519,7 +1519,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMinGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({2048}, 2.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 2.0f, Device::GPU, DataType::Float32);
         auto result = x.sub(0.5f).sigmoid().min();
         unfused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1528,7 +1528,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMinGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::full({2048}, 2.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 2.0f, Device::GPU, DataType::Float32);
         auto result = x.sub(0.5f).sigmoid().min();
         fused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1545,7 +1545,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceUnaryChainGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({2048}, 4.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 4.0f, Device::GPU, DataType::Float32);
         auto result = x.abs().sqrt().exp().sum();
         unfused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1555,7 +1555,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceUnaryChainGPU) {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
-        auto x = Tensor::full({2048}, 4.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({2048}, 4.0f, Device::GPU, DataType::Float32);
         auto result = x.abs().sqrt().exp().sum();
         fused_val = result.to(Device::CPU).to_vector()[0];
 
@@ -1577,7 +1577,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceDiagnosticsGPU) {
 
     const auto before = internal::lazy_executor_diagnostics_snapshot_for_testing();
 
-    auto x = Tensor::full({4096}, 1.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({4096}, 1.0f, Device::GPU, DataType::Float32);
     auto result = x.add(1.0f).mul(2.0f).sum();
     auto val = result.to(Device::CPU).to_vector();
 
@@ -1593,7 +1593,7 @@ TEST(TensorLazyRuntimeTest, NonFullReduceFallback) {
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
-    auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
     auto partial = x.add(1.0f).sum({0});
 
     auto cpu_result = partial.to(Device::CPU).to_vector();
@@ -1614,7 +1614,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceProdGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({512}, 1.01f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({512}, 1.01f, Device::GPU, DataType::Float32);
         auto result = x.add(0.01f).prod();
         unfused_val = result.to(Device::CPU).to_vector()[0];
     }
@@ -1624,7 +1624,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceProdGPU) {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
-        auto x = Tensor::full({512}, 1.01f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({512}, 1.01f, Device::GPU, DataType::Float32);
         auto result = x.add(0.01f).prod();
         fused_val = result.to(Device::CPU).to_vector()[0];
 
@@ -1644,7 +1644,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceSumGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
         auto result = x.add(1.0f).sum({1});
         unfused_result = result.to(Device::CPU).to_vector();
     }
@@ -1654,7 +1654,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceSumGPU) {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
-        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
         auto result = x.add(1.0f).sum({1});
         fused_result = result.to(Device::CPU).to_vector();
 
@@ -1678,7 +1678,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMeanGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
         auto result = x.add(1.0f).mean({1});
         unfused_result = result.to(Device::CPU).to_vector();
     }
@@ -1687,7 +1687,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMeanGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
         auto result = x.add(1.0f).mean({1});
         fused_result = result.to(Device::CPU).to_vector();
     }
@@ -1717,7 +1717,7 @@ TEST(TensorLazyRuntimeTest, ErankExpressionMatchesTorchOnInheritedStream) {
     Tensor scaling;
     {
         CUDAStreamGuard stream_guard(stream);
-        scaling = Tensor::from_vector(host_scaling, {static_cast<size_t>(kRows), static_cast<size_t>(kCols)}, Device::CUDA);
+        scaling = Tensor::from_vector(host_scaling, {static_cast<size_t>(kRows), static_cast<size_t>(kCols)}, Device::GPU);
     }
     ASSERT_EQ(scaling.stream(), stream);
 
@@ -1763,7 +1763,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedSquareSumMatchesTorchOnInheritedStream
     Tensor scaling;
     {
         CUDAStreamGuard stream_guard(stream);
-        scaling = Tensor::from_vector(host_scaling, {static_cast<size_t>(kRows), static_cast<size_t>(kCols)}, Device::CUDA);
+        scaling = Tensor::from_vector(host_scaling, {static_cast<size_t>(kRows), static_cast<size_t>(kCols)}, Device::GPU);
     }
     ASSERT_EQ(scaling.stream(), stream);
 
@@ -1800,7 +1800,7 @@ TEST(TensorLazyRuntimeTest, DeferredMaterializationKeepsActualExecutionStream) {
     Tensor base;
     {
         CUDAStreamGuard producer_guard(producer);
-        base = Tensor::ones({8192}, Device::CUDA, DataType::Float32);
+        base = Tensor::ones({8192}, Device::GPU, DataType::Float32);
     }
     ASSERT_EQ(base.stream(), producer);
 
@@ -1838,7 +1838,7 @@ TEST(TensorLazyRuntimeTest, DeferredViewChainPreservesSourceStreamHint) {
     Tensor base;
     {
         CUDAStreamGuard stream_guard(stream);
-        base = Tensor::ones({2, 3}, Device::CUDA, DataType::Float32);
+        base = Tensor::ones({2, 3}, Device::GPU, DataType::Float32);
     }
     ASSERT_EQ(base.stream(), stream);
 
@@ -1879,7 +1879,7 @@ TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWitho
     Tensor base;
     {
         CUDAStreamGuard producer_guard(producer);
-        base = Tensor::zeros({8192}, Device::CUDA, DataType::Float32);
+        base = Tensor::zeros({8192}, Device::GPU, DataType::Float32);
     }
     ASSERT_EQ(base.stream(), producer);
 
@@ -1889,7 +1889,7 @@ TEST(TensorLazyRuntimeTest, DeferredHintedChainWaitsForProducerWhenConsumedWitho
     Tensor bias;
     {
         CUDAStreamGuard hint_guard(hinted_consumer);
-        bias = Tensor::full({8192}, 2.0f, Device::CUDA, DataType::Float32);
+        bias = Tensor::full({8192}, 2.0f, Device::GPU, DataType::Float32);
     }
     ASSERT_EQ(bias.stream(), hinted_consumer);
 
@@ -1929,7 +1929,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMaxGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::GPU).reshape({32, 64});
         auto result = x.add(1.0f).max({1});
         unfused_result = result.to(Device::CPU).to_vector();
     }
@@ -1938,7 +1938,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMaxGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::GPU).reshape({32, 64});
         auto result = x.add(1.0f).max({1});
         fused_result = result.to(Device::CPU).to_vector();
     }
@@ -1958,7 +1958,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMinGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::GPU).reshape({32, 64});
         auto result = x.mul(0.5f).min({1});
         unfused_result = result.to(Device::CPU).to_vector();
     }
@@ -1967,7 +1967,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMinGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::GPU).reshape({32, 64});
         auto result = x.mul(0.5f).min({1});
         fused_result = result.to(Device::CPU).to_vector();
     }
@@ -1987,7 +1987,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceProdGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({8, 16}, 1.05f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({8, 16}, 1.05f, Device::GPU, DataType::Float32);
         auto result = x.add(0.01f).prod({1});
         unfused_result = result.to(Device::CPU).to_vector();
     }
@@ -1996,7 +1996,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceProdGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::full({8, 16}, 1.05f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({8, 16}, 1.05f, Device::GPU, DataType::Float32);
         auto result = x.add(0.01f).prod({1});
         fused_result = result.to(Device::CPU).to_vector();
     }
@@ -2015,7 +2015,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceKeepdimGPU) {
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
-    auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
     auto result = x.add(1.0f).sum({1}, true);
 
     ASSERT_EQ(result.shape().rank(), 2u);
@@ -2038,7 +2038,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceUnaryChainGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
-        auto x = Tensor::full({16, 128}, 4.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({16, 128}, 4.0f, Device::GPU, DataType::Float32);
         auto result = x.abs().sqrt().sum({1});
         unfused_result = result.to(Device::CPU).to_vector();
     }
@@ -2047,7 +2047,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceUnaryChainGPU) {
     {
         LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-        auto x = Tensor::full({16, 128}, 4.0f, Device::CUDA, DataType::Float32);
+        auto x = Tensor::full({16, 128}, 4.0f, Device::GPU, DataType::Float32);
         auto result = x.abs().sqrt().sum({1});
         fused_result = result.to(Device::CPU).to_vector();
     }
@@ -2069,7 +2069,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceDiagnosticsGPU) {
 
     const auto before = internal::lazy_executor_diagnostics_snapshot_for_testing();
 
-    auto x = Tensor::full({32, 64}, 1.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({32, 64}, 1.0f, Device::GPU, DataType::Float32);
     auto result = x.add(1.0f).sum({1});
     auto val = result.to(Device::CPU).to_vector();
 
@@ -2087,7 +2087,7 @@ TEST(TensorLazyRuntimeTest, NonLastDimReduceFallback) {
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
-    auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({32, 64}, 2.0f, Device::GPU, DataType::Float32);
     auto result = x.add(1.0f).sum({0});
 
     auto cpu_result = result.to(Device::CPU).to_vector();
@@ -2108,7 +2108,7 @@ TEST(TensorLazyIrTest, LazyReduceIRNodeRecorded) {
     LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
-    auto x = Tensor::full({4096}, 2.0f, Device::CUDA, DataType::Float32);
+    auto x = Tensor::full({4096}, 2.0f, Device::GPU, DataType::Float32);
     auto result = x.add(1.0f).sum();
 
     // Reduce result is eager; IR still records the reduce node when enabled.

@@ -54,7 +54,7 @@ namespace {
 
     TEST_F(TensorVulkanBufferQuery, PendingValueIsSignalledAfterSynchronize) {
         GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor source = Tensor::full({256}, 1.25f, Device::CUDA);
+        const Tensor source = Tensor::full({256}, 1.25f, Device::GPU);
         const Tensor result = source.mul(3.0f);
         const auto buffer = tensor_vulkan_buffer(result);
         ASSERT_TRUE(buffer.has_value());
@@ -70,7 +70,7 @@ namespace {
     TEST_F(TensorVulkanBufferQuery, ViewOffsetBytesAndDeviceAddressMatchStorage) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor base = Tensor::from_vector(
-            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::CUDA);
+            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU);
         const Tensor sliced = base.slice(0, 1, 2);
         const auto buffer = tensor_vulkan_buffer(sliced);
         ASSERT_TRUE(buffer.has_value());
@@ -84,7 +84,7 @@ namespace {
     TEST_F(TensorVulkanBufferQuery, KeepAlivePinsStorageAfterTensorDrop) {
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::ones({8}, Device::CUDA);
+            const Tensor warm = Tensor::ones({8}, Device::GPU);
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 8.0f);
         }
         Tensor::trim_memory_pool();
@@ -92,7 +92,7 @@ namespace {
         std::shared_ptr<void> pin;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            Tensor tensor = Tensor::ones({4096}, Device::CUDA);
+            Tensor tensor = Tensor::ones({4096}, Device::GPU);
             const auto buffer = tensor_vulkan_buffer(tensor);
             ASSERT_TRUE(buffer.has_value());
             ASSERT_TRUE(static_cast<bool>(buffer->keep_alive));
@@ -111,7 +111,7 @@ namespace {
     TEST_F(TensorVulkanBufferQuery, CudaAndCpuTensorsReturnNullopt) {
         {
             GpuBackendScope cuda_scope(GpuBackend::CUDA);
-            const Tensor cuda = Tensor::ones({8}, Device::CUDA);
+            const Tensor cuda = Tensor::ones({8}, Device::GPU);
             EXPECT_EQ(gpu_backend_of(cuda), GpuBackend::CUDA);
             EXPECT_FALSE(tensor_vulkan_buffer(cuda).has_value());
         }
@@ -122,7 +122,7 @@ namespace {
     TEST_F(TensorVulkanBufferQuery, TimelineIsNullAfterShutdown) {
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor tensor = Tensor::ones({8}, Device::CUDA);
+            const Tensor tensor = Tensor::ones({8}, Device::GPU);
             ASSERT_TRUE(tensor_vulkan_buffer(tensor).has_value());
             ASSERT_NE(vulkan_backend_timeline(), nullptr);
         }

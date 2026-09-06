@@ -11,16 +11,16 @@
 using namespace lfs::core;
 
 TEST(TensorAdvancedTest, LinspaceIncludesEndpointsAndRejectsZeroSteps) {
-    const auto values = Tensor::linspace(-1.0f, 1.0f, 5, Device::CUDA).cpu().to_vector();
+    const auto values = Tensor::linspace(-1.0f, 1.0f, 5, Device::GPU).cpu().to_vector();
     EXPECT_EQ(values, (std::vector<float>{-1.0f, -0.5f, 0.0f, 0.5f, 1.0f}));
-    EXPECT_THROW(Tensor::linspace(0.0f, 1.0f, 0, Device::CUDA), std::runtime_error);
+    EXPECT_THROW(Tensor::linspace(0.0f, 1.0f, 0, Device::GPU), std::runtime_error);
 }
 
 TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {
     const auto first = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f}, {2}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f}, {2}, Device::GPU);
     const auto second = Tensor::from_vector(
-        std::vector<float>{3.0f, 4.0f}, {2}, Device::CUDA);
+        std::vector<float>{3.0f, 4.0f}, {2}, Device::GPU);
     const auto result = Tensor::stack({first, second}, 0);
 
     EXPECT_EQ(result.shape(), TensorShape({2, 2}));
@@ -29,7 +29,7 @@ TEST(TensorAdvancedTest, StackPreservesValuesAndRejectsEmptyInput) {
 }
 
 TEST(TensorAdvancedTest, TryReshapeDistinguishesCompatibleShapes) {
-    const auto input = Tensor::arange(12.0f).to(Device::CUDA);
+    const auto input = Tensor::arange(12.0f).to(Device::GPU);
 
     const auto compatible = input.try_reshape({3, 4});
     const auto incompatible = input.try_reshape({5, 3});
@@ -41,7 +41,7 @@ TEST(TensorAdvancedTest, TryReshapeDistinguishesCompatibleShapes) {
 }
 
 TEST(TensorAdvancedTest, SplitBatchPreservesTailAndValues) {
-    const auto input = Tensor::arange(1000.0f).to(Device::CUDA).reshape({100, 10});
+    const auto input = Tensor::arange(1000.0f).to(Device::GPU).reshape({100, 10});
 
     const auto batches = Tensor::split_batch(input, 32);
 
@@ -54,7 +54,7 @@ TEST(TensorAdvancedTest, SplitBatchPreservesTailAndValues) {
 }
 
 TEST(TensorAdvancedTest, ApplyAndInplaceChainsHaveDistinctOwnership) {
-    auto input = Tensor::ones({4}, Device::CUDA);
+    auto input = Tensor::ones({4}, Device::GPU);
     const auto applied = input.apply([](const Tensor& tensor) { return tensor.add(1.0f); })
                              .apply([](const Tensor& tensor) { return tensor.mul(2.0f); })
                              .apply([](const Tensor& tensor) { return tensor.sub(1.0f); });
@@ -75,7 +75,7 @@ TEST(TensorAdvancedTest, SpecialValuesAreDetectedAndClamped) {
             std::numeric_limits<float>::infinity(),
             -std::numeric_limits<float>::infinity(),
             0.0f},
-        {4}, Device::CUDA);
+        {4}, Device::GPU);
 
     EXPECT_TRUE(tensor.has_nan());
     EXPECT_TRUE(tensor.has_inf());
@@ -91,7 +91,7 @@ TEST(TensorAdvancedTest, SpecialValuesAreDetectedAndClamped) {
 
 TEST(TensorAdvancedTest, DiagPlacesValuesOnlyOnDiagonal) {
     const auto diagonal = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU);
     const auto matrix = Tensor::diag(diagonal);
 
     EXPECT_EQ(matrix.shape(), TensorShape({3, 3}));
@@ -107,7 +107,7 @@ TEST(TensorAdvancedTest, ProfilingWrapperPreservesResult) {
         ~ProfilingGuard() { Tensor::enable_profiling(false); }
     } guard;
 
-    const auto input = Tensor::ones({4}, Device::CUDA);
+    const auto input = Tensor::ones({4}, Device::GPU);
     const auto result = input.timed("test_operation", [](const Tensor& tensor) {
         return tensor.add(1.0f).mul(2.0f).sub(1.0f);
     });
@@ -116,12 +116,12 @@ TEST(TensorAdvancedTest, ProfilingWrapperPreservesResult) {
 }
 
 TEST(TensorAdvancedTest, MetadataAssertionsRejectMismatches) {
-    auto cuda_float = Tensor::ones({3, 4}, Device::CUDA, DataType::Float32);
+    auto cuda_float = Tensor::ones({3, 4}, Device::GPU, DataType::Float32);
     auto cpu_int = Tensor::zeros({3, 4}, Device::CPU, DataType::Int32);
 
     EXPECT_NO_THROW(cuda_float.assert_shape({3, 4}, "shape"));
     EXPECT_THROW(cuda_float.assert_shape({4, 3}, "shape"), TensorError);
-    EXPECT_NO_THROW(cuda_float.assert_device(Device::CUDA));
+    EXPECT_NO_THROW(cuda_float.assert_device(Device::GPU));
     EXPECT_THROW(cuda_float.assert_device(Device::CPU), TensorError);
     EXPECT_NO_THROW(cpu_int.assert_dtype(DataType::Int32));
     EXPECT_THROW(cpu_int.assert_dtype(DataType::Float32), TensorError);

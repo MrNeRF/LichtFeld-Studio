@@ -40,14 +40,14 @@ namespace lfs::rendering {
 
         [[nodiscard]] Tensor matchBackend(const Tensor& src, const GpuBackend backend) {
             const auto src_backend = lfs::core::gpu_backend_of(src);
-            if (src.device() == Device::CUDA && src_backend && *src_backend == backend) {
+            if (src.device() == Device::GPU && src_backend && *src_backend == backend) {
                 return src.is_contiguous() ? src : src.contiguous();
             }
             GpuBackendScope scope(backend);
             if (src.device() == Device::CPU) {
-                return src.to(Device::CUDA);
+                return src.to(Device::GPU);
             }
-            return src.cpu().to(Device::CUDA);
+            return src.cpu().to(Device::GPU);
         }
 
         [[nodiscard]] Tensor asBool(const Tensor& tensor) {
@@ -71,11 +71,11 @@ namespace lfs::rendering {
 
         void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
             if (!counts_scratch.is_valid() ||
-                counts_scratch.device() != Device::CUDA ||
+                counts_scratch.device() != Device::GPU ||
                 counts_scratch.dtype() != DataType::Int32 ||
                 counts_scratch.numel() != kSelectionGroupScratchWords) {
                 counts_scratch = Tensor::zeros(
-                    {kSelectionGroupScratchWords}, Device::CUDA, DataType::Int32);
+                    {kSelectionGroupScratchWords}, Device::GPU, DataType::Int32);
             } else {
                 counts_scratch.zero_();
             }
@@ -94,7 +94,7 @@ namespace lfs::rendering {
                 }
             }
             GpuBackendScope scope(backend);
-            return Tensor::from_vector(bits, {kSelectionGroupCountBins}, Device::CUDA);
+            return Tensor::from_vector(bits, {kSelectionGroupCountBins}, Device::GPU);
         }
 
         [[nodiscard]] Tensor existingGroups(const Tensor& existing_mask,
@@ -108,7 +108,7 @@ namespace lfs::rendering {
                 return groups.flatten().contiguous();
             }
             GpuBackendScope scope(backend);
-            return Tensor::zeros({n}, Device::CUDA, DataType::UInt8);
+            return Tensor::zeros({n}, Device::GPU, DataType::UInt8);
         }
 
         [[nodiscard]] Tensor nodeValidMask(const std::size_t n,
@@ -116,7 +116,7 @@ namespace lfs::rendering {
                                            const std::vector<bool>& valid_nodes,
                                            const GpuBackend backend) {
             GpuBackendScope scope(backend);
-            auto valid = Tensor::full_bool({n}, true, Device::CUDA);
+            auto valid = Tensor::full_bool({n}, true, Device::GPU);
             if (!nodeMaskRestrictsSelection(valid_nodes)) {
                 return valid;
             }
@@ -125,7 +125,7 @@ namespace lfs::rendering {
                 return valid;
             }
             const int num_nodes = static_cast<int>(valid_nodes.size());
-            const Tensor table = Tensor::from_vector(valid_nodes, {valid_nodes.size()}, Device::CUDA);
+            const Tensor table = Tensor::from_vector(valid_nodes, {valid_nodes.size()}, Device::GPU);
             Tensor idx = matchBackend(*transform_indices, backend).flatten().to(DataType::Int32);
             const Tensor in_range = (idx >= 0).logical_and(idx < num_nodes);
             const Tensor safe = Tensor::where(in_range, idx, Tensor::zeros_like(idx));
@@ -176,13 +176,13 @@ namespace lfs::rendering {
             const Tensor old_nz = old_g != 0;
             if (old_nz.any_scalar()) {
                 const Tensor old_pos = old_nz.nonzero().flatten().to(DataType::Int32);
-                const Tensor neg = Tensor::full({old_pos.numel()}, -1.0f, Device::CUDA, DataType::Int32);
+                const Tensor neg = Tensor::full({old_pos.numel()}, -1.0f, Device::GPU, DataType::Int32);
                 counts_scratch.index_add_(0, old_g.index_select(0, old_pos), neg);
             }
             const Tensor new_nz = new_g != 0;
             if (new_nz.any_scalar()) {
                 const Tensor new_pos = new_nz.nonzero().flatten().to(DataType::Int32);
-                const Tensor pos = Tensor::full({new_pos.numel()}, 1.0f, Device::CUDA, DataType::Int32);
+                const Tensor pos = Tensor::full({new_pos.numel()}, 1.0f, Device::GPU, DataType::Int32);
                 counts_scratch.index_add_(0, new_g.index_select(0, new_pos), pos);
             }
             counts_scratch.slice(0, static_cast<int>(kSelectionChangedCountIndex),
@@ -198,8 +198,8 @@ namespace lfs::rendering {
                                              const bool add_mode,
                                              const bool replace_mode) {
             const auto n = static_cast<std::size_t>(existing_u8.numel());
-            const Tensor gid = Tensor::full({n}, static_cast<float>(group_id), Device::CUDA, DataType::UInt8);
-            const Tensor zeros = Tensor::zeros({n}, Device::CUDA, DataType::UInt8);
+            const Tensor gid = Tensor::full({n}, static_cast<float>(group_id), Device::GPU, DataType::UInt8);
+            const Tensor zeros = Tensor::zeros({n}, Device::GPU, DataType::UInt8);
             Tensor updated;
             if (replace_mode) {
                 const Tensor selected_val = Tensor::where(is_other_locked, existing_u8, gid);
@@ -260,7 +260,7 @@ namespace lfs::rendering {
                 idx = idx.clamp(0.0f, static_cast<float>(count - 1));
             } else {
                 GpuBackendScope scope(backend);
-                idx = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
+                idx = Tensor::zeros({n}, Device::GPU, DataType::Int32);
             }
             const Tensor m = mats.index_select(0, idx);
             const Tensor x = col1(means, 0);
@@ -319,8 +319,8 @@ namespace lfs::rendering {
         const Tensor result = applyGroupLogic(
             selected, existing_u8, node_valid, is_other_locked, group_id, add_mode, replace_mode);
         if (!output_mask.is_valid() || output_mask.numel() != n ||
-            output_mask.dtype() != DataType::UInt8 || output_mask.device() != Device::CUDA) {
-            output_mask = Tensor::empty({n}, Device::CUDA, DataType::UInt8);
+            output_mask.dtype() != DataType::UInt8 || output_mask.device() != Device::GPU) {
+            output_mask = Tensor::empty({n}, Device::GPU, DataType::UInt8);
         }
         output_mask.copy_from(result);
         if (group_counts_scratch != nullptr) {

@@ -39,7 +39,7 @@ namespace {
 
         static void force_vulkan_context() {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::ones({8}, Device::CUDA);
+            const Tensor warm = Tensor::ones({8}, Device::GPU);
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 8.0f);
         }
     };
@@ -314,7 +314,7 @@ namespace {
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
             const uint64_t live_before = internal::vulkan_live_vma_objects_for_testing();
-            const Tensor ones = Tensor::ones({count}, Device::CUDA);
+            const Tensor ones = Tensor::ones({count}, Device::GPU);
             internal::backend_ops(GpuBackend::Vulkan).synchronize_device();
             const Tensor result = ones.mul(42.0f);
             const auto view = cuda_view_of_vulkan_tensor(result, stream);
@@ -349,7 +349,7 @@ namespace {
         ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor base = Tensor::from_vector(
-            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::CUDA);
+            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU);
         const Tensor sliced = base.slice(0, 1, 2);
         const auto view = cuda_view_of_vulkan_tensor(sliced, stream);
         ASSERT_TRUE(view) << lfs::format_for_developer(view.error());
@@ -371,7 +371,7 @@ namespace {
         ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::ones({8}, Device::CUDA);
+            const Tensor warm = Tensor::ones({8}, Device::GPU);
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 8.0f);
         }
         Tensor::trim_memory_pool();
@@ -379,7 +379,7 @@ namespace {
         Tensor view;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            Tensor tensor = Tensor::ones({4096}, Device::CUDA);
+            Tensor tensor = Tensor::ones({4096}, Device::GPU);
             auto created = cuda_view_of_vulkan_tensor(tensor, stream);
             ASSERT_TRUE(created) << lfs::format_for_developer(created.error());
             view = *created;
@@ -404,7 +404,7 @@ namespace {
         ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
         {
             GpuBackendScope cuda_scope(GpuBackend::CUDA);
-            const Tensor cuda = Tensor::ones({8}, Device::CUDA);
+            const Tensor cuda = Tensor::ones({8}, Device::GPU);
             EXPECT_EQ(gpu_backend_of(cuda), GpuBackend::CUDA);
             const auto view = cuda_view_of_vulkan_tensor(cuda, stream);
             EXPECT_FALSE(view);
@@ -417,7 +417,7 @@ namespace {
 
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor base = Tensor::from_vector(
-            std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8}, {2, 4}, Device::CUDA);
+            std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8}, {2, 4}, Device::GPU);
         const Tensor column = base.slice(1, 0, 1);
         ASSERT_FALSE(column.is_contiguous());
         const auto strided = cuda_view_of_vulkan_tensor(column, stream);
@@ -436,7 +436,7 @@ namespace {
         Tensor view;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor tensor = Tensor::ones({4096}, Device::CUDA);
+            const Tensor tensor = Tensor::ones({4096}, Device::GPU);
             auto created = cuda_view_of_vulkan_tensor(tensor, stream);
             ASSERT_TRUE(created) << lfs::format_for_developer(created.error());
             view = *created;
@@ -459,7 +459,7 @@ namespace {
         EXPECT_TRUE(vulkan_backend_adopted());
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::ones({8}, Device::CUDA);
+            const Tensor warm = Tensor::ones({8}, Device::GPU);
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 8.0f);
         }
         if (!vulkan_backend_exports_memory()) {
@@ -468,7 +468,7 @@ namespace {
         cudaStream_t stream = nullptr;
         ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
         GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor source = Tensor::full({1024}, 3.5f, Device::CUDA);
+        const Tensor source = Tensor::full({1024}, 3.5f, Device::GPU);
         const Tensor result = source.mul(2.0f);
         const auto view = cuda_view_of_vulkan_tensor(result, stream);
         ASSERT_TRUE(view) << lfs::format_for_developer(view.error());
@@ -492,7 +492,7 @@ TEST_F(TensorVulkanCudaBridge, DirectLargeAllocationsAreNotExportableButStayUsab
     }
     GpuBackendScope scope(GpuBackend::Vulkan);
     constexpr size_t count = size_t{100} * 1024 * 1024 / sizeof(float);
-    Tensor large = Tensor::ones({count}, Device::CUDA, DataType::Float32);
+    Tensor large = Tensor::ones({count}, Device::GPU, DataType::Float32);
     EXPECT_FLOAT_EQ(large.sum_scalar(), static_cast<float>(count));
     const auto view = cuda_view_of_vulkan_tensor(large, nullptr);
     ASSERT_FALSE(view.has_value());

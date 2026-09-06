@@ -343,8 +343,8 @@ namespace lfs::rendering {
                 prepared.dtype() != lfs::core::DataType::Float32) {
                 prepared = prepared.to(lfs::core::DataType::Float32);
             }
-            if (prepared.device() != lfs::core::Device::CUDA) {
-                prepared = prepared.to(lfs::core::Device::CUDA, stream);
+            if (prepared.device() != lfs::core::Device::GPU) {
+                prepared = prepared.to(lfs::core::Device::GPU, stream);
             }
             if (!prepared.is_contiguous()) {
                 prepared = prepared.contiguous();

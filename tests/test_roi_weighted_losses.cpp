@@ -34,12 +34,12 @@ namespace {
         const int width = static_cast<int>(depth.shape()[1]);
         const cudaStream_t stream = depth.stream();
         DepthResult result{
-            .loss = Tensor::empty({size_t{1}}, Device::CUDA),
-            .grad_depth = Tensor::empty(depth.shape(), Device::CUDA),
-            .grad_alpha = Tensor::empty(alpha.shape(), Device::CUDA)};
+            .loss = Tensor::empty({size_t{1}}, Device::GPU),
+            .grad_depth = Tensor::empty(depth.shape(), Device::GPU),
+            .grad_alpha = Tensor::empty(alpha.shape(), Device::GPU)};
         auto partials = Tensor::empty(
             {lfs::training::kernels::depth_loss_partial_count(depth.numel())},
-            Device::CUDA);
+            Device::GPU);
         result.loss.set_stream(stream);
         result.grad_depth.set_stream(stream);
         result.grad_alpha.set_stream(stream);
@@ -81,11 +81,11 @@ namespace {
         const int width = static_cast<int>(alpha.shape()[1]);
         const cudaStream_t stream = rendered.stream();
         NormalResult result{
-            .loss = Tensor::empty({size_t{1}}, Device::CUDA),
-            .grad_normal = Tensor::empty(rendered.shape(), Device::CUDA)};
+            .loss = Tensor::empty({size_t{1}}, Device::GPU),
+            .grad_normal = Tensor::empty(rendered.shape(), Device::GPU)};
         auto partials = Tensor::empty(
             {lfs::training::kernels::normal_loss_partial_count(alpha.numel())},
-            Device::CUDA);
+            Device::GPU);
         result.loss.set_stream(stream);
         result.grad_normal.set_stream(stream);
         partials.set_stream(stream);
@@ -124,13 +124,13 @@ namespace {
         const int width = static_cast<int>(depth.shape()[1]);
         const cudaStream_t stream = depth.stream();
         ConsistencyResult result{
-            .loss = Tensor::empty({size_t{1}}, Device::CUDA),
-            .grad_normal = Tensor::zeros(rendered_normal.shape(), Device::CUDA),
-            .grad_depth = Tensor::zeros(depth.shape(), Device::CUDA),
-            .grad_alpha = Tensor::zeros(alpha.shape(), Device::CUDA)};
+            .loss = Tensor::empty({size_t{1}}, Device::GPU),
+            .grad_normal = Tensor::zeros(rendered_normal.shape(), Device::GPU),
+            .grad_depth = Tensor::zeros(depth.shape(), Device::GPU),
+            .grad_alpha = Tensor::zeros(alpha.shape(), Device::GPU)};
         auto partials = Tensor::empty(
             {lfs::training::kernels::normal_consistency_partial_count(depth.numel())},
-            Device::CUDA);
+            Device::GPU);
         result.loss.set_stream(stream);
         result.grad_normal.set_stream(stream);
         result.grad_depth.set_stream(stream);
@@ -170,13 +170,13 @@ namespace {
         const int width = static_cast<int>(depth.shape()[1]);
         const cudaStream_t stream = depth.stream();
         ConsistencyResult result{
-            .loss = Tensor::empty({size_t{1}}, Device::CUDA),
+            .loss = Tensor::empty({size_t{1}}, Device::GPU),
             .grad_normal = {},
-            .grad_depth = Tensor::zeros(depth.shape(), Device::CUDA),
-            .grad_alpha = Tensor::zeros(alpha.shape(), Device::CUDA)};
+            .grad_depth = Tensor::zeros(depth.shape(), Device::GPU),
+            .grad_alpha = Tensor::zeros(alpha.shape(), Device::GPU)};
         auto partials = Tensor::empty(
             {lfs::training::kernels::normal_consistency_partial_count(depth.numel())},
-            Device::CUDA);
+            Device::GPU);
         result.loss.set_stream(stream);
         result.grad_depth.set_stream(stream);
         result.grad_alpha.set_stream(stream);
@@ -215,7 +215,7 @@ namespace {
         return Tensor::from_vector(
             values,
             {static_cast<size_t>(height), static_cast<size_t>(width)},
-            Device::CUDA);
+            Device::GPU);
     }
 
     void expect_tensors_near(
@@ -252,11 +252,11 @@ TEST_F(RoiWeightedLossTest, DepthZeroWeightSuppressesOutsideGradientAndOnesMatch
         }
     }
     const auto depth = Tensor::from_vector(
-        depth_values, {size_t{height}, size_t{width}}, Device::CUDA);
-    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
+        depth_values, {size_t{height}, size_t{width}}, Device::GPU);
+    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::GPU);
     const auto target = Tensor::from_vector(
-        target_values, {size_t{height}, size_t{width}}, Device::CUDA);
-    const auto ones = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
+        target_values, {size_t{height}, size_t{width}}, Device::GPU);
+    const auto ones = Tensor::ones({size_t{height}, size_t{width}}, Device::GPU);
     const auto half_weight = make_half_weight(height, width);
     lfs::training::kernels::DepthAnchor anchor{
         .valid = true,
@@ -291,11 +291,11 @@ TEST_F(RoiWeightedLossTest, NormalZeroWeightSuppressesOutsideGradientAndOnesMatc
     std::fill(target_values.begin() + 2 * pixels, target_values.end(), 1.0f);
 
     const auto rendered = Tensor::from_vector(
-        rendered_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
+        rendered_values, {size_t{3}, size_t{height}, size_t{width}}, Device::GPU);
     const auto target = Tensor::from_vector(
-        target_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
-    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
-    const auto ones = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
+        target_values, {size_t{3}, size_t{height}, size_t{width}}, Device::GPU);
+    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::GPU);
+    const auto ones = Tensor::ones({size_t{height}, size_t{width}}, Device::GPU);
     const auto half_weight = make_half_weight(height, width);
 
     const auto baseline = run_normal_loss(rendered, alpha, target);
@@ -329,11 +329,11 @@ TEST_F(RoiWeightedLossTest, NormalConsistencyUsesWeightedCentersAndOnesMatchBase
     std::fill(normal_values.begin() + 2 * pixels, normal_values.end(), -0.98f);
 
     const auto rendered_normal = Tensor::from_vector(
-        normal_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
+        normal_values, {size_t{3}, size_t{height}, size_t{width}}, Device::GPU);
     const auto depth = Tensor::from_vector(
-        depth_values, {size_t{height}, size_t{width}}, Device::CUDA);
-    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
-    const auto ones = Tensor::ones({size_t{height}, size_t{width}}, Device::CUDA);
+        depth_values, {size_t{height}, size_t{width}}, Device::GPU);
+    const auto alpha = Tensor::ones({size_t{height}, size_t{width}}, Device::GPU);
+    const auto ones = Tensor::ones({size_t{height}, size_t{width}}, Device::GPU);
     const auto half_weight = make_half_weight(height, width);
 
     const auto baseline = run_consistency_loss(rendered_normal, depth, alpha);
@@ -357,7 +357,7 @@ TEST_F(RoiWeightedLossTest, NormalConsistencyUsesWeightedCentersAndOnesMatchBase
     std::fill(prior_values.begin(), prior_values.begin() + pixels, 0.3f);
     std::fill(prior_values.begin() + 2 * pixels, prior_values.end(), -0.95f);
     const auto prior_normal = Tensor::from_vector(
-        prior_values, {size_t{3}, size_t{height}, size_t{width}}, Device::CUDA);
+        prior_values, {size_t{3}, size_t{height}, size_t{width}}, Device::GPU);
     const auto prior_baseline = run_prior_depth_loss(prior_normal, depth, alpha);
     const auto prior_all_ones =
         run_prior_depth_loss(prior_normal, depth, alpha, ones);

@@ -180,7 +180,7 @@ TEST_F(TensorReductionAlignmentTest, CudaStateNotCorrupted) {
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
     ASSERT_NE(ptr, nullptr);
 
-    const Tensor new_tensor = Tensor::zeros({256, 256}, Device::CUDA, DataType::Float32);
+    const Tensor new_tensor = Tensor::zeros({256, 256}, Device::GPU, DataType::Float32);
     const Tensor exp_result = new_tensor.exp();
 
     cudaDeviceSynchronize();

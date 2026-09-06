@@ -5559,14 +5559,14 @@ namespace lfs::vis {
             const auto inverted_active = active.logical_xor(other_selected.logical_not());
 
             const auto group_tensor = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
+            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             const auto active_values = group_tensor.where(inverted_active, zeros);
             new_mask = old_u8.where(other_selected, active_values);
         } else {
             // No active selection -> invert becomes select-all (into the active selection group).
             new_mask = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         }
 
         scene_.setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
@@ -5636,7 +5636,7 @@ namespace lfs::vis {
             const auto visible_values = visible_bool.to(lfs::core::DataType::UInt8) *
                                         lfs::core::Tensor::full(
                                             {visible_total}, static_cast<float>(group_id),
-                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             lfs::core::Tensor full_mask;
             const auto visible_indices = scene_.getVisibleSelectionIndices();
             if (visible_values.numel() == full_total && !visible_indices) {
@@ -5644,7 +5644,7 @@ namespace lfs::vis {
             } else if (visible_indices && visible_indices->is_valid() &&
                        visible_indices->numel() == visible_values.numel()) {
                 full_mask = lfs::core::Tensor::zeros(
-                    {full_total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    {full_total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                 full_mask.index_copy_(0, *visible_indices, visible_values);
             } else {
                 return;

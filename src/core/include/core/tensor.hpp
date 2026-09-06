@@ -5,7 +5,7 @@
 
 /**
  * @file tensor.hpp
- * @brief LichtFeld Studio Tensor Library - High-performance CPU/CUDA tensor operations
+ * @brief LichtFeld Studio Tensor Library - High-performance CPU/GPU tensor operations
  *
  * This is the public API for the lfs_tensor library. For forward declarations only,
  * use <core/tensor_fwd.hpp> instead.
@@ -23,8 +23,8 @@
  * using namespace lfs::core;
  *
  * // Create tensors
- * auto a = Tensor::randn({1000, 3}, Device::CUDA);
- * auto b = Tensor::ones({1000, 3}, Device::CUDA);
+ * auto a = Tensor::randn({1000, 3}, Device::GPU);
+ * auto b = Tensor::ones({1000, 3}, Device::GPU);
  *
  * // Lazy evaluation - fused into single kernel
  * Tensor c = (a + b).mul(2.0f).relu();

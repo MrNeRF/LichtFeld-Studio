@@ -135,7 +135,7 @@ namespace lfs::training {
             if (mask.dtype() != lfs::core::DataType::Bool || mask.ndim() != 1) {
                 throw std::runtime_error("AdamOptimizer frozen mask must be a 1D bool tensor");
             }
-            if (mask.device() != lfs::core::Device::CUDA) {
+            if (mask.device() != lfs::core::Device::GPU) {
                 mask = mask.cuda();
             }
             if (!mask.is_contiguous()) {
@@ -161,7 +161,7 @@ namespace lfs::training {
             LFS_ASSERT_MSG(
                 mask.numel() == static_cast<size_t>(splat_data_.size()),
                 "AdamOptimizer crop damping mask must match the model row count");
-            if (mask.device() != lfs::core::Device::CUDA) {
+            if (mask.device() != lfs::core::Device::GPU) {
                 mask = mask.cuda();
             }
             if (!mask.is_contiguous()) {
@@ -2042,14 +2042,14 @@ namespace lfs::training {
             (void)state_name;
             auto upload = [&](lfs::core::Tensor& tensor) {
                 if (!tensor.is_valid() ||
-                    tensor.device() == lfs::core::Device::CUDA) {
+                    tensor.device() == lfs::core::Device::GPU) {
                     return;
                 }
                 if (upload_stream != nullptr) {
-                    tensor = tensor.to(lfs::core::Device::CUDA, upload_stream);
+                    tensor = tensor.to(lfs::core::Device::GPU, upload_stream);
                     return;
                 }
-                tensor = tensor.to(lfs::core::Device::CUDA);
+                tensor = tensor.to(lfs::core::Device::GPU);
                 upload_stream = tensor.stream();
             };
             upload(state.exp_avg);

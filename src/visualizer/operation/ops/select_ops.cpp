@@ -23,7 +23,7 @@ namespace lfs::vis::op {
         auto group_id = scene.getScene().getActiveSelectionGroup();
 
         auto mask = lfs::core::Tensor::full({count}, static_cast<float>(group_id),
-                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(mask)));
 
         return OperationResult::success();
@@ -51,7 +51,7 @@ namespace lfs::vis::op {
             }
             auto group_id = scene.getScene().getActiveSelectionGroup();
             auto new_mask = lfs::core::Tensor::full({model->size()}, static_cast<float>(group_id),
-                                                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                                    lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
             return OperationResult::success();
         }
@@ -65,7 +65,7 @@ namespace lfs::vis::op {
         auto is_selected = mask->gt(0.0f);
         auto inverted = is_selected.logical_not();
 
-        auto new_mask = lfs::core::Tensor::zeros({model->size()}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+        auto new_mask = lfs::core::Tensor::zeros({model->size()}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         new_mask.masked_fill_(inverted, static_cast<float>(group_id));
 
         scene.getScene().setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));

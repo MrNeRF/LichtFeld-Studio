@@ -143,7 +143,7 @@ namespace lfs::core {
             throw std::runtime_error(
                 "Alternate tensor encoding requires a serialization sink");
         }
-        const Tensor host = tensor.device() == Device::CUDA ? tensor.to_pageable_host() : tensor;
+        const Tensor host = tensor.device() == Device::GPU ? tensor.to_pageable_host() : tensor;
         const Tensor src = host.is_contiguous() ? host : host.contiguous();
         if (src.dtype() != descriptor.dtype ||
             src.shape() != descriptor.serialized_shape) {
@@ -194,7 +194,7 @@ namespace lfs::core {
             if (header.dtype > static_cast<uint8_t>(DataType::Bool)) {
                 throw std::runtime_error("Invalid tensor file: unsupported dtype");
             }
-            if (header.device > static_cast<uint8_t>(Device::CUDA)) {
+            if (header.device > static_cast<uint8_t>(Device::GPU)) {
                 throw std::runtime_error("Invalid tensor file: unsupported device");
             }
 
@@ -336,7 +336,7 @@ namespace lfs::core {
                     };
                 Tensor loaded;
                 run_timed(&TensorLoadTiming::alloc_ms, [&] {
-                    loaded = Tensor::empty(parsed.shape, Device::CUDA,
+                    loaded = Tensor::empty(parsed.shape, Device::GPU,
                                            parsed.dtype);
                     loaded.set_stream(stream);
                 });

@@ -320,12 +320,12 @@ TEST(TensorVulkanAdoption, BackendRunsOnAnAdoptedDevice) {
         const std::vector<double> matmul_expected = matmul_reference(left, right, 64);
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor uploaded = Tensor::from_vector(values, {values.size()}, Device::CUDA);
+            const Tensor uploaded = Tensor::from_vector(values, {values.size()}, Device::GPU);
             EXPECT_NEAR(uploaded.sum_scalar(), expected_sum(values), 1e-3f);
 
             const Tensor product =
-                Tensor::from_vector(left, {64, 64}, Device::CUDA)
-                    .matmul(Tensor::from_vector(right, {64, 64}, Device::CUDA));
+                Tensor::from_vector(left, {64, 64}, Device::GPU)
+                    .matmul(Tensor::from_vector(right, {64, 64}, Device::GPU));
             const std::vector<float> product_values = product.cpu().to_vector();
             ASSERT_EQ(product_values.size(), matmul_expected.size());
             for (size_t i = 0; i < product_values.size(); ++i) {
@@ -333,7 +333,7 @@ TEST(TensorVulkanAdoption, BackendRunsOnAnAdoptedDevice) {
             }
 
             const auto [sorted, order] =
-                Tensor::from_vector(values, {values.size()}, Device::CUDA).sort(0, false);
+                Tensor::from_vector(values, {values.size()}, Device::GPU).sort(0, false);
             (void)order;
             EXPECT_EQ(sorted.cpu().to_vector(), sorted_expected);
         }
@@ -346,7 +346,7 @@ TEST(TensorVulkanAdoption, BackendRunsOnAnAdoptedDevice) {
 
     GpuBackendScope scope(GpuBackend::Vulkan);
     const Tensor recovered = Tensor::from_vector(std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f},
-                                                 {4}, Device::CUDA);
+                                                 {4}, Device::GPU);
     EXPECT_FLOAT_EQ(recovered.sum_scalar(), 10.0f);
 }
 
@@ -361,6 +361,6 @@ TEST(TensorVulkanAdoption, RejectsIncompleteHandlesAndStaysUsable) {
     EXPECT_FALSE(vulkan_backend_adopted());
 
     GpuBackendScope scope(GpuBackend::Vulkan);
-    const Tensor tensor = Tensor::from_vector(std::vector<float>{5.0f, 7.0f}, {2}, Device::CUDA);
+    const Tensor tensor = Tensor::from_vector(std::vector<float>{5.0f, 7.0f}, {2}, Device::GPU);
     EXPECT_FLOAT_EQ(tensor.sum_scalar(), 12.0f);
 }

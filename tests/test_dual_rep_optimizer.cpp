@@ -51,8 +51,8 @@ namespace {
             rotations[i * 4] = 1.0f;
         }
         auto shN = rest == 0
-                       ? Tensor::zeros({size_t{0}}, Device::CUDA)
-                       : Tensor::zeros({n, rest, size_t{3}}, Device::CUDA);
+                       ? Tensor::zeros({size_t{0}}, Device::GPU)
+                       : Tensor::zeros({n, rest, size_t{3}}, Device::GPU);
         if (rest > 0) {
             auto cpu = shN.cpu();
             auto* p = cpu.ptr<float>();
@@ -62,12 +62,12 @@ namespace {
         }
         return SplatData(
             sh_degree,
-            Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
-            Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA),
+            Tensor::from_vector(means, {n, size_t{3}}, Device::GPU),
+            Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU),
             std::move(shN),
-            Tensor::full({n, size_t{3}}, -2.0f, Device::CUDA),
-            Tensor::from_vector(rotations, {n, size_t{4}}, Device::CUDA),
-            Tensor::full({n, size_t{1}}, 0.5f, Device::CUDA),
+            Tensor::full({n, size_t{3}}, -2.0f, Device::GPU),
+            Tensor::from_vector(rotations, {n, size_t{4}}, Device::GPU),
+            Tensor::full({n, size_t{1}}, 0.5f, Device::GPU),
             1.0f);
     }
 
@@ -198,9 +198,9 @@ TEST(DualRepOptimizer, JointEncodeZeroUnderBoundsExcludingZero) {
 
     // One block; bounds exclude 0 on both u and log_s.
     std::vector<float> bounds_h = {0.5f, 1.5f, 0.25f, 1.0f}; // umin,umax,smin,smax
-    auto bounds = Tensor::from_vector(bounds_h, {size_t{1}, size_t{4}}, Device::CUDA);
+    auto bounds = Tensor::from_vector(bounds_h, {size_t{1}, size_t{4}}, Device::GPU);
     auto packed = Tensor::zeros({static_cast<size_t>(n), static_cast<size_t>(n_attr * bpc)},
-                                Device::CUDA, DataType::UInt8);
+                                Device::GPU, DataType::UInt8);
     // Seed non-zero codes so a no-op would leave garbage.
     {
         auto cpu = packed.cpu();
@@ -213,7 +213,7 @@ TEST(DualRepOptimizer, JointEncodeZeroUnderBoundsExcludingZero) {
     std::vector<int64_t> idx_h = {0, 3, 7};
     auto idx = Tensor::empty({idx_h.size()}, Device::CPU, DataType::Int64);
     std::memcpy(idx.ptr<int64_t>(), idx_h.data(), idx_h.size() * sizeof(int64_t));
-    idx = idx.to(Device::CUDA);
+    idx = idx.to(Device::GPU);
 
     fast_lfs::optimizer::joint_encode_zero_rows_at_indices(
         packed.ptr<uint8_t>(),
@@ -260,12 +260,12 @@ TEST(DualRepOptimizer, JointGrowZeroEncodesNewRows) {
     // Rebuild without sh for simpler contiguous joint test
     splat = SplatData(
         0,
-        Tensor::randn({n0, 3}, Device::CUDA),
-        Tensor::randn({n0, 1, 3}, Device::CUDA),
-        Tensor::zeros({size_t{0}}, Device::CUDA),
-        Tensor::randn({n0, 3}, Device::CUDA),
-        Tensor::randn({n0, 4}, Device::CUDA),
-        Tensor::randn({n0, 1}, Device::CUDA),
+        Tensor::randn({n0, 3}, Device::GPU),
+        Tensor::randn({n0, 1, 3}, Device::GPU),
+        Tensor::zeros({size_t{0}}, Device::GPU),
+        Tensor::randn({n0, 3}, Device::GPU),
+        Tensor::randn({n0, 4}, Device::GPU),
+        Tensor::randn({n0, 1}, Device::GPU),
         1.0f);
 
     AdamOptimizer opt(splat, make_cfg(64));
@@ -352,7 +352,7 @@ TEST(DualRepOptimizer, JointAddNewParamsGatherShNGrowsMoments) {
     // Grow contiguous params to new_N (as strategies do before shN gather).
     auto indices = Tensor::arange(0.0f, static_cast<float>(n_new), 1.0f)
                        .to(DataType::Int64)
-                       .to(Device::CUDA);
+                       .to(Device::GPU);
     // Manually bump splat size bookkeeping via means append (SplatData size tracks means).
     splat.means().reserve(n0 + n_new + 8);
     splat.means().append_zeros(n_new);
@@ -404,12 +404,12 @@ TEST(DualRepOptimizer, JointBoundsLoadAcceptsOversizedTable) {
     auto splat = make_sh_splat(n, 0);
     splat = SplatData(
         0,
-        Tensor::randn({n, 3}, Device::CUDA),
-        Tensor::randn({n, 1, 3}, Device::CUDA),
-        Tensor::zeros({size_t{0}}, Device::CUDA),
-        Tensor::randn({n, 3}, Device::CUDA),
-        Tensor::randn({n, 4}, Device::CUDA),
-        Tensor::randn({n, 1}, Device::CUDA),
+        Tensor::randn({n, 3}, Device::GPU),
+        Tensor::randn({n, 1, 3}, Device::GPU),
+        Tensor::zeros({size_t{0}}, Device::GPU),
+        Tensor::randn({n, 3}, Device::GPU),
+        Tensor::randn({n, 4}, Device::GPU),
+        Tensor::randn({n, 1}, Device::GPU),
         1.0f);
 
     AdamOptimizer opt(splat, make_cfg(32));
@@ -420,7 +420,7 @@ TEST(DualRepOptimizer, JointBoundsLoadAcceptsOversizedTable) {
 
     // Artificially grow bounds table past live N (compaction leftover).
     const size_t live_nb = joint_adam::n_bounds_for_prims(n);
-    ensure_joint_bounds_capacity(st->joint_bounds, n + 200, n + 200, Device::CUDA, false);
+    ensure_joint_bounds_capacity(st->joint_bounds, n + 200, n + 200, Device::GPU, false);
     EXPECT_GE(st->joint_bounds.shape()[0], live_nb);
 
     std::stringstream ss;
@@ -499,7 +499,7 @@ TEST(DualRepOptimizer, MRNF_PerSplatMeanStepWithQuantizedAdamIsFinite) {
         log_s[i * 3 + 1] = v;
         log_s[i * 3 + 2] = v;
     }
-    splat.scaling_raw() = Tensor::from_vector(log_s, {size_t{8}, size_t{3}}, Device::CUDA);
+    splat.scaling_raw() = Tensor::from_vector(log_s, {size_t{8}, size_t{3}}, Device::GPU);
 
     auto& opt = strategy.get_optimizer();
     EXPECT_TRUE(opt.per_splat_mean_step());
@@ -507,7 +507,7 @@ TEST(DualRepOptimizer, MRNF_PerSplatMeanStepWithQuantizedAdamIsFinite) {
     ASSERT_NE(means_st, nullptr);
     EXPECT_TRUE(means_st->is_joint());
 
-    auto far_mask = Tensor::zeros_bool({size_t{8}}, Device::CUDA).logical_not();
+    auto far_mask = Tensor::zeros_bool({size_t{8}}, Device::GPU).logical_not();
     opt.set_mean_step_far_mask(far_mask.ptr<bool>(), 8);
     EXPECT_NE(opt.mean_step_far_mask(), nullptr);
     EXPECT_EQ(opt.mean_step_far_mask_n(), 8);
@@ -626,7 +626,7 @@ TEST(DualRepOptimizer, ShortBoundsFailsLoud) {
     auto splat = make_sh_splat(300, 3); // >256 so n_bounds=2 → need 4 floats
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
     // Truncate bounds well below n_bounds_for_prims(N)*2.
-    splat.shN_value_bounds() = Tensor::zeros({size_t{2}}, Device::CUDA);
+    splat.shN_value_bounds() = Tensor::zeros({size_t{2}}, Device::GPU);
     EXPECT_THROW((void)sh_value::ensure_shN_fp32_for_mutation(splat), std::runtime_error);
     // Invalid bounds also refuse.
     splat.shN_value_bounds() = Tensor{};
@@ -664,13 +664,13 @@ TEST(DualRepOptimizer, IGSPlus_QuantOnDensifyAndPrune) {
     }
 
     // Densify via LAS_densify with uniform scores (must not abort on q16).
-    auto scores = Tensor::ones({n}, Device::CUDA);
+    auto scores = Tensor::ones({n}, Device::GPU);
     ASSERT_NO_THROW(strategy.densify_for_test(scores, 8));
     EXPECT_GE(static_cast<size_t>(strategy.get_model().size()), n);
 
     // Soft-prune a few rows — joint moments must reset (no early-return).
     auto prune = Tensor::zeros({static_cast<size_t>(strategy.get_model().size())},
-                               Device::CUDA, DataType::Bool);
+                               Device::GPU, DataType::Bool);
     {
         auto cpu = prune.cpu();
         auto* p = cpu.ptr<bool>();

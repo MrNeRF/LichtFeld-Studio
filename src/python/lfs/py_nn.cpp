@@ -267,7 +267,7 @@ namespace lfs::python {
                 } else {
                     path = lfs::preprocessing::ensure_sam2_weights();
                 }
-                auto loaded = unwrap(Sam2::load(path, Device::CUDA));
+                auto loaded = unwrap(Sam2::load(path, Device::GPU));
                 model_ = std::make_unique<Sam2>(std::move(loaded));
             }
 

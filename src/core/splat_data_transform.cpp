@@ -764,7 +764,7 @@ namespace lfs::core {
                 if (gathered.dtype() != DataType::Bool) {
                     gathered = gathered.to(DataType::Bool);
                 }
-                if (gathered.device() != Device::CUDA) {
+                if (gathered.device() != Device::GPU) {
                     gathered = gathered.cuda();
                 }
                 gathered.set_name("splat.deleted_mask");

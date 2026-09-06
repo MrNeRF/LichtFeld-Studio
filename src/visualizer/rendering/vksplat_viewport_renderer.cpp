@@ -122,7 +122,7 @@ namespace lfs::vis {
             }
             const bool rad_backed = splat_data.lod_tree && splat_data.lod_tree->rad_source.valid();
             const bool host_resident_leaves =
-                rad_backed && splat_data.means_raw().device() != lfs::core::Device::CUDA;
+                rad_backed && splat_data.means_raw().device() != lfs::core::Device::GPU;
             const bool out_of_core =
                 rad_backed &&
                 splat_data.lod_tree->total_nodes() > static_cast<std::size_t>(splat_data.size());
@@ -1115,8 +1115,8 @@ namespace lfs::vis {
                 if (tensor.dtype() != DataType::UInt8 && tensor.dtype() != DataType::Bool) {
                     tensor = tensor.to(DataType::UInt8);
                 }
-                if (tensor.device() != Device::CUDA) {
-                    tensor = tensor.to(Device::CUDA);
+                if (tensor.device() != Device::GPU) {
+                    tensor = tensor.to(Device::GPU);
                 }
                 if (!tensor.is_contiguous()) {
                     tensor = tensor.contiguous();
@@ -1156,14 +1156,14 @@ namespace lfs::vis {
             const std::size_t num_splats) {
             try {
                 if (!hasTransformIndices(tensor, num_splats)) {
-                    return Tensor::zeros({std::size_t{1}}, Device::CUDA, DataType::Int32);
+                    return Tensor::zeros({std::size_t{1}}, Device::GPU, DataType::Int32);
                 }
                 Tensor prepared = *tensor;
                 if (prepared.dtype() != DataType::Int32) {
                     prepared = prepared.to(DataType::Int32);
                 }
-                if (prepared.device() != Device::CUDA) {
-                    prepared = prepared.to(Device::CUDA);
+                if (prepared.device() != Device::GPU) {
+                    prepared = prepared.to(Device::GPU);
                 }
                 if (!prepared.is_contiguous()) {
                     prepared = prepared.contiguous();
@@ -1344,8 +1344,8 @@ namespace lfs::vis {
                     label));
             }
             keep_alive = tensor;
-            if (keep_alive.device() != lfs::core::Device::CUDA) {
-                keep_alive = keep_alive.to(lfs::core::Device::CUDA, stream);
+            if (keep_alive.device() != lfs::core::Device::GPU) {
+                keep_alive = keep_alive.to(lfs::core::Device::GPU, stream);
             }
             if (!keep_alive.is_contiguous()) {
                 keep_alive = keep_alive.contiguous();
@@ -1793,7 +1793,7 @@ namespace lfs::vis {
                 tensor.is_contiguous()) {
                 return;
             }
-            tensor = Tensor::empty(shape, Device::CUDA, dtype);
+            tensor = Tensor::empty(shape, Device::GPU, dtype);
             reallocated = true;
         }
 
@@ -1973,7 +1973,7 @@ namespace lfs::vis {
             if (tensor.dtype() != DataType::Float32) {
                 return std::unexpected(std::format("VkSplat LOD page upload expected Float32 {}", label));
             }
-            if (tensor.device() != Device::CUDA) {
+            if (tensor.device() != Device::GPU) {
                 return std::unexpected(std::format("VkSplat LOD page upload expected CUDA {}", label));
             }
             if (!tensor.is_contiguous()) {
@@ -4789,7 +4789,7 @@ namespace lfs::vis {
             }
             {
                 // Output-bytes fingerprint cache. The CPU build is sub-µs; the
-                // former ~6 ms cost was entirely the .to(Device::CUDA) sync.
+                // former ~6 ms cost was entirely the .to(Device::GPU) sync.
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.overlay_params");
                 auto overlay_params_cpu = detail::buildOverlayParamsCpuFloats(
                     request,
@@ -8377,7 +8377,7 @@ namespace lfs::vis {
                         cudaGetErrorString(status)));
                 }
             }
-            auto empty_output = Tensor::zeros({num_splats}, Device::CUDA, DataType::Bool);
+            auto empty_output = Tensor::zeros({num_splats}, Device::GPU, DataType::Bool);
             if (render_stream_) {
                 empty_output.set_stream(render_stream_);
             }
@@ -8567,7 +8567,7 @@ namespace lfs::vis {
                 auto output_storage = vulkanExternalStorage(slot.output_tensor);
                 if (!slot.output_tensor.is_valid() ||
                     slot.output_tensor.dtype() != DataType::Bool ||
-                    slot.output_tensor.device() != Device::CUDA ||
+                    slot.output_tensor.device() != Device::GPU ||
                     slot.output_tensor.numel() != num_splats ||
                     !output_storage ||
                     output_storage->bytes() < output_tensor_region_bytes) {

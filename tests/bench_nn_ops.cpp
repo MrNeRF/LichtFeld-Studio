@@ -65,7 +65,7 @@ namespace {
     }
 
     lfs::core::Tensor randn(const std::vector<std::size_t>& shape, lfs::core::DataType dtype) {
-        auto t = lfs::core::Tensor::randn(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
+        auto t = lfs::core::Tensor::randn(lfs::core::TensorShape(shape), lfs::core::Device::GPU);
         if (dtype == lfs::core::DataType::Float16) {
             return t.to(lfs::core::DataType::Float16);
         }
@@ -163,7 +163,7 @@ TEST(NnBench, DISABLED_ReportTable) {
         auto ws = lfs::core::Tensor::empty(
             lfs::core::TensorShape{std::vector<std::size_t>{
                 (bytes + lfs::core::dtype_size(dtype) - 1) / lfs::core::dtype_size(dtype)}},
-            lfs::core::Device::CUDA, dtype);
+            lfs::core::Device::GPU, dtype);
         const float ms = time_op(warmup, std::max(iters / 4, 5), [&] {
             auto o = lfs::core::nn::conv2d(in, w, nullptr, p, &ws);
             (void)o;

@@ -56,22 +56,22 @@ namespace {
 
     std::shared_ptr<Tensor> make_screen_positions(const std::vector<float>& xy) {
         return std::make_shared<Tensor>(
-            Tensor::from_vector(xy, {xy.size() / 2, size_t{2}}, Device::CUDA).to(DataType::Float32));
+            Tensor::from_vector(xy, {xy.size() / 2, size_t{2}}, Device::GPU).to(DataType::Float32));
     }
 
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
-        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::GPU).to(DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
 
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32);
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         return std::make_unique<lfs::core::SplatData>(
             1,

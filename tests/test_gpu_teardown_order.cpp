@@ -29,7 +29,7 @@ namespace {
         using lfs::training::DensifyNScratch;
 
         DensifyNScratch scratch;
-        scratch.ensure_n(128, Device::CUDA);
+        scratch.ensure_n(128, Device::GPU);
         ASSERT_GT(scratch.n_capacity, 0u);
         ASSERT_TRUE(scratch.f32_a.is_valid());
 
@@ -47,8 +47,8 @@ namespace {
         using lfs::training::DensifyNScratch;
 
         DensifyNScratch scratch;
-        scratch.ensure_n(4096, Device::CUDA);
-        Tensor pooled = Tensor::empty({1024}, Device::CUDA);
+        scratch.ensure_n(4096, Device::GPU);
+        Tensor pooled = Tensor::empty({1024}, Device::GPU);
         ASSERT_TRUE(pooled.is_valid());
 
         scratch.release();

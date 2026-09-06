@@ -42,10 +42,10 @@ namespace lfs::vis::selection {
         bool& cached_host_mask_valid) {
         bool device_recreated = false;
         if (!device_mask.is_valid() ||
-            device_mask.device() != core::Device::CUDA ||
+            device_mask.device() != core::Device::GPU ||
             device_mask.dtype() != core::DataType::Int32 ||
             device_mask.numel() != LOCKED_GROUPS_WORDS) {
-            device_mask = core::Tensor::zeros({LOCKED_GROUPS_WORDS}, core::Device::CUDA, core::DataType::Int32);
+            device_mask = core::Tensor::zeros({LOCKED_GROUPS_WORDS}, core::Device::GPU, core::DataType::Int32);
             device_recreated = true;
         }
 

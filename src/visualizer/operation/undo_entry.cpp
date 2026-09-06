@@ -326,7 +326,7 @@ namespace lfs::vis::op {
             if (!tensor.is_valid()) {
                 return {};
             }
-            if (tensor.device() == lfs::core::Device::CUDA) {
+            if (tensor.device() == lfs::core::Device::GPU) {
                 return UndoMemoryBreakdown{
                     .cpu_bytes = 0,
                     .gpu_bytes = tensor.bytes(),
@@ -1753,7 +1753,7 @@ namespace lfs::vis::op {
                 ? selection_after->device()
                 : ((selection_before_.mask && selection_before_.mask->is_valid())
                        ? selection_before_.mask->device()
-                       : lfs::core::Device::CUDA);
+                       : lfs::core::Device::GPU);
         if (selection_change_known_ && !selection_changed_) {
             selection_mask_storage_ = {};
         } else if (selection_change_known_ &&

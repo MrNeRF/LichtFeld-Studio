@@ -60,8 +60,8 @@ TEST_F(ScreenShareTest, CapActiveRange) {
 
 TEST_F(ScreenShareTest, HardClipShrinksOversizedLogScale) {
     constexpr int n = 4;
-    auto scales = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
-    auto share = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA);
+    auto scales = Tensor::zeros({static_cast<size_t>(n), 3}, Device::GPU);
+    auto share = Tensor::zeros({static_cast<size_t>(n)}, Device::GPU);
 
     auto scales_cpu = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CPU);
     auto share_cpu = Tensor::zeros({static_cast<size_t>(n)}, Device::CPU);
@@ -138,7 +138,7 @@ TEST_F(ScreenShareTest, OversizeSplitScoresKernelRanksCorrectly) {
 
     auto error = error_cpu.cuda();
     auto share = share_cpu.cuda();
-    auto out = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA);
+    auto out = Tensor::zeros({static_cast<size_t>(n)}, Device::GPU);
     launch_oversize_split_scores(
         error.ptr<float>(), share.ptr<float>(), nullptr, 0, out.ptr<float>(), limit, n);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);

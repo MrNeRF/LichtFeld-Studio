@@ -35,11 +35,11 @@ namespace lfs::training {
 
         lfs::core::Tensor kaiming_uniform(const size_t fan_in, const size_t fan_out) {
             const float bound = std::sqrt(6.0f / static_cast<float>(fan_in));
-            return lfs::core::Tensor::uniform({fan_out, fan_in}, -bound, bound, lfs::core::Device::CUDA);
+            return lfs::core::Tensor::uniform({fan_out, fan_in}, -bound, bound, lfs::core::Device::GPU);
         }
 
         lfs::core::Tensor zeros_bias(const size_t size) {
-            return lfs::core::Tensor::zeros({size}, lfs::core::Device::CUDA);
+            return lfs::core::Tensor::zeros({size}, lfs::core::Device::GPU);
         }
 
         lfs::core::Tensor zeros_like(const lfs::core::Tensor& t) {
@@ -152,17 +152,17 @@ namespace lfs::training {
         fc4_b_m_ = zeros_like(fc4_b_);
         fc4_b_v_ = zeros_like(fc4_b_);
 
-        buf_fc1_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
-        buf_fc2_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
-        buf_fc3_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
-        buf_output_ = lfs::core::Tensor::empty({1, FC_OUTPUT_DIM}, lfs::core::Device::CUDA);
-        fc_input_buffer_ = lfs::core::Tensor::zeros({1, FC1_INPUT_DIM}, lfs::core::Device::CUDA);
+        buf_fc1_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
+        buf_fc2_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
+        buf_fc3_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
+        buf_output_ = lfs::core::Tensor::empty({1, FC_OUTPUT_DIM}, lfs::core::Device::GPU);
+        fc_input_buffer_ = lfs::core::Tensor::zeros({1, FC1_INPUT_DIM}, lfs::core::Device::GPU);
         constexpr float DEFAULT_PRIOR = 1.0f;
         cudaMemcpy(fc_input_buffer_.ptr<float>() + CNN_FLAT_DIM, &DEFAULT_PRIOR, sizeof(float), cudaMemcpyHostToDevice);
 
-        bwd_grad_fc3_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
-        bwd_grad_fc2_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
-        bwd_grad_fc1_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::CUDA);
+        bwd_grad_fc3_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
+        bwd_grad_fc2_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
+        bwd_grad_fc1_out_ = lfs::core::Tensor::empty({1, FC_HIDDEN_DIM}, lfs::core::Device::GPU);
 
         LOG_DEBUG("PPISPController: iterations={}, lr={:.2e}", total_iterations, config.lr);
     }
@@ -174,11 +174,11 @@ namespace lfs::training {
         const size_t pool_h = max_H / POOL_STRIDE;
         const size_t pool_w = max_W / POOL_STRIDE;
 
-        shared_buf_conv1_ = lfs::core::Tensor::empty({1, CNN_CH1, max_H, max_W}, lfs::core::Device::CUDA);
-        shared_buf_pool_ = lfs::core::Tensor::empty({1, CNN_CH1, pool_h, pool_w}, lfs::core::Device::CUDA);
-        shared_buf_conv2_ = lfs::core::Tensor::empty({1, CNN_CH2, pool_h, pool_w}, lfs::core::Device::CUDA);
-        shared_buf_conv3_ = lfs::core::Tensor::empty({1, CNN_CH3, pool_h, pool_w}, lfs::core::Device::CUDA);
-        shared_buf_pool2_ = lfs::core::Tensor::empty({1, CNN_CH3, POOL2_SIZE, POOL2_SIZE}, lfs::core::Device::CUDA);
+        shared_buf_conv1_ = lfs::core::Tensor::empty({1, CNN_CH1, max_H, max_W}, lfs::core::Device::GPU);
+        shared_buf_pool_ = lfs::core::Tensor::empty({1, CNN_CH1, pool_h, pool_w}, lfs::core::Device::GPU);
+        shared_buf_conv2_ = lfs::core::Tensor::empty({1, CNN_CH2, pool_h, pool_w}, lfs::core::Device::GPU);
+        shared_buf_conv3_ = lfs::core::Tensor::empty({1, CNN_CH3, pool_h, pool_w}, lfs::core::Device::GPU);
+        shared_buf_pool2_ = lfs::core::Tensor::empty({1, CNN_CH3, POOL2_SIZE, POOL2_SIZE}, lfs::core::Device::GPU);
 
         shared_buf_h_ = max_H;
         shared_buf_w_ = max_W;
@@ -223,10 +223,10 @@ namespace lfs::training {
         // Allocate correctly-sized intermediate tensors (cheap GPU allocations)
         const size_t pool_h = H / POOL_STRIDE;
         const size_t pool_w = W / POOL_STRIDE;
-        auto conv1_out = lfs::core::Tensor::empty({1, CNN_CH1, H, W}, lfs::core::Device::CUDA);
-        auto pool_out = lfs::core::Tensor::empty({1, CNN_CH1, pool_h, pool_w}, lfs::core::Device::CUDA);
-        auto conv2_out = lfs::core::Tensor::empty({1, CNN_CH2, pool_h, pool_w}, lfs::core::Device::CUDA);
-        auto conv3_out = lfs::core::Tensor::empty({1, CNN_CH3, pool_h, pool_w}, lfs::core::Device::CUDA);
+        auto conv1_out = lfs::core::Tensor::empty({1, CNN_CH1, H, W}, lfs::core::Device::GPU);
+        auto pool_out = lfs::core::Tensor::empty({1, CNN_CH1, pool_h, pool_w}, lfs::core::Device::GPU);
+        auto conv2_out = lfs::core::Tensor::empty({1, CNN_CH2, pool_h, pool_w}, lfs::core::Device::GPU);
+        auto conv3_out = lfs::core::Tensor::empty({1, CNN_CH3, pool_h, pool_w}, lfs::core::Device::GPU);
 
         rendered_rgb.conv1x1_bias_out(conv1_w_, conv1_b_, conv1_out);
         conv1_out.max_pool2d_out(POOL_STRIDE, POOL_STRIDE, 0, pool_out);

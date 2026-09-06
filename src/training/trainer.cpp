@@ -545,8 +545,8 @@ namespace lfs::training {
                 return {};
             }
 
-            if (mask.device() != lfs::core::Device::CUDA) {
-                mask = mask.to(lfs::core::Device::CUDA);
+            if (mask.device() != lfs::core::Device::GPU) {
+                mask = mask.to(lfs::core::Device::GPU);
             }
 
             if (mask.ndim() == 3 && mask.shape()[0] >= 3) {
@@ -620,15 +620,15 @@ namespace lfs::training {
                 auto cpu_tensor = lfs::core::Tensor::from_blob(
                     img_data, lfs::core::TensorShape({H, W, 4}),
                     lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::GPU);
                 lfs::core::free_image(img_data);
 
                 auto rgb = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({3, H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                 auto mask = lfs::core::Tensor::zeros(
                     lfs::core::TensorShape({H, W}),
-                    lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                    lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
                 lfs::io::cuda::launch_uint8_rgba_split_to_uint8_rgb_and_float32_alpha(
                     gpu_uint8.ptr<uint8_t>(), rgb.ptr<uint8_t>(), mask.ptr<float>(), H, W, nullptr);
@@ -648,7 +648,7 @@ namespace lfs::training {
                     auto rgb_float = rgb.to(lfs::core::DataType::Float32) / 255.0f;
                     rgb_float = lfs::core::undistort_image(rgb_float, scaled, nullptr);
                     auto rgb_uint8 = lfs::core::Tensor::empty(
-                        rgb_float.shape(), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                        rgb_float.shape(), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                     lfs::io::cuda::launch_float32_chw_to_uint8_chw(
                         rgb_float.ptr<float>(),
                         rgb_uint8.ptr<uint8_t>(),
@@ -1982,7 +1982,7 @@ namespace lfs::training {
     std::expected<std::pair<lfs::core::Tensor, SparsityLossContext>, std::string>
     Trainer::compute_sparsity_loss_forward(const int iter, const lfs::core::SplatData& splat_data) {
         if (!sparsity_optimizer_ || !sparsity_optimizer_->should_apply_loss(iter)) {
-            auto zero = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto zero = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
             return std::make_pair(std::move(zero), SparsityLossContext{});
         }
 
@@ -2658,8 +2658,8 @@ namespace lfs::training {
         }
 
         const lfs::core::TensorShape shape{heatmap->camera_uids.size()};
-        heatmap->latest_loss_gpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::CUDA);
-        heatmap->ema_loss_gpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::CUDA);
+        heatmap->latest_loss_gpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::GPU);
+        heatmap->ema_loss_gpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::GPU);
         heatmap->ema_loss_stage_cpu = lfs::core::Tensor::full(shape, -1.0f, lfs::core::Device::CPU);
         heatmap->published_colors.resize(heatmap->camera_uids.size());
         heatmap->published_valid.assign(heatmap->camera_uids.size(), 0u);
@@ -2690,7 +2690,7 @@ namespace lfs::training {
                                              const lfs::core::Tensor& image_loss) {
         const auto heatmap = getCameraLossHeatmap();
         if (!heatmap || !image_loss.is_valid() || image_loss.numel() != 1 ||
-            image_loss.device() != lfs::core::Device::CUDA) {
+            image_loss.device() != lfs::core::Device::GPU) {
             return;
         }
 
@@ -3093,7 +3093,7 @@ namespace lfs::training {
                 bg_ptr[0] = bg_color[0];
                 bg_ptr[1] = bg_color[1];
                 bg_ptr[2] = bg_color[2];
-                background_ = background_.to(lfs::core::Device::CUDA);
+                background_ = background_.to(lfs::core::Device::GPU);
                 LOG_INFO("Background color set to RGB({:.2f}, {:.2f}, {:.2f})", bg_color[0], bg_color[1], bg_color[2]);
             }
 
@@ -3119,8 +3119,8 @@ namespace lfs::training {
                         .max_width = 0, // No max width limit
                         .cuda_stream = nullptr};
                     bg_image_base_ = loader.load_cached_image(params.optimization.bg_image_path, load_params);
-                    if (bg_image_base_.device() != lfs::core::Device::CUDA) {
-                        bg_image_base_ = bg_image_base_.to(lfs::core::Device::CUDA);
+                    if (bg_image_base_.device() != lfs::core::Device::GPU) {
+                        bg_image_base_ = bg_image_base_.to(lfs::core::Device::GPU);
                     }
                     if (bg_image_base_.shape()[0] != 3) {
                         LOG_WARN("Background image has {} channels, expected 3 (RGB)", bg_image_base_.shape()[0]);
@@ -3171,8 +3171,8 @@ namespace lfs::training {
                         auto& loader = lfs::io::CacheLoader::getInstance();
                         lfs::io::LoadParams load_params{.resize_factor = 1, .max_width = 0, .cuda_stream = nullptr};
                         bg_image_base_ = loader.load_cached_image(params_.optimization.bg_image_path, load_params);
-                        if (bg_image_base_.device() != lfs::core::Device::CUDA) {
-                            bg_image_base_ = bg_image_base_.to(lfs::core::Device::CUDA);
+                        if (bg_image_base_.device() != lfs::core::Device::GPU) {
+                            bg_image_base_ = bg_image_base_.to(lfs::core::Device::GPU);
                         }
                         if (bg_image_base_.shape()[0] != 3) {
                             LOG_WARN("Background image has {} channels, expected 3", bg_image_base_.shape()[0]);
@@ -3382,11 +3382,11 @@ namespace lfs::training {
         auto gt_image = std::move(cached_gt_image);
         auto mask = std::move(cached_mask);
 
-        if (gt_image.device() != lfs::core::Device::CUDA) {
-            gt_image = gt_image.to(lfs::core::Device::CUDA);
+        if (gt_image.device() != lfs::core::Device::GPU) {
+            gt_image = gt_image.to(lfs::core::Device::GPU);
         }
-        if (mask.is_valid() && mask.device() != lfs::core::Device::CUDA) {
-            mask = mask.to(lfs::core::Device::CUDA);
+        if (mask.is_valid() && mask.device() != lfs::core::Device::GPU) {
+            mask = mask.to(lfs::core::Device::GPU);
         }
 
         lfs::core::Tensor rendered;
@@ -3707,8 +3707,8 @@ namespace lfs::training {
                     .max_width = 0,
                     .cuda_stream = nullptr};
                 bg_image_base_ = loader.load_cached_image(params.optimization.bg_image_path, load_params);
-                if (bg_image_base_.device() != lfs::core::Device::CUDA) {
-                    bg_image_base_ = bg_image_base_.to(lfs::core::Device::CUDA);
+                if (bg_image_base_.device() != lfs::core::Device::GPU) {
+                    bg_image_base_ = bg_image_base_.to(lfs::core::Device::GPU);
                 }
                 clearBackgroundImageCache();
                 if (bg_image_base_.shape()[0] != 3) {
@@ -3741,7 +3741,7 @@ namespace lfs::training {
             bg_ptr[0] = bg_color[0];
             bg_ptr[1] = bg_color[1];
             bg_ptr[2] = bg_color[2];
-            background_ = bg_cpu.to(lfs::core::Device::CUDA);
+            background_ = bg_cpu.to(lfs::core::Device::GPU);
         }
     }
 
@@ -5609,7 +5609,7 @@ namespace lfs::training {
             std::clamp(0.5f * (1.0f + std::sin(pb + PHASE_OFFSET_B)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS)};
 
         if (bg_mix_buffer_.is_empty()) {
-            bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         }
 
         LFS_CUDA_TRY(
@@ -5638,7 +5638,7 @@ namespace lfs::training {
     lfs::core::Tensor Trainer::get_edge_weight_map(
         const int camera_uid,
         const lfs::core::Tensor& gt_image) {
-        LFS_ASSERT_MSG(gt_image.is_valid() && gt_image.device() == lfs::core::Device::CUDA &&
+        LFS_ASSERT_MSG(gt_image.is_valid() && gt_image.device() == lfs::core::Device::GPU &&
                            gt_image.ndim() == 3 && gt_image.shape()[0] >= 3,
                        "edge-weight input must be CUDA CHW image data");
         LFS_ASSERT_MSG(gt_image.dtype() == lfs::core::DataType::Float32 ||
@@ -5671,7 +5671,7 @@ namespace lfs::training {
         if (!edge_map_buffer_.is_valid() || edge_map_buffer_.shape() != map_shape ||
             edge_map_buffer_.dtype() != lfs::core::DataType::Float32) {
             edge_map_buffer_ = lfs::core::Tensor::empty(
-                map_shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                map_shape, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         }
         edge_map_buffer_.set_stream(stream);
         if (gt_image.dtype() == lfs::core::DataType::UInt8) {
@@ -5711,7 +5711,7 @@ namespace lfs::training {
         }
         if (!map.is_valid()) {
             map = lfs::core::Tensor::zeros_direct(
-                map_shape, height, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                map_shape, height, lfs::core::Device::GPU, lfs::core::DataType::Float32);
         }
         map.set_stream(stream);
         map.copy_(edge_map_buffer_);
@@ -5754,7 +5754,7 @@ namespace lfs::training {
         // Create resized tensor
         auto resized = lfs::core::Tensor::empty(
             {static_cast<size_t>(channels), static_cast<size_t>(height), static_cast<size_t>(width)},
-            lfs::core::Device::CUDA,
+            lfs::core::Device::GPU,
             lfs::core::DataType::Float32);
 
         // Use bilinear resize kernel
@@ -5802,7 +5802,7 @@ namespace lfs::training {
         if (!random_bg_buffer_.is_valid() || random_bg_buffer_.numel() != required_size) {
             random_bg_buffer_ = lfs::core::Tensor::empty(
                 {3, static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CUDA,
+                lfs::core::Device::GPU,
                 lfs::core::DataType::Float32);
         }
 
@@ -6049,7 +6049,7 @@ namespace lfs::training {
                 const bool fastgs_path = !params_.optimization.gut;
 
                 if (!loss_accumulator_.is_valid()) {
-                    loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
+                    loss_accumulator_ = core::Tensor::zeros({1}, core::Device::GPU);
                 } else {
                     loss_accumulator_.zero_();
                 }
@@ -6285,7 +6285,7 @@ namespace lfs::training {
                         if (params_.optimization.scale_reg > 0.0f) {
                             if (!fused_scale_reg_loss_.is_valid()) {
                                 fused_scale_reg_loss_ = lfs::core::Tensor::zeros(
-                                    {1}, lfs::core::Device::CUDA);
+                                    {1}, lfs::core::Device::GPU);
                             }
                             fused_scale_reg_loss_.zero_();
                             fused_extra_gradients.scale_reg_loss_out =
@@ -6295,7 +6295,7 @@ namespace lfs::training {
                         if (params_.optimization.opacity_reg > 0.0f) {
                             if (!fused_opacity_reg_loss_.is_valid()) {
                                 fused_opacity_reg_loss_ = lfs::core::Tensor::zeros(
-                                    {1}, lfs::core::Device::CUDA);
+                                    {1}, lfs::core::Device::GPU);
                             }
                             fused_opacity_reg_loss_.zero_();
                             fused_extra_gradients.opacity_reg_loss_out =
@@ -6563,7 +6563,7 @@ namespace lfs::training {
                             roi_weight_map_.shape() != roi_shape) {
                             roi_weight_map_ = lfs::core::Tensor::empty(
                                 roi_shape,
-                                lfs::core::Device::CUDA,
+                                lfs::core::Device::GPU,
                                 lfs::core::DataType::Float32);
                         }
                         if (roi_weight_map_.stream() != roi_stream) {
@@ -6817,13 +6817,13 @@ namespace lfs::training {
                                 if (!depth_loss_grad_.is_valid() ||
                                     depth_loss_grad_.shape() != rendered_depth.shape()) {
                                     depth_loss_grad_ = lfs::core::Tensor::empty(
-                                        rendered_depth.shape(), lfs::core::Device::CUDA);
+                                        rendered_depth.shape(), lfs::core::Device::GPU);
                                 }
                                 depth_loss_grad_.set_stream(stream);
                                 if (!depth_loss_grad_alpha_.is_valid() ||
                                     depth_loss_grad_alpha_.shape() != rendered_depth.shape()) {
                                     depth_loss_grad_alpha_ = lfs::core::Tensor::empty(
-                                        rendered_depth.shape(), lfs::core::Device::CUDA);
+                                        rendered_depth.shape(), lfs::core::Device::GPU);
                                 }
                                 depth_loss_grad_alpha_.set_stream(stream);
                                 if (clear_for_accumulation) {
@@ -6943,7 +6943,7 @@ namespace lfs::training {
                                 if (target_depth.ndim() == 3 && target_depth.shape()[0] == 1) {
                                     target_depth = target_depth.squeeze(0);
                                 }
-                                if (target_depth.device() != lfs::core::Device::CUDA) {
+                                if (target_depth.device() != lfs::core::Device::GPU) {
                                     target_depth = target_depth.cuda();
                                 }
                                 if (!target_depth.is_contiguous()) {
@@ -7000,12 +7000,12 @@ namespace lfs::training {
                                         std::pow(kDepthLossFinalScale, depth_progress);
 
                                     if (!depth_loss_scalar_.is_valid()) {
-                                        depth_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                                        depth_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
                                     }
                                     depth_loss_scalar_.set_stream(depth_stream);
                                     if (!depth_loss_partials_.is_valid() ||
                                         depth_loss_partials_.shape()[0] != depth_partials) {
-                                        depth_loss_partials_ = lfs::core::Tensor::empty({depth_partials}, lfs::core::Device::CUDA);
+                                        depth_loss_partials_ = lfs::core::Tensor::empty({depth_partials}, lfs::core::Device::GPU);
                                     }
                                     depth_loss_partials_.set_stream(depth_stream);
 
@@ -7118,17 +7118,17 @@ namespace lfs::training {
                                         lfs::training::kernels::normal_loss_partial_count(num_normal_pixels);
 
                                     if (!normal_loss_scalar_.is_valid()) {
-                                        normal_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                                        normal_loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
                                     }
                                     normal_loss_scalar_.set_stream(normal_stream);
                                     if (!normal_loss_grad_.is_valid() ||
                                         normal_loss_grad_.shape() != rendered_normal.shape()) {
-                                        normal_loss_grad_ = lfs::core::Tensor::empty(rendered_normal.shape(), lfs::core::Device::CUDA);
+                                        normal_loss_grad_ = lfs::core::Tensor::empty(rendered_normal.shape(), lfs::core::Device::GPU);
                                     }
                                     normal_loss_grad_.set_stream(normal_stream);
                                     if (!normal_loss_partials_.is_valid() ||
                                         normal_loss_partials_.shape()[0] != normal_partials) {
-                                        normal_loss_partials_ = lfs::core::Tensor::empty({normal_partials}, lfs::core::Device::CUDA);
+                                        normal_loss_partials_ = lfs::core::Tensor::empty({normal_partials}, lfs::core::Device::GPU);
                                     }
                                     normal_loss_partials_.set_stream(normal_stream);
 
@@ -7174,13 +7174,13 @@ namespace lfs::training {
                                                 lfs::training::kernels::normal_consistency_partial_count(num_normal_pixels);
                                             if (!normal_prior_depth_scalar_.is_valid()) {
                                                 normal_prior_depth_scalar_ =
-                                                    lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                                                    lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
                                             }
                                             normal_prior_depth_scalar_.set_stream(normal_stream);
                                             if (!normal_consistency_partials_.is_valid() ||
                                                 normal_consistency_partials_.shape()[0] != prior_depth_partials) {
                                                 normal_consistency_partials_ =
-                                                    lfs::core::Tensor::empty({prior_depth_partials}, lfs::core::Device::CUDA);
+                                                    lfs::core::Tensor::empty({prior_depth_partials}, lfs::core::Device::GPU);
                                             }
                                             normal_consistency_partials_.set_stream(normal_stream);
 
@@ -7275,7 +7275,7 @@ namespace lfs::training {
                                 if (!tile_grad_normal.is_valid()) {
                                     if (!normal_loss_grad_.is_valid() ||
                                         normal_loss_grad_.shape() != rendered_normal.shape()) {
-                                        normal_loss_grad_ = lfs::core::Tensor::empty(rendered_normal.shape(), lfs::core::Device::CUDA);
+                                        normal_loss_grad_ = lfs::core::Tensor::empty(rendered_normal.shape(), lfs::core::Device::GPU);
                                     }
                                     normal_loss_grad_.set_stream(consistency_stream);
                                     normal_loss_grad_.zero_();
@@ -7289,12 +7289,12 @@ namespace lfs::training {
                                 const size_t consistency_partials =
                                     lfs::training::kernels::normal_consistency_partial_count(num_consistency_pixels);
                                 if (!normal_consistency_scalar_.is_valid()) {
-                                    normal_consistency_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                                    normal_consistency_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
                                 }
                                 normal_consistency_scalar_.set_stream(consistency_stream);
                                 if (!normal_consistency_partials_.is_valid() ||
                                     normal_consistency_partials_.shape()[0] != consistency_partials) {
-                                    normal_consistency_partials_ = lfs::core::Tensor::empty({consistency_partials}, lfs::core::Device::CUDA);
+                                    normal_consistency_partials_ = lfs::core::Tensor::empty({consistency_partials}, lfs::core::Device::GPU);
                                 }
                                 normal_consistency_partials_.set_stream(consistency_stream);
 
@@ -7378,7 +7378,7 @@ namespace lfs::training {
                                         densification_error_map_.shape()[1] != W) {
                                         densification_error_map_ = core::Tensor::empty(
                                             {static_cast<size_t>(H), static_cast<size_t>(W)},
-                                            core::Device::CUDA);
+                                            core::Device::GPU);
                                     }
                                     lfs::training::kernels::launch_ssim_to_error_map(
                                         densify_src, densification_error_map_);
@@ -8627,7 +8627,7 @@ namespace lfs::training {
                 if (gt_image.dtype() == lfs::core::DataType::UInt8) {
                     gt_image.sync_to_stream(training_stream_);
                     auto gt_image_fp32 = lfs::core::Tensor::empty(
-                        gt_image.shape(), lfs::core::Device::CUDA,
+                        gt_image.shape(), lfs::core::Device::GPU,
                         lfs::core::DataType::Float32);
                     lfs::io::cuda::launch_uint8_chw_to_float32_chw(
                         gt_image.ptr<uint8_t>(), gt_image_fp32.ptr<float>(),
@@ -9142,7 +9142,7 @@ namespace lfs::training {
             return rgb;
         }
 
-        auto rgb_chw = rgb.device() == lfs::core::Device::CUDA ? rgb : rgb.cuda();
+        auto rgb_chw = rgb.device() == lfs::core::Device::GPU ? rgb : rgb.cuda();
         if (rgb_chw.shape()[0] != 3 && rgb_chw.shape()[2] == 3) {
             rgb_chw = rgb_chw.permute({2, 0, 1}).contiguous();
         } else if (!rgb_chw.is_contiguous()) {

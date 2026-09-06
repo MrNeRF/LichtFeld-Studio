@@ -563,7 +563,7 @@ namespace lfs::training {
                         const lfs::core::TensorShape& shape,
                         const size_t capacity,
                         const std::string_view name) -> lfs::core::Tensor {
-                    lfs::core::Tensor source_cuda = source.device() == lfs::core::Device::CUDA
+                    lfs::core::Tensor source_cuda = source.device() == lfs::core::Device::GPU
                                                         ? source
                                                         : source.cuda();
                     if (!source_cuda.is_contiguous()) {
@@ -620,7 +620,7 @@ namespace lfs::training {
                         // pad-dropped region — detect that and re-encode instead of
                         // bitcasting float into half.
                         lfs::core::Tensor src_float = model.shN_raw();
-                        if (src_float.device() != lfs::core::Device::CUDA) {
+                        if (src_float.device() != lfs::core::Device::GPU) {
                             src_float = src_float.cuda();
                         }
                         if (!src_float.is_contiguous()) {

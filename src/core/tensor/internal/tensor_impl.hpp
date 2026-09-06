@@ -424,7 +424,7 @@ namespace lfs::core {
 
     struct LoadArgs {
         TensorShape shape;
-        Device device = Device::CUDA;
+        Device device = Device::GPU;
         DataType dtype = DataType::Float32;
         bool use_pinned = true;
         std::variant<
@@ -729,7 +729,7 @@ namespace lfs::core {
                 data, StoredDeleter(std::forward<Deleter>(deleter)));
             data_owner_ = std::shared_ptr<void>(owner, data);
             storage_meta_ = std::shared_ptr<StorageMeta>(owner, &owner->meta);
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 storage_meta_->backend = GpuBackend::CUDA;
             }
         }
@@ -852,7 +852,7 @@ namespace lfs::core {
 
             if (!a_needs_broadcast && !b_needs_broadcast) {
                 // Element-wise operation without broadcasting
-                if (device_ == Device::CUDA) {
+                if (device_ == Device::GPU) {
                     pin_operands({this, &other});
                     internal::backend_ops_for(*this).binary(
                         internal::pointwise_program(dtype_, out_dtype, op),
@@ -869,7 +869,7 @@ namespace lfs::core {
                 // Broadcasting needed
                 pin_operands({this, &other});
 
-                if (device_ == Device::CUDA) {
+                if (device_ == Device::GPU) {
                     internal::backend_ops_for(*this).broadcast_binary(
                         internal::pointwise_program(dtype_, out_dtype, op),
                         internal::storage_ref(*this), internal::strided_layout(*this),
@@ -908,7 +908,7 @@ namespace lfs::core {
 
             auto result = internal::allocate_like(*this, shape_, out_dtype);
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 auto program = internal::pointwise_program(dtype_, out_dtype, op);
                 program.scalar = dtype_ == DataType::Int32
                                      ? internal::scalar_operand(static_cast<int32_t>(scalar))
@@ -967,7 +967,7 @@ namespace lfs::core {
                     });
             }
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 auto program = internal::pointwise_program(dtype_, dtype_, op);
                 program.scalar = internal::scalar_operand(scalar);
                 internal::backend_ops_for(*this).scalar(
@@ -1001,8 +1001,8 @@ namespace lfs::core {
             if (device_ != other.device()) {
                 throw std::runtime_error(
                     std::string("In-place binary op device mismatch: ") +
-                    (device_ == Device::CUDA ? "CUDA" : "CPU") + " vs " +
-                    (other.device() == Device::CUDA ? "CUDA" : "CPU"));
+                    (device_ == Device::GPU ? "CUDA" : "CPU") + " vs " +
+                    (other.device() == Device::GPU ? "CUDA" : "CPU"));
             }
             internal::require_same_gpu_backend(
                 *this, other, "in-place binary operation");
@@ -1024,7 +1024,7 @@ namespace lfs::core {
             Tensor other_materialized;
             const Tensor& other_dense = other.contiguous_read(other_materialized);
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 pin_operands({this, &other_dense});
                 internal::backend_ops_for(*this).binary(
                     internal::pointwise_program(dtype_, dtype_, op),
@@ -1143,20 +1143,20 @@ namespace lfs::core {
                 // Stamp stream hint like TensorExpr::operator Tensor so deferred
                 // large binaries keep cross-stream ordering (D4 / stream tests).
                 const cudaStream_t stream_hint =
-                    (dev == Device::CUDA) ? getCurrentCUDAStream() : nullptr;
+                    (dev == Device::GPU) ? getCurrentCUDAStream() : nullptr;
                 Tensor result = make_deferred_expr_tensor(
                     shp, dev, DataType::Float32, internal::gpu_backend_tag(*this),
                     [lhs_source, rhs_operand, op, shp, dev, stream_hint]() mutable {
                         lhs_source.materialize_if_deferred();
                         rhs_operand.materialize_if_deferred();
                         std::optional<CUDAStreamGuard> execution_guard;
-                        if (dev == Device::CUDA) {
+                        if (dev == Device::GPU) {
                             execution_guard.emplace(prepare_inputs_for_stream(
                                 {&lhs_source, &rhs_operand}, stream_hint));
                         }
                         Tensor out = internal::allocate_like(
                             lhs_source, shp, DataType::Float32);
-                        if (dev == Device::CUDA) {
+                        if (dev == Device::GPU) {
                             pin_operands({&lhs_source, &rhs_operand});
                             internal::backend_ops_for(lhs_source).binary(internal::pointwise_program(DataType::Float32, DataType::Float32, op), internal::storage_ref(lhs_source), internal::storage_ref(rhs_operand), internal::storage_ref(out), out.numel(), internal::ExecContext{out.stream()});
                             tensor_ops::record_tensor_kernel_launch(1);
@@ -1167,7 +1167,7 @@ namespace lfs::core {
                         return out;
                     },
                     {lazy_expr_id(), other.lazy_expr_id()});
-                if (dev == Device::CUDA) {
+                if (dev == Device::GPU) {
                     result.set_stream(stream_hint);
                 }
 
@@ -1205,13 +1205,13 @@ namespace lfs::core {
 
             if (can_fast_path) {
                 std::optional<CUDAStreamGuard> execution_guard;
-                if (device_ == Device::CUDA && numel() > 0) {
+                if (device_ == Device::GPU && numel() > 0) {
                     execution_guard.emplace(prepare_inputs_for_stream({this, &other}));
                 }
                 Tensor result = internal::allocate_like(*this, shape_, result_dtype);
                 if (numel() > 0) {
                     pin_operands({this, &other});
-                    if (device_ == Device::CUDA) {
+                    if (device_ == Device::GPU) {
                         switch (result_dtype) {
                         case DataType::Float32:
                             internal::backend_ops_for(*this).binary(
@@ -1336,7 +1336,7 @@ namespace lfs::core {
                 internal::require_same_gpu_backend(*this, other, "device conversion");
                 return other;
             }
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 return internal::copy_to_backend(other, gpu_backend_of(*this).value());
             }
             return other.to(device_);
@@ -1607,43 +1607,43 @@ namespace lfs::core {
         Tensor ternary(const Tensor& b, const Tensor& c) const;
 
         // ============= FACTORY METHODS =============
-        static Tensor empty(TensorShape shape, Device device = Device::CUDA,
+        static Tensor empty(TensorShape shape, Device device = Device::GPU,
                             DataType dtype = DataType::Float32, bool use_pinned = true);
         // Allocate ordinary pageable host storage. Unlike the default CPU path,
         // this never consults PinnedMemoryAllocator or cudaHostAlloc.
         static Tensor empty_pageable_host(TensorShape shape,
                                           DataType dtype = DataType::Float32);
         static Tensor empty_unpinned(TensorShape shape, DataType dtype = DataType::Float32);
-        static Tensor zeros(TensorShape shape, Device device = Device::CUDA,
+        static Tensor zeros(TensorShape shape, Device device = Device::GPU,
                             DataType dtype = DataType::Float32);
-        static Tensor zeros_direct(TensorShape shape, size_t capacity, Device device = Device::CUDA,
+        static Tensor zeros_direct(TensorShape shape, size_t capacity, Device device = Device::GPU,
                                    DataType dtype = DataType::Float32);
-        static Tensor ones(TensorShape shape, Device device = Device::CUDA,
+        static Tensor ones(TensorShape shape, Device device = Device::GPU,
                            DataType dtype = DataType::Float32);
-        static Tensor full(TensorShape shape, float value, Device device = Device::CUDA,
+        static Tensor full(TensorShape shape, float value, Device device = Device::GPU,
                            DataType dtype = DataType::Float32);
-        static Tensor full_bool(TensorShape shape, bool value, Device device = Device::CUDA);
-        static Tensor zeros_bool(TensorShape shape, Device device = Device::CUDA);
-        static Tensor ones_bool(TensorShape shape, Device device = Device::CUDA);
-        static Tensor rand(TensorShape shape, Device device = Device::CUDA,
+        static Tensor full_bool(TensorShape shape, bool value, Device device = Device::GPU);
+        static Tensor zeros_bool(TensorShape shape, Device device = Device::GPU);
+        static Tensor ones_bool(TensorShape shape, Device device = Device::GPU);
+        static Tensor rand(TensorShape shape, Device device = Device::GPU,
                            DataType dtype = DataType::Float32);
-        static Tensor randn(TensorShape shape, Device device = Device::CUDA,
+        static Tensor randn(TensorShape shape, Device device = Device::GPU,
                             DataType dtype = DataType::Float32);
         static Tensor uniform(TensorShape shape, float low = 0.0f, float high = 1.0f,
-                              Device device = Device::CUDA, DataType dtype = DataType::Float32);
+                              Device device = Device::GPU, DataType dtype = DataType::Float32);
         static Tensor normal(TensorShape shape, float mean = 0.0f, float std = 1.0f,
-                             Device device = Device::CUDA, DataType dtype = DataType::Float32);
+                             Device device = Device::GPU, DataType dtype = DataType::Float32);
         static Tensor randint(TensorShape shape, int low, int high,
-                              Device device = Device::CUDA, DataType dtype = DataType::Int32);
+                              Device device = Device::GPU, DataType dtype = DataType::Int32);
         static Tensor bernoulli(TensorShape shape, float p = 0.5f,
-                                Device device = Device::CUDA, DataType dtype = DataType::Float32);
+                                Device device = Device::GPU, DataType dtype = DataType::Float32);
         static Tensor multinomial(const Tensor& weights, int num_samples,
                                   bool replacement = false);
         static Tensor arange(float end);
         static Tensor arange(float start, float end, float step = 1.0f);
-        static Tensor linspace(float start, float end, size_t steps, Device device = Device::CUDA);
-        static Tensor eye(size_t n, Device device = Device::CUDA);
-        static Tensor eye(size_t m, size_t n, Device device = Device::CUDA);
+        static Tensor linspace(float start, float end, size_t steps, Device device = Device::GPU);
+        static Tensor eye(size_t n, Device device = Device::GPU);
+        static Tensor eye(size_t m, size_t n, Device device = Device::GPU);
         static Tensor diag(const Tensor& diagonal);
 
         static Tensor from_blob(void* data, TensorShape shape, Device device, DataType dtype,
@@ -1680,25 +1680,25 @@ namespace lfs::core {
                                           std::string external_kind);
 
         static Tensor from_vector(const std::vector<float>& data, TensorShape shape,
-                                  Device device = Device::CUDA);
+                                  Device device = Device::GPU);
         static Tensor from_vector(const std::vector<int>& data, TensorShape shape,
-                                  Device device = Device::CUDA);
+                                  Device device = Device::GPU);
         static Tensor from_vector(const std::vector<bool>& data, TensorShape shape,
-                                  Device device = Device::CUDA);
+                                  Device device = Device::GPU);
 
         // Initializer list overloads for convenience
         static Tensor from_vector(std::initializer_list<float> data, TensorShape shape,
-                                  Device device = Device::CUDA) {
+                                  Device device = Device::GPU) {
             return from_vector(std::vector<float>(data), shape, device);
         }
 
         static Tensor from_vector(std::initializer_list<int> data, TensorShape shape,
-                                  Device device = Device::CUDA) {
+                                  Device device = Device::GPU) {
             return from_vector(std::vector<int>(data), shape, device);
         }
 
         static Tensor from_vector(std::initializer_list<bool> data, TensorShape shape,
-                                  Device device = Device::CUDA) {
+                                  Device device = Device::GPU) {
             return from_vector(std::vector<bool>(data), shape, device);
         }
 
@@ -2728,7 +2728,7 @@ namespace lfs::core {
 
         // Scalar reduce operations - use direct CUB path for CUDA Float32 contiguous tensors
         float sum_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
                 return internal::backend_ops_for(*this).sum_scalar(
                     internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
@@ -2740,7 +2740,7 @@ namespace lfs::core {
         }
 
         float mean_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
                 return internal::backend_ops_for(*this).mean_scalar(
                     internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
@@ -2748,7 +2748,7 @@ namespace lfs::core {
         }
 
         float min_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
                 return internal::backend_ops_for(*this).min_scalar(
                     internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
@@ -2756,7 +2756,7 @@ namespace lfs::core {
         }
 
         float max_scalar() const {
-            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+            if (device_ == Device::GPU && dtype_ == DataType::Float32 && is_contiguous_) {
                 return internal::backend_ops_for(*this).max_scalar(
                     internal::storage_ref(*this), numel(), internal::ExecContext{stream()});
             }
@@ -2947,9 +2947,9 @@ namespace lfs::core {
          * - Only works for dim=0 (appending along first dimension)
          *
          * Example:
-         *   auto param = Tensor::randn({1000, 3}, Device::CUDA);
+         *   auto param = Tensor::randn({1000, 3}, Device::GPU);
          *   param.reserve(2000);  // Pre-allocate capacity
-         *   auto indices = Tensor::from_vector({0, 5, 10}, {3}, Device::CUDA);
+         *   auto indices = Tensor::from_vector({0, 5, 10}, {3}, Device::GPU);
          *   param.append_gather(indices);  // Now param.shape() = {1003, 3}
          *
          * This is equivalent to:
@@ -3158,7 +3158,7 @@ namespace lfs::core {
 
         // ============= TENSOR OPTIONS =============
         struct TensorOptions {
-            Device device = Device::CUDA;
+            Device device = Device::GPU;
             DataType dtype = DataType::Float32;
 
             TensorOptions() = default;
@@ -3187,7 +3187,7 @@ namespace lfs::core {
         for (const Tensor* tensor : tensors) {
             if (tensor) {
                 tensor->materialize_if_deferred();
-                if (tensor->device() == Device::CUDA) {
+                if (tensor->device() == Device::GPU) {
                     if (backend_reference == nullptr) {
                         backend_reference = tensor;
                     } else {
@@ -3411,7 +3411,7 @@ namespace lfs::core {
         inline void require_same_gpu_backend(const Tensor& reference,
                                              const Tensor& other,
                                              const std::string_view operation) {
-            if (reference.device_ != Device::CUDA || other.device_ != Device::CUDA) {
+            if (reference.device_ != Device::GPU || other.device_ != Device::GPU) {
                 return;
             }
             if (gpu_backend_tag(reference) != gpu_backend_tag(other)) {
@@ -3444,7 +3444,7 @@ namespace lfs::core {
             tensor.materialize_if_deferred();
             LFS_ASSERT_MSG(tensor.is_valid(), "storage_ref requires a valid tensor");
             tensor.assert_view_not_stale();
-            LFS_ASSERT_MSG(tensor.device_ == Device::CUDA,
+            LFS_ASSERT_MSG(tensor.device_ == Device::GPU,
                            "storage_ref requires GPU storage");
             LFS_ASSERT_MSG(tensor.data_ != nullptr || tensor.numel() == 0,
                            "storage_ref found null storage for a non-empty tensor");

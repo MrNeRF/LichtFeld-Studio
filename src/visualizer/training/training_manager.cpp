@@ -232,7 +232,7 @@ namespace lfs::vis {
                                  debug_name = std::string{name}]() mutable -> lfs::core::Tensor {
                     if (keepFloatShNInPooledCuda(debug_name, dtype)) {
                         auto pooled = lfs::core::Tensor::zeros_direct(
-                            std::move(shape), capacity, lfs::core::Device::CUDA, dtype);
+                            std::move(shape), capacity, lfs::core::Device::GPU, dtype);
                         pooled.set_name(debug_name);
                         return pooled;
                     }

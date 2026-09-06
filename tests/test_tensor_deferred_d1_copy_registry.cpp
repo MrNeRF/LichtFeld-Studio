@@ -213,14 +213,14 @@ TEST(DeferredD1CopyRegistryTest, InPlaceCatCapacityIndependent) {
     LazyTestGuard guard;
 
     Tensor reserved = Tensor::from_vector(
-        std::vector<float>{0.0f, 1.0f}, {2, 1}, Device::CUDA);
+        std::vector<float>{0.0f, 1.0f}, {2, 1}, Device::GPU);
     reserved.reserve(8);
     Tensor alias = reserved;
     Tensor tail = Tensor::from_vector(
-        std::vector<float>{2.0f, 3.0f}, {2, 1}, Device::CUDA);
+        std::vector<float>{2.0f, 3.0f}, {2, 1}, Device::GPU);
     Tensor result = Tensor::cat({alias, tail}, 0);
     Tensor extra = Tensor::from_vector(
-        std::vector<float>{4.0f}, {1, 1}, Device::CUDA);
+        std::vector<float>{4.0f}, {1, 1}, Device::GPU);
     Tensor grown = Tensor::cat({result, extra}, 0);
 
     EXPECT_EQ(grown.to_vector(),

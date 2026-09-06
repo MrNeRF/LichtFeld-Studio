@@ -55,8 +55,8 @@ namespace {
             opacity[i] = -1.0f + 0.0005f * static_cast<float>(i);
         }
         Tensor shN = rest == 0
-                         ? Tensor::zeros({size_t{0}}, Device::CUDA)
-                         : Tensor::zeros({n, rest, size_t{3}}, Device::CUDA);
+                         ? Tensor::zeros({size_t{0}}, Device::GPU)
+                         : Tensor::zeros({n, rest, size_t{3}}, Device::GPU);
         if (rest > 0) {
             auto cpu = shN.cpu();
             auto* p = cpu.ptr<float>();
@@ -68,12 +68,12 @@ namespace {
         }
         return SplatData(
             sh_degree,
-            Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::CUDA),
+            Tensor::from_vector(means, {n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::GPU),
             std::move(shN),
-            Tensor::from_vector(scaling, {n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(rotation, {n, size_t{4}}, Device::CUDA),
-            Tensor::from_vector(opacity, {n, size_t{1}}, Device::CUDA),
+            Tensor::from_vector(scaling, {n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(rotation, {n, size_t{4}}, Device::GPU),
+            Tensor::from_vector(opacity, {n, size_t{1}}, Device::GPU),
             1.0f);
     }
 

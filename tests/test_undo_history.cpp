@@ -117,7 +117,7 @@ namespace {
     public:
         explicit TensorResidencyEntry(std::string name, const size_t estimated_bytes = 0)
             : name_(std::move(name)),
-              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)),
+              tensor_(Tensor::ones({16}, Device::GPU, DataType::Float32)),
               estimated_bytes_(estimated_bytes == 0 ? tensor_.bytes() : estimated_bytes) {}
 
         void undo() override {
@@ -131,7 +131,7 @@ namespace {
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
         [[nodiscard]] lfs::vis::op::UndoMemoryBreakdown memoryBreakdown() const override {
-            return tensor_.device() == Device::CUDA
+            return tensor_.device() == Device::GPU
                        ? lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = 0, .gpu_bytes = tensor_.bytes()}
                        : lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = tensor_.bytes(), .gpu_bytes = 0};
         }
@@ -141,8 +141,8 @@ namespace {
             }
         }
         void restoreToPreferredDevice() override {
-            if (tensor_.device() != Device::CUDA) {
-                tensor_ = tensor_.to(Device::CUDA).contiguous();
+            if (tensor_.device() != Device::GPU) {
+                tensor_ = tensor_.to(Device::GPU).contiguous();
             }
         }
 
@@ -159,17 +159,17 @@ namespace {
 
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
-        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::GPU).to(DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN = Tensor::zeros({count, size_t{3}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
 
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32);
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto rotation = Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         return std::make_unique<lfs::core::SplatData>(
             1,
@@ -209,21 +209,21 @@ namespace {
             }
         }
 
-        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::GPU, DataType::Float32);
         std::vector<float> rotation_data(count * 4, 0.0f);
         for (size_t i = 0; i < count; ++i) {
             rotation_data[i * 4] = 1.0f;
         }
-        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::GPU, DataType::Float32);
 
         auto result = std::make_unique<lfs::core::SplatData>(
             1,
-            Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(means, {count, size_t{3}}, Device::GPU).to(DataType::Float32),
             std::move(sh0),
-            Tensor::from_vector(shN, {count, size_t{3}, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(shN, {count, size_t{3}, size_t{3}}, Device::GPU).to(DataType::Float32),
             std::move(scaling),
-            Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::GPU).to(DataType::Float32),
             std::move(opacity),
             1.0f);
         result->set_active_sh_degree(1);
@@ -827,7 +827,7 @@ TEST_F(UndoHistoryTest, OlderTensorEntriesOffloadToCPUAndRestoreBeforePlayback) 
 
     ASSERT_EQ(history.undoCount(), lfs::vis::op::UndoHistory::HOT_ENTRIES + 2);
     EXPECT_EQ(entries.front()->device(), Device::CPU);
-    EXPECT_EQ(entries.back()->device(), Device::CUDA);
+    EXPECT_EQ(entries.back()->device(), Device::GPU);
 
     const auto memory = history.undoMemory();
     EXPECT_GT(memory.cpu_bytes, 0u);
@@ -841,7 +841,7 @@ TEST_F(UndoHistoryTest, OlderTensorEntriesOffloadToCPUAndRestoreBeforePlayback) 
 
     const auto result = history.undoMultiple(history.undoCount());
     EXPECT_TRUE(result.success);
-    EXPECT_EQ(entries.front()->undoDevice(), Device::CUDA);
+    EXPECT_EQ(entries.front()->undoDevice(), Device::GPU);
 }
 
 TEST_F(UndoHistoryTest, ShrinkToFitOffloadsHistoryToMeetGpuBudget) {
@@ -892,7 +892,7 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRestoresTensorRoundTrip) {
         before.clone(),
         [&]() -> Tensor* { return &node->model->sh0(); });
 
-    node->model->sh0() = Tensor::ones({2, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+    node->model->sh0() = Tensor::ones({2, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
     const auto after = node->model->sh0().clone();
 
     entry->captureAfter();
@@ -931,7 +931,7 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRejectsTopologyChangedReplayWithoutMutati
         scene_manager.get());
 
     node->model->sh0() =
-        Tensor::ones({2, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+        Tensor::ones({2, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
     entry->captureAfter();
     const auto tensor_before_replay = node->model->sh0().clone();
     ASSERT_NE(scene_manager->getScene().addGroup("unexpected"), lfs::core::NULL_NODE);

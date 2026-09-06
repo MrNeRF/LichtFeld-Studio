@@ -55,7 +55,7 @@ namespace lfs::vis::gt_comparison_detail {
             return {};
         }
         lfs::core::Tensor src = *image;
-        if (src.device() == lfs::core::Device::CUDA) {
+        if (src.device() == lfs::core::Device::GPU) {
             // The conversion below deliberately uses host-side loops. Tensor
             // dtype conversion and layout materialization on CPU are not a
             // reliable synchronization boundary for an asynchronously

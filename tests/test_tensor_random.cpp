@@ -156,7 +156,7 @@ protected:
 // ============= Uniform Distribution Tests =============
 
 TEST_F(TensorRandomTest, RandBasic) {
-    auto t = Tensor::rand({100, 100}, Device::CUDA);
+    auto t = Tensor::rand({100, 100}, Device::GPU);
 
     // Check all values are in [0, 1)
     EXPECT_TRUE(check_range(t, 0.0f, 1.0f));
@@ -170,7 +170,7 @@ TEST_F(TensorRandomTest, RandBasic) {
 }
 
 TEST_F(TensorRandomTest, RandShape) {
-    auto t = Tensor::rand({3, 4, 5}, Device::CUDA);
+    auto t = Tensor::rand({3, 4, 5}, Device::GPU);
 
     EXPECT_EQ(t.ndim(), 3);
     EXPECT_EQ(t.shape().dims(), std::vector<size_t>({3, 4, 5}));
@@ -182,7 +182,7 @@ TEST_F(TensorRandomTest, UniformCustomRange) {
     float low = -5.0f;
     float high = 10.0f;
 
-    auto t = Tensor::uniform({1000}, low, high, Device::CUDA);
+    auto t = Tensor::uniform({1000}, low, high, Device::GPU);
 
     // Check all values are in range
     EXPECT_TRUE(check_range(t, low, high));
@@ -197,7 +197,7 @@ TEST_F(TensorRandomTest, UniformCustomRange) {
 }
 
 TEST_F(TensorRandomTest, UniformInPlace) {
-    auto t = Tensor::zeros({500}, Device::CUDA);
+    auto t = Tensor::zeros({500}, Device::GPU);
     t.uniform_(2.0f, 4.0f);
 
     EXPECT_TRUE(check_range(t, 2.0f, 4.0f));
@@ -209,7 +209,7 @@ TEST_F(TensorRandomTest, UniformInPlace) {
 // ============= Normal Distribution Tests =============
 
 TEST_F(TensorRandomTest, RandnBasic) {
-    auto t = Tensor::randn({1000, 10}, Device::CUDA);
+    auto t = Tensor::randn({1000, 10}, Device::GPU);
 
     // Check mean and std
     auto [mean, std] = compute_stats(t);
@@ -232,7 +232,7 @@ TEST_F(TensorRandomTest, NormalCustomParams) {
     float target_mean = 5.0f;
     float target_std = 2.0f;
 
-    auto t = Tensor::normal({2000}, target_mean, target_std, Device::CUDA);
+    auto t = Tensor::normal({2000}, target_mean, target_std, Device::GPU);
 
     auto [mean, std] = compute_stats(t);
     EXPECT_NEAR(mean, target_mean, 0.2f);
@@ -240,7 +240,7 @@ TEST_F(TensorRandomTest, NormalCustomParams) {
 }
 
 TEST_F(TensorRandomTest, NormalInPlace) {
-    auto t = Tensor::empty({1000}, Device::CUDA);
+    auto t = Tensor::empty({1000}, Device::GPU);
     t.normal_(10.0f, 3.0f);
 
     auto [mean, std] = compute_stats(t);
@@ -250,7 +250,7 @@ TEST_F(TensorRandomTest, NormalInPlace) {
 
 TEST_F(TensorRandomTest, NormalInPlaceOddSizeDoesNotOverwriteAdjacentStorage) {
     constexpr float sentinel = -12345.0f;
-    auto storage = Tensor::full({7}, sentinel, Device::CUDA);
+    auto storage = Tensor::full({7}, sentinel, Device::GPU);
     auto odd_view = storage.slice(0, 1, 6);
 
     odd_view.normal_(0.0f, 1.0f);
@@ -264,7 +264,7 @@ TEST_F(TensorRandomTest, NormalInPlaceOddSizeDoesNotOverwriteAdjacentStorage) {
         EXPECT_NE(values[i], sentinel);
     }
 
-    const auto mcmc_shape = Tensor::zeros({101, 3}, Device::CUDA);
+    const auto mcmc_shape = Tensor::zeros({101, 3}, Device::GPU);
     const auto noise = Tensor::randn_like(mcmc_shape);
     EXPECT_EQ(noise.shape(), mcmc_shape.shape());
     EXPECT_EQ(noise.numel(), 303u);
@@ -276,7 +276,7 @@ TEST_F(TensorRandomTest, RandIntBasic) {
     int low = 0;
     int high = 10;
 
-    auto t = Tensor::randint({1000}, low, high, Device::CUDA, DataType::Float32);
+    auto t = Tensor::randint({1000}, low, high, Device::GPU, DataType::Float32);
 
     // Check all values are integers in [low, high)
     auto values = t.to_vector();
@@ -291,7 +291,7 @@ TEST_F(TensorRandomTest, RandIntNegative) {
     int low = -5;
     int high = 5;
 
-    auto t = Tensor::randint({500}, low, high, Device::CUDA, DataType::Float32);
+    auto t = Tensor::randint({500}, low, high, Device::GPU, DataType::Float32);
 
     auto values = t.to_vector();
     for (float val : values) {
@@ -305,7 +305,7 @@ TEST_F(TensorRandomTest, RandIntInt32) {
     int low = 0;
     int high = 100;
 
-    auto t = Tensor::randint({200}, low, high, Device::CUDA, DataType::Int32);
+    auto t = Tensor::randint({200}, low, high, Device::GPU, DataType::Int32);
 
     EXPECT_EQ(t.dtype(), DataType::Int32);
     EXPECT_EQ(t.numel(), 200);
@@ -315,7 +315,7 @@ TEST_F(TensorRandomTest, RandIntDistribution) {
     int low = 0;
     int high = 10;
 
-    auto t = Tensor::randint({10000}, low, high, Device::CUDA, DataType::Float32);
+    auto t = Tensor::randint({10000}, low, high, Device::GPU, DataType::Float32);
 
     // Check roughly uniform distribution
     auto values = t.to_vector();
@@ -336,7 +336,7 @@ TEST_F(TensorRandomTest, RandIntDistribution) {
 TEST_F(TensorRandomTest, BernoulliBasic) {
     float p = 0.7f;
 
-    auto t = Tensor::bernoulli({10000}, p, Device::CUDA);
+    auto t = Tensor::bernoulli({10000}, p, Device::GPU);
 
     // Check all values are 0 or 1
     auto values = t.to_vector();
@@ -352,14 +352,14 @@ TEST_F(TensorRandomTest, BernoulliBasic) {
 
 TEST_F(TensorRandomTest, BernoulliExtreme) {
     // Test p = 0.0
-    auto t0 = Tensor::bernoulli({100}, 0.0f, Device::CUDA);
+    auto t0 = Tensor::bernoulli({100}, 0.0f, Device::GPU);
     auto values0 = t0.to_vector();
     for (float val : values0) {
         EXPECT_FLOAT_EQ(val, 0.0f);
     }
 
     // Test p = 1.0
-    auto t1 = Tensor::bernoulli({100}, 1.0f, Device::CUDA);
+    auto t1 = Tensor::bernoulli({100}, 1.0f, Device::GPU);
     auto values1 = t1.to_vector();
     for (float val : values1) {
         EXPECT_FLOAT_EQ(val, 1.0f);
@@ -369,7 +369,7 @@ TEST_F(TensorRandomTest, BernoulliExtreme) {
 TEST_F(TensorRandomTest, BernoulliMiddleProb) {
     float p = 0.5f;
 
-    auto t = Tensor::bernoulli({5000}, p, Device::CUDA);
+    auto t = Tensor::bernoulli({5000}, p, Device::GPU);
 
     auto values = t.to_vector();
     float sum = std::accumulate(values.begin(), values.end(), 0.0f);
@@ -381,7 +381,7 @@ TEST_F(TensorRandomTest, BernoulliMiddleProb) {
 
 TEST_F(TensorRandomTest, MultinomialBasic) {
     std::vector<float> weights_data = {1.0f, 2.0f, 3.0f, 4.0f};
-    auto weights = Tensor::from_vector(weights_data, {4}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {4}, Device::GPU);
 
     int num_samples = 1000;
     auto samples = Tensor::multinomial(weights, num_samples, true);
@@ -413,7 +413,7 @@ TEST_F(TensorRandomTest, MultinomialBasic) {
 
 TEST_F(TensorRandomTest, MultinomialWithoutReplacement) {
     std::vector<float> weights_data = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    auto weights = Tensor::from_vector(weights_data, {5}, Device::CUDA);
+    auto weights = Tensor::from_vector(weights_data, {5}, Device::GPU);
 
     int num_samples = 3;
     auto samples = Tensor::multinomial(weights, num_samples, false);
@@ -431,10 +431,10 @@ TEST_F(TensorRandomTest, MultinomialWithoutReplacement) {
 TEST_F(TensorRandomTest, ManualSeedReproducibility) {
     // Test that manual seed produces reproducible results
     Tensor::manual_seed(12345);
-    auto t1 = Tensor::randn({100}, Device::CUDA);
+    auto t1 = Tensor::randn({100}, Device::GPU);
 
     Tensor::manual_seed(12345);
-    auto t2 = Tensor::randn({100}, Device::CUDA);
+    auto t2 = Tensor::randn({100}, Device::GPU);
 
     // Should produce identical results
     EXPECT_TRUE(t1.all_close(t2, 1e-6f, 1e-7f));
@@ -442,10 +442,10 @@ TEST_F(TensorRandomTest, ManualSeedReproducibility) {
 
 TEST_F(TensorRandomTest, DifferentSeedsDifferentResults) {
     Tensor::manual_seed(12345);
-    auto t1 = Tensor::randn({100}, Device::CUDA);
+    auto t1 = Tensor::randn({100}, Device::GPU);
 
     Tensor::manual_seed(54321);
-    auto t2 = Tensor::randn({100}, Device::CUDA);
+    auto t2 = Tensor::randn({100}, Device::GPU);
 
     // Different seeds should produce different results
     EXPECT_FALSE(t1.all_close(t2));
@@ -453,20 +453,20 @@ TEST_F(TensorRandomTest, DifferentSeedsDifferentResults) {
 
 TEST_F(TensorRandomTest, UniformSeedReproducibility) {
     Tensor::manual_seed(999);
-    auto t1 = Tensor::rand({200}, Device::CUDA);
+    auto t1 = Tensor::rand({200}, Device::GPU);
 
     Tensor::manual_seed(999);
-    auto t2 = Tensor::rand({200}, Device::CUDA);
+    auto t2 = Tensor::rand({200}, Device::GPU);
 
     EXPECT_TRUE(t1.all_close(t2, 1e-6f, 1e-7f));
 }
 
 TEST_F(TensorRandomTest, RandIntSeedReproducibility) {
     Tensor::manual_seed(777);
-    auto t1 = Tensor::randint({100}, 0, 10, Device::CUDA, DataType::Float32);
+    auto t1 = Tensor::randint({100}, 0, 10, Device::GPU, DataType::Float32);
 
     Tensor::manual_seed(777);
-    auto t2 = Tensor::randint({100}, 0, 10, Device::CUDA, DataType::Float32);
+    auto t2 = Tensor::randint({100}, 0, 10, Device::GPU, DataType::Float32);
 
     EXPECT_TRUE(t1.all_close(t2, 1e-6f, 1e-7f));
 }
@@ -474,7 +474,7 @@ TEST_F(TensorRandomTest, RandIntSeedReproducibility) {
 // ============= Like Operations Tests =============
 
 TEST_F(TensorRandomTest, RandLike) {
-    auto original = Tensor::zeros({3, 4, 5}, Device::CUDA);
+    auto original = Tensor::zeros({3, 4, 5}, Device::GPU);
     auto random = Tensor::rand_like(original);
 
     EXPECT_EQ(random.shape(), original.shape());
@@ -483,7 +483,7 @@ TEST_F(TensorRandomTest, RandLike) {
 }
 
 TEST_F(TensorRandomTest, RandnLike) {
-    auto original = Tensor::ones({10, 10}, Device::CUDA);
+    auto original = Tensor::ones({10, 10}, Device::GPU);
     auto random = Tensor::randn_like(original);
 
     EXPECT_EQ(random.shape(), original.shape());
@@ -496,7 +496,7 @@ TEST_F(TensorRandomTest, RandnLike) {
 }
 
 TEST_F(TensorRandomTest, ZerosLike) {
-    auto original = Tensor::rand({5, 6}, Device::CUDA);
+    auto original = Tensor::rand({5, 6}, Device::GPU);
     auto zeros = Tensor::zeros_like(original);
 
     EXPECT_EQ(zeros.shape(), original.shape());
@@ -509,7 +509,7 @@ TEST_F(TensorRandomTest, ZerosLike) {
 }
 
 TEST_F(TensorRandomTest, OnesLike) {
-    auto original = Tensor::rand({4, 7}, Device::CUDA);
+    auto original = Tensor::rand({4, 7}, Device::GPU);
     auto ones = Tensor::ones_like(original);
 
     EXPECT_EQ(ones.shape(), original.shape());
@@ -532,7 +532,7 @@ TEST_F(TensorRandomTest, CPUDistribution) {
 }
 
 TEST_F(TensorRandomTest, CUDADistribution) {
-    auto t = Tensor::randn({1000}, Device::CUDA);
+    auto t = Tensor::randn({1000}, Device::GPU);
 
     auto [mean, std] = compute_stats(t);
     EXPECT_NEAR(mean, 0.0f, 0.1f);
@@ -552,10 +552,10 @@ TEST_F(TensorRandomTest, CPUCUDASameSeedSameResults) {
 
     // Test CUDA reproducibility
     Tensor::manual_seed(999);
-    auto cuda_t1 = Tensor::randn({100}, Device::CUDA);
+    auto cuda_t1 = Tensor::randn({100}, Device::GPU);
 
     Tensor::manual_seed(999);
-    auto cuda_t2 = Tensor::randn({100}, Device::CUDA);
+    auto cuda_t2 = Tensor::randn({100}, Device::GPU);
 
     EXPECT_TRUE(cuda_t1.all_close(cuda_t2, 1e-6f, 1e-7f))
         << "CUDA should be reproducible with same seed";
@@ -566,7 +566,7 @@ TEST_F(TensorRandomTest, CPUCUDASameSeedSameResults) {
     auto cpu_large = Tensor::randn({1000}, Device::CPU); // Increased from 100 to 1000
 
     Tensor::manual_seed(999);
-    auto cuda_large = Tensor::randn({1000}, Device::CUDA); // Increased from 100 to 1000
+    auto cuda_large = Tensor::randn({1000}, Device::GPU); // Increased from 100 to 1000
 
     auto [cpu_mean, cpu_std] = compute_stats(cpu_large);
     auto [cuda_mean, cuda_std] = compute_stats(cuda_large);
@@ -587,7 +587,7 @@ TEST_F(TensorRandomTest, CPUUniform) {
 }
 
 TEST_F(TensorRandomTest, CUDAUniform) {
-    auto t = Tensor::rand({200}, Device::CUDA);
+    auto t = Tensor::rand({200}, Device::GPU);
 
     EXPECT_TRUE(check_range(t, 0.0f, 1.0f));
     auto [mean, std] = compute_stats(t);
@@ -605,7 +605,7 @@ TEST_F(TensorRandomTest, VariousShapes) {
         {2, 3, 4, 5}};
 
     for (const auto& shape : shapes) {
-        auto t = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto t = Tensor::randn(TensorShape(shape), Device::GPU);
 
         EXPECT_EQ(t.shape().dims(), shape);
 
@@ -618,7 +618,7 @@ TEST_F(TensorRandomTest, VariousShapes) {
 }
 
 TEST_F(TensorRandomTest, HighDimensional) {
-    auto t = Tensor::randn({2, 2, 2, 2, 2, 2}, Device::CUDA);
+    auto t = Tensor::randn({2, 2, 2, 2, 2, 2}, Device::GPU);
 
     EXPECT_EQ(t.ndim(), 6);
     EXPECT_EQ(t.numel(), 64);
@@ -631,14 +631,14 @@ TEST_F(TensorRandomTest, HighDimensional) {
 // ============= Edge Cases =============
 
 TEST_F(TensorRandomTest, EmptyTensor) {
-    auto t = Tensor::randn({0}, Device::CUDA);
+    auto t = Tensor::randn({0}, Device::GPU);
 
     EXPECT_TRUE(t.is_valid());
     EXPECT_EQ(t.numel(), 0);
 }
 
 TEST_F(TensorRandomTest, SingleElement) {
-    auto t = Tensor::uniform({1}, -1.0f, 1.0f, Device::CUDA);
+    auto t = Tensor::uniform({1}, -1.0f, 1.0f, Device::GPU);
 
     EXPECT_EQ(t.numel(), 1);
 
@@ -649,7 +649,7 @@ TEST_F(TensorRandomTest, SingleElement) {
 
 TEST_F(TensorRandomTest, LargeTensor) {
     const size_t large_size = 1000000;
-    auto t = Tensor::randn({large_size}, Device::CUDA);
+    auto t = Tensor::randn({large_size}, Device::GPU);
 
     EXPECT_EQ(t.numel(), large_size);
 
@@ -661,7 +661,7 @@ TEST_F(TensorRandomTest, LargeTensor) {
 }
 
 TEST_F(TensorRandomTest, ZeroElementsMultiDim) {
-    auto t = Tensor::randn({5, 0, 3}, Device::CUDA);
+    auto t = Tensor::randn({5, 0, 3}, Device::GPU);
 
     EXPECT_EQ(t.numel(), 0);
     EXPECT_EQ(t.ndim(), 3);
@@ -671,7 +671,7 @@ TEST_F(TensorRandomTest, ZeroElementsMultiDim) {
 
 TEST_F(TensorRandomTest, ReshapePreservesData) {
     Tensor::manual_seed(123);
-    auto t = Tensor::randn({20}, Device::CUDA);
+    auto t = Tensor::randn({20}, Device::GPU);
     auto original_copy = t.clone();
 
     auto reshaped = t.reshape({4, 5});
@@ -685,7 +685,7 @@ TEST_F(TensorRandomTest, ReshapePreservesData) {
 
 TEST_F(TensorRandomTest, TransposePreservesData) {
     Tensor::manual_seed(456);
-    auto t = Tensor::randn({3, 4}, Device::CUDA);
+    auto t = Tensor::randn({3, 4}, Device::GPU);
 
     auto transposed = t.transpose();
 
@@ -703,7 +703,7 @@ TEST_F(TensorRandomTest, TransposePreservesData) {
 }
 
 TEST_F(TensorRandomTest, ReductionDimensions) {
-    auto t = Tensor::randn({10, 10}, Device::CUDA);
+    auto t = Tensor::randn({10, 10}, Device::GPU);
 
     // Full reduction should give scalar (0D tensor)
     auto sum_all = t.sum();
@@ -724,7 +724,7 @@ TEST_F(TensorRandomTest, ReductionDimensions) {
 
 TEST_F(TensorRandomTest, ArithmeticOnRandom) {
     Tensor::manual_seed(789);
-    auto t = Tensor::randn({100}, Device::CUDA);
+    auto t = Tensor::randn({100}, Device::GPU);
     auto original = t.clone();
 
     auto result = t.mul(2.0f).add(1.0f);
@@ -741,7 +741,7 @@ TEST_F(TensorRandomTest, ArithmeticOnRandom) {
 
 TEST_F(TensorRandomTest, ChainedOperations) {
     Tensor::manual_seed(999);
-    auto t = Tensor::randn({50}, Device::CUDA);
+    auto t = Tensor::randn({50}, Device::GPU);
 
     auto result = t.reshape({10, 5}).t().flatten();
 
@@ -756,7 +756,7 @@ TEST_F(TensorRandomTest, ChainedOperations) {
 
 TEST_F(TensorRandomTest, SlicePreservesData) {
     Tensor::manual_seed(111);
-    auto t = Tensor::randn({100}, Device::CUDA);
+    auto t = Tensor::randn({100}, Device::GPU);
 
     auto slice = t.slice(0, 10, 20);
 

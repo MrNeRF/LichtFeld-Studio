@@ -15,11 +15,11 @@ namespace lfs::rendering {
 
         void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
             if (!counts_scratch.is_valid() ||
-                counts_scratch.device() != lfs::core::Device::CUDA ||
+                counts_scratch.device() != lfs::core::Device::GPU ||
                 counts_scratch.dtype() != lfs::core::DataType::Int32 ||
                 counts_scratch.numel() != kSelectionGroupScratchWords) {
                 counts_scratch = Tensor::zeros(
-                    {kSelectionGroupScratchWords}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+                    {kSelectionGroupScratchWords}, lfs::core::Device::GPU, lfs::core::DataType::Int32);
             } else {
                 counts_scratch.zero_();
             }
@@ -42,7 +42,7 @@ namespace lfs::rendering {
         const Tensor indices = selection_mask.to(lfs::core::DataType::Int32);
         const Tensor ones = Tensor::ones(
             {static_cast<size_t>(selection_mask.numel())},
-            lfs::core::Device::CUDA,
+            lfs::core::Device::GPU,
             lfs::core::DataType::Int32);
         counts_scratch.index_add_(0, indices, ones);
         counts_scratch.slice(0, 0, 1).fill_(0.0f);

@@ -346,7 +346,7 @@ namespace lfs::core {
                 size_t self_bytes = bytes();
                 size_t other_bytes = other.bytes();
 
-                if (device_ == Device::CUDA) {
+                if (device_ == Device::GPU) {
                     pin_operands({this, &other});
                     auto& backend_ops = internal::backend_ops_for(*this);
                     if (self_bytes > 0) {
@@ -406,7 +406,7 @@ namespace lfs::core {
                 auto result = internal::allocate_zeros_like(
                     *this, TensorShape(new_shape), dtype_);
 
-                if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
+                if (device_ == Device::GPU && dtype_ == DataType::Float32) {
                     pin_operands({this});
                     std::array<size_t, MAX_TENSOR_RANK> pad_before_descriptor{};
                     std::copy(pad_before.begin(), pad_before.end(),

@@ -253,7 +253,7 @@ namespace lfs::core::cuda {
 
             // Compute AABB via parallel reduction
             // aabb[0..2] = min_xyz, aabb[3..5] = max_xyz
-            auto aabb_buf = Tensor::empty({6}, Device::CUDA, DataType::Float32);
+            auto aabb_buf = Tensor::empty({6}, Device::GPU, DataType::Float32);
             {
                 float init[6] = {FLT_MAX, FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX};
                 LFS_CUDA_CHECK_MSG(
@@ -292,8 +292,8 @@ namespace lfs::core::cuda {
             int num_cells = static_cast<int>(total);
 
             // Compute cell IDs
-            auto cell_ids = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::Int32);
-            auto sorted_indices = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::Int32);
+            auto cell_ids = Tensor::empty({static_cast<size_t>(N)}, Device::GPU, DataType::Int32);
+            auto sorted_indices = Tensor::empty({static_cast<size_t>(N)}, Device::GPU, DataType::Int32);
 
             compute_cell_ids<<<blocks, BLOCK_SIZE, 0, stream>>>(
                 pos_ptr, cell_ids.ptr<int>(),
@@ -309,8 +309,8 @@ namespace lfs::core::cuda {
             thrust::sort_by_key(thrust::cuda::par.on(stream), ci_ptr, ci_ptr + N, si_ptr);
 
             // Build cell start/end
-            auto cell_start = Tensor::empty({static_cast<size_t>(num_cells)}, Device::CUDA, DataType::Int32);
-            auto cell_end = Tensor::empty({static_cast<size_t>(num_cells)}, Device::CUDA, DataType::Int32);
+            auto cell_start = Tensor::empty({static_cast<size_t>(num_cells)}, Device::GPU, DataType::Int32);
+            auto cell_end = Tensor::empty({static_cast<size_t>(num_cells)}, Device::GPU, DataType::Int32);
             thrust::fill(thrust::cuda::par_nosync.on(stream),
                          thrust::device_ptr<int>(cell_start.ptr<int>()),
                          thrust::device_ptr<int>(cell_start.ptr<int>()) + num_cells, -1);
@@ -344,8 +344,8 @@ namespace lfs::core::cuda {
             }
             return mask;
         }
-        assert(mask.device() == Device::CUDA);
-        assert(means.device() == Device::CUDA);
+        assert(mask.device() == Device::GPU);
+        assert(means.device() == Device::GPU);
         assert(mask.dtype() == DataType::UInt8);
         assert(means.dtype() == DataType::Float32);
         assert(mask.numel() == means.size(0));
@@ -363,7 +363,7 @@ namespace lfs::core::cuda {
         cudaStream_t stream = mask.stream();
         auto grid = build_grid(means, radius, stream);
 
-        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
+        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::GPU, DataType::UInt8);
 
         int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         grow_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(
@@ -387,8 +387,8 @@ namespace lfs::core::cuda {
             }
             return mask;
         }
-        assert(mask.device() == Device::CUDA);
-        assert(means.device() == Device::CUDA);
+        assert(mask.device() == Device::GPU);
+        assert(means.device() == Device::GPU);
         assert(mask.dtype() == DataType::UInt8);
         assert(means.dtype() == DataType::Float32);
         assert(mask.numel() == means.size(0));
@@ -406,7 +406,7 @@ namespace lfs::core::cuda {
         cudaStream_t stream = mask.stream();
         auto grid = build_grid(means, radius, stream);
 
-        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::CUDA, DataType::UInt8);
+        auto out_mask = Tensor::zeros({static_cast<size_t>(N)}, Device::GPU, DataType::UInt8);
 
         int blocks = (N + BLOCK_SIZE - 1) / BLOCK_SIZE;
         shrink_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(

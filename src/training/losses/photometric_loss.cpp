@@ -26,11 +26,11 @@ namespace lfs::training::losses {
         // Only reallocate if shape or num_blocks changed
         if (allocated_shape_ != shape || allocated_num_blocks_ != num_blocks) {
             lfs::core::TensorShape tshape(shape);
-            grad_buffer_ = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
-            loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+            grad_buffer_ = lfs::core::Tensor::empty(tshape, lfs::core::Device::GPU);
+            loss_scalar_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
 
             if (num_blocks > 0) {
-                l1_reduction_buffer_ = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::CUDA);
+                l1_reduction_buffer_ = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
             }
 
             allocated_shape_ = shape;
@@ -85,7 +85,7 @@ namespace lfs::training::losses {
                     rendered_4d, gt_4d, ssim_ws, /*apply_valid_padding=*/true);
 
                 // loss = 1 - ssim
-                loss_tensor_gpu = lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::CUDA) - ssim_value_tensor;
+                loss_tensor_gpu = lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::GPU) - ssim_value_tensor;
 
                 // Backward: d(loss)/d(ssim) = -1 (since loss = 1 - ssim)
                 grad_combined = lfs::training::kernels::ssim_backward(

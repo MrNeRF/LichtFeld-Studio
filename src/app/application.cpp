@@ -1000,7 +1000,7 @@ namespace lfs::app {
                 auto* const bg_ptr = background.ptr<float>();
                 bg_ptr[0] = bg_ptr[1] = bg_ptr[2] = 0.0f;
             }
-            background = background.to(core::Device::CUDA);
+            background = background.to(core::Device::GPU);
 
             lfs::io::video::VideoEncoder encoder;
             lfs::io::video::VideoExportOptions options;
@@ -1061,7 +1061,7 @@ namespace lfs::app {
                 if (image.dtype() != core::DataType::Float32) {
                     image = image.to(core::DataType::Float32);
                 }
-                if (image.device() != core::Device::CUDA) {
+                if (image.device() != core::Device::GPU) {
                     image = image.cuda();
                 }
                 auto image_hwc = image.permute({1, 2, 0}).contiguous();

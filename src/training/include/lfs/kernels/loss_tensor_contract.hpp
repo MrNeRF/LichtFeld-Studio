@@ -30,7 +30,7 @@ namespace lfs::training::kernels {
             const bool target,
             const std::string_view name) {
             LFS_ASSERT_MSG(input.is_valid(), lfs::core::detail::format_cuda_safe("{} must be a valid tensor", name));
-            LFS_ASSERT_MSG(input.device() == lfs::core::Device::CUDA,
+            LFS_ASSERT_MSG(input.device() == lfs::core::Device::GPU,
                            lfs::core::detail::format_cuda_safe("{} must be a CUDA tensor", name));
             LFS_ASSERT_MSG(input.ndim() == 3 || input.ndim() == 4,
                            lfs::core::detail::format_cuda_safe("{} must have shape [C,H,W] or [N,C,H,W] (shape={})",
@@ -94,7 +94,7 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& input,
         const lfs::core::Tensor& prepared_image) {
         LFS_ASSERT_MSG(input.is_valid(), "Loss mask must be a valid tensor");
-        LFS_ASSERT_MSG(input.device() == lfs::core::Device::CUDA, "Loss mask must be a CUDA tensor");
+        LFS_ASSERT_MSG(input.device() == lfs::core::Device::GPU, "Loss mask must be a CUDA tensor");
         LFS_ASSERT_MSG(input.dtype() == lfs::core::DataType::Float32 ||
                            input.dtype() == lfs::core::DataType::UInt8 ||
                            input.dtype() == lfs::core::DataType::Bool,

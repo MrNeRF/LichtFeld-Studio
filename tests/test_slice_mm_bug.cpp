@@ -488,7 +488,7 @@ TEST_F(SliceMMBugTest, SliceOnCUDA) {
         data[i] = static_cast<float>(i + 1);
     }
 
-    auto custom = Tensor::from_vector(data, {4, 4}, Device::CUDA);
+    auto custom = Tensor::from_vector(data, {4, 4}, Device::GPU);
     auto torch_t = torch::tensor(data, torch::kCUDA).reshape({4, 4});
 
     // Create rotation matrix on CUDA

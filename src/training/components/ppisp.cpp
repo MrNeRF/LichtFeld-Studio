@@ -276,42 +276,42 @@ namespace lfs::training {
         assert(num_frames_ > 0 && "num_frames must be positive");
 
         // Allocate exposure params [num_frames]
-        exposure_params_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::CUDA);
-        exposure_exp_avg_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::CUDA);
-        exposure_exp_avg_sq_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::CUDA);
-        exposure_grad_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::CUDA);
+        exposure_params_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
+        exposure_exp_avg_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
+        exposure_exp_avg_sq_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
+        exposure_grad_ = lfs::core::Tensor::zeros({static_cast<size_t>(num_frames_)}, lfs::core::Device::GPU);
 
         // Allocate vignetting params [num_cameras * 3 * 5]
         size_t vig_size = static_cast<size_t>(num_cameras_) * 3 * 5;
-        vignetting_params_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        vignetting_exp_avg_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        vignetting_exp_avg_sq_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        vignetting_grad_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
+        vignetting_params_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
+        vignetting_exp_avg_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
+        vignetting_exp_avg_sq_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
+        vignetting_grad_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
 
         // Allocate color params [num_frames * 8]
         size_t color_size = static_cast<size_t>(num_frames_) * 8;
-        color_params_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::CUDA);
-        color_exp_avg_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::CUDA);
-        color_exp_avg_sq_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::CUDA);
-        color_grad_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::CUDA);
+        color_params_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::GPU);
+        color_exp_avg_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::GPU);
+        color_exp_avg_sq_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::GPU);
+        color_grad_ = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::GPU);
 
         // Allocate CRF params [num_cameras * 3 * 4]
         size_t crf_size = static_cast<size_t>(num_cameras_) * 3 * 4;
-        crf_params_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        crf_exp_avg_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        crf_exp_avg_sq_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        crf_grad_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
+        crf_params_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
+        crf_exp_avg_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
+        crf_exp_avg_sq_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
+        crf_grad_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
 
-        override_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
-        override_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
-        vig_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        override_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
+        override_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::GPU);
+        vig_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
 
         // Scratch buffers for backward_with_controller_params
-        ctrl_bwd_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
-        ctrl_bwd_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
-        ctrl_bwd_vignetting_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        ctrl_bwd_crf_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        ctrl_bwd_output_ = lfs::core::Tensor::empty({9}, lfs::core::Device::CUDA);
+        ctrl_bwd_exposure_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
+        ctrl_bwd_color_ = lfs::core::Tensor::zeros({8}, lfs::core::Device::GPU);
+        ctrl_bwd_vignetting_ = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
+        ctrl_bwd_crf_ = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
+        ctrl_bwd_output_ = lfs::core::Tensor::empty({9}, lfs::core::Device::GPU);
 
         kernels::launch_ppisp_init_identity(exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(),
                                             color_params_.ptr<float>(), crf_params_.ptr<float>(), num_cameras_,
@@ -338,7 +338,7 @@ namespace lfs::training {
             // Neutral block
             0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0128369f, -0.0034654f,
             0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, -0.0034654f, 0.0128158f,
-        }, {8, 8}, lfs::core::Device::CUDA);
+        }, {8, 8}, lfs::core::Device::GPU);
         // clang-format on
     }
 
@@ -353,7 +353,7 @@ namespace lfs::training {
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
-        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         kernels::launch_ppisp_forward_chw_region(exposure, vignetting_params_.ptr<float>(), color,
                                                  crf_params_.ptr<float>(), rgb.ptr<float>(), output.ptr<float>(), h, w,
@@ -396,7 +396,7 @@ namespace lfs::training {
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
-        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         const float clamped = std::clamp(exposure_ev + ov.exposure_offset, -16.0f, 16.0f);
         override_exposure_.fill_(clamped);
@@ -477,7 +477,7 @@ namespace lfs::training {
         auto exposure_temp = controller_params.slice(1, 0, 1).reshape({1});
         auto color_temp = controller_params.slice(1, 1, 9).reshape({8});
 
-        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         // Use controller-predicted exposure and color, but existing vignetting and CRF from camera
         kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
@@ -505,7 +505,7 @@ namespace lfs::training {
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
-        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         // Extract and modify exposure from controller output
         auto exposure_temp = controller_params.slice(1, 0, 1).reshape({1}).clone();
@@ -594,7 +594,7 @@ namespace lfs::training {
         const int full_h = region.full_height > 0 ? region.full_height : h;
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
-        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+        auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         // Exposure: add offset to learned value
         auto exposure_modified = exposure_params_.clone();
@@ -683,7 +683,7 @@ namespace lfs::training {
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
 
-        auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
+        auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         kernels::launch_ppisp_backward_chw(
             exposure_params_.ptr<float>(), vignetting_params_.ptr<float>(), color_params_.ptr<float>(),
@@ -711,7 +711,7 @@ namespace lfs::training {
 
         // Lazy-resize rgb scratch buffer if image dimensions changed
         if (h != ctrl_bwd_rgb_h_ || w != ctrl_bwd_rgb_w_) {
-            ctrl_bwd_rgb_ = lfs::core::Tensor::empty({3, h, w}, lfs::core::Device::CUDA);
+            ctrl_bwd_rgb_ = lfs::core::Tensor::empty({3, h, w}, lfs::core::Device::GPU);
             ctrl_bwd_rgb_h_ = h;
             ctrl_bwd_rgb_w_ = w;
         }
@@ -914,7 +914,7 @@ namespace lfs::training {
         }
 
         // Return as GPU scalar
-        auto loss = lfs::core::Tensor::full({1}, total_loss, lfs::core::Device::CUDA);
+        auto loss = lfs::core::Tensor::full({1}, total_loss, lfs::core::Device::GPU);
         return loss;
     }
 
@@ -1066,13 +1066,13 @@ namespace lfs::training {
 
         // Add gradients to GPU gradient buffers (accumulate)
         auto exp_grad_tensor = lfs::core::Tensor::from_vector(exp_grad, {static_cast<size_t>(num_frames_)},
-                                                              lfs::core::Device::CUDA);
+                                                              lfs::core::Device::GPU);
         auto vig_grad_tensor = lfs::core::Tensor::from_vector(vig_grad, {vig_grad.size()},
-                                                              lfs::core::Device::CUDA);
+                                                              lfs::core::Device::GPU);
         auto color_grad_tensor = lfs::core::Tensor::from_vector(color_grad, {color_grad.size()},
-                                                                lfs::core::Device::CUDA);
+                                                                lfs::core::Device::GPU);
         auto crf_grad_tensor = lfs::core::Tensor::from_vector(crf_grad, {crf_grad.size()},
-                                                              lfs::core::Device::CUDA);
+                                                              lfs::core::Device::GPU);
 
         // Accumulate into existing gradients
         exposure_grad_ = exposure_grad_.add(exp_grad_tensor);
@@ -1296,12 +1296,12 @@ namespace lfs::training {
         const auto frame_indices = lfs::core::Tensor::from_vector(
                                        source_frame_indices,
                                        {source_frame_indices.size()},
-                                       lfs::core::Device::CUDA)
+                                       lfs::core::Device::GPU)
                                        .to(lfs::core::DataType::Int32);
         const auto camera_indices = lfs::core::Tensor::from_vector(
                                         source_camera_indices,
                                         {source_camera_indices.size()},
-                                        lfs::core::Device::CUDA)
+                                        lfs::core::Device::GPU)
                                         .to(lfs::core::DataType::Int32);
 
         exposure_params_ = source.exposure_params_.index_select(0, frame_indices).contiguous();
@@ -1522,16 +1522,16 @@ namespace lfs::training {
         crf_exp_avg = crf_exp_avg.cuda();
         crf_exp_avg_sq = crf_exp_avg_sq.cuda();
 
-        auto exposure_grad = lfs::core::Tensor::zeros({exposure_size}, lfs::core::Device::CUDA);
-        auto vignetting_grad = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        auto color_grad = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::CUDA);
-        auto crf_grad = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        auto ctrl_bwd_exposure = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
-        auto ctrl_bwd_color = lfs::core::Tensor::zeros({8}, lfs::core::Device::CUDA);
-        auto ctrl_bwd_vignetting = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::CUDA);
-        auto ctrl_bwd_crf = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::CUDA);
-        auto ctrl_bwd_output = lfs::core::Tensor::empty({9}, lfs::core::Device::CUDA);
-        auto vig_reg_loss = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+        auto exposure_grad = lfs::core::Tensor::zeros({exposure_size}, lfs::core::Device::GPU);
+        auto vignetting_grad = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
+        auto color_grad = lfs::core::Tensor::zeros({color_size}, lfs::core::Device::GPU);
+        auto crf_grad = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
+        auto ctrl_bwd_exposure = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
+        auto ctrl_bwd_color = lfs::core::Tensor::zeros({8}, lfs::core::Device::GPU);
+        auto ctrl_bwd_vignetting = lfs::core::Tensor::zeros({vig_size}, lfs::core::Device::GPU);
+        auto ctrl_bwd_crf = lfs::core::Tensor::zeros({crf_size}, lfs::core::Device::GPU);
+        auto ctrl_bwd_output = lfs::core::Tensor::empty({9}, lfs::core::Device::GPU);
+        auto vig_reg_loss = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
 
         num_cameras_ = num_cameras;
         num_frames_ = num_frames;
@@ -1669,7 +1669,7 @@ namespace lfs::training {
         }
         init_color_pinv_block_diag();
         if (!vig_reg_loss_.is_valid()) {
-            vig_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+            vig_reg_loss_ = lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
         }
         finalized_ = true;
     }

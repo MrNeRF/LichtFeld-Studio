@@ -51,7 +51,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] lfs::core::Tensor preparePpispInput(lfs::core::Tensor input) {
-            if (!input.is_valid() || input.device() == lfs::core::Device::CUDA) {
+            if (!input.is_valid() || input.device() == lfs::core::Device::GPU) {
                 return input;
             }
             return input.cuda();

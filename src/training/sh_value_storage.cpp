@@ -64,7 +64,7 @@ namespace lfs::training::sh_value {
             if (out.dtype() != DataType::Int64) {
                 out = out.to(DataType::Int64);
             }
-            if (out.device() != Device::CUDA) {
+            if (out.device() != Device::GPU) {
                 out = out.cuda();
             }
             if (!out.is_contiguous()) {
@@ -77,7 +77,7 @@ namespace lfs::training::sh_value {
         }
 
         [[nodiscard]] Tensor make_range_i64(std::size_t start, std::size_t count, cudaStream_t stream) {
-            Tensor out = Tensor::empty(TensorShape({count}), Device::CUDA, DataType::Int64);
+            Tensor out = Tensor::empty(TensorShape({count}), Device::GPU, DataType::Int64);
             out.set_stream(stream);
             if (count == 0) {
                 return out;
@@ -96,7 +96,7 @@ namespace lfs::training::sh_value {
 
         [[nodiscard]] Tensor canonical_contiguous(const Tensor& src, cudaStream_t stream) {
             Tensor out = src;
-            if (out.device() != Device::CUDA) {
+            if (out.device() != Device::GPU) {
                 out = out.cuda();
             }
             if (out.dtype() != DataType::Float32) {
@@ -147,7 +147,7 @@ namespace lfs::training::sh_value {
                             TensorShape({logical}), std::max(logical, cap), dtype, alloc_name);
                     } else {
                         t = Tensor::zeros_direct(
-                            TensorShape({logical}), std::max(logical, cap), Device::CUDA, dtype);
+                            TensorShape({logical}), std::max(logical, cap), Device::GPU, dtype);
                     }
                     t.set_name(set_name);
                     t.set_stream(stream);
@@ -172,7 +172,7 @@ namespace lfs::training::sh_value {
                         TensorShape({logical}), dest_cap, dtype, alloc_name);
                 } else {
                     grown = Tensor::zeros_direct(
-                        TensorShape({logical}), dest_cap, Device::CUDA, dtype);
+                        TensorShape({logical}), dest_cap, Device::GPU, dtype);
                 }
                 grown.set_name(set_name);
                 grown.set_stream(stream);
@@ -196,7 +196,7 @@ namespace lfs::training::sh_value {
         [[nodiscard]] Tensor make_fp32_chunk(std::uint32_t rest, cudaStream_t stream) {
             constexpr std::size_t kChunk = static_cast<std::size_t>(core::sh_value_quant::kBlockSize);
             const std::size_t chunk_floats = core::sh_swizzled_float_count(kChunk, rest);
-            Tensor chunk = Tensor::zeros(TensorShape({chunk_floats}), Device::CUDA, DataType::Float32);
+            Tensor chunk = Tensor::zeros(TensorShape({chunk_floats}), Device::GPU, DataType::Float32);
             chunk.set_stream(stream);
             return chunk;
         }
@@ -280,13 +280,13 @@ namespace lfs::training::sh_value {
             const auto* perm_ptr = perm.ptr<std::int64_t>();
 
             Tensor dest_u16 = Tensor::zeros_direct(
-                TensorShape({n_cells}), std::max(n_cells, cap_cells), Device::CUDA, DataType::Float16);
+                TensorShape({n_cells}), std::max(n_cells, cap_cells), Device::GPU, DataType::Float16);
             dest_u16.set_stream(stream);
             dest_u16.set_name("splat.shN");
             Tensor dest_bounds = Tensor::zeros_direct(
                 TensorShape({n_bound_floats}),
                 std::max(n_bound_floats, cap_bound_floats),
-                Device::CUDA,
+                Device::GPU,
                 DataType::Float32);
             dest_bounds.set_stream(stream);
             dest_bounds.set_name("splat.shN_value_bounds");
@@ -331,7 +331,7 @@ namespace lfs::training::sh_value {
                 bounds.set_stream(stream);
             }
 
-            Tensor block_ids = Tensor::zeros(TensorShape({K}), Device::CUDA, DataType::Float32);
+            Tensor block_ids = Tensor::zeros(TensorShape({K}), Device::GPU, DataType::Float32);
             block_ids.set_stream(stream);
             core::sh_value_quant::fill_quant_block_ids_f32(
                 dest_indices_i64.ptr<std::int64_t>(), block_ids.ptr<float>(), K, stream);
@@ -347,9 +347,9 @@ namespace lfs::training::sh_value {
             sorted_dest.set_stream(stream);
             sorted_can.set_stream(stream);
 
-            Tensor unique_blocks = Tensor::empty(TensorShape({K}), Device::CUDA, DataType::Int32);
-            Tensor run_offsets = Tensor::empty(TensorShape({K}), Device::CUDA, DataType::Int32);
-            Tensor n_runs = Tensor::zeros(TensorShape({1}), Device::CUDA, DataType::Int32);
+            Tensor unique_blocks = Tensor::empty(TensorShape({K}), Device::GPU, DataType::Int32);
+            Tensor run_offsets = Tensor::empty(TensorShape({K}), Device::GPU, DataType::Int32);
+            Tensor n_runs = Tensor::zeros(TensorShape({1}), Device::GPU, DataType::Int32);
             unique_blocks.set_stream(stream);
             run_offsets.set_stream(stream);
             n_runs.set_stream(stream);
@@ -425,14 +425,14 @@ namespace lfs::training::sh_value {
         // (has bounds) and takes the decode path below.
         if (splat.shN_ieee_f16()) {
             Tensor fp32 = shN.to(DataType::Float32);
-            if (fp32.device() != Device::CUDA)
+            if (fp32.device() != Device::GPU)
                 fp32 = fp32.cuda();
             if (!fp32.is_contiguous())
                 fp32 = fp32.contiguous();
             // Preserve capacity headroom when possible.
             if (fp32.capacity() < capacity_floats) {
                 Tensor room = Tensor::zeros_direct(TensorShape({logical_floats}),
-                                                   capacity_floats, Device::CUDA);
+                                                   capacity_floats, Device::GPU);
                 room.set_name("splat.shN");
                 room.copy_from(fp32);
                 fp32 = std::move(room);
@@ -449,7 +449,7 @@ namespace lfs::training::sh_value {
 
         Tensor fp32 = Tensor::zeros_direct(TensorShape({logical_floats}),
                                            std::max(logical_floats, capacity_floats),
-                                           Device::CUDA);
+                                           Device::GPU);
         fp32.set_name("splat.shN");
 
         const cudaStream_t stream = core::getCurrentCUDAStream();
@@ -528,14 +528,14 @@ namespace lfs::training::sh_value {
 
         const std::size_t need = K * static_cast<std::size_t>(rest) * 3u;
         const bool in_place = dest_canonical.is_valid() &&
-                              dest_canonical.device() == Device::CUDA &&
+                              dest_canonical.device() == Device::GPU &&
                               dest_canonical.dtype() == DataType::Float32 &&
                               dest_canonical.numel() >= need;
         Tensor dest = dest_canonical;
         if (!in_place) {
             dest = Tensor::zeros(
                 TensorShape({K, static_cast<std::size_t>(rest), std::size_t{3}}),
-                Device::CUDA,
+                Device::GPU,
                 DataType::Float32);
         } else if (!dest.is_contiguous()) {
             dest = dest.contiguous();
@@ -716,7 +716,7 @@ namespace lfs::training::sh_value {
         }
         Tensor zeros = Tensor::zeros(
             TensorShape({dest_indices.numel(), static_cast<std::size_t>(rest), std::size_t{3}}),
-            Device::CUDA,
+            Device::GPU,
             DataType::Float32);
         scatter_canonical_into_shN(splat, dest_indices, zeros);
     }
@@ -870,7 +870,7 @@ namespace lfs::training::sh_value {
                     TensorShape({indices.numel(),
                                  static_cast<std::size_t>(layout_rest(splat)),
                                  std::size_t{3}}),
-                    Device::CUDA,
+                    Device::GPU,
                     DataType::Float32);
                 zeros.set_stream(stream);
                 dest_parts.push_back(std::move(indices));
@@ -933,13 +933,13 @@ namespace lfs::training::sh_value {
                 core::sh_value_quant::n_bounds_for_prims(cap_prims) * 2;
             if (splat.shN_value_quantized()) {
                 splat.shN() = Tensor::zeros_direct(
-                    TensorShape({std::size_t{0}}), cap_cells, Device::CUDA, DataType::Float16);
+                    TensorShape({std::size_t{0}}), cap_cells, Device::GPU, DataType::Float16);
                 splat.shN_value_bounds() = Tensor::zeros_direct(
-                    TensorShape({std::size_t{0}}), cap_bounds, Device::CUDA, DataType::Float32);
+                    TensorShape({std::size_t{0}}), cap_bounds, Device::GPU, DataType::Float32);
             } else {
                 const std::size_t cap_floats = core::sh_swizzled_float_count(cap_prims, rest);
                 splat.shN() = Tensor::zeros_direct(
-                    TensorShape({std::size_t{0}}), cap_floats, Device::CUDA, DataType::Float32);
+                    TensorShape({std::size_t{0}}), cap_floats, Device::GPU, DataType::Float32);
             }
             splat.shN().set_name("splat.shN");
             return;
@@ -958,7 +958,7 @@ namespace lfs::training::sh_value {
         const std::size_t cap_floats = core::sh_swizzled_float_count(cap_rows, rest);
         const std::size_t logical_floats = core::sh_swizzled_float_count(n_dst, rest);
         auto fresh = Tensor::zeros_direct(
-            TensorShape({logical_floats}), cap_floats, Device::CUDA, DataType::Float32);
+            TensorShape({logical_floats}), cap_floats, Device::GPU, DataType::Float32);
         core::shN_swizzled_gather_self(
             splat.shN().ptr<float>(),
             fresh.ptr<float>(),

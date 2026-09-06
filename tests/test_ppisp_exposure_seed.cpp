@@ -88,7 +88,7 @@ TEST(PPISPApplyWithExposureTest, MatchesApplyForRegisteredFrame) {
     for (size_t i = 0; i < pixels.size(); ++i) {
         pixels[i] = 0.2f + 0.01f * static_cast<float>(i);
     }
-    const auto rgb = lfs::core::Tensor::from_vector(pixels, {3, 4, 4}, Device::CUDA);
+    const auto rgb = lfs::core::Tensor::from_vector(pixels, {3, 4, 4}, Device::GPU);
 
     const auto from_apply = ppisp.apply(rgb, 7, 10).cpu().contiguous().to_vector();
     const auto from_explicit = ppisp.apply_with_exposure(rgb, 7, e).cpu().contiguous().to_vector();

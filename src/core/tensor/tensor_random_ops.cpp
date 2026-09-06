@@ -113,9 +113,9 @@ namespace lfs::core {
 
     void* RandomGenerator::get_generator(Device device) {
         auto* impl = static_cast<RandomGeneratorImpl*>(impl_);
-        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "random generator received an invalid device");
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             return impl->cuda_generator_;
         } else {
             return &impl->cpu_generator_;
@@ -146,7 +146,7 @@ namespace lfs::core {
 
         size_t n = numel();
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             // Use kernel-based generation with advancing seed
             uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
             internal::backend_ops_for(*this).uniform(
@@ -200,7 +200,7 @@ namespace lfs::core {
 
         size_t n = numel();
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             const uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
             const internal::RandomProgram program{
                 .count = n,

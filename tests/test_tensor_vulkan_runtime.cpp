@@ -50,7 +50,7 @@ namespace {
     TEST_F(TensorVulkanRuntime, EmptyCreatesNativeVulkanStorageDescriptor) {
         // Catches Tensor::empty dropping the native allocation descriptor returned by VMA.
         GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor tensor = Tensor::empty({17}, Device::CUDA, DataType::Float32);
+        const Tensor tensor = Tensor::empty({17}, Device::GPU, DataType::Float32);
         const internal::StorageRef storage = internal::storage_ref(tensor);
         EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
         ASSERT_NE(storage.data, nullptr);
@@ -106,7 +106,7 @@ namespace {
                 Tensor vulkan;
                 {
                     GpuBackendScope scope(GpuBackend::Vulkan);
-                    vulkan = cpu.to(Device::CUDA);
+                    vulkan = cpu.to(Device::GPU);
                 }
                 EXPECT_EQ(gpu_backend_of(vulkan), GpuBackend::Vulkan);
                 const Tensor downloaded = vulkan.to(Device::CPU);
@@ -123,7 +123,7 @@ namespace {
         for (int iteration = 0; iteration < 34; ++iteration) {
             GpuBackendScope scope(GpuBackend::Vulkan);
             const Tensor vulkan = Tensor::from_vector(
-                expected, {expected.size()}, Device::CUDA);
+                expected, {expected.size()}, Device::GPU);
             EXPECT_EQ(vulkan.to_vector_int(), expected);
         }
     }
@@ -131,21 +131,21 @@ namespace {
     TEST_F(TensorVulkanRuntime, ZeroOneAndFullUseTransferAndFillPaths) {
         // Catches vkCmdFillBuffer tails and the Slang BDA fill push-constant ABI.
         GpuBackendScope scope(GpuBackend::Vulkan);
-        EXPECT_EQ(Tensor::zeros({7}, Device::CUDA).to_vector(),
+        EXPECT_EQ(Tensor::zeros({7}, Device::GPU).to_vector(),
                   std::vector<float>(7, 0.0f));
-        EXPECT_EQ(Tensor::ones({4099}, Device::CUDA).to_vector(),
+        EXPECT_EQ(Tensor::ones({4099}, Device::GPU).to_vector(),
                   std::vector<float>(4099, 1.0f));
-        EXPECT_EQ(Tensor::full({17}, -3.25f, Device::CUDA).to_vector(),
+        EXPECT_EQ(Tensor::full({17}, -3.25f, Device::GPU).to_vector(),
                   std::vector<float>(17, -3.25f));
-        EXPECT_EQ(Tensor::full({7}, 9.0f, Device::CUDA, DataType::Int32)
+        EXPECT_EQ(Tensor::full({7}, 9.0f, Device::GPU, DataType::Int32)
                       .to_vector_int(),
                   std::vector<int>(7, 9));
-        EXPECT_EQ(Tensor::full({7}, 1.0f, Device::CUDA, DataType::Bool)
+        EXPECT_EQ(Tensor::full({7}, 1.0f, Device::GPU, DataType::Bool)
                       .to_vector_bool(),
                   std::vector<bool>(7, true));
-        EXPECT_FLOAT_EQ(Tensor::full({1}, 2.25f, Device::CUDA).item<float>(),
+        EXPECT_FLOAT_EQ(Tensor::full({1}, 2.25f, Device::GPU).item<float>(),
                         2.25f);
-        EXPECT_EQ(Tensor::full({7}, 5.0f, Device::CUDA).cpu().to_vector(),
+        EXPECT_EQ(Tensor::full({7}, 5.0f, Device::GPU).cpu().to_vector(),
                   std::vector<float>(7, 5.0f));
     }
 
@@ -153,11 +153,11 @@ namespace {
         // Catches view offsets or strides being interpreted as host pointers.
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor base = Tensor::from_vector(
-            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::CUDA);
+            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU);
         const Tensor sliced = base.slice(0, 1, 2);
         const Tensor transposed = base.transpose(0, 1);
         const Tensor row = Tensor::from_vector(
-            std::vector<float>{7, 8, 9}, {1, 3}, Device::CUDA);
+            std::vector<float>{7, 8, 9}, {1, 3}, Device::GPU);
         const Tensor expanded = row.expand({4, 3});
         const Tensor already_contiguous = base.contiguous();
         EXPECT_EQ(internal::storage_ref(base).meta, internal::storage_ref(sliced).meta);
@@ -179,7 +179,7 @@ namespace {
         // Catches D2D copies using a BDA as VkBuffer and reserve losing generation state.
         GpuBackendScope scope(GpuBackend::Vulkan);
         Tensor tensor = Tensor::from_vector(
-            std::vector<float>{1, 2, 3, 4}, {2, 2}, Device::CUDA);
+            std::vector<float>{1, 2, 3, 4}, {2, 2}, Device::GPU);
         const Tensor clone = tensor.clone();
         EXPECT_NE(internal::storage_ref(tensor).meta->gpu_descriptor.native_allocation,
                   internal::storage_ref(clone).meta->gpu_descriptor.native_allocation);
@@ -199,12 +199,12 @@ namespace {
         GpuBackendScope scope(GpuBackend::Vulkan);
         uint64_t retired_allocation = 0;
         {
-            const Tensor first = Tensor::ones({4099}, Device::CUDA);
+            const Tensor first = Tensor::ones({4099}, Device::GPU);
             EXPECT_EQ(first.to_vector().front(), 1.0f);
             retired_allocation =
                 internal::storage_ref(first).meta->gpu_descriptor.native_allocation;
         }
-        const Tensor second = Tensor::empty({4099}, Device::CUDA);
+        const Tensor second = Tensor::empty({4099}, Device::GPU);
         EXPECT_EQ(internal::storage_ref(second).meta->gpu_descriptor.native_allocation,
                   retired_allocation);
     }
@@ -212,7 +212,7 @@ namespace {
     TEST_F(TensorVulkanRuntime, RecorderProtectsReadAllocationsUntilTimelineCompletion) {
         // Catches a recorder that stamps allocation lifetime only for writes.
         GpuBackendScope scope(GpuBackend::Vulkan);
-        Tensor source = Tensor::empty({4099}, Device::CUDA);
+        Tensor source = Tensor::empty({4099}, Device::GPU);
         const uint64_t source_allocation =
             internal::storage_ref(source).meta->gpu_descriptor.native_allocation;
         const uint64_t completed_before =
@@ -220,7 +220,7 @@ namespace {
         const Tensor copy = source.clone();
         source = Tensor{};
 
-        const Tensor before_completion = Tensor::empty({4099}, Device::CUDA);
+        const Tensor before_completion = Tensor::empty({4099}, Device::GPU);
         EXPECT_NE(internal::storage_ref(before_completion)
                       .meta->gpu_descriptor.native_allocation,
                   source_allocation);
@@ -230,7 +230,7 @@ namespace {
         static_cast<void>(copy.cpu());
         EXPECT_GT(internal::vulkan_completed_timeline_for_testing(),
                   completed_before);
-        const Tensor after_completion = Tensor::empty({4099}, Device::CUDA);
+        const Tensor after_completion = Tensor::empty({4099}, Device::GPU);
         EXPECT_EQ(internal::storage_ref(after_completion)
                       .meta->gpu_descriptor.native_allocation,
                   source_allocation);
@@ -243,7 +243,7 @@ namespace {
             GpuBackendScope scope(GpuBackend::Vulkan);
             scoped_same_device_clone =
                 Tensor::from_vector(std::vector<float>{4, 3, 2, 1}, {4})
-                    .to(Device::CUDA);
+                    .to(Device::GPU);
         }
         EXPECT_EQ(gpu_backend_of(scoped_same_device_clone), GpuBackend::Vulkan);
         EXPECT_EQ(scoped_same_device_clone.to_vector(),
@@ -253,7 +253,7 @@ namespace {
         {
             GpuBackendScope scope(GpuBackend::CUDA);
             cuda = Tensor::from_vector(std::vector<float>{1, -2, 3, 9}, {4},
-                                       Device::CUDA);
+                                       Device::GPU);
         }
         const Tensor vulkan = internal::copy_to_backend(cuda, GpuBackend::Vulkan);
         const Tensor cuda_roundtrip =
@@ -269,11 +269,11 @@ namespace {
         Tensor vulkan;
         {
             GpuBackendScope scope(GpuBackend::CUDA);
-            cuda = Tensor::ones({4}, Device::CUDA);
+            cuda = Tensor::ones({4}, Device::GPU);
         }
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            vulkan = Tensor::ones({4}, Device::CUDA);
+            vulkan = Tensor::ones({4}, Device::GPU);
         }
         try {
             static_cast<void>(cuda + vulkan);
@@ -293,7 +293,7 @@ namespace {
         bool consumed = false;
         std::thread producer([&] {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            Tensor value = Tensor::full({4099}, 6.5f, Device::CUDA);
+            Tensor value = Tensor::full({4099}, 6.5f, Device::GPU);
             {
                 std::lock_guard lock(mutex);
                 shared = std::move(value);
@@ -324,7 +324,7 @@ namespace {
         Tensor shared;
         std::thread producer([&] {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            shared = Tensor::full({4099}, 3.5f, Device::CUDA);
+            shared = Tensor::full({4099}, 3.5f, Device::GPU);
         });
         producer.join();
         EXPECT_EQ(shared.to_vector(), std::vector<float>(4099, 3.5f));
@@ -337,7 +337,7 @@ namespace {
         for (int index = 0; index < 64; ++index) {
             threads.emplace_back([] {
                 GpuBackendScope scope(GpuBackend::Vulkan);
-                const Tensor source = Tensor::empty({64}, Device::CUDA);
+                const Tensor source = Tensor::empty({64}, Device::GPU);
                 const Tensor copy = source.clone();
                 static_cast<void>(copy);
             });
@@ -361,7 +361,7 @@ namespace {
             GpuBackendScope scope(GpuBackend::Vulkan);
             for (int index = 0; index < 65; ++index) {
                 live.push_back(Tensor::full({4099}, static_cast<float>(index),
-                                            Device::CUDA));
+                                            Device::GPU));
             }
         }
         ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
@@ -373,14 +373,14 @@ namespace {
         // Catches call_once state or late deleters retaining a destroyed VkDevice.
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor value = Tensor::ones({17}, Device::CUDA);
+            const Tensor value = Tensor::ones({17}, Device::GPU);
             EXPECT_EQ(value.to_vector(), std::vector<float>(17, 1.0f));
         }
         ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
         EXPECT_EQ(internal::vulkan_live_vma_objects_for_testing(), 0u);
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor value = Tensor::full({7}, 2.0f, Device::CUDA);
+            const Tensor value = Tensor::full({7}, 2.0f, Device::GPU);
             EXPECT_EQ(value.to_vector(), std::vector<float>(7, 2.0f));
         }
     }
@@ -392,16 +392,16 @@ namespace {
         Tensor survivor;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            survivor = Tensor::full({33}, 3.0f, Device::CUDA);
+            survivor = Tensor::full({33}, 3.0f, Device::GPU);
             EXPECT_EQ(survivor.to_vector(), std::vector<float>(33, 3.0f));
         }
         ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan).has_value());
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor fresh = Tensor::full({33}, 5.0f, Device::CUDA);
+            const Tensor fresh = Tensor::full({33}, 5.0f, Device::GPU);
             survivor = Tensor();
             EXPECT_EQ(fresh.to_vector(), std::vector<float>(33, 5.0f));
-            EXPECT_EQ(Tensor::full({33}, 6.0f, Device::CUDA).to_vector(),
+            EXPECT_EQ(Tensor::full({33}, 6.0f, Device::GPU).to_vector(),
                       std::vector<float>(33, 6.0f));
         }
     }
@@ -416,7 +416,7 @@ namespace {
             for (size_t index = 0; index < values.size(); ++index) {
                 values[index] = static_cast<float>(index + 1);
             }
-            Tensor half = Tensor::from_vector(values, {values.size()}, Device::CUDA)
+            Tensor half = Tensor::from_vector(values, {values.size()}, Device::GPU)
                               .to(DataType::Float16);
             half.slice(0, start, start + 5).zero_();
             std::vector<float> expected = values;
@@ -425,7 +425,7 @@ namespace {
             }
             EXPECT_EQ(half.to(DataType::Float32).to_vector(), expected) << "start=" << start;
 
-            Tensor bytes = Tensor::from_vector(values, {values.size()}, Device::CUDA)
+            Tensor bytes = Tensor::from_vector(values, {values.size()}, Device::GPU)
                                .to(DataType::UInt8);
             bytes.slice(0, start, start + 5).zero_();
             std::vector<int> expected_bytes(values.size());
@@ -449,7 +449,7 @@ namespace {
         if ((count + 255) / 256 <= limit) {
             GTEST_SKIP() << "device group limit " << limit << " is above the test size";
         }
-        const Tensor ones = Tensor::ones({count}, Device::CUDA);
+        const Tensor ones = Tensor::ones({count}, Device::GPU);
         const Tensor twos = ones + 1.0f;
         const Tensor ints = twos.to(DataType::Int32);
         const auto values = ints.to_vector_int();
@@ -472,7 +472,7 @@ namespace {
         bool second_written = false;
         std::thread late_writer([&] {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::full({4099}, 0.5f, Device::CUDA);
+            const Tensor warm = Tensor::full({4099}, 0.5f, Device::GPU);
             {
                 std::lock_guard lock(mutex);
                 late_opened = true;
@@ -497,7 +497,7 @@ namespace {
                 std::unique_lock lock(mutex);
                 condition.wait(lock, [&] { return late_opened; });
             }
-            Tensor value = Tensor::full({4099}, 1.0f, Device::CUDA);
+            Tensor value = Tensor::full({4099}, 1.0f, Device::GPU);
             {
                 std::lock_guard lock(mutex);
                 shared = std::move(value);
@@ -520,7 +520,7 @@ namespace {
         setenv("LFS_TENSOR_BACKEND", "vulkan", 1);
 #endif
         EXPECT_EQ(default_gpu_backend(), GpuBackend::Vulkan);
-        const Tensor value = Tensor::full({7}, 4.0f, Device::CUDA);
+        const Tensor value = Tensor::full({7}, 4.0f, Device::GPU);
         EXPECT_EQ(gpu_backend_of(value), GpuBackend::Vulkan);
         EXPECT_EQ(value.to_vector(), std::vector<float>(7, 4.0f));
 #if defined(_WIN32)
@@ -592,7 +592,7 @@ namespace {
         const Tensor cpu = Tensor::from_vector(values, {values.size()}, Device::CPU);
         const auto round_trip = [&](const GpuBackend backend) {
             GpuBackendScope scope(backend);
-            return cpu.to(Device::CUDA).to(DataType::Float16).to(DataType::Float32).cpu().to_vector();
+            return cpu.to(Device::GPU).to(DataType::Float16).to(DataType::Float32).cpu().to_vector();
         };
         const std::vector<float> cuda = round_trip(GpuBackend::CUDA);
         const std::vector<float> vulkan = round_trip(GpuBackend::Vulkan);
@@ -618,7 +618,7 @@ namespace {
         // hangs on a dead context.
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::ones({16}, Device::CUDA);
+            const Tensor warm = Tensor::ones({16}, Device::GPU);
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 16.0f);
         }
         internal::vulkan_inject_device_loss_for_testing();
@@ -626,7 +626,7 @@ namespace {
         bool typed = false;
         try {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor lost = Tensor::zeros({16}, Device::CUDA);
+            const Tensor lost = Tensor::zeros({16}, Device::GPU);
             (void)lost.sum_scalar();
         } catch (const lfs::Exception& error) {
             typed = error.error().code() == lfs::ErrorCode::DeviceLost;
@@ -639,7 +639,7 @@ namespace {
         EXPECT_TRUE(status.has_value());
         ASSERT_TRUE(gpu_backend_available(GpuBackend::Vulkan));
         GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor fresh = Tensor::ones({16}, Device::CUDA);
+        const Tensor fresh = Tensor::ones({16}, Device::GPU);
         EXPECT_FLOAT_EQ(fresh.sum_scalar(), 16.0f);
     }
 
@@ -650,7 +650,7 @@ namespace {
         std::latch lost(1);
         std::thread worker([&] {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor pending = Tensor::zeros({64}, Device::CUDA);
+            const Tensor pending = Tensor::zeros({64}, Device::GPU);
             (void)pending;
             recorded.count_down();
             lost.wait();
@@ -669,7 +669,7 @@ namespace {
         // shuts down.
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor warm = Tensor::ones({256}, Device::CUDA);
+            const Tensor warm = Tensor::ones({256}, Device::GPU);
             ASSERT_FLOAT_EQ(warm.sum_scalar(), 256.0f);
         }
         Tensor::trim_memory_pool();
@@ -678,7 +678,7 @@ namespace {
             GpuBackendScope scope(GpuBackend::Vulkan);
             std::vector<Tensor> blocks;
             for (size_t i = 0; i < 6; ++i) {
-                blocks.push_back(Tensor::ones({4096 + 512 * i}, Device::CUDA));
+                blocks.push_back(Tensor::ones({4096 + 512 * i}, Device::GPU));
             }
             float total = 0.0f;
             for (const Tensor& block : blocks) {

@@ -164,7 +164,7 @@ namespace lfs::core {
             LFS_ASSERT_MSG(false, "and_live_ requires contiguous masks");
         }
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &live_mask});
             prepare_inputs_for_stream({this, &live_mask}, stream());
             internal::backend_ops_for(*this).and_live(
@@ -229,7 +229,7 @@ namespace lfs::core {
         auto result = internal::allocate_like(
             *this, TensorShape{output_size}, dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &mask});
             result.set_stream(stream());
             const size_t selected_count = internal::backend_ops_for(*this).masked_select(
@@ -304,7 +304,7 @@ namespace lfs::core {
         Tensor mask_materialized;
         const Tensor& dense_mask = logical_mask->contiguous_read(mask_materialized);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &dense_mask});
             internal::backend_ops_for(*this).masked_fill(
                 internal::storage_ref(*this), internal::storage_ref(dense_mask),
@@ -468,7 +468,7 @@ namespace lfs::core {
         // scan. Release safety transfers to the device fault record. All other
         // modes/devices retain the full assert_index_tensor scan.
         const bool device_fault_assert_path =
-            device_ == Device::CUDA && mode == BoundaryMode::Assert;
+            device_ == Device::GPU && mode == BoundaryMode::Assert;
         if (device_fault_assert_path) {
             assert_index_tensor_host_only(indices, shape_[dim], "index_select_into");
         } else {
@@ -487,7 +487,7 @@ namespace lfs::core {
         }
         const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &kernel_index});
 
             // §1.9: host rejects graph capture at the checked-launch entry BEFORE
@@ -624,7 +624,7 @@ namespace lfs::core {
         }
 
         Tensor result;
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             const cudaStream_t allocation_stream =
                 prepare_inputs_for_stream({this, &indices});
             CUDAStreamGuard guard(allocation_stream);
@@ -642,7 +642,7 @@ namespace lfs::core {
         }
         const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &kernel_index});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&result, this, &kernel_index}, result.stream());
@@ -725,8 +725,8 @@ namespace lfs::core {
         auto flat = flatten();
         Tensor result;
 
-        // DEBUG: Log device and CUDA state
-        if (device_ == Device::CUDA) {
+        // DEBUG: Log device and GPU state
+        if (device_ == Device::GPU) {
             pin_operands({&flat, &indices_int32});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &indices_int32});
@@ -789,7 +789,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32 ||
                            dtype_ == DataType::Bool || dtype_ == DataType::UInt8,
                        "scatter_ encountered an unsupported dtype");
-        LFS_ASSERT_MSG(device_ != Device::CUDA || mode == ScatterMode::None,
+        LFS_ASSERT_MSG(device_ != Device::GPU || mode == ScatterMode::None,
                        "CUDA scatter_ supports assignment only; use index_add_ for addition");
 
         if (!is_contiguous()) {
@@ -828,7 +828,7 @@ namespace lfs::core {
             }
             const Tensor& kernel_index = is_int64 ? indices_int32 : indices_same_device;
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 pin_operands({this, &kernel_index, &src_same_device});
                 const cudaStream_t execution_stream =
                     prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
@@ -901,7 +901,7 @@ namespace lfs::core {
         }
         const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &kernel_index, &src_same_device});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
@@ -1072,7 +1072,7 @@ namespace lfs::core {
         }
         const Tensor& kernel_index = is_int64 ? idx_int32 : idx_same_device;
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({this, &kernel_index, &src_same_device});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index, &src_same_device}, stream());
@@ -1175,7 +1175,7 @@ namespace lfs::core {
             auto idx_same_device = ensure_same_device(idx);
             auto src_same_device = ensure_same_device(src);
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 // Convert int64 indices to int32 for kernel (kernel expects int* not int64_t*)
                 auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
                                      ? idx_same_device.to(DataType::Int32)
@@ -1266,7 +1266,7 @@ namespace lfs::core {
         auto idx_same_device = ensure_same_device(idx);
         auto src_same_device = ensure_same_device(src);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             // Convert int64 indices to int32 for kernel (kernel expects int* not int64_t*)
             auto idx_int32 = (idx_same_device.dtype() == DataType::Int64)
                                  ? idx_same_device.to(DataType::Int32)
@@ -1462,8 +1462,8 @@ namespace lfs::core {
             assert_index_tensor(idx, numel(), "index_put_", true, true);
         }
 
-        // Fast path: use GPU kernel for row assignment on CUDA (avoids CPU roundtrip)
-        if (device_ == Device::CUDA && is_row_assignment && dtype_ == DataType::Float32) {
+        // Fast path: use GPU kernel for row assignment on GPU (avoids CPU roundtrip)
+        if (device_ == Device::GPU && is_row_assignment && dtype_ == DataType::Float32) {
             // Verify shape compatibility: vals should be [K, d1, d2, ...]
             std::vector<size_t> expected_shape = shape_.dims();
             expected_shape[0] = idx_same_device.numel();
@@ -1490,7 +1490,7 @@ namespace lfs::core {
 
         // Helper lambda for index_put_ implementation (fallback path)
         auto index_put_impl = [&]<typename DataT, typename IndexT>() {
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 // Fallback: CPU roundtrip for complex cases
                 auto cpu_tensor = to(Device::CPU);
                 auto cpu_idx = idx_same_device.to(Device::CPU);
@@ -1704,7 +1704,7 @@ namespace lfs::core {
             const int64_t row_bound = static_cast<int64_t>(shape_[0]);
             const int64_t col_bound = static_cast<int64_t>(shape_[1]);
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 Tensor row_idx_cpu = row_idx.to(Device::CPU);
                 Tensor col_idx_cpu = col_idx.to(Device::CPU);
                 pin_operands({this, &row_idx_cpu, &col_idx_cpu, &vals_same_device});
@@ -1787,7 +1787,7 @@ namespace lfs::core {
             return contiguous().count_nonzero();
         }
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             if (is_bool_like(dtype_)) {
                 return internal::backend_ops_for(*this).count_nonzero_bool(
                     internal::storage_ref(*this), numel(),
@@ -1861,7 +1861,7 @@ namespace lfs::core {
                 *this, TensorShape{numel()}, DataType::Int64);
             size_t actual_count = count; // Start with Thrust's count
 
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 if (is_bool_like(dtype_)) {
                     actual_count = internal::backend_ops_for(*this).nonzero_bool(
                         internal::storage_ref(*this), internal::storage_ref(temp),
@@ -1946,7 +1946,7 @@ namespace lfs::core {
             TensorShape{static_cast<size_t>(count), static_cast<size_t>(n_dims)},
             DataType::Int64);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             auto cpu_tensor = to(Device::CPU);
             auto cpu_result = cpu_tensor.nonzero();
             result = internal::copy_to_backend(
@@ -2102,7 +2102,7 @@ namespace lfs::core {
             linear_idx += idx_vec[i] * strides_[i];
         }
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             float value = 0.0f;
             internal::read_scalar(*this, linear_idx, &value, sizeof(value));
             return value;
@@ -2122,7 +2122,7 @@ namespace lfs::core {
             return t;
 
         if (t.numel() > 0 && data.data() != nullptr) {
-            if (device == Device::CUDA) {
+            if (device == Device::GPU) {
                 internal::backend_ops_for(t).copy_host_to_device(
                     internal::CopyRequest{
                         .src = internal::raw_storage_ref(
@@ -2192,7 +2192,7 @@ namespace lfs::core {
 
         unsigned char val = value ? 1 : 0;
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             internal::backend_ops_for(*this).copy_host_to_device(
                 internal::CopyRequest{
                     .src = internal::raw_storage_ref(&val),
@@ -2224,7 +2224,7 @@ namespace lfs::core {
             linear_idx += indices[i] * strides_[i];
         }
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             unsigned char val = 0;
             internal::read_scalar(*this, linear_idx, &val, sizeof(val));
             return val != 0;
@@ -2288,7 +2288,7 @@ namespace lfs::core {
         LFS_ASSERT_MSG(selected.numel() == other.numel(),
                        "masked assignment value count must equal selected element count");
 
-        if (tensor_->device() == Device::CUDA) {
+        if (tensor_->device() == Device::GPU) {
             pin_operands({tensor_, &mask_, &other});
             internal::backend_ops_for(*tensor_).masked_scatter(
                 internal::storage_ref(*tensor_), internal::storage_ref(mask_),
@@ -2446,7 +2446,7 @@ namespace lfs::core {
         const int* idx_ptr = kernel_index.ptr<int>();
 
         // Launch kernel to append gathered rows directly to the end
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({this, &kernel_index}, stream());
             LOG_DEBUG("  Launching index_select kernel: write_offset_elements={}, output_offset_bytes={}, n_gather={}",
@@ -2596,7 +2596,7 @@ namespace lfs::core {
         const size_t write_offset_bytes = write_offset_elements * element_bytes;
 
         // Zero out the appended region
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             internal::backend_ops_for(*this).memset(internal::FillRequest{
                 .dst = internal::offset_storage_ref(
                     internal::storage_ref(*this), write_offset_bytes),

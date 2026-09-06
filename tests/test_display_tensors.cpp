@@ -82,7 +82,7 @@ TEST(DisplayTensors, DepthDisplayMatchesThePerPixelReferenceInBothModesFromEithe
     const auto depth = depth_pattern();
     const glm::vec3 background(0.1f, 0.2f, 0.3f);
     const Tensor cpu = Tensor::from_vector(depth, TensorShape{kHeight, kWidth}, Device::CPU);
-    for (const Tensor& source : {cpu, cpu.to(Device::CUDA)}) {
+    for (const Tensor& source : {cpu, cpu.to(Device::GPU)}) {
         for (const DepthVisualizationMode mode : {DepthVisualizationMode::Palette, DepthVisualizationMode::Grayscale}) {
             SCOPED_TRACE(static_cast<int>(mode));
             const auto image = lfs::vis::makeDepthDisplayTensor(source, mode, background);
@@ -136,7 +136,7 @@ TEST(DisplayTensors, NormalDisplayNormalizesAndGraysDegenerateNormalsInBothLayou
             hwc[i * 3 + c] = chw[c * pixels + i];
     const Tensor chw_tensor = Tensor::from_vector(chw, TensorShape{size_t{3}, kHeight, kWidth}, Device::CPU);
     const Tensor hwc_tensor = Tensor::from_vector(hwc, TensorShape{kHeight, kWidth, size_t{3}}, Device::CPU);
-    for (const Tensor& source : {chw_tensor, chw_tensor.to(Device::CUDA), hwc_tensor, hwc_tensor.to(Device::CUDA)}) {
+    for (const Tensor& source : {chw_tensor, chw_tensor.to(Device::GPU), hwc_tensor, hwc_tensor.to(Device::GPU)}) {
         const auto image = lfs::vis::makeNormalDisplayTensor(source);
         ASSERT_TRUE(image && image->is_valid());
         EXPECT_EQ(image->device(), Device::CPU);

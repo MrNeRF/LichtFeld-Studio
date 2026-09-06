@@ -17,12 +17,12 @@ using namespace lfs::training;
 namespace {
 
     SplatData create_adam_test_splat(size_t n_points) {
-        auto means = Tensor::randn({n_points, 3}, Device::CUDA);
-        auto sh0 = Tensor::randn({n_points, 1, 3}, Device::CUDA);
-        auto shN = Tensor::zeros({n_points, 0, 3}, Device::CUDA); // sh-degree 0
-        auto scaling = Tensor::randn({n_points, 3}, Device::CUDA);
-        auto rotation = Tensor::randn({n_points, 4}, Device::CUDA);
-        auto opacity = Tensor::randn({n_points, 1}, Device::CUDA);
+        auto means = Tensor::randn({n_points, 3}, Device::GPU);
+        auto sh0 = Tensor::randn({n_points, 1, 3}, Device::GPU);
+        auto shN = Tensor::zeros({n_points, 0, 3}, Device::GPU); // sh-degree 0
+        auto scaling = Tensor::randn({n_points, 3}, Device::GPU);
+        auto rotation = Tensor::randn({n_points, 4}, Device::GPU);
+        auto opacity = Tensor::randn({n_points, 1}, Device::GPU);
         return SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -166,7 +166,7 @@ TEST(AdamCapacityInvariant, SlowPathGatherAlsoRestoresCapacity) {
 
     auto indices = Tensor::arange(0.0f, static_cast<float>(n_grow), 1.0f)
                        .to(DataType::Int32)
-                       .to(Device::CUDA);
+                       .to(Device::GPU);
     // extend_state_by_gather expects param already grown; grow param first then state.
     splat.scaling_raw().append_gather(indices);
     opt.extend_state_by_gather(ParamType::Scaling, indices);

@@ -23,15 +23,15 @@ namespace {
     Camera make_camera(int w, int h) {
         std::vector<float> R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         std::vector<float> T_data = {0, 0, 4};
-        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto R = Tensor::from_blob(R_data.data(), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto T = Tensor::from_blob(T_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         return Camera(R, T, /*fx=*/100.f, /*fy=*/100.f, /*cx=*/w * 0.5f, /*cy=*/h * 0.5f,
                       Tensor(), Tensor(), CameraModelType::PINHOLE, "test", "",
                       std::filesystem::path{}, w, h, 0);
     }
 
     std::unique_ptr<SplatData> make_splat(int n) {
-        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::CUDA);
+        auto means = Tensor::zeros({static_cast<size_t>(n), 3}, Device::GPU);
         if (n > 0) {
             auto cpu = means.to(Device::CPU);
             float* p = cpu.ptr<float>();
@@ -40,18 +40,18 @@ namespace {
                 p[i * 3 + 1] = (i / 5) * 0.3f - 0.6f;
                 p[i * 3 + 2] = 0.0f;
             }
-            means = cpu.to(Device::CUDA);
+            means = cpu.to(Device::GPU);
         }
-        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.5f, Device::CUDA);
-        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::CUDA);
-        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -2.0f, Device::CUDA);
+        auto sh0 = Tensor::full({static_cast<size_t>(n), 1, 3}, 0.5f, Device::GPU);
+        auto shN = Tensor::zeros({static_cast<size_t>(n), 0, 3}, Device::GPU);
+        auto scaling = Tensor::full({static_cast<size_t>(n), 3}, -2.0f, Device::GPU);
         std::vector<float> rot(static_cast<size_t>(n) * 4, 0.f);
         for (int i = 0; i < n; ++i) {
             rot[static_cast<size_t>(i) * 4] = 1.f;
         }
         auto rotation = Tensor::from_blob(rot.data(), {static_cast<size_t>(n), 4}, Device::CPU, DataType::Float32)
-                            .to(Device::CUDA);
-        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::CUDA);
+                            .to(Device::GPU);
+        auto opacity = Tensor::full({static_cast<size_t>(n)}, 2.0f, Device::GPU);
         return std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
 
@@ -77,10 +77,10 @@ namespace {
 class FusedBgBlendTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        black_bg_ = Tensor::zeros({3}, Device::CUDA);
+        black_bg_ = Tensor::zeros({3}, Device::GPU);
         std::vector<float> bg_host = {0.2f, 0.4f, 0.6f};
         color_bg_ = Tensor::from_blob(bg_host.data(), {3}, Device::CPU, DataType::Float32)
-                        .to(Device::CUDA)
+                        .to(Device::GPU)
                         .contiguous();
         camera_ = std::make_unique<Camera>(make_camera(32, 32));
         splat_ = make_splat(16);

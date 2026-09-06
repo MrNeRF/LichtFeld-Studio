@@ -64,7 +64,7 @@ namespace lfs::core::internal {
                 tensors.push_back(Tensor::from_blob(
                     cuda_pointer<void>(inputs[i]),
                     TensorShape(layout_vector(layouts[i].dims, layouts[i].rank)),
-                    Device::CUDA, inputs[i].dtype, context.cuda_stream));
+                    Device::GPU, inputs[i].dtype, context.cuda_stream));
             }
             return tensors;
         }

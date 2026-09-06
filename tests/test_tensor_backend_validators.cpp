@@ -30,12 +30,12 @@ namespace {
             }
             {
                 GpuBackendScope scope(GpuBackend::CUDA);
-                cuda_ = Tensor::full({2, 3}, 1.0f, Device::CUDA);
-                cuda_indices_ = Tensor::from_vector(std::vector<int>{0, 1}, {2}, Device::CUDA);
+                cuda_ = Tensor::full({2, 3}, 1.0f, Device::GPU);
+                cuda_indices_ = Tensor::from_vector(std::vector<int>{0, 1}, {2}, Device::GPU);
             }
             {
                 GpuBackendScope scope(GpuBackend::Vulkan);
-                vulkan_ = Tensor::full({2, 3}, 2.0f, Device::CUDA);
+                vulkan_ = Tensor::full({2, 3}, 2.0f, Device::GPU);
                 vulkan_mask_ = vulkan_.gt(0.0f).contiguous();
             }
         }
@@ -98,11 +98,11 @@ namespace {
             Tensor large_vulkan;
             {
                 GpuBackendScope scope(GpuBackend::CUDA);
-                large_cuda = Tensor::full({4096}, 1.0f, Device::CUDA);
+                large_cuda = Tensor::full({4096}, 1.0f, Device::GPU);
             }
             {
                 GpuBackendScope scope(GpuBackend::Vulkan);
-                large_vulkan = Tensor::full({4096}, 2.0f, Device::CUDA);
+                large_vulkan = Tensor::full({4096}, 2.0f, Device::GPU);
             }
             static_cast<void>(large_cuda.add(large_vulkan).to_vector());
         });
@@ -112,7 +112,7 @@ namespace {
         Tensor vulkan_rhs;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            vulkan_rhs = Tensor::full({3, 2}, 1.0f, Device::CUDA);
+            vulkan_rhs = Tensor::full({3, 2}, 1.0f, Device::GPU);
         }
         expect_mixed_backend_error("matmul", [&] {
             static_cast<void>(cuda_.mm(vulkan_rhs).to_vector());
@@ -124,7 +124,7 @@ namespace {
         // materializes: validators then rejected a Vulkan operand against its own
         // deferred result, and the pointwise adapter was chosen from the wrong tag.
         GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor base = Tensor::ones({100, 100}, Device::CUDA);
+        const Tensor base = Tensor::ones({100, 100}, Device::GPU);
         Tensor chain = base;
         for (int step = 0; step < 8; ++step) {
             chain = chain.add(0.001f).mul(1.001f);
@@ -142,7 +142,7 @@ namespace {
         EXPECT_EQ(selected.to_vector(), std::vector<float>(10000, 2.0f));
         const Tensor view = base.transpose(0, 1);
         EXPECT_EQ(gpu_backend_of(view), GpuBackend::Vulkan);
-        Tensor target = Tensor::zeros({100, 100}, Device::CUDA);
+        Tensor target = Tensor::zeros({100, 100}, Device::GPU);
         target.copy_from(view);
         EXPECT_EQ(target.to_vector(), std::vector<float>(10000, 1.0f));
     }
@@ -156,8 +156,8 @@ namespace {
         ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
         {
             CUDAStreamGuard guard(stream);
-            const Tensor a = Tensor::ones({1024, 1024}, Device::CUDA);
-            const Tensor b = Tensor::full({1024, 1024}, 2.0f, Device::CUDA);
+            const Tensor a = Tensor::ones({1024, 1024}, Device::GPU);
+            const Tensor b = Tensor::full({1024, 1024}, 2.0f, Device::GPU);
             EXPECT_TRUE(a.stream() == nullptr);
             Tensor c = a.add(b);
             ASSERT_TRUE(c.is_deferred());
@@ -168,8 +168,8 @@ namespace {
             static_cast<void>(d.to_vector());
             EXPECT_TRUE(d.stream() == nullptr);
             const uint64_t completed_before = internal::vulkan_completed_timeline_for_testing();
-            Tensor x = Tensor::ones({16, 16}, Device::CUDA);
-            const Tensor y = Tensor::full({16, 16}, 0.5f, Device::CUDA);
+            Tensor x = Tensor::ones({16, 16}, Device::GPU);
+            const Tensor y = Tensor::full({16, 16}, 0.5f, Device::GPU);
             for (int i = 0; i < 8; ++i) {
                 x = x.add(y);
             }
@@ -183,7 +183,7 @@ namespace {
     TEST_F(TensorBackendValidators, DeferredViewsCarryTheBackendOfTheirSource) {
         // Catches a view deferral site that drops the tag of its deferred source.
         GpuBackendScope scope(GpuBackend::Vulkan);
-        const Tensor base = Tensor::ones({64, 128}, Device::CUDA);
+        const Tensor base = Tensor::ones({64, 128}, Device::GPU);
         const Tensor chain = base.add(1.0f);
         ASSERT_TRUE(chain.is_deferred());
         const Tensor permuted = chain.permute({1, 0});
@@ -209,7 +209,7 @@ namespace {
         Tensor deferred;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            deferred = Tensor::ones({512, 512}, Device::CUDA).add(0.5f).mul(2.0f);
+            deferred = Tensor::ones({512, 512}, Device::GPU).add(0.5f).mul(2.0f);
         }
         ASSERT_TRUE(deferred.is_deferred());
         EXPECT_EQ(gpu_backend_of(deferred), GpuBackend::Vulkan);
@@ -231,7 +231,7 @@ namespace {
         Tensor deferred;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            leaf = Tensor::ones({512, 512}, Device::CUDA);
+            leaf = Tensor::ones({512, 512}, Device::GPU);
             deferred = leaf.add(1.0f);
         }
         leaf.mul_(10.0f);
@@ -260,12 +260,12 @@ namespace {
         Tensor owner_source;
         {
             GpuBackendScope scope(GpuBackend::CUDA);
-            owner_source = Tensor::full({8}, 3.0f, Device::CUDA);
+            owner_source = Tensor::full({8}, 3.0f, Device::GPU);
         }
         GpuBackendScope scope(GpuBackend::Vulkan);
         auto keep_alive = std::make_shared<Tensor>(owner_source);
         const Tensor external = Tensor::from_external_owner(
-            owner_source.data_ptr(), {8}, Device::CUDA, DataType::Float32, keep_alive);
+            owner_source.data_ptr(), {8}, Device::GPU, DataType::Float32, keep_alive);
         EXPECT_EQ(gpu_backend_of(external), GpuBackend::CUDA);
         EXPECT_EQ(external.to_vector(), std::vector<float>(8, 3.0f));
     }

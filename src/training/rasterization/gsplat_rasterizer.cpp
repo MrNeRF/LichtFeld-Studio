@@ -73,7 +73,7 @@ namespace lfs::training {
                 std::memcpy(slot, src, n * sizeof(float));
                 if (!dest.is_valid() || dest.numel() < n) {
                     dest = core::Tensor::empty(
-                        {n}, core::Device::CUDA, core::DataType::Float32);
+                        {n}, core::Device::GPU, core::DataType::Float32);
                 }
                 if (dest.stream() != stream) {
                     dest.set_stream(stream);
@@ -214,7 +214,7 @@ namespace lfs::training {
                     auto& dequant = gsplat_thread_caches.shN_dequant;
                     if (!dequant.is_valid() || dequant.numel() < n_floats) {
                         dequant = core::Tensor::empty(
-                            core::TensorShape({n_floats}), core::Device::CUDA,
+                            core::TensorShape({n_floats}), core::Device::GPU,
                             core::DataType::Float32);
                     }
                     if (dequant.stream() != fwd_stream) {
@@ -283,7 +283,7 @@ namespace lfs::training {
                     return;
                 }
                 const size_t copy_n = std::min(n, static_cast<size_t>(src.numel()));
-                if (src.device() == core::Device::CUDA && src.is_contiguous() &&
+                if (src.device() == core::Device::GPU && src.is_contiguous() &&
                     src.numel() == copy_n) {
                     dest = src;
                     if (dest.stream() != fwd_stream) {
@@ -430,14 +430,14 @@ namespace lfs::training {
             const core::TensorShape image_shape = {
                 static_cast<size_t>(channels), static_cast<size_t>(H), static_cast<size_t>(W)};
             if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape) {
-                cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
+                cached_image_chw = core::Tensor::empty(image_shape, core::Device::GPU, core::DataType::Float32);
             }
             if (cached_image_chw.stream() != fwd_stream) {
                 cached_image_chw.set_stream(fwd_stream);
             }
             const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
             if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape) {
-                cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
+                cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::GPU, core::DataType::Float32);
             }
             if (cached_alpha_chw.stream() != fwd_stream) {
                 cached_alpha_chw.set_stream(fwd_stream);
@@ -516,7 +516,7 @@ namespace lfs::training {
                 const core::TensorShape depth_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
                 if (!cached_depth_chw.is_valid() || cached_depth_chw.shape() != depth_shape ||
                     cached_depth_chw.stream() != fwd_stream) {
-                    cached_depth_chw = core::Tensor::empty(depth_shape, core::Device::CUDA, core::DataType::Float32);
+                    cached_depth_chw = core::Tensor::empty(depth_shape, core::Device::GPU, core::DataType::Float32);
                     if (cached_depth_chw.stream() != fwd_stream)
                         cached_depth_chw.set_stream(fwd_stream);
                 }
@@ -742,7 +742,7 @@ namespace lfs::training {
                        static_cast<uint32_t>(error_map_2d.shape()[0]) == H &&
                        static_cast<uint32_t>(error_map_2d.shape()[1]) == W &&
                        "pixel_error_map must have shape [H, W] or [1, H, W]");
-                if (error_map_2d.device() != core::Device::CUDA) {
+                if (error_map_2d.device() != core::Device::GPU) {
                     error_map_2d = error_map_2d.cuda();
                 }
                 if (!error_map_2d.is_contiguous()) {
@@ -757,8 +757,8 @@ namespace lfs::training {
                                                          : nullptr;
             const bool edge_scoring =
                 edge_weight_map.is_valid() && edge_score_out.is_valid() &&
-                edge_weight_map.device() == core::Device::CUDA &&
-                edge_score_out.device() == core::Device::CUDA &&
+                edge_weight_map.device() == core::Device::GPU &&
+                edge_score_out.device() == core::Device::GPU &&
                 edge_weight_map.dtype() == core::DataType::Float32 &&
                 edge_score_out.dtype() == core::DataType::Float32 &&
                 edge_weight_map.ndim() == 2 && edge_score_out.ndim() == 1 &&

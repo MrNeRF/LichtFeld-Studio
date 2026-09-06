@@ -61,12 +61,12 @@ TEST(ZeroStrideExpand, ExpandIsViewWithZeroStrideNoAlloc) {
     // [1,4] -> [256,4]: expanded size 4 KiB floats if materialized would miss tiny slabs.
     // Use large expand so a materializing path would need a real driver alloc on cold pool.
     constexpr size_t rows = 4096;
-    auto base = Tensor::full({1, 64}, 3.25f, Device::CUDA);
+    auto base = Tensor::full({1, 64}, 3.25f, Device::GPU);
     cuda_ok();
 
     // Allocate and free a different size so the expand target is cold.
     {
-        auto poison = Tensor::empty({rows, 64}, Device::CUDA);
+        auto poison = Tensor::empty({rows, 64}, Device::GPU);
         (void)poison;
     }
     cuda_ok();

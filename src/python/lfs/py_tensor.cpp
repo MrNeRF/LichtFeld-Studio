@@ -27,12 +27,12 @@ namespace lfs::python {
     namespace {
 
         constexpr DLDeviceType to_dl_device(const Device d) {
-            return d == Device::CUDA ? kDLCUDA : kDLCPU;
+            return d == Device::GPU ? kDLCUDA : kDLCPU;
         }
 
         Device from_dl_device(const DLDeviceType t) {
             if (t == kDLCUDA || t == kDLCUDAManaged)
-                return Device::CUDA;
+                return Device::GPU;
             if (t == kDLCPU || t == kDLCUDAHost)
                 return Device::CPU;
             throw std::runtime_error("Unsupported DLPack device type");
@@ -292,7 +292,7 @@ namespace lfs::python {
     }
 
     void PyTensor::sync() const {
-        if (tensor_.device() == Device::CUDA) {
+        if (tensor_.device() == Device::GPU) {
             cudaDeviceSynchronize();
         }
     }
@@ -341,7 +341,7 @@ namespace lfs::python {
 
     nb::object PyTensor::numpy(bool copy) const {
         validate();
-        Tensor host = tensor_.device() == Device::CUDA ? tensor_.cpu() : tensor_;
+        Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
         const auto& dims = cpu_tensor.shape().dims();
@@ -502,7 +502,7 @@ namespace lfs::python {
 
     nb::object PyTensor::tolist() const {
         validate();
-        Tensor host = tensor_.device() == Device::CUDA ? tensor_.cpu() : tensor_;
+        Tensor host = tensor_.device() == Device::GPU ? tensor_.cpu() : tensor_;
         Tensor cpu_tensor = host.is_contiguous() ? std::move(host) : host.contiguous();
 
         const auto& dims = cpu_tensor.shape().dims();
@@ -1361,7 +1361,7 @@ namespace lfs::python {
     }
 
     nb::tuple PyTensor::dlpack_device() const {
-        const int32_t device_type = tensor_.device() == Device::CUDA ? kDLCUDA : kDLCPU;
+        const int32_t device_type = tensor_.device() == Device::GPU ? kDLCUDA : kDLCPU;
         return nb::make_tuple(device_type, 0);
     }
 
@@ -1426,7 +1426,7 @@ namespace lfs::python {
     } // namespace
 
     nb::capsule PyTensor::dlpack(nb::object stream) const {
-        if (tensor_.device() == Device::CUDA) {
+        if (tensor_.device() == Device::GPU) {
             const cudaStream_t home = tensor_.stream();
             if (stream.is_none()) {
                 cudaStreamSynchronize(home);
@@ -1528,7 +1528,7 @@ namespace lfs::python {
         const DataType dtype = from_dl_dtype(dl.dtype);
 
         Tensor tensor(data, TensorShape(shape_vec), device, dtype);
-        if (stream_handshake && device == Device::CUDA) {
+        if (stream_handshake && device == Device::GPU) {
             // The producer ordered the data onto our current stream via the
             // __dlpack__(stream=) handshake; home the tensor there so a later
             // cross-stream op bridges from the consumer stream, not legacy.

@@ -18,7 +18,7 @@ class InterleavedSliceCopyTest : public ::testing::Test {
 protected:
     void SetUp() override {
         // Warm up GPU
-        auto warmup = Tensor::ones({100, 100}, Device::CUDA);
+        auto warmup = Tensor::ones({100, 100}, Device::GPU);
         warmup.cpu();
     }
 };
@@ -26,7 +26,7 @@ protected:
 // Test basic column slice shape
 TEST_F(InterleavedSliceCopyTest, ColumnSliceShape) {
     const size_t N = 10;
-    Tensor t = Tensor::zeros({N, 7}, Device::CUDA);
+    Tensor t = Tensor::zeros({N, 7}, Device::GPU);
 
     auto slice_0_3 = t.slice(1, 0, 3);
     auto slice_3_6 = t.slice(1, 3, 6);
@@ -49,7 +49,7 @@ TEST_F(InterleavedSliceCopyTest, ColumnSliceShapeVsTorch) {
     auto torch_t = torch::zeros({N, 7}, torch::kCUDA);
     auto torch_slice = torch_t.slice(1, 0, 3);
 
-    Tensor lfs_t = Tensor::zeros({N, 7}, Device::CUDA);
+    Tensor lfs_t = Tensor::zeros({N, 7}, Device::GPU);
     auto lfs_slice = lfs_t.slice(1, 0, 3);
 
     EXPECT_EQ(lfs_slice.size(0), torch_slice.size(0));
@@ -60,8 +60,8 @@ TEST_F(InterleavedSliceCopyTest, ColumnSliceShapeVsTorch) {
 TEST_F(InterleavedSliceCopyTest, CopyIntoColumnSlice) {
     const size_t N = 5;
 
-    Tensor dst = Tensor::zeros({N, 7}, Device::CUDA);
-    Tensor src = Tensor::ones({N, 3}, Device::CUDA) * 2.0f;
+    Tensor dst = Tensor::zeros({N, 7}, Device::GPU);
+    Tensor src = Tensor::ones({N, 3}, Device::GPU) * 2.0f;
 
     dst.slice(1, 0, 3).copy_(src);
 
@@ -86,9 +86,9 @@ TEST_F(InterleavedSliceCopyTest, FullInterleavedPattern) {
     const size_t N = 5;
 
     // Create source tensors with distinct values
-    Tensor positions = Tensor::empty({N, 3}, Device::CUDA);
-    Tensor colors = Tensor::empty({N, 3}, Device::CUDA);
-    Tensor indices = Tensor::empty({N, 1}, Device::CUDA);
+    Tensor positions = Tensor::empty({N, 3}, Device::GPU);
+    Tensor colors = Tensor::empty({N, 3}, Device::GPU);
+    Tensor indices = Tensor::empty({N, 1}, Device::GPU);
 
     // Fill with known values on CPU then upload
     {
@@ -116,7 +116,7 @@ TEST_F(InterleavedSliceCopyTest, FullInterleavedPattern) {
     }
 
     // Build interleaved buffer using slice + copy_
-    Tensor interleaved = Tensor::empty({N, 7}, Device::CUDA);
+    Tensor interleaved = Tensor::empty({N, 7}, Device::GPU);
     interleaved.slice(1, 0, 3).copy_(positions);
     interleaved.slice(1, 3, 6).copy_(colors);
     interleaved.slice(1, 6, 7).copy_(indices);
@@ -150,15 +150,15 @@ TEST_F(InterleavedSliceCopyTest, FullInterleavedPattern) {
 TEST_F(InterleavedSliceCopyTest, SliceCopyVsCat) {
     const size_t N = 100;
 
-    Tensor positions = Tensor::ones({N, 3}, Device::CUDA) * 1.0f;
-    Tensor colors = Tensor::ones({N, 3}, Device::CUDA) * 2.0f;
-    Tensor indices = Tensor::ones({N, 1}, Device::CUDA) * 3.0f;
+    Tensor positions = Tensor::ones({N, 3}, Device::GPU) * 1.0f;
+    Tensor colors = Tensor::ones({N, 3}, Device::GPU) * 2.0f;
+    Tensor indices = Tensor::ones({N, 1}, Device::GPU) * 3.0f;
 
     // Method 1: Tensor::cat
     Tensor cat_result = Tensor::cat({positions, colors, indices}, 1);
 
     // Method 2: slice + copy_
-    Tensor slice_result = Tensor::empty({N, 7}, Device::CUDA);
+    Tensor slice_result = Tensor::empty({N, 7}, Device::GPU);
     slice_result.slice(1, 0, 3).copy_(positions);
     slice_result.slice(1, 3, 6).copy_(colors);
     slice_result.slice(1, 6, 7).copy_(indices);
@@ -188,7 +188,7 @@ TEST_F(InterleavedSliceCopyTest, Int32ToFloatCopy) {
     indices_int = indices_int.cuda();
 
     // Copy into float slice
-    Tensor dst = Tensor::zeros({N, 7}, Device::CUDA, DataType::Float32);
+    Tensor dst = Tensor::zeros({N, 7}, Device::GPU, DataType::Float32);
     dst.slice(1, 6, 7).copy_(indices_int.unsqueeze(1));
 
     // Verify
@@ -204,7 +204,7 @@ TEST_F(InterleavedSliceCopyTest, Int32ToFloatCopy) {
 TEST_F(InterleavedSliceCopyTest, NonContiguousSliceStrides) {
     const size_t N = 10;
 
-    Tensor t = Tensor::zeros({N, 7}, Device::CUDA);
+    Tensor t = Tensor::zeros({N, 7}, Device::GPU);
     auto slice = t.slice(1, 0, 3);
 
     // Column slice should have stride of 7 in the row dimension, not 3
@@ -213,7 +213,7 @@ TEST_F(InterleavedSliceCopyTest, NonContiguousSliceStrides) {
     std::cout << "Slice strides: [" << slice.stride(0) << ", " << slice.stride(1) << "]" << std::endl;
 
     // The slice should still be usable for copy_
-    Tensor src = Tensor::ones({N, 3}, Device::CUDA);
+    Tensor src = Tensor::ones({N, 3}, Device::GPU);
     slice.copy_(src);
 
     auto cpu = t.cpu();
@@ -236,7 +236,7 @@ TEST_F(InterleavedSliceCopyTest, CpuToStridedCudaCopy) {
     Tensor col_cpu = Tensor::rand({N, 3}, Device::CPU);
 
     // Destination: CUDA interleaved buffer
-    Tensor interleaved = Tensor::zeros({N, 7}, Device::CUDA);
+    Tensor interleaved = Tensor::zeros({N, 7}, Device::GPU);
     interleaved.slice(1, 0, 3).copy_(pos_cpu);
     interleaved.slice(1, 3, 6).copy_(col_cpu);
 
@@ -258,14 +258,14 @@ TEST_F(InterleavedSliceCopyTest, CpuToStridedCudaCopy) {
     }
 }
 
-// Test copy_ from CPU UInt8 to non-contiguous CUDA float slice (type + device conversion)
+// Test copy_ from CPU UInt8 to non-contiguous GPU float slice (type + device conversion)
 TEST_F(InterleavedSliceCopyTest, CpuUint8ToStridedCudaFloatCopy) {
     const size_t N = 50;
 
     Tensor colors_u8 = Tensor::randint({N, 3}, 0, 256, Device::CPU, DataType::UInt8);
     Tensor colors_f32 = colors_u8.to(DataType::Float32) / 255.0f;
 
-    Tensor interleaved = Tensor::zeros({N, 7}, Device::CUDA);
+    Tensor interleaved = Tensor::zeros({N, 7}, Device::GPU);
     interleaved.slice(1, 3, 6).copy_(colors_f32);
 
     auto result = interleaved.cpu();
@@ -283,11 +283,11 @@ TEST_F(InterleavedSliceCopyTest, CpuUint8ToStridedCudaFloatCopy) {
 TEST_F(InterleavedSliceCopyTest, LargeScale) {
     const size_t N = 100000;
 
-    Tensor positions = Tensor::ones({N, 3}, Device::CUDA) * 1.0f;
-    Tensor colors = Tensor::ones({N, 3}, Device::CUDA) * 2.0f;
-    Tensor indices = Tensor::ones({N, 1}, Device::CUDA) * 3.0f;
+    Tensor positions = Tensor::ones({N, 3}, Device::GPU) * 1.0f;
+    Tensor colors = Tensor::ones({N, 3}, Device::GPU) * 2.0f;
+    Tensor indices = Tensor::ones({N, 1}, Device::GPU) * 3.0f;
 
-    Tensor interleaved = Tensor::empty({N, 7}, Device::CUDA);
+    Tensor interleaved = Tensor::empty({N, 7}, Device::GPU);
     interleaved.slice(1, 0, 3).copy_(positions);
     interleaved.slice(1, 3, 6).copy_(colors);
     interleaved.slice(1, 6, 7).copy_(indices);

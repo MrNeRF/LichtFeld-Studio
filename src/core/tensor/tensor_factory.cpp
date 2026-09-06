@@ -50,7 +50,7 @@ namespace lfs::core {
                        "from_external_owner requires a valid owner");
         LFS_ASSERT_MSG(data != nullptr || shape.elements() == 0,
                        "from_external_owner received null data for a non-empty tensor");
-        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "from_external_owner received an invalid device");
         LFS_ASSERT_MSG(dtype_size(dtype) != 0,
                        "from_external_owner received an invalid dtype");
@@ -87,7 +87,7 @@ namespace lfs::core {
         t.id_ = next_id_++;
         t.compute_alignment();
         t.init_storage_meta();
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             t.storage_meta_->backend = GpuBackend::CUDA;
             t.storage_meta_->gpu_descriptor.byte_size = allocation_bytes;
             t.storage_meta_->gpu_descriptor.accounting_kind =
@@ -217,7 +217,7 @@ namespace lfs::core {
     Tensor Tensor::arange(float end) {
         LoadArgs args;
         args.shape = TensorShape{};
-        args.device = Device::CUDA;
+        args.device = Device::GPU;
         args.dtype = DataType::Float32;
         args.args = std::tuple<float, float, float>{0.0f, end, 1.0f};
         return load(LoadOp::Arange, args);
@@ -226,7 +226,7 @@ namespace lfs::core {
     Tensor Tensor::arange(float start, float end, float step) {
         LoadArgs args;
         args.shape = TensorShape{};
-        args.device = Device::CUDA;
+        args.device = Device::GPU;
         args.dtype = DataType::Float32;
         args.args = std::tuple<float, float, float>{start, end, step};
         return load(LoadOp::Arange, args);

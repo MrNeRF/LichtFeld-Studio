@@ -110,7 +110,7 @@ namespace {
     }
 
     // Create test tensor with sequential values for both implementations
-    std::pair<Tensor, torch::Tensor> create_test_tensors(const std::vector<int64_t>& shape, Device device = Device::CUDA) {
+    std::pair<Tensor, torch::Tensor> create_test_tensors(const std::vector<int64_t>& shape, Device device = Device::GPU) {
         size_t total = 1;
         for (auto dim : shape) {
             total *= dim;
@@ -127,7 +127,7 @@ namespace {
         }
 
         auto tensor_custom = Tensor::from_vector(data, TensorShape(shape_custom), device);
-        auto tensor_torch = torch::tensor(data, device == Device::CUDA ? torch::kCUDA : torch::kCPU)
+        auto tensor_torch = torch::tensor(data, device == Device::GPU ? torch::kCUDA : torch::kCPU)
                                 .reshape(shape);
 
         return {std::move(tensor_custom), tensor_torch};
@@ -402,7 +402,7 @@ TEST_F(TensorViewTest, TransposeBasic) {
 }
 
 TEST_F(TensorViewTest, ViewMetadataAndMaterializationOwnership) {
-    const auto base = Tensor::arange(120.0f).to(Device::CUDA).reshape({4, 5, 6});
+    const auto base = Tensor::arange(120.0f).to(Device::GPU).reshape({4, 5, 6});
     const auto transposed = base.transpose(0, 1);
 
     EXPECT_EQ(base.strides(), (std::vector<size_t>{30, 6, 1}));
@@ -559,7 +559,7 @@ TEST_F(TensorViewTest, ViewOnCPUTensor) {
 // ============= Edge Cases =============
 
 TEST_F(TensorViewTest, EmptyTensor) {
-    auto empty_custom = Tensor::empty({0}, Device::CUDA);
+    auto empty_custom = Tensor::empty({0}, Device::GPU);
     auto empty_torch = torch::empty({0}, torch::kCUDA);
 
     auto view_custom = empty_custom.view({0});

@@ -139,7 +139,7 @@ TEST(TensorDispatch, UnaryReduceFusesWithIrOff) {
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
-    auto x = Tensor::ones({4096}, Device::CUDA, DataType::Float32);
+    auto x = Tensor::ones({4096}, Device::GPU, DataType::Float32);
     // abs is fusable unary; full reduce should consume the pointwise fusion.
     auto result = x.abs().sum();
     const float value = result.item<float>();
@@ -221,8 +221,8 @@ TEST(TensorDispatch, BinaryFastPathFloat32Cuda) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
-    auto a = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CUDA);
-    auto b = Tensor::from_vector({10.0f, 20.0f, 30.0f, 40.0f}, {4}, Device::CUDA);
+    auto a = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::GPU);
+    auto b = Tensor::from_vector({10.0f, 20.0f, 30.0f, 40.0f}, {4}, Device::GPU);
     auto sum = a.add(b).cpu();
     auto prod = a.mul(b).cpu();
     ASSERT_EQ(sum.to_vector(), (std::vector<float>{11.0f, 22.0f, 33.0f, 44.0f}));
@@ -237,8 +237,8 @@ TEST(TensorDispatch, BinaryFastPathFloat16Cuda) {
     Dispatch6AGuard guard;
     internal::lazy_ir_set_active_for_testing(false);
 
-    auto a_f = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CUDA);
-    auto b_f = Tensor::from_vector({0.5f, 1.5f, 2.5f, 3.5f}, {4}, Device::CUDA);
+    auto a_f = Tensor::from_vector({1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::GPU);
+    auto b_f = Tensor::from_vector({0.5f, 1.5f, 2.5f, 3.5f}, {4}, Device::GPU);
     auto a = a_f.to(DataType::Float16);
     auto b = b_f.to(DataType::Float16);
     auto sum = a.add(b).to(DataType::Float32).cpu();

@@ -238,7 +238,7 @@ TEST_F(VideoColorConvertTest, TensorPermuteCHWtoHWC) {
         }
     }
 
-    auto lfs_chw = lfs::core::Tensor::from_vector(data, {C, H, W}, lfs::core::Device::CUDA);
+    auto lfs_chw = lfs::core::Tensor::from_vector(data, {C, H, W}, lfs::core::Device::GPU);
     auto torch_chw = torch::from_blob(data.data(), {C, H, W}, torch::kFloat32).clone().cuda();
 
     auto lfs_hwc = lfs_chw.permute({1, 2, 0}).contiguous();
@@ -279,7 +279,7 @@ TEST_F(VideoColorConvertTest, FullHDExportSimulation) {
         }
     }
 
-    auto chw_tensor = lfs::core::Tensor::from_vector(chw_data, {C, HEIGHT, WIDTH}, lfs::core::Device::CUDA);
+    auto chw_tensor = lfs::core::Tensor::from_vector(chw_data, {C, HEIGHT, WIDTH}, lfs::core::Device::GPU);
     auto hwc_tensor = chw_tensor.permute({1, 2, 0}).contiguous();
 
     ASSERT_EQ(hwc_tensor.shape()[0], HEIGHT);

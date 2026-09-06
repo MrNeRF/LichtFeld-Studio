@@ -44,17 +44,17 @@ namespace {
             internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
 
             constexpr size_t count = 64;
-            means_ = Tensor::randn({count, 3}, Device::CUDA, DataType::Float32);
-            sh0_ = Tensor::randn({count, 1, 3}, Device::CUDA, DataType::Float32).mul(0.3f);
-            shN_ = Tensor::zeros({count, 0, 3}, Device::CUDA, DataType::Float32);
-            scaling_ = Tensor::randn({count, 3}, Device::CUDA, DataType::Float32).mul(0.2f).sub(3.0f);
-            rotation_ = Tensor::randn({count, 4}, Device::CUDA, DataType::Float32);
+            means_ = Tensor::randn({count, 3}, Device::GPU, DataType::Float32);
+            sh0_ = Tensor::randn({count, 1, 3}, Device::GPU, DataType::Float32).mul(0.3f);
+            shN_ = Tensor::zeros({count, 0, 3}, Device::GPU, DataType::Float32);
+            scaling_ = Tensor::randn({count, 3}, Device::GPU, DataType::Float32).mul(0.2f).sub(3.0f);
+            rotation_ = Tensor::randn({count, 4}, Device::GPU, DataType::Float32);
             rotation_ = rotation_.div(rotation_.pow(2.0f).sum(-1, true).sqrt());
-            opacity_ = Tensor::randn({count}, Device::CUDA, DataType::Float32);
+            opacity_ = Tensor::randn({count}, Device::GPU, DataType::Float32);
             splat_ = std::make_unique<SplatData>(
                 0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
 
-            auto rotation = Tensor::eye(3, Device::CUDA);
+            auto rotation = Tensor::eye(3, Device::GPU);
             std::vector<float> translation_values{0.0f, 0.0f, 4.0f};
             auto translation = Tensor::from_blob(
                                    translation_values.data(), {3}, Device::CPU, DataType::Float32)
@@ -64,7 +64,7 @@ namespace {
                 100.0f, 100.0f, 32.0f, 32.0f,
                 Tensor{}, Tensor{}, lfs::core::CameraModelType::PINHOLE,
                 "deferred-d3", "", std::filesystem::path{}, 64, 64, 0);
-            background_ = Tensor::zeros({3}, Device::CUDA, DataType::Float32);
+            background_ = Tensor::zeros({3}, Device::GPU, DataType::Float32);
         }
 
         void TearDown() override {
@@ -133,11 +133,11 @@ namespace {
     TEST_F(DeferredD3PinTest, MultiOperandLaunchWithDeferredInputs) {
         using namespace lfs::core;
 
-        for (const Device device : {Device::CPU, Device::CUDA}) {
+        for (const Device device : {Device::CPU, Device::GPU}) {
             SCOPED_TRACE(device == Device::CPU ? "CPU" : "CUDA");
             auto base = Tensor::from_vector(
                 std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CPU);
-            if (device == Device::CUDA) {
+            if (device == Device::GPU) {
                 base = base.cuda();
             }
 
@@ -243,7 +243,7 @@ namespace {
         EXPECT_FALSE(cuda_is_unavailable());
 
         {
-            auto allocation = Tensor::zeros({16}, Device::CUDA, DataType::Float32);
+            auto allocation = Tensor::zeros({16}, Device::GPU, DataType::Float32);
             EXPECT_TRUE(allocation.is_valid());
             EXPECT_NE(allocation.data_ptr(), nullptr);
         }

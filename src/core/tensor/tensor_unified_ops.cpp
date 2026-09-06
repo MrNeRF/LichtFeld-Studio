@@ -31,7 +31,7 @@ namespace lfs::core {
 
     namespace {
         Tensor empty_on_tensor_stream(const TensorShape& shape, Device device, DataType dtype, const Tensor& tensor) {
-            if (device != Device::CUDA) {
+            if (device != Device::GPU) {
                 return internal::allocate_like(tensor, shape, dtype);
             }
 
@@ -345,7 +345,7 @@ namespace lfs::core {
 
     Tensor Tensor::load(LoadOp op, const LoadArgs& args) {
         Tensor result;
-        LFS_ASSERT_MSG(args.device == Device::CPU || args.device == Device::CUDA,
+        LFS_ASSERT_MSG(args.device == Device::CPU || args.device == Device::GPU,
                        "tensor load received an invalid device");
         LFS_ASSERT_MSG(dtype_size(args.dtype) != 0,
                        "tensor load received an invalid dtype");
@@ -356,7 +356,7 @@ namespace lfs::core {
         switch (op) {
         case LoadOp::Empty: {
             const std::optional<GpuBackend> gpu_backend =
-                args.device == Device::CUDA
+                args.device == Device::GPU
                     ? std::optional{internal::resolve_new_gpu_storage_backend()}
                     : std::nullopt;
             result.shape_ = args.shape;
@@ -392,7 +392,7 @@ namespace lfs::core {
                 return result;
             }
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 cudaStream_t s = result.stream();
                 if (*gpu_backend == GpuBackend::CUDA) {
                     if (auto* arena = nn::ActivationArena::current()) {
@@ -522,7 +522,7 @@ namespace lfs::core {
             if (!result.is_valid() || result.numel() == 0)
                 return result;
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 auto& backend_ops = internal::backend_ops_for(result);
                 const auto fill_bytes = [&](const uint8_t fill, const bool asynchronous) {
                     backend_ops.memset(internal::FillRequest{
@@ -649,7 +649,7 @@ namespace lfs::core {
             }
 
             const std::optional<GpuBackend> gpu_backend =
-                args.device == Device::CUDA
+                args.device == Device::GPU
                     ? std::optional{internal::resolve_new_gpu_storage_backend()}
                     : std::nullopt;
 
@@ -666,7 +666,7 @@ namespace lfs::core {
 
             size_t bytes = count * dtype_size(result.dtype_);
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 cudaStream_t s = result.stream();
                 auto& backend_ops = internal::backend_ops(*gpu_backend);
                 internal::StorageRef storage = backend_ops.allocate(
@@ -784,7 +784,7 @@ namespace lfs::core {
             if (!result.is_valid() || result.numel() == 0)
                 return result;
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 const cudaStream_t stream = result.stream();
                 if (result.dtype_ == DataType::Float32) {
                     internal::backend_ops_for(result).uniform(
@@ -848,7 +848,7 @@ namespace lfs::core {
                 break;
             }
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 size_t n = result.numel();
                 const uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
                 const internal::RandomProgram program{.count = n, .first = mean, .second = std, .seed = seed};
@@ -892,7 +892,7 @@ namespace lfs::core {
             if (!result.is_valid() || result.numel() == 0)
                 return result;
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 const cudaStream_t stream = result.stream();
                 if (result.dtype_ == DataType::Int32) {
                     internal::backend_ops_for(result).randint(
@@ -991,7 +991,7 @@ namespace lfs::core {
             if (!result.is_valid() || result.numel() == 0)
                 return result;
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 internal::backend_ops_for(result).bernoulli(
                     internal::storage_ref(result),
                     internal::RandomProgram{
@@ -1042,7 +1042,7 @@ namespace lfs::core {
             if (!result.is_valid())
                 return result;
 
-            if (weights->device() == Device::CUDA) {
+            if (weights->device() == Device::GPU) {
                 prepare_inputs_for_stream({weights}, result.stream());
                 internal::backend_ops_for(*weights).multinomial(
                     internal::storage_ref(*weights), internal::storage_ref(result),
@@ -1121,7 +1121,7 @@ namespace lfs::core {
             size_t n = args.shape[1];
             size_t min_dim = std::min(m, n);
 
-            if (result.device_ == Device::CUDA) {
+            if (result.device_ == Device::GPU) {
                 internal::backend_ops_for(result).eye(
                     internal::storage_ref(result), m, n,
                     internal::ExecContext{result.stream()});
@@ -1144,8 +1144,8 @@ namespace lfs::core {
 
             result = Tensor(src_ptr, args.shape, Device::CPU, args.dtype);
 
-            if (args.device == Device::CUDA) {
-                result = result.to(Device::CUDA);
+            if (args.device == Device::GPU) {
+                result = result.to(Device::GPU);
             }
             break;
         }
@@ -1157,7 +1157,7 @@ namespace lfs::core {
             LFS_ASSERT_MSG(src_ptr != nullptr,
                            "FromCUDA requires a non-null source pointer");
 
-            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype,
+            result = Tensor(src_ptr, args.shape, Device::GPU, args.dtype,
                             getCurrentCUDAStream());
 
             if (args.device == Device::CPU) {
@@ -1294,7 +1294,7 @@ namespace lfs::core {
             LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
                            "partial CPU Bool reductions currently support only any and all");
         }
-        if (dtype_ == DataType::Bool && device_ == Device::CUDA &&
+        if (dtype_ == DataType::Bool && device_ == Device::GPU &&
             !args.axes.empty() && args.axes.size() != shape_.rank()) {
             LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
                            "partial CUDA Bool reductions currently support only any and all");
@@ -1311,7 +1311,7 @@ namespace lfs::core {
 
         // Fused transform-reduce: consume pending pointwise chain
         if (dtype_ == DataType::Float32 &&
-            device_ == Device::CUDA && has_lazy_expr() &&
+            device_ == Device::GPU && has_lazy_expr() &&
             (op == ReduceOp::Sum || op == ReduceOp::Mean ||
              op == ReduceOp::Max || op == ReduceOp::Min ||
              op == ReduceOp::Prod)) {
@@ -1335,7 +1335,7 @@ namespace lfs::core {
                     fused_source.materialize_if_deferred();
                 }
                 if (fused_source.is_valid() &&
-                    fused_source.device() == Device::CUDA &&
+                    fused_source.device() == Device::GPU &&
                     fused_source.is_contiguous() &&
                     fused_source.dtype() == DataType::Float32 &&
                     !fused_ops.empty() &&
@@ -1359,7 +1359,7 @@ namespace lfs::core {
                         }
                         Tensor rhs = *fop.rhs;
                         rhs.materialize_if_deferred();
-                        if (!rhs.is_valid() || rhs.device() != Device::CUDA ||
+                        if (!rhs.is_valid() || rhs.device() != Device::GPU ||
                             !rhs.is_contiguous() || rhs.dtype() != DataType::Float32 ||
                             rhs.shape() != fused_source.shape()) {
                             rhs_ok = false;
@@ -1435,7 +1435,7 @@ namespace lfs::core {
 
         // Fused segmented transform-reduce: last-dim reduction with producer pointwise chain
         if (dtype_ == DataType::Float32 &&
-            device_ == Device::CUDA && has_lazy_expr() &&
+            device_ == Device::GPU && has_lazy_expr() &&
             (op == ReduceOp::Sum || op == ReduceOp::Mean ||
              op == ReduceOp::Max || op == ReduceOp::Min ||
              op == ReduceOp::Prod) &&
@@ -1452,7 +1452,7 @@ namespace lfs::core {
                     fused_source.materialize_if_deferred();
                 }
                 if (fused_source.is_valid() &&
-                    fused_source.device() == Device::CUDA &&
+                    fused_source.device() == Device::GPU &&
                     fused_source.is_contiguous() &&
                     fused_source.dtype() == DataType::Float32 &&
                     !fused_ops.empty() &&
@@ -1476,7 +1476,7 @@ namespace lfs::core {
                         }
                         Tensor rhs = *fop.rhs;
                         rhs.materialize_if_deferred();
-                        if (!rhs.is_valid() || rhs.device() != Device::CUDA ||
+                        if (!rhs.is_valid() || rhs.device() != Device::GPU ||
                             !rhs.is_contiguous() || rhs.dtype() != DataType::Float32 ||
                             rhs.shape() != fused_source.shape()) {
                             rhs_ok = false;
@@ -1600,7 +1600,7 @@ namespace lfs::core {
             using RP = tensor_ops::ReducePathForTesting;
             const RP override = tensor_ops::reduce_path_override_for_testing();
             const bool force_w2 = (override == RP::StridedFast || override == RP::Transpose);
-            if (!force_w2 && args.axes.size() == 1 && device_ == Device::CUDA &&
+            if (!force_w2 && args.axes.size() == 1 && device_ == Device::GPU &&
                 shape_.rank() == 2 && dtype_ == DataType::Float32 && is_contiguous_) {
                 int dim = args.axes[0];
                 if (dim < 0)
@@ -1637,7 +1637,7 @@ namespace lfs::core {
         // the measured heuristic says so; keep transpose for the cheap-copy edge
         // class (argmin of microbench — see should_prefer_strided_over_transpose).
         // Float16 is converted at reduce entry, so this path is Float32 only.
-        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() >= 2 &&
+        if (args.axes.size() == 1 && device_ == Device::GPU && shape_.rank() >= 2 &&
             is_contiguous_ && dtype_ == DataType::Float32 &&
             (op == ReduceOp::Sum || op == ReduceOp::Mean ||
              op == ReduceOp::Max || op == ReduceOp::Min)) {
@@ -1787,7 +1787,7 @@ namespace lfs::core {
         const DataType out_dtype = reduction.result_dtype;
 
         std::optional<CUDAStreamGuard> execution_guard;
-        if (input->device_ == Device::CUDA) {
+        if (input->device_ == Device::GPU) {
             const cudaStream_t execution_stream = prepare_inputs_for_stream({input});
             execution_guard.emplace(execution_stream);
         }
@@ -1795,7 +1795,7 @@ namespace lfs::core {
         auto result = internal::allocate_like(
             *input, TensorShape(out_shape), out_dtype);
 
-        if (input->device_ == Device::CUDA) {
+        if (input->device_ == Device::GPU) {
             pin_operands({input});
             LFS_ASSERT_MSG(axes.size() <= MAX_TENSOR_RANK,
                            "reduction axis count exceeds MAX_TENSOR_RANK");
@@ -2239,7 +2239,7 @@ namespace lfs::core {
                        std::format("where failed to cast inputs to output dtype {}",
                                    dtype_name(out_dtype)));
 
-        if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
+        if (device_ == Device::GPU && out_dtype == DataType::Float32) {
             pin_operands({&a_broadcast, &b_cast, &c_cast});
             auto result = internal::allocate_like(*this, shape_abc, out_dtype);
             prepare_inputs_for_stream(
@@ -2254,9 +2254,9 @@ namespace lfs::core {
             return result;
         }
 
-        Tensor cond_cpu = (a_broadcast.device() == Device::CUDA) ? a_broadcast.to(Device::CPU) : a_broadcast;
-        Tensor x_cpu = (b_cast.device() == Device::CUDA) ? b_cast.to(Device::CPU) : b_cast;
-        Tensor y_cpu = (c_cast.device() == Device::CUDA) ? c_cast.to(Device::CPU) : c_cast;
+        Tensor cond_cpu = (a_broadcast.device() == Device::GPU) ? a_broadcast.to(Device::CPU) : a_broadcast;
+        Tensor x_cpu = (b_cast.device() == Device::GPU) ? b_cast.to(Device::CPU) : b_cast;
+        Tensor y_cpu = (c_cast.device() == Device::GPU) ? c_cast.to(Device::CPU) : c_cast;
         LFS_ASSERT_MSG(cond_cpu.is_valid() && x_cpu.is_valid() && y_cpu.is_valid(),
                        std::format("where failed to materialize host tensors for dtype {}",
                                    dtype_name(out_dtype)));
@@ -2274,7 +2274,7 @@ namespace lfs::core {
             std::memcpy(dst + i * elem_size, src, elem_size);
         }
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             return internal::copy_to_backend(
                 result_cpu, gpu_backend_of(*this).value());
         }
@@ -2567,7 +2567,7 @@ namespace lfs::core {
                       result.id_, result.data_, result.capacity(), result.logical_size());
 
             // Copy additional tensors into the reserved space
-            if (first_device == Device::CUDA) {
+            if (first_device == Device::GPU) {
                 size_t offset = first_size * row_size * element_size;
                 LOG_DEBUG("  Starting CUDA memcpy for {} additional tensors, initial offset={} bytes",
                           tensors.size() - 1, offset);
@@ -2623,7 +2623,7 @@ namespace lfs::core {
         // ============= OPTIMIZED PATH: First dimension =============
         if (resolved_dim == 0) {
             // Concatenating along first dimension - completely contiguous
-            if (first_device == Device::CUDA) {
+            if (first_device == Device::GPU) {
                 size_t offset = 0;
                 for (const auto& t : tensors) {
                     size_t bytes = t.bytes();
@@ -2664,7 +2664,7 @@ namespace lfs::core {
                 num_rows *= first_shape[i];
             }
 
-            if (first_device == Device::CUDA) {
+            if (first_device == Device::GPU) {
                 for (const auto& tensor : tensors)
                     pin_operands({&tensor});
                 std::vector<internal::StorageRef> input_storage;
@@ -2713,7 +2713,7 @@ namespace lfs::core {
             inner_size *= first_shape[i];
         }
 
-        if (first_device == Device::CUDA) {
+        if (first_device == Device::GPU) {
             for (const auto& tensor : tensors)
                 pin_operands({&tensor});
             std::vector<internal::StorageRef> input_storage;
@@ -2815,7 +2815,7 @@ namespace lfs::core {
         // Copy each input tensor into the corresponding slice of the output
         for (size_t i = 0; i < tensors.size(); ++i) {
             const int si = static_cast<int>(i);
-            if (dim == 0 && first_device == Device::CUDA) {
+            if (dim == 0 && first_device == Device::GPU) {
                 // dim=0: output slices are contiguous, use direct memcpy
                 internal::backend_ops_for(result).copy_device_to_device(
                     internal::CopyRequest{
@@ -2873,7 +2873,7 @@ namespace lfs::core {
         // FUSED VERSION: Allocate output + clamp in one pass (avoids separate clone)
         auto result = internal::allocate_like(*this, shape_, dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             if (dtype_ == DataType::Float32) {
                 internal::backend_ops_for(*this).clamp_fused(
                     internal::storage_ref(*this), internal::storage_ref(result),

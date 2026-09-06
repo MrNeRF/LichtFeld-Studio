@@ -301,7 +301,7 @@ namespace {
     // The swizzled layout is intrinsically CUDA-only: every reader / writer
     // (reorder_sh_to_swizzled, undo_reorder_sh_from_swizzled, shN_swizzled_gather_self,
     // the rasterizer's load_shN_coeffs, the fused Adam path) is a CUDA kernel. There is no
-    // CPU swizzle path, so this buffer always lives on Device::CUDA regardless of where
+    // CPU swizzle path, so this buffer always lives on Device::GPU regardless of where
     // the other SplatData tensors live.
     lfs::core::Tensor allocate_param_tensor(const lfs::core::TensorShape& shape,
                                             size_t capacity,
@@ -311,7 +311,7 @@ namespace {
         using namespace lfs::core;
         Tensor tensor = allocator
                             ? allocator(shape, capacity, dtype, name)
-                            : Tensor::zeros_direct(shape, capacity, Device::CUDA, dtype);
+                            : Tensor::zeros_direct(shape, capacity, Device::GPU, dtype);
         tensor.set_name(std::string{name});
         return tensor;
     }
@@ -367,9 +367,9 @@ namespace {
         const size_t logical_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
         const size_t capacity_floats = sh_swizzled_float_count(cap, layout_coeffs_rest);
         if (capacity_floats == 0) {
-            return Tensor::zeros({0}, Device::CUDA);
+            return Tensor::zeros({0}, Device::GPU);
         }
-        return Tensor::zeros_direct(TensorShape({logical_floats}), capacity_floats, Device::CUDA);
+        return Tensor::zeros_direct(TensorShape({logical_floats}), capacity_floats, Device::GPU);
     }
 
     lfs::core::Tensor allocate_swizzled_shN(size_t n,
@@ -382,7 +382,7 @@ namespace {
         const size_t logical_floats = sh_swizzled_float_count(n, layout_coeffs_rest);
         const size_t capacity_floats = sh_swizzled_float_count(cap, layout_coeffs_rest);
         if (capacity_floats == 0) {
-            Tensor tensor = Tensor::zeros({0}, Device::CUDA);
+            Tensor tensor = Tensor::zeros({0}, Device::GPU);
             tensor.set_name(std::string{name});
             return tensor;
         }
@@ -419,7 +419,7 @@ namespace {
         }
         Tensor tensor = Tensor::zeros_direct(TensorShape({logical_floats}),
                                              capacity_floats,
-                                             Device::CUDA);
+                                             Device::GPU);
         tensor.set_name(std::string{name});
         return tensor;
     }
@@ -493,7 +493,7 @@ namespace {
                             .contiguous();
             src = truncated;
         }
-        Tensor src_cuda = src.device() == Device::CUDA ? src : src.cuda();
+        Tensor src_cuda = src.device() == Device::GPU ? src : src.cuda();
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
         }
@@ -507,7 +507,7 @@ namespace {
             return;
         }
         // IEEE f16 float4-swizzle destination.
-        Tensor staging = Tensor::zeros({n_floats}, Device::CUDA, DataType::Float32);
+        Tensor staging = Tensor::zeros({n_floats}, Device::GPU, DataType::Float32);
         reorder_sh_to_swizzled(src_cuda.ptr<float>(),
                                staging.ptr<float>(),
                                n_primitives,
@@ -596,7 +596,7 @@ namespace {
                 }
                 return;
             }
-            Tensor grown = Tensor::zeros_direct(TensorShape({need}), need_cap, Device::CUDA,
+            Tensor grown = Tensor::zeros_direct(TensorShape({need}), need_cap, Device::GPU,
                                                 DataType::Float16);
             if (shN.numel() > 0) {
                 const size_t copy_n = std::min(static_cast<size_t>(shN.numel()), need);
@@ -716,7 +716,7 @@ namespace {
     }
 
     // Host-only Float16 → canonical [N, K, 3]. D2H of the compact codes is the
-    // only device traffic; no CUDA destination is allocated here.
+    // only device traffic; no GPU destination is allocated here.
     [[nodiscard]] lfs::core::Tensor canonical_shN_from_f16_cpu(
         const lfs::core::Tensor& shN,
         const lfs::core::Tensor& bounds,
@@ -805,7 +805,7 @@ namespace {
         prefault_pageable_host_memory(out.data_ptr(), out.bytes());
 
         Tensor device_staging = Tensor::empty(
-            {band_prims, k, SH_CHANNELS}, Device::CUDA, DataType::Float32);
+            {band_prims, k, SH_CHANNELS}, Device::GPU, DataType::Float32);
         Tensor host_staging = Tensor::empty(
             {band_prims, k, SH_CHANNELS}, Device::CPU, DataType::Float32, true);
         if (!PinnedMemoryAllocator::instance().is_cuda_host_allocation(
@@ -1010,11 +1010,11 @@ namespace lfs::core {
                 return Tensor{};
             }
             const Tensor contiguous = source.contiguous();
-            if (contiguous.device() != Device::CUDA || stream == nullptr) {
+            if (contiguous.device() != Device::GPU || stream == nullptr) {
                 return contiguous.clone();
             }
             Tensor result = Tensor::empty(
-                contiguous.shape(), Device::CUDA, contiguous.dtype());
+                contiguous.shape(), Device::GPU, contiguous.dtype());
             contiguous.sync_to_stream(stream);
             result.set_stream(stream);
             if (contiguous.bytes() != 0) {
@@ -1194,7 +1194,7 @@ namespace lfs::core {
             &_max_screen_share,
         };
         for (Tensor* tensor : tensors) {
-            if (!tensor->is_valid() || tensor->device() != Device::CUDA) {
+            if (!tensor->is_valid() || tensor->device() != Device::GPU) {
                 continue;
             }
             if (const cudaStream_t stream = tensor->stream()) {
@@ -1214,18 +1214,18 @@ namespace lfs::core {
         const size_t k = max_sh_coeffs_rest();
         // The swizzled buffer is CUDA-only (see allocate_swizzled_shN); align the canonical
         // output device with where the source data actually lives.
-        const Device dst_device = _shN.is_valid() ? _shN.device() : Device::CUDA;
+        const Device dst_device = _shN.is_valid() ? _shN.device() : Device::GPU;
         if (n == 0 || k == 0) {
             return Tensor::zeros({n, k, SH_CHANNELS}, dst_device);
         }
         // Float16 resident SH (q16 codes + bounds, or IEEE-f16 swizzle) decodes on the
-        // host. Device cost is only the returned canonical tensor when dst is CUDA.
+        // host. Device cost is only the returned canonical tensor when dst is GPU.
         if (_shN.dtype() == DataType::Float16) {
             // q16 and IEEE-f16 decode on the host (parallel), then upload the
-            // canonical tensor once when the resident buffer lives on CUDA.
+            // canonical tensor once when the resident buffer lives on GPU.
             Tensor out = canonical_shN_from_f16_cpu(_shN, _shN_value_bounds, n, k);
-            if (dst_device == Device::CUDA) {
-                return out.to(Device::CUDA);
+            if (dst_device == Device::GPU) {
+                return out.to(Device::GPU);
             }
             return out;
         }
@@ -1289,9 +1289,9 @@ namespace lfs::core {
 
         const bool bounds_are_gpu_compatible =
             !_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0 ||
-            _shN_value_bounds.device() == Device::CUDA;
+            _shN_value_bounds.device() == Device::GPU;
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
-            _shN.device() == Device::CUDA && bounds_are_gpu_compatible) {
+            _shN.device() == Device::GPU && bounds_are_gpu_compatible) {
             return canonical_shN_from_f16_gpu(_shN, _shN_value_bounds, n, k);
         }
         return shN_canonical_cpu();
@@ -1308,7 +1308,7 @@ namespace lfs::core {
 
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
             _shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0 &&
-            _shN.device() == Device::CUDA && _shN_value_bounds.device() == Device::CUDA) {
+            _shN.device() == Device::GPU && _shN_value_bounds.device() == Device::GPU) {
             // Keep the device staging buffer at most 128 MiB. Rounding to the q16
             // block size also
             // keeps every full band aligned with its source bounds table.
@@ -1367,7 +1367,7 @@ namespace lfs::core {
                     prefault_pageable_host_memory(out.data_ptr(), out.bytes());
                 }
                 device_staging[0] = Tensor::empty(
-                    {band_prims, k, SH_CHANNELS}, Device::CUDA, DataType::Float32);
+                    {band_prims, k, SH_CHANNELS}, Device::GPU, DataType::Float32);
                 host_staging[0] = Tensor::empty(
                     {band_prims, k, SH_CHANNELS}, Device::CPU, DataType::Float32, true);
                 for (size_t slot = 0; slot < 1; ++slot) {
@@ -1757,7 +1757,7 @@ namespace lfs::core {
             const auto new_rest = static_cast<uint32_t>(max_sh_coeffs_rest());
             _shN = allocate_swizzled_shN(n_now, cap_now, new_rest);
             if (canonical.is_valid() && canonical.numel() > 0 && n_now > 0 && new_rest > 0) {
-                if (canonical.device() != Device::CUDA) {
+                if (canonical.device() != Device::GPU) {
                     canonical = canonical.cuda();
                 }
                 const auto src_rest = static_cast<uint32_t>(canonical.size(1));
@@ -1938,7 +1938,7 @@ namespace lfs::core {
         }
         const size_t n = size();
         return _deleted.dtype() == DataType::Bool &&
-               _deleted.device() == Device::CUDA &&
+               _deleted.device() == Device::GPU &&
                _deleted.is_contiguous() &&
                _deleted.ndim() == 1 &&
                static_cast<size_t>(_deleted.numel()) == n;
@@ -1969,7 +1969,7 @@ namespace lfs::core {
         Tensor fresh = Tensor::zeros({n}, _means.device(), DataType::Bool);
         fresh.set_name("splat.deleted_mask");
         const size_t old_n = static_cast<size_t>(_deleted.numel());
-        if (old_n > 0 && _deleted.device() == Device::CUDA) {
+        if (old_n > 0 && _deleted.device() == Device::GPU) {
             Tensor src = _deleted;
             if (src.dtype() != DataType::Bool) {
                 src = src.to(DataType::Bool);
@@ -1978,7 +1978,7 @@ namespace lfs::core {
                 src = src.contiguous();
             }
             const size_t copy_n = std::min(old_n, n);
-            if (copy_n > 0 && src.device() == Device::CUDA) {
+            if (copy_n > 0 && src.device() == Device::GPU) {
                 auto src_prefix = src.ndim() == 1 ? src.slice(0, 0, copy_n) : src;
                 auto dst_prefix = fresh.slice(0, 0, copy_n);
                 dst_prefix.copy_from(src_prefix.contiguous());
@@ -2421,7 +2421,7 @@ namespace lfs::core {
         upload_keep_alive.reserve(8);
 
         const auto copy_param = [&](Tensor source, std::string_view name) {
-            if (source.device() == Device::CUDA) {
+            if (source.device() == Device::GPU) {
                 Tensor source_cuda = std::move(source);
                 if (!source_cuda.is_contiguous()) {
                     source_cuda = source_cuda.contiguous();
@@ -2444,7 +2444,7 @@ namespace lfs::core {
                 host = host.contiguous();
             }
             if (!tensor_allocator) {
-                Tensor source_cuda = host.to(Device::CUDA, upload_stream);
+                Tensor source_cuda = host.to(Device::GPU, upload_stream);
                 if (!source_cuda.is_contiguous()) {
                     source_cuda = source_cuda.contiguous();
                 }
@@ -2456,7 +2456,7 @@ namespace lfs::core {
                                                tensor_allocator,
                                                name);
             if (host.numel() > 0) {
-                if (dst.device() == Device::CUDA && dst.dtype() == host.dtype() &&
+                if (dst.device() == Device::GPU && dst.dtype() == host.dtype() &&
                     dst.is_contiguous()) {
                     LFS_CUDA_CHECK_MSG_STREAM_ARGS(
                         cudaMemcpyAsync(dst.data_ptr(), host.data_ptr(), host.bytes(),
@@ -2499,10 +2499,10 @@ namespace lfs::core {
             shN_src_rest = std::min(canonical_rest_coefficients(shN_canon), shN_layout_rest);
             if (shN_canon.is_valid() && shN_canon.numel() > 0 && n > 0 && shN_src_rest > 0 &&
                 shN_layout_rest > 0) {
-                if (shN_canon.device() == Device::CUDA) {
+                if (shN_canon.device() == Device::GPU) {
                     uploaded_shN_canon = std::move(shN_canon);
                 } else {
-                    uploaded_shN_canon = shN_canon.to(Device::CUDA, upload_stream);
+                    uploaded_shN_canon = shN_canon.to(Device::GPU, upload_stream);
                 }
                 if (!uploaded_shN_canon.is_contiguous()) {
                     uploaded_shN_canon = uploaded_shN_canon.contiguous();
@@ -2533,7 +2533,7 @@ namespace lfs::core {
             }
             if (any_deleted) {
                 upload_keep_alive.push_back(deleted_host.to(DataType::Bool));
-                loaded_deleted = upload_keep_alive.back().to(Device::CUDA, upload_stream);
+                loaded_deleted = upload_keep_alive.back().to(Device::GPU, upload_stream);
                 if (!loaded_deleted.is_contiguous()) {
                     loaded_deleted = loaded_deleted.contiguous();
                 }
@@ -2542,7 +2542,7 @@ namespace lfs::core {
 
         Tensor loaded_densification;
         if (has_densification && densification.numel() > 0) {
-            loaded_densification = densification.to(Device::CUDA, upload_stream);
+            loaded_densification = densification.to(Device::GPU, upload_stream);
         }
 
         LFS_CUDA_CHECK_MSG_STREAM(
@@ -2822,15 +2822,15 @@ namespace lfs::core {
                       capacity, params.optimization.random, params.optimization.sh_degree);
             LOG_DEBUG("  scene_center: is_valid={}, device={}, shape={}",
                       scene_center.is_valid(),
-                      scene_center.device() == Device::CUDA ? "CUDA" : "CPU",
+                      scene_center.device() == Device::GPU ? "CUDA" : "CPU",
                       scene_center.shape().str());
             LOG_DEBUG("  pcd.means: is_valid={}, device={}, shape={}, numel={}",
                       pcd.means.is_valid(),
-                      pcd.means.device() == Device::CUDA ? "CUDA" : "CPU",
+                      pcd.means.device() == Device::GPU ? "CUDA" : "CPU",
                       pcd.means.shape().str(), pcd.means.numel());
             LOG_DEBUG("  pcd.colors: is_valid={}, device={}, shape={}, numel={}",
                       pcd.colors.is_valid(),
-                      pcd.colors.device() == Device::CUDA ? "CUDA" : "CPU",
+                      pcd.colors.device() == Device::GPU ? "CUDA" : "CPU",
                       pcd.colors.shape().str(), pcd.colors.numel());
 
             // Generate positions and colors based on init type
@@ -2849,11 +2849,11 @@ namespace lfs::core {
                 const float extent = params.optimization.init_extent;
 
                 LOG_DEBUG("  Using random initialization: num_points={}, extent={}", num_points, extent);
-                positions = (Tensor::rand({static_cast<size_t>(num_points), 3}, Device::CUDA)
+                positions = (Tensor::rand({static_cast<size_t>(num_points), 3}, Device::GPU)
                                  .mul(2.0f)
                                  .sub(1.0f))
                                 .mul(extent);
-                colors = Tensor::rand({static_cast<size_t>(num_points), 3}, Device::CUDA);
+                colors = Tensor::rand({static_cast<size_t>(num_points), 3}, Device::GPU);
                 LOG_DEBUG("  Random positions created: shape={}, numel={}", positions.shape().str(), positions.numel());
                 LOG_DEBUG("  Random colors created: shape={}, numel={}", colors.shape().str(), colors.numel());
             } else {
@@ -2868,7 +2868,7 @@ namespace lfs::core {
                 positions = pcd.means.cuda();
                 LOG_DEBUG("  positions after .cuda(): is_valid={}, device={}, ptr={}, shape={}, numel={}",
                           positions.is_valid(),
-                          positions.device() == Device::CUDA ? "CUDA" : "CPU",
+                          positions.device() == Device::GPU ? "CUDA" : "CPU",
                           static_cast<void*>(positions.ptr<float>()),
                           positions.shape().str(), positions.numel());
 
@@ -2886,7 +2886,7 @@ namespace lfs::core {
                 }
                 LOG_DEBUG("  colors after conversion: is_valid={}, device={}, shape={}, numel={}",
                           colors.is_valid(),
-                          colors.device() == Device::CUDA ? "CUDA" : "CPU",
+                          colors.device() == Device::GPU ? "CUDA" : "CPU",
                           colors.shape().str(), colors.numel());
             }
 
@@ -2959,7 +2959,7 @@ namespace lfs::core {
                           sh0_.shape().str(), sh0_.numel());
 
                 // Build SH-rest directly in the resident vksplat-swizzled layout.
-                // The old path allocated a canonical CUDA tensor and then the final
+                // The old path allocated a canonical GPU tensor and then the final
                 // swizzled tensor, briefly holding both. At SH3/max-cap that transient
                 // is large enough to show up in the VRAM profile.
                 shN_ = allocate_swizzled_shN(num_points,
@@ -2980,14 +2980,14 @@ namespace lfs::core {
             if (capacity > 0) {
                 LOG_DEBUG("Computing values on CPU");
                 LOG_DEBUG("  positions tensor: is_valid={}, device={}, shape={}, numel={}",
-                          positions.is_valid(), positions.device() == Device::CUDA ? "CUDA" : "CPU",
+                          positions.is_valid(), positions.device() == Device::GPU ? "CUDA" : "CPU",
                           positions.shape().str(), positions.numel());
 
                 // Compute means on CPU
                 auto positions_cpu = positions.cpu();
                 LOG_DEBUG("  positions_cpu after .cpu(): is_valid={}, ptr={}, device={}, shape={}, numel={}",
                           positions_cpu.is_valid(), static_cast<const void*>(positions_cpu.ptr<float>()),
-                          positions_cpu.device() == Device::CUDA ? "CUDA" : "CPU",
+                          positions_cpu.device() == Device::GPU ? "CUDA" : "CPU",
                           positions_cpu.shape().str(), positions_cpu.numel());
 
                 if (params.optimization.random) {
@@ -2997,7 +2997,7 @@ namespace lfs::core {
                 }
                 LOG_DEBUG("  means_cpu computed: is_valid={}, ptr={}, device={}, shape={}, numel={}",
                           means_cpu.is_valid(), static_cast<const void*>(means_cpu.ptr<float>()),
-                          means_cpu.device() == Device::CUDA ? "CUDA" : "CPU",
+                          means_cpu.device() == Device::GPU ? "CUDA" : "CPU",
                           means_cpu.shape().str(), means_cpu.numel());
 
                 // Compute scaling on CPU
@@ -3018,7 +3018,7 @@ namespace lfs::core {
                 }
                 LOG_DEBUG("  scaling_cpu computed: is_valid={}, ptr={}, device={}, shape={}, numel={}",
                           scaling_cpu.is_valid(), static_cast<const void*>(scaling_cpu.ptr<float>()),
-                          scaling_cpu.device() == Device::CUDA ? "CUDA" : "CPU",
+                          scaling_cpu.device() == Device::GPU ? "CUDA" : "CPU",
                           scaling_cpu.shape().str(), scaling_cpu.numel());
 
                 // Create identity quaternion rotations on CPU
@@ -3043,7 +3043,7 @@ namespace lfs::core {
                 // Compute SH coefficients on CPU
                 LOG_DEBUG("  Computing SH coefficients...");
                 LOG_DEBUG("    colors tensor: is_valid={}, device={}, shape={}, numel={}",
-                          colors.is_valid(), colors.device() == Device::CUDA ? "CUDA" : "CPU",
+                          colors.is_valid(), colors.device() == Device::GPU ? "CUDA" : "CPU",
                           colors.shape().str(), colors.numel());
 
                 auto colors_cpu = colors.cpu();
@@ -3085,7 +3085,7 @@ namespace lfs::core {
                           shN_cpu.is_valid(), static_cast<const void*>(shN_cpu.ptr<float>()),
                           shN_cpu.shape().str(), shN_cpu.numel());
 
-                // Copy CPU data to direct CUDA tensors
+                // Copy CPU data to direct GPU tensors
                 LOG_DEBUG("Copying CPU values to direct CUDA tensors");
                 cudaError_t err;
 
@@ -3222,16 +3222,16 @@ namespace lfs::core {
                                        .cuda();
                 }
 
-                auto ones_col = Tensor::ones({num_points, 1}, Device::CUDA);
-                auto zeros_cols = Tensor::zeros({num_points, 3}, Device::CUDA);
+                auto ones_col = Tensor::ones({num_points, 1}, Device::GPU);
+                auto zeros_cols = Tensor::zeros({num_points, 3}, Device::GPU);
                 auto rotation_temp = ones_col.cat(zeros_cols, 1);
 
-                auto opacity_temp = Tensor::full({num_points, 1}, params.optimization.init_opacity, Device::CUDA).logit();
+                auto opacity_temp = Tensor::full({num_points, 1}, params.optimization.init_opacity, Device::GPU).logit();
 
                 auto colors_device = colors.cuda();
                 auto fused_color = rgb_to_sh(colors_device);
 
-                auto shs = Tensor::zeros({fused_color.size(0), static_cast<size_t>(feature_shape), 3}, Device::CUDA);
+                auto shs = Tensor::zeros({fused_color.size(0), static_cast<size_t>(feature_shape), 3}, Device::GPU);
                 auto shs_cpu_tmp = shs.cpu();
                 auto fused_cpu_tmp = fused_color.cpu();
 
@@ -3251,7 +3251,7 @@ namespace lfs::core {
                     shN_temp = shs.slice(1, 1, feature_shape).contiguous();
                 } else {
                     // sh-degree 0: create empty shN tensor [N, 0, 3]
-                    shN_temp = Tensor::zeros({shs.size(0), 0, 3}, Device::CUDA);
+                    shN_temp = Tensor::zeros({shs.size(0), 0, 3}, Device::GPU);
                 }
 
                 means_ = means_temp;
@@ -3321,7 +3321,7 @@ namespace lfs::core {
         if (float_src.dtype() == DataType::Float16) {
             float_src = float_src.to(DataType::Float32);
         }
-        if (float_src.device() != Device::CUDA) {
+        if (float_src.device() != Device::GPU) {
             float_src = float_src.cuda();
         }
         if (!float_src.is_contiguous()) {

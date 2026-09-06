@@ -425,7 +425,7 @@ namespace lfs::rendering {
             }
 
             Tensor positions_cuda = positions_source;
-            if (positions_cuda.device() != lfs::core::Device::CUDA) {
+            if (positions_cuda.device() != lfs::core::Device::GPU) {
                 positions_cuda = positions_cuda.cuda();
             }
             positions_cuda = positions_cuda.contiguous();
@@ -437,7 +437,7 @@ namespace lfs::rendering {
             if (colors_cuda.dtype() != lfs::core::DataType::Float32) {
                 colors_cuda = colors_cuda.to(lfs::core::DataType::Float32);
             }
-            if (colors_cuda.device() != lfs::core::Device::CUDA) {
+            if (colors_cuda.device() != lfs::core::Device::GPU) {
                 colors_cuda = colors_cuda.cuda();
             }
             colors_cuda = colors_cuda.contiguous();
@@ -450,7 +450,7 @@ namespace lfs::rendering {
                 if (transform_indices_cuda.dtype() != lfs::core::DataType::Int32) {
                     transform_indices_cuda = transform_indices_cuda.to(lfs::core::DataType::Int32);
                 }
-                if (transform_indices_cuda.device() != lfs::core::Device::CUDA) {
+                if (transform_indices_cuda.device() != lfs::core::Device::GPU) {
                     transform_indices_cuda = transform_indices_cuda.cuda();
                 }
                 transform_indices_cuda = transform_indices_cuda.contiguous();
@@ -502,7 +502,7 @@ namespace lfs::rendering {
                 if (deleted_mask_cuda.dtype() != lfs::core::DataType::Bool) {
                     deleted_mask_cuda = deleted_mask_cuda.to(lfs::core::DataType::Bool);
                 }
-                if (deleted_mask_cuda.device() != lfs::core::Device::CUDA) {
+                if (deleted_mask_cuda.device() != lfs::core::Device::GPU) {
                     deleted_mask_cuda = deleted_mask_cuda.cuda();
                 }
                 deleted_mask_cuda = deleted_mask_cuda.contiguous();
@@ -525,10 +525,10 @@ namespace lfs::rendering {
 
             Tensor image_tensor = Tensor::empty(
                 {static_cast<size_t>(channels), static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                lfs::core::Device::GPU, lfs::core::DataType::Float32);
             Tensor depth_tensor = Tensor::empty(
                 {static_cast<size_t>(1), static_cast<size_t>(height), static_cast<size_t>(width)},
-                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
             lfs::core::pin_operands({&positions_cuda, &colors_cuda});
             pcraster::LaunchParams params{};

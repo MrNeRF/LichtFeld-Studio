@@ -14,7 +14,7 @@ namespace lfs::core::cuda {
         constexpr float kShC0 = 0.28209479177387814f;
 
         Tensor empty_group_mask() {
-            return Tensor::empty({0}, Device::CUDA, DataType::UInt8);
+            return Tensor::empty({0}, Device::GPU, DataType::UInt8);
         }
 
         Tensor group_mask(const Tensor& mask, const uint8_t group_id) {
@@ -26,7 +26,7 @@ namespace lfs::core::cuda {
 
     Tensor select_by_opacity(const Tensor& opacity_raw, const float min_opacity,
                              const float max_opacity, const uint8_t group_id) {
-        assert(opacity_raw.device() == Device::CUDA);
+        assert(opacity_raw.device() == Device::GPU);
         assert(opacity_raw.dtype() == DataType::Float32);
         if (opacity_raw.numel() == 0) {
             return empty_group_mask();
@@ -36,7 +36,7 @@ namespace lfs::core::cuda {
     }
 
     Tensor select_by_scale(const Tensor& scale_raw, const float max_scale, const uint8_t group_id) {
-        assert(scale_raw.device() == Device::CUDA);
+        assert(scale_raw.device() == Device::GPU);
         assert(scale_raw.dtype() == DataType::Float32);
         assert(scale_raw.ndim() == 2 && scale_raw.size(1) == 3);
         if (scale_raw.size(0) == 0) {
@@ -48,7 +48,7 @@ namespace lfs::core::cuda {
 
     Tensor select_by_color(const Tensor& sh0, const float ref_r, const float ref_g, const float ref_b,
                            const float threshold, const uint8_t group_id) {
-        assert(sh0.device() == Device::CUDA);
+        assert(sh0.device() == Device::GPU);
         assert(sh0.dtype() == DataType::Float32);
         const size_t n = sh0.size(0);
         if (n == 0) {
