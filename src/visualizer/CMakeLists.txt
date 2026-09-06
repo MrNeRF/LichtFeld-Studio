@@ -46,6 +46,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/rendering_manager.cpp
         rendering/rendering_manager_events.cpp
         rendering/rendering_manager_vulkan.cpp
+        rendering/display_tensors.cpp
         rendering/rendering_manager_viewport.cpp
         rendering/nvidia_dlss_plugin.cpp
         rendering/scene_upscaler_registry.cpp
