@@ -6,6 +6,7 @@
 #include "core/gpu_backend_fwd.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace lfs::core {
@@ -56,6 +57,22 @@ namespace lfs::core {
     // Vulkan tensor) or the device lacks a required feature.
     LFS_CORE_API lfs::Status adopt_vulkan_device(const VulkanDeviceHandles& handles);
     LFS_CORE_API bool vulkan_backend_adopted();
+
+    // A Vulkan-backend tensor's storage for a consumer on the same device. The
+    // buffer is valid while keep_alive is held; pending_timeline_value is the
+    // value of vulkan_backend_timeline() after which every pending write to the
+    // tensor is complete (0 when nothing is pending); the query flushes the
+    // recorder that owns those writes so the value will be signalled.
+    struct TensorVulkanBuffer {
+        void* buffer = nullptr;
+        uint64_t offset = 0;
+        uint64_t device_address = 0;
+        uint64_t bytes = 0;
+        uint64_t pending_timeline_value = 0;
+        std::shared_ptr<void> keep_alive;
+    };
+    LFS_CORE_API void* vulkan_backend_timeline();
+    LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
 
     namespace internal {
         LFS_CORE_API void gpu_backend_reset_for_testing();

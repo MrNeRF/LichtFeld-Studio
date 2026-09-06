@@ -561,6 +561,9 @@ namespace lfs::core {
 
 namespace lfs::core {
 
+    struct TensorVulkanBuffer;
+    LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
+
     class LFS_CORE_API Tensor {
     private:
         friend struct internal::LazyIrTensorAccess;
@@ -570,6 +573,7 @@ namespace lfs::core {
             const Tensor& source);
         friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
         friend std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
+        friend std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
         friend internal::StorageRef internal::storage_ref(const Tensor& tensor);
         friend void internal::require_same_gpu_backend(const Tensor& reference,
                                                        const Tensor& other,

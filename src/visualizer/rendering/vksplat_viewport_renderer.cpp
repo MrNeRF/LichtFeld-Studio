@@ -17,6 +17,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/formats/rad.hpp"
 #include "rendering/coordinate_conventions.hpp"
@@ -1588,6 +1589,10 @@ namespace lfs::vis {
                 if (!tensor.is_valid()) {
                     return nullptr;
                 }
+                if (auto vulkan = lfs::core::tensor_vulkan_buffer(tensor); vulkan) {
+                    return reinterpret_cast<const void*>(
+                        static_cast<std::uintptr_t>(vulkan->device_address));
+                }
                 if (tensor.has_exportable_provenance()) {
                     return lfs::core::resolve_exportable_device_ptr(tensor);
                 }
@@ -1728,6 +1733,49 @@ namespace lfs::vis {
                 return std::unexpected(ok.error());
             }
             return {};
+        }
+
+        [[nodiscard]] bool isVulkanBackendTensor(const Tensor& tensor) {
+            return lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan;
+        }
+
+        [[nodiscard]] bool vulkanInputsDebugEnabled() {
+            static const bool enabled = [] {
+                const char* const value = std::getenv("LFS_VKSPLAT_VULKAN_INPUTS");
+                return value != nullptr && value[0] == '1' && value[1] == '\0';
+            }();
+            return enabled;
+        }
+
+        [[nodiscard]] lfs::Result<_VulkanBuffer> borrowVulkanTensorBuffer(
+            const lfs::core::TensorVulkanBuffer& storage,
+            const std::size_t active_bytes,
+            const char* const label) {
+            if (storage.buffer == nullptr) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Vulkan,
+                    .user_message = std::format("VkSplat Vulkan tensor {} storage is missing", label),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            if (storage.bytes < active_bytes) {
+                return lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::FailedPrecondition,
+                    .domain = lfs::ErrorDomain::Vulkan,
+                    .user_message = std::format("VkSplat Vulkan tensor {} storage is too small: have {} bytes, need {}",
+                                                label, storage.bytes, active_bytes),
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                });
+            }
+            const std::size_t capacity = static_cast<std::size_t>(storage.bytes);
+            const std::size_t backing =
+                static_cast<std::size_t>(storage.offset) + capacity;
+            return makeBorrowedBufferView(static_cast<VkBuffer>(storage.buffer),
+                                          backing,
+                                          capacity,
+                                          active_bytes,
+                                          storage.offset);
         }
 
         [[nodiscard]] std::expected<void, std::string> requireCudaFloat32ContiguousTensor(
@@ -5010,6 +5058,62 @@ namespace lfs::vis {
         return false;
     }
 
+    // Debug-only: LFS_VKSPLAT_VULKAN_INPUTS=1 copies CUDA splat tensors onto the
+    // Vulkan backend once per model input snapshot so prepareInputs binds native
+    // VkBuffer storage without CUDA import.
+    const VksplatViewportRenderer::VulkanDebugSplatInputs*
+    VksplatViewportRenderer::vulkanDebugSplatInputs(const lfs::core::SplatData& splat_data,
+                                                    const ModelInputSnapshot& snapshot) {
+        if (!vulkanInputsDebugEnabled() ||
+            !lfs::core::vulkan_backend_adopted() ||
+            !lfs::core::gpu_backend_available(lfs::core::GpuBackend::Vulkan)) {
+            return nullptr;
+        }
+        VulkanDebugSplatInputs& copies = vulkan_debug_inputs_;
+        ModelInputSnapshot& cached_key = vulkan_debug_inputs_key_;
+        if (cached_key.valid() && cached_key == snapshot) {
+            return &copies;
+        }
+        try {
+            copies.means = lfs::core::internal::copy_to_backend(
+                splat_data.means_raw(), lfs::core::GpuBackend::Vulkan);
+            copies.sh0 = lfs::core::internal::copy_to_backend(
+                splat_data.sh0_raw(), lfs::core::GpuBackend::Vulkan);
+            copies.rotation = lfs::core::internal::copy_to_backend(
+                splat_data.rotation_raw(), lfs::core::GpuBackend::Vulkan);
+            copies.scaling = lfs::core::internal::copy_to_backend(
+                splat_data.scaling_raw(), lfs::core::GpuBackend::Vulkan);
+            copies.opacity = lfs::core::internal::copy_to_backend(
+                splat_data.opacity_raw(), lfs::core::GpuBackend::Vulkan);
+            if (splat_data.shN_raw().is_valid() && splat_data.shN_raw().numel() > 0) {
+                copies.shN = lfs::core::internal::copy_to_backend(
+                    splat_data.shN_raw(), lfs::core::GpuBackend::Vulkan);
+            } else {
+                copies.shN = Tensor();
+            }
+            if (splat_data.shN_value_quantized() &&
+                splat_data.shN_value_bounds().is_valid() &&
+                splat_data.shN_value_bounds().numel() > 0) {
+                copies.shN_bounds = lfs::core::internal::copy_to_backend(
+                    splat_data.shN_value_bounds(), lfs::core::GpuBackend::Vulkan);
+            } else {
+                copies.shN_bounds = Tensor();
+            }
+            if (splat_data.has_deleted_mask()) {
+                copies.deleted = lfs::core::internal::copy_to_backend(
+                    splat_data.deleted(), lfs::core::GpuBackend::Vulkan);
+            } else {
+                copies.deleted = Tensor();
+            }
+            cached_key = snapshot;
+            return &copies;
+        } catch (const std::exception& error) {
+            LOG_WARN("VkSplat LFS_VKSPLAT_VULKAN_INPUTS copy failed: {}", error.what());
+            cached_key = {};
+            return nullptr;
+        }
+    }
+
     std::expected<VksplatViewportRenderer::InputBindingResult, std::string> VksplatViewportRenderer::prepareInputs(
         VulkanContext& context,
         const lfs::core::SplatData& splat_data,
@@ -5021,9 +5125,6 @@ namespace lfs::vis {
             return std::unexpected("VkSplat cannot render an empty model");
         }
 
-        if (!context.externalMemoryInteropEnabled()) {
-            return std::unexpected("VkSplat input binding requires CUDA/Vulkan external-memory interop");
-        }
         LFS_VK_DEBUG_ASSERT(
             ring_slot < ring_uploaded_.size(),
             "VkSplat input-upload ring slot must be in range before snapshot access (ring_slot={}, ring_size={}, splats={}, force_upload={}, requested_sh_degree={})",
@@ -5069,6 +5170,42 @@ namespace lfs::vis {
             uploaded_input_snapshot.active_sh_degree <= 0 &&
             current_input_snapshot.active_sh_degree > 0 &&
             current_input_snapshot.shn_q16;
+
+        const VulkanDebugSplatInputs* const debug_inputs =
+            vulkanDebugSplatInputs(splat_data, current_input_snapshot);
+        const Tensor& means_input =
+            debug_inputs ? debug_inputs->means : splat_data.means_raw();
+        const Tensor& sh0_input =
+            debug_inputs ? debug_inputs->sh0 : splat_data.sh0_raw();
+        const Tensor& rotation_input =
+            debug_inputs ? debug_inputs->rotation : splat_data.rotation_raw();
+        const Tensor& scaling_input =
+            debug_inputs ? debug_inputs->scaling : splat_data.scaling_raw();
+        const Tensor& opacity_input =
+            debug_inputs ? debug_inputs->opacity : splat_data.opacity_raw();
+        const Tensor& shN_input =
+            debug_inputs ? debug_inputs->shN : splat_data.shN_raw();
+        const Tensor& shN_bounds_input =
+            debug_inputs ? debug_inputs->shN_bounds : splat_data.shN_value_bounds();
+        const bool shN_input_present =
+            shN_input.is_valid() && shN_input.numel() > 0;
+        const bool shN_bounds_input_present =
+            splat_data.shN_value_quantized() &&
+            shN_bounds_input.is_valid() &&
+            shN_bounds_input.numel() > 0;
+        const bool vulkan_inputs =
+            lfs::core::vulkan_backend_adopted() &&
+            isVulkanBackendTensor(means_input) &&
+            isVulkanBackendTensor(sh0_input) &&
+            isVulkanBackendTensor(rotation_input) &&
+            isVulkanBackendTensor(scaling_input) &&
+            isVulkanBackendTensor(opacity_input) &&
+            (!shN_input_present || isVulkanBackendTensor(shN_input)) &&
+            (!shN_bounds_input_present || isVulkanBackendTensor(shN_bounds_input));
+        if (!vulkan_inputs && !context.externalMemoryInteropEnabled()) {
+            return std::unexpected(
+                "VkSplat input binding requires CUDA/Vulkan external-memory interop");
+        }
 
         std::shared_ptr<VulkanExternalTensorStorage> means_storage, sh0_storage, shN_storage,
             shN_bounds_storage, rotations_storage, scaling_storage, opacity_storage;
@@ -5133,13 +5270,20 @@ namespace lfs::vis {
                                        : std::string("VkSplat omit-SH layout failed"));
             }
         }
+        const bool use_vulkan_sh =
+            vulkan_inputs &&
+            !force_viewer_omit_shN &&
+            shN_input_present &&
+            !upload_layout->omits_shN &&
+            effective_upload_sh_degree > 0;
         const bool use_external_sh =
+            !vulkan_inputs &&
             !force_viewer_omit_shN &&
             can_bind_external && shN_storage &&
             !upload_layout->omits_shN &&
             effective_upload_sh_degree > 0;
         const auto& layout =
-            use_external_sh
+            (use_vulkan_sh || use_external_sh)
                 ? external_layout
                 : (omit_layout_holder ? **omit_layout_holder : upload_layout);
         if (first_q16_sh_enable) {
@@ -5204,6 +5348,242 @@ namespace lfs::vis {
                 buffers_.is_unsorted_1 = true;
             }
         };
+
+        if (vulkan_inputs) {
+            static bool logged_direct_bind = false;
+            if (!logged_direct_bind) {
+                logged_direct_bind = true;
+                LOG_INFO("VkSplat: binding Vulkan tensor storage directly");
+            }
+
+            Tensor opacity_for_bind = opacity_input;
+            if (has_deleted_mask) {
+                try {
+                    lfs::core::GpuBackendScope vulkan_scope(lfs::core::GpuBackend::Vulkan);
+                    Tensor deleted_for_bind =
+                        debug_inputs && debug_inputs->deleted.is_valid()
+                            ? debug_inputs->deleted
+                            : splat_data.deleted();
+                    if (lfs::core::gpu_backend_of(deleted_for_bind) !=
+                        lfs::core::GpuBackend::Vulkan) {
+                        deleted_for_bind = lfs::core::internal::copy_to_backend(
+                            deleted_for_bind, lfs::core::GpuBackend::Vulkan);
+                    }
+                    const Tensor hidden = Tensor::full_like(opacity_for_bind, -20.0f);
+                    opacity_for_bind =
+                        Tensor::where(deleted_for_bind, hidden, opacity_for_bind);
+                } catch (const std::exception& error) {
+                    return std::unexpected(std::format(
+                        "VkSplat failed to bake deleted-mask opacity on Vulkan tensors: {}",
+                        error.what()));
+                }
+            }
+
+            std::vector<std::shared_ptr<void>> keep_alives;
+            std::uint64_t max_pending = 0;
+            const auto take =
+                [&](const Tensor& tensor,
+                    const char* const label) -> lfs::Result<lfs::core::TensorVulkanBuffer> {
+                auto buffer = lfs::core::tensor_vulkan_buffer(tensor);
+                if (!buffer) {
+                    return lfs::make_error(lfs::ErrorInit{
+                        .code = lfs::ErrorCode::FailedPrecondition,
+                        .domain = lfs::ErrorDomain::Vulkan,
+                        .user_message = std::format(
+                            "VkSplat Vulkan tensor {} storage is not a live Vulkan-backend buffer", label),
+                        .detection = LFS_SOURCE_SITE_CURRENT(),
+                    });
+                }
+                max_pending = std::max(max_pending, buffer->pending_timeline_value);
+                if (buffer->keep_alive) {
+                    keep_alives.push_back(buffer->keep_alive);
+                }
+                return *buffer;
+            };
+
+            auto means_buffer = take(means_input, "means");
+            if (!means_buffer) {
+                return std::unexpected(legacyErrorString(means_buffer.error()));
+            }
+            auto sh0_buffer = take(sh0_input, "sh0");
+            if (!sh0_buffer) {
+                return std::unexpected(legacyErrorString(sh0_buffer.error()));
+            }
+            auto rotation_buffer = take(rotation_input, "rotation");
+            if (!rotation_buffer) {
+                return std::unexpected(legacyErrorString(rotation_buffer.error()));
+            }
+            auto scaling_buffer = take(scaling_input, "scaling");
+            if (!scaling_buffer) {
+                return std::unexpected(legacyErrorString(scaling_buffer.error()));
+            }
+            auto opacity_buffer = take(opacity_for_bind, "opacity");
+            if (!opacity_buffer) {
+                return std::unexpected(legacyErrorString(opacity_buffer.error()));
+            }
+            std::optional<lfs::core::TensorVulkanBuffer> shN_buffer;
+            std::optional<lfs::core::TensorVulkanBuffer> shN_bounds_buffer;
+            if (!layout->omits_shN) {
+                auto queried = take(shN_input, "shN");
+                if (!queried) {
+                    return std::unexpected(legacyErrorString(queried.error()));
+                }
+                shN_buffer = queried.value();
+                if (layout->shN_q16) {
+                    auto queried_bounds = take(shN_bounds_input, "shN_value_bounds");
+                    if (!queried_bounds) {
+                        return std::unexpected(legacyErrorString(queried_bounds.error()));
+                    }
+                    shN_bounds_buffer = queried_bounds.value();
+                }
+            }
+
+            auto opacity_view =
+                borrowVulkanTensorBuffer(opacity_buffer.value(), layout->opacity_bytes, "opacity");
+            if (!opacity_view) {
+                return std::unexpected(legacyErrorString(opacity_view.error()));
+            }
+            buffers_.opacity_raw.deviceBuffer = opacity_view.value();
+
+            {
+                LOG_TIMER("prepareInputs.borrow_views");
+                auto means_view =
+                    borrowVulkanTensorBuffer(means_buffer.value(), layout->xyz_bytes, "means");
+                if (!means_view) {
+                    return std::unexpected(legacyErrorString(means_view.error()));
+                }
+                buffers_.xyz_ws.deviceBuffer = means_view.value();
+                auto sh0_view =
+                    borrowVulkanTensorBuffer(sh0_buffer.value(), layout->sh0_bytes, "sh0");
+                if (!sh0_view) {
+                    return std::unexpected(legacyErrorString(sh0_view.error()));
+                }
+                buffers_.sh0.deviceBuffer = sh0_view.value();
+                buffers_.shN_address = 0;
+                buffers_.shN_committed_bytes = 0;
+                const bool shN_bda = !layout->omits_shN && (layout->shN_q16 || layout->shN_f16);
+                if (layout->omits_shN) {
+                    auto shN_placeholder = borrowVulkanTensorBuffer(
+                        rotation_buffer.value(), layout->shN_bytes, "shN_placeholder");
+                    if (!shN_placeholder) {
+                        return std::unexpected(legacyErrorString(shN_placeholder.error()));
+                    }
+                    buffers_.shN.deviceBuffer = shN_placeholder.value();
+                } else if (shN_bda) {
+                    buffers_.shN.deviceBuffer = {};
+                    buffers_.shN_address = shN_buffer->device_address;
+                    buffers_.shN_committed_bytes =
+                        std::max(shN_buffer->bytes, static_cast<std::uint64_t>(layout->shN_bytes));
+                    if (buffers_.shN_address == 0) {
+                        return std::unexpected(
+                            "VkSplat q16/f16 SH requires a non-zero shN buffer device address");
+                    }
+                    const auto splat_count = splat_data.size();
+                    const auto rest = static_cast<std::uint32_t>(splat_data.max_sh_coeffs_rest());
+                    const std::size_t need_bytes = layout->shN_q16
+                                                       ? lfs::core::sh_value_quant::sh_value_u16_count(splat_count, rest) * 2u
+                                                       : lfs::core::sh_swizzled_f16_byte_count(splat_count, rest);
+                    if (need_bytes > buffers_.shN_committed_bytes) {
+                        return std::unexpected(std::format(
+                            "VkSplat shN BDA region is smaller than the live index footprint: "
+                            "need {} bytes, committed {}",
+                            need_bytes,
+                            buffers_.shN_committed_bytes));
+                    }
+                } else {
+                    auto shN_view =
+                        borrowVulkanTensorBuffer(*shN_buffer, layout->shN_bytes, "shN");
+                    if (!shN_view) {
+                        return std::unexpected(legacyErrorString(shN_view.error()));
+                    }
+                    buffers_.shN.deviceBuffer = shN_view.value();
+                }
+                auto rotation_view = borrowVulkanTensorBuffer(
+                    rotation_buffer.value(), layout->rotations_bytes, "rotation");
+                if (!rotation_view) {
+                    return std::unexpected(legacyErrorString(rotation_view.error()));
+                }
+                buffers_.rotations.deviceBuffer = rotation_view.value();
+                auto scaling_view = borrowVulkanTensorBuffer(
+                    scaling_buffer.value(), layout->scaling_bytes, "scaling");
+                if (!scaling_view) {
+                    return std::unexpected(legacyErrorString(scaling_view.error()));
+                }
+                buffers_.scaling_raw.deviceBuffer = scaling_view.value();
+                buffers_.scales_opacs.deviceBuffer = {};
+                buffers_.sh_coeffs.deviceBuffer = {};
+                buffers_.page_frames.deviceBuffer = {};
+                buffers_.quant_pool = false;
+                buffers_.pool_page_splats = 0;
+                const bool q16_supported =
+                    layout->shN_q16 && renderer_.supportsFloat16Storage() && q16_pair_ok;
+                buffers_.shN_q16 = q16_supported;
+                buffers_.shN_f16 = layout->shN_f16 && !buffers_.shN_q16;
+                buffers_.attrs_f16 = layout->attrs_f16 && !buffers_.quant_pool;
+                buffers_.shN_n_cells =
+                    buffers_.shN_q16
+                        ? (q16_bind.n_cells_per_prim > 0u ? q16_bind.n_cells_per_prim
+                                                          : layout->shN_n_cells)
+                        : 0u;
+                if (buffers_.shN_q16 && shN_bounds_buffer) {
+                    const std::size_t bounds_capacity = std::max(
+                        static_cast<std::size_t>(shN_bounds_buffer->bytes),
+                        layout->shN_bounds_bytes);
+                    auto bounds_view = borrowVulkanTensorBuffer(
+                        *shN_bounds_buffer, bounds_capacity, "shN_value_bounds");
+                    if (!bounds_view) {
+                        return std::unexpected(legacyErrorString(bounds_view.error()));
+                    }
+                    buffers_.shN_bounds.deviceBuffer = bounds_view.value();
+                } else {
+                    buffers_.shN_bounds.deviceBuffer = {};
+                }
+                if (layout->shN_q16 && !q16_supported) {
+                    if (!q16_pair_ok) {
+                        return std::unexpected(
+                            "VkSplat q16 SH bind refused: generation-checked codes+bounds "
+                            "pair incomplete during first enable");
+                    }
+                    return std::unexpected(
+                        "VkSplat q16 SH requires shaderFloat16+storageBuffer16BitAccess; "
+                        "device lacks 16-bit storage (fp16 fallback is standalone-only)");
+                }
+                update_input_metadata(input_snapshot_changed && !deleted_mask_only_change);
+
+                const auto retirement_value =
+                    nextRenderCompletionValue("input-storage retirement");
+                if (!retirement_value) {
+                    return std::unexpected(legacyErrorString(retirement_value.error()));
+                }
+                retired_input_storages_.emplace_back(*retirement_value, std::move(keep_alives));
+            }
+
+            if (max_pending != 0) {
+                void* const timeline = lfs::core::vulkan_backend_timeline();
+                if (timeline == nullptr) {
+                    return std::unexpected(
+                        "VkSplat Vulkan tensor bind is missing the backend timeline");
+                }
+                if (max_pending > last_vulkan_tensor_input_wait_value_) {
+                    renderer_.addTimelineWait(static_cast<VkSemaphore>(timeline),
+                                              max_pending,
+                                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+                    last_vulkan_tensor_input_wait_value_ = max_pending;
+                }
+            }
+
+            {
+                LOG_TIMER("prepareInputs.snapshot");
+                ring_uploaded_[ring_slot] = current_input_snapshot;
+            }
+            current_input_sh_degree_ =
+                (buffers_.shN_q16 || (shN_buffer && !layout->omits_shN))
+                    ? splat_data.get_max_sh_degree()
+                    : effective_upload_sh_degree;
+            return InputBindingResult{
+                .model_snapshot_changed = input_snapshot_changed && !deleted_mask_only_change,
+            };
+        }
 
         if (can_bind_external) {
             const auto require_capacity =

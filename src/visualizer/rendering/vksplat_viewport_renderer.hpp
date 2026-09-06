@@ -755,9 +755,25 @@ namespace lfs::vis {
         // Zero-copy input storages bound to in-flight frames, keyed by the
         // completion value at which the GPU is done reading them. Keeps
         // VkBuffer + external memory + CUDA allocation alive across trainer
-        // topology reallocations.
+        // topology reallocations. Vulkan-backend tensors pin the same way
+        // through TensorVulkanBuffer::keep_alive.
         std::vector<std::pair<std::uint64_t, std::vector<std::shared_ptr<void>>>>
             retired_input_storages_;
+        std::uint64_t last_vulkan_tensor_input_wait_value_ = 0;
+        struct VulkanDebugSplatInputs {
+            lfs::core::Tensor means;
+            lfs::core::Tensor sh0;
+            lfs::core::Tensor rotation;
+            lfs::core::Tensor scaling;
+            lfs::core::Tensor opacity;
+            lfs::core::Tensor shN;
+            lfs::core::Tensor shN_bounds;
+            lfs::core::Tensor deleted;
+        };
+        [[nodiscard]] const VulkanDebugSplatInputs* vulkanDebugSplatInputs(
+            const lfs::core::SplatData& splat_data, const ModelInputSnapshot& snapshot);
+        VulkanDebugSplatInputs vulkan_debug_inputs_{};
+        ModelInputSnapshot vulkan_debug_inputs_key_{};
 
         // Async RAD page streaming: decoded pages are packed and copied on the
         // engine's own thread/stream; render frames only publish completions.

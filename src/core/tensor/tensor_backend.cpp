@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <format>
@@ -15,6 +16,7 @@
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/gpu_backend_ops.hpp"
 #include "backend/vulkan/vk_context.hpp"
+#include "backend/vulkan/vk_recorder.hpp"
 #endif
 
 namespace lfs::core {
@@ -224,6 +226,59 @@ namespace lfs::core {
         return internal::vulkan_context_adopted();
 #else
         return false;
+#endif
+    }
+
+    void* vulkan_backend_timeline() {
+#ifdef LFS_TENSOR_VULKAN
+        const auto context = internal::try_live_vulkan_context();
+        if (!context) {
+            return nullptr;
+        }
+        const VkSemaphore timeline = context->timeline();
+        if (timeline == VK_NULL_HANDLE) {
+            return nullptr;
+        }
+        return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(timeline));
+#else
+        return nullptr;
+#endif
+    }
+
+    std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor) {
+#ifdef LFS_TENSOR_VULKAN
+        if (!tensor.is_valid()) {
+            return std::nullopt;
+        }
+        tensor.materialize_if_deferred();
+        if (gpu_backend_of(tensor) != GpuBackend::Vulkan) {
+            return std::nullopt;
+        }
+        const auto context = internal::try_live_vulkan_context();
+        if (!context) {
+            return std::nullopt;
+        }
+        const internal::StorageRef storage = internal::storage_ref(tensor);
+        if (storage.meta == nullptr ||
+            storage.backend != GpuBackend::Vulkan ||
+            storage.meta->gpu_descriptor.native_buffer == 0) {
+            return std::nullopt;
+        }
+        context->recorders().flush_storage(storage);
+        TensorVulkanBuffer result;
+        result.buffer = reinterpret_cast<void*>(static_cast<uintptr_t>(
+            storage.meta->gpu_descriptor.native_buffer));
+        result.offset = storage.byte_offset;
+        result.device_address =
+            storage.meta->gpu_descriptor.base_address + storage.byte_offset;
+        result.bytes = tensor.bytes();
+        result.pending_timeline_value =
+            storage.meta->pending_value.load(std::memory_order_acquire);
+        result.keep_alive = tensor.data_owner_;
+        return result;
+#else
+        (void)tensor;
+        return std::nullopt;
 #endif
     }
 
