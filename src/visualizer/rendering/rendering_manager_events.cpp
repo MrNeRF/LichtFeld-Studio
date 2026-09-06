@@ -10,6 +10,7 @@
 #include "operator/operator_registry.hpp"
 #include "operator/ops/depth_window_ops.hpp"
 #include "rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
 
@@ -18,6 +19,33 @@ namespace lfs::vis {
     using namespace lfs::core::events;
 
     namespace {
+
+        void cancelDepthWindowDragBeforeSplitModeChange(const SplitViewMode current_mode,
+                                                        const SplitViewMode target_mode) {
+            if (current_mode == target_mode) {
+                return;
+            }
+            const bool involves_independent = splitViewUsesIndependentPanels(current_mode) ||
+                                              splitViewUsesIndependentPanels(target_mode);
+            // GT comparison suspends the depth filter entirely, so entering or
+            // leaving it is a drag-lifetime boundary too: cancel BEFORE the mode
+            // change, never after it (a post-transition restore would write into
+            // the new epoch's state).
+            const bool involves_gt = splitViewUsesGTComparison(current_mode) ||
+                                     splitViewUsesGTComparison(target_mode);
+            if (!involves_independent && !involves_gt) {
+                return;
+            }
+            if (op::operators().activeModalId() == "selection.depth_window_drag") {
+                op::operators().cancelModalOperator();
+            }
+        }
+
+        [[nodiscard]] SplitViewMode toggledSplitViewTarget(const SplitViewMode current_mode,
+                                                           const SplitViewMode target_mode) {
+            return current_mode == target_mode ? SplitViewMode::Disabled : target_mode;
+        }
+
         [[nodiscard]] constexpr bool hasSceneMutation(const uint32_t flags, const lfs::core::Scene::MutationType type) {
             return (flags & static_cast<uint32_t>(type)) != 0;
         }
@@ -85,10 +113,22 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleSplitView() {
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const SplitViewMode current_mode = getSettings().split_view_mode;
+        cancelDepthWindowDragBeforeSplitModeChange(
+            current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::PLYComparison));
+
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.toggleMode(settings_, SplitViewMode::PLYComparison);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             markDirty(DirtyFlag::SPLIT_VIEW);
         }
         applySplitModeChange(result);
@@ -96,14 +136,27 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const SplitViewMode current_mode = getSettings().split_view_mode;
+        // A refused toggle must cancel nothing: discover the null viewport
+        // BEFORE touching an active drag.
         if (!event.viewport) {
             return;
         }
+        cancelDepthWindowDragBeforeSplitModeChange(
+            current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::IndependentDual));
 
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.toggleMode(settings_, SplitViewMode::IndependentDual, event.viewport);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             syncGridPlanesLocked(settings_.grid_plane);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::CAMERA);
         }
@@ -114,11 +167,23 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const SplitViewMode current_mode = getSettings().split_view_mode;
+        cancelDepthWindowDragBeforeSplitModeChange(
+            current_mode, toggledSplitViewTarget(current_mode, SplitViewMode::GTComparison));
+
         SplitViewService::ModeChangeResult result;
 
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.toggleMode(settings_, SplitViewMode::GTComparison);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
         }
 
@@ -134,7 +199,10 @@ namespace lfs::vis {
                     input->releaseDepthWindowCursor();
                 }
             }
-            setDepthWindowDragPreview(false);
+            // No hard reset of the drag gate here: the counter and the per-panel
+            // backups are owned by beginDepthWindowDrag/endDepthWindowDrag alone.
+            // The pre-transition cancel above (and the epoch boundary the
+            // transition raised) is what ends a racing drag.
         }
         if (!splitViewUsesGTComparison(result.current_mode)) {
             invalidateCameraMetricsRequests(true);
@@ -144,26 +212,38 @@ namespace lfs::vis {
     void RenderingManager::restoreSplitViewMode(
         const SplitViewMode mode,
         Viewport& primary_viewport) {
-        std::vector<SplitViewService::ModeChangeResult>
-            changes;
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        SplitViewMode current_mode;
         {
-            std::lock_guard<std::mutex> lock(
-                settings_mutex_);
-            if (settings_.split_view_mode == mode)
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            if (settings_.split_view_mode == mode) {
                 return;
-            if (settings_.split_view_mode !=
-                SplitViewMode::Disabled) {
-                changes.push_back(
-                    split_view_service_.toggleMode(
-                        settings_,
-                        settings_.split_view_mode,
-                        &primary_viewport));
+            }
+            current_mode = settings_.split_view_mode;
+        }
+        cancelDepthWindowDragBeforeSplitModeChange(current_mode, mode);
+
+        std::vector<SplitViewService::ModeChangeResult> changes;
+        {
+            std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            SplitViewMode previous_mode = settings_.split_view_mode;
+            if (settings_.split_view_mode != SplitViewMode::Disabled) {
+                changes.push_back(split_view_service_.toggleMode(
+                    settings_, settings_.split_view_mode, &primary_viewport));
+                applyDepthWindowModeTransitionLocked(
+                    previous_mode, settings_.split_view_mode, pre_transition_focus);
+                previous_mode = settings_.split_view_mode;
             }
             if (mode != SplitViewMode::Disabled) {
-                changes.push_back(
-                    split_view_service_.toggleMode(
-                        settings_, mode,
-                        &primary_viewport));
+                changes.push_back(split_view_service_.toggleMode(
+                    settings_, mode, &primary_viewport));
+                applyDepthWindowModeTransitionLocked(
+                    previous_mode, settings_.split_view_mode, pre_transition_focus);
             }
             if (mode == SplitViewMode::IndependentDual)
                 syncGridPlanesLocked(settings_.grid_plane);
@@ -256,6 +336,16 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneLoaded() {
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const SplitViewMode current_mode = getSettings().split_view_mode;
+        const SplitViewMode target_mode =
+            splitViewUsesGTComparison(current_mode) ? SplitViewMode::Disabled : current_mode;
+        cancelDepthWindowDragBeforeSplitModeChange(current_mode, target_mode);
+
         LOG_DEBUG("Scene loaded, marking render dirty");
         markDirty();
         invalidateCameraMetricsRequests(true);
@@ -265,7 +355,10 @@ namespace lfs::vis {
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handleSceneLoaded(settings_);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             syncGridPlanesLocked(settings_.grid_plane);
         }
         applySplitModeChange(result);
@@ -279,12 +372,23 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneCleared() {
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const SplitViewMode current_mode = getSettings().split_view_mode;
+        cancelDepthWindowDragBeforeSplitModeChange(current_mode, SplitViewMode::Disabled);
+
         releaseSceneRenderResources();
         invalidateCameraMetricsRequests(true);
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handleSceneCleared(settings_);
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             syncGridPlanesLocked(settings_.grid_plane);
         }
         camera_interaction_service_.clearCurrentCamera();
@@ -303,10 +407,29 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handlePLYRemoved() {
+        // Held across the pre-collapse cancel hook AND the mode change, so a
+        // depth-window drag's release sequence cannot interleave with this
+        // transition. Lock order: transition -> settings -> history; this is
+        // acquired BEFORE any settings_mutex_ scope below.
+        const auto transition_lock = acquireDepthWindowTransitionLock();
+        const SplitViewMode current_mode = getSettings().split_view_mode;
+        if (splitViewUsesPLYComparison(current_mode)) {
+            if (auto* const scene_manager = services().sceneOrNull()) {
+                const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
+                if (visible_nodes.size() < 2) {
+                    cancelDepthWindowDragBeforeSplitModeChange(
+                        current_mode, SplitViewMode::Disabled);
+                }
+            }
+        }
+
         SplitViewService::ModeChangeResult result;
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
+            const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull());
+            applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
         }
         applySplitModeChange(result);

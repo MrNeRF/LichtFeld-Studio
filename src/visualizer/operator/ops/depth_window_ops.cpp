@@ -12,14 +12,17 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator.hpp"
 #include "operator/operator_registry.hpp"
+#include "rendering/depth_window_state.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
+#include <optional>
 
 namespace lfs::vis::op {
 
@@ -177,7 +180,13 @@ namespace lfs::vis::op {
 
         DepthWindowOverlayState g_overlay_state;
         std::uint64_t g_overlay_revision = 0;
-        std::uint64_t g_depth_drag_revision = 0;
+        // Drag ownership is PER PANEL. The counter's original purpose is
+        // unchanged - a drag replaced on ITS OWN panel must not yank the
+        // incoming drag's baseline out from under it during teardown - but a
+        // replacement on the OTHER panel is not a takeover: with per-panel
+        // windows the replaced drag still owns, and must still restore, its own
+        // panel, or its uncommitted preview stays baked there.
+        std::array<std::uint64_t, 2> g_depth_drag_revisions{};
 
         [[nodiscard]] tools::SelectionTool* activeDepthWindowTool() {
             auto* const gui = services().guiOrNull();
@@ -234,13 +243,20 @@ namespace lfs::vis::op {
             }
         }
 
+        // An absolute snapshot: BOTH panel slots, the sync flag and the
+        // projection, all read under one manager lock, plus the panel this drag
+        // owns. Undo therefore never depends on the sync or focus in force when
+        // it runs.
         [[nodiscard]] DepthWindowSettingsState captureDepthWindowSettings(
-            const RenderSettings& settings) {
+            const DepthWindowModeSnapshot& snapshot,
+            const SplitViewPanelId panel) {
             return {
-                .scale_x = settings.depth_filter_scale_x,
-                .scale_y = settings.depth_filter_scale_y,
-                .offset_x = settings.depth_filter_offset_x,
-                .offset_y = settings.depth_filter_offset_y,
+                .panels = snapshot.panels,
+                .projection = snapshot.projection,
+                .sync = snapshot.sync,
+                .panel = panel,
+                .mode_epoch = snapshot.mode_epoch,
+                .independent_dual_snapshot = snapshot.independent_dual,
             };
         }
 
@@ -272,6 +288,11 @@ namespace lfs::vis::op {
                     }
                 }
                 finishLatch();
+                // The manager's ownership bracket closes LAST, at the true end
+                // of teardown: the registry invokes a replacement modal before
+                // destroying this one, so the incoming drag's begin has already
+                // run and the panel is never unowned across the handoff.
+                releasePanelBracket();
                 if ((terminated_mid_drag || modal_active_) &&
                     g_overlay_revision == overlay_revision_) {
                     clearDepthWindowHover();
@@ -298,18 +319,31 @@ namespace lfs::vis::op {
             [[nodiscard]] DepthWindowRect deriveEdgeRect(const glm::vec2& pointer) const;
             void updateFromScreen(const glm::vec2& screen);
             void applyRect(const DepthWindowRect& rect);
+            void captureBaselineIfNeeded();
             void restoreBeforeState();
             void restoreBeforeStateIfStillOurs();
             void startLatch();
             void finishLatch();
+            void releasePanelBracket();
             void refreshOverlay();
 
             RenderingManager* rendering_manager_ = nullptr;
             tools::SelectionTool* selection_tool_ = nullptr;
             DepthWindowPanelMapping panel_{};
             glm::vec4 viewport_bounds_{0.0f};
-            DepthWindowSettingsState before_{};
-            DepthWindowSettingsState applied_{};
+            // UNDO BASELINE. What this drag's undo entry restores: composed
+            // from the manager's recorded pre-drag BACKUP for every slot this
+            // drag owns (live value elsewhere), so an undo can never resurrect
+            // a replaced drag's abandoned preview.
+            DepthWindowSettingsState undo_baseline_{};
+            // CANCEL / TEARDOWN TARGET. What a cancelled drag puts back on
+            // SCREEN: the LIVE state as this drag found it, predecessor's
+            // abandoned preview included - cancelling B returns you to what was
+            // on screen when B started, which is not the same thing as undoing
+            // B. Own slot, then the other slot for the fan-out case.
+            DepthWindowState restore_window_{};
+            DepthWindowState restore_other_window_{};
+            DepthWindowState applied_window_{};
             DepthWindowRect initial_rect_{};
             DepthWindowRect current_rect_{};
             glm::vec2 press_render_{0.0f};
@@ -324,9 +358,30 @@ namespace lfs::vis::op {
             bool constrained_ = false;
             bool draw_started_ = false;
             bool latch_active_ = false;
+            // False until the drag's FIRST slot write captured the baseline.
+            // While it is false this drag has written nothing, so there is
+            // nothing to restore and no undo entry to build.
+            bool baseline_captured_ = false;
+            // True when beginDepthWindowDrag also PINNED the other panel's
+            // backup (the fan-out predicate at invoke): this drag's writes may
+            // reach both slots, so its teardown restore must put both back.
+            bool pinned_other_panel_ = false;
+            bool panel_bracket_active_ = false;
             bool modal_active_ = false;
             std::uint64_t overlay_revision_ = 0;
             std::uint64_t drag_revision_ = 0;
+            std::uint64_t start_epoch_ = 0;
+            // This drag's per-slot OWNERSHIP token, minted by
+            // beginDepthWindowDrag and handed back on every manager call:
+            // preview write, commit, teardown restore and end. A slot whose
+            // owner is no longer this token was superseded by a legitimate
+            // non-drag write or taken over by a later drag, and every one of
+            // those calls refuses on it.
+            std::uint64_t drag_token_ = 0;
+            // Set the moment an epoch-guarded write is refused: the mode
+            // transition already collapsed or re-seeded the slots, so this drag
+            // must vanish WITHOUT restoring anything.
+            bool epoch_lost_ = false;
         };
 
         const OperatorDescriptor DepthWindowDragOperator::DESCRIPTOR = {
@@ -336,7 +391,7 @@ namespace lfs::vis::op {
             .description = "Draw, resize, or move the selection depth window",
             .icon = "selection",
             .shortcut = "",
-            .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
+            .flags = OperatorFlags::REGISTER,
             .source = OperatorSource::CPP,
             .poll_deps = PollDependency::ALL,
         };
@@ -372,6 +427,14 @@ namespace lfs::vis::op {
                 return OperatorResult::CANCELLED;
             }
             panel_ = *panel;
+            rendering_manager_->setFocusedSplitPanel(panel_.panel);
+            const auto start_snapshot = rendering_manager_->depthWindowSnapshot();
+            start_epoch_ = start_snapshot.mode_epoch;
+            undo_baseline_ = captureDepthWindowSettings(start_snapshot, panel_.panel);
+            const size_t start_own_index = splitViewPanelIndex(panel_.panel);
+            restore_window_ = start_snapshot.panels[start_own_index];
+            restore_other_window_ = start_snapshot.panels[start_own_index == 0 ? 1u : 0u];
+            applied_window_ = restore_window_;
 
             drag_button_ = props.get_or<int>(
                 "button", static_cast<int>(input::AppMouseButton::LEFT));
@@ -381,12 +444,10 @@ namespace lfs::vis::op {
             }
             constrained_ = (current_modifiers_ & input::KEYMOD_CTRL) != 0;
 
-            const auto settings = rendering_manager_->getSettings();
-            before_ = captureDepthWindowSettings(settings);
             initial_rect_ = depthWindowRenderRect(
                 panel_.render_width, panel_.render_height,
-                before_.scale_x, before_.scale_y,
-                before_.offset_x, before_.offset_y);
+                restore_window_.scale_x, restore_window_.scale_y,
+                restore_window_.offset_x, restore_window_.offset_y);
             current_rect_ = initial_rect_;
             press_threshold_render_ = screenToRender(last_screen_, panel_);
             press_render_ = glm::clamp(
@@ -395,8 +456,8 @@ namespace lfs::vis::op {
                 dragBoundsMax(panel_));
 
             const auto screen_rect = depthWindowScreenRect(
-                panel_, before_.scale_x, before_.scale_y,
-                before_.offset_x, before_.offset_y);
+                panel_, restore_window_.scale_x, restore_window_.scale_y,
+                restore_window_.offset_x, restore_window_.offset_y);
             active_handle_ = hitTestDepthWindowHandles(
                 last_screen_, depthWindowHandleGeometry(screen_rect));
             if (active_handle_ == DepthWindowHandle::Center) {
@@ -426,8 +487,8 @@ namespace lfs::vis::op {
                 anchor_render_ = press_render_;
             }
 
-            const float initial_width = std::abs(before_.scale_x) * panel_.render_width;
-            const float initial_height = std::abs(before_.scale_y) * panel_.render_height;
+            const float initial_width = std::abs(restore_window_.scale_x) * panel_.render_width;
+            const float initial_height = std::abs(restore_window_.scale_y) * panel_.render_height;
             const float viewport_aspect = static_cast<float>(panel_.render_width) /
                                           static_cast<float>(panel_.render_height);
             aspect_px_ = initial_height > kSingularityEpsilon
@@ -443,13 +504,20 @@ namespace lfs::vis::op {
                 aspect_px_ = 1.0f;
             }
 
+            // The manager bracket opens at INVOKE, not at the latch: the
+            // registry invokes this modal BEFORE destroying the one it
+            // replaces, so opening here is what keeps the pressed panel owned
+            // (and its pre-drag backup alive) across the handoff.
+            pinned_other_panel_ = rendering_manager_->beginDepthWindowDrag(panel_.panel, drag_token_);
+            panel_bracket_active_ = true;
+
             if (drag_kind_ == DragKind::Draw) {
                 refreshOverlay();
             } else {
                 startLatch();
                 refreshOverlay();
             }
-            drag_revision_ = ++g_depth_drag_revision;
+            drag_revision_ = ++g_depth_drag_revisions[splitViewPanelIndex(panel_.panel)];
             modal_active_ = true;
             return OperatorResult::RUNNING_MODAL;
         }
@@ -556,12 +624,59 @@ namespace lfs::vis::op {
                 panel_, std::nullopt, MinimumWindowPolicy::LegacyEdge);
         }
 
+        void DepthWindowDragOperator::captureBaselineIfNeeded() {
+            // The undo BASELINE and the restore target are captured at the
+            // FIRST SLOT WRITE, not at invoke. Under registry replacement the
+            // sequence is: incoming invoke, outgoing destroy (which runs the
+            // replaced drag's teardown restore), then the incoming drag's first
+            // event - so an invoke-time capture would bake the OUTGOING drag's
+            // abandoned preview into this drag's baseline, and undoing this
+            // drag would resurrect it.
+            //
+            // The two roles then diverge, and they are captured from TWO
+            // different sources.
+            //
+            // UNDO BASELINE (undo_baseline_): every slot this drag OWNS comes
+            // from the manager's RECORDED BACKUP, because once a replacement
+            // drag TAKES OVER the slots (per-slot ownership) instead of letting
+            // its predecessor's teardown restore them, the live slots STILL
+            // hold the abandoned preview - and undoing this drag must not
+            // republish it. The backup is the pre-drag value by construction
+            // (first-wins on record, kept across the take-over); slots this
+            // drag does not own keep the live value.
+            //
+            // CANCEL / TEARDOWN TARGET (restore_window_ / restore_other_window_)
+            // comes from the LIVE snapshot, because cancelling a drag means
+            // "put back what was on screen when this drag started" - the
+            // predecessor's abandoned preview included. That is the upstream
+            // semantics DepthWindowDragLifecycleTest pins, and it is a
+            // different question from what an UNDO of this drag restores.
+            //
+            // Each snapshot carries BOTH slots (DepthWindowSettingsState::panels)
+            // plus the projection and the sync flag, so the fan-out case - where
+            // this drag's writes land in both slots - is covered without a
+            // second code path.
+            if (baseline_captured_ || !rendering_manager_) {
+                return;
+            }
+            baseline_captured_ = true;
+            const size_t own_index = splitViewPanelIndex(panel_.panel);
+            const auto baseline_snapshot =
+                rendering_manager_->depthWindowBaselineSnapshotForDrag(drag_token_);
+            undo_baseline_ = captureDepthWindowSettings(baseline_snapshot, panel_.panel);
+            const auto live_snapshot = rendering_manager_->depthWindowSnapshot();
+            restore_window_ = live_snapshot.panels[own_index];
+            restore_other_window_ = live_snapshot.panels[own_index == 0 ? 1u : 0u];
+            applied_window_ = restore_window_;
+        }
+
         void DepthWindowDragOperator::applyRect(const DepthWindowRect& rect) {
             if (!rendering_manager_) {
                 return;
             }
+            captureBaselineIfNeeded();
 
-            auto settings = rendering_manager_->getSettings();
+            auto panel_window = rendering_manager_->getDepthWindowForPanel(panel_.panel);
             const glm::vec2 size = glm::clamp(
                 rect.size(), glm::vec2(0.0f),
                 glm::vec2(panel_.render_width, panel_.render_height));
@@ -579,14 +694,18 @@ namespace lfs::vis::op {
                     -1.0f, 1.0f);
             };
 
-            settings.depth_filter_scale_x = scale_x;
-            settings.depth_filter_scale_y = scale_y;
-            settings.depth_filter_offset_x = offset_for_axis(
+            panel_window.scale_x = scale_x;
+            panel_window.scale_y = scale_y;
+            panel_window.offset_x = offset_for_axis(
                 center.x, static_cast<float>(panel_.render_width), scale_x);
-            settings.depth_filter_offset_y = offset_for_axis(
+            panel_window.offset_y = offset_for_axis(
                 center.y, static_cast<float>(panel_.render_height), scale_y);
-            rendering_manager_->updateSettings(settings, DirtyFlag::SELECTION);
-            applied_ = captureDepthWindowSettings(rendering_manager_->getSettings());
+            if (!rendering_manager_->applyDepthWindowForPanelIfEpoch(
+                    panel_.panel, panel_window, start_epoch_, drag_token_)) {
+                epoch_lost_ = true;
+                return;
+            }
+            applied_window_ = rendering_manager_->getDepthWindowForPanel(panel_.panel);
         }
 
         void DepthWindowDragOperator::updateFromScreen(const glm::vec2& screen) {
@@ -606,7 +725,7 @@ namespace lfs::vis::op {
             selection_tool_->setDepthWindowDragInProgress(true);
             latch_active_ = true;
             if (rendering_manager_) {
-                rendering_manager_->setDepthWindowDragPreview(true);
+                rendering_manager_->beginDepthWindowPreview(panel_.panel);
             }
         }
 
@@ -619,27 +738,64 @@ namespace lfs::vis::op {
                 selection_tool_->setDepthWindowDragInProgress(false);
             }
             if (rendering_manager_) {
-                rendering_manager_->setDepthWindowDragPreview(false);
+                rendering_manager_->endDepthWindowPreview(panel_.panel);
+            }
+        }
+
+        void DepthWindowDragOperator::releasePanelBracket() {
+            if (!panel_bracket_active_) {
+                return;
+            }
+            panel_bracket_active_ = false;
+            if (rendering_manager_) {
+                rendering_manager_->endDepthWindowDrag(panel_.panel, drag_token_);
             }
         }
 
         void DepthWindowDragOperator::restoreBeforeState() {
-            if (rendering_manager_) {
-                auto settings = rendering_manager_->getSettings();
-                settings.depth_filter_scale_x = before_.scale_x;
-                settings.depth_filter_scale_y = before_.scale_y;
-                settings.depth_filter_offset_x = before_.offset_x;
-                settings.depth_filter_offset_y = before_.offset_y;
-                rendering_manager_->updateSettings(settings, DirtyFlag::SELECTION);
+            // Epoch-guarded like every other drag write: a mode transition that
+            // already collapsed or re-seeded the slots owns the state now, and
+            // this drag must leave it alone.
+            if (!rendering_manager_ || epoch_lost_) {
+                return;
+            }
+            // Nothing was written, so there is nothing to restore. The baseline
+            // is captured at the first slot write; before that point this drag
+            // holds no claim on the slot, and writing the invoke-time value
+            // back would republish whatever a replaced drag had left there.
+            if (!baseline_captured_) {
+                return;
+            }
+            // RESTORE, never a normal apply, and PER SLOT AGAINST THE PINS.
+            // The manager decides under ONE lock, slot by slot, whether this
+            // drag still holds the pin it took at begin: a newer legitimate
+            // non-drag write released that pin, and the newest intent must
+            // stand - the teardown then skips that slot instead of reviving the
+            // pre-drag value over it. Every slot this drag PINNED is offered
+            // (under the fan-out predicate its writes reached both), and each
+            // is still written individually in slot-only RESTORE mode - never a
+            // fan-out, so the fan-out invariant stays intact.
+            std::optional<DepthWindowState> other_state;
+            if (pinned_other_panel_) {
+                other_state = restore_other_window_;
+            }
+            if (!rendering_manager_->restorePinnedDepthWindowSlots(
+                    panel_.panel, restore_window_, other_state, start_epoch_,
+                    drag_token_)) {
+                epoch_lost_ = true;
             }
         }
 
         void DepthWindowDragOperator::restoreBeforeStateIfStillOurs() {
-            if (!rendering_manager_ || g_depth_drag_revision != drag_revision_) {
+            // Ownership is asked PER PANEL: only a later drag on THIS panel
+            // takes it over. A replacement on the other panel leaves this
+            // drag's claim on its own panel intact, so its teardown restore
+            // still runs (epoch-guarded, as always).
+            if (!rendering_manager_ || epoch_lost_ ||
+                g_depth_drag_revisions[splitViewPanelIndex(panel_.panel)] != drag_revision_) {
                 return;
             }
-            const auto settings = rendering_manager_->getSettings();
-            if (captureDepthWindowSettings(settings) != applied_) {
+            if (rendering_manager_->getDepthWindowForPanel(panel_.panel) != applied_window_) {
                 return;
             }
             restoreBeforeState();
@@ -661,6 +817,11 @@ namespace lfs::vis::op {
         OperatorResult DepthWindowDragOperator::modal(OperatorContext& ctx,
                                                       OperatorProperties& /*props*/) {
             if (!rendering_manager_ || !selection_tool_) {
+                return OperatorResult::CANCELLED;
+            }
+            if (epoch_lost_ || rendering_manager_->depthWindowModeEpoch() != start_epoch_) {
+                epoch_lost_ = true;
+                cancel(ctx);
                 return OperatorResult::CANCELLED;
             }
 
@@ -689,6 +850,10 @@ namespace lfs::vis::op {
                         startLatch();
                     }
                     updateFromScreen(glm::vec2(move->position));
+                    if (epoch_lost_) {
+                        cancel(ctx);
+                        return OperatorResult::CANCELLED;
+                    }
                 }
                 return OperatorResult::RUNNING_MODAL;
             }
@@ -711,18 +876,67 @@ namespace lfs::vis::op {
                 if (pointInDepthWindowPanel(release_screen, panel_)) {
                     updateFromScreen(release_screen);
                 }
-                finishLatch();
+                if (epoch_lost_) {
+                    cancel(ctx);
+                    return OperatorResult::CANCELLED;
+                }
+                rendering_manager_->setFocusedSplitPanel(panel_.panel);
+                // The commit is itself a slot write: a release whose pointer
+                // left the panel reaches here without any earlier write, and
+                // committing the invoke-time value would republish a replaced
+                // drag's abandoned preview. Capturing here makes that commit a
+                // clean-state no-op that pushes no undo entry.
+                captureBaselineIfNeeded();
 
-                const auto after = captureDepthWindowSettings(
-                    rendering_manager_->getSettings());
-                if (after != before_) {
+                // Commit under start_epoch_ or not at all: the release never
+                // adopts an epoch or a route it did not start with. The final
+                // write, the epoch check and the snapshot the undo entry is built
+                // from happen under ONE manager lock, so a REFUSED commit leaves
+                // no trace at all - no undo entry and no draw-commit publication.
+                // The entry is captured and pushed BEFORE the latch is released,
+                // so no sync toggle can interleave between the gate clearing and
+                // the push and land its own entry out of order.
+                // The whole release sequence - commit, epoch re-check, undo push
+                // and draw-commit publication - is serialized against split-mode
+                // transitions by the manager's transition mutex, so no
+                // transition can interleave inside it. Lock order is
+                // transition -> settings -> history, and this scope holds
+                // NEITHER of the inner two on entry.
+                auto transition_lock = rendering_manager_->acquireDepthWindowTransitionLock();
+
+                DepthWindowModeSnapshot after_snapshot{};
+                if (!rendering_manager_->commitDepthWindowForPanelIfEpoch(
+                        panel_.panel, applied_window_, start_epoch_, drag_token_,
+                        after_snapshot)) {
+                    epoch_lost_ = true;
+                    cancel(ctx);
+                    return OperatorResult::CANCELLED;
+                }
+                // KEPT AS A CHEAP ASSERT. The transition mutex above already
+                // makes this re-read redundant: every split-mode-change site
+                // takes that mutex around the mode change, so no transition can
+                // land between the commit and the publications below. The
+                // previously documented publish sliver is gone with it. The
+                // check stays because it costs one locked read and it fails
+                // closed if a future mode-change site forgets the mutex.
+                const bool epoch_intact =
+                    rendering_manager_->depthWindowModeEpoch() == start_epoch_;
+                if (!epoch_intact) {
+                    epoch_lost_ = true;
+                }
+                const auto after = captureDepthWindowSettings(after_snapshot, panel_.panel);
+                if (epoch_intact && after != undo_baseline_) {
                     undoHistory().push(std::make_unique<DepthWindowSettingsUndoEntry>(
-                        *rendering_manager_, before_, after,
+                        *rendering_manager_, undo_baseline_, after,
                         drag_kind_ == DragKind::Draw));
                 }
-                if (drag_kind_ == DragKind::Draw) {
-                    publish_depth_window_draw_commit();
+                finishLatch();
+                if (epoch_intact && drag_kind_ == DragKind::Draw) {
+                    publish_depth_window_draw_commit(panel_.panel);
                 }
+                // Every publication that belongs to this commit has landed;
+                // transitions may proceed again from here.
+                transition_lock.unlock();
                 if (auto* const selection = ctx.scene().getSelectionService()) {
                     selection->invalidateInteractiveBrushFilterCache();
                 }
@@ -828,13 +1042,26 @@ namespace lfs::vis::op {
             return DepthWindowCursor::Default;
         }
 
-        const auto settings = rendering->getSettings();
+        DepthWindowState hover_window{};
+        if (rendering->isIndependentSplitViewActive()) {
+            hover_window = rendering->getDepthWindowForPanel(panel->panel);
+        } else {
+            const auto settings = rendering->getSettings();
+            hover_window = {
+                .near_plane = -settings.depth_filter_max.z,
+                .far_plane = -settings.depth_filter_min.z,
+                .scale_x = settings.depth_filter_scale_x,
+                .scale_y = settings.depth_filter_scale_y,
+                .offset_x = settings.depth_filter_offset_x,
+                .offset_y = settings.depth_filter_offset_y,
+            };
+        }
         const auto screen_rect = depthWindowScreenRect(
             *panel,
-            settings.depth_filter_scale_x,
-            settings.depth_filter_scale_y,
-            settings.depth_filter_offset_x,
-            settings.depth_filter_offset_y);
+            hover_window.scale_x,
+            hover_window.scale_y,
+            hover_window.offset_x,
+            hover_window.offset_y);
         const auto handle = hitTestDepthWindowHandles(
             screen, depthWindowHandleGeometry(screen_rect));
         setOverlayState({

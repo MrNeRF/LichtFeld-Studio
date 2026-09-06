@@ -125,6 +125,7 @@ namespace lfs::vis::tools {
 
         if ((depth_filter_enabled_ || crop_filter_enabled_) &&
             depth_window_drag_count_ == 0) {
+            refreshDepthNearFarFromProjection(ctx);
             applySelectionFilterSettings(ctx);
         }
 
@@ -193,6 +194,7 @@ namespace lfs::vis::tools {
             return;
         }
         if (enabled) {
+            refreshDepthNearFarFromProjection(*tool_context_);
             applySelectionFilterSettings(*tool_context_);
         } else {
             clearSelectionRenderState(*tool_context_);
@@ -209,6 +211,7 @@ namespace lfs::vis::tools {
             return;
         }
 
+        refreshDepthNearFarFromProjection(*tool_context_);
         applySelectionFilterSettings(*tool_context_);
     }
 
@@ -229,6 +232,9 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::adjustDepthFar(const float scale) {
+        if (tool_context_) {
+            refreshDepthNearFarFromProjection(*tool_context_);
+        }
         depth_far_ = std::clamp(depth_far_ * scale, std::max(DEPTH_MIN, depth_near_ + DEPTH_MIN), DEPTH_MAX);
         if (tool_context_ && isEnabled() && depth_filter_enabled_) {
             applySelectionFilterSettings(*tool_context_);
@@ -241,6 +247,7 @@ namespace lfs::vis::tools {
         // window that hit a limit on one axis keep changing on the other and
         // silently change shape.
         if (tool_context_) {
+            refreshDepthNearFarFromProjection(*tool_context_);
             if (auto* const rm = tool_context_->getRenderingManager()) {
                 auto settings = rm->getSettings();
                 // Same bound formula as selection_controls._scale_factor_bounds,
@@ -271,6 +278,7 @@ namespace lfs::vis::tools {
             return;
         }
 
+        refreshDepthNearFarFromProjection(*tool_context_);
         auto settings = rm->getSettings();
         settings.crop_filter_for_selection = crop_filter_enabled_;
         if (crop_filter_enabled_) {
@@ -294,6 +302,7 @@ namespace lfs::vis::tools {
         depth_window_drag_count_ = std::max(0, previous + (in_progress ? 1 : -1));
         if (previous > 0 && depth_window_drag_count_ == 0 &&
             tool_context_ && isEnabled() && depth_filter_enabled_) {
+            refreshDepthNearFarFromProjection(*tool_context_);
             applySelectionFilterSettings(*tool_context_);
         }
     }
@@ -303,7 +312,28 @@ namespace lfs::vis::tools {
         if (!tool_context_ || !isEnabled()) {
             return;
         }
+        refreshDepthNearFarFromProjection(*tool_context_);
         applySelectionFilterSettings(*tool_context_);
+    }
+
+    void SelectionTool::refreshDepthNearFarFromProjection(const ToolContext& ctx) {
+        // ACCEPTED TRANSIENT: the generation read and the later stamp are separate
+        // locks, so a projection write landing in between is missed for one frame;
+        // it is self-healing because the next reapply refreshes again.
+        auto* const rm = ctx.getRenderingManager();
+        if (!rm) {
+            return;
+        }
+
+        const auto generation = rm->depthWindowProjectionGeneration();
+        if (generation == depth_projection_generation_) {
+            return;
+        }
+        depth_projection_generation_ = generation;
+
+        const auto settings = rm->getSettings();
+        depth_near_ = std::clamp(-settings.depth_filter_max.z, 0.0f, DEPTH_MAX - DEPTH_MIN);
+        depth_far_ = std::clamp(-settings.depth_filter_min.z, depth_near_ + DEPTH_MIN, DEPTH_MAX);
     }
 
     void SelectionTool::applySelectionFilterSettings(

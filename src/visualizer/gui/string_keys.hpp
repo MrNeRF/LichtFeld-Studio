@@ -461,6 +461,17 @@ namespace lichtfeld::Strings {
         inline constexpr const char* INSTRUCTIONS = "ellipsoid.instructions";
     } // namespace Ellipsoid
 
+    namespace Selection {
+        // Undo-history entry labels: rendered verbatim in the history panel and
+        // on the Undo/Redo buttons (scene_panel_native.cpp), so they localize.
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_EXPIRED =
+            "selection.history_depth_window_expired";
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_DRAG =
+            "selection.history_depth_window_drag";
+        inline constexpr const char* HISTORY_DEPTH_WINDOW_SYNC =
+            "selection.history_depth_window_sync";
+    } // namespace Selection
+
     namespace TrainingPanel {
         inline constexpr const char* START_TRAINING = "training_panel.start_training";
         inline constexpr const char* RESUME_TRAINING = "training_panel.resume_training";

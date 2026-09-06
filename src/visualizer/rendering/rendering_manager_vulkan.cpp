@@ -1694,9 +1694,27 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
-        const auto [frame_settings, frame_depth_window_drag_preview] = [this] {
+        const auto [frame_settings, frame_depth_window_drag_preview, frame_panel_depth_windows] = [this] {
             std::lock_guard lock(settings_mutex_);
-            return std::pair(settings_, depth_window_drag_preview_);
+            std::array<DepthWindowState, 2> resolved_depth_windows{};
+            if (split_view_service_.isIndependentDualActive(settings_)) {
+                resolved_depth_windows = panel_depth_windows_;
+            } else {
+                const auto projection_window = [&]() {
+                    return DepthWindowState{
+                        .near_plane = -settings_.depth_filter_max.z,
+                        .far_plane = -settings_.depth_filter_min.z,
+                        .scale_x = settings_.depth_filter_scale_x,
+                        .scale_y = settings_.depth_filter_scale_y,
+                        .offset_x = settings_.depth_filter_offset_x,
+                        .offset_y = settings_.depth_filter_offset_y,
+                    };
+                }();
+                resolved_depth_windows = {projection_window, projection_window};
+            }
+            // The preview gate is a counter (nested/replacing modals); the
+            // frame only cares whether any drag is live.
+            return std::tuple(settings_, depthWindowDragActiveLocked(), resolved_depth_windows);
         }();
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
@@ -2416,7 +2434,8 @@ namespace lfs::vis {
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {},
-            .scene_jitter_pixels = applied_temporal_jitter_pixels};
+            .scene_jitter_pixels = applied_temporal_jitter_pixels,
+            .panel_depth_windows = frame_panel_depth_windows};
 
         const auto complete_temporal_convergence_frame =
             [this, temporal_camera_cut_generation]() {
@@ -3914,7 +3933,16 @@ namespace lfs::vis {
                 render_error = "Point-cloud Vulkan render failed";
             }
         } else if (has_visible_gaussian_model) {
-            auto request = buildViewportRenderRequest(frame_ctx, render_size);
+            // In independent-dual the MAIN scene render IS the left panel (the
+            // right panel renders separately with its panel id) - tag it, or
+            // the builder falls back to the focused panel's depth window and
+            // the left panel filters with the right panel's box whenever the
+            // right panel is focused.
+            const std::optional<SplitViewPanelId> main_render_panel =
+                splitViewUsesIndependentPanels(frame_settings.split_view_mode)
+                    ? std::optional<SplitViewPanelId>(SplitViewPanelId::Left)
+                    : std::nullopt;
+            auto request = buildViewportRenderRequest(frame_ctx, render_size, nullptr, main_render_panel);
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);

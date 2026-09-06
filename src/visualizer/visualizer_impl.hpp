@@ -267,6 +267,7 @@ namespace lfs::vis {
         friend class gui::GuiManager;
         friend class project::ProjectLifecycle;
         friend class ::DepthWindowDragLifecycleTest;
+        friend class DepthWindowPanelsInteractionTest;
         friend class DepthWindowGtHookTest;
         friend class P5SessionCaptureTestAccess;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;

@@ -3472,6 +3472,11 @@ namespace lfs::vis::project {
             const bool sequencer_visible =
                 gui_manager->panelLayout().isShowSequencer();
             const auto finish = [&] {
+                // Depth values are final only after the tool-restore block
+                // below has re-applied them, so the explicit global seed of
+                // both panel slots (sync OFF) runs here, on every exit path.
+                rendering
+                    ->restoreDepthWindowStateFromProject();
                 viewer.getEditorContext()
                     .armToolRestoreGuard();
                 gui_manager->panelLayout()
