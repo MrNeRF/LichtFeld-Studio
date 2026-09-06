@@ -10,6 +10,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "gui/gui_manager.hpp"
 #include "internal/viewport.hpp"
@@ -1121,7 +1122,24 @@ namespace lfs::vis {
             }
             host_counts = nullptr;
         };
+        const auto drain_vulkan = [](PendingSelectionCounts& pending) {
+            if (pending.vulkan_ticket.id == 0 || pending.host_counts == nullptr) {
+                return;
+            }
+            try {
+                lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
+                    .wait_for(lfs::core::internal::SyncToken{
+                        .backend = lfs::core::GpuBackend::Vulkan,
+                        .value = pending.vulkan_ticket.timeline_value,
+                    });
+                rendering::poll_selection_group_count_readback(
+                    pending.vulkan_ticket, pending.host_counts);
+            } catch (const std::exception&) {
+            }
+            pending.vulkan_ticket = {};
+        };
         for (auto& pending : pending_selection_counts_) {
+            drain_vulkan(pending);
             if (pending.ready_event) {
                 if (pending.pending) {
                     LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(pending.ready_event), nullptr,
@@ -1132,6 +1150,7 @@ namespace lfs::vis {
             }
             release_host_counts(pending.host_counts, "selection count teardown: free pinned counts");
         }
+        drain_vulkan(pending_passive_ring_count_);
         if (pending_passive_ring_count_.ready_event) {
             if (pending_passive_ring_count_.pending) {
                 LFS_CUDA_LOG_TEARDOWN(cudaEventSynchronize(pending_passive_ring_count_.ready_event), nullptr,
@@ -1150,8 +1169,21 @@ namespace lfs::vis {
             return;
         }
 
-        if (pending.ready_event == nullptr) {
-            // Vulkan count path downloads synchronously in enqueue.
+        if (pending.vulkan_ticket.id != 0) {
+            if (wait) {
+                lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
+                    .wait_for(lfs::core::internal::SyncToken{
+                        .backend = lfs::core::GpuBackend::Vulkan,
+                        .value = pending.vulkan_ticket.timeline_value,
+                    });
+            }
+            if (!rendering::poll_selection_group_count_readback(
+                    pending.vulkan_ticket, pending.host_counts)) {
+                return;
+            }
+            pending.vulkan_ticket = {};
+        } else if (pending.ready_event == nullptr) {
+            // CUDA-less callers that still enqueue a blocking download.
         } else {
             const cudaError_t status = wait ? cudaEventSynchronize(pending.ready_event)
                                             : cudaEventQuery(pending.ready_event);
@@ -1229,8 +1261,13 @@ namespace lfs::vis {
         }
 
         rendering::count_selection_groups_async(*mask, slot->scratch);
-        rendering::enqueue_selection_group_count_read(
-            slot->scratch, slot->host_counts, slot->ready_event);
+        if (core::gpu_backend_of(slot->scratch) == core::GpuBackend::Vulkan) {
+            rendering::enqueue_selection_group_count_read(
+                slot->scratch, slot->host_counts, nullptr, &slot->vulkan_ticket);
+        } else {
+            rendering::enqueue_selection_group_count_read(
+                slot->scratch, slot->host_counts, slot->ready_event);
+        }
         slot->mask = mask;
         slot->undo_entry = std::move(undo_entry);
         slot->after_metadata = after_metadata;
@@ -2568,10 +2605,19 @@ namespace lfs::vis {
             hit = false;
         } else {
             rendering::count_selection_groups_async(selection, pending_passive_ring_count_.scratch);
-            rendering::enqueue_selection_group_count_read(
-                pending_passive_ring_count_.scratch,
-                pending_passive_ring_count_.host_counts,
-                pending_passive_ring_count_.ready_event);
+            if (core::gpu_backend_of(pending_passive_ring_count_.scratch) ==
+                core::GpuBackend::Vulkan) {
+                rendering::enqueue_selection_group_count_read(
+                    pending_passive_ring_count_.scratch,
+                    pending_passive_ring_count_.host_counts,
+                    nullptr,
+                    &pending_passive_ring_count_.vulkan_ticket);
+            } else {
+                rendering::enqueue_selection_group_count_read(
+                    pending_passive_ring_count_.scratch,
+                    pending_passive_ring_count_.host_counts,
+                    pending_passive_ring_count_.ready_event);
+            }
             pending_passive_ring_count_.mask = std::make_shared<core::Tensor>(selection);
             pending_passive_ring_count_.apply_to_scene = false;
             pending_passive_ring_count_.sequence = ++selection_count_sequence_;

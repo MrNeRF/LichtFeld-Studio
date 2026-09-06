@@ -9,6 +9,7 @@
 #include "operation/undo_entry.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_types.hpp"
+#include "rendering/selection_ops.hpp"
 #include <array>
 #include <cstdint>
 #include <cuda_runtime.h>
@@ -227,6 +228,7 @@ namespace lfs::vis {
             core::Tensor scratch;
             int* host_counts = nullptr;
             cudaEvent_t ready_event = nullptr;
+            lfs::rendering::SelectionCountTicket vulkan_ticket;
             bool pending = false;
             bool apply_to_scene = true;
             uint64_t sequence = 0;

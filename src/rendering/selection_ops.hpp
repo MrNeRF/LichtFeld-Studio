@@ -229,9 +229,21 @@ namespace lfs::rendering {
         const Tensor* model_transforms,
         const Tensor* transform_indices);
     void prepare_cuda_selection_group_counts_scratch(Tensor& counts_scratch);
+    struct SelectionCountTicket {
+        uint64_t id = 0;
+        uint64_t timeline_value = 0;
+        size_t bytes = 0;
+    };
+
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* pinned_host_counts,
                                             cudaEvent_t ready_event);
+    void enqueue_selection_group_count_read(const Tensor& counts_scratch,
+                                            int* pinned_host_counts,
+                                            cudaEvent_t ready_event,
+                                            SelectionCountTicket* vulkan_ticket);
+    [[nodiscard]] bool poll_selection_group_count_readback(
+        const SelectionCountTicket& ticket, int* pinned_host_counts);
     [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
         const Tensor& counts_scratch);
     [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(
