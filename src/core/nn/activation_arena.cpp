@@ -41,7 +41,7 @@ namespace lfs::core::nn {
         if (used_ > high_water_) {
             high_water_ = used_;
         }
-        if (cap_ == 0 && high_water_ > 0) {
+        if (high_water_ > cap_ && high_water_ > 0) {
             lfs::core::CudaMemoryPool::instance().trim();
             commit();
         }

@@ -8,6 +8,10 @@
 
 #include <optional>
 
+namespace lfs::io::video {
+    class VideoReconstructionPlan;
+}
+
 // Native events -> ErrorBus bridge (Phase 8, packet P1). Subscribes to today's
 // string failure events and translates each into an lfs::ErrorNotification
 // published on ErrorBus::instance(), so the failures surface natively even when
@@ -50,6 +54,9 @@ namespace lfs::vis::gui {
     translateExportFailed(const core::events::state::ExportFailed& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateVideoExportFailed(const core::events::state::VideoExportFailed& e);
+    LFS_VIS_API std::optional<lfs::ErrorNotification>
+    videoReconstructionFallbackNotification(const io::video::VideoReconstructionPlan& plan);
+    LFS_VIS_API lfs::ErrorNotification unsupportedVideoReconstructionVersionNotification();
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateMesh2SplatFailed(const core::events::state::Mesh2SplatFailed& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>

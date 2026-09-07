@@ -174,14 +174,79 @@ namespace lfs::io::project::detail {
         }
 
 #ifdef _WIN32
-        lfs::Result<DWORD> wait_for_overlapped(HANDLE handle, OVERLAPPED& operation,
+        struct OverlappedOperation {
+            explicit OverlappedOperation(const std::uint64_t offset) {
+                overlapped.Offset = static_cast<DWORD>(offset & 0xffffffffu);
+                overlapped.OffsetHigh = static_cast<DWORD>(offset >> 32);
+                overlapped.hEvent =
+                    CreateEventW(nullptr, TRUE, FALSE, nullptr);
+                if (overlapped.hEvent == nullptr) {
+                    event_error = GetLastError();
+                }
+            }
+
+            OverlappedOperation(const OverlappedOperation&) = delete;
+            OverlappedOperation& operator=(const OverlappedOperation&) = delete;
+
+            ~OverlappedOperation() {
+                if (pending) {
+                    // An in-flight request must never outlive its OVERLAPPED and buffer.
+                    CancelIoEx(file_handle, &overlapped);
+                    DWORD transferred = 0;
+                    GetOverlappedResult(file_handle, &overlapped, &transferred,
+                                        TRUE);
+                }
+                if (overlapped.hEvent != nullptr) {
+                    CloseHandle(overlapped.hEvent);
+                }
+            }
+
+            [[nodiscard]] bool valid() const noexcept {
+                return overlapped.hEvent != nullptr;
+            }
+
+            void mark_pending(const HANDLE handle) noexcept {
+                file_handle = handle;
+                pending = true;
+            }
+
+            void mark_complete() noexcept { pending = false; }
+
+            [[nodiscard]] DWORD creation_error() const noexcept {
+                return event_error;
+            }
+
+            OVERLAPPED overlapped{};
+
+        private:
+            HANDLE file_handle = INVALID_HANDLE_VALUE;
+            DWORD event_error = ERROR_SUCCESS;
+            bool pending = false;
+        };
+
+        lfs::Error overlapped_operation_start_error(
+            const OverlappedOperation& operation,
+            const std::filesystem::path& path,
+            const std::uint64_t offset,
+            const std::string_view action) {
+            return project_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The project file operation could not be started.",
+                std::format("{} could not create a completion event with Windows error {}",
+                            action, operation.creation_error()),
+                path, offset, {},
+                static_cast<std::int64_t>(operation.creation_error()), "Win32");
+        }
+
+        lfs::Result<DWORD> wait_for_overlapped(HANDLE handle,
+                                               OverlappedOperation& operation,
                                                const BOOL immediate_result,
                                                const std::filesystem::path& path,
                                                const std::string_view action,
                                                const bool writing) {
             if (immediate_result) {
                 DWORD transferred = 0;
-                if (!GetOverlappedResult(handle, &operation, &transferred, TRUE)) {
+                if (!GetOverlappedResult(handle, &operation.overlapped, &transferred, TRUE)) {
                     const DWORD error = GetLastError();
                     return project_error(native_error_code(static_cast<int>(error), writing),
                                          writing ? "The project could not be written."
@@ -201,8 +266,16 @@ namespace lfs::io::project::detail {
                                      path, std::nullopt, {}, static_cast<std::int64_t>(error),
                                      "Win32");
             }
+            operation.mark_pending(handle);
+            // The event belongs to this operation, so this wait cannot be
+            // satisfied by another request on the same file handle.
             DWORD transferred = 0;
-            if (!GetOverlappedResult(handle, &operation, &transferred, TRUE)) {
+            const BOOL completed =
+                GetOverlappedResult(handle, &operation.overlapped, &transferred, TRUE);
+            if (completed || HasOverlappedIoCompleted(&operation.overlapped)) {
+                operation.mark_complete();
+            }
+            if (!completed) {
                 const DWORD completion_error = GetLastError();
                 return project_error(
                     native_error_code(static_cast<int>(completion_error), writing),
@@ -212,13 +285,6 @@ namespace lfs::io::project::detail {
                     path, std::nullopt, {}, static_cast<std::int64_t>(completion_error), "Win32");
             }
             return transferred;
-        }
-
-        OVERLAPPED operation_at(const std::uint64_t offset) noexcept {
-            OVERLAPPED operation{};
-            operation.Offset = static_cast<DWORD>(offset & 0xffffffffu);
-            operation.OffsetHigh = static_cast<DWORD>(offset >> 32);
-            return operation;
         }
 #endif
 
@@ -435,10 +501,15 @@ namespace lfs::io::project::detail {
 #ifdef _WIN32
             const DWORD request = static_cast<DWORD>(
                 std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
-            OVERLAPPED operation = operation_at(offset + completed);
+            OverlappedOperation operation(offset + completed);
+            if (!operation.valid()) {
+                return status_failure(overlapped_operation_start_error(
+                    operation, path_, offset + completed, "ReadFile"));
+            }
             const BOOL immediate = ReadFile(handle_, destination.data() + completed, request, nullptr,
-                                            &operation);
-            auto result = wait_for_overlapped(handle_, operation, immediate, path_, "ReadFile", false);
+                                            &operation.overlapped);
+            auto result = wait_for_overlapped(handle_, operation, immediate, path_, "ReadFile",
+                                              false);
             if (!result) {
                 return status_failure(std::move(result).error());
             }
@@ -485,10 +556,16 @@ namespace lfs::io::project::detail {
 #ifdef _WIN32
             const DWORD request = static_cast<DWORD>(
                 std::min<std::size_t>(remaining, std::numeric_limits<DWORD>::max()));
-            OVERLAPPED operation = operation_at(offset + completed);
+            OverlappedOperation operation(offset + completed);
+            if (!operation.valid()) {
+                return status_failure(overlapped_operation_start_error(
+                    operation, path_, offset + completed, "WriteFile"));
+            }
             const BOOL immediate =
-                WriteFile(handle_, source.data() + completed, request, nullptr, &operation);
-            auto result = wait_for_overlapped(handle_, operation, immediate, path_, "WriteFile", true);
+                WriteFile(handle_, source.data() + completed, request, nullptr,
+                          &operation.overlapped);
+            auto result = wait_for_overlapped(handle_, operation, immediate, path_, "WriteFile",
+                                              true);
             if (!result) {
                 return status_failure(std::move(result).error());
             }
@@ -538,9 +615,13 @@ namespace lfs::io::project::detail {
                 lfs::ErrorCode::BoundsViolation, "The project head could not be written.",
                 "single-write request exceeds DWORD", path_, offset, "head_write"));
         }
-        OVERLAPPED operation = operation_at(offset);
+        OverlappedOperation operation(offset);
+        if (!operation.valid()) {
+            return status_failure(overlapped_operation_start_error(
+                operation, path_, offset, "WriteFile(head)"));
+        }
         const BOOL immediate = WriteFile(handle_, source.data(), static_cast<DWORD>(source.size()),
-                                         nullptr, &operation);
+                                         nullptr, &operation.overlapped);
         auto result = wait_for_overlapped(handle_, operation, immediate, path_, "WriteFile(head)",
                                           true);
         if (!result) {

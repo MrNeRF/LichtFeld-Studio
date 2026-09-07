@@ -49,6 +49,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/gui_manager.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/gui/sequencer_ui_state.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
@@ -150,6 +151,19 @@ namespace lfs::python {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
             auto name = nb::cast<std::string>(cls.attr("__qualname__"));
             return mod + "." + name;
+        }
+
+        bool set_video_reconstruction_selection(const io::video::VideoReconstructionSelection& selection) {
+            return invoke_on_viewer(
+                [selection = selection]() mutable {
+                    auto* const viewer = get_visualizer();
+                    auto* const gui = get_gui_manager();
+                    if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                        return false;
+                    gui->getSequencerUIState().reconstruction = std::move(selection);
+                    return true;
+                },
+                false);
         }
 
         constexpr size_t INPUT_TEXT_BUFFER_SIZE = 1024;
@@ -3672,6 +3686,45 @@ namespace lfs::python {
             "Clear all localization overrides");
 
         m.def(
+            "_loc_register_catalog",
+            [](const std::string& owner_id,
+               const std::string& language_code,
+               const nb::dict& translations) {
+                lfs::event::LocalizationManager::TranslationMap entries;
+                entries.reserve(translations.size());
+                for (const auto& item : translations) {
+                    if (!nb::isinstance<nb::str>(item.first) ||
+                        !nb::isinstance<nb::str>(item.second))
+                        throw nb::type_error("translations must be a dict[str, str]");
+                    entries.emplace(nb::cast<std::string>(item.first),
+                                    nb::cast<std::string>(item.second));
+                }
+
+                std::string error;
+                const auto token =
+                    lfs::event::LocalizationManager::getInstance().registerPluginCatalog(
+                        owner_id, language_code, entries, &error);
+                if (token == 0)
+                    throw nb::value_error(error.c_str());
+
+                lfs::vis::publish_language_generation();
+                return token;
+            },
+            nb::arg("owner_id"), nb::arg("language_code"), nb::arg("translations"),
+            "Register one validated, owner-scoped plugin localization catalog");
+
+        m.def(
+            "_loc_unregister_catalog",
+            [](const std::uint64_t token) {
+                const bool removed =
+                    lfs::event::LocalizationManager::getInstance().unregisterPluginCatalog(token);
+                if (removed)
+                    lfs::vis::publish_language_generation();
+                return removed;
+            },
+            nb::arg("token"), "Unregister one plugin localization catalog by ownership token");
+
+        m.def(
             "register_popup_draw_callback",
             [](nb::object callback) {
                 warnLegacyPopupDrawCallbackOnce();
@@ -4772,23 +4825,79 @@ namespace lfs::python {
               "Set sequencer playback speed");
 
         m.def(
+            "get_video_reconstruction_selection",
+            [] {
+                using Selection = io::video::VideoReconstructionSelection;
+                const auto selection = invoke_on_viewer(
+                    []() -> std::optional<Selection> {
+                        auto* const viewer = get_visualizer();
+                        auto* const gui = get_gui_manager();
+                        if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                            return std::nullopt;
+                        return gui->getSequencerUIState().reconstruction;
+                    },
+                    std::optional<Selection>{});
+                if (!selection)
+                    throw std::runtime_error("Viewer is unavailable");
+                nb::dict result;
+                result["backend_id"] = selection->backend_id;
+                result["preset_id"] = selection->preset_id;
+                result["fallback"] = std::string(io::video::videoReconstructionFallbackId(selection->fallback));
+                return result;
+            },
+            "Return the saved video reconstruction selection used by both export entry points.");
+
+        m.def(
+            "set_video_reconstruction_selection",
+            [](const std::string& backend_id, const std::string& preset_id, const std::string& fallback) {
+                const auto policy = io::video::videoReconstructionFallbackFromId(fallback);
+                if (!policy)
+                    throw nb::value_error("Video reconstruction fallback must be 'abort' or 'native'");
+                const io::video::VideoReconstructionSelection selection{
+                    .backend_id = backend_id,
+                    .preset_id = preset_id,
+                    .fallback = *policy};
+                if (const auto valid = io::video::validateVideoReconstructionSelection(selection); !valid)
+                    throw nb::value_error(valid.error().message.c_str());
+                if (!set_video_reconstruction_selection(selection))
+                    throw std::runtime_error("Viewer is unavailable");
+            },
+            nb::arg("backend_id"), nb::arg("preset_id"), nb::arg("fallback") = "abort",
+            "Set the persisted video reconstruction selection. Validates metadata only, without loading a backend.");
+
+        m.def(
+            "reset_video_reconstruction_selection",
+            [] {
+                if (!set_video_reconstruction_selection({}))
+                    throw std::runtime_error("Viewer is unavailable");
+            },
+            "Reset the saved video reconstruction selection to native/native with abort policy.");
+
+        m.def(
             "export_video",
             [](int width, int height, int framerate, int crf, const std::string& path,
                bool include_provenance) {
-                lfs::core::events::cmd::SequencerExportVideo{
-                    .width = width,
-                    .height = height,
-                    .framerate = framerate,
-                    .crf = crf,
-                    .path = path,
-                    .include_provenance = include_provenance}
-                    .emit();
+                const bool dispatched = invoke_on_viewer(
+                    [width, height, framerate, crf, path, include_provenance] {
+                        auto* const viewer = get_visualizer();
+                        auto* const gui = get_gui_manager();
+                        if (!viewer || !viewer->acceptsPostedWork() || !gui)
+                            return false;
+                        gui->getSequencerUIState()
+                            .videoExportRequest(width, height, framerate, crf, path, include_provenance)
+                            .emit();
+                        return true;
+                    },
+                    false);
+                if (!dispatched)
+                    throw std::runtime_error("Viewer is unavailable");
             },
             nb::arg("width"), nb::arg("height"), nb::arg("framerate"), nb::arg("crf"),
             nb::arg("path") = std::string{},
             nb::arg("include_provenance") = true,
             "Export video with specified settings. Without a path a save dialog opens, "
             "which a script cannot answer; pass one to export directly. "
+            "Uses the saved video reconstruction selection, as does the Sequencer button. "
             "include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.");
 
         m.def(

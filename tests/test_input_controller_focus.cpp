@@ -206,6 +206,23 @@ namespace lfs::vis {
         EXPECT_EQ(toggle_split_count, 1);
     }
 
+    TEST_F(InputControllerFocusTest, EscapeWithScenePanelFocusStaysWithGui) {
+        Viewport viewport(200, 200);
+        InputController controller(nullptr, viewport);
+        input::InputRouter router;
+        router.setInputController(&controller);
+        controller.setInputRouter(&router);
+
+        auto& focus = gui::guiFocusState();
+        focus.want_capture_keyboard = true;
+        focus.any_item_active = true;
+
+        ASSERT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+        controller.handleKey(input::KEY_ESCAPE, input::ACTION_PRESS, input::KEYMOD_NONE);
+        EXPECT_EQ(router.keyboardFocus(), input::InputTarget::Gui);
+        EXPECT_FALSE(router.isViewportKeyboardFocused());
+    }
+
     TEST_F(InputControllerFocusTest, ProgrammaticViewportFocusAllowsViewportHotkeys) {
         Viewport viewport(200, 200);
         InputController controller(nullptr, viewport);
