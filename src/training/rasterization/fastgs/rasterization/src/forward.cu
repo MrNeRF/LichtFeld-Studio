@@ -338,12 +338,14 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         static_cast<uint>(n_primitives));
     LFS_CUDA_LAUNCH_CHECK(stream, "fastgs.forward.compact_visible");
 
+    // Legacy-default-stream copies do not wait for nonblocking streams.
+    LFS_CUDA_CHECK_MSG(cudaStreamSynchronize(stream), "cudaStreamSynchronize(FastGS visible count)");
     uint h_n_visible = 0;
     LFS_CUDA_CHECK_MSG(
         cudaMemcpy(&h_n_visible, visibility_buffers.block_offsets + n_visibility_blocks - 1,
                    sizeof(h_n_visible), cudaMemcpyDeviceToHost),
         "cudaMemcpy(FastGS visible count)");
-    const int n_visible = checked_to_int(h_n_visible, "visible primitive count exceeds int range");
+    const int n_visible = checked_fastgs_visible_count(h_n_visible, n_primitives);
 
     char* per_primitive_buffers_base =
         per_primitive_buffers_func(PerPrimitiveBuffers::required_persistent(n_visible));

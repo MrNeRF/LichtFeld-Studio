@@ -11,6 +11,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/formats/ply.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "rasterization/fastgs/rasterization/include/forward.h"
 #include "rasterization/fastgs/utils/utils.h"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -30,6 +31,8 @@
 
 using namespace lfs::training;
 using namespace lfs::core;
+
+cudaError_t fastgs_visibility_readback_delay(cudaStream_t stream, unsigned long long cycles);
 
 namespace {
     constexpr const char* GARDEN_PATH = "data/garden";
@@ -198,6 +201,28 @@ TEST(FastGSOverflowGuards, RejectsInstanceCountsBeyondIntRange) {
     EXPECT_THROW(
         checked_fastgs_instance_count(max_int + 1, 595037, 11907),
         std::overflow_error);
+}
+
+TEST(FastGSOverflowGuards, RejectsVisibleCountsBeyondPrimitiveCount) {
+    const uint64_t max_int = static_cast<uint64_t>(std::numeric_limits<int>::max());
+    EXPECT_EQ(checked_fastgs_visible_count(0, 1000), 0);
+    EXPECT_EQ(checked_fastgs_visible_count(1, 1000), 1);
+    EXPECT_EQ(checked_fastgs_visible_count(1000, 1000), 1000);
+    EXPECT_EQ(checked_fastgs_visible_count(max_int, max_int), std::numeric_limits<int>::max());
+
+    for (const uint64_t count : {uint64_t{1001}, max_int,
+                                 static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())}) {
+        SCOPED_TRACE(count);
+        try {
+            (void)checked_fastgs_visible_count(count, 1000);
+            FAIL() << "An impossible visible count must be rejected";
+        } catch (const std::runtime_error& error) {
+            EXPECT_EQ(std::string(error.what()),
+                      "FastGS visible count exceeds primitive count: " + std::to_string(count) +
+                          " visible primitives from 1000 primitives");
+        }
+    }
+    EXPECT_THROW(checked_fastgs_visible_count(max_int + 1, max_int + 1), std::overflow_error);
 }
 
 class FastGSKernelTest : public ::testing::Test {
@@ -574,6 +599,189 @@ namespace {
         }
     };
 } // namespace
+
+class FastGSVisibilityReadback : public ::testing::Test {
+protected:
+    static constexpr size_t scratch_bytes = 16 * 1024 * 1024;
+    cudaStream_t blocking_stream_ = nullptr;
+    cudaStream_t nonblocking_stream_ = nullptr;
+    char* scratch_ = nullptr;
+    unsigned long long delay_cycles_ = 0;
+
+    static void check_cuda(cudaError_t error) {
+        if (error != cudaSuccess) {
+            throw std::runtime_error(cudaGetErrorString(error));
+        }
+    }
+
+    void SetUp() override {
+        if (!torch::cuda::is_available()) {
+            GTEST_SKIP() << "CUDA not available";
+        }
+        ASSERT_EQ(cudaStreamCreateWithFlags(&blocking_stream_, cudaStreamDefault), cudaSuccess);
+        ASSERT_EQ(cudaStreamCreateWithFlags(&nonblocking_stream_, cudaStreamNonBlocking), cudaSuccess);
+        ASSERT_EQ(cudaMalloc(&scratch_, scratch_bytes), cudaSuccess);
+        int device = 0;
+        int clock_khz = 0;
+        ASSERT_EQ(cudaGetDevice(&device), cudaSuccess);
+        ASSERT_EQ(cudaDeviceGetAttribute(&clock_khz, cudaDevAttrClockRate, device), cudaSuccess);
+        delay_cycles_ = static_cast<unsigned long long>(clock_khz) * 200;
+        // Load the helper before the timed run, including with CUDA lazy loading.
+        ASSERT_EQ(fastgs_visibility_readback_delay(nonblocking_stream_, 0), cudaSuccess);
+        ASSERT_EQ(cudaStreamSynchronize(nonblocking_stream_), cudaSuccess);
+    }
+
+    void TearDown() override {
+        if (blocking_stream_)
+            EXPECT_EQ(cudaStreamSynchronize(blocking_stream_), cudaSuccess);
+        if (nonblocking_stream_)
+            EXPECT_EQ(cudaStreamSynchronize(nonblocking_stream_), cudaSuccess);
+        if (scratch_)
+            EXPECT_EQ(cudaFree(scratch_), cudaSuccess);
+        if (nonblocking_stream_)
+            EXPECT_EQ(cudaStreamDestroy(nonblocking_stream_), cudaSuccess);
+        if (blocking_stream_)
+            EXPECT_EQ(cudaStreamDestroy(blocking_stream_), cudaSuccess);
+    }
+
+    struct RenderResult {
+        int n_visible;
+        float image[3];
+        std::vector<unsigned> primitive_work_indices;
+    };
+
+    RenderResult render(Camera& camera, SplatData& splat, cudaStream_t stream, bool delay = false,
+                        int scratch_fill = 0) {
+        CUDAStreamGuard guard(stream);
+        // Preallocate every callback's storage. cudaMalloc/arena frame entry
+        // after the delay could synchronize the device and conceal the bug.
+        // Zero scratch makes an unordered read deterministically see zero.
+        check_cuda(cudaMemsetAsync(scratch_, scratch_fill, scratch_bytes, stream));
+        check_cuda(cudaDeviceSynchronize());
+        size_t used = 256; // Reserve image, alpha and depth at the front.
+        auto allocate = [&](size_t bytes) -> char* {
+            const size_t offset = (used + 255) & ~size_t{255};
+            if (offset > scratch_bytes || bytes > scratch_bytes - offset) {
+                throw std::runtime_error("FastGS visibility test scratch exhausted");
+            }
+            used = offset + bytes;
+            return scratch_ + offset;
+        };
+        auto* output = reinterpret_cast<float*>(scratch_);
+        if (delay) {
+            check_cuda(fastgs_visibility_readback_delay(stream, delay_cycles_));
+        }
+        const auto result = fast_lfs::rasterization::forward(
+            allocate,
+            [](size_t) {}, // Keep all phases alive until forward completes.
+            allocate,
+            [](const void* ptr, size_t) { return static_cast<char*>(const_cast<void*>(ptr)); },
+            allocate,
+            reinterpret_cast<const float3*>(splat.means().ptr<float>()),
+            reinterpret_cast<const float3*>(splat.scaling_raw().ptr<float>()),
+            reinterpret_cast<const float4*>(splat.rotation_raw().ptr<float>()),
+            splat.opacity_raw().ptr<float>(),
+            reinterpret_cast<const float3*>(splat.sh0().ptr<float>()),
+            nullptr, nullptr, 0, 0,
+            reinterpret_cast<const float4*>(camera.world_view_transform_ptr()),
+            reinterpret_cast<const float3*>(camera.cam_position_ptr()),
+            output, output + 3, output + 4,
+            nullptr, nullptr, nullptr,
+            static_cast<int>(splat.means().shape()[0]),
+            1, 1, 1, 1, 1.0f, 1.0f, 0.5f, 0.5f, 0.01f, 1e10f,
+            false, getCurrentCUDAStream());
+        check_cuda(cudaStreamSynchronize(stream));
+        RenderResult host{.n_visible = result.n_visible, .image = {}, .primitive_work_indices = std::vector<unsigned>(splat.means().shape()[0])};
+        check_cuda(cudaMemcpy(host.image, output, sizeof(host.image), cudaMemcpyDeviceToHost));
+        check_cuda(cudaMemcpy(host.primitive_work_indices.data(), result.primitive_work_indices,
+                              host.primitive_work_indices.size() * sizeof(unsigned), cudaMemcpyDeviceToHost));
+        return host;
+    }
+};
+
+TEST_F(FastGSVisibilityReadback, CountIsStreamOrderedOnNonBlockingStream) {
+    NormalChannelScene scene;
+    auto camera = scene.make_camera();
+    auto splat = scene.make_splat({1.0f, 0.0f, 0.0f, 0.0f});
+    // Warm the forward kernels and CUB before the delayed call as well.
+    const auto reference = render(camera, splat, blocking_stream_);
+    ASSERT_EQ(reference.n_visible, 1);
+    ASSERT_GT(reference.image[0], 0.0f);
+
+    const auto actual = render(camera, splat, nonblocking_stream_, true);
+    EXPECT_EQ(actual.n_visible, reference.n_visible);
+    for (int channel = 0; channel < 3; ++channel) {
+        EXPECT_NEAR(actual.image[channel], reference.image[channel], 1e-6f);
+    }
+}
+
+TEST_F(FastGSVisibilityReadback, CountIsBoundedByPrimitiveCount) {
+    NormalChannelScene scene;
+    auto camera = scene.make_camera();
+    for (const size_t count : {1, 31, 32, 33, 255, 256, 257, 1000}) {
+        for (const bool visible : {true, false}) {
+            SCOPED_TRACE(::testing::Message() << "N=" << count << ", visible=" << visible);
+            auto splat = make_adam_test_splat(count);
+            if (!visible) {
+                // Camera is at z=-4; put every primitive behind it.
+                std::vector<float> means(count * 3, 0.0f);
+                for (size_t i = 0; i < count; ++i)
+                    means[i * 3 + 2] = -10.0f;
+                splat.means() = Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA);
+            }
+            const auto result = render(camera, splat, nonblocking_stream_);
+            EXPECT_GE(result.n_visible, 0);
+            EXPECT_LE(result.n_visible, static_cast<int>(count));
+            EXPECT_EQ(result.n_visible, visible ? static_cast<int>(count) : 0);
+        }
+    }
+}
+
+TEST_F(FastGSVisibilityReadback, MixedVisibilityCompactsIndicesWithDirtyScratch) {
+    NormalChannelScene scene;
+    auto camera = scene.make_camera();
+    enum class Pattern { Alternating,
+                         BlockEdges,
+                         LastOnly,
+                         None,
+                         All };
+    for (const size_t count : {1, 31, 32, 33, 255, 256, 257, 511, 512, 513,
+                               4095, 4096, 4097, 65537}) {
+        for (const auto pattern : {Pattern::Alternating, Pattern::BlockEdges,
+                                   Pattern::LastOnly, Pattern::None, Pattern::All}) {
+            SCOPED_TRACE(::testing::Message() << "N=" << count << ", pattern=" << static_cast<int>(pattern));
+            auto splat = make_adam_test_splat(count);
+            std::vector<float> means(count * 3, 0.0f);
+            std::vector<unsigned> expected(count, 0xffffffffu);
+            unsigned n_visible = 0;
+            for (size_t i = 0; i < count; ++i) {
+                bool visible = false;
+                switch (pattern) {
+                case Pattern::Alternating: visible = i % 2 == 1; break;
+                case Pattern::BlockEdges: visible = i % 256 == 255 || i % 256 == 0; break;
+                case Pattern::LastOnly: visible = i == count - 1; break;
+                case Pattern::None: break;
+                case Pattern::All: visible = true; break;
+                }
+                means[3 * i + 2] = visible ? 1.0f : -10.0f;
+                if (visible)
+                    expected[i] = n_visible++;
+            }
+            splat.means() = Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA);
+            const auto reference = render(camera, splat, blocking_stream_);
+            ASSERT_EQ(reference.n_visible, n_visible);
+            ASSERT_EQ(reference.primitive_work_indices, expected);
+
+            // Dirty storage exposes missing map writes and dependence on zeros.
+            // The separate delayed test exercises the readback ordering race.
+            const auto actual = render(camera, splat, nonblocking_stream_, false, 0xa5);
+            EXPECT_EQ(actual.n_visible, n_visible);
+            EXPECT_EQ(actual.primitive_work_indices, expected);
+            for (int channel = 0; channel < 3; ++channel)
+                EXPECT_NEAR(actual.image[channel], reference.image[channel], 1e-6f);
+        }
+    }
+}
 
 TEST(FastGSNormalChannelTest, RendersCameraSpaceNormalForCenteredSplat) {
     if (!torch::cuda::is_available()) {
