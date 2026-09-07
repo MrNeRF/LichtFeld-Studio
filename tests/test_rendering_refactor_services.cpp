@@ -21,6 +21,7 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/split_view_composition.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
+#include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
@@ -39,6 +40,48 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(StaleFrameGuardTest, DeferralsBelowBoundKeepCachedThenEscalateOnce) {
+        StaleFrameGuard guard;
+        EXPECT_TRUE(guard.canUseCachedFrame());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral()) << attempt;
+            EXPECT_TRUE(guard.canUseCachedFrame()) << attempt;
+            EXPECT_FALSE(guard.takeRecoveryRequest()) << attempt;
+        }
+        EXPECT_TRUE(guard.onDeferral());
+        EXPECT_FALSE(guard.canUseCachedFrame());
+        EXPECT_TRUE(guard.takeRecoveryRequest());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        // Reimport/reset is not a successful publication. Failure after reset
+        // must not restore the stale image or trigger another reset/WARN.
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+            EXPECT_FALSE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+    }
+
+    TEST(StaleFrameGuardTest, SuccessfulPublicationResetsTheWholeEpisode) {
+        StaleFrameGuard guard;
+        for (int episode = 0; episode < 2; ++episode) {
+            for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+                EXPECT_FALSE(guard.onDeferral());
+            }
+            EXPECT_TRUE(guard.onDeferral());
+            guard.onSuccess();
+            EXPECT_TRUE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+        // Success also clears a partially consumed budget.
+        EXPECT_FALSE(guard.onDeferral());
+        guard.onSuccess();
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+        }
+        EXPECT_TRUE(guard.onDeferral());
+    }
 
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {

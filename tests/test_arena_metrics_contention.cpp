@@ -21,6 +21,7 @@
 
 #include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
+#include "visualizer/rendering/vksplat_shared_scratch_install.hpp"
 
 using lfs::core::RasterizerMemoryArena;
 
@@ -341,6 +342,110 @@ TEST_F(ArenaMetricsContentionTest, DetachedViewerBackingCanBeReinstalledAndGrown
 
     arena.clear_external_backing();
     EXPECT_FALSE(arena.using_external_backing(device_ptr));
+}
+
+class VkSplatSharedScratch : public ArenaMetricsContentionTest {};
+
+TEST_F(VkSplatSharedScratch, PauseDetachThenLargerScratchRequestReinstallsBeforeGrow) {
+    constexpr size_t MiB = 1024 * 1024;
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, 2 * MiB), cudaSuccess);
+    auto retained_block = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+    // A local real arena keeps this test isolated from the global trainer.
+    // B3's GlobalArenaManager::clear_external_backing forwards to this method.
+    RasterizerMemoryArena arena;
+    const RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = MiB,
+        .device = 0,
+        .owner = retained_block,
+        .label = "test.vksplat.retained_scratch",
+    };
+    ASSERT_TRUE(arena.install_external_backing(backing));
+    bool renderer_installed = true;
+    size_t renderer_capacity = MiB;
+    arena.clear_external_backing();
+    ASSERT_FALSE(arena.using_external_backing(device_ptr));
+    ASSERT_TRUE(renderer_installed); // The viewer did not observe B3 detachment.
+
+    constexpr size_t requested_capacity = 2 * MiB;
+    ASSERT_GT(requested_capacity, renderer_capacity);
+    int reinstall_count = 0;
+    // This is the production renderer seam, called before its capacity/grow
+    // branches. No Vulkan device or import is needed for the ownership decision.
+    ASSERT_TRUE(lfs::vis::ensureRetainedSharedScratchInstalled(
+        renderer_installed,
+        [&] { return arena.using_external_backing(retained_block.get()); },
+        [&] {
+            ++reinstall_count;
+            return arena.try_install_external_backing(backing);
+        }));
+
+    bool committed = false;
+    using GrowFailure = RasterizerMemoryArena::ExternalGrowFailure;
+    GrowFailure failure = GrowFailure::None;
+    EXPECT_TRUE(arena.grow_external_backing(
+        retained_block.get(), requested_capacity,
+        [&](const size_t bytes) {
+            committed = true;
+            renderer_capacity = bytes;
+            return true;
+        },
+        0, &failure));
+    EXPECT_EQ(failure, GrowFailure::None); // Neither BackingMissing nor Busy.
+    EXPECT_TRUE(committed);
+    EXPECT_EQ(reinstall_count, 1);
+    EXPECT_TRUE(renderer_installed);
+    EXPECT_TRUE(arena.using_external_backing(retained_block.get()));
+    EXPECT_EQ(renderer_capacity, requested_capacity);
+    EXPECT_EQ(arena.get_statistics().capacity, requested_capacity);
+    EXPECT_EQ(cudaMemset(retained_block.get(), 0, requested_capacity), cudaSuccess);
+}
+
+TEST_F(VkSplatSharedScratch, DetachedBackingDefersWhileTrainingOwnsArenaThenRetries) {
+    constexpr size_t MiB = 1024 * 1024;
+    void* device_ptr = nullptr;
+    ASSERT_EQ(cudaMalloc(&device_ptr, MiB), cudaSuccess);
+    auto retained_block = std::shared_ptr<void>(device_ptr, [](void* ptr) {
+        EXPECT_EQ(cudaFree(ptr), cudaSuccess);
+    });
+    RasterizerMemoryArena arena;
+    const RasterizerMemoryArena::ExternalBacking backing{
+        .device_ptr = device_ptr,
+        .size = MiB,
+        .device = 0,
+        .owner = retained_block,
+        .label = "test.vksplat.busy_scratch",
+    };
+    ASSERT_TRUE(arena.install_external_backing(backing));
+    bool renderer_installed = true;
+    arena.clear_external_backing();
+    const auto held = arena.begin_frame(nullptr, false);
+    int reinstall_count = 0;
+    const auto ensure_installed = [&] {
+        return lfs::vis::ensureRetainedSharedScratchInstalled(
+            renderer_installed,
+            [&] { return arena.using_external_backing(device_ptr); },
+            [&] {
+                ++reinstall_count;
+                return arena.try_install_external_backing(backing);
+            });
+    };
+    const bool ready = ensure_installed();
+    arena.end_frame(held, nullptr, false);
+    EXPECT_FALSE(ready);
+    EXPECT_FALSE(renderer_installed);
+    EXPECT_EQ(reinstall_count, 1);
+    EXPECT_TRUE(ensure_installed());
+    EXPECT_TRUE(renderer_installed);
+    EXPECT_TRUE(arena.using_external_backing(device_ptr));
+    EXPECT_EQ(reinstall_count, 2);
+    // The capacity-sufficient path must revalidate too, but an attached backing
+    // needs no additional installation.
+    EXPECT_TRUE(ensure_installed());
+    EXPECT_EQ(reinstall_count, 2);
 }
 
 TEST_F(ArenaMetricsContentionTest, ViewerGrowTimeoutReleasesReservation) {

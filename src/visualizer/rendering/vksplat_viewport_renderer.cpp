@@ -26,6 +26,7 @@
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
+#include "vksplat_shared_scratch_install.hpp"
 #include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
 
@@ -3505,14 +3506,14 @@ namespace lfs::vis {
         // changing this renderer's cached installation flag. Reinstall the same
         // block before either the capacity fast path or growth uses it again.
         if (shared_scratch_.block) {
-            shared_scratch_.installed_in_training_arena =
-                lfs::core::GlobalArenaManager::instance().get_arena().using_external_backing(
-                    shared_scratch_.block->device_ptr);
-            if (!shared_scratch_.installed_in_training_arena) {
-                if (!try_install_existing()) {
-                    return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
-                }
-                shared_scratch_.installed_in_training_arena = true;
+            if (!ensureRetainedSharedScratchInstalled(
+                    shared_scratch_.installed_in_training_arena,
+                    [&] {
+                        return lfs::core::GlobalArenaManager::instance().get_arena().using_external_backing(
+                            shared_scratch_.block->device_ptr);
+                    },
+                    try_install_existing)) {
+                return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
             }
         }
 
