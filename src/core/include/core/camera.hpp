@@ -19,6 +19,15 @@
 
 namespace lfs::core {
 
+    struct CameraCalibration {
+        float fx = 0.0f;
+        float fy = 0.0f;
+        float cx = 0.0f;
+        float cy = 0.0f;
+        int width = 0;
+        int height = 0;
+    };
+
     enum class CameraSplit : uint8_t {
         Train,
         Eval
@@ -223,6 +232,11 @@ namespace lfs::core {
         void adopt_undistortion(const UndistortParams& params) noexcept;
         bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
         void prepare_undistortion(float blank_pixels = 0.0f);
+        void restore_undistortion_state(
+            const CameraCalibration& source,
+            const CameraCalibration& destination,
+            bool prepared,
+            bool crop_solve_failed = false);
         bool is_undistort_prepared() const noexcept { return _undistort_prepared; }
         bool has_distortion() const noexcept;
         const UndistortParams& undistort_params() const noexcept { return _undistort_params; }

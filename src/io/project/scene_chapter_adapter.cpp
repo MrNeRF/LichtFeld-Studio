@@ -219,6 +219,29 @@ namespace lfs::io::project {
             result.has_image = camera.has_image();
             result.split =
                 camera.split() == lfs::core::CameraSplit::Train ? "train" : "eval";
+            if (camera.is_undistort_precomputed()) {
+                const lfs::core::UndistortParams& params = camera.undistort_params();
+                result.undistortion = CameraUndistortionRecord{
+                    .source = CameraCalibrationRecord{
+                        .focal_x = params.src_fx,
+                        .focal_y = params.src_fy,
+                        .center_x = params.src_cx,
+                        .center_y = params.src_cy,
+                        .width = params.src_width,
+                        .height = params.src_height,
+                    },
+                    .destination = CameraCalibrationRecord{
+                        .focal_x = params.dst_fx,
+                        .focal_y = params.dst_fy,
+                        .center_x = params.dst_cx,
+                        .center_y = params.dst_cy,
+                        .width = params.dst_width,
+                        .height = params.dst_height,
+                    },
+                    .prepared = camera.is_undistort_prepared(),
+                    .crop_solve_failed = params.crop_solve_failed,
+                };
+            }
             return result;
         }
 
@@ -430,7 +453,23 @@ namespace lfs::io::project {
                 value.camera_height, value.uid, value.camera_id,
                 lfs::core::utf8_to_path(value.depth_path),
                 lfs::core::utf8_to_path(value.normal_path));
-            if (camera->has_distortion()) {
+            if (value.undistortion) {
+                const auto calibration = [](const CameraCalibrationRecord& record) {
+                    return lfs::core::CameraCalibration{
+                        .fx = record.focal_x,
+                        .fy = record.focal_y,
+                        .cx = record.center_x,
+                        .cy = record.center_y,
+                        .width = record.width,
+                        .height = record.height,
+                    };
+                };
+                camera->restore_undistortion_state(
+                    calibration(value.undistortion->source),
+                    calibration(value.undistortion->destination),
+                    value.undistortion->prepared,
+                    value.undistortion->crop_solve_failed);
+            } else if (camera->has_distortion()) {
                 // Camera IDs can overlap across datasets; reuse only identical calibrations.
                 UndistortCacheKey key{
                     value.camera_id, value.focal_x, value.focal_y,

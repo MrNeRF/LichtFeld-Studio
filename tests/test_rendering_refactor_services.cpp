@@ -510,6 +510,107 @@ namespace lfs::vis {
         EXPECT_FALSE(render_camera->equirectangular);
     }
 
+    TEST(SplitViewServiceTest, RestoredUndistortionCalibrationSurvivesTransformCopies) {
+        using lfs::core::Camera;
+        using lfs::core::CameraCalibration;
+        using lfs::core::CameraModelType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        const auto rotation = Tensor::from_vector(
+            {1.0f, 0.0f, 0.0f,
+             0.0f, 1.0f, 0.0f,
+             0.0f, 0.0f, 1.0f},
+            {size_t{3}, size_t{3}}, Device::CPU);
+        const auto translation =
+            Tensor::from_vector({0.0f, 0.0f, 0.0f}, {size_t{3}}, Device::CPU);
+        const CameraCalibration source{
+            .fx = 801.25f,
+            .fy = 799.75f,
+            .cx = 639.5f,
+            .cy = 359.25f,
+            .width = 1280,
+            .height = 720};
+        const CameraCalibration destination{
+            .fx = 733.125f,
+            .fy = 731.875f,
+            .cx = 602.75f,
+            .cy = 341.5f,
+            .width = 1207,
+            .height = 683};
+
+        const std::array models{
+            CameraModelType::PINHOLE,
+            CameraModelType::FISHEYE,
+            CameraModelType::THIN_PRISM_FISHEYE};
+        for (const auto model : models) {
+            const auto radial = model == CameraModelType::PINHOLE
+                                    ? Tensor::from_vector({-0.08f, 0.01f}, {size_t{2}}, Device::CPU)
+                                    : Tensor::from_vector(
+                                          {0.04f, -0.005f, 0.001f, -0.0002f},
+                                          {size_t{4}}, Device::CPU);
+            const auto tangential = model == CameraModelType::THIN_PRISM_FISHEYE
+                                        ? Tensor::from_vector(
+                                              {0.001f, -0.0015f, 0.0005f, -0.0004f},
+                                              {size_t{4}}, Device::CPU)
+                                        : Tensor();
+            for (const bool prepared : {false, true}) {
+                SCOPED_TRACE(static_cast<int>(model));
+                SCOPED_TRACE(prepared);
+                Camera camera(
+                    rotation, translation,
+                    source.fx, source.fy, source.cx, source.cy,
+                    radial, tangential, model,
+                    "calibration.png", "calibration.png", {},
+                    source.width, source.height, 101);
+                camera.restore_undistortion_state(
+                    source, destination, prepared, true);
+
+                ASSERT_TRUE(camera.is_undistort_precomputed());
+                EXPECT_EQ(camera.is_undistort_prepared(), prepared);
+                const auto& params = camera.undistort_params();
+                EXPECT_FLOAT_EQ(params.src_fx, source.fx);
+                EXPECT_FLOAT_EQ(params.src_fy, source.fy);
+                EXPECT_FLOAT_EQ(params.src_cx, source.cx);
+                EXPECT_FLOAT_EQ(params.src_cy, source.cy);
+                EXPECT_EQ(params.src_width, source.width);
+                EXPECT_EQ(params.src_height, source.height);
+                EXPECT_FLOAT_EQ(params.dst_fx, destination.fx);
+                EXPECT_FLOAT_EQ(params.dst_fy, destination.fy);
+                EXPECT_FLOAT_EQ(params.dst_cx, destination.cx);
+                EXPECT_FLOAT_EQ(params.dst_cy, destination.cy);
+                EXPECT_EQ(params.dst_width, destination.width);
+                EXPECT_EQ(params.dst_height, destination.height);
+                EXPECT_EQ(params.model_type, model);
+                EXPECT_TRUE(params.crop_solve_failed);
+
+                Camera transformed(camera, camera.world_view_transform());
+                EXPECT_TRUE(transformed.is_undistort_precomputed());
+                EXPECT_EQ(transformed.is_undistort_prepared(), prepared);
+                EXPECT_EQ(transformed.undistort_params().src_width, source.width);
+                EXPECT_EQ(transformed.undistort_params().dst_width, destination.width);
+                EXPECT_FLOAT_EQ(transformed.undistort_params().dst_fx, destination.fx);
+                EXPECT_EQ(transformed.undistort_params().model_type, model);
+                EXPECT_EQ(
+                    transformed.undistort_params().num_distortion,
+                    params.num_distortion);
+                EXPECT_TRUE(transformed.undistort_params().crop_solve_failed);
+                for (int i = 0; i < 12; ++i) {
+                    EXPECT_FLOAT_EQ(
+                        transformed.undistort_params().distortion[i],
+                        params.distortion[i]);
+                }
+                const auto& current = prepared ? destination : source;
+                EXPECT_FLOAT_EQ(transformed.focal_x(), current.fx);
+                EXPECT_FLOAT_EQ(transformed.focal_y(), current.fy);
+                EXPECT_FLOAT_EQ(transformed.center_x(), current.cx);
+                EXPECT_FLOAT_EQ(transformed.center_y(), current.cy);
+                EXPECT_EQ(transformed.camera_width(), current.width);
+                EXPECT_EQ(transformed.camera_height(), current.height);
+            }
+        }
+    }
+
     TEST(CameraImageLoadTest, PreviewLoadsCanAvoidMutatingCameraImageDimensions) {
         using lfs::core::Camera;
         using lfs::core::CameraModelType;
