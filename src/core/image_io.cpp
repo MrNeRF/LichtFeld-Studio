@@ -13,6 +13,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +21,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <queue>
 #include <stdexcept>
@@ -659,6 +661,51 @@ namespace lfs::core {
         if (max_width <= 0)
             throw std::invalid_argument("load_image_thumbnail: max_width must be positive");
         return ::load_image_t<unsigned char>(std::move(p), -1, max_width, true, used_exif_thumbnail);
+    }
+
+    Tensor load_image_rgb8_chw_native_resolution(const std::filesystem::path& path) {
+        const std::string path_utf8 = path_to_utf8(path);
+        auto [pixels, width, height, channels] = [&] {
+            LOG_TIMER("GT native RGB read/decode");
+            return load_image(path, 1, 0);
+        }();
+        if (!pixels || width <= 0 || height <= 0 || channels != 3) {
+            if (pixels) {
+                free_image(pixels);
+            }
+            throw std::runtime_error("Invalid decoded RGB image: " + path_utf8);
+        }
+
+        std::unique_ptr<unsigned char, decltype(&free_image)> decoded(pixels, &free_image);
+        const size_t image_width = static_cast<size_t>(width);
+        const size_t image_height = static_cast<size_t>(height);
+        if (image_width > std::numeric_limits<size_t>::max() / image_height ||
+            image_width * image_height > std::numeric_limits<size_t>::max() / 3) {
+            throw std::overflow_error("RGB image size overflow");
+        }
+        const size_t pixel_count = image_width * image_height;
+
+        LOG_TIMER("GT native RGB layout conversion");
+        std::shared_ptr<void> owner(std::malloc(pixel_count * 3), &free_image);
+        if (!owner) {
+            throw std::bad_alloc();
+        }
+        auto* const planar = static_cast<unsigned char*>(owner.get());
+        auto* const red = planar;
+        auto* const green = planar + pixel_count;
+        auto* const blue = planar + 2 * pixel_count;
+        for (size_t index = 0; index < pixel_count; ++index) {
+            red[index] = pixels[3 * index];
+            green[index] = pixels[3 * index + 1];
+            blue[index] = pixels[3 * index + 2];
+        }
+        decoded.reset();
+        return Tensor::from_external_owner(
+            planar,
+            {3, image_height, image_width},
+            Device::CPU,
+            DataType::UInt8,
+            std::move(owner));
     }
 
     std::tuple<uint16_t*, int, int, int>

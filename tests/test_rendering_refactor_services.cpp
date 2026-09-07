@@ -37,6 +37,8 @@
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -189,6 +191,25 @@ namespace lfs::vis {
         bool has_cuda_device() {
             int device_count = 0;
             return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+        }
+        void writeU8Image(const std::filesystem::path& path,
+                          const int width,
+                          const int height,
+                          const int channels,
+                          std::vector<std::uint8_t> pixels,
+                          const int jpeg_quality = 100) {
+            if (pixels.size() != static_cast<std::size_t>(width) * height * channels) {
+                throw std::invalid_argument("test image byte count does not match its shape");
+            }
+            auto image = lfs::core::Tensor::from_blob(
+                             pixels.data(),
+                             {static_cast<std::size_t>(height),
+                              static_cast<std::size_t>(width),
+                              static_cast<std::size_t>(channels)},
+                             lfs::core::Device::CPU,
+                             lfs::core::DataType::UInt8)
+                             .clone();
+            lfs::core::save_image_u8(path, std::move(image), jpeg_quality);
         }
     } // namespace
 
@@ -540,6 +561,115 @@ namespace lfs::vis {
         EXPECT_EQ(camera.image_height(), 3);
 
         std::filesystem::remove(image_path);
+    }
+
+    TEST(CameraImageLoadTest, NativeResolutionRgb8LoaderPreservesEightBitBytesAndChannelPolicy) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::TensorShape;
+
+        for (const auto [width, height] : {
+                 std::pair{1, 1}, std::pair{7, 1}, std::pair{1, 7},
+                 std::pair{5, 2}, std::pair{7, 5}}) {
+            SCOPED_TRACE(std::format("{}x{}", width, height));
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            const auto stamp = std::to_string(
+                std::chrono::steady_clock::now().time_since_epoch().count());
+            const auto root = std::filesystem::temp_directory_path() /
+                              ("lfs_gt_rgb8_native_" + stamp);
+            std::filesystem::create_directories(root);
+
+            std::vector<std::uint8_t> gray(pixel_count);
+            std::vector<std::uint8_t> two_channel(pixel_count * 2);
+            std::vector<std::uint8_t> rgb(pixel_count * 3);
+            std::vector<std::uint8_t> rgba(pixel_count * 4);
+            for (std::size_t index = 0; index < pixel_count; ++index) {
+                gray[index] = static_cast<std::uint8_t>(11 + index);
+                two_channel[index * 2] = static_cast<std::uint8_t>(21 + index);
+                two_channel[index * 2 + 1] = static_cast<std::uint8_t>(101 + index);
+                rgb[index * 3] = static_cast<std::uint8_t>(31 + index);
+                rgb[index * 3 + 1] = static_cast<std::uint8_t>(111 + index);
+                rgb[index * 3 + 2] = static_cast<std::uint8_t>(211 - index);
+                rgba[index * 4] = static_cast<std::uint8_t>(41 + index);
+                rgba[index * 4 + 1] = static_cast<std::uint8_t>(121 + index);
+                rgba[index * 4 + 2] = static_cast<std::uint8_t>(221 - index);
+                rgba[index * 4 + 3] = static_cast<std::uint8_t>(7 + index);
+            }
+
+            const auto gray_path = root / "gray.png";
+            const auto two_path = root / "two.png";
+            const auto rgb_path = root / "rgb.png";
+            const auto rgba_path = root / "rgba.png";
+            const auto jpeg_path = root / "rgb.jpg";
+            ASSERT_NO_THROW(writeU8Image(gray_path, width, height, 1, gray));
+            ASSERT_NO_THROW(writeU8Image(two_path, width, height, 2, two_channel));
+            ASSERT_NO_THROW(writeU8Image(rgb_path, width, height, 3, rgb));
+            ASSERT_NO_THROW(writeU8Image(rgba_path, width, height, 4, rgba));
+            ASSERT_NO_THROW(writeU8Image(jpeg_path, width, height, 3, rgb));
+
+            const auto loaded_rgb = lfs::core::load_image_rgb8_chw_native_resolution(rgb_path);
+            const auto repeated_rgb = lfs::core::load_image_rgb8_chw_native_resolution(rgb_path);
+            ASSERT_TRUE(loaded_rgb.is_valid());
+            EXPECT_EQ(loaded_rgb.device(), Device::CPU);
+            EXPECT_EQ(loaded_rgb.dtype(), DataType::UInt8);
+            EXPECT_EQ(loaded_rgb.shape(), TensorShape({size_t{3}, static_cast<size_t>(height), static_cast<size_t>(width)}));
+            EXPECT_TRUE(loaded_rgb.is_contiguous());
+            EXPECT_TRUE(loaded_rgb.owns_memory());
+            EXPECT_FALSE(loaded_rgb.is_view());
+            EXPECT_EQ(loaded_rgb.stream(), nullptr);
+            EXPECT_EQ(loaded_rgb.to_vector_uint8(), repeated_rgb.to_vector_uint8());
+
+            const auto expect_channels = [&](const std::filesystem::path& path,
+                                             const std::vector<std::uint8_t>& expected_r,
+                                             const std::vector<std::uint8_t>& expected_g,
+                                             const std::vector<std::uint8_t>& expected_b) {
+                const auto loaded = lfs::core::load_image_rgb8_chw_native_resolution(path);
+                const auto values = loaded.to_vector_uint8();
+                ASSERT_EQ(values.size(), 3 * pixel_count);
+                for (std::size_t index = 0; index < pixel_count; ++index) {
+                    EXPECT_EQ(values[index], expected_r[index]);
+                    EXPECT_EQ(values[pixel_count + index], expected_g[index]);
+                    EXPECT_EQ(values[2 * pixel_count + index], expected_b[index]);
+                }
+            };
+
+            expect_channels(gray_path, gray, gray, gray);
+            std::vector<std::uint8_t> two_r(pixel_count);
+            std::vector<std::uint8_t> two_g(pixel_count);
+            std::vector<std::uint8_t> two_b(pixel_count);
+            std::vector<std::uint8_t> rgb_r(pixel_count);
+            std::vector<std::uint8_t> rgb_g(pixel_count);
+            std::vector<std::uint8_t> rgb_b(pixel_count);
+            std::vector<std::uint8_t> rgba_r(pixel_count);
+            std::vector<std::uint8_t> rgba_g(pixel_count);
+            std::vector<std::uint8_t> rgba_b(pixel_count);
+            for (std::size_t index = 0; index < pixel_count; ++index) {
+                two_r[index] = two_channel[index * 2];
+                two_g[index] = two_channel[index * 2 + 1];
+                two_b[index] = static_cast<std::uint8_t>(
+                    (static_cast<std::uint16_t>(two_r[index]) + two_g[index]) / 2u);
+                rgb_r[index] = rgb[index * 3];
+                rgb_g[index] = rgb[index * 3 + 1];
+                rgb_b[index] = rgb[index * 3 + 2];
+                rgba_r[index] = rgba[index * 4];
+                rgba_g[index] = rgba[index * 4 + 1];
+                rgba_b[index] = rgba[index * 4 + 2];
+            }
+            expect_channels(two_path, two_r, two_g, two_b);
+            expect_channels(rgb_path, rgb_r, rgb_g, rgb_b);
+            expect_channels(rgba_path, rgba_r, rgba_g, rgba_b);
+
+            const auto jpeg_first =
+                lfs::core::load_image_rgb8_chw_native_resolution(jpeg_path).to_vector_uint8();
+            const auto jpeg_second =
+                lfs::core::load_image_rgb8_chw_native_resolution(jpeg_path).to_vector_uint8();
+            EXPECT_EQ(jpeg_first, jpeg_second);
+            EXPECT_THROW(
+                (void)lfs::core::load_image_rgb8_chw_native_resolution(root / "missing.png"),
+                std::runtime_error);
+
+            std::filesystem::remove_all(root);
+        }
     }
 
     TEST(SplitViewServiceTest, SharedCameraPoseHelperNormalizesSceneRotationAndAppliesVisualizerAxes) {
