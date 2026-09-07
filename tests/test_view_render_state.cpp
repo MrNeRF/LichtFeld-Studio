@@ -61,6 +61,40 @@ namespace lfs::vis {
             EXPECT_NE(rendering.viewState(second).dirty_mask_.load(), 0u);
         }
 
+        TEST_F(ViewRenderStateTest, NativeGtSettingAndPanStayWithTheirView) {
+            source.screen().setActiveView(screen::AreaId{first});
+            auto settings = rendering.getSettings();
+            const auto before = settings.view();
+            settings.gt_comparison_actual_size = true;
+            EXPECT_NE(before, settings.view());
+            rendering.updateSettings(settings);
+            EXPECT_TRUE(rendering.settingsForView(first).gt_comparison_actual_size);
+            EXPECT_FALSE(rendering.settingsForView(second).gt_comparison_actual_size);
+
+            for (const auto id : {first, second}) {
+                auto& view = rendering.viewState(id);
+                const GTComparisonActualFrameSnapshot snapshot{
+                    .source_key = {.camera_uid = 7, .image_path = "frame.png"},
+                    .source_generation = 1,
+                    .full_extent = {640, 480},
+                    .framebuffer_extent = {200, 120},
+                    .crop = {.origin = {100, 100}, .extent = {200, 120}}};
+                view.gt_comparison_published_actual_frame_ = snapshot;
+                view.gt_comparison_actual_size_state_.source_key = snapshot.source_key;
+                view.gt_comparison_actual_size_state_.source_generation = snapshot.source_generation;
+                view.gt_comparison_actual_size_state_.crop = snapshot.crop;
+            }
+            clearDirty();
+            source.screen().setActiveView(screen::AreaId{second});
+            rendering.setGTComparisonCropOrigin({50, 40}, first);
+            EXPECT_EQ(rendering.viewState(first).gt_comparison_actual_size_state_.crop.origin, glm::ivec2(50, 40));
+            EXPECT_EQ(rendering.viewState(second).gt_comparison_actual_size_state_.crop.origin, glm::ivec2(100, 100));
+            EXPECT_EQ(rendering.viewState(first).dirty_mask_.load(), DirtyFlag::SPLIT_VIEW);
+            EXPECT_EQ(rendering.viewState(second).dirty_mask_.load(), 0u);
+            // Input changes the pending crop; the active view still reports its last presented frame.
+            EXPECT_EQ(rendering.getGTComparisonCropOrigin(), glm::ivec2(100, 100));
+        }
+
         TEST_F(ViewRenderStateTest, TargetsAreLazyDistinctAndNotReusedAfterRetirement) {
             EXPECT_FALSE(rendering.viewState(first).main_render_target_.valid());
             renderEmpty(first);

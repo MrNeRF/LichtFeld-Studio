@@ -10,7 +10,7 @@ struct PpispParams {
     float vignetting[15];
     float color_matrix[9];
     float crf[15];
-    int y_offset,full_height;
+    int y_offset,full_height,x_offset,full_width;
 };
 [numthreads(LFS_LOCAL_SIZE_X,1,1)]
 void main(uint3 tid:SV_DispatchThreadID,uniform Parameters args) {
@@ -20,9 +20,10 @@ void main(uint3 tid:SV_DispatchThreadID,uniform Parameters args) {
     Ptr<float,Access.ReadWrite> dst=(Ptr<float,Access.ReadWrite>)args.output;
     const int width=args.width,height=args.height,plane=width*height;
     const int full_height=p.full_height>0?p.full_height:height;
-    const float resolution=float(max(width,full_height));
+    const int full_width=p.full_width>0?p.full_width:width;
+    const float resolution=float(max(full_width,full_height));
     for(uint i=tid.x;i<uint(plane);i+=groups.x*LFS_LOCAL_SIZE_X) {
-        const float x=(float(i%width)+0.5f-width*0.5f)/resolution;
+        const float x=(float(i%width+p.x_offset)+0.5f-full_width*0.5f)/resolution;
         const float y=(float(i/width+p.y_offset)+0.5f-full_height*0.5f)/resolution;
         float3 rgb;
         for(int c=0;c<3;++c) {

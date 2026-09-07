@@ -8,6 +8,7 @@ struct Parameters {
     uint count, cameras, frames, height, width, yOffset, fullHeight;
     int cameraIndex, frameIndex;
     float lr, beta1, beta2, bc1Rcp, bc2SqrtRcp, eps, center, channel, nonPositive;
+    uint xOffset, fullWidth;
 };
 groupshared float reduceData[256];
 
@@ -66,9 +67,9 @@ float3 ppCrfBwd(float3 rgb,uint64_t addr,float3 go,inout float gc[12]) {
 void main(uint3 groupId:SV_GroupID,uint lane:SV_GroupIndex,uint3 tid:SV_DispatchThreadID,uniform Parameters p) {
     uint3 groups=spirv_asm { result:$$uint3=OpLoad builtin(NumWorkgroups:uint3); };
     if(operation==0){for(uint i=tid.x;i<p.height*p.width;i+=groups.x*256){const uint n=p.height*p.width;uint y=i/p.width,x=i%p.width;
-        float3 rgb=loadRgb(p,p.rgb,i);float2 xy=float2(float(x)+0.5f,float(p.yOffset+y)+0.5f);
+        float3 rgb=loadRgb(p,p.rgb,i);float2 xy=float2(float(p.xOffset+x)+0.5f,float(p.yOffset+y)+0.5f);
         if(p.frameIndex!=-1)rgb=ppApplyExposure(rgb,load(p.exposure,uint(p.frameIndex)));
-        if(p.cameraIndex!=-1)rgb=applyVig(rgb,p.vignetting+uint64_t(p.cameraIndex)*60,xy,float(p.width),float(p.fullHeight));
+        if(p.cameraIndex!=-1)rgb=applyVig(rgb,p.vignetting+uint64_t(p.cameraIndex)*60,xy,float(p.fullWidth),float(p.fullHeight));
         if(p.frameIndex!=-1){Ptr<float,Access.Read> c=(Ptr<float,Access.Read>)p.color;uint k=uint(p.frameIndex)*8;PpColor col;col.b=float2(c[k],c[k+1]);col.r=float2(c[k+2],c[k+3]);col.g=float2(c[k+4],c[k+5]);col.n=float2(c[k+6],c[k+7]);rgb=ppApplyColor(rgb,col);}
         if(p.cameraIndex!=-1)rgb=applyCrf(rgb,p.crf+uint64_t(p.cameraIndex)*48);storeRgb(p,p.out,i,rgb);}return;}
     if(operation==1){

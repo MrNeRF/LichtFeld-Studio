@@ -31,8 +31,9 @@ namespace lfs::training {
             uint32_t count, cameras, frames, height, width, y_offset, full_height;
             int32_t camera_index, frame_index;
             float lr, beta1, beta2, bc1_rcp, bc2_sqrt_rcp, eps, center, channel, non_positive;
+            uint32_t x_offset, full_width;
         };
-        static_assert(sizeof(Push) == 200);
+        static_assert(sizeof(Push) == 208);
         static_assert(offsetof(Push, count) == 128);
         static_assert(offsetof(Push, lr) == 164);
 
@@ -140,6 +141,9 @@ namespace lfs::training {
             p.output = vk::address(ref(corrected));
             p.height = h;
             p.width = w;
+            p.x_offset = r.x_offset;
+            p.full_width = r.full_width > 0 ? r.full_width : w;
+            LFS_ASSERT_MSG(r.x_offset >= 0 && p.full_width >= w + p.x_offset, "PPISP crop exceeds full width");
             p.y_offset = r.y_offset;
             p.full_height = r.full_height;
             p.camera_index = r.camera_index;

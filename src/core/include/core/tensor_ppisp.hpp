@@ -4,6 +4,13 @@
 #include "core/export.hpp"
 #include "core/tensor_fwd.hpp"
 namespace lfs::core {
+    struct PpispRegion {
+        int x_offset = 0;
+        int y_offset = 0;
+        int full_width = 0;
+        int full_height = 0;
+    };
+
     struct PpispParams {
         float exposure_factor = 1.0f;
         float vignetting[15]{};                                                       // Per channel: center x/y, radial r2/r4/r6 coefficients.
@@ -11,6 +18,8 @@ namespace lfs::core {
         float crf[15]{1, 1, 1, 0.5f, 0.5f, 1, 1, 1, 0.5f, 0.5f, 1, 1, 1, 0.5f, 0.5f}; // toe, shoulder, gamma, center, a.
         int y_offset = 0;
         int full_height = 0;
+        int x_offset = 0;
+        int full_width = 0;
     };
     // Float RGB CHW. Non-contiguous inputs are materialized on their own backend.
     LFS_CORE_API Tensor ppisp_apply(const Tensor& rgb, const PpispParams& params);

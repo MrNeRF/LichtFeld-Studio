@@ -22,13 +22,20 @@ namespace lfs::core {
 namespace lfs::vis {
 
     namespace detail {
+        struct GTComparisonPixelRegion {
+            glm::ivec2 origin{0, 0};
+            glm::ivec2 full_extent{0, 0};
+            std::optional<lfs::rendering::CameraIntrinsics> full_intrinsics;
+        };
+
         [[nodiscard]] LFS_VIS_API glm::mat4 currentSceneTransform(SceneManager* const scene_manager,
                                                                   const int camera_uid);
 
         [[nodiscard]] LFS_VIS_API std::optional<GTRenderCamera> buildGTRenderCamera(
             const lfs::core::Camera& cam,
             glm::ivec2 render_size,
-            const glm::mat4& scene_transform);
+            const glm::mat4& scene_transform,
+            std::optional<GTComparisonPixelRegion> pixel_region = std::nullopt);
     } // namespace detail
 
     class LFS_VIS_API SplitViewService {

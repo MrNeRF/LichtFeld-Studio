@@ -352,12 +352,15 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
+        const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
-        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure, vignetting_params_, color, crf_params_}, rgb, output, {region.y_offset, full_h, num_cameras_, num_frames, camera_idx, frame_idx});
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure, vignetting_params_, color, crf_params_}, rgb, output, {region.y_offset, full_h, num_cameras_, num_frames, camera_idx, frame_idx, region.x_offset, full_w});
 
         return output;
     }
@@ -393,7 +396,10 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
+        const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
@@ -447,7 +453,7 @@ namespace lfs::training {
         }
 
         lfs::core::TensorExecutionTarget::current().wait_for(override_exposure_.execution_target());
-        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({override_exposure_, vignetting_modified, override_color_, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({override_exposure_, vignetting_modified, override_color_, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0, region.x_offset, full_w});
         return output;
     }
 
@@ -463,7 +469,10 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
+        const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         // Extract exposure (index 0) and color params (indices 1-8) from controller output
@@ -473,7 +482,7 @@ namespace lfs::training {
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
 
         // Use controller-predicted exposure and color, but existing vignetting and CRF from camera
-        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_temp, vignetting_params_, color_temp, crf_params_}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_temp, vignetting_params_, color_temp, crf_params_}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0, region.x_offset, full_w});
 
         return output;
     }
@@ -491,7 +500,10 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
+        const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
@@ -555,7 +567,7 @@ namespace lfs::training {
             crf_modified.flatten().slice(0, copy_offset, copy_offset + 12).copy_from(crf_cpu.flatten().slice(0, copy_offset, copy_offset + 12));
         }
 
-        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_temp, vignetting_modified, color_temp, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0});
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_temp, vignetting_modified, color_temp, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, 1, camera_idx, 0, region.x_offset, full_w});
 
         return output;
     }
@@ -570,7 +582,10 @@ namespace lfs::training {
         assert(shape.rank() == 3 && shape[0] == 3 && "Expected CHW layout with 3 channels");
 
         const int h = static_cast<int>(shape[1]);
+        const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::GPU);
@@ -635,7 +650,7 @@ namespace lfs::training {
             crf_modified.flatten().slice(0, copy_offset, copy_offset + 12).copy_from(crf_cpu.flatten().slice(0, copy_offset, copy_offset + 12));
         }
 
-        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_modified, vignetting_modified, color_modified, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, num_frames_, camera_idx, frame_idx});
+        training_ops(lfs::core::gpu_backend_of(exposure_params_).value()).ppisp->forward({exposure_modified, vignetting_modified, color_modified, crf_modified}, rgb, output, {region.y_offset, full_h, num_cameras_, num_frames_, camera_idx, frame_idx, region.x_offset, full_w});
 
         return output;
     }

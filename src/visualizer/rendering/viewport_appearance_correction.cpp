@@ -53,7 +53,7 @@ namespace lfs::vis {
             const lfs::core::Tensor& rgb,
             const int camera_uid,
             const PPISPOverrides& overrides,
-            const lfs::training::PPISPRegion& region = {},
+            const lfs::core::PpispRegion& region = {},
             const lfs::core::Tensor& controller_params = {}) {
             const bool was_hwc = (rgb.ndim() == 3 && rgb.shape()[2] == 3);
             const auto input = was_hwc ? rgb.permute({2, 0, 1}).contiguous() : rgb;
@@ -91,13 +91,13 @@ namespace lfs::vis {
 #endif
         [[nodiscard]] lfs::core::Tensor applyStandaloneAppearance(
             const lfs::core::Tensor& rgb, SceneManager& scene_mgr, int camera_uid,
-            const PPISPOverrides& overrides, bool use_controller) {
+            const PPISPOverrides& overrides, bool use_controller, const lfs::core::PpispRegion& region) {
             const auto* model = scene_mgr.getAppearanceTensorModel();
             if (!model)
                 return rgb;
             const bool was_hwc = rgb.ndim() == 3 && rgb.shape()[2] == 3;
             const auto input = was_hwc ? rgb.permute({2, 0, 1}).contiguous() : rgb;
-            auto result = model->apply(input, camera_uid, overrides, use_controller);
+            auto result = model->apply(input, camera_uid, overrides, use_controller, region);
             return was_hwc ? result.permute({1, 2, 0}).contiguous() : result;
         }
     } // namespace
@@ -106,7 +106,8 @@ namespace lfs::vis {
         std::shared_ptr<lfs::core::Tensor> image,
         SceneManager* const scene_manager,
         const RenderSettings& settings,
-        const int camera_uid) {
+        const int camera_uid,
+        const lfs::core::PpispRegion& region) {
         if (!image || !scene_manager || !settings.apply_appearance_correction) {
             return image;
         }
@@ -164,7 +165,7 @@ namespace lfs::vis {
                 try {
                     auto ppisp_input = preparePpispInput(rgb_input);
                     auto corrected = trainer->applyPPISPForViewport(
-                        ppisp_input, camera_uid, trainer_overrides, use_controller);
+                        ppisp_input, camera_uid, trainer_overrides, use_controller, region);
                     corrected = restore_alpha(std::move(corrected));
                     return std::make_shared<lfs::core::Tensor>(std::move(corrected));
                 } catch (const std::exception& e) {
@@ -189,7 +190,7 @@ namespace lfs::vis {
         lfs::core::Tensor corrected;
         try {
             auto ppisp_input = preparePpispInput(rgb_input);
-            corrected = applyStandaloneAppearance(ppisp_input, *scene_manager, camera_uid, overrides, use_controller);
+            corrected = applyStandaloneAppearance(ppisp_input, *scene_manager, camera_uid, overrides, use_controller, region);
         } catch (const std::exception& e) {
             LOG_WARN("Standalone viewport PPISP correction failed: {}", e.what());
             return image;
