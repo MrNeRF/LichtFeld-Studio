@@ -708,6 +708,7 @@ target_link_libraries(lichtfeld_tests PRIVATE lfs_vulkan_rasterizer Vulkan::Vulk
 # compatibility contracts, without compiling the unrelated tensor oracle suite.
 add_executable(popspa_tests
     test_main.cpp
+    licht_test_support.cpp
     ${POPSPA_TEST_FILES}
     test_training_parameters.cpp
     test_checkpoint_resume.cpp
