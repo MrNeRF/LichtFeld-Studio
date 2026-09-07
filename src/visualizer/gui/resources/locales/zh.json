@@ -1337,6 +1337,10 @@
     "gt_compare_mode": "选择 RGB、法线、深度或损失真值可视化",
     "gt_loss_lower_error": "更低误差",
     "gt_loss_higher_error": "更高误差",
+    "gt_compare_actual_size": "以一个图像像素对应一个物理屏幕像素显示 RGB 真值。需要透视相机；对于畸变图像，还需要可用的已保存去畸变标定。旧项目可能需要重新导入并保存数据集。",
+    "gt_compare_actual_size_active": "1:1 已启用：一个图像像素对应一个物理屏幕像素。",
+    "gt_compare_actual_size_fallback": "已请求 1:1，但在加载或恢复原生分辨率内容时，当前显示的是适配视口的预览。",
+    "gt_compare_actual_size_unavailable": "此相机或比较模式无法使用 1:1。畸变图像需要可用的已保存去畸变标定。",
     "depth_view_range": "深度图可视化范围",
     "depth_view_near": "深度范围近端",
     "depth_view_far": "深度范围远端",
@@ -2423,6 +2427,9 @@
     "redo_named": "重做：{name}"
   },
   "ui": {
+    "gt_compare_preparing": "正在准备 1:1…",
+    "gt_compare_retrying": "无法准备 1:1。正在重试…",
+    "gt_compare_retry": "重试",
     "near": "近端",
     "far": "远端",
     "selection_depth_size": "大小",
