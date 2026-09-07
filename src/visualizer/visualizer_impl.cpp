@@ -1918,6 +1918,7 @@ namespace lfs::vis {
                     trainer_manager_->getLastEvaluationMetrics()) {
                 store.eval_psnr.set(last->psnr);
                 store.eval_ssim.set(last->ssim);
+                store.eval_lpips.set(last->lpips);
             }
             python::update_trainer_loaded(true, trainer_manager_->getTotalIterations(),
                                           trainer_manager_->getCurrentIteration());
@@ -1929,6 +1930,7 @@ namespace lfs::vis {
             lfs::core::reactive::BatchUpdate batch(store.store());
             store.eval_psnr.set(event.psnr);
             store.eval_ssim.set(event.ssim);
+            store.eval_lpips.set(event.lpips);
         });
 
         state::SceneLoaded::when([](const auto& event) {
@@ -3730,6 +3732,11 @@ namespace lfs::vis {
     void VisualizerImpl::setShutdownRequestedCallback(std::function<void()> callback) {
         std::lock_guard lock(shutdown_callback_mutex_);
         shutdown_requested_callback_ = std::move(callback);
+    }
+
+    void VisualizerImpl::set_evaluation_weights_preparer(
+        std::function<std::optional<std::filesystem::path>(bool allow_download)> preparer) {
+        trainer_manager_->set_evaluation_weights_preparer(std::move(preparer));
     }
 
     VisualizerImpl::ProjectTrainingSessionState

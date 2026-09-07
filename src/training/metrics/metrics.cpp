@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <ctime>
 #include <iomanip>
 #include <iostream>
@@ -28,7 +29,10 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include <cuda_runtime.h>
 
 namespace lfs::training {
 
@@ -104,6 +108,20 @@ namespace lfs::training {
                        : mask;
         }
 
+        lfs::core::Tensor mask_image_for_lpips(const lfs::core::Tensor& image,
+                                               const lfs::core::Tensor& mask) {
+            if (!mask.is_valid())
+                return image;
+            const auto mask_f = mask_as_float01(mask);
+            const int channels = static_cast<int>(image.shape()[image.ndim() - 3]);
+            const int height = static_cast<int>(image.shape()[image.ndim() - 2]);
+            const int width = static_cast<int>(image.shape()[image.ndim() - 1]);
+            const auto expanded = image.ndim() == 3
+                                      ? mask_f.unsqueeze(0).expand({channels, height, width})
+                                      : mask_f.unsqueeze(0).unsqueeze(0).expand({static_cast<int>(image.shape()[0]), channels, height, width});
+            return image * expanded;
+        }
+
         struct FreeImageBuffer {
             void operator()(unsigned char* p) const noexcept {
                 if (p) {
@@ -137,6 +155,16 @@ namespace lfs::training {
             return chw.to(lfs::core::Device::CUDA);
         }
     } // namespace
+
+    lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image) {
+        return image.clamp(0.0f, 1.0f)
+            .mul(255.0f)
+            .add(0.5f)
+            .to(lfs::core::DataType::UInt8)
+            .to(lfs::core::DataType::Float32)
+            .div(255.0f)
+            .contiguous();
+    }
 
     float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
                         const lfs::core::Tensor& mask) const {
@@ -465,6 +493,8 @@ namespace lfs::training {
             report_file << "\nFinal Metrics (iteration " << final.iteration << "):\n";
             report_file << "PSNR:  " << final.psnr << "\n";
             report_file << "SSIM:  " << final.ssim << "\n";
+            if (final.lpips && std::isfinite(*final.lpips))
+                report_file << "LPIPS: " << *final.lpips << "\n";
             report_file << "Time per image: " << final.elapsed_time << " seconds\n";
             report_file << "Number of Gaussians: " << final.num_gaussians << "\n";
             report_file << "Bias (raw):  (" << final.bias_r << ", " << final.bias_g << ", " << final.bias_b << ")\n";
@@ -484,6 +514,7 @@ namespace lfs::training {
         report_file << std::setw(10) << "Iteration"
                     << std::setw(10) << "PSNR"
                     << std::setw(10) << "SSIM"
+                    << std::setw(10) << "LPIPS"
                     << std::setw(15) << "Time(s/img)"
                     << std::setw(15) << "#Gaussians"
                     << "\n";
@@ -492,8 +523,13 @@ namespace lfs::training {
         for (const auto& m : all_metrics_) {
             report_file << std::setw(10) << m.iteration
                         << std::setw(10) << std::fixed << std::setprecision(4) << m.psnr
-                        << std::setw(10) << m.ssim
-                        << std::setw(15) << m.elapsed_time
+                        << std::setw(10) << m.ssim;
+            if (m.lpips && std::isfinite(*m.lpips)) {
+                report_file << std::setw(10) << *m.lpips;
+            } else {
+                report_file << std::setw(10) << "";
+            }
+            report_file << std::setw(15) << m.elapsed_time
                         << std::setw(15) << m.num_gaussians << "\n";
         }
 
@@ -618,7 +654,7 @@ namespace lfs::training {
         result.num_gaussians = static_cast<int>(splatData.size());
         result.iteration = iteration;
 
-        std::vector<float> psnr_values, ssim_values, normal_values, depth_values;
+        std::vector<float> psnr_values, ssim_values, lpips_values, normal_values, depth_values;
         std::vector<float> bias_r_values, bias_g_values, bias_b_values;
         std::vector<float> bias_corr_r_values, bias_corr_g_values, bias_corr_b_values;
         const auto start_time = std::chrono::steady_clock::now();
@@ -634,6 +670,52 @@ namespace lfs::training {
         size_t skipped_images = 0;
         size_t evaluated_images = 0;
         size_t saved_images = 0;
+        std::optional<std::pair<int, int>> lpips_preflight_size;
+        cudaEvent_t lpips_start_event = nullptr;
+        cudaEvent_t lpips_stop_event = nullptr;
+        double lpips_elapsed_ms = 0.0;
+        std::size_t lpips_timed_images = 0;
+
+        if (!_lpips_load_attempted && _lpips_weights_path) {
+            _lpips_load_attempted = true;
+            const auto& weights_path = *_lpips_weights_path;
+            try {
+                auto loaded = lfs::core::nn::models::Lpips::load(
+                    weights_path, lfs::core::Device::CUDA, lfs::core::DataType::Float16,
+                    lfs::core::nn::models::InputScaling::Identity);
+                if (loaded) {
+                    _lpips_metric.emplace(std::move(*loaded));
+                } else {
+                    LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
+                             lfs::core::path_to_utf8(weights_path), loaded.error().detail());
+                }
+            } catch (const std::exception& e) {
+                LOG_WARN("Eval: LPIPS unavailable at '{}' ({})",
+                         lfs::core::path_to_utf8(weights_path), e.what());
+            }
+        }
+        if (_lpips_metric) {
+            const bool start_created = cudaEventCreate(&lpips_start_event) == cudaSuccess;
+            const bool stop_created = start_created && cudaEventCreate(&lpips_stop_event) == cudaSuccess;
+            if (!start_created || !stop_created) {
+                if (lpips_start_event != nullptr)
+                    cudaEventDestroy(lpips_start_event);
+                if (lpips_stop_event != nullptr)
+                    cudaEventDestroy(lpips_stop_event);
+                lpips_start_event = nullptr;
+                lpips_stop_event = nullptr;
+            }
+        }
+
+        std::ofstream per_image_csv;
+        if (_params.optimization.enable_save_eval_images) {
+            if (lfs::core::open_file_for_write(eval_dir / "per_image_metrics.csv", per_image_csv)) {
+                per_image_csv << "image_name,psnr,ssim,lpips\n";
+            } else {
+                LOG_WARN("Eval: failed to open per-image metrics CSV at '{}'",
+                         lfs::core::path_to_utf8(eval_dir / "per_image_metrics.csv"));
+            }
+        }
 
         const auto mask_mode = _params.optimization.mask_mode;
         const bool use_masking =
@@ -697,7 +779,7 @@ namespace lfs::training {
             if (appearance_ && r_output.image.is_valid()) {
                 r_output.image = appearance_(r_output.image, *cam);
             }
-            r_output.image = r_output.image.clamp(0.0f, 1.0f);
+            r_output.image = image_for_metrics_and_save(r_output.image);
 
             float psnr = 0.0f;
             float ssim = 0.0f;
@@ -722,6 +804,78 @@ namespace lfs::training {
             evaluated_images++;
 
             const auto gt_float = image_as_float01(gt_image).clamp(0.0f, 1.0f);
+            std::optional<float> lpips;
+            if (_lpips_metric) {
+                try {
+                    const auto pred_lpips = mask_image_for_lpips(r_output.image, mask);
+                    const auto target_lpips = mask_image_for_lpips(
+                        gt_float.to(lfs::core::Device::CUDA), mask);
+                    const int image_height = static_cast<int>(gt_image.shape()[1]);
+                    const int image_width = static_cast<int>(gt_image.shape()[2]);
+                    const std::pair<int, int> image_size{image_height, image_width};
+                    const bool size_changed = !lpips_preflight_size || *lpips_preflight_size != image_size;
+                    lpips_preflight_size = image_size;
+                    const auto required = _lpips_metric->estimated_peak_bytes(image_height, image_width);
+                    std::size_t free_bytes = 0;
+                    std::size_t total_bytes = 0;
+                    const auto status = cudaMemGetInfo(&free_bytes, &total_bytes);
+                    const bool lpips_preflight_ok = status == cudaSuccess && free_bytes >= required;
+                    if (!lpips_preflight_ok && size_changed) {
+                        const auto shortfall = required > free_bytes ? required - free_bytes : 0;
+                        LOG_WARN("Eval: LPIPS skipped for this image size; tile={} required={} free={} shortfall={} bytes",
+                                 _lpips_metric->tile_size_for(image_height, image_width), required,
+                                 free_bytes, shortfall);
+                    } else if (lpips_preflight_ok && size_changed) {
+                        LOG_DEBUG("Eval: LPIPS preflight passed; tile={} required={} free={} bytes",
+                                  _lpips_metric->tile_size_for(image_height, image_width), required, free_bytes);
+                    }
+                    if (lpips_preflight_ok) {
+                        const cudaStream_t lpips_stream = pred_lpips.stream();
+                        const bool timed_lpips = lpips_start_event != nullptr &&
+                                                 cudaEventRecord(lpips_start_event, lpips_stream) == cudaSuccess;
+                        auto value = _lpips_metric->forward(
+                            pred_lpips, target_lpips,
+                            lfs::core::nn::models::InputScaling::Identity);
+                        const bool lpips_event_complete =
+                            timed_lpips && cudaEventRecord(lpips_stop_event, lpips_stream) == cudaSuccess &&
+                            cudaEventSynchronize(lpips_stop_event) == cudaSuccess;
+                        if (value && std::isfinite(*value)) {
+                            if (lpips_event_complete) {
+                                float elapsed_ms = 0.0f;
+                                if (cudaEventElapsedTime(&elapsed_ms, lpips_start_event, lpips_stop_event) ==
+                                        cudaSuccess &&
+                                    std::isfinite(elapsed_ms)) {
+                                    lpips_elapsed_ms += elapsed_ms;
+                                    lpips_timed_images++;
+                                }
+                            }
+                            lpips = *value;
+                            lpips_values.push_back(*value);
+                        } else if (!value) {
+                            LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(),
+                                     value.error().detail());
+                        } else {
+                            LOG_WARN("Eval: LPIPS produced a non-finite value for camera '{}'",
+                                     cam->image_name());
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: LPIPS failed for camera '{}' ({})", cam->image_name(), e.what());
+                }
+            }
+            if (per_image_csv) {
+                per_image_csv << '"';
+                for (const char ch : cam->image_name()) {
+                    if (ch == '"')
+                        per_image_csv << '"';
+                    per_image_csv << ch;
+                }
+                per_image_csv << "\"," << std::fixed << std::setprecision(6)
+                              << psnr << "," << ssim << ",";
+                if (lpips)
+                    per_image_csv << *lpips;
+                per_image_csv << "\n";
+            }
             auto accumulate_bias = [&](const lfs::core::Tensor& image,
                                        std::vector<float>& br,
                                        std::vector<float>& bg,
@@ -740,8 +894,8 @@ namespace lfs::training {
             accumulate_bias(render_raw, bias_r_values, bias_g_values, bias_b_values);
             accumulate_bias(r_output.image, bias_corr_r_values, bias_corr_g_values, bias_corr_b_values);
 
-            try {
-                if (render_normal && cam->has_normal()) {
+            if (render_normal && cam->has_normal()) {
+                try {
                     if (!r_output.normal.is_valid() || r_output.normal.numel() == 0) {
                         LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': rendered normal is empty",
                                   cam->image_name());
@@ -781,9 +935,9 @@ namespace lfs::training {
                             }
                         }
                     }
+                } catch (const std::exception& e) {
+                    LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': {}", cam->image_name(), e.what());
                 }
-            } catch (const std::exception& e) {
-                LOG_DEBUG("Eval: normal_angle_deg skipped for '{}': {}", cam->image_name(), e.what());
             }
 
             try {
@@ -839,7 +993,7 @@ namespace lfs::training {
                     gt_vis = gt_vis * mask_3d;
                     render_vis = r_output.image * mask_3d;
                 }
-                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis, render_vis};
+                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis.clone(), render_vis.clone()};
                 auto stamp = _params.include_provenance ? lfs::core::make_provenance_stamp()
                                                         : lfs::core::make_minimal_provenance_stamp();
                 if (_params.include_provenance) {
@@ -863,7 +1017,22 @@ namespace lfs::training {
         if (_params.optimization.enable_save_eval_images) {
             lfs::core::image_io::wait_for_pending_saves();
         }
+        if (per_image_csv)
+            per_image_csv.close();
 
+        if (lpips_start_event != nullptr)
+            cudaEventDestroy(lpips_start_event);
+        if (lpips_stop_event != nullptr)
+            cudaEventDestroy(lpips_stop_event);
+        if (lpips_timed_images > 0) {
+            LOG_DEBUG("Eval: LPIPS-only {:.3f} ms/image over {} images",
+                      lpips_elapsed_ms / static_cast<double>(lpips_timed_images), lpips_timed_images);
+        }
+
+        if (_lpips_metric) {
+            _lpips_metric->release_activations();
+            lfs::core::Tensor::trim_memory_pool();
+        }
         const auto end_time = std::chrono::steady_clock::now();
         const auto elapsed = std::chrono::duration<float>(end_time - start_time).count();
 
@@ -872,6 +1041,7 @@ namespace lfs::training {
             result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0f) / psnr_values.size();
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
+        result.lpips = mean_of_finite(lpips_values);
         if (!bias_r_values.empty()) {
             const auto n = static_cast<float>(bias_r_values.size());
             result.bias_r = std::accumulate(bias_r_values.begin(), bias_r_values.end(), 0.0f) / n;
@@ -904,7 +1074,7 @@ namespace lfs::training {
             .iteration = result.iteration,
             .psnr = result.psnr,
             .ssim = result.ssim,
-            .lpips = 0.0f, // LPIPS not computed in this code path
+            .lpips = result.lpips,
             .elapsed_time = result.elapsed_time,
             .num_gaussians = result.num_gaussians}
             .emit();

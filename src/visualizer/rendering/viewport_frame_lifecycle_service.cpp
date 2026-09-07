@@ -56,8 +56,9 @@ namespace lfs::vis {
 
     ViewportFrameLifecycleService::ModelChangeResult
     ViewportFrameLifecycleService::handleModelChange(const size_t model_ptr,
-                                                     ViewportArtifactService& viewport_artifacts) {
-        if (model_ptr == last_model_ptr_) {
+                                                     ViewportArtifactService& viewport_artifacts,
+                                                     const ModelSource source) {
+        if (model_ptr == last_model_ptr_ && source == last_model_source_) {
             return {};
         }
 
@@ -65,6 +66,7 @@ namespace lfs::vis {
             .changed = true,
             .previous_model_ptr = last_model_ptr_};
         last_model_ptr_ = model_ptr;
+        last_model_source_ = source;
         viewport_artifacts.clearViewportOutput();
         return result;
     }

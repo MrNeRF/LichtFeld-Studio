@@ -431,6 +431,7 @@ namespace lfs::core {
             // belong to OptimizationParameters: saved training configurations
             // must not make a later normal launch enter safe mode.
             bool safe_mode = false;
+            bool no_download = false;
             bool reset_preferences = false;
             bool reset_layout = false;
             bool reset_all_settings = false;
@@ -462,6 +463,10 @@ namespace lfs::core {
             // is hydrated first; full trainer state must be loaded before
             // train() is allowed to start.
             std::optional<std::filesystem::path> resume_project = std::nullopt;
+
+            // Untrained .licht passed to --data-path. Its REFS dataset folder,
+            // or the embedded dataset copy, becomes the training data source.
+            std::optional<std::filesystem::path> dataset_project = std::nullopt;
 
             // Headless/integration-test trigger for the production training
             // snapshot path. Empty unless the user passed --save-project-path;

@@ -323,6 +323,7 @@ add_library(lfs_io STATIC
         project/scene_chapter_adapter.cpp
         project/geometry_payload.cpp
         project/selection_chapter.cpp
+        project/embedded_dataset.cpp
 
 )
 

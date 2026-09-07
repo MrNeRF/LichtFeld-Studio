@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
@@ -1648,6 +1649,15 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
+        if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
+            // clear_external_backing waits for the arena to be idle. Do this
+            // before taking either trainer lock, after the failed frame's borrow
+            // publisher has run, so training can finish its active frame. Detach
+            // first, outside releaseScratchOnIdle's readback mutex: the arena's
+            // shrink callback takes that mutex while holding the arena gate.
+            lfs::core::GlobalArenaManager::instance().clear_external_backing();
+            vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+        }
         const RenderSettings frame_settings = [this] {
             std::lock_guard lock(settings_mutex_);
             return settings_;
@@ -1708,6 +1718,9 @@ namespace lfs::vis {
 
         std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
         const auto cached_frame_result = [this, current_size]() -> VulkanFrameResult {
+            if (!vksplat_stale_frame_guard_.canUseCachedFrame()) {
+                return {};
+            }
             if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
                 return {.image = {},
                         .external_image = vulkan_external_viewport_image_,
@@ -1737,6 +1750,18 @@ namespace lfs::vis {
                     .flip_y = vulkan_viewport_image_flip_y_,
                     .matches_viewport_extent =
                         vulkan_viewport_coordinate_size_ == current_size};
+        };
+        const auto defer_shared_scratch = [this](const std::string& reason) {
+            if (vksplat_stale_frame_guard_.onDeferral()) {
+                LOG_WARN("VkSplat shared scratch deferred {} viewport attempts; dropping stale viewport and resetting scratch before the next attempt: {}",
+                         StaleFrameGuard::kMaxCachedDeferrals, reason);
+                // Reset alone still needs arena access on the next render.
+                // Hide the old publication until fresh output is available;
+                // the renderer retains its output allocations and GPU fences.
+                clearVulkanViewportImageState();
+                clearVulkanMeshFrame();
+                viewport_artifact_service_.clearViewportOutput();
+            }
         };
         const auto update_cached_split_position = [this, &frame_settings](const bool require_position_change) -> bool {
             if (!split_view_service_.isActive(frame_settings)) {
@@ -1938,13 +1963,20 @@ namespace lfs::vis {
         };
         refresh_content_flags();
         size_t model_ptr = reinterpret_cast<size_t>(model);
+        // Edit-mode handoff moves the same SplatData into a scene node. Its
+        // address does not change, but the trainer's GPU handshake is gone.
+        // Use dataset ownership, not Running/Paused, so completion alone does
+        // not reset the renderer while the trainer still owns its fences.
+        const auto model_source = scene_manager && scene_manager->hasDataset()
+                                      ? ViewportFrameLifecycleService::ModelSource::Training
+                                      : ViewportFrameLifecycleService::ModelSource::Scene;
 
         // Skip model-change tracking while the step-boundary lock is contended:
         // model_ptr is null only because densify holds exclusive, not because the
         // scene dropped the model. Treating it as a change would wipe the retained
         // last splat image (the whole point of the cadence path).
         if (!render_lock_contended) {
-            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
                 model_change.changed) {
                 invalidateGTComparisonImageCache();
                 clearVulkanViewportImageState();
@@ -2065,7 +2097,7 @@ namespace lfs::vis {
                 sample_model_under_lock();
                 refresh_content_flags();
                 model_ptr = reinterpret_cast<size_t>(model);
-                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
+                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
             }
         }
         // Scene state is authoritative here (contended frames returned above): nothing
@@ -2438,7 +2470,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Raw point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -2477,7 +2509,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -3106,7 +3138,7 @@ namespace lfs::vis {
                                     if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
                                         auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
                                         if (rendered && rendered->image) {
-                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            const bool flip_y = rendered->metadata.flip_y;
                                             compare_panel = RenderedPanel{.image = std::move(rendered->image),
                                                                           .metadata = std::move(rendered->metadata),
                                                                           .flip_y = flip_y};
@@ -3126,7 +3158,7 @@ namespace lfs::vis {
                                     if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
                                         auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
                                         if (rendered && rendered->image) {
-                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            const bool flip_y = rendered->metadata.flip_y;
                                             compare_panel = RenderedPanel{.image = std::move(rendered->image),
                                                                           .metadata = std::move(rendered->metadata),
                                                                           .flip_y = flip_y};
@@ -3384,6 +3416,7 @@ namespace lfs::vis {
             isRetryableSharedScratchUnavailable(render_error)) {
             dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
                                  std::memory_order_relaxed);
+            defer_shared_scratch(render_error);
             render_lock.reset();
             LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
                       render_error);
@@ -3554,6 +3587,7 @@ namespace lfs::vis {
                 }
 
                 render_lock.reset();
+                vksplat_stale_frame_guard_.onSuccess();
                 clearVulkanViewportImageState(render_result->size, render_result->flip_y);
                 vulkan_external_viewport_image_ = render_result->image;
                 vulkan_external_viewport_image_view_ = render_result->image_view;
@@ -3847,6 +3881,7 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                     }
                     const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                        vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
                         note_vksplat_render_progress(render_result);
@@ -4169,6 +4204,7 @@ namespace lfs::vis {
                                   "VkSplat shared scratch unavailable",
                                   render_result.error(),
                                   retry_dirty);
+                        defer_shared_scratch(render_result.error());
                         render_lock.reset();
                         return cached_frame_result();
                     }
@@ -4226,6 +4262,9 @@ namespace lfs::vis {
             pending_split_view.enabled;
 
         if (!rendered_image && has_gpu_only_pass) {
+            if (pending_split_view.enabled || render_error.empty()) {
+                vksplat_stale_frame_guard_.onSuccess();
+            }
             clearVulkanViewportImageState(render_size, false);
             vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
@@ -4398,6 +4437,7 @@ namespace lfs::vis {
                               "VkSplat shared scratch unavailable",
                               render_error,
                               retry_dirty);
+                    defer_shared_scratch(render_error);
                     return cached_frame_result();
                 }
 
@@ -4444,6 +4484,7 @@ namespace lfs::vis {
         }
 
         auto viewport_image = std::move(rendered_image);
+        vksplat_stale_frame_guard_.onSuccess();
         vulkan_viewport_image_ = viewport_image;
         ++vulkan_viewport_image_generation_;
         if (vulkan_viewport_image_generation_ == 0)

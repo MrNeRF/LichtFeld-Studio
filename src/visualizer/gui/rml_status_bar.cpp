@@ -608,6 +608,7 @@ namespace lfs::vis::gui {
         bind(store.trainer_loaded);
         bind(store.eval_psnr);
         bind(store.eval_ssim);
+        bind(store.eval_lpips);
         bind(store.scene_generation);
         bind(store.selection_generation);
         subscriptions_.push_back(store.fps.subscribe([this](const float& fps) {
@@ -1418,12 +1419,16 @@ namespace lfs::vis::gui {
             const auto eval_metrics = tm->getLastEvaluationMetrics();
             setModelBool("show_eval_metrics", model_.show_eval_metrics, eval_metrics.has_value());
             if (eval_metrics) {
-                setModelString("eval_metrics_value", model_.eval_metrics_value,
-                               std::format("{} {:.2f} / {} {:.4f}",
-                                           LOC(lichtfeld::Strings::Status::PSNR),
-                                           eval_metrics->psnr,
-                                           LOC(lichtfeld::Strings::Status::SSIM),
-                                           eval_metrics->ssim));
+                auto eval_text = std::format("{} {:.2f} / {} {:.4f}",
+                                             LOC(lichtfeld::Strings::Status::PSNR),
+                                             eval_metrics->psnr,
+                                             LOC(lichtfeld::Strings::Status::SSIM),
+                                             eval_metrics->ssim);
+                if (eval_metrics->lpips)
+                    eval_text += std::format(" / {} {:.4f}",
+                                             LOC(lichtfeld::Strings::Status::LPIPS),
+                                             *eval_metrics->lpips);
+                setModelString("eval_metrics_value", model_.eval_metrics_value, eval_text);
             } else {
                 setModelString("eval_metrics_value", model_.eval_metrics_value, "");
             }

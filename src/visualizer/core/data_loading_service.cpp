@@ -378,6 +378,7 @@ namespace lfs::vis {
             if (checkpoint_params_result) {
                 params = *checkpoint_params_result;
             }
+            params.no_download = params_.no_download;
             // Override dataset/output paths if provided by user
             if (!dataset_path.empty()) {
                 params.dataset.data_path = dataset_path;

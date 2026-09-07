@@ -69,10 +69,12 @@ namespace lfs::vis::op {
     };
 
     struct SceneTopologyProof {
+        std::vector<lfs::core::Uuid> roots;
         std::vector<SceneTopologyNodeProof> nodes;
         lfs::core::Uuid training_model_uuid;
         bool consolidated = false;
         std::size_t consolidated_extent = 0;
+        bool scoped = false;
 
         friend bool operator==(
             const SceneTopologyProof&,
@@ -430,6 +432,11 @@ namespace lfs::vis::op {
         SceneGraphCaptureMode mode = SceneGraphCaptureMode::FULL;
         bool include_selected_nodes = true;
         bool include_scene_context = true;
+        bool preserve_node_ids = false;
+        bool scoped_topology = false;
+        // A missing allowlist preserves the legacy FULL capture behavior. An
+        // engaged allowlist captures payloads only for these node UUIDs.
+        std::optional<std::vector<lfs::core::Uuid>> payload_uuids;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -465,6 +472,7 @@ namespace lfs::vis::op {
         ~SceneGraphNodeSnapshot();
 
         lfs::core::Uuid uuid;
+        lfs::core::NodeId id = lfs::core::NULL_NODE;
         lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
@@ -476,11 +484,13 @@ namespace lfs::vis::op {
         bool payload_diverged = false;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
+        int order_index = -1;
         lfs::core::Device payload_device = lfs::core::Device::CUDA;
         lfs::core::Device selection_slice_device = lfs::core::Device::CUDA;
         std::optional<std::filesystem::path> source_path;
         std::shared_ptr<lfs::core::Tensor> selection_slice;
         std::unique_ptr<lfs::core::SplatData> model;
+        std::shared_ptr<const lfs::core::SplatData> shared_model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
@@ -499,6 +509,9 @@ namespace lfs::vis::op {
 
     struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
+        bool preserve_node_ids = false;
+        bool complete_root_order = false;
+        bool scoped_topology = false;
         std::optional<std::vector<lfs::core::Uuid>> selected_node_uuids;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;

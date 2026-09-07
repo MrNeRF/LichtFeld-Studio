@@ -159,6 +159,16 @@ namespace lfs::rendering {
         return view;
     }
 
+    // Sequencer poses are in visualizer world space; headless renders consume
+    // raw dataset points and a +Y-down, +Z-forward camera.
+    inline glm::mat4 dataWorldToCameraFromVisualizerPose(const glm::mat3& rotation,
+                                                         const glm::vec3& position) {
+        // Convert raw world points on the right and local camera axes on the
+        // left. Converting only the camera axes leaves the eye in the wrong world.
+        return glm::mat4(VISUALIZER_TO_DATA_CAMERA_AXES) * makeViewMatrix(rotation, position) *
+               DATA_TO_VISUALIZER_WORLD_AXES_4;
+    }
+
     inline glm::vec3 chooseFallbackUp(const glm::vec3& forward) {
         const glm::vec3 candidates[] = {
             glm::vec3(0.0f, 1.0f, 0.0f),

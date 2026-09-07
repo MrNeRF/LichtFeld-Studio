@@ -489,7 +489,7 @@ namespace {
             // =============================================================================
             ::args::Group paths_sep(parser, " ");
             ::args::Group paths_group(parser, "TRAINING PATHS:");
-            ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data", {'d', "data-path"});
+            ::args::ValueFlag<std::string> data_path(paths_group, "data_path", "Path to training data: a dataset folder or an untrained .licht project", {'d', "data-path"});
             ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
@@ -653,6 +653,7 @@ namespace {
             ::args::Group output_sep(parser, " ");
             ::args::Group output_group(parser, "OUTPUT OPTIONS:");
             ::args::Flag enable_eval(output_group, "eval", lfs::core::args::optimization_cli_help("--eval"), {"eval"});
+            ::args::Flag no_download(output_group, "no_download", "Do not download optional model weights", {"no-download"});
             ::args::ValueFlagList<int> eval_steps(output_group, "eval_steps", "Held-out evaluation iterations (repeatable; default: 7000 and 30000)", {"eval-steps"});
             ::args::Flag no_save_eval_images(output_group, "no_save_eval_images", "Disable saving of evaluation comparison images (GT vs rendered) during eval (default: enabled)", {"no-save-eval-images"});
             ::args::ValueFlagList<std::string> timelapse_images(output_group, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
@@ -995,19 +996,44 @@ namespace {
                     parser.Help()));
             }
 
-            // Training/resume mode requires both data-path and output-path
-            // Exception: resume mode can work without explicit paths (extracted from checkpoint)
-            if (has_data_path && has_output_path) {
-                params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
-                params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
+            // An untrained .licht on --data-path is a dataset source and, unless
+            // --output-path redirects the result, also the project the run trains into.
+            const auto data_path_value = has_data_path
+                                             ? lfs::core::utf8_to_path(::args::get(data_path))
+                                             : std::filesystem::path{};
+            auto data_extension = data_path_value.extension().string();
+            std::ranges::transform(
+                data_extension, data_extension.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            const bool data_path_is_project = data_extension == ".licht";
 
-                // Create output directory
-                std::error_code ec;
-                std::filesystem::create_directories(params.dataset.output_path, ec);
-                if (ec) {
-                    return std::unexpected(std::format(
-                        "Failed to create output directory '{}': {}",
-                        lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+            // Training mode requires both data-path and output-path.
+            // Exceptions: a .licht carries its own destination, and resume mode
+            // can work without explicit paths (extracted from checkpoint).
+            if (has_data_path && (has_output_path || data_path_is_project)) {
+                if (data_path_is_project) {
+                    if (!lfs::io::project::isPublishedLichtPath(data_path_value)) {
+                        return std::unexpected(
+                            lfs::io::project::unpublishedLichtUserMessage(data_path_value));
+                    }
+                    params.dataset_project = data_path_value;
+                } else {
+                    params.dataset.data_path = data_path_value;
+                }
+
+                if (has_output_path) {
+                    params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
+
+                    // Create output directory
+                    std::error_code ec;
+                    std::filesystem::create_directories(params.dataset.output_path, ec);
+                    if (ec) {
+                        return std::unexpected(std::format(
+                            "Failed to create output directory '{}': {}",
+                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
+                    }
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
                 // Only require both if not in resume mode
@@ -1216,6 +1242,7 @@ namespace {
                                         ppisp_freeze_from_sidecar_flag = bool(ppisp_freeze_from_sidecar),
                                         ppisp_sidecar_path_val = cli_option_present({"--ppisp-sidecar"}) ? std::optional<std::string>(::args::get(ppisp_sidecar_path)) : std::optional<std::string>(),
                                         enable_eval_flag = bool(enable_eval),
+                                        no_download_flag = bool(no_download),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
                                         safe_mode_flag = bool(safe_mode),
@@ -1380,6 +1407,7 @@ namespace {
                 if (opt.ppisp_freeze_from_sidecar)
                     opt.use_ppisp = true;
                 setFlag(enable_eval_flag, opt.enable_eval);
+                setFlag(no_download_flag, params.no_download);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
                 setFlag(safe_mode_flag, params.safe_mode);

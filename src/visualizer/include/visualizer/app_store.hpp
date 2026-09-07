@@ -173,6 +173,7 @@ namespace lfs::vis {
             TrainerLoaded,
             EvalPsnr,
             EvalSsim,
+            EvalLpips,
             SceneGeneration,
             SelectionGeneration,
             Fps,
@@ -213,6 +214,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<bool> trainer_loaded;
         lfs::core::reactive::Observable<std::optional<float>> eval_psnr;
         lfs::core::reactive::Observable<std::optional<float>> eval_ssim;
+        lfs::core::reactive::Observable<std::optional<float>> eval_lpips;
         lfs::core::reactive::Observable<std::uint64_t> scene_generation;
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
         lfs::core::reactive::Observable<float> fps;

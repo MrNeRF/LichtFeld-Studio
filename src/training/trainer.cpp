@@ -3151,6 +3151,8 @@ namespace lfs::training {
 
             // Initialize the evaluator - it handles all metrics internally
             evaluator_ = std::make_unique<lfs::training::MetricsEvaluator>(params_);
+            if (lpips_weights_path_)
+                evaluator_->set_lpips_weights_path(*lpips_weights_path_);
             if (params_.optimization.ppisp_active() && ppisp_ && ppisp_->isFinalized()) {
                 evaluator_->set_appearance([this](const lfs::core::Tensor& rgb, const lfs::core::Camera& cam) {
                     return applyPPISPForEval(rgb, cam);
@@ -3678,6 +3680,12 @@ namespace lfs::training {
             pending_params_.reset();
         }
         apply_param_side_effects(accepted, bg_image_path_changed);
+    }
+
+    void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {
+        lpips_weights_path_ = std::move(path);
+        if (evaluator_)
+            evaluator_->set_lpips_weights_path(lpips_weights_path_);
     }
 
     void Trainer::apply_pending_params_at_safe_point() {
@@ -4704,11 +4712,13 @@ namespace lfs::training {
 
         photometric_loss_.arena().shrink_to_required();
 
+        std::optional<std::filesystem::path> headless_source_path;
         bool first_publish_to_destination =
             false;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
+            headless_source_path = headless_project_source_path_;
             project_step_regression_
                 .arm_after_snapshot(iteration);
             first_publish_to_destination =
@@ -4723,7 +4733,7 @@ namespace lfs::training {
 
         try {
             project_writer_thread_ = std::jthread(
-                [this, path, chapters, cpu_state,
+                [this, path, chapters, cpu_state, headless_source_path,
                  request_id, write_kind,
                  base_explicit_commit_uuid,
                  autosave_sequence,
@@ -4840,6 +4850,13 @@ namespace lfs::training {
                             source_path = path;
                             compact_after_publish =
                                 first_publish_to_destination;
+                        } else if (!document_context && headless_source_path) {
+                            source_path = headless_source_path;
+                        }
+                        // A redirected recovery save does not merge into or own
+                        // the original master. Its owner keeps staging alive.
+                        if (!document_context && recovery_session && !recovery_session->writer_lock().owns(path)) {
+                            recovery_session.reset();
                         }
                         bool save_as =
                             !source_path &&
@@ -4937,6 +4954,42 @@ namespace lfs::training {
                                 !created) {
                                 return std::move(created)
                                     .error();
+                            }
+                        }
+
+                        if (!document_context && save_as && headless_source_path) {
+                            // Save As carries DSRC lazily. Reject broken manifests
+                            // before publication, and bind the effective dataset
+                            // relative to the new project rather than the source.
+                            auto manifest = document->parameters().embedded_dataset();
+                            if (!manifest) {
+                                return std::move(manifest).error();
+                            }
+                            if (*manifest) {
+                                for (const auto& entry : (*manifest)->entries) {
+                                    const auto* row = document->source_reader()->find(
+                                        lfs::io::project::FOURCC_DSRC, entry.chunk_uuid);
+                                    if (!row || !row->is_live() || row->uncompressed_bytes != entry.bytes) {
+                                        return project_snapshot_error(
+                                            lfs::ErrorCode::DataLoss,
+                                            "Embedded dataset manifest has a missing or incorrectly sized DSRC payload",
+                                            LFS_SOURCE_SITE_CURRENT());
+                                    }
+                                }
+                            }
+                            auto existing = document->project().dataset_reference();
+                            if (!existing) {
+                                return std::move(existing).error();
+                            }
+                            auto reference = lfs::io::project::upsert_path_reference(
+                                document->edit_references(), path.parent_path(),
+                                chapters->parameters.dataset.data_path,
+                                "dataset", "dataset", *existing);
+                            if (!reference) {
+                                return std::move(reference).error();
+                            }
+                            if (auto bound = document->edit_project().set_dataset_reference(*reference); !bound) {
+                                return std::move(bound).error();
                             }
                         }
 
@@ -5168,7 +5221,7 @@ namespace lfs::training {
                                         document_context
                                             ? document_context
                                                   ->save_as_project_uuid
-                                            : lfs::core::Uuid{},
+                                            : (headless_source_path && save_as ? project_uuid_ : lfs::core::Uuid{}),
                                     .allow_existing_destination_replacement =
                                         document_context &&
                                         document_context
@@ -8879,8 +8932,12 @@ namespace lfs::training {
             const bool popspa_complete = popspa_enabled() && popspa_controller_.is_initialized() &&
                                          popspa_controller_.phase() == POPSpaPhase::Complete &&
                                          current_iteration_.load() >= get_total_iterations();
+            // A resume at the terminal iteration starts at max+1, so there is no
+            // training step in which to service an evaluation scheduled at max.
+            const bool terminal_eval_due = !popspa_enabled() && iter > get_total_iterations() &&
+                                           evaluator_->should_evaluate(current_iteration_.load());
             if (!terminal_error && !stop_token.stop_requested() && !stop_requested_.load() &&
-                evaluator_->is_enabled() && popspa_complete) {
+                evaluator_->is_enabled() && (popspa_complete || terminal_eval_due)) {
                 const int eval_iteration = current_iteration_.load();
                 evaluator_->print_evaluation_header(eval_iteration);
                 eval_ppisp_applied_.store(0);
@@ -9176,9 +9233,11 @@ namespace lfs::training {
         std::optional<std::filesystem::path> path,
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>
-            context_provider) {
+            context_provider,
+        std::optional<std::filesystem::path> headless_source_path) {
         std::lock_guard lock(project_snapshot_mutex_);
         live_project_path_ = std::move(path);
+        headless_project_source_path_ = std::move(headless_source_path);
         live_document_context_provider_ =
             std::move(context_provider);
     }

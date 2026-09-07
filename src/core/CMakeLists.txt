@@ -50,6 +50,7 @@ set(TENSOR_SOURCES
         nn/weight_file.cpp
         nn/activation_arena.cpp
         nn/models/moge2.cpp
+        nn/models/lpips.cpp
 )
 
 # Core module sources
@@ -110,6 +111,9 @@ set(CORE_SOURCES
 )
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
+
+add_dependencies(lfs_core lfs_core_abi_stamp)
+target_include_directories(lfs_core BEFORE PRIVATE "${LFS_CORE_ABI_INCLUDE_DIR}")
 
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS)
 

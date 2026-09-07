@@ -10,5 +10,6 @@ Development docs in this section are organized around execution workflows rather
 - [RmlUI Styling](rmlui-styling)
 - [UI design language and window patterns](ui-design-language)
 - [Developer flags and diagnostics](flags)
+- [Windows build preflight](windows-build-preflight)
 - [Preferences and user storage](preferences-and-user-storage)
 - [Scene reconstruction](scene-reconstruction)

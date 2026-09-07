@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/video/video_export_options.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
@@ -10,6 +11,7 @@
 #include "sequencer/timeline_view_math.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -53,6 +55,37 @@ namespace {
             std::filesystem::remove(path, ec);
         }
     };
+
+    TEST(SequencerTimelineRegressionTest, ExportCameraPreservesScreenCornersAcrossPoses) {
+        // Independent screen-space oracle: right stays right, up maps to smaller
+        // image rows, and visible points have positive depth in a dataset Camera.
+        const std::array<glm::vec3, 4> eyes{{{0, 0, 5}, {2, 4, 1}, {-2, -4, 1}, {1, 2, 5}}};
+        const std::array<glm::vec3, 4> ups{{{0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {1, 0, 0}}};
+        for (size_t pose = 0; pose < eyes.size(); ++pose) {
+            SCOPED_TRACE(pose);
+            const auto rotation = lfs::rendering::tryMakeVisualizerLookAtRotation(
+                eyes[pose], glm::vec3(0), ups[pose]);
+            ASSERT_TRUE(rotation.has_value());
+            Timeline timeline;
+            auto keyframe = makeKeyframe(0, eyes[pose]);
+            keyframe.rotation = glm::quat_cast(*rotation);
+            timeline.addKeyframe(keyframe);
+            const auto camera = timeline.evaluate(0);
+            const auto view = lfs::rendering::dataWorldToCameraFromVisualizerPose(
+                glm::mat3_cast(camera.rotation), camera.position);
+            for (const float x : {-1.0f, 1.0f}) {
+                for (const float y : {-1.0f, 1.0f}) {
+                    const auto visualizer_point = eyes[pose] + *rotation * glm::vec3(x, y, -3);
+                    // Raw PLY world uses the opposite Y/Z axes to the visualizer.
+                    const glm::vec3 data_point(visualizer_point.x, -visualizer_point.y, -visualizer_point.z);
+                    const auto projected = glm::vec3(view * glm::vec4(data_point, 1));
+                    EXPECT_NEAR(projected.x, x, 1e-5f);
+                    EXPECT_NEAR(projected.y, -y, 1e-5f);
+                    EXPECT_NEAR(projected.z, 3, 1e-5f);
+                }
+            }
+        }
+    }
 
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {
         Timeline timeline;

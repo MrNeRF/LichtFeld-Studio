@@ -14,10 +14,12 @@
 #include <format>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <map>
 #include <optional>
 #include <ranges>
 #include <span>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -197,6 +199,15 @@ namespace lfs::io::project {
                 static_cast<std::int32_t>(camera.camera_model_type());
             result.camera_width = camera.camera_width();
             result.camera_height = camera.camera_height();
+            if (camera.is_undistort_prepared()) {
+                const auto& source = camera.undistort_params();
+                result.focal_x = source.src_fx;
+                result.focal_y = source.src_fy;
+                result.center_x = source.src_cx;
+                result.center_y = source.src_cy;
+                result.camera_width = source.src_width;
+                result.camera_height = source.src_height;
+            }
             result.image_width = camera.image_width();
             result.image_height = camera.image_height();
             result.image_name = camera.image_name();
@@ -391,8 +402,14 @@ namespace lfs::io::project {
                 lfs::core::Device::CPU);
         }
 
+        using UndistortCacheKey = std::tuple<
+            std::int32_t, float, float, float, float,
+            std::int32_t, std::int32_t, std::int32_t,
+            std::vector<float>, std::vector<float>>;
+        using UndistortCache = std::map<UndistortCacheKey, lfs::core::UndistortParams>;
+
         std::shared_ptr<lfs::core::Camera> hydrate_camera(
-            const CameraRecord& value) {
+            const CameraRecord& value, UndistortCache& undistort_cache) {
             auto camera = std::make_shared<lfs::core::Camera>(
                 float_tensor(value.rotation, {3, 3}),
                 float_tensor(value.translation, {3}),
@@ -407,6 +424,21 @@ namespace lfs::io::project {
                 value.camera_height, value.uid, value.camera_id,
                 lfs::core::utf8_to_path(value.depth_path),
                 lfs::core::utf8_to_path(value.normal_path));
+            if (camera->has_distortion()) {
+                // Camera IDs can overlap across datasets; reuse only identical calibrations.
+                UndistortCacheKey key{
+                    value.camera_id, value.focal_x, value.focal_y,
+                    value.center_x, value.center_y, value.camera_width,
+                    value.camera_height, value.camera_model_type,
+                    value.radial_distortion, value.tangential_distortion};
+                const auto cached = undistort_cache.find(key);
+                if (cached != undistort_cache.end()) {
+                    camera->adopt_undistortion(cached->second);
+                } else {
+                    camera->precompute_undistortion(0.0f);
+                    undistort_cache.emplace(std::move(key), camera->undistort_params());
+                }
+            }
             camera->set_image_dimensions(value.image_width, value.image_height);
             camera->set_has_alpha(value.has_alpha);
             camera->set_has_image(value.has_image);
@@ -530,6 +562,7 @@ namespace lfs::io::project {
             const ScenePayloadResolver& resolver,
             const bool defer_geometry_payloads,
             const bool payload_units_only) {
+            UndistortCache undistort_cache;
             auto nodes = chapter.nodes();
             if (!nodes) {
                 return lfs::Result<void>::failure(std::move(nodes).error());
@@ -713,7 +746,7 @@ namespace lfs::io::project {
                 }
                 if (record.camera) {
                     try {
-                        desc.camera = hydrate_camera(*record.camera);
+                        desc.camera = hydrate_camera(*record.camera, undistort_cache);
                     } catch (const std::exception& error) {
                         // LFS-CENSUS-OK(empty-catch): reject malformed camera tensors before mutating the scene.
                         return fail<void>(
