@@ -553,7 +553,7 @@ namespace {
         }
 
         std::cout << spec.download_message << " to " << path_to_string(path) << "\n";
-        download_verified_file(spec.url, path, spec.sha256);
+        download_verified_file(spec.url, path, spec.sha256, "Downloaded model");
         require_sha256(path, spec.sha256, "Cached model");
         return path;
     }
