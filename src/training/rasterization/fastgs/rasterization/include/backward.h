@@ -27,7 +27,7 @@ namespace fast_lfs::rasterization {
         const float4* sh_coefficients_rest, // compact float4-packed swizzled layout
         const float4* w2c,
         const float3* cam_position,
-        const float3* primitive_normals, // [N] or nullptr, required when grad_normal != nullptr
+        const float3* primitive_normals, // [n_visible] compact, indexed by work_idx; or nullptr, required when grad_normal != nullptr
         char* per_primitive_buffers_blob,
         char* per_tile_buffers_blob,
         const uint* sorted_primitive_indices,
@@ -37,7 +37,7 @@ namespace fast_lfs::rasterization {
         float2* grad_mean2d_helper,
         float3* grad_conic_helper,
         float* grad_depth_helper,
-        float3* grad_normal_helper, // [N] or nullptr, required when grad_normal != nullptr
+        float3* grad_normal_helper, // [n_visible] compact, indexed by work_idx; or nullptr, required when grad_normal != nullptr
         float4* grad_w2c,
         float* densification_info,
         const int n_primitives,

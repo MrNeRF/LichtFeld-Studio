@@ -577,6 +577,14 @@ namespace {
         std::vector<float> scaling_data{-1.0f, -1.5f, -3.0f};
         float opacity_value = 0.3f;
         std::vector<float> t_data{0.0f, 0.0f, 4.0f};
+        int width = 1;
+        int height = 1;
+        float fx = 1.0f;
+        float fy = 1.0f;
+        float cx = 0.5f;
+        float cy = 0.5f;
+        // Per-pixel upstream in CHW, 3*height*width floats.
+        std::vector<float> upstream_data{0.7f, -0.4f, 1.1f};
 
         SplatData make_splat(const std::vector<float>& rotation_data) const {
             const size_t n = means_data.size() / 3;
@@ -593,9 +601,29 @@ namespace {
         Camera make_camera() const {
             auto R = Tensor::eye(3, Device::CUDA);
             auto T = Tensor::from_blob(const_cast<float*>(t_data.data()), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-            return Camera(R, T, 1.0f, 1.0f, 0.5f, 0.5f,
+            return Camera(R, T, fx, fy, cx, cy,
                           Tensor(), Tensor(), CameraModelType::PINHOLE,
-                          "normal_grad", "", std::filesystem::path{}, 1, 1, 0);
+                          "normal_grad", "", std::filesystem::path{}, width, height, 0);
+        }
+
+        float normal_loss(const Tensor& normal) const {
+            const auto normal_cpu = normal.to(Device::CPU);
+            const float* n = normal_cpu.ptr<float>();
+            const size_t n_pix = static_cast<size_t>(width) * static_cast<size_t>(height);
+            float loss = 0.0f;
+            for (size_t p = 0; p < n_pix; ++p) {
+                loss += upstream_data[0 * n_pix + p] * n[0 * n_pix + p] +
+                        upstream_data[1 * n_pix + p] * n[1 * n_pix + p] +
+                        upstream_data[2 * n_pix + p] * n[2 * n_pix + p];
+            }
+            return loss;
+        }
+
+        Tensor make_grad_normal() const {
+            return Tensor::from_vector(
+                upstream_data,
+                {size_t{3}, static_cast<size_t>(height), static_cast<size_t>(width)},
+                Device::CUDA);
         }
     };
 } // namespace
@@ -984,6 +1012,123 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIn
         const float expected = (render_loss(plus) - render_loss(minus)) / (2.0f * h);
         EXPECT_NEAR(actual[2 * 4 + c], expected, std::max(2.0e-3f, std::abs(expected) * 2.0e-2f))
             << "rotation gradient mismatch for visible row 2, quaternion component " << c;
+    }
+}
+
+TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientInterleavedVisibleRows) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    NormalChannelScene scene;
+    // 8x1 so A and B sit on different pixel centers with several pixels of
+    // gap. Dilation (~0.3) gives ~1.1 px extent, so adjacent pixels would
+    // leak a blend-weight rotation derivative into the FD; pixel 0 vs 7
+    // keeps each splat's supervision on its own pixel-centered sample.
+    scene.width = 8;
+    scene.height = 1;
+    scene.fx = 8.0f;
+    scene.fy = 8.0f;
+    scene.cx = 4.0f;
+    scene.cy = 0.5f;
+    const float depth = 1.0f + scene.t_data[2];
+    const float x_a = ((0.5f - scene.cx) / scene.fx) * depth;
+    const float x_b = ((7.5f - scene.cx) / scene.fx) * depth;
+    scene.means_data = {0.0f, 0.0f, -50.0f,
+                        x_a, 0.0f, 1.0f,
+                        0.0f, 0.0f, -50.0f,
+                        x_b, 0.0f, 1.0f};
+    scene.scaling_data = {-1.0f, -1.5f, -3.0f,
+                          -1.0f, -1.5f, -3.0f,
+                          -1.0f, -1.5f, -3.0f,
+                          -1.0f, -1.5f, -3.0f};
+    const int n_pix = scene.width * scene.height;
+    scene.upstream_data.assign(static_cast<size_t>(3 * n_pix), 0.0f);
+    scene.upstream_data[0 * n_pix + 0] = 0.7f;
+    scene.upstream_data[1 * n_pix + 0] = -0.4f;
+    scene.upstream_data[2 * n_pix + 0] = 1.1f;
+    scene.upstream_data[0 * n_pix + 7] = -0.5f;
+    scene.upstream_data[1 * n_pix + 7] = 0.9f;
+    scene.upstream_data[2 * n_pix + 7] = 0.3f;
+
+    const std::vector<float> quat_a{0.95f, 0.15f, -0.1f, 0.05f};
+    const std::vector<float> quat_b{0.80f, -0.20f, 0.40f, 0.10f};
+    const std::vector<float> identity{1.0f, 0.0f, 0.0f, 0.0f};
+    std::vector<float> rotations;
+    rotations.insert(rotations.end(), identity.begin(), identity.end());
+    rotations.insert(rotations.end(), quat_a.begin(), quat_a.end());
+    rotations.insert(rotations.end(), identity.begin(), identity.end());
+    rotations.insert(rotations.end(), quat_b.begin(), quat_b.end());
+
+    auto camera = scene.make_camera();
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    const auto render_loss = [&](const std::vector<float>& rotation_data) {
+        auto splat = scene.make_splat(rotation_data);
+        auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+        if (!forward.has_value()) {
+            throw lfs::Exception(std::move(forward.error()));
+        }
+        const float loss = scene.normal_loss(forward->first.normal);
+        forward->second.release_forward_context();
+        return loss;
+    };
+
+    auto splat = scene.make_splat(rotations);
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+    ASSERT_EQ(forward->second.forward_ctx.n_visible, 2);
+    ASSERT_NE(forward->second.forward_ctx.primitive_work_indices, nullptr);
+    std::vector<unsigned> work_indices(4);
+    ASSERT_EQ(cudaMemcpy(work_indices.data(), forward->second.forward_ctx.primitive_work_indices,
+                         work_indices.size() * sizeof(unsigned), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    // Row 1: primitive_idx 1 < n_visible 2, but work_idx 0 != primitive_idx.
+    // The old helper read would pick B's in-range row rather than fault.
+    const std::vector<unsigned> expected_map{0xffffffffu, 0u, 0xffffffffu, 1u};
+    ASSERT_EQ(work_indices, expected_map);
+
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    auto grad_image = Tensor::zeros_like(forward->first.image);
+    auto grad_normal = scene.make_grad_normal();
+    fast_rasterize_backward(
+        forward->second,
+        grad_image,
+        splat,
+        opt,
+        {},
+        {},
+        DensificationType::None,
+        1,
+        {},
+        {},
+        grad_normal);
+
+    const auto rotation_grad = recovered_fused_grad(opt, ParamType::Rotation).to(Device::CPU);
+    const float* actual = rotation_grad.ptr<float>();
+    for (int row : {0, 2}) {
+        for (int c = 0; c < 4; ++c) {
+            // Packed optimizer-moment readback can leave a sub-1e-12 residue on rows sharing a block with visible rows.
+            EXPECT_NEAR(actual[row * 4 + c], 0.0f, 1.0e-6f)
+                << "invisible row " << row << " has rotation gradient for component " << c;
+        }
+    }
+
+    const float h = 2.0e-2f;
+    for (int row : {1, 3}) {
+        for (int c = 0; c < 4; ++c) {
+            std::vector<float> plus = rotations;
+            std::vector<float> minus = rotations;
+            plus[row * 4 + c] += h;
+            minus[row * 4 + c] -= h;
+            const float expected = (render_loss(plus) - render_loss(minus)) / (2.0f * h);
+            EXPECT_NEAR(actual[row * 4 + c], expected, std::max(2.0e-3f, std::abs(expected) * 2.0e-2f))
+                << "rotation gradient mismatch for visible row " << row << ", quaternion component " << c;
+        }
     }
 }
 
