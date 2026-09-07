@@ -345,12 +345,7 @@ fast_lfs::rasterization::ForwardResult fast_lfs::rasterization::forward(
         cudaMemcpy(&h_n_visible, visibility_buffers.block_offsets + n_visibility_blocks - 1,
                    sizeof(h_n_visible), cudaMemcpyDeviceToHost),
         "cudaMemcpy(FastGS visible count)");
-    if (h_n_visible > static_cast<uint>(n_primitives)) {
-        throw std::runtime_error(
-            "FastGS visible count exceeds primitive count: " + std::to_string(h_n_visible) +
-            " visible primitives from " + std::to_string(n_primitives) + " primitives");
-    }
-    const int n_visible = checked_to_int(h_n_visible, "visible primitive count exceeds int range");
+    const int n_visible = checked_fastgs_visible_count(h_n_visible, n_primitives);
 
     char* per_primitive_buffers_base =
         per_primitive_buffers_func(PerPrimitiveBuffers::required_persistent(n_visible));
