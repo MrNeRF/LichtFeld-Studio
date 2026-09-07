@@ -554,13 +554,14 @@ namespace {
         std::vector<float> t_data{0.0f, 0.0f, 4.0f};
 
         SplatData make_splat(const std::vector<float>& rotation_data) const {
-            auto means = Tensor::from_blob(const_cast<float*>(means_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-            auto sh0 = Tensor::zeros({1, 1, 3}, Device::CUDA);
-            auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-            auto scaling = Tensor::from_blob(const_cast<float*>(scaling_data.data()), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-            auto rotation = Tensor::from_blob(const_cast<float*>(rotation_data.data()), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            const size_t n = means_data.size() / 3;
+            auto means = Tensor::from_blob(const_cast<float*>(means_data.data()), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            auto sh0 = Tensor::zeros({n, 1, 3}, Device::CUDA);
+            auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
+            auto scaling = Tensor::from_blob(const_cast<float*>(scaling_data.data()), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+            auto rotation = Tensor::from_blob(const_cast<float*>(rotation_data.data()), {n, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
             const float raw_opacity = std::log(opacity_value / (1.0f - opacity_value));
-            auto opacity = Tensor::full({1}, raw_opacity, Device::CUDA);
+            auto opacity = Tensor::full({n}, raw_opacity, Device::CUDA);
             return SplatData(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
         }
 
@@ -674,6 +675,107 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
         const float expected = (render_loss(plus) - render_loss(minus)) / (2.0f * h);
         EXPECT_NEAR(actual[c], expected, std::max(2.0e-3f, std::abs(expected) * 2.0e-2f))
             << "rotation gradient mismatch for quaternion component " << c;
+    }
+}
+
+TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIndex) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+
+    NormalChannelScene single_scene;
+    NormalChannelScene scene;
+    // R is identity and T is world-to-camera translation: depth = world_z + 4.
+    // Rows 0/1 have depth -46 and fail preprocess forward's near-plane culling.
+    scene.means_data = {0.0f, 0.0f, -50.0f,
+                        0.0f, 0.0f, -50.0f,
+                        0.0f, 0.0f, 1.0f};
+    scene.scaling_data = {-1.0f, -1.5f, -3.0f,
+                          -1.0f, -1.5f, -3.0f,
+                          -1.0f, -1.5f, -3.0f};
+    const std::vector<float> base_quat{0.95f, 0.15f, -0.1f, 0.05f};
+    const std::vector<float> upstream{0.7f, -0.4f, 1.1f};
+    std::vector<float> rotations;
+    for (int row = 0; row < 3; ++row) {
+        rotations.insert(rotations.end(), base_quat.begin(), base_quat.end());
+    }
+    auto camera = scene.make_camera();
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+
+    auto single_splat = single_scene.make_splat(base_quat);
+    auto single_forward = fast_rasterize_forward(camera, single_splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+    ASSERT_TRUE(single_forward.has_value()) << lfs::format_for_developer(single_forward.error());
+    ASSERT_TRUE(single_forward->first.normal.is_valid());
+    ASSERT_EQ(single_forward->first.normal.numel(), 3);
+    const auto single_normal_cpu = single_forward->first.normal.to(Device::CPU);
+    single_forward->second.release_forward_context();
+
+    const auto render_loss = [&](const std::vector<float>& rotation_data) {
+        auto splat = scene.make_splat(rotation_data);
+        auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+        if (!forward.has_value()) {
+            throw lfs::Exception(std::move(forward.error()));
+        }
+        const auto normal_cpu = forward->first.normal.to(Device::CPU);
+        const float* n = normal_cpu.ptr<float>();
+        const float loss = upstream[0] * n[0] + upstream[1] * n[1] + upstream[2] * n[2];
+        forward->second.release_forward_context();
+        return loss;
+    };
+
+    auto splat = scene.make_splat(rotations);
+    auto forward = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+    ASSERT_TRUE(forward.has_value()) << lfs::format_for_developer(forward.error());
+    ASSERT_EQ(forward->second.forward_ctx.n_visible, 1);
+    ASSERT_TRUE(forward->first.normal.is_valid());
+    ASSERT_EQ(forward->first.normal.numel(), 3);
+    const auto normal_cpu = forward->first.normal.to(Device::CPU);
+    for (int c = 0; c < 3; ++c) {
+        EXPECT_FLOAT_EQ(normal_cpu.ptr<float>()[c], single_normal_cpu.ptr<float>()[c])
+            << "invisible rows must not change normal channel " << c;
+    }
+
+    AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    AdamOptimizer opt(splat, cfg);
+    opt.allocate_gradients();
+    opt.zero_grad(0);
+
+    std::vector<float> upstream_data = upstream;
+    auto grad_image = Tensor::zeros_like(forward->first.image);
+    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    fast_rasterize_backward(
+        forward->second,
+        grad_image,
+        splat,
+        opt,
+        {},
+        {},
+        DensificationType::None,
+        1,
+        {},
+        {},
+        grad_normal);
+
+    const auto rotation_grad = recovered_fused_grad(opt, ParamType::Rotation).to(Device::CPU);
+    const float* actual = rotation_grad.ptr<float>();
+    for (int row = 0; row < 2; ++row) {
+        for (int c = 0; c < 4; ++c) {
+            EXPECT_EQ(actual[row * 4 + c], 0.0f)
+                << "invisible row " << row << " has rotation gradient for component " << c;
+        }
+    }
+
+    // Only primitive row 2 is visible, so its normal helper is at work_idx 0.
+    // As in the single-splat test, pixel centering isolates the normal value path.
+    const float h = 2.0e-2f;
+    for (int c = 0; c < 4; ++c) {
+        std::vector<float> plus = rotations;
+        std::vector<float> minus = rotations;
+        plus[2 * 4 + c] += h;
+        minus[2 * 4 + c] -= h;
+        const float expected = (render_loss(plus) - render_loss(minus)) / (2.0f * h);
+        EXPECT_NEAR(actual[2 * 4 + c], expected, std::max(2.0e-3f, std::abs(expected) * 2.0e-2f))
+            << "rotation gradient mismatch for visible row 2, quaternion component " << c;
     }
 }
 
