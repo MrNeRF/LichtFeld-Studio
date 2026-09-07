@@ -598,7 +598,7 @@ class _HandleStub:
 def _configuration_panel(module, monkeypatch):
     panel = module.TrainingPanel()
     params = SimpleNamespace(
-        has_params=lambda: True, raster_backend="fastgs",
+        has_params=lambda: True, raster_backend="3dgs",
         use_exposure_correction=False, use_bilateral_grid=False, ppisp=False,
         ppisp_use_controller=False, ppisp_freeze_from_sidecar=False,
         ppisp_controller_lr=0.003, ppisp_sidecar_path="saved.ppisp",
@@ -614,7 +614,7 @@ def test_backend_selector_uses_available_descriptors_and_syncs_viewer(training_p
     panel, params = _configuration_panel(training_panel_module, monkeypatch)
     updates = []
     monkeypatch.setattr(training_panel_module.lf, "training_backends", lambda: [
-        {"id": "fastgs", "label": "FastGS", "viewer_backend": "3dgs"},
+        {"id": "3dgs", "label": "3DGS", "viewer_backend": "3dgs"},
         {"id": "3dgut", "label": "3DGUT", "viewer_backend": "3dgut"},
     ], raising=False)
     monkeypatch.setattr(training_panel_module.lf, "get_render_settings",
@@ -625,11 +625,11 @@ def test_backend_selector_uses_available_descriptors_and_syncs_viewer(training_p
     panel._set_training_backend("nonexistent")
     assert params.raster_backend == "3dgut"
     assert len(updates) == 1
-    panel._set_training_backend("fastgs")
+    panel._set_training_backend("3dgs")
     assert updates[-1] == ("raster_backend", "3dgs")
     monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
     panel._set_training_backend("3dgut")
-    assert params.raster_backend == "fastgs"
+    assert params.raster_backend == "3dgs"
     assert len(updates) == 2
 
 
@@ -661,7 +661,7 @@ def test_appearance_modes_preserve_custom_combinations_and_tuning(training_panel
 
 
 @pytest.mark.parametrize("query,section,field", [
-    ("FastGS", "basic_params", "backend"),
+    ("3DGS", "basic_params", "backend"),
     ("strategy", "basic_params", "strategy"),
     ("SH_degree", "basic_params", "sh_degree"),
     ("bg_image", "background", "background_fields"),

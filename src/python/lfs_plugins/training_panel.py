@@ -514,7 +514,7 @@ class TrainingPanel(Panel):
 
     _BESPOKE_SEARCH = {
         "strategy": ("basic_params", "strategy mrnf igs+ mcmc", ("training_params.strategy",)),
-        "backend": ("basic_params", "raster backend fastgs 3dgut gut", ("training.backend",)),
+        "backend": ("basic_params", "raster backend 3dgs 3dgut gut", ("training.backend",)),
         "sh_degree": ("basic_params", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
         "depth_loss_mode": ("supervision", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
         "background_fields": ("background", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
@@ -561,7 +561,7 @@ class TrainingPanel(Panel):
     @staticmethod
     def _training_backend():
         params = lf.optimization_params()
-        return params.raster_backend if params and params.has_params() else "fastgs"
+        return params.raster_backend if params and params.has_params() else "3dgs"
 
     def _set_training_backend(self, name):
         params = lf.optimization_params()

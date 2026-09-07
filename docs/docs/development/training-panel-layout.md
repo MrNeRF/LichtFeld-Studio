@@ -55,7 +55,7 @@ or changing backend/appearance does not toggle it.
 
 ## Manual checks
 
-- In Ready at iteration zero, check FastGS and 3DGUT selection, viewer alignment,
+- In Ready at iteration zero, check 3DGS and 3DGUT selection, viewer alignment,
   and the capability notice. Check that unknown/unimplemented backends do not
   appear. Enable multiple unsupported options: Start must be disabled and list
   selected conflicts even with an unrelated search or collapsed sections. Remove
@@ -69,7 +69,7 @@ or changing backend/appearance does not toggle it.
 - Toggle the Iterations padlock; change iterations and inspect scaled refinement
   fields. Unlock and edit manually, then relock. Check that search and project
   chrome restoration retain the lock preference.
-- Search for Strategy, FastGS, SH Degree, background image, dataset resize and
+- Search for Strategy, 3DGS, SH Degree, background image, dataset resize and
   save steps. Clear search and check prior section expansion is restored.
 - Check a narrow panel, keyboard selection and the localized headings/tooltips.
 - Check toolbar width, text containment and icon contrast with light/dark themes and long
