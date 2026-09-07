@@ -18,8 +18,10 @@
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "operator/ops/depth_window_ops.hpp"
+#include "rendering/render_pass.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/rendering_types.hpp"
+#include "rendering/viewport_request_builder.hpp"
 #include "selection/selection_service.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer/app_store.hpp"
@@ -819,6 +821,246 @@ namespace lfs::vis {
         const auto back_epoch = rendering_manager_->depthWindowModeEpoch();
         EXPECT_NE(back_epoch, gt_epoch);
         EXPECT_NE(back_epoch, global_epoch);
+    }
+
+    // GT DORMANCY, end to end (PLAN03-R1.md:55, :588, :782): GT comparison
+    // SUSPENDS the depth filter, so the two per-panel windows are DORMANT for
+    // its duration and both must return intact. The shape is what
+    // discriminates: deliberately DIFFERING L/R windows with RIGHT focused, so
+    // a leave-collapse on the way in leaves both slots holding RIGHT's window
+    // and a projection seed on the way back leaves both holding the global
+    // one - either failure makes the two panels EQUAL, and both are caught by
+    // the exact-value assertions after the round trip. The middle section
+    // pins the suspension itself (no filter in either panel's request, no
+    // overlay, no drag) so a "dormancy" that merely stopped drawing could not
+    // pass.
+    TEST_F(DepthWindowPanelsInteractionTest, GtComparisonKeepsBothPanelWindowsDormantAndRestoresThem) {
+        enterIndependentDual();
+        rendering_manager_->setDepthWindowSync(false);
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Left, makeWindow(1.0f, 10.0f, 0.31f, 0.32f, 0.10f, 0.11f));
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Right, makeWindow(2.0f, 20.0f, 0.62f, 0.63f, -0.20f, -0.21f));
+        rendering_manager_->setFocusedSplitPanel(SplitViewPanelId::Right);
+
+        const auto left_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left);
+        const auto right_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
+        ASSERT_NE(left_pre, right_pre);
+        const auto lineage_pre = rendering_manager_->getDepthWindowCollapseRecord().generation;
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::GTComparison);
+
+        // DURING GT the state is untouched, and the filter it describes is
+        // fully suspended.
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), right_pre);
+        {
+            const auto snapshot = rendering_manager_->getDepthWindowOverlaySnapshot();
+            EXPECT_FALSE(snapshot.independent_dual_active);
+            EXPECT_TRUE(op::depthWindowOverlaySuppressed(rendering_manager_->isGTComparisonActive()));
+
+            auto settings = rendering_manager_->getSettings();
+            ASSERT_TRUE(settings.depth_filter_enabled);
+            FrameContext ctx{
+                .viewport = viewer_->getViewport(),
+                .settings = settings,
+                .render_size = {kViewerWidth, kViewerHeight},
+                .panel_depth_windows = snapshot.panel_windows,
+            };
+            for (const auto panel : {SplitViewPanelId::Left, SplitViewPanelId::Right}) {
+                const auto request = buildViewportRenderRequest(
+                    ctx, {kViewerWidth, kViewerHeight}, &ctx.viewport, panel);
+                EXPECT_FALSE(request.filters.screen_window.has_value());
+                EXPECT_FALSE(request.filters.view_volume.has_value());
+            }
+            // No drag can start either, so no preview lane can revive it.
+            EXPECT_FALSE(startDepthDrag(40.0, 40.0));
+            EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
+        }
+
+        // A GLOBAL depth write while GT is active fans out through BOTH slots
+        // outside independent-dual, so the dormant pair cannot live in the
+        // slots alone - this is what proves it is parked elsewhere.
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Left, makeWindow(7.0f, 70.0f, 0.77f, 0.78f, 0.07f, 0.08f));
+
+        lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewer_->getViewport()}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::IndependentDual);
+
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), right_pre);
+        // The split service resets focus to Left on entering independent-dual,
+        // so the projection follows LEFT's restored window.
+        EXPECT_EQ(rendering_manager_->getFocusedSplitPanel(), SplitViewPanelId::Left);
+        EXPECT_EQ(projectionDepthWindow(*rendering_manager_), left_pre);
+        // Nothing a per-panel reference describes was destroyed, so the
+        // lineage channel stamped nothing across either leg.
+        EXPECT_EQ(rendering_manager_->getDepthWindowCollapseRecord().generation, lineage_pre);
+    }
+
+    // GT DORMANCY x DRAG. The conjunction is what discriminates: the dragged
+    // panel is the RIGHT one AND it is the focused one, so its preview is in
+    // the PROJECTION as well as in its slot. The split service resets focus to
+    // Left on the way into GT, so a transition that decides the projection
+    // from the CURRENT focus restores Right's slot and leaves Right's
+    // uncommitted preview standing in the projection - where the next
+    // GT -> Disabled leg promotes it to the single-window state. Both legs are
+    // asserted; the pre-drag Right window is the only correct answer for each.
+    TEST_F(DepthWindowPanelsInteractionTest, GtEntryWithFocusedRightDragLeavesNoTransientProjection) {
+        enterIndependentDual();
+        rendering_manager_->setDepthWindowSync(false);
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Left, makeWindow(1.0f, 10.0f, 0.31f, 0.32f, 0.10f, 0.11f));
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Right, makeWindow(2.0f, 20.0f, 0.62f, 0.63f, -0.20f, -0.21f));
+        rendering_manager_->setFocusedSplitPanel(SplitViewPanelId::Right);
+
+        const auto left_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left);
+        const auto right_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
+        ASSERT_NE(left_pre, right_pre);
+        // Focused, so the projection tracks RIGHT.
+        ASSERT_EQ(projectionDepthWindow(*rendering_manager_), right_pre);
+
+        // A live drag on the focused RIGHT panel, through the DRAG lane so it
+        // leaves a genuine pre-drag backup (a public-setter write would be a
+        // legitimate non-drag write and would supersede it).
+        std::uint64_t right_token = 0;
+        rendering_manager_->beginDepthWindowDrag(SplitViewPanelId::Right, right_token);
+        ASSERT_TRUE(rendering_manager_->applyDepthWindowForPanelIfEpoch(
+            SplitViewPanelId::Right, makeWindow(3.0f, 30.0f, 0.90f),
+            rendering_manager_->depthWindowModeEpoch(), right_token));
+        const auto transient = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
+        ASSERT_NE(transient, right_pre);
+        ASSERT_EQ(projectionDepthWindow(*rendering_manager_), transient);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::GTComparison);
+        ASSERT_EQ(rendering_manager_->getFocusedSplitPanel(), SplitViewPanelId::Left);
+
+        // Parked pair intact, and the transient is gone from the projection too.
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), right_pre);
+        EXPECT_EQ(projectionDepthWindow(*rendering_manager_), right_pre);
+
+        // The leg that makes the leak visible to the user: GT -> Disabled
+        // discards the park, so whatever the projection holds becomes the
+        // single window.
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::Disabled);
+        EXPECT_EQ(projectionDepthWindow(*rendering_manager_), right_pre);
+        EXPECT_NE(projectionDepthWindow(*rendering_manager_), transient);
+
+        // Balance the manually opened bracket; the transition consumed the backup.
+        rendering_manager_->endDepthWindowDrag(SplitViewPanelId::Right, right_token);
+        EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    }
+
+    // GT DORMANCY x SYNC. setDepthWindowSync promises that turning sync ON
+    // with differing panels copies the FOCUSED panel's window to the other as
+    // one undo step. While a dormant pair is parked neither half of that is
+    // available - the per-panel focus was reset by the mode change, and an
+    // undo entry restores the live slots, not the park - so the flag must not
+    // move at all: setting it alone would restore L != R with sync true on the
+    // direct return. The second half pins that this is scoped to a DORMANT
+    // session and is not a blanket GT ban.
+    TEST_F(DepthWindowPanelsInteractionTest, GtTimeSyncMutationIsRefusedWhileAPairIsDormant) {
+        enterIndependentDual();
+        rendering_manager_->setDepthWindowSync(false);
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Left, makeWindow(1.0f, 10.0f, 0.31f, 0.32f, 0.10f, 0.11f));
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Right, makeWindow(2.0f, 20.0f, 0.62f, 0.63f, -0.20f, -0.21f));
+        rendering_manager_->setFocusedSplitPanel(SplitViewPanelId::Right);
+        const auto left_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left);
+        const auto right_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
+        ASSERT_NE(left_pre, right_pre);
+        ASSERT_FALSE(rendering_manager_->getDepthWindowSync());
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::GTComparison);
+
+        rendering_manager_->setDepthWindowSync(true);
+        // REFUSED, and it left no undo step behind either.
+        EXPECT_FALSE(rendering_manager_->getDepthWindowSync());
+        EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+        lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewer_->getViewport()}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::IndependentDual);
+        const auto left_back = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left);
+        const auto right_back = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
+        EXPECT_EQ(left_back, left_pre);
+        EXPECT_EQ(right_back, right_pre);
+        // THE INVARIANT: sync true never stands over an unequal pair.
+        EXPECT_NE(left_back, right_back);
+        EXPECT_FALSE(rendering_manager_->getDepthWindowSync());
+
+        // A GT session entered from a GLOBAL mode parks nothing, so the sync
+        // flag still moves there: the gate is the park, not GT itself.
+        lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewer_->getViewport()}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::Disabled);
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::GTComparison);
+        rendering_manager_->setDepthWindowSync(true);
+        EXPECT_TRUE(rendering_manager_->getDepthWindowSync());
+    }
+
+    // GT DORMANCY x updateSettings. This is the ONLY entry that can move the
+    // split mode and the global depth projection in ONE write, so it is the
+    // only one that exercises the fan-out suppression on the way into GT: the
+    // incoming projection must land in settings_ as an ordinary GT-time global
+    // write, WITHOUT being fanned into the two slots and WITHOUT being
+    // overwritten by the focused drag's pre-drag window on the way past the
+    // backup fold. All three are asserted, and the round trip proves the
+    // parked pair was the pre-drag one.
+    TEST_F(DepthWindowPanelsInteractionTest, UpdateSettingsGtEntryKeepsItsProjectionAndParksBothPanels) {
+        enterIndependentDual();
+        rendering_manager_->setDepthWindowSync(false);
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Left, makeWindow(1.0f, 10.0f, 0.31f, 0.32f, 0.10f, 0.11f));
+        rendering_manager_->setDepthWindowForPanel(
+            SplitViewPanelId::Right, makeWindow(2.0f, 20.0f, 0.62f, 0.63f, -0.20f, -0.21f));
+        rendering_manager_->setFocusedSplitPanel(SplitViewPanelId::Left);
+        const auto left_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left);
+        const auto right_pre = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
+        ASSERT_NE(left_pre, right_pre);
+
+        // A live drag on the FOCUSED panel, so its backup is the one the fold
+        // would otherwise re-apply to the projection.
+        std::uint64_t left_token = 0;
+        rendering_manager_->beginDepthWindowDrag(SplitViewPanelId::Left, left_token);
+        ASSERT_TRUE(rendering_manager_->applyDepthWindowForPanelIfEpoch(
+            SplitViewPanelId::Left, makeWindow(3.0f, 30.0f, 0.90f),
+            rendering_manager_->depthWindowModeEpoch(), left_token));
+        ASSERT_NE(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
+
+        // ONE write: enter GT AND move the global depth projection.
+        auto settings = rendering_manager_->getSettings();
+        settings.split_view_mode = SplitViewMode::GTComparison;
+        settings.depth_filter_scale_x = 0.77f;
+        settings.depth_filter_scale_y = 0.78f;
+        settings.depth_filter_offset_x = 0.0f;
+        settings.depth_filter_offset_y = 0.0f;
+        settings.depth_filter_min = {-0.5f, -0.5f, -70.0f};
+        settings.depth_filter_max = {0.5f, 0.5f, -7.0f};
+        rendering_manager_->updateSettings(settings);
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::GTComparison);
+
+        const auto requested = makeWindow(7.0f, 70.0f, 0.77f, 0.78f, 0.0f, 0.0f);
+        EXPECT_EQ(projectionDepthWindow(*rendering_manager_), requested);
+        // The GT-time global write did NOT fan out into the dormant pair.
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), right_pre);
+
+        lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewer_->getViewport()}.emit();
+        ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::IndependentDual);
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
+        EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), right_pre);
+        EXPECT_NE(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left),
+                  rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right));
+
+        rendering_manager_->endDepthWindowDrag(SplitViewPanelId::Left, left_token);
+        EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
     }
 
     TEST_F(DepthWindowPanelsInteractionTest, UndoSyncedDragCommitRestoresBothSlotsAfterSyncOffAndFocusMove) {

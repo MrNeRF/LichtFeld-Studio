@@ -1026,9 +1026,17 @@ namespace lfs::vis {
         // other, and must revalidate the generation around its reads.
         void stampDepthWindowLineageLocked(SplitViewPanelId source,
                                            DepthWindowLineageKind kind);
+        // boundary_carries_global_depth_write says the SAME write that moved the
+        // mode also moved the global depth projection (only updateSettings can
+        // combine the two; every event site changes the mode alone). It matters
+        // on the independent -> GT park leg ONLY, where settings_ already holds
+        // that incoming projection: such a write is an ordinary GT-time global
+        // write and must survive, so the park must not overwrite it with the
+        // pre-transition focused panel's window.
         void applyDepthWindowModeTransitionLocked(SplitViewMode previous_mode,
                                                   SplitViewMode new_mode,
-                                                  SplitViewPanelId pre_transition_focus);
+                                                  SplitViewPanelId pre_transition_focus,
+                                                  bool boundary_carries_global_depth_write = false);
         [[nodiscard]] bool depthWindowDragActiveLocked() const;
         // OWNERSHIP, not preview: true from the moment a drag is invoked until
         // its operator is destroyed, subthreshold presses included. The
@@ -1211,6 +1219,24 @@ namespace lfs::vis {
         SceneUpscalerSelection scene_upscaler_runtime_selection_{};
         std::array<int, 2> panel_grid_planes_{{1, 1}};
         std::array<DepthWindowState, 2> panel_depth_windows_{};
+        // The DORMANT per-panel pair, parked for exactly one GT-comparison
+        // session and only when GT was entered DIRECTLY from independent-dual.
+        // GT fully suspends the depth filter (viewport_request_builder.cpp:251,
+        // depthWindowOverlaySuppressed, the drag operator's poll), so the two
+        // windows are DORMANT for its duration rather than collapsed onto the
+        // focused one: both must come back exactly as they were. The park is
+        // needed because an ordinary GLOBAL depth write during GT fans out
+        // through BOTH slots (applyDepthWindowForPanelLocked is
+        // non-independent there), so the slots themselves cannot carry the
+        // dormant values across. Written only under settings_mutex_, by
+        // applyDepthWindowModeTransitionLocked - which parks on the
+        // independent -> GT leg, restores on the GT -> independent leg, and
+        // drops it at every other boundary it runs for - and cleared by the
+        // project restore, which is a lifetime discontinuity. Engaged, it also
+        // means "a dormant pair is live somewhere other than the slots", and
+        // setDepthWindowSync READS it under the same lock for exactly that:
+        // the sync flag cannot move while the pair it constrains is parked.
+        std::optional<std::array<DepthWindowState, 2>> depth_window_dormant_panels_;
         bool depth_window_sync_ = false;
         // Written by stampDepthWindowLineageLocked at each of the four
         // slot-invalidating writes (settings_mutex_ held by every caller,

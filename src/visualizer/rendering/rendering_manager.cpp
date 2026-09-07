@@ -760,7 +760,18 @@ namespace lfs::vis {
                 }
             } else {
                 syncGridPlanesLocked(settings_.grid_plane);
-                if (depth_window_projection_changed) {
+                // GT DORMANCY: settings_ already carries the NEW mode, so a
+                // single write that BOTH enters GT from independent-dual and
+                // moves the depth projection reaches this non-independent
+                // branch and would homogenize the very pair the transition
+                // below has to park intact. A global depth write arriving with
+                // the GT boundary is an ordinary GT-time write, and GT-time
+                // writes never disturb the dormant windows.
+                const bool entering_gt_from_independent_panels =
+                    split_mode_changes &&
+                    splitViewUsesIndependentPanels(previous_split_mode) &&
+                    splitViewUsesGTComparison(settings_.split_view_mode);
+                if (depth_window_projection_changed && !entering_gt_from_independent_panels) {
                     const auto projection_window = depthWindowFromProjection(settings_);
                     panel_depth_windows_ = {projection_window, projection_window};
                     releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
@@ -779,8 +790,13 @@ namespace lfs::vis {
             // restoreSplitViewMode do; leaving one is already covered by the
             // non-independent branch above.
             if (split_mode_changes) {
+                // This is the ONE site that can carry a global depth write
+                // across a mode boundary in the same call, so it is the one
+                // site that passes the flag: on a GT park leg that incoming
+                // projection is what settings_ must keep.
                 applyDepthWindowModeTransitionLocked(
-                    previous_split_mode, settings_.split_view_mode, pre_transition_focus);
+                    previous_split_mode, settings_.split_view_mode, pre_transition_focus,
+                    depth_window_projection_changed);
                 if (splitViewUsesIndependentPanels(settings_.split_view_mode)) {
                     syncGridPlanesLocked(settings_.grid_plane);
                 }
@@ -1281,6 +1297,25 @@ namespace lfs::vis {
             if (depthWindowDragOwnedLocked()) {
                 return;
             }
+            // GT DORMANCY, same refusal for the same reason. This setter's
+            // documented promise is that turning sync ON with differing panels
+            // "copies the FOCUSED panel's window to the other as ONE UNDO
+            // STEP" (py_ui.cpp set_depth_window_sync). While a dormant pair is
+            // parked NEITHER half of that is available: the live per-panel
+            // focus was reset to Left by the mode change that parked the pair,
+            // so no panel is the copy source, and an undo entry restores the
+            // LIVE slots, which are not where the dormant pair lives. Setting
+            // the flag alone is worse than refusing - it would restore L != R
+            // with sync true on the direct return, breaking the invariant the
+            // copy exists to establish. So the flag does not move, exactly as
+            // it does not move mid-drag; the binding already reports the
+            // ACTUAL post-call state rather than the requested one, and the
+            // toolbar toggle is hidden in GT anyway. A GT session entered from
+            // a global mode parks nothing and is unaffected: its panels are
+            // already equal, so sync there breaks nothing.
+            if (depth_window_dormant_panels_) {
+                return;
+            }
             bool slots_changed = false;
             if (sync && split_view_service_.isIndependentDualActive(settings_)) {
                 const size_t focused_index =
@@ -1406,6 +1441,10 @@ namespace lfs::vis {
         // nothing. A surviving drag's endDepthWindowDrag releases only what it
         // still owns, so clearing here simply makes that end a no-op.
         depth_window_pin_owners_ = {};
+        // A parked dormant pair belongs to the previous session's windows for
+        // exactly the same reason as the backups above: leaving GT after this
+        // restore must not fold a pre-project pair back over the restored one.
+        depth_window_dormant_panels_.reset();
         // The third SLOT-INVALIDATING write. A restore seeds BOTH slots from
         // the restored projection, so nothing a consumer cached about either
         // panel survives it - and it can begin and end in independent-dual with
@@ -1485,7 +1524,8 @@ namespace lfs::vis {
     void RenderingManager::applyDepthWindowModeTransitionLocked(
         const SplitViewMode previous_mode,
         const SplitViewMode new_mode,
-        const SplitViewPanelId pre_transition_focus) {
+        const SplitViewPanelId pre_transition_focus,
+        const bool boundary_carries_global_depth_write) {
         // ONE boundary predicate governs the WHOLE helper. GT comparison fully
         // suspends the depth filter and independent-dual is where per-panel
         // windows exist at all, so entering or leaving either is the only kind
@@ -1504,6 +1544,20 @@ namespace lfs::vis {
             return;
         }
 
+        // GT DORMANCY (PLAN03-R1.md:55, :588, :782). GT comparison SUSPENDS the
+        // depth filter; it does not end per-panel state. So the independent
+        // <-> GT legs are their OWN cases, ahead of the ordinary enter/leave
+        // arms below: routing them through those arms would homogenize both
+        // slots onto the pre-transition focused window (a leave collapse) and
+        // then re-seed both from the global projection (a plain enter), which
+        // destroys a deliberately differing pair across a boundary that is
+        // required to leave it untouched.
+        const bool was_gt = splitViewUsesGTComparison(previous_mode);
+        const bool is_gt = splitViewUsesGTComparison(new_mode);
+        const bool park_dormant_panels = was_independent && is_gt;
+        const bool restore_dormant_panels =
+            was_gt && is_independent && depth_window_dormant_panels_.has_value();
+
         // Drags that raced this transition may already have written previews into
         // their slots (the registry can check a modal out before the cancel
         // arrives). Undo EVERY recorded write FIRST so the collapse below folds
@@ -1517,7 +1571,18 @@ namespace lfs::vis {
             }
             const DepthWindowState backup_window = *depth_window_drag_backups_[index];
             panel_depth_windows_[index] = backup_window;
-            if (index == focused_index) {
+            // On the PARK leg the projection is decided by the park arm alone,
+            // for two reasons this per-slot write cannot serve. It tests the
+            // CURRENT focus, which the split service has already reset to Left
+            // (split_view_service.cpp:217) - so a Right-focused drag's slot is
+            // restored while its transient preview is left standing in the
+            // projection, and a later GT -> Disabled makes that transient the
+            // single-window state. And when the boundary write carried its own
+            // global projection, this write would overwrite it with a pre-drag
+            // window. The old leave collapse masked both by re-applying
+            // pre_transition_focus afterwards; the park arm now does that
+            // explicitly. Every OTHER leg keeps this write exactly as it was.
+            if (index == focused_index && !park_dormant_panels) {
                 const RenderSettings before_projection = settings_;
                 applyDepthWindowToProjection(settings_, backup_window);
                 if (projectionNearFarChanged(before_projection, settings_)) {
@@ -1531,7 +1596,57 @@ namespace lfs::vis {
         // write refuses on ownership as well as on the epoch.
         depth_window_pin_owners_ = {};
 
-        if (!was_independent && is_independent) {
+        if (park_dormant_panels) {
+            // PRESERVE both windows. The drag fold and the ownership clear
+            // above have already run, so what is parked is clean pre-drag
+            // state. Nothing is stamped: a lineage stamp says "a slot a
+            // consumer cached no longer exists", and here BOTH still do -
+            // which is also why the record's documented four bump sites
+            // exclude GT boundaries.
+            depth_window_dormant_panels_ = panel_depth_windows_;
+            // The projection is the ONE thing this leg must still settle, and
+            // it settles it EXPLICITLY rather than trusting what is already
+            // there. Two writes can leave it incoherent at this point: a drag
+            // whose transient preview was folded out of the slots above but
+            // not out of the projection, and, on the other side, a
+            // boundary-carried global depth write that must be kept. So: an
+            // incoming global projection WINS (it is an ordinary GT-time
+            // global write, and GT-time writes never disturb the dormant
+            // windows); otherwise the projection is re-derived from the
+            // PARKED window of the panel that was focused when this
+            // transition began - the current focus is already reset to Left,
+            // and pre_transition_focus is the same panel the old leave
+            // collapse sourced. Idempotent when the projection is already
+            // right, so the ordinary drag-free entry bumps nothing.
+            if (!boundary_carries_global_depth_write) {
+                const auto parked_focused_window =
+                    panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
+                const float previous_depth_min_z = settings_.depth_filter_min.z;
+                const float previous_depth_max_z = settings_.depth_filter_max.z;
+                applyDepthWindowToProjection(settings_, parked_focused_window);
+                if (settings_.depth_filter_min.z != previous_depth_min_z ||
+                    settings_.depth_filter_max.z != previous_depth_max_z) {
+                    ++depth_window_projection_generation_;
+                }
+            }
+        } else if (restore_dormant_panels) {
+            // The return leg of that same session: the EXACT pre-GT pair comes
+            // back over whatever a global GT-time write fanned into the slots.
+            // The projection follows whichever panel is focused NOW - the
+            // split service resets that to Left on entering independent-dual
+            // (split_view_service.cpp:217) - exactly as setFocusedSplitPanel
+            // would have done for that focus.
+            panel_depth_windows_ = *depth_window_dormant_panels_;
+            const auto focused_window =
+                panel_depth_windows_[splitViewPanelIndex(split_view_service_.focusedPanel())];
+            const float previous_depth_min_z = settings_.depth_filter_min.z;
+            const float previous_depth_max_z = settings_.depth_filter_max.z;
+            applyDepthWindowToProjection(settings_, focused_window);
+            if (settings_.depth_filter_min.z != previous_depth_min_z ||
+                settings_.depth_filter_max.z != previous_depth_max_z) {
+                ++depth_window_projection_generation_;
+            }
+        } else if (!was_independent && is_independent) {
             const auto projection_window = depthWindowFromProjection(settings_);
             panel_depth_windows_ = {projection_window, projection_window};
         } else if (was_independent && !is_independent) {
@@ -1555,6 +1670,17 @@ namespace lfs::vis {
                 settings_.depth_filter_max.z != previous_depth_max_z) {
                 ++depth_window_projection_generation_;
             }
+        }
+
+        // Dormancy is scoped to ONE GT session entered directly from
+        // independent-dual, so every OTHER boundary this helper runs for drops
+        // the park: a GT entered from a global mode can never restore a pair it
+        // did not park, a GT left for a global mode leaves that mode's single
+        // window governing, and a pair just restored above is consumed. (A
+        // transition that touches neither boundary returned at the top, and one
+        // of those cannot be leaving GT.)
+        if (!park_dormant_panels) {
+            depth_window_dormant_panels_.reset();
         }
 
         // The boundary was established at the top of this helper: a drag that
