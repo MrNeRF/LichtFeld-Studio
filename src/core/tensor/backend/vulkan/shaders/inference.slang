@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
 // SPDX-License-Identifier: GPL-3.0-or-later
 static const uint LFS_LOCAL_SIZE_X = 256;
-static const uint LFS_PUSH_CONSTANT_SIZE = 120;
+static const uint LFS_PUSH_CONSTANT_SIZE = 112;
 
 [SpecializationConstant]
 const uint kOperation = 0; // im2col, col2im, resize, pool, activation, grid
@@ -34,7 +34,6 @@ struct Parameters
     float u1;
     float v0;
     float v1;
-    uint reserved;
 };
 
 float sample(float* input, int plane, int y, int x, Parameters p)
@@ -58,7 +57,7 @@ float cubic(float x)
     return 0.0;
 }
 
-// Maximum absolute error below 1.5e-7, evaluated in fp32 before the output cast.
+// Evaluate the erf approximation in fp32 before the output cast.
 float erfApprox(float x)
 {
     float a = abs(x);

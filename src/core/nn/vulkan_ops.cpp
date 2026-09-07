@@ -2,11 +2,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vulkan_ops.hpp"
-#include "core/tensor/internal/tensor_impl.hpp"
 #include "core/tensor/backend/vulkan/vk_context.hpp"
 #include "core/tensor/backend/vulkan/vk_ops_common.hpp"
 #include "core/tensor/backend/vulkan/vk_pipelines.hpp"
 #include "core/tensor/backend/vulkan/vk_recorder.hpp"
+#include "core/tensor/internal/tensor_impl.hpp"
 
 #include <algorithm>
 #include <array>
@@ -23,9 +23,8 @@ namespace lfs::core::nn::vulkan {
             int32_t pad_h = 0, pad_w = 0, dilation_h = 0, dilation_w = 0;
             int32_t offset = 0, columns = 0, mode = 0, coord = 0, include_pad = 0;
             float u0 = 0, u1 = 0, v0 = 0, v1 = 0;
-            uint32_t reserved = 0;
         };
-        static_assert(sizeof(Push) == 120);
+        static_assert(sizeof(Push) == 112);
 
         Tensor fp32(const Tensor& t) { return t.to(DataType::Float32).contiguous(); }
 
@@ -34,7 +33,8 @@ namespace lfs::core::nn::vulkan {
         }
 
         void dispatch(uint32_t kind, const Tensor& input, Tensor& output, Push push) {
-            if (output.numel() == 0) return;
+            if (output.numel() == 0)
+                return;
             LFS_ASSERT_MSG(output.numel() <= static_cast<size_t>(std::numeric_limits<int32_t>::max()),
                            "NN shader output exceeds int32 indexing");
             const auto src = internal::storage_ref(input);
@@ -58,16 +58,20 @@ namespace lfs::core::nn::vulkan {
 
         Tensor affine(Tensor out, const Tensor* bias, Activation activation,
                       const Tensor* residual, const Tensor* scale) {
-            if (bias) out = out.add(fp32(*bias));
+            if (bias)
+                out = out.add(fp32(*bias));
             out = activate(out, activation);
-            if (scale) out = out.mul(fp32(*scale));
-            if (residual) out = out.add(fp32(*residual).reshape(out.shape()));
+            if (scale)
+                out = out.mul(fp32(*scale));
+            if (residual)
+                out = out.add(fp32(*residual).reshape(out.shape()));
             return out;
         }
     } // namespace
 
     Tensor activate(const Tensor& input, Activation activation) {
-        if (activation == Activation::None) return input;
+        if (activation == Activation::None)
+            return input;
         const auto x = fp32(input);
         auto out = empty(x, x.shape());
         dispatch(4, x, out, Push{.mode = static_cast<int32_t>(activation)});
@@ -76,25 +80,39 @@ namespace lfs::core::nn::vulkan {
 
     Tensor gemm(const Tensor& a, const Tensor& b, bool trans_b, const Tensor* bias,
                 Activation activation, const Tensor* residual, const Tensor* scale) {
-        auto x = fp32(a);
-        auto w = fp32(b);
-        if (trans_b) w = w.transpose(-2, -1).contiguous();
-        auto out = x.matmul(w);
+        const auto x = fp32(a);
+        const auto source_weight = fp32(b);
+        const auto w = trans_b ? source_weight.transpose(-2, -1).contiguous() : source_weight;
+        const auto m = a.shape()[a.ndim() - 2], k = a.shape()[a.ndim() - 1];
+        const auto n = w.shape()[w.ndim() - 1];
+        const auto batches = a.numel() / (m * k);
+        Tensor out;
+        if (w.numel() == k * n) {
+            out = x.reshape(TensorShape{batches * m, k}).mm(w.reshape(TensorShape{k, n}));
+        } else {
+            out = x.reshape(TensorShape{batches, m, k}).bmm(w.reshape(TensorShape{batches, k, n}));
+        }
+        std::vector<size_t> shape;
+        for (size_t i = 0; i + 1 < a.ndim(); ++i)
+            shape.push_back(a.shape()[i]);
+        shape.push_back(n);
+        out = out.reshape(TensorShape(shape));
         return affine(std::move(out), bias, activation, residual, scale).to(a.dtype());
     }
 
     Tensor norm(const Tensor& input, const Tensor& weight, const Tensor* bias, float eps) {
-        auto x = fp32(input);
-        if (bias) x = x.sub(x.mean(-1, true));
+        const auto source = fp32(input);
+        const auto x = bias ? source.sub(source.mean(-1, true)) : source;
         auto variance = x.mul(x).mean(-1, true);
         auto out = x.div(variance.add(eps).sqrt()).mul(fp32(weight));
-        if (bias) out = out.add(fp32(*bias));
+        if (bias)
+            out = out.add(fp32(*bias));
         return out.to(input.dtype());
     }
 
     Tensor softmax(const Tensor& input, const Tensor* mask) {
-        auto x = fp32(input);
-        if (mask) x = x.add(fp32(*mask));
+        const auto source = fp32(input);
+        const auto x = mask ? source.add(fp32(*mask)) : source;
         auto shifted = x.sub(x.max(-1, true));
         auto e = shifted.exp();
         return e.div(e.sum(-1, true)).to(input.dtype());
@@ -119,7 +137,8 @@ namespace lfs::core::nn::vulkan {
             const int end = std::min(nq, start + tile);
             auto scores = queries.slice(1, start, end).contiguous().bmm(keys).mul(scale);
             Tensor mask_tile;
-            if (mask) mask_tile = additive.slice(2, start, end).contiguous().reshape({batches, end - start, nk});
+            if (mask)
+                mask_tile = additive.slice(2, start, end).contiguous().reshape({batches, end - start, nk});
             auto probs = softmax(scores, mask ? &mask_tile : nullptr);
             out.slice(1, start, end).copy_from(probs.bmm(values));
         }
@@ -139,14 +158,14 @@ namespace lfs::core::nn::vulkan {
         const auto x = fp32(input);
         const auto weights = fp32(weight);
         auto out = empty(x, TensorShape{static_cast<size_t>(n), static_cast<size_t>(cout), static_cast<size_t>(oh), static_cast<size_t>(ow)});
-        Push push{.channels = cig, .height = h, .width = w, .out_height = oh, .out_width = ow,
-                  .kernel_h = kh, .kernel_w = kw, .stride_h = params.stride_h, .stride_w = params.stride_w,
-                  .pad_h = params.pad_h, .pad_w = params.pad_w, .dilation_h = params.dilation_h,
-                  .dilation_w = params.dilation_w, .mode = static_cast<int32_t>(params.pad_mode)};
+        Push push{.channels = cig, .height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = params.stride_h, .stride_w = params.stride_w, .pad_h = params.pad_h, .pad_w = params.pad_w, .dilation_h = params.dilation_h, .dilation_w = params.dilation_w, .mode = static_cast<int32_t>(params.pad_mode)};
         for (int batch = 0; batch < n; ++batch) {
             for (int group = 0; group < params.groups; ++group) {
                 auto image = x.slice(0, batch, batch + 1).slice(1, group * cig, (group + 1) * cig).contiguous();
-                auto destination = out.slice(0, batch, batch + 1).slice(1, group * cog, (group + 1) * cog).reshape({cog, oh * ow});
+                // Reshape the full dense output before slicing channels. A
+                // grouped NCHW slice can materialize when reshaped, losing the
+                // connection to the output storage we must write.
+                auto destination = out.reshape({n, cout, oh * ow}).slice(0, batch, batch + 1).squeeze(0).slice(0, group * cog, (group + 1) * cog);
                 if (transpose) {
                     auto wt = weights.slice(0, group * cig, (group + 1) * cig).reshape({cig, cog * kh * kw}).transpose(0, 1).contiguous();
                     auto columns = wt.mm(image.reshape({cig, h * w}));
@@ -168,15 +187,15 @@ namespace lfs::core::nn::vulkan {
                 }
             }
         }
-        if (bias) out = out.add(fp32(*bias).reshape({1, cout, 1, 1}));
+        if (bias)
+            out = out.add(fp32(*bias).reshape({1, cout, 1, 1}));
         return activate(out, params.activation).to(input.dtype());
     }
 
     Tensor resize(const Tensor& input, int height, int width, ResizeMode mode, CoordTransform coord) {
         auto x = fp32(input);
         auto out = empty(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(height), static_cast<size_t>(width)});
-        dispatch(2, x, out, Push{.height = static_cast<int32_t>(input.shape()[2]), .width = static_cast<int32_t>(input.shape()[3]),
-                                 .out_height = height, .out_width = width, .mode = static_cast<int32_t>(mode), .coord = static_cast<int32_t>(coord)});
+        dispatch(2, x, out, Push{.height = static_cast<int32_t>(input.shape()[2]), .width = static_cast<int32_t>(input.shape()[3]), .out_height = height, .out_width = width, .mode = static_cast<int32_t>(mode), .coord = static_cast<int32_t>(coord)});
         return out.to(input.dtype());
     }
 
@@ -186,9 +205,7 @@ namespace lfs::core::nn::vulkan {
         LFS_ASSERT_MSG(oh > 0 && ow > 0, "NN pooling requires positive output dimensions");
         auto x = fp32(input);
         auto out = empty(x, TensorShape{input.shape()[0], input.shape()[1], static_cast<size_t>(oh), static_cast<size_t>(ow)});
-        dispatch(3, x, out, Push{.height = h, .width = w, .out_height = oh, .out_width = ow,
-                                 .kernel_h = kh, .kernel_w = kw, .stride_h = sh, .stride_w = sw,
-                                 .pad_h = ph, .pad_w = pw, .mode = average ? 1 : 0, .include_pad = count_include_pad ? 1 : 0});
+        dispatch(3, x, out, Push{.height = h, .width = w, .out_height = oh, .out_width = ow, .kernel_h = kh, .kernel_w = kw, .stride_h = sh, .stride_w = sw, .pad_h = ph, .pad_w = pw, .mode = average ? 1 : 0, .include_pad = count_include_pad ? 1 : 0});
         return out.to(input.dtype());
     }
 
@@ -207,8 +224,7 @@ namespace lfs::core::nn::vulkan {
     Tensor window_unpartition(const Tensor& input, int window, int height, int width) {
         const int nh = (height + window - 1) / window, nw = (width + window - 1) / window;
         const int b = static_cast<int>(input.shape()[0]) / (nh * nw), c = static_cast<int>(input.shape()[3]);
-        return input.reshape({b, nh, nw, window, window, c}).permute({0, 1, 3, 2, 4, 5}).contiguous()
-            .reshape({b, nh * window, nw * window, c}).slice(1, 0, height).slice(2, 0, width).contiguous();
+        return input.reshape({b, nh, nw, window, window, c}).permute({0, 1, 3, 2, 4, 5}).contiguous().reshape({b, nh * window, nw * window, c}).slice(1, 0, height).slice(2, 0, width).contiguous();
     }
 
     std::array<Tensor, 3> split_qkv(const Tensor& input, int heads) {
@@ -223,8 +239,13 @@ namespace lfs::core::nn::vulkan {
     }
 
     Tensor fourier_pe(const Tensor& coords, const Tensor& gaussian) {
-        auto projection = fp32(coords).mul(2.0f).sub(1.0f).matmul(fp32(gaussian)).mul(6.2831853071795864769f);
-        return Tensor::cat({projection.sin(), projection.cos()}, -1).to(coords.dtype());
+        const auto count = coords.numel() / 2;
+        auto projection = fp32(coords).reshape(TensorShape{count, 2}).mul(2.0f).sub(1.0f).mm(fp32(gaussian)).mul(6.2831853071795864769f);
+        std::vector<size_t> shape;
+        for (size_t i = 0; i + 1 < coords.ndim(); ++i)
+            shape.push_back(coords.shape()[i]);
+        shape.push_back(gaussian.shape()[1] * 2);
+        return Tensor::cat({projection.sin(), projection.cos()}, -1).reshape(TensorShape(shape)).to(coords.dtype());
     }
 
     Tensor grid(const Tensor& like, int height, int width, float u0, float u1, float v0, float v1) {

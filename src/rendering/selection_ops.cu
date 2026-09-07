@@ -93,6 +93,8 @@ namespace lfs::rendering {
         };
 
         [[nodiscard]] Tensor uploadBoolMask(const std::vector<bool>& mask) {
+            // This helper feeds raw CUDA kernels even when the app default is Vulkan.
+            lfs::core::GpuBackendScope cuda_scope(lfs::core::GpuBackend::CUDA);
             auto tensor = Tensor::empty({mask.size()}, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
             auto* const ptr = tensor.ptr<uint8_t>();
             for (std::size_t i = 0; i < mask.size(); ++i) {
@@ -121,8 +123,10 @@ namespace lfs::rendering {
         }
 
         void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
+            lfs::core::GpuBackendScope cuda_scope(lfs::core::GpuBackend::CUDA);
             if (!counts_scratch.is_valid() ||
                 counts_scratch.device() != lfs::core::Device::CUDA ||
+                lfs::core::gpu_backend_of(counts_scratch) != lfs::core::GpuBackend::CUDA ||
                 counts_scratch.dtype() != lfs::core::DataType::Int32 ||
                 counts_scratch.numel() != kSelectionGroupScratchWords) {
                 counts_scratch = Tensor::zeros(

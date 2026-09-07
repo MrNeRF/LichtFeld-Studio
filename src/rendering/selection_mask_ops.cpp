@@ -72,6 +72,7 @@ namespace lfs::rendering {
         void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
             if (!counts_scratch.is_valid() ||
                 counts_scratch.device() != Device::CUDA ||
+                lfs::core::gpu_backend_of(counts_scratch) != lfs::core::default_gpu_backend() ||
                 counts_scratch.dtype() != DataType::Int32 ||
                 counts_scratch.numel() != kSelectionGroupScratchWords) {
                 counts_scratch = Tensor::zeros(

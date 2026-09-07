@@ -1093,10 +1093,11 @@ namespace lfs::core::nn {
         const int feats = static_cast<int>(g_c.shape()[1]);
 #ifdef LFS_TENSOR_VULKAN
         if (gpu_backend_of(g_c) == GpuBackend::Vulkan) {
-            auto coords = vulkan::grid(g_c, height, width, 0.5f / width, 1.0f - 0.5f / width,
+            const auto gaussian_f32 = g_c.to(DataType::Float32);
+            auto coords = vulkan::grid(gaussian_f32, height, width, 0.5f / width, 1.0f - 0.5f / width,
                                         0.5f / height, 1.0f - 0.5f / height)
                               .permute({0, 2, 3, 1}).contiguous();
-            return vulkan::fourier_pe(coords, g_c).permute({0, 3, 1, 2}).contiguous();
+            return vulkan::fourier_pe(coords, gaussian_f32).permute({0, 3, 1, 2}).contiguous().to(dtype);
         }
 #endif
         auto out = Tensor::empty(
@@ -1188,12 +1189,15 @@ namespace lfs::core::nn {
             static_cast<std::size_t>(d)}};
 #ifdef LFS_TENSOR_VULKAN
         if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
-            auto windows = vulkan::window_partition(in_c, window);
-            if (bias_c) {
-                // Padding is zero in the fused CUDA kernel, including the bias.
-                auto biased = in_c.to(DataType::Float32).add(bias_c->to(DataType::Float32)).to(in_c.dtype());
-                windows = vulkan::window_partition(biased, window);
+            // Valid QKV pixels already include the linear bias. Padded pixels
+            // represent a zero input to that linear, so contain the bias alone.
+            Tensor padded;
+            if (bias_c && (pad_h != 0 || pad_w != 0)) {
+                padded = bias_c->reshape({1, 1, 1, packed})
+                             .expand({b, height + pad_h, width + pad_w, packed}).contiguous();
+                padded.slice(1, 0, height).slice(2, 0, width).copy_from(in_c);
             }
+            auto windows = vulkan::window_partition(padded.is_valid() ? padded : in_c, window);
             return vulkan::split_qkv(windows.reshape({b * n_h * n_w, seq, packed}), heads);
         }
 #endif

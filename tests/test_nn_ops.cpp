@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/nn.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 
 #include <cuda_runtime.h>
 #include <nlohmann/json.hpp>
