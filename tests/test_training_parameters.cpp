@@ -717,6 +717,29 @@ namespace {
         EXPECT_TRUE(restored.validate().empty()) << restored.validate();
     }
 
+    TEST_F(TrainingParametersTest, POPSpaSnapshotMayTargetPostprocessingIterations) {
+        lfs::core::param::TrainingParameters params;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        params.save_project_at_iteration = params.optimization.iterations + 1;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.save_project_at_iteration = params.optimization.resolved_total_iterations();
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        params.save_project_at_iteration = params.optimization.resolved_total_iterations() + 1;
+        EXPECT_FALSE(params.validate().empty());
+        params.optimization.enable_sparsity = false;
+        params.save_project_at_iteration = params.optimization.iterations + 1;
+        EXPECT_FALSE(params.validate().empty());
+        params.save_project_at_iteration = params.optimization.iterations;
+        EXPECT_TRUE(params.validate().empty()) << params.validate();
+        // Legacy ADMM consumes its reserved snapshot at the regular boundary;
+        // this POPSpa fix must not accept unsupported ADMM-tail CLI captures.
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::OpacityADMM;
+        params.save_project_at_iteration = params.optimization.iterations + 1;
+        EXPECT_FALSE(params.validate().empty());
+    }
+
     TEST_F(TrainingParametersTest, POPSpaRejectsInvalidConfigurationAndOverflow) {
         using lfs::core::param::SparsityMethod;
         OptimizationParameters baseline;

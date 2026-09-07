@@ -29,6 +29,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/control_boundary.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -1843,6 +1844,159 @@ namespace {
             return condition();
         }
     };
+
+    TEST_F(ProjectCheckpointTrainerInstall, POPSpaMidPhaseSnapshotSurvivesRegularPhaseSave) {
+        const auto dataset = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        if (!std::filesystem::is_directory(dataset / TEST_IMAGES))
+            GTEST_SKIP() << "bicycle dataset is required for the real Trainer snapshot contract";
+        const auto output = std::filesystem::temp_directory_path() /
+                            std::format("lfs_popspa_mid_snapshot_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        std::filesystem::create_directories(output);
+        const auto mid_path = output / "mid.licht";
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.max_width = 64;
+        params.dataset.output_path = output;
+        params.optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        params.optimization.iterations = 2;
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 1000;
+        params.optimization.start_refine = 0;
+        params.optimization.stop_refine = 0;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        params.optimization.popspa_first_prune_count = 800;
+        params.optimization.popspa_target_count = 600;
+        params.optimization.popspa_sparsify_steps = 2;
+        params.optimization.popspa_refine_steps = 2;
+        params.optimization.save_steps = {6};
+        params.save_project_at_iteration = 3;
+        params.save_project_path = mid_path;
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized) << initialized.error();
+            lfs::training::grant_headless_project_saves(trainer, params);
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 6);
+            trainer.shutdown();
+        }
+        ASSERT_TRUE(std::filesystem::is_regular_file(mid_path));
+        auto document = lfs::io::project::ProjectDocument::open(mid_path);
+        ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+        const auto ids = document->checkpoint_uuids();
+        ASSERT_EQ(ids.size(), 1u);
+        const auto* checkpoint = document->find_checkpoint(ids.front());
+        ASSERT_NE(checkpoint, nullptr);
+        std::optional<int> captured_iteration;
+        ASSERT_TRUE(checkpoint->visit_stream([&](std::istream& stream, uint64_t bytes) -> lfs::Result<void> {
+            auto header = lfs::core::load_checkpoint_header(stream, bytes);
+            EXPECT_TRUE(header.has_value());
+            if (header)
+                captured_iteration = header->iteration;
+            return {};
+        }));
+        EXPECT_EQ(captured_iteration, 3);
+        std::error_code ignored;
+        std::filesystem::remove_all(output, ignored);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall, POPSpaExplicitRequestAndCLISnapshotBothCaptureTargetIteration) {
+        const auto dataset = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        if (!std::filesystem::is_directory(dataset / TEST_IMAGES))
+            GTEST_SKIP() << "bicycle dataset is required for the real Trainer snapshot contract";
+        const auto output = std::filesystem::temp_directory_path() /
+                            std::format("lfs_popspa_interleaved_snapshot_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        std::filesystem::create_directories(output);
+        const auto mid_path = output / "mid.licht";
+        const auto explicit_path = output / "explicit.licht";
+        std::uint64_t explicit_request_id = 0;
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.max_width = 64;
+        params.dataset.output_path = output;
+        params.optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        params.optimization.iterations = 2;
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 1000;
+        params.optimization.start_refine = 0;
+        params.optimization.stop_refine = 0;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        params.optimization.popspa_first_prune_count = 800;
+        params.optimization.popspa_target_count = 600;
+        params.optimization.popspa_sparsify_steps = 2;
+        params.optimization.popspa_refine_steps = 2;
+        params.optimization.save_steps = {6};
+        params.save_project_at_iteration = 3;
+        params.save_project_path = mid_path;
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized) << initialized.error();
+            lfs::training::grant_headless_project_saves(trainer, params);
+            auto& boundary = lfs::training::ControlBoundary::instance();
+            const auto callback_id = boundary.register_callback(
+                lfs::training::ControlHook::PostStep,
+                [&](const lfs::training::HookContext& ctx) {
+                    if (ctx.trainer == &trainer && ctx.iteration == 2 && explicit_request_id == 0)
+                        explicit_request_id = trainer.request_project_save(explicit_path);
+                });
+            struct CallbackGuard {
+                std::size_t id;
+                ~CallbackGuard() {
+                    lfs::training::ControlBoundary::instance().unregister_callback(
+                        lfs::training::ControlHook::PostStep, id);
+                }
+            } callback_guard{callback_id};
+            ASSERT_NE(callback_id, 0u);
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 6);
+            trainer.shutdown();
+        }
+        ASSERT_NE(explicit_request_id, 0u);
+        std::vector<std::string> captured_uuids;
+        for (const auto& path : {explicit_path, mid_path}) {
+            ASSERT_TRUE(std::filesystem::is_regular_file(path)) << path;
+            auto document = lfs::io::project::ProjectDocument::open(path);
+            ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+            bool found_target = false;
+            for (const auto& id : document->checkpoint_uuids()) {
+                const auto* checkpoint = document->find_checkpoint(id);
+                ASSERT_NE(checkpoint, nullptr);
+                std::optional<int> captured_iteration;
+                ASSERT_TRUE(checkpoint->visit_stream([&](std::istream& stream, uint64_t bytes) -> lfs::Result<void> {
+                    auto header = lfs::core::load_checkpoint_header(stream, bytes);
+                    EXPECT_TRUE(header.has_value());
+                    if (header)
+                        captured_iteration = header->iteration;
+                    return {};
+                }));
+                if (captured_iteration == 3) {
+                    found_target = true;
+                    captured_uuids.push_back(id.to_string());
+                    break;
+                }
+            }
+            EXPECT_TRUE(found_target) << path;
+        }
+        ASSERT_EQ(captured_uuids.size(), 2u);
+        EXPECT_NE(captured_uuids[0], captured_uuids[1]);
+        std::error_code ignored;
+        std::filesystem::remove_all(output, ignored);
+    }
 
     TEST_F(ProjectCheckpointTrainerInstall,
            SharedHelperRestoresTrainerAndGaussianCount) {

@@ -634,9 +634,11 @@ namespace lfs::core {
             if (save_project_at_iteration && *save_project_at_iteration == 0) {
                 return "--save-project-at-iter must be positive";
             }
-            if (save_project_at_iteration &&
-                *save_project_at_iteration >
-                    optimization.iterations) {
+            const auto project_snapshot_limit = optimization.enable_sparsity &&
+                                                        optimization.sparsity_method == SparsityMethod::POPSpa
+                                                    ? static_cast<size_t>(optimization.resolved_total_iterations())
+                                                    : optimization.iterations;
+            if (save_project_at_iteration && *save_project_at_iteration > project_snapshot_limit) {
                 return "--save-project-at-iter cannot exceed the training iteration limit";
             }
             if (!save_project_at_iteration &&

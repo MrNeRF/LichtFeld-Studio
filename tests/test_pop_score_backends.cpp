@@ -45,7 +45,8 @@ namespace {
         return result;
     }
 
-    void check_scores(bool fast, size_t n, float opacity, bool image_background, bool capture_gradients = false) {
+    void check_scores(bool fast, size_t n, float opacity, bool image_background,
+                      bool capture_gradients = false, bool inactive_last = false) {
         int devices = 0;
         if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
             GTEST_SKIP();
@@ -69,8 +70,12 @@ namespace {
             }
             alphas[i] = std::min(0.999f, 1.f / (1.f + std::exp(-opacity)));
         }
-        // An invisible row must retain exactly zero energy.
-        means[(n - 1) * 3 + 2] = -10.f;
+        // Invisible and inactive rows must retain exactly zero energy. Keep the
+        // inactive row in front of the camera to exercise quaternion culling.
+        if (inactive_last)
+            quats[(n - 1) * 4] = 0.f;
+        else
+            means[(n - 1) * 3 + 2] = -10.f;
         auto means_t = Tensor::from_blob(means.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
         auto sh_t = Tensor::from_blob(sh.data(), {n, 1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
         auto q_t = Tensor::from_blob(quats.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
@@ -152,41 +157,49 @@ namespace {
             EXPECT_GT(actual[270], 0.0);
     }
 
-    void check_distorted_gut_leave_one_out(bool fisheye) {
+    void check_projected_leave_one_out(bool fisheye, bool fast = false, bool mip = false) {
         int devices = 0;
         if (cudaGetDeviceCount(&devices) != cudaSuccess || devices == 0)
             GTEST_SKIP() << "CUDA device required";
-        constexpr size_t n = 4, width = 16, height = 12, pixels = width * height;
+        constexpr size_t n = 4;
+        const size_t width = fast ? 39 : 16, height = fast ? 27 : 12;
+        const size_t pixels = width * height;
         auto R = Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f}, {3, 3}, Device::CUDA);
         auto T = Tensor::zeros({3}, Device::CUDA);
         auto radial = fisheye
                           ? Tensor::from_vector({0.08f, -0.02f, 0.004f, -0.0003f}, {4}, Device::CPU)
                           : Tensor::from_vector({0.12f, -0.025f, 0.003f, 0.f, 0.f, 0.f}, {6}, Device::CPU);
         auto tangential = fisheye ? Tensor{} : Tensor::from_vector({0.008f, -0.006f}, {2}, Device::CPU);
-        Camera camera(R, T, 10.f, 9.f, 7.2f, 5.1f, radial, tangential,
+        Camera camera(R, T, fast ? 35.f : 10.f, fast ? 31.f : 9.f,
+                      fast ? 19.2f : 7.2f, fast ? 13.1f : 5.1f,
+                      fast ? Tensor{} : radial, fast ? Tensor{} : tangential,
                       fisheye ? lfs::core::CameraModelType::FISHEYE : lfs::core::CameraModelType::PINHOLE,
                       "distorted-pop", "", std::filesystem::path{}, width, height, 0);
-        const auto make_model = [](size_t omitted) {
+        const auto make_model = [fast](size_t omitted) {
             // With four alphas bounded by 0.12, T stays above 0.88^4 > 0.59.
             // Removing a row therefore cannot reveal contributors beyond a cutoff.
             std::vector<float> opacities(n, std::log(0.12f / 0.88f));
             if (omitted < n)
                 opacities[omitted] = -30.f;
-            return SplatData(0,
-                             Tensor::from_vector({-0.65f, -0.3f, 2.8f, 0.45f, 0.4f, 3.0f,
-                                                  -0.25f, 0.5f, 3.3f, 0.7f, -0.4f, 3.6f},
-                                                 {n, 3}, Device::CUDA),
-                             Tensor::from_vector({0.2f, 0.5f, 0.3f, 0.5f, 0.1f, 0.4f,
-                                                  0.3f, 0.6f, 0.1f, 0.6f, 0.3f, 0.5f},
-                                                 {n, 1, 3}, Device::CUDA),
-                             Tensor::zeros({n, 0, 3}, Device::CUDA),
-                             Tensor::from_vector({-1.1f, -1.4f, -1.7f, -1.4f, -1.0f, -1.5f,
-                                                  -1.2f, -1.6f, -1.0f, -1.5f, -1.1f, -1.3f},
-                                                 {n, 3}, Device::CUDA),
-                             Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 0.98f, 0.f, 0.f, 0.2f,
-                                                  0.98f, 0.2f, 0.f, 0.f, 0.98f, 0.f, 0.2f, 0.f},
-                                                 {n, 4}, Device::CUDA),
-                             Tensor::from_vector(opacities, {n, 1}, Device::CUDA), 1.f);
+            auto model = SplatData(fast ? 1 : 0,
+                                   Tensor::from_vector({-0.65f, -0.3f, 2.8f, 0.45f, 0.4f, 3.0f,
+                                                        -0.25f, 0.5f, 3.3f, 0.7f, -0.4f, 3.6f},
+                                                       {n, 3}, Device::CUDA),
+                                   Tensor::from_vector({0.2f, 0.5f, 0.3f, 0.5f, 0.1f, 0.4f,
+                                                        0.3f, 0.6f, 0.1f, 0.6f, 0.3f, 0.5f},
+                                                       {n, 1, 3}, Device::CUDA),
+                                   fast ? Tensor::full({n, 3, 3}, 0.07f, Device::CUDA)
+                                        : Tensor::zeros({n, 0, 3}, Device::CUDA),
+                                   Tensor::from_vector({-1.1f, -1.4f, -1.7f, -1.4f, -1.0f, -1.5f,
+                                                        -1.2f, -1.6f, -1.0f, -1.5f, -1.1f, -1.3f},
+                                                       {n, 3}, Device::CUDA),
+                                   Tensor::from_vector({1.f, 0.f, 0.f, 0.f, 0.98f, 0.f, 0.f, 0.2f,
+                                                        0.98f, 0.2f, 0.f, 0.f, 0.98f, 0.f, 0.2f, 0.f},
+                                                       {n, 4}, Device::CUDA),
+                                   Tensor::from_vector(opacities, {n, 1}, Device::CUDA), 1.f);
+            if (fast)
+                model.set_active_sh_degree(1);
+            return model;
         };
         std::vector<float> background_values(3 * pixels);
         for (size_t c = 0; c < 3; ++c)
@@ -199,7 +212,14 @@ namespace {
         auto scores = Tensor::zeros({n, sizeof(double)}, Device::CUDA, DataType::UInt8);
         auto full_model = make_model(n);
         std::vector<float> full_image;
-        {
+        if (fast) {
+            auto full = fast_rasterize_forward(camera, full_model, background, 0, 0, 0, 0,
+                                               mip, background_image);
+            ASSERT_TRUE(full.has_value());
+            EXPECT_GT(full->second.forward_ctx.n_instances, static_cast<int>(n));
+            ASSERT_TRUE(fast_accumulate_pop_scores(full->second, scores));
+            full_image = full->first.image.to_vector();
+        } else {
             auto full = gsplat_rasterize_forward(camera, full_model, background, 0, 0, 0, 0,
                                                  1.f, false, GsplatRenderMode::RGB, true, background_image);
             ASSERT_TRUE(full.has_value()) << full.error();
@@ -217,11 +237,19 @@ namespace {
         for (size_t omitted = 0; omitted < n; ++omitted) {
             SCOPED_TRACE(omitted);
             auto removed_model = make_model(omitted);
-            auto removed = gsplat_rasterize_forward(camera, removed_model, background, 0, 0, 0, 0,
-                                                    1.f, false, GsplatRenderMode::RGB, true, background_image);
-            ASSERT_TRUE(removed.has_value()) << removed.error();
-            const auto removed_image = removed->first.image.to_vector();
-            GlobalArenaManager::instance().get_arena().end_frame(removed->second.frame_id, removed->second.stream);
+            std::vector<float> removed_image;
+            if (fast) {
+                auto removed = fast_rasterize_forward(camera, removed_model, background, 0, 0, 0, 0,
+                                                      mip, background_image);
+                ASSERT_TRUE(removed.has_value());
+                removed_image = removed->first.image.to_vector();
+            } else {
+                auto removed = gsplat_rasterize_forward(camera, removed_model, background, 0, 0, 0, 0,
+                                                        1.f, false, GsplatRenderMode::RGB, true, background_image);
+                ASSERT_TRUE(removed.has_value()) << removed.error();
+                removed_image = removed->first.image.to_vector();
+                GlobalArenaManager::instance().get_arena().end_frame(removed->second.frame_id, removed->second.stream);
+            }
             ASSERT_EQ(full_image.size(), 3 * pixels);
             ASSERT_EQ(removed_image.size(), full_image.size());
             double expected = 0;
@@ -253,10 +281,19 @@ TEST(PopScoreBackends, BelowAlphaThreshold) {
         check_scores(fast, 5, -8.f, false);
 }
 TEST(PopScoreBackends, DistortedOpenCvPinholeMatchesLeaveOneOutRenders) {
-    check_distorted_gut_leave_one_out(false);
+    check_projected_leave_one_out(false);
 }
 TEST(PopScoreBackends, DistortedFisheyeMatchesLeaveOneOutRenders) {
-    check_distorted_gut_leave_one_out(true);
+    check_projected_leave_one_out(true);
+}
+TEST(PopScoreBackends, FastMultiTileAnisotropicShMatchesLeaveOneOutRenders) {
+    check_projected_leave_one_out(false, true);
+}
+TEST(PopScoreBackends, FastMultiTileMipFilteredShMatchesLeaveOneOutRenders) {
+    check_projected_leave_one_out(false, true, true);
+}
+TEST(PopScoreBackends, InactiveZeroRotationDoesNotContaminateFastScores) {
+    check_scores(true, 5, -0.4f, true, false, true);
 }
 TEST(PopScoreBackends, DeferredFastBackwardCapturesWithoutAdamUpdate) {
     check_scores(true, 5, -0.4f, false, true);

@@ -4153,6 +4153,7 @@ namespace lfs::training {
         requested_project_base_commit_uuid_ = {};
         requested_project_autosave_sequence_ = 0;
         prestaged_project_chapters_.reset();
+        popspa_cli_project_chapters_.reset();
         prestaged_project_request_id_ = 0;
         clear_prepared_project_request();
     }
@@ -4257,11 +4258,11 @@ namespace lfs::training {
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
-            if (!prestaged_project_chapters_ ||
-                prestaged_project_request_id_ !=
-                    request_id ||
-                prestaged_project_chapters_
-                    ->snapshot_uuid.is_nil()) {
+            const bool cli_capture = request_id == 0 && popspa_cli_project_chapters_ &&
+                                     params_.save_project_at_iteration == static_cast<size_t>(capture_iteration);
+            const auto& reserved = cli_capture ? popspa_cli_project_chapters_ : prestaged_project_chapters_;
+            if (!reserved || (!cli_capture && prestaged_project_request_id_ != request_id) ||
+                reserved->snapshot_uuid.is_nil()) {
                 fail_project_request_locked(
                     request_id,
                     "Snapshot UUID was not reserved for this request");
@@ -4270,9 +4271,7 @@ namespace lfs::training {
                     "was not reserved before the optimizer safe point");
                 return;
             }
-            snapshot_uuid =
-                prestaged_project_chapters_
-                    ->snapshot_uuid;
+            snapshot_uuid = reserved->snapshot_uuid;
         }
 
         const auto checkpoint_params =
@@ -4487,8 +4486,11 @@ namespace lfs::training {
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
-            if (prestaged_project_request_id_ ==
-                prepared_project_request_id_) {
+            if (prepared_project_request_id_ == 0 && popspa_cli_project_chapters_ &&
+                popspa_cli_project_chapters_->snapshot_uuid == prepared_project_snapshot_->snapshot_uuid()) {
+                chapters = std::move(popspa_cli_project_chapters_);
+            } else if (prestaged_project_request_id_ ==
+                       prepared_project_request_id_) {
                 chapters = std::move(
                     prestaged_project_chapters_);
                 prestaged_project_request_id_ = 0;
@@ -8081,7 +8083,10 @@ namespace lfs::training {
                     }
 
                     // Clean evaluation - let the evaluator handle everything
-                    if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter)) {
+                    // POPSpa may still compact at this iteration's boundary,
+                    // including a zero-step recovery. Evaluate after Complete.
+                    const bool defer_popspa_final_eval = popspa_enabled() && iter == get_total_iterations();
+                    if (!defer_popspa_final_eval && evaluator_->is_enabled() && evaluator_->should_evaluate(iter)) {
                         evaluator_->print_evaluation_header(iter);
                         eval_ppisp_applied_.store(0);
                         eval_ppisp_exif_.store(0);
@@ -8256,6 +8261,12 @@ namespace lfs::training {
                                 project_hook_destination);
                         }
                         if (iter == target) {
+                            // The explicit request consumed above may have started
+                            // a writer. A CLI target names this exact iteration:
+                            // drain that writer without abandoning pending requests
+                            // before preparing the independent CLI capture.
+                            if (in_popspa && project_writer_thread_.joinable())
+                                project_writer_thread_.join();
                             if (!prepared_project_snapshot_) {
                                 prepare_project_snapshot_at_safe_point(
                                     iter,
@@ -8656,6 +8667,7 @@ namespace lfs::training {
             const size_t epoch2_loader_sample_count =
                 train_dataset_ ? train_dataset_->size() * size_t{2} : size_t{0};
             std::optional<POPSpaPhase> popspa_sampler_phase;
+            const auto popspa_project_hook = getParams().save_project_at_iteration;
             while (iter <= get_total_iterations() ||
                    (popspa_enabled() && (!popspa_controller_.is_initialized() ||
                                          popspa_controller_.phase() != POPSpaPhase::Complete))) {
@@ -8669,6 +8681,27 @@ namespace lfs::training {
                 }
                 if (iter > get_total_iterations() || stop_token.stop_requested() || stop_requested_.load())
                     break;
+                // The regular-phase save consumes the initially reserved UUID.
+                // Reserve another outside the optimizer safe point for a CLI
+                // snapshot inside POPSpa. Its layout is prepared after this step,
+                // since intervening POPSpa boundaries can compact the model.
+                if (popspa_project_hook && *popspa_project_hook == static_cast<size_t>(iter) && popspa_enabled()) {
+                    bool needs_reservation = false;
+                    {
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        needs_reservation = !popspa_cli_project_chapters_;
+                    }
+                    if (needs_reservation) {
+                        auto chapters = reserve_project_snapshot_chapters();
+                        if (!chapters) {
+                            terminal_error = std::move(chapters).error();
+                            break;
+                        }
+                        std::lock_guard lock(project_snapshot_mutex_);
+                        if (!popspa_cli_project_chapters_)
+                            popspa_cli_project_chapters_ = std::move(*chapters);
+                    }
+                }
                 if (popspa_optimizing() && popspa_sampler_phase != popspa_controller_.phase()) {
                     popspa_sampler_phase = popspa_controller_.phase();
                     const uint64_t seed = static_cast<uint64_t>(params_.optimization.popspa_seed) +
@@ -8838,6 +8871,26 @@ namespace lfs::training {
                 }
 
                 ++iter;
+            }
+
+            // Evaluate the actual compacted model after all POPSpa boundaries,
+            // even if eval_steps lists only the regular training horizon. This also
+            // covers resuming an already completed POPSpa model.
+            const bool popspa_complete = popspa_enabled() && popspa_controller_.is_initialized() &&
+                                         popspa_controller_.phase() == POPSpaPhase::Complete &&
+                                         current_iteration_.load() >= get_total_iterations();
+            if (!terminal_error && !stop_token.stop_requested() && !stop_requested_.load() &&
+                evaluator_->is_enabled() && popspa_complete) {
+                const int eval_iteration = current_iteration_.load();
+                evaluator_->print_evaluation_header(eval_iteration);
+                eval_ppisp_applied_.store(0);
+                eval_ppisp_exif_.store(0);
+                auto metrics = evaluator_->evaluate(eval_iteration,
+                                                    strategy_->get_model(),
+                                                    val_dataset_,
+                                                    background_);
+                LOG_INFO("{}", metrics.to_string());
+                photometric_loss_.arena().shrink_to_required();
             }
 
             clearActiveImageLoader();

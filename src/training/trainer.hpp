@@ -783,6 +783,10 @@ namespace lfs::training {
             prepared_project_snapshot_;
         std::shared_ptr<ProjectSnapshotChapters>
             prestaged_project_chapters_;
+        // Independent of coalesced explicit requests; reserved before the
+        // target POPSpa step and consumed only by its CLI capture.
+        std::shared_ptr<ProjectSnapshotChapters>
+            popspa_cli_project_chapters_;
         std::uint64_t
             prestaged_project_request_id_ = 0;
         std::filesystem::path prepared_project_path_;
