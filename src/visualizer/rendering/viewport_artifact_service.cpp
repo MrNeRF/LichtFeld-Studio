@@ -226,10 +226,6 @@ namespace lfs::vis {
                     scaled_x = panel_local_x;
                 }
 
-                // Tensor-backed depth outputs use a bottom-left origin. Tools operate in
-                // window coordinates with a top-left origin, so flip Y before sampling.
-                scaled_y = (depth_height - 1) - scaled_y;
-
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
                     float d;
                     const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;

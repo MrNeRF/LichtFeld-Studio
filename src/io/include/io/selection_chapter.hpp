@@ -130,10 +130,13 @@ namespace lfs::io::project {
 
     // Phase-A API. Every slice is validated against topology and copied into
     // its final contiguous CPU tensor. topology is not mutated.
+    // extra_owner_uuids are node UUIDs that own selections but are absent from
+    // the partial topology, e.g. the SCNG nodes the shell already restored.
     [[nodiscard]] LFS_IO_API lfs::Result<StagedSelectionChapter>
     stage_selection_chapter(
         const SelectionChapter& chapter,
-        const lfs::core::Scene& topology);
+        const lfs::core::Scene& topology,
+        std::span<const lfs::core::Uuid> extra_owner_uuids = {});
 
     [[nodiscard]] LFS_IO_API lfs::Result<SelectionHydrationReport>
     hydrate_selection_chapter(
