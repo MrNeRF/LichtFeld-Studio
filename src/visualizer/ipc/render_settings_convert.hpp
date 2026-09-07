@@ -64,6 +64,7 @@ namespace lfs::vis {
         p.show_pivot = s.show_pivot;
         p.split_view_mode = static_cast<int>(s.split_view_mode);
         p.gt_comparison_mode = static_cast<int>(s.gt_comparison_mode);
+        p.gt_comparison_actual_size = s.gt_comparison_actual_size;
         p.split_position = s.split_position;
         p.split_view_offset = s.split_view_offset;
         p.raster_backend = static_cast<int>(s.raster_backend);
@@ -157,6 +158,7 @@ namespace lfs::vis {
         s.show_pivot = p.show_pivot;
         s.split_view_mode = static_cast<SplitViewMode>(p.split_view_mode);
         s.gt_comparison_mode = static_cast<GTComparisonMode>(p.gt_comparison_mode);
+        s.gt_comparison_actual_size = p.gt_comparison_actual_size;
         sanitizeGTComparisonSettings(s);
         s.split_position = p.split_position;
         s.split_view_offset = p.split_view_offset;

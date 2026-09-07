@@ -22,10 +22,10 @@ namespace lfs::training::kernels {
         inline int divUp(int a, int b) { return (a + b - 1) / b; }
     } // namespace
 
-    // Forward kernel (CHW layout). Processes a full-width row band starting at
-    // y_offset within an image of full_height rows; vignetting is evaluated in
-    // full-image coordinates so banded application matches the full-image pass.
-    __global__ void ppisp_forward_chw_kernel(int height, int width, int y_offset, int full_height, int num_cameras,
+    // Forward kernel (CHW layout). Tensor indexing is crop-local; vignetting
+    // uses full-image coordinates so crops match the full-image pass.
+    __global__ void ppisp_forward_chw_kernel(int height, int width, int x_offset, int y_offset,
+                                             int full_width, int full_height, int num_cameras,
                                              int num_frames, const float* __restrict__ exposure_params,
                                              const VignettingChannelParams* __restrict__ vignetting_params,
                                              const ColorPPISPParams* __restrict__ color_params,
@@ -45,7 +45,7 @@ namespace lfs::training::kernels {
             make_float3(rgb_in[0 * num_pixels + idx], rgb_in[1 * num_pixels + idx], rgb_in[2 * num_pixels + idx]);
 
         // Pixel coordinates (center of pixel, full-image space)
-        float2 pixel_coord = make_float2(x + 0.5f, y_offset + y + 0.5f);
+        float2 pixel_coord = make_float2(x_offset + x + 0.5f, y_offset + y + 0.5f);
 
         // ISP Pipeline
         if (frame_idx != -1) {
@@ -53,7 +53,7 @@ namespace lfs::training::kernels {
         }
 
         if (camera_idx != -1) {
-            ppisp_apply_vignetting(rgb, &vignetting_params[camera_idx * 3], pixel_coord, (float)width,
+            ppisp_apply_vignetting(rgb, &vignetting_params[camera_idx * 3], pixel_coord, (float)full_width,
                                    (float)full_height, rgb);
         }
 
@@ -489,18 +489,20 @@ namespace lfs::training::kernels {
     // Launch functions
     void launch_ppisp_forward_chw_region(const float* exposure_params, const float* vignetting_params,
                                          const float* color_params, const float* crf_params, const float* rgb_in,
-                                         float* rgb_out, int band_height, int width, int y_offset, int full_height,
+                                         float* rgb_out, int height, int width, int x_offset, int y_offset,
+                                         int full_width, int full_height,
                                          int num_cameras, int num_frames, int camera_idx, int frame_idx,
                                          cudaStream_t stream) {
-        assert(band_height > 0 && width > 0);
-        assert(y_offset >= 0 && y_offset + band_height <= full_height);
+        assert(height > 0 && width > 0);
+        assert(x_offset >= 0 && x_offset + width <= full_width);
+        assert(y_offset >= 0 && y_offset + height <= full_height);
         stream = resolve_stream(stream);
-        int num_pixels = band_height * width;
+        int num_pixels = height * width;
         int threads = PPISP_BLOCK_SIZE;
         int blocks = divUp(num_pixels, threads);
 
         ppisp_forward_chw_kernel<<<blocks, threads, 0, stream>>>(
-            band_height, width, y_offset, full_height, num_cameras, num_frames, exposure_params,
+            height, width, x_offset, y_offset, full_width, full_height, num_cameras, num_frames, exposure_params,
             reinterpret_cast<const VignettingChannelParams*>(vignetting_params),
             reinterpret_cast<const ColorPPISPParams*>(color_params),
             reinterpret_cast<const CRFPPISPChannelParams*>(crf_params), rgb_in, rgb_out, camera_idx, frame_idx);
@@ -513,7 +515,7 @@ namespace lfs::training::kernels {
                                   float* rgb_out, int height, int width, int num_cameras, int num_frames,
                                   int camera_idx, int frame_idx, cudaStream_t stream) {
         launch_ppisp_forward_chw_region(exposure_params, vignetting_params, color_params, crf_params, rgb_in, rgb_out,
-                                        height, width, 0, height, num_cameras, num_frames, camera_idx, frame_idx,
+                                        height, width, 0, 0, width, height, num_cameras, num_frames, camera_idx, frame_idx,
                                         stream);
     }
 

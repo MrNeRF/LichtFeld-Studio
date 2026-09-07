@@ -124,6 +124,30 @@ namespace lfs::vis {
             static_cast<float>(viewport_height),
             false};
 
+        if (gt_comparison_published_actual_frame_) {
+            const auto& published = *gt_comparison_published_actual_frame_;
+            const glm::ivec4 physical_rect =
+                detail::centeredGTComparisonContentRect(
+                    published.framebuffer_extent,
+                    published.crop.extent);
+            const glm::vec4 logical_rect =
+                detail::physicalToLogicalContentRect(
+                    physical_rect,
+                    published.framebuffer_extent,
+                    {viewport_width, viewport_height});
+            if (logical_rect.z > 0.0f && logical_rect.w > 0.0f) {
+                bounds.x = logical_rect.x;
+                bounds.y = logical_rect.y;
+                bounds.width = logical_rect.z;
+                bounds.height = logical_rect.w;
+                bounds.letterboxed =
+                    physical_rect.x != 0 || physical_rect.y != 0 ||
+                    physical_rect.z != published.framebuffer_extent.x ||
+                    physical_rect.w != published.framebuffer_extent.y;
+            }
+            return bounds;
+        }
+
         if (split_view_service_.isGTComparisonActive(settings_)) {
             glm::ivec2 content_dims{0, 0};
             if (const auto service_dims = split_view_service_.gtContentDimensions()) {

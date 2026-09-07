@@ -3,14 +3,16 @@
 
 // Banded PPISP forward (launch_ppisp_forward_chw_region) must reproduce the
 // full-image pass bit-exactly: vignetting is the only spatially-dependent stage
-// and evaluates in full-image coordinates via (y_offset, full_height).
+// and evaluates in full-image coordinates via the crop origin and full extent.
 
+#include <array>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 #include <vector>
 
 #include "lfs/kernels/ppisp.cuh"
+#include "training/components/ppisp.hpp"
 
 namespace {
 
@@ -67,7 +69,7 @@ namespace {
             lfs::training::kernels::launch_ppisp_forward_chw_region(
                 p.exposure.data_ptr<float>(), p.vignetting.data_ptr<float>(), p.color.data_ptr<float>(),
                 p.crf.data_ptr<float>(), band_in.data_ptr<float>(), band_out.data_ptr<float>(), band_height, width,
-                y0, height, NUM_CAMERAS, NUM_FRAMES, CAMERA_IDX, FRAME_IDX, nullptr);
+                0, y0, width, height, NUM_CAMERAS, NUM_FRAMES, CAMERA_IDX, FRAME_IDX, nullptr);
             rgb_out.slice(1, y0, y0 + band_height).copy_(band_out);
         }
         cudaDeviceSynchronize();
@@ -127,15 +129,75 @@ namespace {
         auto out_bottom = torch::empty_like(rgb_in);
         lfs::training::kernels::launch_ppisp_forward_chw_region(
             params.exposure.data_ptr<float>(), params.vignetting.data_ptr<float>(), params.color.data_ptr<float>(),
-            params.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), out_top.data_ptr<float>(), 16, width, 0, 256,
+            params.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), out_top.data_ptr<float>(), 16, width, 0, 0, width, 256,
             NUM_CAMERAS, NUM_FRAMES, CAMERA_IDX, FRAME_IDX, nullptr);
         lfs::training::kernels::launch_ppisp_forward_chw_region(
             params.exposure.data_ptr<float>(), params.vignetting.data_ptr<float>(), params.color.data_ptr<float>(),
-            params.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), out_bottom.data_ptr<float>(), 16, width, 240,
-            256, NUM_CAMERAS, NUM_FRAMES, CAMERA_IDX, FRAME_IDX, nullptr);
+            params.crf.data_ptr<float>(), rgb_in.data_ptr<float>(), out_bottom.data_ptr<float>(), 16, width, 0, 240,
+            width, 256, NUM_CAMERAS, NUM_FRAMES, CAMERA_IDX, FRAME_IDX, nullptr);
         cudaDeviceSynchronize();
 
         EXPECT_FALSE(torch::equal(out_top, out_bottom));
+    }
+
+    TEST_F(PPISPBandedRegionTest, CropsMatchFullImageAcrossForwardModes) {
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+        using lfs::training::PPISPRegion;
+
+        lfs::training::PPISP ppisp(100);
+        ppisp.register_frame(17, 9);
+        ppisp.finalize();
+        const std::array<float, 15> vignette{
+            0.12f, -0.07f, -0.8f, -0.2f, -0.1f,
+            -0.05f, 0.09f, -0.6f, -0.1f, -0.2f,
+            0.03f, 0.11f, -0.7f, -0.3f, -0.1f};
+        auto vignetting = ppisp.vignetting_params();
+        ASSERT_EQ(cudaMemcpy(vignetting.ptr<float>(), vignette.data(),
+                             sizeof(vignette), cudaMemcpyHostToDevice),
+                  cudaSuccess);
+        ASSERT_EQ(ppisp.vignetting_params().cpu().to_vector(),
+                  std::vector<float>(vignette.begin(), vignette.end()));
+        const auto controller = Tensor::from_vector(
+            {0.2f, 0.01f, -0.02f, 0.03f, -0.01f, 0.02f, -0.03f, 0.01f, 0.02f},
+            {1, 9}, Device::CUDA);
+        lfs::training::PPISPRenderOverrides overrides;
+        overrides.exposure_offset = 0.15f;
+        overrides.vignette_strength = 0.7f;
+
+        for (int mode = 0; mode < 6; ++mode) {
+            SCOPED_TRACE(mode);
+            const auto apply = [&](const Tensor& input, const PPISPRegion& region) {
+                switch (mode) {
+                case 0: return ppisp.apply(input, 9, 17, region);
+                case 1: return ppisp.apply_with_exposure(input, 9, 0.2f, region);
+                case 2: return ppisp.apply_with_exposure_and_overrides(input, 9, 0.2f, overrides, region);
+                case 3: return ppisp.apply_with_controller_params(input, controller, 0, region);
+                case 4: return ppisp.apply_with_controller_params_and_overrides(input, controller, 0, overrides, region);
+                default: return ppisp.apply_with_overrides(input, 9, 17, overrides, region);
+                }
+            };
+            for (const auto size : {std::array{64, 48}, std::array{48, 64}}) {
+                const auto [width, height] = size;
+                SCOPED_TRACE(::testing::Message() << width << "x" << height);
+                const auto input = Tensor::from_vector(
+                    std::vector<float>(3 * width * height, 0.5f),
+                    {3, static_cast<size_t>(height), static_cast<size_t>(width)}, Device::CUDA);
+                const auto full = apply(input, {}).cpu();
+                constexpr int crop_width = 17;
+                constexpr int crop_height = 13;
+                for (const auto origin : {std::array{0, 0}, std::array{9, 5},
+                                          std::array{width - crop_width, height - crop_height}}) {
+                    const auto [x, y] = origin;
+                    SCOPED_TRACE(::testing::Message() << "origin=" << x << "," << y);
+                    const auto crop = input.slice(1, y, y + crop_height).slice(2, x, x + crop_width).contiguous();
+                    const PPISPRegion region{.x_offset = x, .y_offset = y, .full_width = width, .full_height = height};
+                    const auto actual = apply(crop, region).cpu().to_vector();
+                    const auto expected = full.slice(1, y, y + crop_height).slice(2, x, x + crop_width).contiguous().to_vector();
+                    EXPECT_TRUE(actual == expected);
+                }
+            }
+        }
     }
 
 } // namespace

@@ -39,6 +39,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Rendering
         rendering/camera_interaction_service.cpp
+        rendering/gt_comparison_source.cpp
         rendering/output_image_pool.cpp
         rendering/output_slot_ring.cpp
         rendering/readback_ticket_ring.cpp
@@ -51,6 +52,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         rendering/lod_page_cache.cpp
         rendering/lod_upload_engine.cpp
         rendering/spark_lod_controller.cpp
+        rendering/split_capture_compositor.cpp
         rendering/split_view_composition.cpp
         rendering/split_view_service.cpp
         rendering/viewport_artifact_service.cpp

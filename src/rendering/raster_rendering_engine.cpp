@@ -510,13 +510,23 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 view = request.frame_view.getViewMatrix();
-            const glm::mat4 projection = createProjectionMatrix(
+            glm::mat4 projection = createProjectionMatrix(
                 request.frame_view.size,
                 focalLengthToVFov(request.frame_view.focal_length_mm),
                 request.frame_view.orthographic,
                 request.frame_view.ortho_scale,
                 request.frame_view.near_plane,
                 request.frame_view.far_plane);
+            if (!request.frame_view.orthographic && request.frame_view.intrinsics_override) {
+                const auto& intrinsics = *request.frame_view.intrinsics_override;
+                // The point raster maps NDC endpoints to pixel indices [0, size - 1].
+                const float raster_width = static_cast<float>(std::max(request.frame_view.size.x - 1, 1));
+                const float raster_height = static_cast<float>(std::max(request.frame_view.size.y - 1, 1));
+                projection[0][0] = 2.0f * intrinsics.focal_x / raster_width;
+                projection[1][1] = 2.0f * intrinsics.focal_y / raster_height;
+                projection[2][0] = 1.0f - 2.0f * intrinsics.center_x / raster_width;
+                projection[2][1] = 2.0f * intrinsics.center_y / raster_height - 1.0f;
+            }
             const glm::mat4 view_proj = projection * view;
 
             const int width = request.frame_view.size.x;
@@ -572,9 +582,7 @@ namespace lfs::rendering {
             params.equirectangular = request.render.equirectangular;
             params.orthographic = request.frame_view.orthographic;
             params.ortho_scale = request.frame_view.ortho_scale;
-            params.focal_y = lfs::core::fov2focal(
-                focalLengthToVFovRad(request.frame_view.focal_length_mm),
-                request.frame_view.size.y);
+            params.focal_y = request.frame_view.getCameraIntrinsics().focal_y;
             params.voxel_size = request.render.voxel_size;
             params.scaling_modifier = request.render.scaling_modifier;
             params.far_plane = request.frame_view.far_plane;

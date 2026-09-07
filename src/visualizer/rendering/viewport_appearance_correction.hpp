@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/tensor.hpp"
 #include "rendering_types.hpp"
+#include "training/components/ppisp.hpp"
 #include <expected>
 #include <glm/glm.hpp>
 #include <memory>
@@ -20,7 +21,8 @@ namespace lfs::vis {
         std::shared_ptr<lfs::core::Tensor> image,
         SceneManager* scene_manager,
         const RenderSettings& settings,
-        int camera_uid);
+        int camera_uid,
+        const lfs::training::PPISPRegion& region = {});
 
     enum class ExportPostProcessMode {
         Opaque,              // [H,W,3] in -> [H,W,3] out, PPISP only

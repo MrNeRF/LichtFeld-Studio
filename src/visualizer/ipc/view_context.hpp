@@ -114,6 +114,7 @@ namespace lfs::vis {
         bool show_pivot = false;
         int split_view_mode = 0;
         int gt_comparison_mode = 0;
+        bool gt_comparison_actual_size = false;
         float split_position = 0.5f;
         size_t split_view_offset = 0;
         int raster_backend = 2;

@@ -350,14 +350,16 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
         kernels::launch_ppisp_forward_chw_region(exposure, vignetting_params_.ptr<float>(), color,
                                                  crf_params_.ptr<float>(), rgb.ptr<float>(), output.ptr<float>(), h, w,
-                                                 region.y_offset, full_h, num_cameras_, num_frames, camera_idx,
+                                                 region.x_offset, region.y_offset, full_w, full_h, num_cameras_, num_frames, camera_idx,
                                                  frame_idx, nullptr);
 
         return output;
@@ -393,7 +395,9 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
@@ -452,7 +456,7 @@ namespace lfs::training {
 
         kernels::launch_ppisp_forward_chw_region(override_exposure_.ptr<float>(), vignetting_modified.ptr<float>(),
                                                  override_color_.ptr<float>(), crf_modified.ptr<float>(),
-                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
+                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.x_offset, region.y_offset, full_w, full_h,
                                                  num_cameras_, 1, camera_idx, 0, nullptr);
         return output;
     }
@@ -470,7 +474,9 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         // Extract exposure (index 0) and color params (indices 1-8) from controller output
@@ -482,7 +488,7 @@ namespace lfs::training {
         // Use controller-predicted exposure and color, but existing vignetting and CRF from camera
         kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_params_.ptr<float>(),
                                                  color_temp.ptr<float>(), crf_params_.ptr<float>(), rgb.ptr<float>(),
-                                                 output.ptr<float>(), h, w, region.y_offset, full_h, num_cameras_, 1,
+                                                 output.ptr<float>(), h, w, region.x_offset, region.y_offset, full_w, full_h, num_cameras_, 1,
                                                  camera_idx, 0, nullptr);
 
         return output;
@@ -502,7 +508,9 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
@@ -574,7 +582,7 @@ namespace lfs::training {
 
         kernels::launch_ppisp_forward_chw_region(exposure_temp.ptr<float>(), vignetting_modified.ptr<float>(),
                                                  color_temp.ptr<float>(), crf_modified.ptr<float>(), rgb.ptr<float>(),
-                                                 output.ptr<float>(), h, w, region.y_offset, full_h, num_cameras_, 1,
+                                                 output.ptr<float>(), h, w, region.x_offset, region.y_offset, full_w, full_h, num_cameras_, 1,
                                                  camera_idx, 0, nullptr);
 
         return output;
@@ -591,7 +599,9 @@ namespace lfs::training {
 
         const int h = static_cast<int>(shape[1]);
         const int w = static_cast<int>(shape[2]);
+        const int full_w = region.full_width > 0 ? region.full_width : w;
         const int full_h = region.full_height > 0 ? region.full_height : h;
+        assert(region.x_offset >= 0 && region.x_offset + w <= full_w && "PPISP region out of bounds");
         assert(region.y_offset >= 0 && region.y_offset + h <= full_h && "PPISP region out of bounds");
 
         auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
@@ -665,7 +675,7 @@ namespace lfs::training {
 
         kernels::launch_ppisp_forward_chw_region(exposure_modified.ptr<float>(), vignetting_modified.ptr<float>(),
                                                  color_modified.ptr<float>(), crf_modified.ptr<float>(),
-                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.y_offset, full_h,
+                                                 rgb.ptr<float>(), output.ptr<float>(), h, w, region.x_offset, region.y_offset, full_w, full_h,
                                                  num_cameras_, num_frames_, camera_idx, frame_idx, nullptr);
 
         return output;

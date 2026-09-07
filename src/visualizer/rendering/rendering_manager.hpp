@@ -11,6 +11,7 @@
 #include "core/tensor.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
+#include "gt_comparison_geometry.hpp"
 #include "internal/viewport.hpp"
 #include "io/loader.hpp"
 #include "passes/vulkan_depth_blit_pass.hpp"
@@ -44,9 +45,11 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 #include <vulkan/vulkan.h>
 
@@ -384,16 +387,24 @@ namespace lfs::vis {
         ContentBounds getContentBounds(const glm::ivec2& viewport_size) const;
 
         // Current camera tracking for GT comparison
-        void setCurrentCameraId(int cam_id) {
-            const bool changed = camera_interaction_service_.currentCameraId() != cam_id;
-            camera_interaction_service_.setCurrentCameraId(cam_id);
-            if (changed) {
-                invalidateCameraMetricsRequests(true);
-            }
-            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
-        }
+        void setCurrentCameraId(int cam_id);
         int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
         int getHoveredCameraId() const { return camera_interaction_service_.hoveredCameraId(); }
+        [[nodiscard]] bool isGTComparisonActualSizeAvailable(
+            const SceneManager* scene_manager) const;
+        [[nodiscard]] bool isGTComparisonActualSizeActive() const {
+            return gt_comparison_published_actual_frame_.has_value();
+        }
+        [[nodiscard]] const std::string& getGTComparisonActualSizeError() const {
+            return gt_comparison_actual_size_state_.error;
+        }
+        void retryGTComparisonActualSize();
+        [[nodiscard]] glm::ivec2 getGTComparisonCropOrigin() const {
+            return gt_comparison_published_actual_frame_
+                       ? gt_comparison_published_actual_frame_->crop.origin
+                       : glm::ivec2{0, 0};
+        }
+        void setGTComparisonCropOrigin(glm::ivec2 origin);
 
         struct CameraMetricsOverlayState {
             int camera_id = -1;
@@ -717,7 +728,7 @@ namespace lfs::vis {
             RenderSettings settings{};
         };
 
-        struct GTComparisonImageJobRequest {
+        struct GTComparisonPreviewRequest {
             uint64_t generation = 0;
             int camera_uid = -1;
             GTComparisonMode mode = GTComparisonMode::RGB;
@@ -734,6 +745,15 @@ namespace lfs::vis {
             std::chrono::steady_clock::time_point queued_at{};
         };
 
+        struct GTComparisonFullSourceRequest {
+            detail::GTComparisonSourceKey source_key;
+            uint64_t generation = 0;
+            std::chrono::steady_clock::time_point queued_at{};
+        };
+
+        using GTComparisonWorkerRequest =
+            std::variant<GTComparisonPreviewRequest, GTComparisonFullSourceRequest>;
+
         enum class GTComparisonImageStatus {
             Loading,
             Ready,
@@ -746,6 +766,31 @@ namespace lfs::vis {
             std::string error;
             std::shared_ptr<lfs::core::Tensor> stale_image;
             bool grace_elapsed = true;
+        };
+
+        struct GTComparisonFullSourceLookup {
+            GTComparisonImageStatus status = GTComparisonImageStatus::Loading;
+            uint64_t generation = 0;
+            std::shared_ptr<lfs::core::Tensor> source;
+            std::string error;
+        };
+
+        struct GTComparisonActualFrame {
+            struct Snapshot {
+                detail::GTComparisonSourceKey source_key;
+                uint64_t source_generation = 0;
+                glm::ivec2 full_extent{0, 0};
+                glm::ivec2 framebuffer_extent{0, 0};
+                detail::GTComparisonCrop crop{};
+            };
+
+            GTComparisonImageStatus status = GTComparisonImageStatus::Loading;
+            std::shared_ptr<lfs::core::Tensor> tile;
+            std::shared_ptr<lfs::core::Tensor> fallback;
+            std::optional<detail::GTComparisonPixelRegion> pixel_region;
+            std::optional<Snapshot> snapshot;
+            glm::ivec4 content_rect{0, 0, 0, 0};
+            std::string error;
         };
 
         static constexpr auto CAMERA_METRICS_REFRESH_INTERVAL = std::chrono::milliseconds(500);
@@ -762,11 +807,34 @@ namespace lfs::vis {
         void releaseResizeTrainingPause();
         void cameraMetricsWorkerLoop(std::stop_token stop_token);
         [[nodiscard]] GTComparisonImageLookup getOrQueueGTComparisonImage(
-            GTComparisonImageJobRequest request);
-        void queueGTComparisonImagePrefetch(GTComparisonImageJobRequest request);
+            GTComparisonPreviewRequest request);
+        [[nodiscard]] GTComparisonFullSourceLookup getOrQueueGTComparisonFullSource(
+            GTComparisonFullSourceRequest request);
+        [[nodiscard]] GTComparisonActualFrame prepareGTActualFrame(
+            const lfs::core::Camera& camera,
+            glm::ivec2 physical_viewport,
+            cudaStream_t stream);
+        void queueGTComparisonImagePrefetch(GTComparisonPreviewRequest request);
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> ensureCudaGTViewportImage(
+            std::shared_ptr<lfs::core::Tensor> image,
+            int camera_uid,
+            glm::ivec2 size,
+            bool undistorted,
+            std::string_view label);
+        void updateSplitLeftCpuSourceIdentity(
+            const lfs::core::Tensor* source,
+            glm::ivec2 size,
+            int camera_uid,
+            bool undistorted);
         void invalidateGTComparisonImageCache();
+        void invalidateGTComparisonActualSizeTile();
+        void invalidateGTComparisonActualSizeResources(bool preserve_ready_source = false);
+        void setGTComparisonActualSizeError(std::string error);
+        void publishGTComparisonActualFrame(
+            const GTComparisonActualFrame::Snapshot& snapshot);
+        void clearPublishedGTComparisonActualFrame();
         void insertGTComparisonImageCacheEntry(
-            const GTComparisonImageJobRequest& request,
+            const GTComparisonPreviewRequest& request,
             std::shared_ptr<lfs::core::Tensor> image,
             std::string error,
             std::chrono::steady_clock::time_point now);
@@ -878,23 +946,76 @@ namespace lfs::vis {
             std::chrono::steady_clock::time_point failure_time{};
             std::chrono::steady_clock::time_point last_used{};
         };
-        static bool gtRequestMatches(const GTComparisonImageJobRequest& lhs,
-                                     const GTComparisonImageJobRequest& rhs);
+        struct GTComparisonFullSourceSlot {
+            GTComparisonImageStatus status = GTComparisonImageStatus::Loading;
+            detail::GTComparisonSourceKey source_key;
+            uint64_t generation = 0;
+            std::shared_ptr<lfs::core::Tensor> cpu_source;
+            std::string error;
+            std::chrono::steady_clock::time_point failure_time{};
+        };
+        struct GTComparisonActualSizeState {
+            struct TileFailure {
+                detail::GTComparisonTileKey key;
+                std::chrono::steady_clock::time_point time{};
+                std::string error;
+
+                [[nodiscard]] bool suppresses(
+                    const detail::GTComparisonTileKey& candidate,
+                    const std::chrono::steady_clock::time_point now,
+                    const std::chrono::steady_clock::duration cooldown) const {
+                    return key == candidate &&
+                           time.time_since_epoch().count() != 0 &&
+                           now - time < cooldown;
+                }
+            };
+
+            detail::GTComparisonSourceKey source_key;
+            uint64_t source_generation = 0;
+            std::shared_ptr<lfs::core::Tensor> cpu_source;
+            std::shared_ptr<lfs::core::Tensor> cuda_source;
+            glm::ivec2 full_extent{0, 0};
+            glm::ivec2 framebuffer_extent{0, 0};
+            detail::GTComparisonCrop crop{};
+            std::optional<detail::GTComparisonTileKey> tile_key;
+            std::optional<TileFailure> tile_failure;
+            // Retain the failure through automatic retries until a native frame publishes.
+            std::string error;
+            std::shared_ptr<lfs::core::Tensor> visible_tile;
+            std::shared_ptr<lfs::core::Tensor> fit_fallback;
+            std::chrono::steady_clock::time_point requested_at{};
+            bool lookup_timed = false;
+            bool source_cache_hit = false;
+
+            void invalidateTile() {
+                tile_key.reset();
+                visible_tile.reset();
+            }
+            void reset() { *this = {}; }
+        };
+        static bool gtRequestMatches(const GTComparisonPreviewRequest& lhs,
+                                     const GTComparisonPreviewRequest& rhs);
         static bool gtCacheEntryMatches(const GTComparisonImageCacheEntry& entry,
-                                        const GTComparisonImageJobRequest& request);
+                                        const GTComparisonPreviewRequest& request);
         static constexpr std::size_t GT_COMPARISON_IMAGE_CACHE_MAX_ENTRIES = 6;
         static constexpr std::size_t GT_COMPARISON_IMAGE_CACHE_MAX_BYTES = 128ULL * 1024ULL * 1024ULL;
         static constexpr std::size_t GT_COMPARISON_IMAGE_PREFETCH_MAX_ENTRIES = 4;
         std::list<GTComparisonImageCacheEntry> gt_comparison_image_cache_;
         std::size_t gt_comparison_image_cache_bytes_ = 0;
         mutable std::mutex gt_comparison_image_mutex_;
-        std::optional<GTComparisonImageJobRequest> pending_gt_comparison_image_request_;
-        std::optional<GTComparisonImageJobRequest> active_gt_comparison_image_request_;
+        std::optional<GTComparisonPreviewRequest> pending_gt_comparison_image_request_;
+        std::optional<GTComparisonFullSourceRequest> pending_gt_comparison_full_source_request_;
+        std::optional<GTComparisonWorkerRequest> active_gt_comparison_worker_request_;
         bool active_gt_comparison_image_is_prefetch_ = false;
-        std::deque<GTComparisonImageJobRequest> prefetch_gt_comparison_image_requests_;
-        uint64_t gt_comparison_image_request_generation_ = 0;
+        std::deque<GTComparisonPreviewRequest> prefetch_gt_comparison_image_requests_;
+        uint64_t gt_comparison_preview_request_generation_ = 0;
+        uint64_t gt_comparison_full_source_generation_ = 0;
+        std::optional<GTComparisonFullSourceSlot> gt_comparison_full_source_slot_;
         std::condition_variable_any gt_comparison_image_cv_;
         std::jthread gt_comparison_image_worker_;
+        GTComparisonActualSizeState gt_comparison_actual_size_state_;
+        std::optional<GTComparisonActualFrame::Snapshot>
+            gt_comparison_published_actual_frame_;
         // #1574 GT depth/normal async hold-then-swap: at most one outstanding ticket.
         // Panel keeps gt_async_held_display_ until the next ticket delivers (never blank).
         std::uint64_t gt_async_depth_ticket_ = 0;
@@ -951,6 +1072,12 @@ namespace lfs::vis {
         lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
+        friend class RenderingManagerActualSizeStateTest_PublishesOnlyAtCommitAndRetainsAcrossResourceInvalidation_Test;
+        friend class RenderingManagerActualSizeCacheTest_RetainsReadySourceAcrossTogglesAndClearsOnContextChanges_Test;
+        friend class RenderingManagerActualSizeCacheTest_RetryAndCancellationPreserveOnlyCurrentWork_Test;
+        friend class RenderingManagerActualSizeFailureTest_KeyedCooldownRetainsFallbackAndAllowsRelevantChanges_Test;
+        friend class RenderingManagerActualSizeFailureTest_PinholeUploadFailureRetriesAndReusesCache_Test;
+        friend class RenderingManagerGTComparisonGenerationTest_SplitLeftGenerationRemainsMonotonicAcrossInvalidations_Test;
         friend class SceneManager;
     };
 

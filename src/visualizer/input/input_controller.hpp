@@ -124,7 +124,8 @@ namespace lfs::vis {
                                          keys_movement_[3] || keys_movement_[4] || keys_movement_[5];
             const bool camera_drag = drag_mode_ == DragMode::Orbit ||
                                      drag_mode_ == DragMode::Pan ||
-                                     drag_mode_ == DragMode::Rotate;
+                                     drag_mode_ == DragMode::Rotate ||
+                                     drag_mode_ == DragMode::GTImagePan;
             auto& keyboard_camera = activeKeyboardViewport().camera;
             const bool orbit_coasting =
                 orbit_coast_viewport_ && orbit_coast_viewport_->camera.hasOrbitMomentum();
@@ -249,7 +250,8 @@ namespace lfs::vis {
             Rotate,
             Orbit,
             Gizmo,
-            Splitter
+            Splitter,
+            GTImagePan
         };
         DragMode drag_mode_ = DragMode::None;
         CameraNavigationMode camera_navigation_mode_ = CameraNavigationMode::Orbit;
@@ -258,6 +260,9 @@ namespace lfs::vis {
         glm::dvec2 last_mouse_pos_{0, 0};
         float splitter_start_pos_ = 0.5f;
         double splitter_start_x_ = 0.0;
+        glm::dvec2 gt_image_pan_start_mouse_{0.0, 0.0};
+        glm::ivec2 gt_image_pan_start_origin_{0, 0};
+        glm::dvec2 gt_image_pan_physical_scale_{1.0, 1.0};
         Viewport* drag_viewport_ = nullptr;
         Viewport* orbit_coast_viewport_ = nullptr;
         Viewport* pan_coast_viewport_ = nullptr;

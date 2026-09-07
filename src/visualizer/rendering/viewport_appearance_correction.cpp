@@ -7,7 +7,6 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/export_post_process.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #include "training/trainer.hpp"
@@ -111,7 +110,8 @@ namespace lfs::vis {
             SceneManager& scene_mgr,
             const int camera_uid,
             const PPISPOverrides& overrides,
-            const bool use_controller) {
+            const bool use_controller,
+            const lfs::training::PPISPRegion& region) {
             auto* ppisp = scene_mgr.getAppearancePPISP();
             if (!ppisp) {
                 return rgb;
@@ -119,7 +119,7 @@ namespace lfs::vis {
             auto* const pool = use_controller && scene_mgr.hasAppearanceController()
                                    ? scene_mgr.getAppearanceControllerPool()
                                    : nullptr;
-            return applyPpispAppearance(*ppisp, pool, rgb, camera_uid, overrides);
+            return applyPpispAppearance(*ppisp, pool, rgb, camera_uid, overrides, region);
         }
     } // namespace
 
@@ -127,7 +127,8 @@ namespace lfs::vis {
         std::shared_ptr<lfs::core::Tensor> image,
         SceneManager* const scene_manager,
         const RenderSettings& settings,
-        const int camera_uid) {
+        const int camera_uid,
+        const lfs::training::PPISPRegion& region) {
         if (!image || !scene_manager || !settings.apply_appearance_correction) {
             return image;
         }
@@ -184,7 +185,7 @@ namespace lfs::vis {
                 try {
                     auto ppisp_input = preparePpispInput(rgb_input);
                     auto corrected = trainer->applyPPISPForViewport(
-                        ppisp_input, camera_uid, trainer_overrides, use_controller);
+                        ppisp_input, camera_uid, trainer_overrides, use_controller, region);
                     corrected = restore_alpha(std::move(corrected));
                     return std::make_shared<lfs::core::Tensor>(std::move(corrected));
                 } catch (const std::exception& e) {
@@ -208,7 +209,7 @@ namespace lfs::vis {
         lfs::core::Tensor corrected;
         try {
             auto ppisp_input = preparePpispInput(rgb_input);
-            corrected = applyStandaloneAppearance(ppisp_input, *scene_manager, camera_uid, overrides, use_controller);
+            corrected = applyStandaloneAppearance(ppisp_input, *scene_manager, camera_uid, overrides, use_controller, region);
         } catch (const std::exception& e) {
             LOG_WARN("Standalone viewport PPISP correction failed: {}", e.what());
             return image;

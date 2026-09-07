@@ -46,6 +46,7 @@ namespace lfs::vis {
         glm::ivec4 content_rect{0, 0, 0, 0}; // x, y, w, h (letterboxed)
         glm::ivec2 coordinate_extent{0, 0};
         glm::vec3 background{0.0f};
+        bool exact_texel_sampling = false;
     };
 
     // GPU split-view composite. Replaces the CPU compositeSplitImages scanline loop

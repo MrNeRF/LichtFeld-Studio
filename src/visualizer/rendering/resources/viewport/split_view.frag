@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = padding
+    // w = exact integer texel sampling (0/1)
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.
@@ -70,6 +70,15 @@ vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normaliz
     return clamp(sharpened, neighborhood_min, neighborhood_max);
 }
 
+vec3 fetch_panel_exact(sampler2D tex, ivec2 local_texel, float flip_y) {
+    ivec2 size = textureSize(tex, 0);
+    ivec2 texel = local_texel;
+    if (flip_y > 0.5) {
+        texel.y = int(pc.rect.w) - 1 - texel.y;
+    }
+    return texelFetch(tex, clamp(texel, ivec2(0), size - ivec2(1)), 0).rgb;
+}
+
 void main() {
     // Pixel-space coordinate (gl_FragCoord origin top-left in Vulkan).
     vec2 px = gl_FragCoord.xy;
@@ -93,15 +102,23 @@ void main() {
     float divider_pixel = pc.rect.x + floor(pc.split.x * pc.rect.z + 0.5);
     bool use_left = px.x < divider_pixel;
 
-    vec3 color = use_left
-        ? sample_panel(u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
-                       pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
-                       pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw,
-                       pc.left_texcoord_scale_offset.xy, pc.left_texcoord_scale_offset.zw)
-        : sample_panel(u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
-                       pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
-                       pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw,
-                       pc.right_texcoord_scale_offset.xy, pc.right_texcoord_scale_offset.zw);
+    vec3 color;
+    if (pc.split.w > 0.5) {
+        ivec2 local_texel = ivec2(floor(px - pc.rect.xy));
+        color = use_left
+            ? fetch_panel_exact(u_left, local_texel, pc.split.y)
+            : fetch_panel_exact(u_right, local_texel, pc.split.z);
+    } else {
+        color = use_left
+            ? sample_panel(u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
+                           pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
+                           pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw,
+                           pc.left_texcoord_scale_offset.xy, pc.left_texcoord_scale_offset.zw)
+            : sample_panel(u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
+                           pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
+                           pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw,
+                           pc.right_texcoord_scale_offset.xy, pc.right_texcoord_scale_offset.zw);
+    }
 
     // Divider/handle/grip overlay. Mirrors compositeSplitImages CPU geometry
     // pixel-for-pixel: vertical bar + rounded handle + horizontal grip lines.

@@ -9298,7 +9298,8 @@ namespace lfs::training {
 
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
                                                      const PPISPViewportOverrides& overrides,
-                                                     const bool use_controller) const {
+                                                     const bool use_controller,
+                                                     const PPISPRegion& region) const {
         const auto params = getParams();
         if (!ppisp_ || !params.optimization.ppisp_active() || rgb.shape().rank() != 3) {
             return rgb;
@@ -9318,14 +9319,14 @@ namespace lfs::training {
             std::lock_guard<std::mutex> controller_lock(ppisp_controller_pool_->predict_mutex());
             const auto controller_params = ppisp_controller_pool_->predict(controller_idx, rgb_chw.unsqueeze(0), 1.0f);
             result = overrides.isIdentity()
-                         ? ppisp_->apply_with_controller_params(rgb_chw, controller_params, controller_idx)
+                         ? ppisp_->apply_with_controller_params(rgb_chw, controller_params, controller_idx, region)
                          : ppisp_->apply_with_controller_params_and_overrides(rgb_chw, controller_params, controller_idx,
-                                                                              toRenderOverrides(overrides));
+                                                                              toRenderOverrides(overrides), region);
         } else if (is_training_camera) {
             const int camera_id = ppisp_->camera_for_frame(camera_uid);
-            result = overrides.isIdentity() ? ppisp_->apply(rgb_chw, camera_id, camera_uid)
+            result = overrides.isIdentity() ? ppisp_->apply(rgb_chw, camera_id, camera_uid, region)
                                             : ppisp_->apply_with_overrides(rgb_chw, camera_id, camera_uid,
-                                                                           toRenderOverrides(overrides));
+                                                                           toRenderOverrides(overrides), region);
         } else {
             // Manual viewport overrides should remain usable on novel views even without a controller.
             // Fall back to any learned PPISP frame/camera pair so the user can still inspect exposure,
@@ -9333,9 +9334,9 @@ namespace lfs::training {
             const int fallback_camera = ppisp_->any_camera_id();
             const int fallback_frame = ppisp_->any_frame_uid();
             result = overrides.isIdentity()
-                         ? ppisp_->apply(rgb_chw, fallback_camera, fallback_frame)
+                         ? ppisp_->apply(rgb_chw, fallback_camera, fallback_frame, region)
                          : ppisp_->apply_with_overrides(rgb_chw, fallback_camera, fallback_frame,
-                                                        toRenderOverrides(overrides));
+                                                        toRenderOverrides(overrides), region);
         }
 
         return is_chw ? result : result.permute({1, 2, 0}).contiguous();

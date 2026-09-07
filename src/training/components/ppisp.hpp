@@ -65,11 +65,13 @@ namespace lfs::training {
         bool train_crf = true;      // When false, CRF stays at identity and is not stepped
     };
 
-    /// Full-width row band of a larger image: vignetting is evaluated in full-image
-    /// coordinates so banded application matches a single full-image pass exactly.
-    /// full_height == 0 means the input covers the whole image.
+    /// Crop of a larger image: vignetting is evaluated in full-image coordinates
+    /// so regional application matches a single full-image pass exactly.
+    /// A zero full extent uses the input extent on that axis.
     struct PPISPRegion {
+        int x_offset = 0;
         int y_offset = 0;
+        int full_width = 0;
         int full_height = 0;
     };
 
