@@ -689,6 +689,7 @@ body {
 }
 
 #gt-compare-mode-block .viewport-gt-compare-panel {
+    position: relative;
     padding: 5dp 6dp;
     border-radius: 6dp;
     gap: 0;
@@ -701,6 +702,78 @@ body {
     height: 22dp;
     min-height: 22dp;
     line-height: 20dp;
+}
+
+#gt-compare-mode-block .viewport-gt-compare-actual-size {
+    width: 48dp;
+    min-width: 48dp;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5dp;
+    border-width: 1dp;
+    height: 22dp;
+    min-height: 22dp;
+    margin-left: 4dp;
+    padding: 0 3dp;
+    border-radius: 4dp;
+    font-size: 11dp;
+    line-height: 20dp;
+    box-sizing: border-box;
+}
+
+@keyframes gt-compare-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.viewport-gt-compare-spinner {
+    width: 10dp;
+    height: 10dp;
+    border-width: 2dp;
+    border-radius: 5dp;
+    box-sizing: border-box;
+    visibility: hidden;
+}
+
+.viewport-gt-compare-spinner.spinning {
+    visibility: visible;
+    animation: gt-compare-spin 0.8s linear-in infinite;
+}
+
+#gt-compare-mode-block .viewport-gt-compare-status {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4dp;
+    min-width: 0;
+    padding: 4dp 6dp;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6dp;
+    font-size: 11dp;
+    white-space: nowrap;
+}
+
+.viewport-gt-compare-warning {
+    width: 13dp;
+    height: 13dp;
+    line-height: 13dp;
+    text-align: center;
+    border-width: 1dp;
+    border-radius: 8dp;
+}
+
+.viewport-gt-compare-retry {
+    padding: 2dp 5dp;
+    border-width: 1dp;
+    border-radius: 3dp;
+}
+
+#gt-compare-mode-block .viewport-gt-compare-actual-size:disabled {
+    opacity: 0.45;
+    cursor: default;
 }
 
 .viewport-transform-panel.viewport-export-panel {

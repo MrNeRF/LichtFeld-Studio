@@ -10,6 +10,8 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
@@ -31,6 +33,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -1101,6 +1104,57 @@ result_values = [1.0 if set_ok else 0.0, 1.0 if clear_ok else 0.0]
     ASSERT_EQ(result.values.size(), 2u);
     EXPECT_FLOAT_EQ(result.values[0], 1.0F);
     EXPECT_FLOAT_EQ(result.values[1], 1.0F);
+}
+
+TEST_F(PythonIntegrationTest, GTComparisonActionsRunOnViewerThread) {
+    using namespace std::chrono_literals;
+    TestVisualizer viewer;
+    viewer.queue_posted_work = true;
+    const ScopedVisualizer scoped_viewer(&viewer);
+    const auto viewer_thread = std::this_thread::get_id();
+    std::vector<int> actions;
+    std::vector<std::thread::id> action_threads;
+    lfs::event::ScopedHandler handlers;
+    handlers.subscribe<lfs::core::events::cmd::GoToCamView>([&](const auto& event) {
+        actions.push_back(event.cam_id);
+        action_threads.push_back(std::this_thread::get_id());
+    });
+    handlers.subscribe<lfs::core::events::cmd::ToggleGTComparison>([&](const auto&) {
+        actions.push_back(-1);
+        action_threads.push_back(std::this_thread::get_id());
+    });
+
+    std::exception_ptr python_error;
+    PythonTensorResult result;
+    std::thread python_worker([&] {
+        try {
+            result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+for uid in (7, 13, 7):
+    lf.ui.go_to_camera_view(uid)
+    lf.ui.toggle_gt_comparison()
+result_shape = (1,)
+result_values = [1.0]
+)PY");
+        } catch (...) {
+            python_error = std::current_exception();
+        }
+    });
+    for (int i = 0; i < 6; ++i) {
+        if (!viewer.waitForQueuedWork(5s)) {
+            ADD_FAILURE() << "Camera action was not posted to the viewer";
+            break;
+        }
+        EXPECT_TRUE(viewer.runNextQueuedWork());
+    }
+    python_worker.join();
+    if (python_error) {
+        std::rethrow_exception(python_error);
+    }
+    EXPECT_EQ(result.values, std::vector<float>{1.0f});
+    EXPECT_EQ(actions, (std::vector<int>{7, -1, 13, -1, 7, -1}));
+    EXPECT_EQ(action_threads, std::vector<std::thread::id>(6, viewer_thread));
+    EXPECT_EQ(viewer.post_work_calls, 6);
 }
 
 TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {

@@ -36,12 +36,26 @@ class GTCompareControlsController:
     _DIRTY_FIELDS = (
         "gt_compare_tool_label",
         "gt_compare_mode_value",
+        "gt_compare_actual_size",
+        "gt_compare_actual_size_available",
+        "gt_compare_actual_size_active",
+        "gt_compare_actual_size_transitioning",
+        "gt_compare_actual_size_tooltip",
+        "gt_compare_actual_size_loading",
+        "gt_compare_actual_size_failed",
+        "gt_compare_actual_size_status",
+        "gt_compare_actual_size_retry_label",
     )
 
     def __init__(self):
         self._handle = None
         self._visible = False
         self._mode = _DEFAULT_MODE
+        self._actual_size_requested = False
+        self._actual_size_available = False
+        self._actual_size_active = False
+        self._actual_size_transitioning = False
+        self._actual_size_error = ""
         self._last_state_key = None
 
     @property
@@ -54,6 +68,35 @@ class GTCompareControlsController:
             "gt_compare_mode_value",
             lambda: self._mode,
             self._set_mode,
+        )
+        model.bind_func(
+            "gt_compare_actual_size",
+            lambda: self._actual_size_requested,
+        )
+        model.bind_func(
+            "gt_compare_actual_size_available",
+            lambda: self._actual_size_available,
+        )
+        model.bind_func(
+            "gt_compare_actual_size_active",
+            lambda: self._actual_size_active,
+        )
+        model.bind_func(
+            "gt_compare_actual_size_transitioning",
+            lambda: self._actual_size_transitioning,
+        )
+        model.bind_func(
+            "gt_compare_actual_size_tooltip",
+            self._actual_size_tooltip,
+        )
+        model.bind_func("gt_compare_actual_size_loading", self._actual_size_loading)
+        model.bind_func("gt_compare_actual_size_failed", lambda: bool(self._actual_size_error))
+        model.bind_func("gt_compare_actual_size_status", self._actual_size_status)
+        model.bind_func("gt_compare_actual_size_retry_label", lambda: _ui_label("ui.gt_compare_retry", "Retry"))
+        model.bind_event("gt_compare_retry_actual_size", self._retry_actual_size)
+        model.bind_event(
+            "gt_compare_toggle_actual_size",
+            self._toggle_actual_size,
         )
         self._handle = model.get_handle()
 
@@ -82,7 +125,15 @@ class GTCompareControlsController:
             return ",".join(dirty_reasons) if dirty else None
 
         self._mode = self._read_mode()
-        state_key = (RuntimeState.language_generation.value, self._mode)
+        self._refresh_actual_size_state()
+        state_key = (
+            RuntimeState.language_generation.value,
+            self._mode,
+            self._actual_size_requested,
+            self._actual_size_available,
+            self._actual_size_active,
+            self._actual_size_error,
+        )
         if state_key != self._last_state_key:
             self._last_state_key = state_key
             self._dirty_all()
@@ -124,6 +175,115 @@ class GTCompareControlsController:
             self._mode = self._read_mode()
         else:
             self._mode = _DEFAULT_MODE
+        self._refresh_actual_size_state()
+        self._dirty_all()
+
+    def _read_actual_size(self):
+        getter = getattr(lf.ui, "get_gt_comparison_actual_size", None)
+        if not callable(getter):
+            return False
+        try:
+            return bool(getter())
+        except Exception:
+            return False
+
+    def _read_actual_size_available(self):
+        getter = getattr(lf.ui, "is_gt_comparison_actual_size_available", None)
+        if not callable(getter):
+            return False
+        try:
+            return bool(getter())
+        except Exception:
+            return False
+
+    def _read_actual_size_active(self):
+        getter = getattr(lf.ui, "is_gt_comparison_actual_size_active", None)
+        if not callable(getter):
+            return False
+        try:
+            return bool(getter())
+        except Exception:
+            return False
+
+    def _read_actual_size_error(self):
+        if not self._actual_size_requested or not self._actual_size_available:
+            return ""
+        getter = getattr(lf.ui, "get_gt_comparison_actual_size_error", None)
+        if not callable(getter):
+            return ""
+        try:
+            return str(getter() or "")
+        except Exception:
+            return ""
+
+    def _actual_size_loading(self):
+        return (
+            self._actual_size_requested
+            and self._actual_size_available
+            and not self._actual_size_active
+            and not self._actual_size_error
+        )
+
+    def _actual_size_status(self):
+        if self._actual_size_error:
+            return _ui_label("ui.gt_compare_retrying", "Couldn't prepare 1:1. Retrying…")
+        if self._actual_size_loading():
+            return _ui_label("ui.gt_compare_preparing", "Preparing 1:1…")
+        return ""
+
+    def _refresh_actual_size_state(self):
+        self._actual_size_requested = self._read_actual_size()
+        self._actual_size_available = self._read_actual_size_available()
+        self._actual_size_active = self._read_actual_size_active()
+        self._actual_size_error = self._read_actual_size_error()
+        self._actual_size_transitioning = (
+            self._actual_size_available
+            and self._actual_size_requested != self._actual_size_active
+        )
+
+    def _actual_size_tooltip(self):
+        if not self._actual_size_available:
+            return _ui_label(
+                "tooltip.gt_compare_actual_size_unavailable",
+                "1:1 is unavailable for this camera or comparison mode. Distorted images require usable saved undistortion calibration.",
+            )
+        if self._actual_size_error:
+            return self._actual_size_status() + "\n" + self._actual_size_error
+        if self._actual_size_requested and not self._actual_size_active:
+            return _ui_label(
+                "tooltip.gt_compare_actual_size_fallback",
+                "1:1 was requested, but a Fit preview is currently displayed while native-resolution content loads or recovers.",
+            )
+        if self._actual_size_active:
+            return _ui_label(
+                "tooltip.gt_compare_actual_size_active",
+                "1:1 is active: one image pixel maps to one physical display pixel.",
+            )
+        return _ui_label(
+            "tooltip.gt_compare_actual_size",
+            "Show RGB ground truth at one image pixel per physical display pixel. Requires a perspective camera and usable saved undistortion calibration for distorted images. Legacy projects may need dataset reimport and resave.",
+        )
+
+    def _toggle_actual_size(self, *_):
+        if not self._read_actual_size_available():
+            return
+        setter = getattr(lf.ui, "set_gt_comparison_actual_size", None)
+        if callable(setter):
+            try:
+                setter(not self._read_actual_size())
+            except Exception:
+                pass
+        self._refresh_actual_size_state()
+        self._dirty_all()
+
+    def _retry_actual_size(self, *_):
+        retry = getattr(lf.ui, "retry_gt_comparison_actual_size", None)
+        if self._read_actual_size() and self._read_actual_size_available() and callable(retry):
+            try:
+                retry()
+            except Exception:
+                pass
+        self._refresh_actual_size_state()
         self._dirty_all()
 
     def _dirty_all(self):

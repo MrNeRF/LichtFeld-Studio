@@ -821,7 +821,25 @@
                         <option value="normal">@tr:ui.normal</option>
                         <option value="depth">@tr:ui.depth</option>
                     </select>
+                    <button class="icon-btn viewport-gt-compare-actual-size"
+                            data-class-selected="gt_compare_actual_size_active"
+                            data-class-transitioning="gt_compare_actual_size_transitioning"
+                            data-class-loading="gt_compare_actual_size_loading"
+                            data-class-disabled="!gt_compare_actual_size_available"
+                            data-attrif-disabled="!gt_compare_actual_size_available"
+                            data-attr-title="gt_compare_actual_size_tooltip"
+                            data-event-click="gt_compare_toggle_actual_size"><span>1:1</span><span class="viewport-gt-compare-spinner" data-class-spinning="gt_compare_actual_size_loading"></span></button>
                 </div>
+            </div>
+            <div class="viewport-transform-panel viewport-gt-compare-status"
+                 data-if="gt_compare_actual_size_loading || gt_compare_actual_size_failed"
+                 data-class-failed="gt_compare_actual_size_failed"
+                 data-attr-title="gt_compare_actual_size_tooltip">
+                <span class="viewport-gt-compare-warning" data-if="gt_compare_actual_size_failed">!</span>
+                <span>{{gt_compare_actual_size_status}}</span>
+                <button class="icon-btn viewport-gt-compare-retry"
+                        data-if="gt_compare_actual_size_failed"
+                        data-event-click="gt_compare_retry_actual_size">{{gt_compare_actual_size_retry_label}}</button>
             </div>
         </div>
     </div>

@@ -91,6 +91,79 @@ crashes happen, and files outlive programs.
   live generations into a fresh file and atomically swaps it in (run it yourself, or accept the
   suggestion around ~50% waste).
 
+## GT Compare 1:1 state and compatibility
+
+GT Compare adds optional camera calibration to the existing `SCNG` chapter.
+It does not change the container grammar, chapter versions, or minimum-reader
+version. The usual container-version checks still apply; accepting these fields
+is not a promise that every older release can open every `.licht` file.
+
+### Temporary view state
+
+Projects always open with GT Compare in Fit. The 1:1 request, crop position, pending
+work, failures, decoded images, and GPU tiles are runtime state and are not saved.
+
+### Camera calibration
+
+`SCNG.nodes[].camera.undistortion` is optional. A writer includes it when the camera
+has precomputed undistortion parameters. The existing distortion coefficients and
+camera model remain in the camera record.
+
+| Field within `undistortion` | Meaning and requirements |
+| --- | --- |
+| `source` | Required calibration object for the distorted source image. |
+| `destination` | Required calibration object for the undistorted output. |
+| `prepared` | Required Boolean. Whether the camera's runtime intrinsics use the destination calibration. |
+| `crop_solve_failed` | Optional Boolean, default `false`. Preserves the crop solver's fallback status; written only when `true`. |
+
+Each calibration object has six required fields: `focal_x`, `focal_y`, `center_x`,
+`center_y`, `width`, and `height`. Focal lengths must be finite and positive;
+principal-point coordinates must be finite; width and height must be positive
+32-bit integers. Intrinsics are in pixel units at the corresponding calibration
+resolution. Native comparison scales the saved calibration to the decoded source's
+resolution and uses the undistorted output grid for 1:1 sampling.
+
+When the record is present, the camera must have distortion and use a supported
+internal model: `PINHOLE` (0), `FISHEYE` (2), or `THIN_PRISM_FISHEYE` (4). These are
+LFS model identifiers, not COLMAP model identifiers. Writers store the source
+calibration in the camera's outer `focal_x`, `focal_y`, `center_x`, `center_y`,
+`camera_width`, and `camera_height`, including when `prepared` is true. These outer values
+must match `source`. Dimensions match exactly; float comparisons allow a relative
+tolerance of `1e-5`, with a minimum scale of 1.
+
+A missing `undistortion` member is accepted as a legacy camera. A null, partial,
+invalid, or inconsistent record is rejected as `DataLoss`; it is not silently
+replaced by a newly solved calibration. Restoring a valid record reconstructs the
+undistortion parameters without repeating the crop solve. Camera transform copies
+preserve both calibrations, the prepared state, and the crop-solver fallback status.
+
+### Supported transitions
+
+| Save/open sequence | Behavior |
+| --- | --- |
+| Older project without these fields → this version | Opens with Fit as the default. Supported pinhole cameras with an image source can use 1:1. Distorted cameras recover undistortion from stored source calibration when available; otherwise dataset reimport and resave may be required. |
+| This version → this version | Opens in Fit and preserves valid calibration. The native image is prepared when 1:1 is requested; transient loading and crop state are not restored. |
+| This version → upstream reader without 1:1 | The tested upstream chapter reader accepts the additive records. It has no native-size comparison behavior and does not interpret the new calibration. |
+| This version → older resave → this version | Not a lossless calibration round trip. Rebuilding a camera record in the older writer drops `undistortion`. Usable source calibration allows reconstruction, but the exact destination calibration and crop-solver state are lost. |
+
+The calibration compatibility check on 2026-09-06 used the actual `SCNG` reader/writer
+sources from upstream commit `1466bb107f317a4a3222261333392dd2c3fbcd93`.
+It exercised calibrated records for all three supported models, both prepared
+states, both crop-solver statuses, and legacy pinhole/distorted records. At that
+revision, an opaque chapter byte round trip preserves the calibration. Materializing
+`SCNG` from typed camera records drops the unrecognized calibration.
+This verifies the chapter paths, not a complete GUI save/open cycle for every
+older release, and does not promise metadata preservation on an older resave.
+
+Legacy distorted cameras without an `undistortion` record recompute undistortion
+from the stored source calibration, reusing identical calibrations within a load.
+There is no automatic migration when usable source calibration cannot be recovered. Reimport the
+original dataset with this version and resave to establish usable calibration.
+Reopening and resaving the old project alone is not guaranteed to do so.
+
+See [GT Compare: Fit and 1:1](docs/features/gt-compare.md) for controls, loading,
+retry, and memory behavior.
+
 ## Command-line opening and recovery
 
 Use `-v project.licht` to open a project in the GUI. Headless training resumes

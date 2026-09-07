@@ -621,7 +621,7 @@ namespace lfs::python {
         group.id = "render_settings";
         group.name = "Render Settings";
 
-        auto add_color3 = [&](std::array<float, 3> Proxy::*member, const std::string& id, const std::string& name,
+        auto add_color3 = [&](std::array<float, 3> Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, std::array<double, 3> default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -641,7 +641,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_bool = [&](bool Proxy::*member, const std::string& id, const std::string& name, const std::string& desc,
+        auto add_bool = [&](bool Proxy::* member, const std::string& id, const std::string& name, const std::string& desc,
                             bool default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -658,7 +658,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_float = [&](float Proxy::*member, const std::string& id, const std::string& name,
+        auto add_float = [&](float Proxy::* member, const std::string& id, const std::string& name,
                              const std::string& desc, double default_val, double min_val, double max_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -677,7 +677,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_int_enum = [&](int Proxy::*member, const std::string& id, const std::string& name,
+        auto add_int_enum = [&](int Proxy::* member, const std::string& id, const std::string& name,
                                 const std::string& desc, std::vector<EnumItem> items, int default_idx) {
             PropertyMeta meta;
             meta.id = id;
@@ -712,7 +712,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        auto add_string = [&](std::string Proxy::*member, const std::string& id, const std::string& name,
+        auto add_string = [&](std::string Proxy::* member, const std::string& id, const std::string& name,
                               const std::string& desc, const std::string& default_val) {
             PropertyMeta meta;
             meta.id = id;
@@ -821,6 +821,8 @@ namespace lfs::python {
         add_int_enum(&Proxy::gt_comparison_mode, "gt_comparison_mode", "GT Compare",
                      "Ground-truth comparison payload",
                      {{"RGB", "rgb", 0}, {"Normal", "normal", 1}, {"Depth", "depth", 2}}, 0);
+        add_bool(&Proxy::gt_comparison_actual_size, "gt_comparison_actual_size", "GT Compare 1:1",
+                 "Map one ground-truth image pixel to one physical framebuffer pixel", false);
         add_int_enum(&Proxy::camera_metrics_mode, "camera_metrics_mode", "Camera Metrics",
                      "Compute metrics when jumping to a source camera",
                      {{"Off", "OFF", 0}, {"PSNR", "PSNR", 1}, {"PSNR + SSIM", "PSNR_SSIM", 2}}, 0);
@@ -856,7 +858,7 @@ namespace lfs::python {
                      {{"Manual", "MANUAL", 0}, {"Auto", "AUTO", 1}}, 1);
 
         using PPISP = vis::PPISPOverrides;
-        const auto add_ppisp_float = [&](float PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_float = [&](float PPISP::* member, const char* id, const char* name,
                                          const char* desc, double def, double min_v, double max_v) {
             PropertyMeta meta;
             meta.id = id;
@@ -875,7 +877,7 @@ namespace lfs::python {
             group.properties.push_back(std::move(meta));
         };
 
-        const auto add_ppisp_bool = [&](bool PPISP::*member, const char* id, const char* name,
+        const auto add_ppisp_bool = [&](bool PPISP::* member, const char* id, const char* name,
                                         const char* desc, bool def) {
             PropertyMeta meta;
             meta.id = id;
@@ -946,16 +948,27 @@ namespace lfs::python {
             settings_.gut = rendering::isGutBackend(
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
-        vis::update_render_settings(settings_);
-        // update_render_settings may normalize dependent properties (for
-        // example the preset when switching scene reconstruction backends).
-        // Keep this Python proxy in lockstep with that applied state so the
-        // next property assignment cannot restore a stale, cross-backend
-        // preset.
-        if (const auto applied = vis::get_render_settings()) {
-            settings_ = *applied;
+        const auto apply_settings = [settings = settings_]() {
+            vis::update_render_settings(settings);
+            request_redraw();
+            return vis::get_render_settings();
+        };
+        std::optional<vis::RenderSettingsProxy> applied;
+        auto* const viewer = get_visualizer();
+        if (!viewer || viewer->isOnViewerThread()) {
+            applied = apply_settings();
+        } else if (viewer->acceptsPostedWork()) {
+            nb::gil_scoped_release release;
+            applied = vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                apply_settings,
+                []() -> std::optional<vis::RenderSettingsProxy> { return std::nullopt; });
         }
-        request_redraw();
+        // Keep the Python proxy in sync with normalized settings after the
+        // viewer has applied them and this thread has reacquired the GIL.
+        if (applied) {
+            settings_ = std::move(*applied);
+        }
     }
 
     void PyRenderSettings::prop_setattr(const std::string& name, nb::object value) {

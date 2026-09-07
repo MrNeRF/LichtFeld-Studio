@@ -1279,6 +1279,10 @@
     "depth_view_tool": "Vista de mapa de profundidad activa",
     "depth_view_mode": "Elegir el modo de color de profundidad",
     "gt_compare_mode": "Elige la comparación con datos de referencia RGB, normales o profundidad",
+    "gt_compare_actual_size": "Muestra la referencia RGB con un píxel de imagen por píxel físico de pantalla. Requiere una cámara en perspectiva y, para imágenes distorsionadas, una calibración de desdistorsión guardada y válida. Los proyectos antiguos pueden requerir volver a importar y guardar el conjunto de datos.",
+    "gt_compare_actual_size_active": "1:1 está activo: un píxel de imagen corresponde a un píxel físico de pantalla.",
+    "gt_compare_actual_size_fallback": "Se ha solicitado 1:1, pero actualmente se muestra una vista previa ajustada mientras se carga o recupera el contenido a resolución nativa.",
+    "gt_compare_actual_size_unavailable": "1:1 no está disponible para esta cámara o modo de comparación. Las imágenes distorsionadas requieren una calibración de desdistorsión guardada y válida.",
     "depth_view_range": "Rango de visualización de profundidad",
     "depth_view_near": "Límite cercano del rango de profundidad",
     "depth_view_far": "Límite lejano del rango de profundidad",
@@ -2349,6 +2353,9 @@
     "redo_named": "Rehacer: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "Preparando 1:1…",
+    "gt_compare_retrying": "No se pudo preparar 1:1. Reintentando…",
+    "gt_compare_retry": "Reintentar",
     "near": "Cerca",
     "far": "Lejos",
     "color": "Color",

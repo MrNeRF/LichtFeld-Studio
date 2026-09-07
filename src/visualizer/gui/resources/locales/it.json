@@ -1279,6 +1279,10 @@
     "depth_view_tool": "Vista mappa di profondità attiva",
     "depth_view_mode": "Scegli il modo colore della profondità",
     "gt_compare_mode": "Scegli il confronto con la ground truth RGB, delle normali o della profondità",
+    "gt_compare_actual_size": "Mostra la ground truth RGB con un pixel immagine per pixel fisico dello schermo. Richiede una camera prospettica e, per immagini distorte, una calibrazione di correzione salvata e utilizzabile. I progetti precedenti potrebbero richiedere di reimportare e salvare nuovamente il dataset.",
+    "gt_compare_actual_size_active": "1:1 è attivo: un pixel dell’immagine corrisponde a un pixel fisico dello schermo.",
+    "gt_compare_actual_size_fallback": "È stato richiesto 1:1, ma al momento viene mostrata un’anteprima adattata mentre il contenuto a risoluzione nativa viene caricato o ripristinato.",
+    "gt_compare_actual_size_unavailable": "1:1 non è disponibile per questa camera o modalità di confronto. Le immagini distorte richiedono una calibrazione di correzione salvata e utilizzabile.",
     "depth_view_range": "Intervallo di visualizzazione della profondità",
     "depth_view_near": "Limite vicino dell'intervallo di profondità",
     "depth_view_far": "Limite lontano dell'intervallo di profondità",
@@ -2349,6 +2353,9 @@
     "redo_named": "Ripeti: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "Preparazione 1:1…",
+    "gt_compare_retrying": "Impossibile preparare 1:1. Nuovo tentativo…",
+    "gt_compare_retry": "Riprova",
     "near": "Vicino",
     "far": "Lontano",
     "color": "Colore",

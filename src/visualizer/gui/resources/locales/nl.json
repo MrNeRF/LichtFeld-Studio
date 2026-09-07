@@ -1279,6 +1279,10 @@
     "depth_view_tool": "Actieve dieptekaartweergave",
     "depth_view_mode": "Kleurmodus voor dieptekaart kiezen",
     "gt_compare_mode": "Kies RGB-, normaal- of diepte-ground-truthvergelijking",
+    "gt_compare_actual_size": "Toon RGB-ground truth met één beeldpixel per fysieke schermpixel. Vereist een perspectiefcamera en bij vervormde beelden een bruikbare opgeslagen ontekeningskalibratie. Oudere projecten moeten mogelijk de dataset opnieuw importeren en opslaan.",
+    "gt_compare_actual_size_active": "1:1 is actief: één beeldpixel komt overeen met één fysieke schermpixel.",
+    "gt_compare_actual_size_fallback": "1:1 is aangevraagd, maar er wordt momenteel een ingepaste voorvertoning getoond terwijl inhoud op native resolutie wordt geladen of hersteld.",
+    "gt_compare_actual_size_unavailable": "1:1 is niet beschikbaar voor deze camera of vergelijkingsmodus. Vervormde beelden vereisen een bruikbare opgeslagen ontekeningskalibratie.",
     "depth_view_range": "Visualisatiebereik van dieptekaart",
     "depth_view_near": "Dichtbijgrens van het dieptebereik",
     "depth_view_far": "Verre grens van het dieptebereik",
@@ -2349,6 +2353,9 @@
     "redo_named": "Opnieuw uitvoeren: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "1:1 voorbereiden…",
+    "gt_compare_retrying": "1:1 voorbereiden mislukt. Opnieuw proberen…",
+    "gt_compare_retry": "Opnieuw proberen",
     "near": "Dichtbij",
     "far": "Ver",
     "color": "Kleur",

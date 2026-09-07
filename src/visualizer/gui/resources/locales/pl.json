@@ -1279,6 +1279,10 @@
     "depth_view_tool": "Aktywny widok mapy głębi",
     "depth_view_mode": "Wybierz tryb koloru głębi",
     "gt_compare_mode": "Wybierz porównanie z referencją RGB, normalnych lub głębi",
+    "gt_compare_actual_size": "Wyświetl referencję RGB w skali jeden piksel obrazu na jeden fizyczny piksel ekranu. Wymaga kamery perspektywicznej, a dla obrazów ze zniekształceniem także użytecznej zapisanej kalibracji korekcji. Starsze projekty mogą wymagać ponownego importu i zapisania zestawu danych.",
+    "gt_compare_actual_size_active": "Tryb 1:1 jest aktywny: jeden piksel obrazu odpowiada jednemu fizycznemu pikselowi ekranu.",
+    "gt_compare_actual_size_fallback": "Zażądano trybu 1:1, ale podczas wczytywania lub odzyskiwania zawartości w natywnej rozdzielczości jest obecnie wyświetlany podgląd dopasowany.",
+    "gt_compare_actual_size_unavailable": "Tryb 1:1 jest niedostępny dla tej kamery lub trybu porównania. Zniekształcone obrazy wymagają użytecznej zapisanej kalibracji korekcji.",
     "depth_view_range": "Zakres wizualizacji głębi",
     "depth_view_near": "Bliska granica zakresu głębi",
     "depth_view_far": "Daleka granica zakresu głębi",
@@ -2349,6 +2353,9 @@
     "redo_named": "Ponów: {name}"
   },
   "ui": {
+    "gt_compare_preparing": "Przygotowywanie 1:1…",
+    "gt_compare_retrying": "Nie udało się przygotować 1:1. Ponawianie…",
+    "gt_compare_retry": "Ponów",
     "near": "Blisko",
     "far": "Daleko",
     "color": "Kolor",
