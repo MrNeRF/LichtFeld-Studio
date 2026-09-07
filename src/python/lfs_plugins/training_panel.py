@@ -1745,6 +1745,7 @@ class TrainingPanel(Panel):
                 p = lf.optimization_params()
                 if button == _gut:
                     p.gut = False
+                    self._sync_render_setting("gut", False)
                     p.set_strategy(_val)
                     self._refresh_strategy_values()
 
@@ -2419,24 +2420,11 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            btn_mcmc = tr("training.conflict.btn_use_mcmc")
-            btn_gut = tr("training.conflict.btn_disable_gut")
-            btn_cancel = tr("training.conflict.btn_cancel")
-
-            def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
-                p = lf.optimization_params()
-                if button == _mcmc:
-                    p.set_strategy("mcmc")
-                    lf.start_training()
-                elif button == _gut:
-                    p.gut = False
-                    lf.start_training()
-
             lf.ui.confirm_dialog(
-                tr("training.error.strategy_gut_title"),
-                tr("training.conflict.strategy_gut_start_message"),
-                [btn_mcmc, btn_gut, btn_cancel],
-                _on_conflict,
+                tr("status.error"),
+                error,
+                [tr("common.ok")],
+                lambda _button: None,
             )
         elif self._should_offer_pc_save():
             self._show_save_pc_dialog()
