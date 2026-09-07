@@ -4,9 +4,13 @@
 #include "core/nn/ops.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_impl.hpp"
 #include "nn_kernels.hpp"
+#ifdef LFS_TENSOR_VULKAN
+#include "vulkan_ops.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -23,20 +27,21 @@ namespace lfs::core::nn {
             tensor_contract::require_dtype(tensor, {DataType::Float32, DataType::Float16}, op,
                                            role, LFS_SOURCE_SITE_CURRENT());
             LFS_ASSERT_MSG(tensor.device() == Device::GPU,
-                           std::format("{} requires CUDA {} (device={})", op, role,
+                           std::format("{} requires GPU {} (device={})", op, role,
                                        device_name(tensor.device())));
         }
 
         void require_same_dtype_device(const Tensor& a, const Tensor& b, const std::string_view op,
                                        const std::string_view a_role, const std::string_view b_role) {
             tensor_contract::require_same_device(a, b, op, a_role, b_role, LFS_SOURCE_SITE_CURRENT());
+            internal::require_same_gpu_backend(a, b, op);
             LFS_ASSERT_MSG(a.dtype() == b.dtype(),
                            std::format("{} dtype mismatch ({}={}, {}={})", op, a_role,
                                        dtype_name(a.dtype()), b_role, dtype_name(b.dtype())));
         }
 
         Tensor empty_like_shape(const Tensor& like, const TensorShape& shape) {
-            auto out = Tensor::empty(shape, like.device(), like.dtype());
+            auto out = internal::allocate_like(like, shape, like.dtype());
             out.set_stream(like.stream());
             return out;
         }
@@ -103,7 +108,7 @@ namespace lfs::core::nn {
         const Tensor a_c0 = a.contiguous();
         const Tensor b_c = b.contiguous();
         Tensor a_t_store;
-        const Tensor& a_c = trans_a ? (a_t_store = a_c0.t().contiguous()) : a_c0;
+        const Tensor& a_c = trans_a ? (a_t_store = a_c0.transpose(-2, -1).contiguous()) : a_c0;
 
         const int m = static_cast<int>(a_c.size(a_c.ndim() - 2));
         const int ka = static_cast<int>(a_c.size(a_c.ndim() - 1));
@@ -158,6 +163,11 @@ namespace lfs::core::nn {
             scale_c = &scale_store;
         }
 
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(a_c) == GpuBackend::Vulkan) {
+            return vulkan::gemm(a_c, b_c, trans_b, bias_c, activation, residual_c, scale_c);
+        }
+#endif
         auto out = empty_like_shape(a_c, TensorShape(out_dims));
         pin_operands({&a_c, &b_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&a_c, &b_c}, out.stream());
@@ -211,6 +221,15 @@ namespace lfs::core::nn {
             residual_c = &residual_store;
         }
 
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            auto out = vulkan::gemm(in_2d, w_c, true, bias_c, activation, residual_c);
+            std::vector<std::size_t> shape;
+            for (std::size_t i = 0; i < input.ndim(); ++i) shape.push_back(input.shape()[i]);
+            shape.back() = n;
+            return out.reshape(TensorShape(shape));
+        }
+#endif
         std::vector<std::size_t> out_dims;
         for (std::size_t i = 0; i + 1 < input.ndim(); ++i) {
             out_dims.push_back(input.shape()[i]);
@@ -249,6 +268,11 @@ namespace lfs::core::nn {
         const Tensor in_c = input.contiguous();
         const Tensor w_c = weight.contiguous();
         const Tensor b_c = bias.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::norm(in_c, w_c, &b_c, eps);
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c, &w_c, &b_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c, &b_c}, out.stream());
@@ -268,6 +292,11 @@ namespace lfs::core::nn {
                        "rms_norm weight must match the last dim");
         const Tensor in_c = input.contiguous();
         const Tensor w_c = weight.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::norm(in_c, w_c, nullptr, eps);
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c, &w_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, out.stream());
@@ -301,6 +330,11 @@ namespace lfs::core::nn {
                 msc = 1;
             }
         }
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::softmax(in_c, mask_c);
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
@@ -364,6 +398,11 @@ namespace lfs::core::nn {
             }
         }
 
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(q_c) == GpuBackend::Vulkan) {
+            return vulkan::attention(q_c, k_c, v_c, m_c, used_scale);
+        }
+#endif
         auto out = empty_like_shape(q_c, q_c.shape());
         pin_operands({&q_c, &k_c, &v_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&q_c, &k_c, &v_c}, out.stream());
@@ -447,6 +486,11 @@ namespace lfs::core::nn {
         const int pad_w = (window_size - w % window_size) % window_size;
         const int n_h = (h + pad_h) / window_size;
         const int n_w = (w + pad_w) / window_size;
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return Window2d{vulkan::window_partition(in_c, window_size), pad_h, pad_w};
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{
                       static_cast<std::size_t>(b) * static_cast<std::size_t>(n_h) *
@@ -482,6 +526,11 @@ namespace lfs::core::nn {
                        "window_unpartition_2d window spatial mismatch");
         const int b = static_cast<int>(w_c.shape()[0] / static_cast<std::size_t>(nwin));
         const int c = static_cast<int>(w_c.shape()[3]);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(w_c) == GpuBackend::Vulkan) {
+            return vulkan::window_unpartition(w_c, window_size, orig_h, orig_w);
+        }
+#endif
         auto out = empty_like_shape(
             w_c, TensorShape{std::vector<std::size_t>{
                      static_cast<std::size_t>(b), static_cast<std::size_t>(orig_h),
@@ -510,6 +559,7 @@ namespace lfs::core::nn {
 
     std::size_t conv2d_workspace_bytes(const TensorShape& input_shape, const TensorShape& weight_shape,
                                        const Conv2dParams& params, DataType dtype) {
+        if (default_gpu_backend() == GpuBackend::Vulkan) return 0;
         LFS_ASSERT_MSG(input_shape.rank() == 4 && weight_shape.rank() == 4,
                        "conv2d workspace expects 4D input and weight");
         const int kh = static_cast<int>(weight_shape[2]);
@@ -520,9 +570,13 @@ namespace lfs::core::nn {
         const bool implicit_3x3 = kh == 3 && kw == 3 && params.groups == 1 && params.stride_h == 1 &&
                                   params.stride_w == 1 && params.dilation_h == 1 &&
                                   params.dilation_w == 1 && params.pad_h == 1 && params.pad_w == 1 &&
-                                  dtype == DataType::Float16;
-        if (pointwise || implicit_3x3) {
+                                  (dtype == DataType::Float16 || dtype == DataType::Float32);
+        if (pointwise) {
             return 0;
+        }
+        if (implicit_3x3) {
+            return kernels::conv2d_weight_scratch_bytes(static_cast<int>(weight_shape[0]),
+                                                        static_cast<int>(weight_shape[1]), dtype);
         }
         const auto hw = conv2d_output_hw(static_cast<int>(input_shape[2]),
                                          static_cast<int>(input_shape[3]), kh, kw, params);
@@ -536,6 +590,7 @@ namespace lfs::core::nn {
     std::size_t conv_transpose2d_workspace_bytes(const TensorShape& input_shape,
                                                  const TensorShape& weight_shape,
                                                  const Conv2dParams& params, DataType dtype) {
+        if (default_gpu_backend() == GpuBackend::Vulkan) return 0;
         LFS_ASSERT_MSG(input_shape.rank() == 4 && weight_shape.rank() == 4,
                        "conv_transpose2d workspace expects 4D input and weight");
         const int kh = static_cast<int>(weight_shape[2]);
@@ -555,7 +610,7 @@ namespace lfs::core::nn {
     }
 
     Tensor conv2d(const Tensor& input, const Tensor& weight, const Tensor* bias,
-                  const Conv2dParams& params, Tensor* workspace) {
+                  const Conv2dParams& params, Tensor* workspace, const Tensor* weight_taps) {
         require_nn_tensor(input, "conv2d", "input");
         require_nn_tensor(weight, "conv2d", "weight");
         require_same_dtype_device(input, weight, "conv2d", "input", "weight");
@@ -582,11 +637,20 @@ namespace lfs::core::nn {
         const bool implicit_3x3 = kh == 3 && kw == 3 && params.groups == 1 && params.stride_h == 1 &&
                                   params.stride_w == 1 && params.dilation_h == 1 &&
                                   params.dilation_w == 1 && params.pad_h == 1 && params.pad_w == 1 &&
-                                  input.dtype() == DataType::Float16;
+                                  (input.dtype() == DataType::Float16 || input.dtype() == DataType::Float32);
 
         Tensor b_s;
         const Tensor in_c = input.contiguous();
         const Tensor w_c = weight.contiguous();
+        if (weight_taps != nullptr && weight_taps->is_valid()) {
+            require_nn_tensor(*weight_taps, "conv2d", "weight_taps");
+            require_same_dtype_device(in_c, *weight_taps, "conv2d", "input", "weight_taps");
+            LFS_ASSERT_MSG(implicit_3x3 && weight_taps->shape() ==
+                                               TensorShape(std::vector<std::size_t>{9u,
+                                                                                    static_cast<std::size_t>(cout),
+                                                                                    static_cast<std::size_t>(cin)}),
+                           "conv2d weight_taps must be [9,C_out,C_in] for 3x3 convolution");
+        }
         const Tensor* b_c = nullptr;
         if (bias != nullptr && bias->is_valid()) {
             require_nn_tensor(*bias, "conv2d", "bias");
@@ -597,7 +661,12 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
-        pin_operands({&in_c, &w_c});
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::conv(in_c, w_c, b_c, params);
+        }
+#endif
+        pin_operands({&in_c, &w_c, b_c, weight_taps});
 
         if (pointwise) {
             auto nchw = empty_like_shape(
@@ -613,7 +682,8 @@ namespace lfs::core::nn {
             kernels::gemm(raw(in_c), raw(w_c), raw_mut(nchw), hw_n, cout, cin,
                           static_cast<long long>(cin) * hw_n, 0,
                           static_cast<long long>(cout) * hw_n, n, true, true,
-                          b_c ? raw(*b_c) : nullptr, 0, in_c.dtype(), stream, true);
+                          b_c ? raw(*b_c) : nullptr, static_cast<int>(params.activation),
+                          in_c.dtype(), stream, true);
             return nchw;
         }
 
@@ -624,14 +694,33 @@ namespace lfs::core::nn {
                                                            static_cast<std::size_t>(out_h),
                                                            static_cast<std::size_t>(out_w)}});
             const cudaStream_t stream = prepare_inputs_for_stream({&in_c, &w_c}, nchw.stream());
+            if (b_c)
+                b_c->sync_to_stream(stream);
+            if (weight_taps)
+                weight_taps->sync_to_stream(stream);
             nchw.set_stream(stream);
-            kernels::conv2d_implicit(raw(in_c), raw(w_c), b_c ? raw(*b_c) : nullptr, raw_mut(nchw),
+            const std::size_t scratch_bytes =
+                weight_taps != nullptr
+                    ? 0
+                    : kernels::conv2d_weight_scratch_bytes(cout, cin, in_c.dtype());
+            Tensor scratch;
+            if (scratch_bytes > 0) {
+                scratch = ensure_workspace(workspace, scratch_bytes, in_c, "conv2d");
+                scratch.set_stream(stream);
+            }
+            kernels::conv2d_implicit(raw(in_c), raw(w_c),
+                                     weight_taps ? raw(*weight_taps) : nullptr,
+                                     b_c ? raw(*b_c) : nullptr,
+                                     raw_mut(nchw), scratch_bytes > 0 ? raw_mut(scratch) : nullptr,
                                      n, cin, h, w, cout, kh, kw, out_h, out_w, params.stride_h,
-                                     params.stride_w, params.pad_h, params.pad_w, params.dilation_h,
+                                     params.stride_w,
+                                     params.pad_h, params.pad_w, params.dilation_h,
                                      params.dilation_w, static_cast<int>(params.pad_mode),
-                                     in_c.dtype(), stream);
+                                     static_cast<int>(params.activation), in_c.dtype(), stream);
             return nchw;
         }
+        LFS_ASSERT_MSG(params.activation == Activation::None,
+                       "conv2d fused activation is only supported on the pointwise and 3x3 paths");
         const std::size_t bytes = conv2d_workspace_bytes(in_c.shape(), w_c.shape(), params, in_c.dtype());
         Tensor scratch = ensure_workspace(workspace, bytes, in_c, "conv2d");
         auto nhwc = empty_like_shape(
@@ -718,6 +807,11 @@ namespace lfs::core::nn {
             b_c = &b_s;
         }
 
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::conv(in_c, w_c, b_c, params, true);
+        }
+#endif
         const bool scatter_s2 =
             kh == 2 && kw == 2 && params.stride_h == 2 && params.stride_w == 2 && params.pad_h == 0 &&
             params.pad_w == 0 && params.dilation_h == 1 && params.dilation_w == 1 &&
@@ -803,6 +897,11 @@ namespace lfs::core::nn {
         LFS_ASSERT_MSG(input.ndim() == 4, "resize2d expects NCHW");
         LFS_ASSERT_MSG(out_h > 0 && out_w > 0, "resize2d output size must be positive");
         const Tensor in_c = input.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::resize(in_c, out_h, out_w, mode, coord);
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{
                       in_c.shape()[0], in_c.shape()[1], static_cast<std::size_t>(out_h),
@@ -828,6 +927,11 @@ namespace lfs::core::nn {
         const int w = static_cast<int>(in_c.shape()[3]);
         const int out_h = conv_out_dim(h, kernel_h, stride_h, pad_h, 1);
         const int out_w = conv_out_dim(w, kernel_w, stride_w, pad_w, 1);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::pool(in_c, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w);
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
                                                        static_cast<std::size_t>(c),
@@ -852,6 +956,11 @@ namespace lfs::core::nn {
         const int w = static_cast<int>(in_c.shape()[3]);
         const int out_h = conv_out_dim(h, kernel_h, stride_h, pad_h, 1);
         const int out_w = conv_out_dim(w, kernel_w, stride_w, pad_w, 1);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::pool(in_c, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, true, count_include_pad);
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{static_cast<std::size_t>(n),
                                                        static_cast<std::size_t>(c),
@@ -869,6 +978,11 @@ namespace lfs::core::nn {
     Tensor gelu(const Tensor& input, GELUApprox approx) {
         require_nn_tensor(input, "gelu", "input");
         const Tensor in_c = input.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::activate(in_c, approx == GELUApprox::Erf ? Activation::GeluErf : Activation::GeluTanh);
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
@@ -881,6 +995,11 @@ namespace lfs::core::nn {
     Tensor silu(const Tensor& input) {
         require_nn_tensor(input, "silu", "input");
         const Tensor in_c = input.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::activate(in_c, Activation::Silu);
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
@@ -892,6 +1011,11 @@ namespace lfs::core::nn {
     Tensor relu(const Tensor& input) {
         require_nn_tensor(input, "relu", "input");
         const Tensor in_c = input.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::activate(in_c, Activation::Relu);
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
@@ -903,6 +1027,11 @@ namespace lfs::core::nn {
     Tensor sigmoid(const Tensor& input) {
         require_nn_tensor(input, "sigmoid", "input");
         const Tensor in_c = input.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return in_c.to(DataType::Float32).sigmoid().to(in_c.dtype());
+        }
+#endif
         auto out = empty_like_shape(in_c, in_c.shape());
         pin_operands({&in_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&in_c}, out.stream());
@@ -936,6 +1065,11 @@ namespace lfs::core::nn {
             out_dims.push_back(c_c.shape()[i]);
         }
         out_dims.push_back(static_cast<std::size_t>(feats) * 2);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(c_c) == GpuBackend::Vulkan) {
+            return vulkan::fourier_pe(c_c, g_c);
+        }
+#endif
         auto out = empty_like_shape(c_c, TensorShape(out_dims));
         pin_operands({&c_c, &g_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&c_c, &g_c}, out.stream());
@@ -957,6 +1091,15 @@ namespace lfs::core::nn {
         LFS_ASSERT_MSG(gaussian.dtype() == dtype, "fourier_pe_grid gaussian dtype mismatch");
         const Tensor g_c = gaussian.contiguous();
         const int feats = static_cast<int>(g_c.shape()[1]);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(g_c) == GpuBackend::Vulkan) {
+            const auto gaussian_f32 = g_c.to(DataType::Float32);
+            auto coords = vulkan::grid(gaussian_f32, height, width, 0.5f / width, 1.0f - 0.5f / width,
+                                        0.5f / height, 1.0f - 0.5f / height)
+                              .permute({0, 2, 3, 1}).contiguous();
+            return vulkan::fourier_pe(coords, gaussian_f32).permute({0, 3, 1, 2}).contiguous().to(dtype);
+        }
+#endif
         auto out = Tensor::empty(
             TensorShape{std::vector<std::size_t>{1, static_cast<std::size_t>(feats) * 2,
                                                  static_cast<std::size_t>(height),
@@ -994,6 +1137,11 @@ namespace lfs::core::nn {
         const auto shape = TensorShape{std::vector<std::size_t>{
             static_cast<std::size_t>(b), static_cast<std::size_t>(heads),
             static_cast<std::size_t>(seq), static_cast<std::size_t>(d)}};
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::split_qkv(in_c.reshape({b, seq, 3 * heads * d}), heads);
+        }
+#endif
         auto q = empty_like_shape(in_c, shape);
         auto k = empty_like_shape(in_c, shape);
         auto v = empty_like_shape(in_c, shape);
@@ -1039,6 +1187,20 @@ namespace lfs::core::nn {
                 static_cast<std::size_t>(n_w),
             static_cast<std::size_t>(heads), static_cast<std::size_t>(seq),
             static_cast<std::size_t>(d)}};
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            // Valid QKV pixels already include the linear bias. Padded pixels
+            // represent a zero input to that linear, so contain the bias alone.
+            Tensor padded;
+            if (bias_c && (pad_h != 0 || pad_w != 0)) {
+                padded = bias_c->reshape({1, 1, 1, packed})
+                             .expand({b, height + pad_h, width + pad_w, packed}).contiguous();
+                padded.slice(1, 0, height).slice(2, 0, width).copy_from(in_c);
+            }
+            auto windows = vulkan::window_partition(padded.is_valid() ? padded : in_c, window);
+            return vulkan::split_qkv(windows.reshape({b * n_h * n_w, seq, packed}), heads);
+        }
+#endif
         auto q = empty_like_shape(in_c, shape);
         auto k = empty_like_shape(in_c, shape);
         auto v = empty_like_shape(in_c, shape);
@@ -1061,6 +1223,11 @@ namespace lfs::core::nn {
         const int heads = static_cast<int>(in_c.shape()[1]);
         const int seq = static_cast<int>(in_c.shape()[2]);
         const int d = static_cast<int>(in_c.shape()[3]);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            return vulkan::merge_heads(in_c);
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{
                       static_cast<std::size_t>(b), static_cast<std::size_t>(seq),
@@ -1090,6 +1257,12 @@ namespace lfs::core::nn {
         LFS_ASSERT_MSG(nwin > 0 && in_c.shape()[0] % static_cast<std::size_t>(nwin) == 0,
                        "merge_heads_unwindow_2d batch is not divisible by n_windows");
         const int b = static_cast<int>(in_c.shape()[0] / static_cast<std::size_t>(nwin));
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            auto windows = vulkan::merge_heads(in_c).reshape({b * nwin, window, window, heads * d});
+            return vulkan::window_unpartition(windows, window, orig_h, orig_w);
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{
                       static_cast<std::size_t>(b), static_cast<std::size_t>(orig_h),
@@ -1115,6 +1288,12 @@ namespace lfs::core::nn {
         const int d = static_cast<int>(in_c.shape()[3]);
         LFS_ASSERT_MSG(seq == height * width, "max_pool_heads_2d S must equal H*W");
         const int out_s = (height / 2) * (width / 2);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            auto image = in_c.permute({0, 1, 3, 2}).contiguous().reshape({b * heads, d, height, width});
+            return vulkan::pool(image, 2, 2, 2, 2, 0, 0).reshape({b, heads, d, out_s}).permute({0, 1, 3, 2}).contiguous();
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{
                       static_cast<std::size_t>(b), static_cast<std::size_t>(heads),
@@ -1137,6 +1316,12 @@ namespace lfs::core::nn {
         const int channels = static_cast<int>(in_c.shape()[3]);
         LFS_ASSERT_MSG(height > 0 && width > 0 && (height % 2) == 0 && (width % 2) == 0,
                        "max_pool2d_bhwc requires even positive H and W");
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(in_c) == GpuBackend::Vulkan) {
+            auto image = in_c.permute({0, 3, 1, 2}).contiguous();
+            return vulkan::pool(image, 2, 2, 2, 2, 0, 0).permute({0, 2, 3, 1}).contiguous();
+        }
+#endif
         auto out = empty_like_shape(
             in_c, TensorShape{std::vector<std::size_t>{
                       static_cast<std::size_t>(b), static_cast<std::size_t>(height / 2),
@@ -1166,6 +1351,11 @@ namespace lfs::core::nn {
                                                  static_cast<std::size_t>(width)}},
             device, dtype);
         out.set_stream(stream);
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(out) == GpuBackend::Vulkan) {
+            return vulkan::grid(out, height, width, u0, u1, v0, v1);
+        }
+#endif
         kernels::uv_grid(raw_mut(out), height, width, u0, u1, v0, v1, dtype, stream);
         return out;
     }
@@ -1183,6 +1373,11 @@ namespace lfs::core::nn {
         const Tensor x_c = x.contiguous();
         const Tensor h_c = hidden.contiguous();
         const Tensor g_c = gamma.contiguous();
+#ifdef LFS_TENSOR_VULKAN
+        if (gpu_backend_of(x_c) == GpuBackend::Vulkan) {
+            return x_c.to(DataType::Float32).add(h_c.to(DataType::Float32).mul(g_c.to(DataType::Float32))).to(x_c.dtype());
+        }
+#endif
         auto out = empty_like_shape(x_c, x_c.shape());
         pin_operands({&x_c, &h_c, &g_c});
         const cudaStream_t stream = prepare_inputs_for_stream({&x_c, &h_c, &g_c}, out.stream());

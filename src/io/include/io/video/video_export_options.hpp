@@ -4,9 +4,9 @@
 #pragma once
 
 #include "core/provenance.hpp"
+#include "io/video/video_output_extent.hpp"
+#include "io/video/video_reconstruction.hpp"
 
-#include <climits>
-#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <limits>
@@ -69,26 +69,18 @@ namespace lfs::io::video {
         int framerate = 30;
         int crf = 18;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+        VideoReconstructionSelection reconstruction{};
     };
 
     [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
         const VideoExportOptions& options) {
-        if (options.width <= 0 || options.height <= 0)
-            return std::unexpected("Video width and height must be positive");
-        if ((options.width & 1) != 0 || (options.height & 1) != 0)
-            return std::unexpected("YUV420 video width and height must be even");
+        if (const auto error = videoOutputExtentError(options.width, options.height))
+            return std::unexpected(std::string(*error));
         if (options.framerate <= 0 || options.framerate > 1000)
             return std::unexpected("Video framerate must be between 1 and 1000");
         if (options.crf < 0 || options.crf > 51)
             return std::unexpected("Video CRF must be between 0 and 51");
 
-        const size_t width = static_cast<size_t>(options.width);
-        const size_t height = static_cast<size_t>(options.height);
-        if (width > std::numeric_limits<size_t>::max() / height ||
-            width * height > static_cast<size_t>(INT_MAX / 3)) {
-            // CUDA conversion kernels use signed int indexing for packed RGB.
-            return std::unexpected("Video dimensions exceed the supported pixel budget");
-        }
         return {};
     }
 

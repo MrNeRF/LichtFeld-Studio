@@ -1366,6 +1366,29 @@ namespace lfs::vis::project {
                     "SEQR playhead or playback speed is invalid",
                     "SEQR");
             }
+
+            if (const auto preferences = find_required_object(root, "preferences");
+                preferences != root.end()) {
+                const auto reconstruction = preferences->find("reconstruction");
+                if (reconstruction != preferences->end()) {
+                    if (!reconstruction->is_object()) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            "SEQR video reconstruction selection must be an object",
+                            "SEQR.preferences.reconstruction");
+                    }
+                    if (const auto selection =
+                            lfs::io::video::deserializeVideoReconstructionSelection(
+                                reconstruction->dump());
+                        !selection && selection.error().issue !=
+                                          lfs::io::video::VideoReconstructionSelectionIssue::UnsupportedVersion) {
+                        return fail<void>(
+                            lfs::ErrorCode::DataLoss,
+                            selection.error().message,
+                            "SEQR.preferences.reconstruction");
+                    }
+                }
+            }
             return {};
         }
 
@@ -2264,6 +2287,13 @@ namespace lfs::vis::project {
             viewer.getSelectionTool();
         const auto& sequencer_ui =
             gui_manager->getSequencerUIState();
+        const auto reconstruction_json =
+            lfs::io::video::serializeVideoReconstructionSelection(sequencer_ui.reconstruction);
+        if (!reconstruction_json) {
+            return fail<lfs::io::project::ProjectSessionChapters>(
+                lfs::ErrorCode::InvalidArgument, reconstruction_json.error().message,
+                "SEQR.preferences.reconstruction");
+        }
         auto project_render_settings =
             renderSettingsToProjectJson(settings);
         if (!settings.environment_map_path.empty() &&
@@ -2586,6 +2616,18 @@ namespace lfs::vis::project {
             }
             clips.push_back(std::move(saved_clip));
         }
+        auto sequencer_preferences = fields_to_json(sequencer_ui, sequencer_preference_fields());
+        sequencer_preferences["reconstruction"] = Json::parse(*reconstruction_json);
+        if (const auto retained_selection = result.sequencer.dom().get_json("preferences.reconstruction")) {
+            const auto parsed = lfs::io::video::deserializeVideoReconstructionSelection(retained_selection->dump());
+            if (!parsed && parsed.error().issue ==
+                               lfs::io::video::VideoReconstructionSelectionIssue::UnsupportedVersion) {
+                // Do not merge a future schema's opaque members into version 1.
+                // Same-version unknown members retain the normal SEQR preservation rules.
+                if (auto removed = result.sequencer.dom().remove("preferences.reconstruction"); !removed)
+                    return std::move(removed).error();
+            }
+        }
         const Json sequencer_known{
             {"version", 1},
             {"timeline", std::move(timeline)},
@@ -2596,10 +2638,7 @@ namespace lfs::vis::project {
                  controller.loopMode())},
             {"playback_speed",
              controller.playbackSpeed()},
-            {"preferences",
-             fields_to_json(
-                 sequencer_ui,
-                 sequencer_preference_fields())},
+            {"preferences", std::move(sequencer_preferences)},
             {"view",
              {
                  {"zoom",
@@ -3767,6 +3806,7 @@ namespace lfs::vis::project {
             auto& ui =
                 gui_manager
                     ->getSequencerUIState();
+            ui.reconstruction = {};
             if (const auto preferences =
                     find_required_object(
                         root, "preferences");
@@ -3776,6 +3816,16 @@ namespace lfs::vis::project {
                     ui,
                     "SEQR.preferences",
                     sequencer_preference_fields());
+                if (const auto found = preferences->find("reconstruction"); found != preferences->end()) {
+                    auto selection = lfs::io::video::deserializeVideoReconstructionSelection(found->dump());
+                    if (selection) {
+                        ui.reconstruction = std::move(*selection);
+                    } else if (selection.error().issue ==
+                               lfs::io::video::VideoReconstructionSelectionIssue::UnsupportedVersion) {
+                        LOG_WARN("Unsupported project video reconstruction selection version; using native");
+                        lfs::ErrorBus::instance().publish(gui::unsupportedVideoReconstructionVersionNotification());
+                    }
+                }
             }
             // Controller values are canonical over the UI mirrors.
             ui.playback_speed =

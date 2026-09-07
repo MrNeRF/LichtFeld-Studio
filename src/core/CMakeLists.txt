@@ -69,6 +69,7 @@ set(TENSOR_SOURCES
         nn/activation_arena.cpp
         nn/models/moge2.cpp
         nn/models/sam2.cpp
+        nn/models/lpips.cpp
 )
 
 if(LFS_TENSOR_VULKAN)
@@ -152,9 +153,12 @@ add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
-    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE})
+    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} nn/vulkan_ops.cpp)
     target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
 endif()
+
+add_dependencies(lfs_core lfs_core_abi_stamp)
+target_include_directories(lfs_core BEFORE PRIVATE "${LFS_CORE_ABI_INCLUDE_DIR}")
 
 target_compile_definitions(lfs_core PRIVATE LFS_CORE_EXPORTS)
 

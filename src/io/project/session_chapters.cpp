@@ -404,6 +404,13 @@ namespace lfs::io::project {
                      {"show_pip_preview", true},
                      {"pip_preview_scale", 1.0},
                      {"show_film_strip", true},
+                     {"reconstruction",
+                      {
+                          {"version", 1},
+                          {"backend_id", "native"},
+                          {"preset_id", "native"},
+                          {"fallback", "abort"},
+                      }},
                  }},
             };
         }

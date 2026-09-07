@@ -5,9 +5,12 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/tensor_backend.hpp"
+#include "core/tensor/internal/tensor_impl.hpp"
 #include "core/source_site.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "nn_kernels.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
@@ -36,6 +39,7 @@ namespace lfs::core::nn::models {
         }
 
         void configure_nn_mempool() {
+            if (default_gpu_backend() != GpuBackend::CUDA) return;
 #if CUDART_VERSION >= 11020
             int device = 0;
             LFS_CUDA_CHECK(cudaGetDevice(&device));
@@ -52,8 +56,12 @@ namespace lfs::core::nn::models {
         // device copies is enough and dtype-correct.
         void recapture(Tensor& slot, const Tensor& src) {
             if (!slot.is_valid() || slot.dtype() != src.dtype() || slot.device() != src.device() ||
-                slot.shape() != src.shape()) {
+                slot.shape() != src.shape() || gpu_backend_of(slot) != gpu_backend_of(src)) {
                 slot = src.clone();
+                return;
+            }
+            if (gpu_backend_of(src) == GpuBackend::Vulkan) {
+                slot.copy_from(src);
                 return;
             }
             slot.set_stream(src.stream());
@@ -81,6 +89,9 @@ namespace lfs::core::nn::models {
                 out_dims.push_back(a.shape()[i] + b.shape()[i]);
             }
             LFS_ASSERT_MSG(dim >= 0, "concat tensors have identical shapes");
+            if (gpu_backend_of(a) == GpuBackend::Vulkan) {
+                return Tensor::cat({a, b}, dim);
+            }
             auto a_c = a.contiguous();
             auto b_c = b.contiguous();
             auto out = Tensor::empty(TensorShape(out_dims), a_c.device(), a_c.dtype());
@@ -149,7 +160,7 @@ namespace lfs::core::nn::models {
                                    std::optional<DataType> compute) {
         if (device != Device::GPU) {
             return moge_error(lfs::ErrorCode::InvalidArgument,
-                              "MoGe-2 requires a CUDA device");
+                              "MoGe-2 requires a GPU device");
         }
         auto file = WeightFile::open(weights);
         if (!file) {
@@ -192,6 +203,22 @@ namespace lfs::core::nn::models {
         if (model.weights_.contains("encoder.image_std")) {
             model.weights_["encoder.image_std"] =
                 model.weights_["encoder.image_std"].to(DataType::Float32).contiguous();
+        }
+        if (default_gpu_backend() == GpuBackend::CUDA && dtype == DataType::Float16 && kernels::conv3x3_mma_available()) {
+            for (const auto& [name, tensor] : model.weights_) {
+                if (tensor.ndim() != 4 || tensor.shape()[2] != 3 || tensor.shape()[3] != 3 ||
+                    tensor.shape()[1] % 8 != 0) {
+                    continue;
+                }
+                auto taps = Tensor::empty(
+                    shape_of({9, tensor.shape()[0], tensor.shape()[1]}), device, dtype);
+                kernels::conv3x3_weight_taps(tensor.data_ptr(), taps.data_ptr(),
+                                             static_cast<int>(tensor.shape()[0]),
+                                             static_cast<int>(tensor.shape()[1]), taps.stream());
+                model.weight_taps_.emplace(name, std::move(taps));
+            }
+            if (!model.weight_taps_.empty())
+                LFS_CUDA_CHECK(cudaStreamSynchronize(model.weight_taps_.begin()->second.stream()));
         }
         const std::array<const char*, 8> required = {
             "encoder.image_mean",
@@ -262,9 +289,11 @@ namespace lfs::core::nn::models {
         p.pad_w = 1;
         p.pad_mode = ConvPadMode::Replicate;
         const auto& ww = w(weight);
-        const auto bytes = conv2d_workspace_bytes(x.shape(), ww.shape(), p, x.dtype());
+        const auto tap_it = weight_taps_.find(std::string(weight));
+        const Tensor* taps = tap_it == weight_taps_.end() ? nullptr : &tap_it->second;
+        const auto bytes = taps != nullptr ? 0 : conv2d_workspace_bytes(x.shape(), ww.shape(), p, x.dtype());
         Tensor ws = ensure_workspace(bytes, x);
-        return conv2d(x, ww, &w(bias), p, &ws);
+        return conv2d(x, ww, &w(bias), p, &ws, taps);
     }
 
     Tensor Moge2::conv_transpose2x(const Tensor& x, std::string_view weight,
@@ -395,7 +424,7 @@ namespace lfs::core::nn::models {
                               "MoGe-2 image must be NCHW with 3 channels");
         }
         if (image.device() != Device::GPU) {
-            return moge_error(lfs::ErrorCode::InvalidArgument, "MoGe-2 image must be on CUDA");
+            return moge_error(lfs::ErrorCode::InvalidArgument, "MoGe-2 image must be on the GPU");
         }
         if (num_tokens <= 0) {
             return moge_error(lfs::ErrorCode::InvalidArgument, "num_tokens must be positive");
@@ -412,6 +441,9 @@ namespace lfs::core::nn::models {
         const float aspect = static_cast<float>(img_w) / static_cast<float>(std::max(img_h, 1));
 
         NvtxRange forward_nvtx("moge2/forward");
+        if (gpu_backend_of(image) != gpu_backend_of(weights_.begin()->second))
+            return moge_error(lfs::ErrorCode::InvalidArgument, "Image and model weights must use the same GPU backend");
+        GpuBackendScope backend_scope(*gpu_backend_of(image));
         const cudaStream_t fwd_stream = image.stream();
         lfs::core::CUDAStreamGuard stream_guard(fwd_stream);
         if (!weights_on_stream_) {
@@ -434,7 +466,13 @@ namespace lfs::core::nn::models {
                 }
             }
         } arena_closer{arena_, mempool_trimmed_};
-        StageProfile profile(fwd_stream);
+        StageProfile profile(fwd_stream, default_gpu_backend() == GpuBackend::CUDA);
+        const auto capture_tap = [&](Tensor& destination, const Tensor& source) {
+            const Tensor materialized = source.contiguous();
+            ActivationArena::bind(nullptr);
+            destination = materialized.to(DataType::Float32);
+            ActivationArena::bind(&arena_);
+        };
 
         Tensor img;
         {
@@ -469,9 +507,7 @@ namespace lfs::core::nn::models {
                          .contiguous();
         }
         if (taps) {
-            ActivationArena::bind(nullptr);
-            taps->patch_embed = tokens.to(DataType::Float32);
-            ActivationArena::bind(&arena_);
+            capture_tap(taps->patch_embed, tokens);
         }
 
         Tensor x;
@@ -497,9 +533,7 @@ namespace lfs::core::nn::models {
             x = vit_block(x, i);
             block_out[static_cast<std::size_t>(i)] = x;
             if (taps) {
-                ActivationArena::bind(nullptr);
-                taps->blocks[static_cast<std::size_t>(i)] = x.to(DataType::Float32);
-                ActivationArena::bind(&arena_);
+                capture_tap(taps->blocks[static_cast<std::size_t>(i)], x);
             }
         }
 
@@ -533,9 +567,7 @@ namespace lfs::core::nn::models {
                                     "encoder.output_projections.1.bias"));
         }
         if (taps) {
-            ActivationArena::bind(nullptr);
-            taps->encoder_feat = feat.to(DataType::Float32);
-            ActivationArena::bind(&arena_);
+            capture_tap(taps->encoder_feat, feat);
         }
         block_out = {};
         {
@@ -587,9 +619,7 @@ namespace lfs::core::nn::models {
                 }
                 neck_out[static_cast<std::size_t>(i)] = neck_x;
                 if (taps) {
-                    ActivationArena::bind(nullptr);
-                    taps->neck[static_cast<std::size_t>(i)] = neck_x.to(DataType::Float32);
-                    ActivationArena::bind(&arena_);
+                    capture_tap(taps->neck[static_cast<std::size_t>(i)], neck_x);
                 }
                 if (i < 3) {
                     neck_x = conv_transpose2x(neck_x,
@@ -617,7 +647,7 @@ namespace lfs::core::nn::models {
             return slot;
         };
 
-        auto run_head = [&](const char* prefix, int out_ch, Tensor* tap) {
+        auto run_head = [&](const char* prefix, int out_ch) {
             Tensor hx;
             for (int i = 0; i < 5; ++i) {
                 auto fin = conv1x1(neck_out[static_cast<std::size_t>(i)],
@@ -648,11 +678,6 @@ namespace lfs::core::nn::models {
             hx = conv1x1(hx, std::format("{}.output_blocks.4.weight", prefix),
                          std::format("{}.output_blocks.4.bias", prefix));
             (void)out_ch;
-            if (tap) {
-                ActivationArena::bind(nullptr);
-                *tap = hx.to(DataType::Float32);
-                ActivationArena::bind(&arena_);
-            }
             return hx;
         };
 
@@ -662,20 +687,26 @@ namespace lfs::core::nn::models {
         {
             NvtxRange nvtx("moge2/points_head");
             profile.mark("points_head");
-            points_nchw = persist_and_rewind(
-                run_head("points_head", 3, taps ? &taps->points_head : nullptr));
+            points_nchw = persist_and_rewind(run_head("points_head", 3));
+            if (taps) {
+                capture_tap(taps->points_head, points_nchw);
+            }
         }
         {
             NvtxRange nvtx("moge2/normal_head");
             profile.mark("normal_head");
-            normal_nchw = persist_and_rewind(
-                run_head("normal_head", 3, taps ? &taps->normal_head : nullptr));
+            normal_nchw = persist_and_rewind(run_head("normal_head", 3));
+            if (taps) {
+                capture_tap(taps->normal_head, normal_nchw);
+            }
         }
         {
             NvtxRange nvtx("moge2/mask_head");
             profile.mark("mask_head");
-            mask_nchw = persist_and_rewind(
-                run_head("mask_head", 1, taps ? &taps->mask_head : nullptr));
+            mask_nchw = persist_and_rewind(run_head("mask_head", 1));
+            if (taps) {
+                capture_tap(taps->mask_head, mask_nchw);
+            }
         }
 
         Tensor points;

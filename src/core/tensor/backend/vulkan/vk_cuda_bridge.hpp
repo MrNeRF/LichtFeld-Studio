@@ -11,6 +11,18 @@
 #include <unordered_map>
 #include <vulkan/vulkan.h>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+// vulkan.h may already have been included without platform extensions.
+#include <vulkan/vulkan_win32.h>
+#endif
+
 struct VmaAllocator_T;
 using VmaAllocator = VmaAllocator_T*;
 

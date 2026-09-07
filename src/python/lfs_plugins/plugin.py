@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, List, Any
+from typing import Any, Iterator, List, Optional
 from enum import Enum
 import re
 
@@ -65,3 +65,19 @@ class PluginInstance:
     venv_path: Optional[Path] = None
     file_mtimes: dict = field(default_factory=dict)
     sys_paths: List[str] = field(default_factory=list)
+    localization_tokens: List[int] = field(default_factory=list)
+
+
+def iter_plugin_watch_files(plugin_path: Path) -> Iterator[Path]:
+    """Yield source files whose changes require a plugin reload."""
+    for py_file in plugin_path.rglob("*.py"):
+        if ".venv" not in py_file.parts:
+            yield py_file
+
+    locales_dir = plugin_path / "locales"
+    if locales_dir.is_dir():
+        yield from (
+            path
+            for path in locales_dir.iterdir()
+            if path.is_file() and path.suffix.lower() == ".json"
+        )
