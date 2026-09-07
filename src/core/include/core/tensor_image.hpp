@@ -17,6 +17,14 @@ namespace lfs::core {
         bool crop_solve_failed = false;
     };
 
+    namespace detail {
+        LFS_CORE_API UndistortParams initialize_undistort_params(
+            float fx, float fy, float cx, float cy,
+            int width, int height,
+            const Tensor& radial, const Tensor& tangential,
+            CameraModelType model);
+    } // namespace detail
+
     LFS_CORE_API UndistortParams compute_undistort_params(
         float fx, float fy, float cx, float cy,
         int width, int height,
@@ -28,6 +36,9 @@ namespace lfs::core {
         const int max_width = 0);
 
     namespace internal {
+        LFS_CORE_API Tensor undistort_image_region_tensor(
+            const Tensor& input, const UndistortParams& params,
+            int destination_x, int destination_y, int width, int height);
         LFS_CORE_API Tensor undistort_image_tensor(const Tensor& input, const UndistortParams& params, bool mask);
         LFS_CORE_API Tensor resize_image_prior_tensor(const Tensor& input, int height, int width, bool normal);
     } // namespace internal
