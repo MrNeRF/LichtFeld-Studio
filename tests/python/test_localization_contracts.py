@@ -58,6 +58,16 @@ def test_locale_json_uses_one_key_per_line():
                 assert len(match.group(1)) % 2 == 0, f"{path.name}:{line_number} has odd indentation"
 
 
+def test_video_reconstruction_warnings_and_failure_line_breaks():
+    for path in sorted(LOCALES.glob("*.json")):
+        runtime = _load(path.stem)["runtime"]
+        assert _fields(runtime["video_reconstruction_native_fallback"]) == ("{}", "{}"), path.name
+        assert runtime["video_reconstruction_version_unsupported"].strip(), path.name
+        message = runtime["video_export_failed"]
+        assert "\n\n" in message, path.name
+        assert "\\n" not in message, path.name
+
+
 def test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters():
     for path in sorted(LOCALES.glob("*.json")):
         contents = path.read_bytes()
@@ -430,6 +440,7 @@ if __name__ == "__main__":
     contracts = [
         test_shipped_locales_match_english_keys_and_placeholders,
         test_locale_json_uses_one_key_per_line,
+        test_video_reconstruction_warnings_and_failure_line_breaks,
         test_shipped_locale_files_are_strict_utf8_without_bom_or_replacement_characters,
         test_rml_translation_directives_resolve,
         test_literal_localization_calls_resolve,

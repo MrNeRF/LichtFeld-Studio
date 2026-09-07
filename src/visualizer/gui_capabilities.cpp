@@ -21,6 +21,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -596,7 +597,8 @@ namespace lfs::vis::cap {
             if (!local_transform)
                 return std::unexpected("Node not found: " + name);
 
-            scene_manager.setNodeTransform(name, *local_transform);
+            if (!scene_manager.setNodeTransform(name, *local_transform))
+                return std::unexpected("Cannot transform '" + name + "': node is locked");
             return {};
         }
 
@@ -864,8 +866,18 @@ namespace lfs::vis::cap {
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
         entry->captureTransforms(targets);
 
-        for (const auto& name : targets)
-            scene_manager.setNodeTransform(name, transform);
+        for (const auto& name : targets) {
+            const auto* node = scene_manager.getScene().getNode(name);
+            if (!node)
+                return std::unexpected(std::format("Cannot transform '{}': node not found", name));
+            if (static_cast<bool>(node->locked))
+                return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+        }
+
+        for (const auto& name : targets) {
+            if (!scene_manager.setNodeTransform(name, transform))
+                return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+        }
 
         entry->captureAfter();
         vis::op::pushSceneSnapshotIfChanged(std::move(entry));

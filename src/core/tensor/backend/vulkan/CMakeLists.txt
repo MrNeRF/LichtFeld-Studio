@@ -85,6 +85,7 @@ _tensor_add_slang_kernel(gemm gemm.slang)
 _tensor_add_slang_kernel(matrix_misc matrix_misc.slang)
 _tensor_add_slang_kernel(cdist cdist.slang)
 _tensor_add_slang_kernel(nn nn.slang)
+_tensor_add_slang_kernel(inference inference.slang)
 _tensor_add_slang_kernel(random random.slang)
 # The library carries its modules: one generated translation unit holds every
 # finalized SPIR-V word stream and the facts the loader checks.

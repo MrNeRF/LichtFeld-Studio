@@ -58,6 +58,7 @@ namespace lfs::core::nn {
         int output_pad_h = 0;
         int output_pad_w = 0;
         ConvPadMode pad_mode = ConvPadMode::Zeros;
+        Activation activation = Activation::None;
     };
 
     // C = op(A) @ op(B) [+ bias] [+ activation].
@@ -149,7 +150,8 @@ namespace lfs::core::nn {
     // allocated for this call.
     [[nodiscard]] LFS_CORE_API Tensor conv2d(const Tensor& input, const Tensor& weight,
                                              const Tensor* bias, const Conv2dParams& params,
-                                             Tensor* workspace = nullptr);
+                                             Tensor* workspace = nullptr,
+                                             const Tensor* weight_taps = nullptr);
 
     [[nodiscard]] LFS_CORE_API Tensor conv_transpose2d(const Tensor& input, const Tensor& weight,
                                                        const Tensor* bias,

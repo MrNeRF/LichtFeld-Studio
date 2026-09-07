@@ -26,9 +26,9 @@ namespace lfs::core::nn {
     // ordered on `stream`; dump() synchronizes once at the end.
     class StageProfile {
     public:
-        explicit StageProfile(cudaStream_t stream) : stream_(stream) {
+        explicit StageProfile(cudaStream_t stream, bool cuda_backend = true) : stream_(stream) {
             const char* env = std::getenv("LFS_NN_PROFILE");
-            on_ = env != nullptr && env[0] != '\0' && env[0] != '0';
+            on_ = cuda_backend && env != nullptr && env[0] != '\0' && env[0] != '0';
             alloc0_ = alloc_counter::snapshot();
             if (on_) {
                 mark("start");

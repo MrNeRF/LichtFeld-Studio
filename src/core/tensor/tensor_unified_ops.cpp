@@ -1769,6 +1769,10 @@ namespace lfs::core {
 
         auto result = internal::allocate_like(
             *input, TensorShape(out_shape), out_dtype);
+        if (input->device_ == Device::GPU &&
+            internal::gpu_backend_tag(*input) == GpuBackend::CUDA) {
+            result.set_stream(getCurrentCUDAStream());
+        }
 
         if (input->device_ == Device::GPU) {
             pin_operands({input});

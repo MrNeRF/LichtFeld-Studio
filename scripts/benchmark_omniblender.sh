@@ -63,6 +63,7 @@ echo "--------------------------------------------------------------------------
 total_psnr=0
 total_ssim=0
 total_lpips=0
+lpips_count=0
 total_gaussians=0
 valid_scenes=0
 
@@ -74,12 +75,12 @@ do
         final_metrics=$(tail -n 1 "$csv_file")
         
         # Parse CSV values
-        IFS=',' read -r iteration psnr ssim lpips time_per_image num_gaussians <<< "$final_metrics"
+        IFS=',' read -r iteration psnr ssim lpips time_per_image num_gaussians _metrics_tail <<< "$final_metrics"
         
         # Format the numbers
         psnr_fmt=$(format_number $psnr 4)
         ssim_fmt=$(format_number $ssim 6)
-        lpips_fmt=$(format_number $lpips 6)
+        if [ -n "$lpips" ]; then lpips_fmt=$(format_number "$lpips" 6); else lpips_fmt="n/a"; fi
         gaussians_fmt=$(format_with_commas $num_gaussians)
         
         # Print formatted row
@@ -96,7 +97,10 @@ do
         # Accumulate for mean calculation
         total_psnr=$(echo "$total_psnr + $psnr" | bc -l)
         total_ssim=$(echo "$total_ssim + $ssim" | bc -l)
-        total_lpips=$(echo "$total_lpips + $lpips" | bc -l)
+        if [ -n "$lpips" ]; then
+            total_lpips=$(echo "$total_lpips + $lpips" | bc -l)
+            lpips_count=$((lpips_count + 1))
+        fi
         total_gaussians=$((total_gaussians + num_gaussians))
         valid_scenes=$((valid_scenes + 1))
     fi
@@ -106,12 +110,16 @@ done
 if [ $valid_scenes -gt 0 ]; then
     mean_psnr=$(echo "$total_psnr / $valid_scenes" | bc -l)
     mean_ssim=$(echo "$total_ssim / $valid_scenes" | bc -l)
-    mean_lpips=$(echo "$total_lpips / $valid_scenes" | bc -l)
+    if [ "$lpips_count" -gt 0 ]; then
+        mean_lpips=$(echo "$total_lpips / $lpips_count" | bc -l)
+        mean_lpips_fmt=$(format_number "$mean_lpips" 6)
+    else
+        mean_lpips_fmt="n/a"
+    fi
     mean_gaussians=$((total_gaussians / valid_scenes))
     
     mean_psnr_fmt=$(format_number $mean_psnr 4)
     mean_ssim_fmt=$(format_number $mean_ssim 6)
-    mean_lpips_fmt=$(format_number $mean_lpips 6)
     mean_gaussians_fmt=$(format_with_commas $mean_gaussians)
     
     echo "=============================================================================="
