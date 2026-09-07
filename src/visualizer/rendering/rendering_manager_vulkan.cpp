@@ -2445,7 +2445,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Raw point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -2484,7 +2484,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -3113,7 +3113,7 @@ namespace lfs::vis {
                                     if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
                                         auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
                                         if (rendered && rendered->image) {
-                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            const bool flip_y = rendered->metadata.flip_y;
                                             compare_panel = RenderedPanel{.image = std::move(rendered->image),
                                                                           .metadata = std::move(rendered->metadata),
                                                                           .flip_y = flip_y};
@@ -3133,7 +3133,7 @@ namespace lfs::vis {
                                     if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
                                         auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
                                         if (rendered && rendered->image) {
-                                            const bool flip_y = !rendered->metadata.flip_y;
+                                            const bool flip_y = rendered->metadata.flip_y;
                                             compare_panel = RenderedPanel{.image = std::move(rendered->image),
                                                                           .metadata = std::move(rendered->metadata),
                                                                           .flip_y = flip_y};

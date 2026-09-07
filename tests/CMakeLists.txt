@@ -430,6 +430,7 @@ set(TEST_FILES
     test_scene_upscaler_registry.cpp
     test_selection_rasterization_ops.cpp
     test_rendering_refactor_services.cpp
+    test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
     test_preferences_migration.cpp
     test_viewport.cpp
