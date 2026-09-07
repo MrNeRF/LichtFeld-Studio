@@ -251,6 +251,11 @@
     "status.showing_projects.other": "{count}개 프로젝트 표시 중"
   },
   "training": {
+    "status_restoring": "복원 중",
+    "status_saving": "저장 중",
+    "action_stop": "중지",
+    "action_save": ".licht 저장",
+    "action_start": "시작",
     "start_fix_settings": "아래 설정을 수정하거나 호환되는 백엔드를 선택하여 Start를 활성화하세요.",
     "section.method": "학습 방식",
     "section.camera": "카메라 및 래스터화",

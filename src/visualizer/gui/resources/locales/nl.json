@@ -251,6 +251,11 @@
     "status.showing_projects.other": "{count} projecten weergegeven"
   },
   "training": {
+    "status_restoring": "Herstellen",
+    "status_saving": "Opslaan",
+    "action_stop": "Stop",
+    "action_save": ".licht opslaan",
+    "action_start": "Start",
     "start_fix_settings": "Corrigeer de onderstaande instellingen of selecteer een compatibele backend om Start in te schakelen.",
     "section.method": "Trainingsmethode",
     "section.camera": "Camera en rasterisatie",

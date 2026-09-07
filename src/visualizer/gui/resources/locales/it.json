@@ -251,6 +251,11 @@
     "status.showing_projects.other": "Visualizzazione di {count} progetti"
   },
   "training": {
+    "status_restoring": "Ripristino",
+    "status_saving": "Salvataggio",
+    "action_stop": "Ferma",
+    "action_save": "Salva .licht",
+    "action_start": "Avvia",
     "start_fix_settings": "Correggi le impostazioni qui sotto o seleziona un backend compatibile per abilitare Start.",
     "section.method": "Metodo di training",
     "section.camera": "Camera e rasterizzazione",

@@ -377,6 +377,10 @@ class TrainingPanel(Panel):
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
+        model.bind_func("label_toolbar_edit", lambda: tr("common.edit"))
+        model.bind_func("label_toolbar_reset", lambda: tr("common.reset"))
+        model.bind_func("label_toolbar_stop", lambda: tr("training.action_stop"))
+        model.bind_func("label_toolbar_save", lambda: tr("training.action_save"))
         model.bind_func("label_stop", lambda: tr("training_panel.stop"))
         model.bind_func(
             "label_switch_edit", lambda: tr("training_panel.switch_edit_mode")
@@ -489,9 +493,9 @@ class TrainingPanel(Panel):
             if it <= 0:
                 it = int(session.get("iteration") or 0)
             return (
-                tr("training_panel.resume_training")
+                tr("training_panel.resume")
                 if it > 0
-                else tr("training_panel.start_training")
+                else tr("training.action_start")
             )
 
         model.bind_func("btn_start", _btn_start)
@@ -1285,19 +1289,12 @@ class TrainingPanel(Panel):
         )
 
     def _bind_status(self, model, p):
-        def _status_mode():
+        def _status_state():
             session = _training_session_state()
             if session.get("restoring"):
-                n = int(session.get("iteration") or 0)
-                return (
-                    f"{tr('status.mode')} "
-                    + tr("training_panel.loading_session").replace("{n}", f"{n:,}")
-                )
+                return "restoring"
             if session.get("error"):
-                return (
-                    f"{tr('status.mode')} "
-                    + tr("training_panel.session_restore_failed")
-                )
+                return "error"
             state = RuntimeState.trainer_state.value
             if (
                 not RuntimeState.has_trainer.value
@@ -1305,20 +1302,30 @@ class TrainingPanel(Panel):
                 and not session.get("hydrated")
             ):
                 state = "completed" if session.get("completed") else "paused"
-            it = RuntimeState.iteration.value
             if state == "stopping" and lf.trainer_saving_model():
-                return f"{tr('status.mode')} Saving model..."
+                return "saving"
+            return state
+
+        def _status_label():
+            state = _status_state()
+            it = RuntimeState.iteration.value
             labels = {
                 "idle": tr("training_panel.idle"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
+                "restoring": tr("training.status_restoring"),
+                "starting": tr("runtime.task_starting"),
                 "running": tr("training_panel.running"),
                 "paused": tr("status.paused"),
+                "saving": tr("training.status_saving"),
                 "stopping": tr("status.stopping"),
                 "completed": tr("status.complete"),
                 "stopped": tr("status.stopped"),
                 "error": tr("status.error"),
             }
-            return f"{tr('status.mode')} {labels.get(state, tr('status.unknown'))}"
+            return labels.get(state, tr("status.unknown"))
+
+        def _status_mode():
+            return f"{tr('status.mode')} {_status_label()}"
 
         def _status_iteration():
             it = RuntimeState.iteration.value
@@ -1342,6 +1349,9 @@ class TrainingPanel(Panel):
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
+            session_error = str(_training_session_state().get("error") or "")
+            if session_error:
+                return f"{tr('training_panel.session_restore_failed')}: {session_error}"
             return lf.trainer_error() or ""
 
         model.bind_func("status_mode", _status_mode)
@@ -1668,6 +1678,8 @@ class TrainingPanel(Panel):
             it = RuntimeState.iteration.value
             if it != self._last_iteration:
                 self._last_iteration = it
+                self._handle.dirty("status_mode")
+                self._handle.dirty("btn_start")
                 self._handle.dirty("status_iteration")
                 self._handle.dirty("progress_text")
                 self._handle.dirty("show_training_telemetry")

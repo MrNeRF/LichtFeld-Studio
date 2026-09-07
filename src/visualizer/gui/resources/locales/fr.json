@@ -251,6 +251,11 @@
     "status.showing_projects.other": "Affichage de {count} projets"
   },
   "training": {
+    "status_restoring": "Restauration",
+    "status_saving": "Enregistrement",
+    "action_stop": "Arrêter",
+    "action_save": "Enregistrer .licht",
+    "action_start": "Démarrer",
     "start_fix_settings": "Corrigez les paramètres ci-dessous ou sélectionnez un backend compatible pour activer Start.",
     "section.method": "Méthode d’entraînement",
     "section.camera": "Caméra et rastérisation",

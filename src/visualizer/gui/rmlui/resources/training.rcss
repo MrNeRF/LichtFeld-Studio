@@ -26,6 +26,8 @@ body {
 }
 
 .training-panel-layout {
+    width: 100%;
+    box-sizing: border-box;
     min-width: 0;
     min-height: 0;
     flex: 1;
@@ -35,6 +37,109 @@ body {
 
 #controls {
     flex-shrink: 0;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: hidden;
+}
+
+.training-actions-group {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.training-action-row {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4dp;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+
+.training-start-feedback,
+.training-action-status {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    white-space: normal;
+    word-break: break-word;
+    overflow-x: hidden;
+}
+
+#training-controls-header {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 22dp;
+    margin-bottom: 6dp;
+}
+
+.training-status-badge {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    height: 18dp;
+    padding: 2dp 8dp;
+    border-width: 1dp;
+    border-radius: 4dp;
+    font-size: 10dp;
+    font-weight: 700;
+    letter-spacing: 0.3dp;
+    line-height: 18dp;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.training-status-badge-label {
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.training-start-feedback {
+    max-height: 120dp;
+    overflow-y: auto;
+    margin-bottom: 6dp;
+}
+
+.training-toolbar-action {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 4dp;
+    box-sizing: border-box;
+    height: 28dp;
+    min-width: 62dp;
+    max-width: 132dp;
+    padding: 3dp 7dp;
+    margin: 0;
+    line-height: 20dp;
+    white-space: nowrap;
+}
+
+.training-toolbar-action--primary {
+    min-width: 74dp;
+}
+
+.training-toolbar-action--save {
+    min-width: 92dp;
+}
+
+.training-toolbar-action img {
+    width: 14dp;
+    height: 14dp;
+    flex-shrink: 0;
+}
+
+.training-toolbar-action span {
+    white-space: nowrap;
 }
 
 #training-search-container {

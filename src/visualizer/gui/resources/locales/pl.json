@@ -251,6 +251,11 @@
     "status.showing_projects.other": "Wyświetlono {count} projektów"
   },
   "training": {
+    "status_restoring": "Przywracanie",
+    "status_saving": "Zapisywanie",
+    "action_stop": "Zatrzymaj",
+    "action_save": "Zapisz .licht",
+    "action_start": "Uruchom",
     "start_fix_settings": "Popraw poniższe ustawienia lub wybierz zgodny backend, aby włączyć Start.",
     "section.method": "Metoda treningu",
     "section.camera": "Kamera i rasteryzacja",

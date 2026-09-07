@@ -13,52 +13,70 @@
 
   <!-- ── Controls ──────────────────────────────────────── -->
   <div id="controls">
-    <div data-if="show_ctrl_ready">
-      <div data-if="start_blocked">
-        <span class="status-text status-error">{{start_error}}</span>
-        <span class="status-text status-error">{{start_conflicts}}</span>
-        <span class="status-text status-muted">{{start_fix_hint}}</span>
+    <div id="training-controls-header">
+      <span class="training-status-badge is-ready" data-if="show_ctrl_ready"><span class="training-status-badge-label">@tr:status.ready</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_starting"><span class="training-status-badge-label">@tr:runtime.task_starting</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_running"><span class="training-status-badge-label">@tr:training_panel.running</span></span>
+      <span class="training-status-badge is-paused" data-if="show_ctrl_paused"><span class="training-status-badge-label">@tr:status.paused</span></span>
+      <span class="training-status-badge is-complete" data-if="show_ctrl_completed"><span class="training-status-badge-label">@tr:status.complete</span></span>
+      <span class="training-status-badge is-complete" data-if="show_ctrl_stopped"><span class="training-status-badge-label">@tr:status.stopped</span></span>
+      <span class="training-status-badge is-error" data-if="show_ctrl_error"><span class="training-status-badge-label">@tr:status.error</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_stopping"><span class="training-status-badge-label">@tr:status.stopping</span></span>
+    </div>
+    <div class="training-actions-group" data-if="show_ctrl_ready">
+      <div class="training-start-feedback" data-if="start_blocked">
+        <span class="training-action-status status-text status-error">{{start_error}}</span>
+        <span class="training-action-status status-text status-error">{{start_conflicts}}</span>
+        <span class="training-action-status status-text status-muted">{{start_fix_hint}}</span>
       </div>
-      <button class="btn btn--success btn--full" data-attrif-disabled="start_blocked" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{btn_start}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attrif-disabled="start_blocked" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')"><img src="../icon/sequencer/play.png" /><span>{{btn_start}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_starting">
-      <span class="status-text status-muted">{{label_status_starting}}</span>
-      <button class="btn btn--warning btn--full" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')">{{label_pause}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_stop" data-event-click="action('stop')">{{label_stop}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_starting">
+      <div class="training-action-row">
+        <button class="btn btn--warning training-toolbar-action training-toolbar-action--primary" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')"><img src="../icon/sequencer/pause.png" /><span>{{label_pause}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_stop" data-attr-aria-label="label_stop" data-attr-title="label_stop" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_running">
-      <button class="btn btn--warning btn--full" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')">{{label_pause}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_running">
+      <div class="training-action-row">
+        <button class="btn btn--warning training-toolbar-action training-toolbar-action--primary" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')"><img src="../icon/sequencer/pause.png" /><span>{{label_pause}}</span></button>
+        <button class="btn btn--primary training-toolbar-action training-toolbar-action--save" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')"><img src="../icon/archive.png" /><span>{{label_toolbar_save}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_paused">
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_resume" data-event-click="action('resume')">{{label_resume}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_stop" data-event-click="action('stop')">{{label_stop}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_paused">
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-tooltip="training.tooltip.btn_resume" data-event-click="action('resume')"><img src="../icon/sequencer/play.png" /><span>{{label_resume}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_stop" data-attr-aria-label="label_stop" data-attr-title="label_stop" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></button>
+        <button class="btn btn--primary training-toolbar-action training-toolbar-action--save" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')"><img src="../icon/archive.png" /><span>{{label_toolbar_save}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_completed">
-      <span class="status-text status-success">{{label_status_completed}}</span>
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_completed">
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_stopped">
-      <span class="status-text status-muted">{{label_status_stopped}}</span>
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_stopped">
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_error">
-      <span class="status-text status-error">{{label_status_error}}</span>
-      <span class="status-text">{{error_message}}</span>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_error">
+      <span class="training-action-status status-text status-error">{{error_message}}</span>
+      <div class="training-action-row">
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_stopping">
-      <span class="status-text status-muted">{{label_status_stopping}}</span>
-    </div>
-    <button class="btn btn--primary btn--full" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')">{{label_save_project}}</button>
-    <span class="status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
+    <span class="training-action-status status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
   </div>
 
   <!-- ── Training Parameters ── -->
@@ -73,7 +91,6 @@
 
   <!-- Training telemetry remains visible while parameter rows scroll independently. -->
   <div class="section-gap training-telemetry" data-if="show_training_telemetry">
-    <span class="status-text text-default training-status-line">{{status_mode}}</span>
     <span class="status-text text-default training-status-line">{{status_iteration}}</span>
     <span class="status-text text-default training-status-line">{{status_gaussians}}</span>
     <div class="training-progress-wrap">
@@ -710,7 +727,11 @@
 
     <!-- Sparsity subsection (conditional) -->
     <div class="training-subsection" data-if="pv_section_sparsity_visible">
-      <div class="training-subsection-title">{{pv_header_sparsity}}</div>
+      <div class="section-header text-accent" id="hdr-sparsity" data-event-click="toggle_section('sparsity')">
+        <span class="section-arrow text-accent" id="arrow-sparsity">&#x25B6;</span>
+        <span class="text-accent">{{pv_header_sparsity}}</span>
+      </div>
+      <div class="section-content collapsed" id="sec-sparsity">
       <div data-class-disabled-overlay="adv_disabled">
 <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
@@ -738,6 +759,8 @@
       </div>
     </div>
 </div>
+
+      </div>
 
     <!-- Save Steps subsection -->
     <div class="training-subsection" data-if="pv_show_save_steps">

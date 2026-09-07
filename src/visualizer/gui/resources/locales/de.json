@@ -251,6 +251,11 @@
     "status.showing_projects.other": "{count} Projekte angezeigt"
   },
   "training": {
+    "status_restoring": "Wiederherstellen",
+    "status_saving": "Speichern",
+    "action_stop": "Stopp",
+    "action_save": ".licht speichern",
+    "action_start": "Start",
     "start_fix_settings": "Korrigiere die Einstellungen unten oder wähle ein kompatibles Backend, um Start zu aktivieren.",
     "section.method": "Trainingsmethode",
     "section.camera": "Kamera und Rasterisierung",

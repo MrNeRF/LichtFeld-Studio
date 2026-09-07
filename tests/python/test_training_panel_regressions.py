@@ -107,6 +107,166 @@ def test_only_start_is_disabled_and_feedback_is_outside_search():
     assert "{{start_conflicts}}" in "".join(feedback.itertext())
 
 
+@pytest.mark.parametrize("state,iteration,actions", [
+    ("ready", 0, ["start", "clear"]),
+    ("ready", 12, ["start", "reset", "clear"]),
+    ("starting", 0, ["pause", "stop"]),
+    ("running", 12, ["pause", "save_project"]),
+    ("paused", 12, ["resume", "reset", "stop", "save_project"]),
+    ("completed", 12, ["switch_edit", "reset", "clear"]),
+    ("stopped", 12, ["switch_edit", "reset", "clear"]),
+    ("error", 12, ["reset", "clear"]),
+    ("stopping", 12, []),
+])
+def test_compact_toolbar_preserves_visible_actions_by_state(
+    training_panel_module, monkeypatch, state, iteration, actions
+):
+    from xml.etree import ElementTree as ET
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", state)
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", iteration)
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    panel._bind_visibility(model, lambda: None, lambda: None)
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = root.find(".//*[@id='controls']")
+    visible = []
+
+    def visit(node):
+        condition = node.get("data-if")
+        # Error text is independent of the action visibility matrix.
+        if condition == "start_blocked":
+            return
+        if condition and not model.bindings[condition][0]():
+            return
+        if node.tag == "button":
+            visible.append(node.get("data-event-click"))
+        for child in node:
+            visit(child)
+
+    visit(controls)
+    assert visible == [f"action('{action}')" for action in actions]
+
+
+def test_compact_toolbar_icons_labels_and_tooltips_are_retained():
+    from xml.etree import ElementTree as ET
+    project = Path(__file__).parents[2]
+    root = ET.parse(project / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = root.find(".//*[@id='controls']")
+    for button in controls.iter("button"):
+        classes = button.get("class", "").split()
+        assert "btn--full" not in classes
+        assert button.get("data-tooltip")
+        assert "training-toolbar-action" in classes
+        assert button.find("img") is not None
+        assert "{{" in "".join(button.itertext())
+        for icon in button.iter("img"):
+            path = icon.get("src").removeprefix("../")
+            assert (project / "src/visualizer/gui/assets" / path).is_file()
+    assert controls.find(".//*[@data-if='show_project_saved']") is not None
+    assert controls.find(".//*[@data-if='show_ctrl_error']") is not None
+
+
+def test_toolbar_status_is_always_above_actions_and_outside_telemetry():
+    from xml.etree import ElementTree as ET
+    project = Path(__file__).parents[2]
+    root = ET.parse(project / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = root.find(".//*[@id='controls']")
+    assert controls[0].get("id") == "training-controls-header"
+    assert controls[0].get("data-if") is None
+    badges = {badge.get("data-if"): badge for badge in controls[0].findall("span")}
+    ready_label = badges["show_ctrl_ready"].find("span[@class='training-status-badge-label']")
+    assert ready_label.text == "@tr:status.ready"
+    assert all(
+        badge.find("span[@class='training-status-badge-label']") is not None
+        for badge in badges.values()
+    )
+    assert "is-ready" in badges["show_ctrl_ready"].get("class")
+    assert "is-active" in badges["show_ctrl_running"].get("class")
+    assert "is-paused" in badges["show_ctrl_paused"].get("class")
+    assert "is-complete" in badges["show_ctrl_completed"].get("class")
+    assert "is-error" in badges["show_ctrl_error"].get("class")
+    assert set(badges) == {
+        "show_ctrl_ready", "show_ctrl_starting", "show_ctrl_running",
+        "show_ctrl_paused", "show_ctrl_completed", "show_ctrl_stopped",
+        "show_ctrl_error", "show_ctrl_stopping",
+    }
+    assert sum(node.text == "{{status_mode}}" for node in root.iter()) == 0
+    for group in controls.findall("div"):
+        for row in group.findall("div[@class='training-action-row']"):
+            assert all(child.tag == "button" for child in row)
+    css = (project / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
+    for selector in ("#controls", ".training-actions-group", ".training-action-row"):
+        block = css.split(selector + " {", 1)[1].split("}", 1)[0]
+        assert "width: 100%;" in block
+    row = css.split(".training-action-row {", 1)[1].split("}", 1)[0]
+    assert "display: flex;" in row
+    assert "flex-wrap: wrap;" in row
+    button = css.split(".training-toolbar-action {", 1)[1].split("}", 1)[0]
+    assert "display: inline-flex;" in button
+    assert "flex: 0 0 auto;" in button
+    assert "overflow: hidden" not in button
+    assert "\n    width: 100%;" not in button
+
+
+@pytest.mark.parametrize("iteration,key", [(0, "training.action_start"), (12, "training_panel.resume")])
+def test_toolbar_uses_short_primary_labels(training_panel_module, monkeypatch, iteration, key):
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", iteration)
+    model = _ModelStub()
+    module.TrainingPanel()._bind_labels(model)
+    assert model.bindings["btn_start"][0]() == key
+    assert model.bindings["label_toolbar_edit"][0]() == "common.edit"
+
+
+def test_toolbar_starting_status_is_not_unknown(training_panel_module, monkeypatch):
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "starting")
+    model = _ModelStub()
+    module.TrainingPanel()._bind_status(model, lambda: None)
+    assert "runtime.task_starting" in model.bindings["status_mode"][0]()
+
+
+def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, monkeypatch):
+    module = training_panel_module
+    monkeypatch.setattr(module, "_training_session_state", lambda: {"error": "bad checkpoint"})
+    model = _ModelStub()
+    module.TrainingPanel()._bind_status(model, lambda: None)
+    assert "status.error" in model.bindings["status_mode"][0]()
+    assert "bad checkpoint" in model.bindings["error_message"][0]()
+
+
+def test_sparsity_is_a_collapsible_advanced_group():
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    advanced = root.find(".//div[@class='training-panel-block'][@data-if='pv_section_advanced_params_visible']")
+    header = advanced.find(".//*[@id='hdr-sparsity']")
+    assert header.get("data-event-click") == "toggle_section('sparsity')"
+    assert header.find(".//*[@id='arrow-sparsity']") is not None
+    content = advanced.find(".//*[@id='sec-sparsity']")
+    assert "collapsed" in content.get("class")
+    assert content.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']") is not None
+    assert content.find(".//*[@data-if='dep_sparsity']") is not None
+    assert content.find(".//*[@data-for='row : pv_sparsity_rows']") is not None
+    assert content.find(".//*[@id='sec-save-steps']") is None
+
+
+def test_save_project_is_in_the_same_row_as_pause_and_resume():
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    for state in ("running", "paused"):
+        group = root.find(
+            f".//div[@class='training-actions-group'][@data-if='show_ctrl_{state}']"
+        )
+        row = group.find("div[@class='training-action-row']")
+        assert row.find("button[@data-if='show_project_save']") is not None
+    controls = root.find(".//*[@id='controls']")
+    assert controls.find("button[@data-if='show_project_save']") is None
+
+
 def test_bundled_locales_define_training_panel_strategy_and_color_keys():
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
@@ -115,6 +275,11 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         data = json.loads(locale_path.read_text())
         assert data["training"]["options.strategy.igs_plus"] == "IGS+"
         assert data["training"]["start_fix_settings"]
+        assert data["training"]["action_start"]
+        assert data["training"]["action_stop"]
+        assert data["training"]["action_save"]
+        assert data["training"]["status_restoring"]
+        assert data["training"]["status_saving"]
         assert "refinement.grow_until_iter" in data["training"]
         assert "tooltip.grow_until_iter" in data["training"]
         assert data["training"]["overwrite.btn_save_as_start"]

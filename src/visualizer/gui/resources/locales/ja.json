@@ -251,6 +251,11 @@
     "status.showing_projects.other": "{count} 件のプロジェクトを表示中"
   },
   "training": {
+    "status_restoring": "復元中",
+    "status_saving": "保存中",
+    "action_stop": "停止",
+    "action_save": ".licht を保存",
+    "action_start": "開始",
     "start_fix_settings": "以下の設定を修正するか、互換性のあるバックエンドを選択して Start を有効にしてください。",
     "section.method": "トレーニング方式",
     "section.camera": "カメラとラスタライズ",

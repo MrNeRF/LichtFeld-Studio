@@ -251,6 +251,11 @@
     "status.showing_projects.other": "正在显示 {count} 个项目"
   },
   "training": {
+    "status_restoring": "正在恢复",
+    "status_saving": "正在保存",
+    "action_stop": "停止",
+    "action_save": "保存 .licht",
+    "action_start": "开始",
     "start_fix_settings": "请修正下方设置或选择兼容的后端以启用 Start。",
     "section.method": "训练方式",
     "section.camera": "相机与光栅化",
