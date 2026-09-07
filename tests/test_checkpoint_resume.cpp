@@ -1231,7 +1231,7 @@ namespace {
     }
 
     TEST(CheckpointParamsJsonTest,
-         Legacy3DGutNoopOptionsRemainReadableAndAreClearedOnlyForResume) {
+         Legacy3DGutOptionsRemainReadableAndOnlyUnsupportedOnesAreClearedForResume) {
         const auto temp_dir = std::filesystem::temp_directory_path() /
                               "lfs_checkpoint_legacy_3dgut_options";
         std::error_code ec;
@@ -1276,10 +1276,23 @@ namespace {
             nullptr, nullptr, nullptr, nullptr);
         ASSERT_TRUE(resumed.has_value()) << resumed.error();
         EXPECT_TRUE(resumed_params.optimization.gut);
-        EXPECT_FALSE(resumed_params.optimization.undistort);
+        EXPECT_TRUE(resumed_params.optimization.undistort);
         EXPECT_FALSE(resumed_params.optimization.mip_filter);
         EXPECT_FALSE(resumed_params.optimization.use_depth_loss);
         EXPECT_FALSE(resumed_params.optimization.use_normal_loss);
+
+        auto explicit_undistort_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC explicit_undistort_strategy(*explicit_undistort_model);
+        auto explicit_undistort_params = make_params_json_test_params(temp_dir);
+        explicit_undistort_params.overrides.optimization_json =
+            R"({"undistort":true})";
+        const auto explicit_undistort_resume = lfs::training::load_checkpoint(
+            checkpoint, explicit_undistort_strategy, explicit_undistort_params,
+            nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(explicit_undistort_resume.has_value())
+            << explicit_undistort_resume.error();
+        EXPECT_TRUE(explicit_undistort_params.optimization.gut);
+        EXPECT_TRUE(explicit_undistort_params.optimization.undistort);
 
         auto explicit_model = make_checkpoint_test_splat(1);
         lfs::training::MCMC explicit_strategy(*explicit_model);

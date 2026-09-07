@@ -37,8 +37,6 @@ namespace lfs::python {
             switch (conflict) {
             case TrainingBackendConflict::IGSPlus:
                 return "igs_plus";
-            case TrainingBackendConflict::Undistort:
-                return "undistort";
             case TrainingBackendConflict::MipFilter:
                 return "mip_filter";
             case TrainingBackendConflict::DepthSupervision:

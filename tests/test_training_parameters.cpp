@@ -321,7 +321,6 @@ namespace {
             const char* label;
         };
         const std::array cases{
-            Case{&OptimizationParameters::undistort, Conflict::Undistort, "Undistort"},
             Case{&OptimizationParameters::mip_filter, Conflict::MipFilter, "Mip Filter"},
             Case{&OptimizationParameters::use_depth_loss, Conflict::DepthSupervision, "Depth Supervision"},
             Case{&OptimizationParameters::use_normal_loss, Conflict::NormalSupervision, "Normal Supervision"},
@@ -349,7 +348,7 @@ namespace {
         }
     }
 
-    TEST_F(TrainingParametersTest, GutConflictValidationDoesNotNormalizeSettings) {
+    TEST_F(TrainingParametersTest, GutConflictValidationAllowsUndistortAndDoesNotNormalizeSettings) {
         using Conflict = lfs::core::param::TrainingBackendConflict;
         auto params = OptimizationParameters::mrnf_defaults();
         params.gut = true;
@@ -358,11 +357,12 @@ namespace {
         params.undistort = true;
         params.use_depth_loss = true;
         const auto before = params.to_json();
-        EXPECT_EQ(params.backend_conflict(), Conflict::Undistort);
+        EXPECT_EQ(params.backend_conflict(), Conflict::DepthSupervision);
         EXPECT_FALSE(params.validate().empty());
         EXPECT_EQ(params.to_json(), before);
-        params.undistort = false;
-        EXPECT_EQ(params.backend_conflict(), Conflict::DepthSupervision);
+        params.use_depth_loss = false;
+        EXPECT_EQ(params.backend_conflict(), Conflict::None);
+        EXPECT_TRUE(params.validate().empty());
         params.gut = false;
         EXPECT_TRUE(params.validate().empty());
     }

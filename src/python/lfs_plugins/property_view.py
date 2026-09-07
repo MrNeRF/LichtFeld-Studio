@@ -192,11 +192,7 @@ BASIC_RUNS = (
     ),
     _run("basic_sparsity_toggle", "enable_sparsity"),
     _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),
-    _run(
-        "basic_undistort",
-        "undistort",
-        disabled_condition_id="gut_undistort_disabled",
-    ),
+    _run("basic_undistort", "undistort"),
     _run(
         "basic_mip_filter",
         "mip_filter",

@@ -69,7 +69,6 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
         const char* field;
     };
     const Case cases[] = {
-        {"--undistort", "Undistort", "undistort"},
         {"--enable-mip", "Mip Filter", "mip_filter"},
         {"--use-depth-loss", "Depth Supervision", "use_depth_loss"},
         {"--use-normal-loss", "Normal Supervision", "use_normal_loss"},
@@ -99,6 +98,28 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
         EXPECT_FALSE((*standard_3dgs)->optimization.gut);
         EXPECT_TRUE((*standard_3dgs)->optimization.to_json().at(test.field).get<bool>());
     }
+}
+
+TEST(ArgumentParserTest, GutAcceptsUndistort) {
+    const auto data_path = make_test_path("lfs_gut_undistort_data");
+    const auto output_path = make_test_path("lfs_gut_undistort_output");
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--strategy",
+        "mcmc",
+        "--gut",
+        "--undistort",
+    };
+
+    const auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.gut);
+    EXPECT_TRUE((*parsed)->optimization.undistort);
 }
 
 TEST(ArgumentParserTest,

@@ -25,7 +25,6 @@ namespace lfs::core {
         enum class TrainingBackendConflict {
             None,
             IGSPlus,
-            Undistort,
             MipFilter,
             DepthSupervision,
             NormalSupervision,

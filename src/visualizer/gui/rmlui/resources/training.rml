@@ -298,8 +298,7 @@
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
       <div class="setting-row" data-for="row : pv_basic_undistort_rows"
-           data-attr-data-tooltip="row.tooltip_key"
-           data-class-disabled-overlay="gut_undistort_disabled">
+           data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />

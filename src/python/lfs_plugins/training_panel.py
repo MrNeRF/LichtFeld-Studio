@@ -758,17 +758,12 @@ class TrainingPanel(Panel):
                 return False
             return bool(
                 params.strategy == "igs+"
-                or params.undistort
                 or params.mip_filter
                 or params.use_depth_loss
                 or params.use_normal_loss
             )
 
         model.bind_func("gut_disabled", _gut_enable_disabled)
-        model.bind_func(
-            "gut_undistort_disabled",
-            lambda: _gut_feature_enable_disabled("undistort"),
-        )
         model.bind_func(
             "gut_mip_filter_disabled",
             lambda: _gut_feature_enable_disabled("mip_filter"),

@@ -418,7 +418,6 @@
     "tooltip.opt.depth_loss_mode.ssi_disparity": "先验为视差型（数值越大越近），例如 Depth Anything、MiDaS",
     "tooltip.opt.depth_loss_mode.ssi_depth": "先验为深度型（数值越大越远），例如度量深度模型",
     "error.strategy_gut_title": "不兼容的设置",
-    "backend_conflict.undistort": "3DGUT 不能与 Undistort 同时使用。请禁用 Undistort 或选择 3DGS。",
     "backend_conflict.mip_filter": "3DGUT 不能与 Mip Filter 同时使用。请禁用 Mip Filter 或选择 3DGS。",
     "backend_conflict.depth_supervision": "3DGUT 不能与 Depth Supervision 同时使用。请禁用 Depth Supervision 或选择 3DGS。",
     "backend_conflict.normal_supervision": "3DGUT 不能与 Normal Supervision 同时使用。请禁用 Normal Supervision 或选择 3DGS。",

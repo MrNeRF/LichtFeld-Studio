@@ -57,7 +57,6 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert data["training"]["overwrite.btn_save_as_start"]
         assert data["training"]["save_pc.message_project"]
         for conflict in (
-            "undistort",
             "mip_filter",
             "depth_supervision",
             "normal_supervision",
@@ -421,12 +420,13 @@ def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
     assert disabled("gut_disabled") is False
     assert disabled("gut_depth_supervision_disabled") is False
     assert disabled("gut_normal_supervision_disabled") is True
-    assert disabled("gut_undistort_disabled") is True
     assert disabled("gut_mip_filter_disabled") is True
+    assert "gut_undistort_disabled" not in model.bindings
 
     params.gut = False
     assert disabled("gut_disabled") is True
     params.use_depth_loss = False
+    params.undistort = True
     assert disabled("gut_disabled") is False
     params.strategy = "igs+"
     assert disabled("gut_disabled") is True

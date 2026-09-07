@@ -362,8 +362,6 @@ namespace lfs::core {
                 return TrainingBackendConflict::None;
             if (canonical_strategy_name(strategy) == kStrategyIGSPlus)
                 return TrainingBackendConflict::IGSPlus;
-            if (undistort)
-                return TrainingBackendConflict::Undistort;
             if (mip_filter)
                 return TrainingBackendConflict::MipFilter;
             if (use_depth_loss)
@@ -377,8 +375,6 @@ namespace lfs::core {
             switch (backend_conflict()) {
             case TrainingBackendConflict::IGSPlus:
                 return "3DGUT cannot be used with the IGS+ strategy";
-            case TrainingBackendConflict::Undistort:
-                return "3DGUT does not support Undistort; disable Undistort or select 3DGS";
             case TrainingBackendConflict::MipFilter:
                 return "3DGUT does not support Mip Filter; disable Mip Filter or select 3DGS";
             case TrainingBackendConflict::DepthSupervision:

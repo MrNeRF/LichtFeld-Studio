@@ -418,7 +418,6 @@
     "tooltip.opt.depth_loss_mode.ssi_disparity": "Prior is disparity-like (larger = closer), e.g. Depth Anything or MiDaS output",
     "tooltip.opt.depth_loss_mode.ssi_depth": "Prior is depth-like (larger = farther), e.g. metric depth models",
     "error.strategy_gut_title": "Inkompatible Einstellungen",
-    "backend_conflict.undistort": "3DGUT kann nicht mit Undistort verwendet werden. Deaktivieren Sie Undistort oder wählen Sie 3DGS.",
     "backend_conflict.mip_filter": "3DGUT kann nicht mit Mip Filter verwendet werden. Deaktivieren Sie Mip Filter oder wählen Sie 3DGS.",
     "backend_conflict.depth_supervision": "3DGUT kann nicht mit Depth Supervision verwendet werden. Deaktivieren Sie Depth Supervision oder wählen Sie 3DGS.",
     "backend_conflict.normal_supervision": "3DGUT kann nicht mit Normal Supervision verwendet werden. Deaktivieren Sie Normal Supervision oder wählen Sie 3DGS.",

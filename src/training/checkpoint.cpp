@@ -80,7 +80,6 @@ namespace lfs::training {
             // These combinations were accepted by older releases but did not
             // contribute to the 3DGUT optimization. Preserve them when merely
             // inspecting a checkpoint and clear only the inherited runtime copy.
-            clear_if_inherited(optimization.undistort, "undistort", "Undistort");
             clear_if_inherited(optimization.mip_filter, "mip_filter", "Mip Filter");
             clear_if_inherited(optimization.use_depth_loss, "use_depth_loss", "Depth Supervision");
             clear_if_inherited(optimization.use_normal_loss, "use_normal_loss", "Normal Supervision");
