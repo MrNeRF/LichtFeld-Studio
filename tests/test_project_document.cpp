@@ -1296,13 +1296,17 @@ namespace {
                 const auto& camera = *node->camera;
                 EXPECT_TRUE(camera.has_distortion());
                 EXPECT_TRUE(camera.is_undistort_precomputed());
-                EXPECT_FALSE(camera.is_undistort_prepared());
-                EXPECT_FLOAT_EQ(camera.focal_x(), 100.0f);
-                EXPECT_FLOAT_EQ(camera.focal_y(), 100.0f);
-                EXPECT_FLOAT_EQ(camera.center_x(), 50.0f);
-                EXPECT_FLOAT_EQ(camera.center_y(), 50.0f);
-                EXPECT_EQ(camera.camera_width(), 100);
-                EXPECT_EQ(camera.camera_height(), 100);
+                if (node->name == "prepared.png") {
+                    expect_destination(camera);
+                } else {
+                    EXPECT_FALSE(camera.is_undistort_prepared());
+                    EXPECT_FLOAT_EQ(camera.focal_x(), 100.0f);
+                    EXPECT_FLOAT_EQ(camera.focal_y(), 100.0f);
+                    EXPECT_FLOAT_EQ(camera.center_x(), 50.0f);
+                    EXPECT_FLOAT_EQ(camera.center_y(), 50.0f);
+                    EXPECT_EQ(camera.camera_width(), 100);
+                    EXPECT_EQ(camera.camera_height(), 100);
+                }
                 EXPECT_FLOAT_EQ(camera.undistort_params().src_fx, destination.src_fx);
                 EXPECT_FLOAT_EQ(camera.undistort_params().src_fy, destination.src_fy);
                 EXPECT_FLOAT_EQ(camera.undistort_params().src_cx, destination.src_cx);
@@ -1310,6 +1314,33 @@ namespace {
                 EXPECT_EQ(camera.undistort_params().src_width, destination.src_width);
                 EXPECT_EQ(camera.undistort_params().src_height, destination.src_height);
             }
+            // Legacy records have no saved state and still recover from source calibration.
+            auto legacy_json = lfs::io::JsonChapterDom::Json::parse(chapter->dom().dump());
+            for (auto& node : legacy_json["nodes"]) {
+                if (node.contains("camera")) {
+                    node["camera"].erase("undistortion");
+                }
+            }
+            auto legacy_chapter = SceneGraphChapter::parse(legacy_json.dump());
+            ASSERT_TRUE(legacy_chapter)
+                << lfs::format_for_developer(legacy_chapter.error());
+            Scene legacy_restored;
+            auto legacy_hydrated =
+                hydrate_scene_graph(*legacy_chapter, legacy_restored, ScenePayloadResolver{});
+            ASSERT_TRUE(legacy_hydrated)
+                << lfs::format_for_developer(legacy_hydrated.error());
+            for (const auto* name : {"prepared.png", "unprepared.png"}) {
+                const auto* node = legacy_restored.getNode(name);
+                ASSERT_NE(node, nullptr);
+                ASSERT_NE(node->camera, nullptr);
+                EXPECT_TRUE(node->camera->is_undistort_precomputed());
+                EXPECT_FALSE(node->camera->is_undistort_prepared());
+                EXPECT_FLOAT_EQ(node->camera->center_x(), 50.0f);
+                EXPECT_EQ(node->camera->camera_width(), 100);
+                node->camera->prepare_undistortion();
+                expect_destination(*node->camera);
+            }
+
             prepared = restored->getNode("prepared.png")->camera;
             unprepared = restored->getNode("unprepared.png")->camera;
             prepared->prepare_undistortion();
