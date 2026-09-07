@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/parameters.hpp"
@@ -32,6 +33,7 @@ using lfs::core::Tensor;
 using lfs::training::CameraDataset;
 using lfs::training::DatasetConfig;
 using lfs::training::EvalMetrics;
+using lfs::training::image_for_metrics_and_save;
 using lfs::training::mean_normal_angle_deg;
 using lfs::training::median_depth_absrel;
 using lfs::training::MetricsEvaluator;
@@ -175,7 +177,7 @@ namespace {
 
 TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
 
     EvalMetrics missing;
     missing.iteration = 200;
@@ -183,7 +185,7 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     missing.ssim = 0.5f;
     missing.elapsed_time = 0.01f;
     missing.num_gaussians = 10;
-    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000");
+    EXPECT_EQ(missing.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,,,0.000000,0.000000,0.000000,0.000000,0.000000,0.000000");
 
     EvalMetrics present = missing;
     present.normal_angle_deg = 12.5f;
@@ -191,7 +193,73 @@ TEST(EvalMetricsCsv, HeaderAppendsGeometryColumnsWithoutRenamingExisting) {
     present.bias_r = 0.001f;
     present.bias_g = -0.002f;
     present.bias_b = 0.003f;
-    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000");
+    EXPECT_EQ(present.to_csv_row(), "200,1.000000,0.500000,,0.010000,10,12.500000,0.250000,0.001000,-0.002000,0.003000,0.000000,0.000000,0.000000");
+}
+
+TEST(EvalMetricsEvent, ZeroLpipsRemainsPresent) {
+    std::optional<float> observed;
+    const auto handler_id = lfs::core::events::state::EvaluationCompleted::when(
+        [&observed](const auto& event) { observed = event.lpips; });
+    lfs::core::events::state::EvaluationCompleted{
+        .iteration = 1,
+        .psnr = 1.0f,
+        .ssim = 1.0f,
+        .lpips = 0.0f,
+        .elapsed_time = 0.0f,
+        .num_gaussians = 0}
+        .emit();
+    lfs::event::EventBridge::instance().unsubscribe(
+        typeid(lfs::core::events::state::EvaluationCompleted), handler_id);
+    ASSERT_TRUE(observed.has_value());
+    EXPECT_FLOAT_EQ(*observed, 0.0f);
+}
+
+TEST(EvalMetricsImage, QuantizesWithImageSaverRounding) {
+    const std::vector<float> values{
+        1.0f,
+        2.0f,
+        254.0f / 255.0f,
+        0.5f,
+        0.4999f / 255.0f,
+        0.5001f / 255.0f,
+        -0.1f,
+        1.1f};
+    std::vector<float> image_data;
+    image_data.reserve(values.size() * 3);
+    for (const float value : values) {
+        image_data.insert(image_data.end(), {value, value, value});
+    }
+    const auto input = Tensor::from_blob(
+                           image_data.data(), {values.size(), 1, 3}, Device::CPU,
+                           DataType::Float32)
+                           .clone();
+    const auto quantized = image_for_metrics_and_save(input).to_vector();
+    ASSERT_EQ(quantized.size(), image_data.size());
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        const auto expected = static_cast<float>(std::lround(std::clamp(values[i], 0.0f, 1.0f) * 255.0f)) /
+                              255.0f;
+        for (int channel = 0; channel < 3; ++channel) {
+            EXPECT_FLOAT_EQ(quantized[i * 3 + channel], expected) << "index " << i;
+        }
+    }
+
+    const auto path = std::filesystem::temp_directory_path() / "lfs_metrics_quantized_rounding.png";
+    lfs::core::save_image(path, image_for_metrics_and_save(input));
+    auto [saved, width, height, channels] = lfs::core::load_image(path);
+    ASSERT_NE(saved, nullptr);
+    ASSERT_EQ(width, 1);
+    ASSERT_EQ(height, static_cast<int>(values.size()));
+    ASSERT_GE(channels, 3);
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        const auto expected = static_cast<unsigned char>(std::lround(std::clamp(values[i], 0.0f, 1.0f) * 255.0f));
+        for (int channel = 0; channel < 3; ++channel) {
+            EXPECT_EQ(saved[i * static_cast<std::size_t>(channels) + channel], expected)
+                << "index " << i << ", channel " << channel;
+        }
+    }
+    lfs::core::free_image(saved);
+    std::error_code ec;
+    std::filesystem::remove(path, ec);
 }
 
 TEST(GeomMetricHelpers, MatchingNormalsYieldZeroAngle) {
@@ -284,7 +352,7 @@ TEST(MetricsEvaluatorGeom, MatchingRenderedAndPriorNormalIsNearZero) {
     ASSERT_TRUE(metrics.normal_angle_deg.has_value());
     EXPECT_NEAR(*metrics.normal_angle_deg, 0.0f, 2.0f);
     EXPECT_EQ(EvalMetrics::to_csv_header(),
-              "iteration,psnr,ssim,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
+              "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b");
 
     std::filesystem::remove_all(tmp);
 }

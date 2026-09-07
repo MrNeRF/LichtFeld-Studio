@@ -1060,8 +1060,18 @@ namespace lfs::core {
                 const TensorShape shp = shape_;
                 // Stamp stream hint like TensorExpr::operator Tensor so deferred
                 // large binaries keep cross-stream ordering (D4 / stream tests).
-                const cudaStream_t stream_hint =
-                    (dev == Device::CUDA) ? getCurrentCUDAStream() : nullptr;
+                const cudaStream_t stream_hint = [&] {
+                    if (dev != Device::CUDA) {
+                        return static_cast<cudaStream_t>(nullptr);
+                    }
+                    if (const cudaStream_t current = getCurrentCUDAStream()) {
+                        return current;
+                    }
+                    if (const cudaStream_t lhs_stream = lhs_source.stream()) {
+                        return lhs_stream;
+                    }
+                    return rhs_operand.stream();
+                }();
                 Tensor result = make_deferred_expr_tensor(
                     shp, dev, DataType::Float32,
                     [lhs_source, rhs_operand, op, shp, dev, stream_hint]() mutable {

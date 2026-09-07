@@ -441,6 +441,30 @@ namespace lfs::core::tensor_ops {
             }
         }
 
+        __global__ void fused_tiny_segmented_transform_reduce_kernel(
+            const float* __restrict__ input,
+            float* __restrict__ output,
+            size_t num_segments,
+            size_t segment_size,
+            FusedPointwiseOpChain chain,
+            int reduce_op_int) {
+            const size_t seg = blockIdx.x * blockDim.x + threadIdx.x;
+            if (seg >= num_segments) {
+                return;
+            }
+
+            const size_t seg_base = seg * segment_size;
+            float acc = reduce_identity(reduce_op_int);
+            for (size_t i = 0; i < segment_size; ++i) {
+                acc = reduce_combine(
+                    acc, apply_chain(input[seg_base + i], chain, seg_base + i), reduce_op_int);
+            }
+            if (reduce_op_int == 1) {
+                acc *= (1.0f / static_cast<float>(segment_size));
+            }
+            output[seg] = acc;
+        }
+
     } // namespace
 
     void launch_fused_segmented_transform_reduce(
@@ -458,10 +482,17 @@ namespace lfs::core::tensor_ops {
         const int reduce_op_int = static_cast<int>(reduce_op);
         assert(reduce_op_int >= 0 && reduce_op_int <= 4);
 
-        const int grid_size = static_cast<int>(std::min(num_segments, size_t(2048)));
-        fused_segmented_transform_reduce_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
-            input, output, num_segments, segment_size, chain, reduce_op_int);
-        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.segmented_transform_reduce");
+        if (segment_size < 32) {
+            const int grid_size = static_cast<int>((num_segments + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            fused_tiny_segmented_transform_reduce_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                input, output, num_segments, segment_size, chain, reduce_op_int);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.tiny_segmented_transform_reduce");
+        } else {
+            const int grid_size = static_cast<int>(std::min(num_segments, size_t(2048)));
+            fused_segmented_transform_reduce_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                input, output, num_segments, segment_size, chain, reduce_op_int);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.fused_pointwise.segmented_transform_reduce");
+        }
         record_tensor_kernel_launch(1);
     }
 

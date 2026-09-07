@@ -30,5 +30,6 @@ src/io/ply_to_rad_lod.cpp:std::ifstream meminfo("/proc/meminfo");
 src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(csv_path_, csv_file)) {
 src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
 src/training/metrics/metrics.cpp:if (!lfs::core::open_file_for_write(txt_path_, report_file)) {
+src/training/metrics/metrics.cpp:if (lfs::core::open_file_for_write(eval_dir / "per_image_metrics.csv", per_image_csv)) {
 src/training/training_snapshot_service.cpp:std::ifstream input("/proc/self/status");
 src/training/training_snapshot_service.cpp:std::ifstream input("/proc/meminfo");

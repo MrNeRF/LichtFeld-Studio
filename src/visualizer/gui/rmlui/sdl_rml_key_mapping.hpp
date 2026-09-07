@@ -56,6 +56,7 @@ namespace lfs::vis::gui {
         case SDLK_SEMICOLON:    return Rml::Input::KI_OEM_1;
         case SDLK_EQUALS:       return Rml::Input::KI_OEM_PLUS;
         case SDLK_PLUS:         return Rml::Input::KI_OEM_PLUS;
+        case SDLK_APOSTROPHE:   return Rml::Input::KI_OEM_7;
         case SDLK_COMMA:        return Rml::Input::KI_OEM_COMMA;
         case SDLK_MINUS:        return Rml::Input::KI_OEM_MINUS;
         case SDLK_PERIOD:       return Rml::Input::KI_OEM_PERIOD;
@@ -134,6 +135,7 @@ namespace lfs::vis::gui {
         // still comes from SDL text events through text_codepoints.
         // clang-format off
         switch (sc) {
+        case SDL_SCANCODE_ESCAPE:          return Rml::Input::KI_ESCAPE;
         case SDL_SCANCODE_SPACE:          return Rml::Input::KI_SPACE;
         case SDL_SCANCODE_APOSTROPHE:     return Rml::Input::KI_OEM_7;
         case SDL_SCANCODE_COMMA:          return Rml::Input::KI_OEM_COMMA;

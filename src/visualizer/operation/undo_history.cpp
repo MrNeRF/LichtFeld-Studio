@@ -530,7 +530,28 @@ namespace lfs::vis::op {
         }
 
         if (auto* const scene_manager = services().sceneOrNull()) {
-            scene_manager->completePendingSelectionCounts();
+            try {
+                scene_manager->completePendingSelectionCounts();
+            } catch (const std::exception& e) {
+                LOG_ERROR("{} preflight failed: {}",
+                          undo_direction ? "Undo" : "Redo",
+                          e.what());
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = e.what(),
+                };
+            } catch (...) {
+                LOG_ERROR("{} preflight failed: unknown exception",
+                          undo_direction ? "Undo" : "Redo");
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = "unknown exception",
+                };
+            }
         }
 
         std::unique_lock playback_lock(playback_mutex_, std::try_to_lock);
