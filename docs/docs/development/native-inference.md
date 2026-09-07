@@ -14,6 +14,16 @@ mixing CUDA and Vulkan tensors in a model call is rejected. The preprocessing
 MoGe path and Python SAM2 bindings also accept the Vulkan backend. Vulkan inference
 does not require an available CUDA device.
 
+Standalone MoGe preprocessing also follows this selection:
+
+```sh
+LFS_TENSOR_BACKEND=vulkan ./build/LichtFeld-Studio preprocess /path/to/dataset
+```
+
+It writes depth and normal maps on Vulkan. The optional depth-anchor sidecar uses
+CUDA training kernels, so Vulkan preprocessing leaves that cache for training
+startup to generate. Downloading model weights does not require a GPU.
+
 The Vulkan implementation uses the tensor backend's existing device, memory pool,
 and command recorder. Weight uploads use owned staging memory, and inference uses
 Vulkan tensor programs plus shaders for image sampling, convolution packing,
