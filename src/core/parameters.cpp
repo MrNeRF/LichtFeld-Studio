@@ -504,13 +504,13 @@ namespace lfs::core {
             case TrainingBackendConflict::IGSPlus:
                 return "GUT and igs+ strategy cannot be used together";
             case TrainingBackendConflict::Undistort:
-                return "3DGUT (gut=true) does not support undistort; disable undistort or select FastGS (gut=false)";
+                return "3DGUT does not support undistort; disable undistort or select 3DGS";
             case TrainingBackendConflict::MipFilter:
-                return "3DGUT (gut=true) does not support mip_filter; disable mip_filter or select FastGS (gut=false)";
+                return "3DGUT does not support mip_filter; disable mip_filter or select 3DGS";
             case TrainingBackendConflict::DepthSupervision:
-                return "3DGUT (gut=true) does not support depth supervision (use_depth_loss); disable use_depth_loss or select FastGS (gut=false)";
+                return "3DGUT does not support depth supervision (use_depth_loss); disable use_depth_loss or select 3DGS";
             case TrainingBackendConflict::NormalSupervision:
-                return "3DGUT (gut=true) does not support normal supervision (use_normal_loss); disable use_normal_loss or select FastGS (gut=false)";
+                return "3DGUT does not support normal supervision (use_normal_loss); disable use_normal_loss or select 3DGS";
             case TrainingBackendConflict::None:
                 break;
             }

@@ -89,6 +89,8 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChangingFastGS) {
         const auto gut = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
         ASSERT_FALSE(gut.has_value());
         EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
+        EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
+        EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
         EXPECT_NE(gut.error().find(test.field), std::string::npos);
 
         const auto fastgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
