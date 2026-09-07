@@ -1,0 +1,118 @@
+# Training backend identity and compatibility
+
+Training strategy and raster backend are independent choices. `3dgs` is the
+default training backend; `3dgut` selects Gaussian Unscented Transform rendering.
+No additional backend alias is introduced for 3DGS.
+
+`core/training_backend.hpp` owns the backend identifiers, labels, descriptions,
+viewer mapping, and high-level training capabilities. Its descriptions provide
+technical tooltip text for later UI consumers. The capability map is exhaustive
+for the high-level feature groups exposed by the training panel; a consumer does
+not need to infer support from a missing key.
+
+Each capability has one of two states:
+
+- `supported`: the backend path is established and may be presented normally;
+- `unsupported`: the combination is a known hard incompatibility and may prevent
+  training from starting.
+
+Only `unsupported` participates in central backend validation. The current
+matrix is:
+
+| Feature group | 3DGS | 3DGUT |
+| --- | --- | --- |
+| MCMC strategy | supported | supported |
+| MRNF strategy | supported | supported |
+| IGS+ strategy | supported | unsupported |
+| Undistortion | supported | supported |
+| Mip Filter | supported | unsupported |
+| Depth supervision | supported | unsupported |
+| Normal supervision | supported | unsupported |
+| Masking | supported | supported |
+| Segmentation | supported | supported |
+| Background modes | supported | supported |
+| Background Improvements | supported | supported |
+| Exposure correction | supported | supported |
+| Bilateral grid | supported | supported |
+| PPISP | supported | supported |
+| Sparsity | supported | supported |
+
+This matrix describes backend compatibility, not complete option availability.
+Detailed numeric controls, strategy-specific applicability, mutually exclusive
+option groups, and dataset requirements still belong to the property registry
+and the later resolved UI model. For example, Background Improvements is an MRNF
+option even though the backend matrix also reports its backend support state.
+Localized conflict reasons continue to come from the existing backend-conflict
+result instead of duplicating UI text in the descriptor.
+
+## Compatibility rules
+
+- `OptimizationParameters::raster_backend()` and `set_raster_backend()` adapt the
+  existing `gut` storage. There is no second mutable backend field. Existing C++
+  and Python writers of `gut` therefore remain effective.
+- JSON accepts `raster_backend: "3dgs"` or `"3dgut"`. Files containing only
+  `gut` retain their original meaning. Missing both selects the existing 3DGS default.
+- New JSON writes both names consistently. While `gut` remains the compatibility
+  storage, its value takes precedence if a previous application preserved a stale
+  known `raster_backend` field while changing `gut`. Unknown identifiers and
+  incorrect JSON types are still errors.
+- `--raster-backend 3dgs|3dgut` is additive. `--gut` remains an alias for 3DGUT.
+  `--gut --raster-backend 3dgs` is an error, independent of argument order.
+- Explicit CLI selection overrides a valid configuration's backend. Its captured
+  overrides contain both aliases so subsequent checkpoint restoration cannot
+  combine a stale config alias with the CLI choice. Invalid configurations still
+  fail their existing load-time validation before CLI overrides are applied.
+- Checkpoint parameter JSON and `.licht` parameter presets use the same adapters.
+  The binary checkpoint format and `.licht` chapter schema are unchanged.
+- A stored `.licht` preset may retain an unsupported 3DGUT option so legacy
+  projects can still open without silently changing user data. Storage validation
+  continues to reject malformed values; trainer validation reports the backend
+  conflict when Start is requested.
+- Older applications ignore the new field and continue to read `gut`. In `.licht`,
+  they can preserve the unknown new field while changing `gut`; the precedence
+  rule above ensures that the file still reopens with the legacy application's
+  selected backend.
+
+## Python and viewer lifecycle
+
+`lf.optimization_params().raster_backend` and `get/set("raster_backend", ...)`
+access the same backend as `gut`. The new setter uses the existing `gut` property
+notification path. `backend_capabilities` returns the complete high-level map for
+the selected backend using the strings `supported` and `unsupported`.
+`lf.training_backends()` lists IDs, labels, descriptions, viewer IDs, and the
+same capability map without needing to change the current selection.
+
+These are next-run parameter APIs, not an atomic command to replace an active
+trainer and viewer. The existing panel change path still updates its viewer
+setting; viewer startup receives the resolved compatibility value. Project
+restoration preserves the distinction between session defaults, next-run presets,
+and active trainer state. The future RmlUi selector should use the descriptors
+and the existing scene/lifecycle commands rather than mutating active training
+from a parameter setter.
+
+## Adding another backend later
+
+This is a compatibility step, not runtime backend registration. An additional
+backend needs its implementation, descriptor, an explicit state for every
+high-level capability, explicit dispatch, and a replacement for boolean `gut`
+storage with legacy accessors. Unknown enum values are rejected by the
+compatibility setter. Do not map an additional backend to either boolean value or
+assume that adding a descriptor installs a rasterizer.
+
+## Verification
+
+After updating the native binaries, run from the repository in the normal
+PowerShell development environment:
+
+```powershell
+lfsdev
+.\build\tests\lichtfeld_tests.exe --gtest_filter="TrainingParametersTest.BackendIdentityCompatibility:TrainingParametersTest.SupportedThreeDGUTCapabilitiesRemainNonBlocking:TrainingParametersTest.StoredBackendConflictPreservesSettingsButStillRejectsInvalidNumbers:ArgumentParserTest.ExplicitBackendSelectionAndLegacyAlias:ArgumentParserTest.BackendCliOverrideReplacesConfigAliasesTogether:ArgumentParserTest.ViewerBackendSelectionSurvivesParameterDefaults:ProjectChapterTest.TrainingBackendIdentityRoundTripAndCompatibility:ParameterManagerTest.PendingProjectRestoreChangesOnlyRoleQualifiedManagerState" --gtest_color=no
+lfspytest tests/python/test_property_system.py -q -p no:cacheprovider
+```
+
+Manual checks: open legacy 3DGS and 3DGUT projects/checkpoints, save and reopen
+them, change the backend through Python and the existing panel, and verify a
+valid training run with each backend. Exercise CLI selection, config overrides,
+viewer startup, and invalid aliases. Confirm that changing next-run settings
+does not replace an active trainer. The parameter/chapter tests do not prove
+end-to-end project restoration or GPU training behavior.

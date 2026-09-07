@@ -7,6 +7,7 @@
 #include "core/property_registry.hpp"
 #include "python/lfs/py_params.hpp"
 
+#include "core/checkpoint_format.hpp"
 #include <algorithm>
 #include <any>
 #include <array>
@@ -249,6 +250,7 @@ namespace {
             {"enable_save_eval_images", "evaluation image output is not a registry property"},
             {"eval_steps", "vector-valued evaluation schedule is managed separately"},
             {"ppisp_sidecar_path", "PPISP sidecar path uses its dedicated Python binding"},
+            {"raster_backend", "explicit backend name is an adapter over the legacy gut property"},
             {"save_steps", "vector-valued save schedule is managed separately"},
         };
 
@@ -595,6 +597,120 @@ namespace {
         EXPECT_FALSE(params.normal_supervision_active(scaled_start - 1));
         EXPECT_TRUE(params.normal_supervision_active(scaled_start));
         EXPECT_TRUE(params.normal_supervision_active(scaled_total));
+    }
+
+    TEST_F(TrainingParametersTest, BackendIdentityCompatibility) {
+        using namespace lfs::core::param;
+        for (const bool gut : {false, true}) {
+            auto params = OptimizationParameters::mrnf_defaults();
+            params.gut = gut;
+            const auto json = params.to_json();
+            EXPECT_EQ(json.at("raster_backend"), gut ? "3dgut" : "3dgs");
+            EXPECT_EQ(OptimizationParameters::from_json(json).gut, gut);
+            auto legacy = json;
+            legacy.erase("raster_backend");
+            EXPECT_EQ(OptimizationParameters::from_json(legacy).gut, gut);
+            const auto checkpoint = lfs::core::parse_checkpoint_params_json(
+                nlohmann::json{{"optimization", legacy}}.dump());
+            EXPECT_EQ(checkpoint.optimization.gut, gut);
+            EXPECT_EQ(lfs::core::parse_checkpoint_params_json(
+                          nlohmann::json{{"optimization", json}}.dump())
+                          .optimization.gut,
+                      gut);
+            auto explicit_only = json;
+            explicit_only.erase("gut");
+            EXPECT_EQ(OptimizationParameters::from_json(explicit_only).gut, gut);
+            auto conflict = json;
+            conflict["gut"] = !gut;
+            EXPECT_EQ(OptimizationParameters::from_json(conflict).gut, !gut);
+
+            TrainingParameters target;
+            target.optimization = params;
+            ExplicitTrainingOverrides overrides;
+            overrides.optimization_json = nlohmann::json{{"gut", !gut}}.dump();
+            apply_explicit_training_overrides(target, overrides);
+            EXPECT_EQ(target.optimization.gut, !gut);
+            overrides.optimization_json = nlohmann::json{{"raster_backend", gut ? "3dgut" : "3dgs"}}.dump();
+            apply_explicit_training_overrides(target, overrides);
+            EXPECT_EQ(target.optimization.gut, gut);
+        }
+        auto json = OptimizationParameters::mrnf_defaults().to_json();
+        auto without_backend_selection = json;
+        without_backend_selection.erase("raster_backend");
+        without_backend_selection.erase("gut");
+        const auto default_backend = OptimizationParameters::from_json(without_backend_selection);
+        EXPECT_FALSE(default_backend.gut);
+        EXPECT_EQ(default_backend.raster_backend(), RasterBackendId::ThreeDGS);
+        json["raster_backend"] = "future_backend";
+        EXPECT_THROW((void)OptimizationParameters::from_json(json), std::invalid_argument);
+        json["raster_backend"] = nullptr;
+        EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::type_error);
+        EXPECT_FALSE(parse_training_backend("future_backend").has_value());
+        ASSERT_EQ(kTrainingBackends.size(), 2);
+        EXPECT_EQ(training_backend_descriptor(RasterBackendId::ThreeDGS).viewer_name, "3dgs");
+        EXPECT_NE(training_backend_descriptor(RasterBackendId::ThreeDGS).description.find("EWA projection"),
+                  std::string_view::npos);
+        EXPECT_EQ(training_backend_descriptor(RasterBackendId::ThreeDGUT).viewer_name, "3dgut");
+        EXPECT_NE(training_backend_descriptor(RasterBackendId::ThreeDGUT).description.find("Unscented Transform"),
+                  std::string_view::npos);
+        EXPECT_NE(training_backend_descriptor(RasterBackendId::ThreeDGUT).description.find("distorted camera models"),
+                  std::string_view::npos);
+        const auto& gut_capabilities = training_backend_descriptor(RasterBackendId::ThreeDGUT).capabilities;
+        EXPECT_EQ(gut_capabilities.mcmc, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.mrnf, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.igs_plus, TrainingFeatureSupport::Unsupported);
+        EXPECT_EQ(gut_capabilities.undistort, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.mip_filter, TrainingFeatureSupport::Unsupported);
+        EXPECT_EQ(gut_capabilities.depth_supervision, TrainingFeatureSupport::Unsupported);
+        EXPECT_EQ(gut_capabilities.normal_supervision, TrainingFeatureSupport::Unsupported);
+        EXPECT_EQ(gut_capabilities.masking, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.segmentation, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.background_modes, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.background_improvements, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.exposure_correction, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.bilateral_grid, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.ppisp, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(gut_capabilities.sparsity, TrainingFeatureSupport::Supported);
+        EXPECT_EQ(training_feature_support_name(TrainingFeatureSupport::Supported), "supported");
+        EXPECT_EQ(training_feature_support_name(TrainingFeatureSupport::Unsupported), "unsupported");
+    }
+
+    TEST_F(TrainingParametersTest, SupportedThreeDGUTCapabilitiesRemainNonBlocking) {
+        using namespace lfs::core::param;
+        auto baseline = OptimizationParameters::mrnf_defaults();
+        baseline.set_raster_backend(RasterBackendId::ThreeDGUT);
+
+        const auto expect_non_blocking = [](const std::string_view feature,
+                                            const OptimizationParameters& params) {
+            SCOPED_TRACE(feature);
+            EXPECT_EQ(params.backend_conflict(), TrainingBackendConflict::None);
+            const auto error = params.validate(ParameterValidationMode::Runtime);
+            EXPECT_TRUE(error.empty()) << error;
+        };
+
+        auto params = baseline;
+        params.mask_mode = MaskMode::Segment;
+        expect_non_blocking("masking and segmentation", params);
+
+        params = baseline;
+        params.background_improvements = true;
+        expect_non_blocking("background improvements", params);
+
+        params = baseline;
+        params.use_exposure_correction = true;
+        expect_non_blocking("exposure correction", params);
+
+        params = baseline;
+        params.use_bilateral_grid = true;
+        expect_non_blocking("bilateral grid", params);
+
+        params = baseline;
+        params.use_ppisp = true;
+        expect_non_blocking("PPISP", params);
+
+        params = baseline;
+        params.enable_sparsity = true;
+        expect_non_blocking("sparsity", params);
     }
 
     TEST_F(TrainingParametersTest, OldNewToJsonParity) {
