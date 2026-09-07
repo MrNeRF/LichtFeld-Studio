@@ -1460,8 +1460,9 @@ namespace {
 
         TemporaryDirectory temporary;
         const auto path = temporary.path / "legacy-3dgut-checkpoint.licht";
-        (void)require_result(document->save(
-            path, save_options(19'203, 200)));
+        auto options = save_options(19'203, 200);
+        options.commit.snapshot_uuid = checkpoint_uuid;
+        (void)require_result(document->save(path, options));
         auto reopened = require_result_ptr(ProjectDocument::open(path));
         Scene live;
         auto staged = reopened->stage_hydration(live);
