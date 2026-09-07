@@ -303,20 +303,21 @@ namespace lfs::core {
                 if (it == g_cuda_readbacks.end()) {
                     return false;
                 }
+                const cudaError_t status = cudaEventQuery(it->second.event);
+                if (status == cudaErrorNotReady) {
+                    return false;
+                }
+                LFS_CUDA_CHECK(status);
                 pending = it->second;
+                // Claim completion while holding the map lock. Two polling
+                // threads must not copy and destroy the same event/host block.
+                g_cuda_readbacks.erase(it);
             }
-            const cudaError_t status = cudaEventQuery(pending.event);
-            if (status == cudaErrorNotReady) {
-                return false;
-            }
-            LFS_CUDA_CHECK(status);
             if (dst != nullptr && pending.host != nullptr) {
                 std::memcpy(dst, pending.host, pending.bytes);
             }
             LFS_CUDA_CHECK(cudaEventDestroy(pending.event));
             LFS_CUDA_CHECK(cudaFreeHost(pending.host));
-            std::lock_guard lock(g_cuda_readback_mutex);
-            g_cuda_readbacks.erase(ticket.id);
             return true;
         }
 

@@ -1195,17 +1195,32 @@ namespace lfs::rendering {
         if (!counts_scratch.is_valid() || pinned_host_counts == nullptr) {
             throw std::runtime_error("invalid asynchronous selection-count destination");
         }
+        if (counts_scratch.device() != lfs::core::Device::GPU ||
+            counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+            !counts_scratch.is_contiguous() ||
+            counts_scratch.numel() < kSelectionGroupScratchWords) {
+            throw std::runtime_error("invalid asynchronous selection-count scratch");
+        }
         if (lfs::core::gpu_backend_of(counts_scratch) == lfs::core::GpuBackend::Vulkan) {
+            if (vulkan_ticket == nullptr) {
+                // The original overload has no way to return or poll a Vulkan
+                // ticket. Preserve its completed-host-copy contract.
+                const Tensor host = counts_scratch.cpu();
+                std::memcpy(pinned_host_counts, host.ptr<int>(),
+                            kSelectionGroupScratchWords * sizeof(int));
+                if (ready_event != nullptr) {
+                    LFS_CUDA_CHECK(cudaEventRecord(ready_event, nullptr));
+                }
+                return;
+            }
             auto& ops = lfs::core::internal::backend_ops_for(counts_scratch);
             const lfs::core::internal::ReadbackTicket ticket = ops.enqueue_readback(
                 lfs::core::internal::storage_ref(counts_scratch),
                 kSelectionGroupScratchWords * sizeof(int),
                 lfs::core::internal::ExecContext{});
-            if (vulkan_ticket != nullptr) {
-                vulkan_ticket->id = ticket.id;
-                vulkan_ticket->timeline_value = ticket.timeline_value;
-                vulkan_ticket->bytes = ticket.bytes;
-            }
+            vulkan_ticket->id = ticket.id;
+            vulkan_ticket->timeline_value = ticket.timeline_value;
+            vulkan_ticket->bytes = ticket.bytes;
             return;
         }
         if (ready_event == nullptr) {

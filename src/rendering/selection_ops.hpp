@@ -235,9 +235,12 @@ namespace lfs::rendering {
         size_t bytes = 0;
     };
 
+    // CUDA completion is reported by ready_event. Without a Vulkan ticket,
+    // Vulkan counts are copied to the destination before this call returns.
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* pinned_host_counts,
                                             cudaEvent_t ready_event);
+    // A non-null Vulkan ticket must be consumed with the poll function below.
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* pinned_host_counts,
                                             cudaEvent_t ready_event,
