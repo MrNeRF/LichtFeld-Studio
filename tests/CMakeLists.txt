@@ -375,6 +375,7 @@ set(TEST_FILES
     test_adam_capacity_invariant.cpp
     test_dual_rep_optimizer.cpp
     test_gut_shN_joint_adam.cpp
+    test_gut_undistort_parity.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
@@ -492,6 +493,7 @@ set(TEST_FILES
     test_selection_rasterization_ops.cpp
     test_selection_screen_window.cpp
     test_rendering_refactor_services.cpp
+    test_point_cloud_raster_orientation.cpp
     test_theme_registry.cpp
     test_preferences_migration.cpp
     test_viewport.cpp
