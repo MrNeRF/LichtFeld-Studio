@@ -246,6 +246,10 @@ int main(int argc, char* argv[]) {
 
     publishResolvedUserPaths();
 
-    return lfs::core::run_with_exception_firewall(
+    const int exit_code = lfs::core::run_with_exception_firewall(
         [&result] { return run_mode(std::move(*result)); });
+    // CLI modes return here without the viewer's explicit GPU teardown. Drain
+    // their backends before validation layers and driver libraries are unloaded.
+    lfs::core::teardown_gpu_before_exit();
+    return exit_code;
 }
