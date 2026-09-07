@@ -1290,7 +1290,8 @@ namespace lfs::training {
     void grant_headless_project_saves(
         Trainer& trainer,
         const lfs::core::param::TrainingParameters& params,
-        const std::filesystem::path& destination) {
+        const std::filesystem::path& destination,
+        std::optional<std::filesystem::path> source_path) {
         if (destination.empty() &&
             params.dataset.output_path.empty()) {
             LOG_WARN(
@@ -1300,7 +1301,8 @@ namespace lfs::training {
         trainer.set_live_project_snapshot(
             destination.empty()
                 ? params.dataset.output_path / "project.licht"
-                : destination);
+                : destination,
+            {}, std::move(source_path));
         trainer.set_trainer_project_save_policy({
             .on_completion = true,
             .on_stop_or_error = true,

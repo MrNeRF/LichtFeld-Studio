@@ -36,11 +36,14 @@ namespace lfs::training {
     };
 
     // Headless sessions have no project lifecycle; the application grants the
-    // trainer its standing save destination and triggers here.
+    // trainer its standing save destination and triggers here. source_path may
+    // seed a fresh destination only when it contains the dataset being trained;
+    // recovered sources must remain alive until the trainer finishes saving.
     void grant_headless_project_saves(
         Trainer& trainer,
         const lfs::core::param::TrainingParameters& params,
-        const std::filesystem::path& destination = {});
+        const std::filesystem::path& destination = {},
+        std::optional<std::filesystem::path> source_path = std::nullopt);
 
     /// Write `--export` formats next to project.licht after a terminal project
     /// save. No-op when `params.export_formats` is empty.

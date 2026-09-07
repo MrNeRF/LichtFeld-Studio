@@ -6345,6 +6345,36 @@ namespace {
         // Reopen from disk so the DSRC chunks are read as lazy file-backed
         // sources, the way headless training sees them.
         auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto source_bytes = read_file_bytes(project_path);
+        const auto destination = temporary.path / "redirected" / "project.licht";
+        fs::create_directories(destination.parent_path());
+        auto redirected_options = save_options(2507, 500);
+        redirected_options.save_as_project_uuid = fixed_uuid(2508);
+        (void)require_result(reopened->save_as(destination, redirected_options));
+        EXPECT_EQ(read_file_bytes(project_path), source_bytes);
+        EXPECT_EQ(require_result(reopened->parameters().embedded_dataset()), manifest);
+        const auto dataset_ref = require_result(reopened->project().dataset_reference());
+        ASSERT_TRUE(dataset_ref);
+        EXPECT_EQ(resolve_path_reference(
+                      reopened->references(), destination.parent_path(), *dataset_ref),
+                  dataset);
+        document.reset();
+        fs::remove(project_path);
+        fs::remove_all(dataset);
+        // A second save must reuse the destination after the source and its
+        // external dataset have disappeared. The cache has never been created.
+        (void)require_result(reopened->save(destination, save_options(2509, 600)));
+        reopened = require_result_ptr(ProjectDocument::open(destination));
+        EXPECT_EQ(reopened->project_uuid(), fixed_uuid(2508));
+        EXPECT_EQ(require_result(reopened->parameters().embedded_dataset()), manifest);
+        auto redirected_reader = require_result(ProjectReader::open(destination));
+        for (const auto& entry : manifest.entries) {
+            const auto* row = redirected_reader.find(FOURCC_DSRC, entry.chunk_uuid);
+            ASSERT_NE(row, nullptr);
+            EXPECT_TRUE(row->is_live());
+            EXPECT_EQ(require_result(redirected_reader.read_chunk(*row)),
+                      entry.kind == "image" ? image_bytes : sparse_bytes);
+        }
         const auto extracted = require_result(
             lfs::io::project::extract_embedded_dataset(*reopened, cache));
         ASSERT_TRUE(extracted);
@@ -6363,6 +6393,36 @@ namespace {
         (void)require_result(
             lfs::io::project::extract_embedded_dataset(*reopened, cache));
         EXPECT_EQ(read_file_bytes(cache / "images_2" / "frame.bin"), image_bytes);
+
+        struct ScopedLfsHome {
+            std::optional<std::string> previous;
+            explicit ScopedLfsHome(const fs::path& root) {
+                if (const auto* value = std::getenv("LFS_HOME"))
+                    previous = value;
+#ifdef _WIN32
+                (void)_putenv_s("LFS_HOME", root.string().c_str());
+#else
+                (void)setenv("LFS_HOME", root.string().c_str(), 1);
+#endif
+            }
+            ~ScopedLfsHome() {
+#ifdef _WIN32
+                (void)_putenv_s("LFS_HOME", previous ? previous->c_str() : "");
+#else
+                if (previous)
+                    (void)setenv("LFS_HOME", previous->c_str(), 1);
+                else
+                    (void)unsetenv("LFS_HOME");
+#endif
+            }
+        } home_guard(temporary.path / "user");
+        const auto fallback_cache = require_result(embedded_dataset_cache_dir(*reopened));
+        EXPECT_FALSE(fs::exists(fallback_cache));
+        const auto fallback = require_result(extract_embedded_dataset_if_needed(*reopened));
+        ASSERT_TRUE(fallback);
+        EXPECT_EQ(*fallback, fallback_cache);
+        EXPECT_EQ(read_file_bytes(*fallback / "images_2/frame.bin"), image_bytes);
+        EXPECT_EQ(read_file_bytes(*fallback / "sparse/0/cameras.bin"), sparse_bytes);
     }
 
 } // namespace
