@@ -1625,6 +1625,79 @@ namespace {
     }
 
     TEST(ProjectDocumentTest,
+         ShellRestoredProjectHydratesWithNonGeometryNodeSelected) {
+        Scene source;
+        const auto group = source.addGroup("Empty group");
+        ASSERT_NE(group, lfs::core::NULL_NODE);
+        const auto group_uuid = source.getNodeUuid(group);
+        const auto point_uuid = fixed_uuid(949);
+        auto points = make_point_cloud(2);
+        ASSERT_NE(source.restoreNodeWithUuid(Scene::RestoreNodeDesc{
+                      .uuid = point_uuid,
+                      .type = NodeType::POINTCLOUD,
+                      .name = "Points",
+                      .point_cloud = points,
+                  }),
+                  lfs::core::NULL_NODE);
+        const ScenePayloadBindings bindings{
+            {point_uuid, PayloadBinding{
+                             .fourcc = "PCLD",
+                             .instance_uuid = point_uuid,
+                             .source_kind = "ply",
+                         }}};
+        const auto make_document = [&] {
+            auto document = make_empty_document(fixed_uuid(948), 100);
+            document->edit_scene_graph() =
+                require_result(capture_scene_graph(source, bindings));
+            require_status(document->set_point_cloud(
+                point_uuid, PointCloudPayload(points)));
+            require_status(document->edit_project().upsert_embed_decision(
+                EmbedDecision{
+                    .uuid = point_uuid,
+                    .node_uuid = point_uuid,
+                    .payload_fourcc = "PCLD",
+                    .decision = "embedded",
+                    .reason = "selection regression",
+                }));
+            require_status(document->edit_project().upsert_embedded_payload_provenance(
+                provenance(point_uuid, "PCLD", "assets/points.ply", 39)));
+            return document;
+        };
+
+        TemporaryDirectory temporary;
+        for (const auto& selected_uuid : {point_uuid, group_uuid}) {
+            SCOPED_TRACE(selected_uuid == point_uuid ? "point cloud selected" : "empty group selected");
+            const auto path = temporary.path / (selected_uuid.to_string() + ".licht");
+            auto document = make_document();
+            require_status(document->edit_selection().set_selected_node_uuids(
+                {selected_uuid}));
+            const auto saved = document->save(path, save_options(948, 200));
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto reopened = require_result_ptr(ProjectDocument::open(
+                path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+            Scene live;
+            auto shell = reopened->stage_shell(live);
+            ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+            live.commitRestoreStage(std::move(*shell));
+            ASSERT_NE(live.getNodeByUuid(group_uuid), nullptr);
+            auto staged = reopened->stage_hydration(live);
+            ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+            EXPECT_EQ(staged->report().selection.selected_node_uuids,
+                      (std::vector<Uuid>{selected_uuid}));
+            const auto report = ProjectDocument::commit_partial_hydration(
+                live, std::move(*staged), true);
+            EXPECT_EQ(report.hydrated_payload_units, 1u);
+            EXPECT_EQ(report.invalidated_payload_units, 0u);
+            EXPECT_TRUE(report.selection_installed);
+            EXPECT_NE(live.getNodeByUuid(group_uuid), nullptr);
+            const auto* point = live.getNodeByUuid(point_uuid);
+            ASSERT_NE(point, nullptr);
+            ASSERT_NE(point->point_cloud, nullptr);
+            EXPECT_EQ(point->point_cloud->size(), 2u);
+        }
+    }
+
+    TEST(ProjectDocumentTest,
          DeferredShellExposesUnloadedUnitsAndCommitsHydrationPerNodeUuid) {
         TemporaryDirectory temporary;
         const auto path =

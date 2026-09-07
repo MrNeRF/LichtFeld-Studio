@@ -5067,9 +5067,19 @@ namespace lfs::io::project {
             if (!staged_scene) {
                 return std::move(staged_scene).error();
             }
+            auto nodes = impl_->scene_graph.nodes();
+            if (!nodes) {
+                return std::move(nodes).error();
+            }
+            std::vector<lfs::core::Uuid> selection_owner_uuids;
+            selection_owner_uuids.reserve(nodes->size());
+            for (const auto& node : *nodes) {
+                selection_owner_uuids.push_back(node.uuid);
+            }
             auto staged_selection =
                 stage_selection_chapter(
-                    impl_->selection, **staged_scene);
+                    impl_->selection, **staged_scene,
+                    selection_owner_uuids);
             if (!staged_selection) {
                 return std::move(staged_selection).error();
             }
