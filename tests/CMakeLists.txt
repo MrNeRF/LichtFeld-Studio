@@ -320,6 +320,7 @@ set(TEST_FILES
     test_adam_capacity_invariant.cpp
     test_dual_rep_optimizer.cpp
     test_gut_shN_joint_adam.cpp
+    test_gut_undistort_parity.cpp
     test_sparsity_optimizer.cpp
     test_mcmc_tensor_ops.cpp
     test_training_cropbox_mask.cpp
