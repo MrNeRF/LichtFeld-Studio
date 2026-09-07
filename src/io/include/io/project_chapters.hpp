@@ -360,6 +360,8 @@ namespace lfs::io::project {
         friend bool operator==(const EllipsoidRecord&, const EllipsoidRecord&) = default;
     };
 
+    // Camera calibration in SCNG is always the source (pre-rectification) calibration
+    // that belongs to the stored distortion model; rectified calibration is derived runtime state.
     struct CameraRecord {
         std::int32_t uid = -1;
         std::int32_t camera_id = 0;
