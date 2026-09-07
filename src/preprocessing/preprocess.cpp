@@ -930,6 +930,12 @@ namespace {
         if (!needs_depth(params.mode)) {
             return;
         }
+        // This optional training cache still uses CUDA projection kernels.
+        // Vulkan inference must not hand its buffers to those raw CUDA kernels.
+        if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA) {
+            LOG_INFO("Depth anchors: CUDA training will fit and cache anchors at startup");
+            return;
+        }
         try {
             auto loader = lfs::io::Loader::create();
             lfs::io::LoadOptions options;

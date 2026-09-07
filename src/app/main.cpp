@@ -163,7 +163,13 @@ namespace {
                 preflightGpuOrExit(false);
                 return lfs::app::run_mesh2splat(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
-                preflightGpuOrExit(false);
+                // Native inference validates the selected tensor backend. Only
+                // CUDA execution needs the CUDA driver/SM gate; weight downloads
+                // and Vulkan inference must also work without a CUDA device.
+                if (!mode.params.download_only &&
+                    lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA) {
+                    preflightGpuOrExit(false);
+                }
                 return lfs::preprocessing::run_preprocess(mode.params);
             } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
                 return lfs::python::run_plugin_command(mode);
