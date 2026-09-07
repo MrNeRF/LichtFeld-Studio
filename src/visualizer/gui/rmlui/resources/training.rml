@@ -188,6 +188,13 @@
                   data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
         </select>
       </div>
+      <div class="setting-row" data-for="row : pv_basic_depth_toggle_rows"
+           data-attr-data-tooltip="row.tooltip_key"
+           data-class-disabled-overlay="gut_depth_supervision_disabled">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-click="pv_value_change(row.id, !row.checked)" />
+      </div>
       <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss &amp;&amp; !pv_search_active">
         <span class="prop-label">{{label_depth_loss_mode}}</span>
         <select data-value="depth_loss_mode_str">
@@ -208,7 +215,8 @@
         <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
       </div>
       <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key">
+           data-attr-data-tooltip="row.tooltip_key"
+           data-class-disabled-overlay="gut_normal_supervision_disabled">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
@@ -289,8 +297,16 @@
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
-      <div class="setting-row" data-for="row : pv_basic_after_gut_rows"
-           data-attr-data-tooltip="row.tooltip_key">
+      <div class="setting-row" data-for="row : pv_basic_undistort_rows"
+           data-attr-data-tooltip="row.tooltip_key"
+           data-class-disabled-overlay="gut_undistort_disabled">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-click="pv_value_change(row.id, !row.checked)" />
+      </div>
+      <div class="setting-row" data-for="row : pv_basic_mip_filter_rows"
+           data-attr-data-tooltip="row.tooltip_key"
+           data-class-disabled-overlay="gut_mip_filter_disabled">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />

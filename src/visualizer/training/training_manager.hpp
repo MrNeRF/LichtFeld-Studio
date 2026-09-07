@@ -331,6 +331,10 @@ namespace lfs::vis {
             restored_accumulated_training_time_;
         std::optional<lfs::io::project::TrainingFinishReason>
             restored_finish_reason_;
+        // Frozen at Start so worker-side application cannot observe a newer
+        // ParameterManager state than the one synchronously validated.
+        std::optional<lfs::core::param::TrainingParameters>
+            start_params_candidate_;
         bool restored_finish_published_ = false;
         bool stored_session_presentation_active_ = false;
         bool stored_session_presentation_completed_ = false;
@@ -339,6 +343,7 @@ namespace lfs::vis {
         std::string stored_session_presentation_strategy_;
 
         [[nodiscard]] FinishReason resolvedRestoredFinishReason() const;
+        [[nodiscard]] lfs::core::param::TrainingParameters pendingParamsCandidate() const;
         void applyRestoredCheckpointPresentation();
         void publishRestoredTrainingStore();
         void clearStoredSessionPresentation();

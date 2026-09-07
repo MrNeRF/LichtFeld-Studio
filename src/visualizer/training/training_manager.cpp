@@ -1024,6 +1024,10 @@ namespace lfs::vis {
             splat_storage_.reset();
         }
         checkpoint_baseline_iteration_.reset();
+        {
+            std::lock_guard lock(initialization_mutex_);
+            start_params_candidate_.reset();
+        }
         // Trainer::shutdown() trims before Tensor-valued members are destroyed.
         // Trim again after destruction so those returned blocks do not survive clear.
         lfs::core::Tensor::trim_memory_pool();
@@ -1098,7 +1102,8 @@ namespace lfs::vis {
 
         // Parameter validation is deliberately synchronous: callers get an
         // immediate rejection without starting a worker or touching the scene.
-        if (auto error = trainer_->getParams().validate(); !error.empty()) {
+        auto start_params = pendingParamsCandidate();
+        if (auto error = start_params.validate(); !error.empty()) {
             return reject_start(std::move(error), lfs::ErrorCode::InvalidArgument);
         }
 
@@ -1106,7 +1111,13 @@ namespace lfs::vis {
             return reject_start("Scene has no cameras", lfs::ErrorCode::FailedPrecondition);
         }
 
+        {
+            std::lock_guard lock(initialization_mutex_);
+            start_params_candidate_ = std::move(start_params);
+        }
         if (!state_machine_.transitionTo(TrainingState::Starting)) {
+            std::lock_guard lock(initialization_mutex_);
+            start_params_candidate_.reset();
             LOG_WARN("Failed to transition to Starting");
             return false;
         }
@@ -2410,33 +2421,49 @@ namespace lfs::vis {
         return trainer_->computeCameraMetrics(*cam, include_ssim, appearance);
     }
 
+    lfs::core::param::TrainingParameters TrainerManager::pendingParamsCandidate() const {
+        auto params = trainer_->getParams();
+        if (trainer_->isInitialized() && params.resume_checkpoint.has_value()) {
+            if (auto* const param_mgr = services().paramsOrNull()) {
+                params.optimization.save_steps = param_mgr->copyActiveParams().save_steps;
+            }
+            return params;
+        }
+
+        params.dataset = pending_dataset_params_;
+        if (auto* const param_mgr = services().paramsOrNull()) {
+            params.optimization = param_mgr->copyActiveParams();
+        } else {
+            params.optimization = pending_opt_params_;
+        }
+        return params;
+    }
+
     void TrainerManager::applyPendingParams() {
         if (!trainer_)
             return;
 
-        if (trainer_->isInitialized() && trainer_->getParams().resume_checkpoint.has_value()) {
+        const auto previous_params = trainer_->getParams();
+        std::optional<lfs::core::param::TrainingParameters> frozen_start_params;
+        {
+            std::lock_guard lock(initialization_mutex_);
+            frozen_start_params = std::move(start_params_candidate_);
+            start_params_candidate_.reset();
+        }
+        auto params = frozen_start_params
+                          ? std::move(*frozen_start_params)
+                          : pendingParamsCandidate();
+        if (trainer_->isInitialized() && previous_params.resume_checkpoint.has_value()) {
+            trainer_->setParams(params);
             if (auto* const param_mgr = services().paramsOrNull()) {
-                auto params = trainer_->getParams();
-                params.optimization.save_steps = param_mgr->copyActiveParams().save_steps;
-                trainer_->setParams(params);
                 param_mgr->importTrainingParams(params);
             }
             LOG_DEBUG("Ignoring parameter updates for checkpoint-backed trainer (save steps kept)");
             return;
         }
 
-        const auto previous_params = trainer_->getParams();
-        auto params = previous_params;
-        params.dataset = pending_dataset_params_;
-
-        // Use ParameterManager in GUI mode, fallback to pending_opt_params_ for headless
-        if (auto* const param_mgr = services().paramsOrNull()) {
-            params.optimization = param_mgr->copyActiveParams();
-            LOG_DEBUG("Applied params: strategy={}, iter={}, max_cap={}",
-                      params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
-        } else {
-            params.optimization = pending_opt_params_;
-        }
+        LOG_DEBUG("Applied params: strategy={}, iter={}, max_cap={}",
+                  params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
 
         const bool evaluation_split_changed =
             previous_params.optimization.enable_eval != params.optimization.enable_eval ||

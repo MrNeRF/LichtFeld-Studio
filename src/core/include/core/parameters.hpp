@@ -31,6 +31,11 @@ namespace lfs::core {
             NormalSupervision,
         };
 
+        enum class ParameterValidationMode {
+            Runtime,
+            Storage,
+        };
+
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -319,10 +324,11 @@ namespace lfs::core {
             static OptimizationParameters from_json(const nlohmann::json& j);
 
             [[nodiscard]] TrainingBackendConflict backend_conflict() const;
-            // Project presets may retain a backend-incompatible next-run choice so
-            // an older project can open and let the user correct it before Start.
-            [[nodiscard]] std::string validate_for_storage() const;
-            [[nodiscard]] std::string validate() const;
+            [[nodiscard]] std::string backend_conflict_message() const;
+            // Storage mode preserves newly unsupported backend options in old
+            // projects/checkpoints, while retaining every pre-existing validation rule.
+            [[nodiscard]] std::string validate(
+                ParameterValidationMode mode = ParameterValidationMode::Runtime) const;
 
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();

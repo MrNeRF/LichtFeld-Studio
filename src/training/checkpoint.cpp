@@ -58,6 +58,34 @@ namespace lfs::training {
             };
         }
 
+        void clear_inherited_3dgut_noop_options_for_resume(
+            lfs::core::param::TrainingParameters& params) {
+            auto& optimization = params.optimization;
+            if (!optimization.gut) {
+                return;
+            }
+
+            const auto clear_if_inherited = [&](bool& enabled,
+                                                const std::string_view key,
+                                                const std::string_view label) {
+                if (!enabled || params.overrides.has_optimization_key(key)) {
+                    return;
+                }
+                enabled = false;
+                LOG_WARN(
+                    "Checkpoint enabled {} with 3DGUT; the option had no training effect and was disabled for resume",
+                    label);
+            };
+
+            // These combinations were accepted by older releases but did not
+            // contribute to the 3DGUT optimization. Preserve them when merely
+            // inspecting a checkpoint and clear only the inherited runtime copy.
+            clear_if_inherited(optimization.undistort, "undistort", "Undistort");
+            clear_if_inherited(optimization.mip_filter, "mip_filter", "Mip Filter");
+            clear_if_inherited(optimization.use_depth_loss, "use_depth_loss", "Depth Supervision");
+            clear_if_inherited(optimization.use_normal_loss, "use_normal_loss", "Normal Supervision");
+        }
+
         [[nodiscard]] lfs::Error checkpoint_stream_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -459,6 +487,7 @@ namespace lfs::training {
                     cli_bg_color_set;
                 lfs::core::param::apply_explicit_training_overrides(
                     loaded_params, loaded_params.overrides);
+                clear_inherited_3dgut_noop_options_for_resume(loaded_params);
             }
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");

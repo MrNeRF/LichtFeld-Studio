@@ -739,9 +739,47 @@ class TrainingPanel(Panel):
             "step_scaling_params_locked",
             lambda: self._auto_scale_steps_locked,
         )
+
+        def _params():
+            params = p()
+            return params if params is not None and params.has_params() else None
+
+        def _gut_feature_enable_disabled(prop):
+            params = _params()
+            return bool(
+                params is not None
+                and params.gut
+                and not bool(getattr(params, prop, False))
+            )
+
+        def _gut_enable_disabled():
+            params = _params()
+            if params is None or params.gut:
+                return False
+            return bool(
+                params.strategy == "igs+"
+                or params.undistort
+                or params.mip_filter
+                or params.use_depth_loss
+                or params.use_normal_loss
+            )
+
+        model.bind_func("gut_disabled", _gut_enable_disabled)
         model.bind_func(
-            "gut_disabled",
-            lambda: p() is not None and p().has_params() and p().strategy == "igs+",
+            "gut_undistort_disabled",
+            lambda: _gut_feature_enable_disabled("undistort"),
+        )
+        model.bind_func(
+            "gut_mip_filter_disabled",
+            lambda: _gut_feature_enable_disabled("mip_filter"),
+        )
+        model.bind_func(
+            "gut_depth_supervision_disabled",
+            lambda: _gut_feature_enable_disabled("use_depth_loss"),
+        )
+        model.bind_func(
+            "gut_normal_supervision_disabled",
+            lambda: _gut_feature_enable_disabled("use_normal_loss"),
         )
         model.bind_func(
             "dataset_disabled",
@@ -2420,11 +2458,51 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            lf.ui.confirm_dialog(
-                tr("status.error"),
-                error,
-                [tr("common.ok")],
-                lambda _button: None,
+            conflict = str(getattr(params, "backend_conflict", ""))
+            conflict_message = str(
+                getattr(params, "backend_conflict_message", "")
+            )
+            is_backend_conflict = bool(
+                conflict and conflict_message and error == conflict_message
+            )
+            if is_backend_conflict and conflict == "igs_plus":
+                btn_mcmc = tr("training.conflict.btn_use_mcmc")
+                btn_gut = tr("training.conflict.btn_disable_gut")
+                btn_cancel = tr("training.conflict.btn_cancel")
+
+                def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
+                    current = lf.optimization_params()
+                    if not current or not current.has_params():
+                        return
+                    if button == _mcmc:
+                        current.set_strategy("mcmc")
+                    elif button == _gut:
+                        current.gut = False
+                        self._sync_render_setting("gut", False)
+                    else:
+                        return
+                    self._refresh_strategy_values()
+                    self._start_after_consent()
+
+                lf.ui.confirm_dialog(
+                    tr("training.error.strategy_gut_title"),
+                    tr("training.conflict.strategy_gut_start_message"),
+                    [btn_mcmc, btn_gut, btn_cancel],
+                    _on_conflict,
+                )
+                return
+
+            message = (
+                tr(f"training.backend_conflict.{conflict}")
+                if is_backend_conflict
+                else error
+            )
+            lf.ui.message_dialog(
+                tr("training.error.strategy_gut_title")
+                if is_backend_conflict
+                else tr("status.error"),
+                message,
+                style="error",
             )
         elif self._should_offer_pc_save():
             self._show_save_pc_dialog()

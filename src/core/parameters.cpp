@@ -373,13 +373,25 @@ namespace lfs::core {
             return TrainingBackendConflict::None;
         }
 
-        std::string OptimizationParameters::validate_for_storage() const {
-            auto compatible_probe = *this;
-            compatible_probe.gut = false;
-            return compatible_probe.validate();
+        std::string OptimizationParameters::backend_conflict_message() const {
+            switch (backend_conflict()) {
+            case TrainingBackendConflict::IGSPlus:
+                return "3DGUT cannot be used with the IGS+ strategy";
+            case TrainingBackendConflict::Undistort:
+                return "3DGUT does not support Undistort; disable Undistort or select 3DGS";
+            case TrainingBackendConflict::MipFilter:
+                return "3DGUT does not support Mip Filter; disable Mip Filter or select 3DGS";
+            case TrainingBackendConflict::DepthSupervision:
+                return "3DGUT does not support Depth Supervision; disable Depth Supervision or select 3DGS";
+            case TrainingBackendConflict::NormalSupervision:
+                return "3DGUT does not support Normal Supervision; disable Normal Supervision or select 3DGS";
+            case TrainingBackendConflict::None:
+                return {};
+            }
+            return {};
         }
 
-        std::string OptimizationParameters::validate() const {
+        std::string OptimizationParameters::validate(const ParameterValidationMode mode) const {
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)
                     return std::format("{} must be finite and nonnegative (got {})", name, value);
@@ -500,19 +512,11 @@ namespace lfs::core {
                                    static_cast<uint64_t>(bilateral_grid_W))
                 return std::format("bilateral grid dimensions are too large ({}x{}x{})",
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
-            switch (backend_conflict()) {
-            case TrainingBackendConflict::IGSPlus:
-                return "GUT and igs+ strategy cannot be used together";
-            case TrainingBackendConflict::Undistort:
-                return "3DGUT does not support undistort; disable undistort or select 3DGS";
-            case TrainingBackendConflict::MipFilter:
-                return "3DGUT does not support mip_filter; disable mip_filter or select 3DGS";
-            case TrainingBackendConflict::DepthSupervision:
-                return "3DGUT does not support depth supervision (use_depth_loss); disable use_depth_loss or select 3DGS";
-            case TrainingBackendConflict::NormalSupervision:
-                return "3DGUT does not support normal supervision (use_normal_loss); disable use_normal_loss or select 3DGS";
-            case TrainingBackendConflict::None:
-                break;
+            const auto conflict = backend_conflict();
+            if (conflict == TrainingBackendConflict::IGSPlus ||
+                (mode == ParameterValidationMode::Runtime &&
+                 conflict != TrainingBackendConflict::None)) {
+                return backend_conflict_message();
             }
             if (use_exposure_correction &&
                 (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {

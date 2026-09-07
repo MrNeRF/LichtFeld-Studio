@@ -31,6 +31,27 @@ namespace lfs::python {
     using namespace lfs::core::prop;
     using lfs::training::CommandCenter;
 
+    namespace {
+        [[nodiscard]] std::string_view backend_conflict_id(
+            const TrainingBackendConflict conflict) {
+            switch (conflict) {
+            case TrainingBackendConflict::IGSPlus:
+                return "igs_plus";
+            case TrainingBackendConflict::Undistort:
+                return "undistort";
+            case TrainingBackendConflict::MipFilter:
+                return "mip_filter";
+            case TrainingBackendConflict::DepthSupervision:
+                return "depth_supervision";
+            case TrainingBackendConflict::NormalSupervision:
+                return "normal_supervision";
+            case TrainingBackendConflict::None:
+                return {};
+            }
+            return {};
+        }
+    } // namespace
+
     std::any resolve_optimization_default(
         const PropertyMeta& meta,
         const OptimizationParameters& source) {
@@ -825,6 +846,16 @@ namespace lfs::python {
             .def(
                 "validate", [](PyOptimizationParams& self) { return self.params().validate(); },
                 "Validate parameter consistency, returns empty string if valid")
+            .def_prop_ro(
+                "backend_conflict",
+                [](PyOptimizationParams& self) {
+                    return std::string(backend_conflict_id(self.params().backend_conflict()));
+                },
+                "Stable identifier for the selected backend incompatibility, or an empty string")
+            .def_prop_ro(
+                "backend_conflict_message",
+                [](PyOptimizationParams& self) { return self.params().backend_conflict_message(); },
+                "Native CLI message for the selected backend incompatibility, or an empty string")
             .def_prop_rw(
                 "iterations",
                 [](PyOptimizationParams& self) { return self.params().iterations; },

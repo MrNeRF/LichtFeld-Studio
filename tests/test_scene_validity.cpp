@@ -41,6 +41,7 @@
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
@@ -743,11 +744,53 @@ namespace lfs::python {
         EXPECT_EQ(scene.getTrainingModel()->size(), 1u);
     }
 
+    TEST(TrainerConstructionTest, StartRejectsInvalidPendingParamsBeforeTransition) {
+        struct EventScope {
+            EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+            ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+        } event_scope;
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); }
+            ~ServicesScope() { lfs::vis::services().clear(); }
+        } services_scope;
+
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()),
+                  core::NULL_NODE);
+        auto trainer = std::make_unique<training::Trainer>(scene);
+        const auto installed_params = trainer->getParams();
+
+        lfs::vis::ParameterManager parameter_manager;
+        ASSERT_TRUE(parameter_manager.ensureLoaded());
+        parameter_manager.setActiveStrategy("mcmc");
+        parameter_manager.modifyActiveParams([](auto& pending) {
+            pending.gut = true;
+            pending.use_depth_loss = true;
+        });
+        lfs::vis::services().set(&parameter_manager);
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::move(trainer));
+
+        EXPECT_FALSE(manager.startTraining());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_NE(manager.getLastError().find("Depth Supervision"),
+                  std::string::npos);
+        ASSERT_NE(manager.getTrainer(), nullptr);
+        EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
+                  installed_params.optimization.to_json());
+    }
+
     TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
         struct EventScope {
             EventScope() { lfs::event::EventBridge::instance().clear_all(); }
             ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
         } event_scope;
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); }
+            ~ServicesScope() { lfs::vis::services().clear(); }
+        } services_scope;
 
         core::Scene scene;
         const auto model_id = scene.addSplat("Model", make_test_splat(1));
@@ -792,6 +835,9 @@ namespace lfs::python {
         ASSERT_TRUE(manager.startTraining());
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Starting);
         EXPECT_FALSE(weights_prepared);
+        // The worker must apply the exact candidate accepted by Start, even if
+        // a script changes the pending slot before initialization acquires it.
+        manager.getEditableOptParams().enable_eval = false;
         initialization_lock.unlock();
         ASSERT_FALSE(manager.waitForInitialization());
         EXPECT_TRUE(weights_prepared);

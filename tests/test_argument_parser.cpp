@@ -60,18 +60,19 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
     EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
 }
 
-TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChangingFastGS) {
+TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
     const auto data_path = make_test_path("lfs_backend_validation_data");
     const auto output_path = make_test_path("lfs_backend_validation_output");
     struct Case {
         const char* flag;
+        const char* label;
         const char* field;
     };
     const Case cases[] = {
-        {"--undistort", "undistort"},
-        {"--enable-mip", "mip_filter"},
-        {"--use-depth-loss", "use_depth_loss"},
-        {"--use-normal-loss", "use_normal_loss"},
+        {"--undistort", "Undistort", "undistort"},
+        {"--enable-mip", "Mip Filter", "mip_filter"},
+        {"--use-depth-loss", "Depth Supervision", "use_depth_loss"},
+        {"--use-normal-loss", "Normal Supervision", "use_normal_loss"},
     };
     for (const auto& test : cases) {
         SCOPED_TRACE(test.flag);
@@ -91,11 +92,12 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChangingFastGS) {
         EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
         EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
         EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
-        EXPECT_NE(gut.error().find(test.field), std::string::npos);
+        EXPECT_NE(gut.error().find(test.label), std::string::npos);
 
-        const auto fastgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
-        ASSERT_TRUE(fastgs.has_value()) << fastgs.error();
-        EXPECT_FALSE((*fastgs)->optimization.gut);
+        const auto standard_3dgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        ASSERT_TRUE(standard_3dgs.has_value()) << standard_3dgs.error();
+        EXPECT_FALSE((*standard_3dgs)->optimization.gut);
+        EXPECT_TRUE((*standard_3dgs)->optimization.to_json().at(test.field).get<bool>());
     }
 }
 

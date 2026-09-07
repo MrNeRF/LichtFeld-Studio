@@ -1230,6 +1230,72 @@ namespace {
         std::filesystem::remove_all(temp_dir, ec);
     }
 
+    TEST(CheckpointParamsJsonTest,
+         Legacy3DGutNoopOptionsRemainReadableAndAreClearedOnlyForResume) {
+        const auto temp_dir = std::filesystem::temp_directory_path() /
+                              "lfs_checkpoint_legacy_3dgut_options";
+        std::error_code ec;
+        std::filesystem::remove_all(temp_dir, ec);
+        std::filesystem::create_directories(temp_dir / "checkpoints");
+
+        auto params = make_params_json_test_params(temp_dir);
+        params.optimization.gut = true;
+        params.optimization.undistort = true;
+        params.optimization.mip_filter = true;
+        params.optimization.use_depth_loss = true;
+        params.optimization.use_normal_loss = true;
+        auto source_model = make_checkpoint_test_splat(2);
+        lfs::training::MCMC source_strategy(*source_model);
+        ASSERT_TRUE(lfs::test::write_checkpoint_fixture(
+                        temp_dir, 5, source_strategy, params,
+                        nullptr, nullptr, nullptr, nullptr)
+                        .has_value());
+
+        const auto checkpoint = lfs::test::checkpoint_fixture_path(temp_dir);
+        const auto path_params = lfs::core::load_checkpoint_params(checkpoint);
+        ASSERT_TRUE(path_params.has_value()) << path_params.error();
+        EXPECT_TRUE(path_params->optimization.gut);
+        EXPECT_TRUE(path_params->optimization.undistort);
+        EXPECT_TRUE(path_params->optimization.mip_filter);
+        EXPECT_TRUE(path_params->optimization.use_depth_loss);
+        EXPECT_TRUE(path_params->optimization.use_normal_loss);
+
+        std::ifstream input(checkpoint, std::ios::binary);
+        ASSERT_TRUE(input.is_open());
+        const auto stream_params = lfs::core::load_checkpoint_params(
+            input, std::filesystem::file_size(checkpoint));
+        ASSERT_TRUE(stream_params.has_value()) << stream_params.error();
+        EXPECT_EQ(stream_params->optimization.to_json(),
+                  path_params->optimization.to_json());
+
+        auto target_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC target_strategy(*target_model);
+        auto resumed_params = make_params_json_test_params(temp_dir);
+        const auto resumed = lfs::training::load_checkpoint(
+            checkpoint, target_strategy, resumed_params,
+            nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(resumed.has_value()) << resumed.error();
+        EXPECT_TRUE(resumed_params.optimization.gut);
+        EXPECT_FALSE(resumed_params.optimization.undistort);
+        EXPECT_FALSE(resumed_params.optimization.mip_filter);
+        EXPECT_FALSE(resumed_params.optimization.use_depth_loss);
+        EXPECT_FALSE(resumed_params.optimization.use_normal_loss);
+
+        auto explicit_model = make_checkpoint_test_splat(1);
+        lfs::training::MCMC explicit_strategy(*explicit_model);
+        auto explicit_params = make_params_json_test_params(temp_dir);
+        explicit_params.overrides.optimization_json =
+            R"({"use_depth_loss":true})";
+        const auto explicit_resume = lfs::training::load_checkpoint(
+            checkpoint, explicit_strategy, explicit_params,
+            nullptr, nullptr, nullptr, nullptr);
+        ASSERT_FALSE(explicit_resume.has_value());
+        EXPECT_NE(explicit_resume.error().find("Depth Supervision"),
+                  std::string::npos);
+
+        std::filesystem::remove_all(temp_dir, ec);
+    }
+
     TEST(CheckpointParamsJsonTest, RejectsMismatchedSplatFreezeMetadataOnLoad) {
         const auto temp_dir = std::filesystem::temp_directory_path() / "lfs_checkpoint_params_mismatch_load";
         std::error_code ec;

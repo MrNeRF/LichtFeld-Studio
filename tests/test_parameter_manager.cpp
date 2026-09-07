@@ -243,9 +243,11 @@ namespace {
         EXPECT_FALSE(target.consumeDirty());
 
         auto backend_conflict = *captured;
+        backend_conflict.active_strategy = "mrnf";
         backend_conflict.mrnf_current.gut = true;
         backend_conflict.mrnf_current.use_normal_loss = true;
         EXPECT_TRUE(target.restorePendingProjectState(backend_conflict));
+        EXPECT_EQ(target.getActiveStrategy(), "mrnf");
         EXPECT_TRUE(target.getCurrentParams("mrnf").gut);
         EXPECT_TRUE(target.getCurrentParams("mrnf").use_normal_loss);
         EXPECT_FALSE(target.getCurrentParams("mrnf").validate().empty());
