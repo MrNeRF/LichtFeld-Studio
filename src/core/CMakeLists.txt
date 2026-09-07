@@ -218,6 +218,9 @@ endif()
 
 if(WIN32)
     target_link_libraries(lfs_core PRIVATE bcrypt)
+    # Public tensor headers use min/max names, so consumers must suppress the
+    # Windows macros before any transitive windows.h include is processed.
+    target_compile_definitions(lfs_core PUBLIC NOMINMAX)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
@@ -232,7 +235,7 @@ if(MSVC)
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
     )
-    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX
+    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
     target_link_options(lfs_core PRIVATE /ignore:4217)
