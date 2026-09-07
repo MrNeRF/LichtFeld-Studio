@@ -5,6 +5,7 @@
 #include "preprocessing/preprocess.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/environment.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -796,8 +797,12 @@ namespace {
                 input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA,
                                                   lfs::core::DataType::Float32);
             }
-            LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
-                                           cudaMemcpyHostToDevice, input_.stream()));
+            if (lfs::core::gpu_backend_of(input_) == lfs::core::GpuBackend::Vulkan) {
+                input_.copy_from(lfs::core::Tensor::from_vector(chw, shape, lfs::core::Device::CPU));
+            } else {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
+                                               cudaMemcpyHostToDevice, input_.stream()));
+            }
             auto result = model_.forward(input_, num_tokens);
             if (!result)
                 throw std::runtime_error("Native MoGe-2 forward failed: " +
@@ -1120,9 +1125,8 @@ namespace {
         if (!progress)
             print_plan_summary(params, plan, &model_path);
 
-        int cuda_devices = 0;
-        if (cudaGetDeviceCount(&cuda_devices) != cudaSuccess || cuda_devices <= 0) {
-            throw std::runtime_error("Native MoGe-2 inference requires a CUDA device");
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            throw std::runtime_error("Native MoGe-2 inference requires an available GPU backend");
         }
 
         const fs::path lfw_path = lfw_path_for_onnx(model_path);
