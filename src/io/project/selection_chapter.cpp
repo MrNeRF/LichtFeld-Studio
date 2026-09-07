@@ -1221,7 +1221,8 @@ namespace lfs::io::project {
     lfs::Result<StagedSelectionChapter>
     stage_selection_chapter(
         const SelectionChapter& chapter,
-        const lfs::core::Scene& topology) {
+        const lfs::core::Scene& topology,
+        std::span<const lfs::core::Uuid> extra_owner_uuids) {
         if (auto groups = validate_groups(
                 chapter.groups(),
                 chapter.active_group_id(),
@@ -1396,13 +1397,16 @@ namespace lfs::io::project {
             }
         }
 
+        const std::unordered_set<lfs::core::Uuid> extra_owners(
+            extra_owner_uuids.begin(), extra_owner_uuids.end());
         std::unordered_set<lfs::core::Uuid> selected_nodes;
         selected_nodes.reserve(
             chapter.selected_node_uuids().size());
         for (const auto& uuid :
              chapter.selected_node_uuids()) {
             if (!ranges.contains(uuid) &&
-                topology.getNodeByUuid(uuid) == nullptr) {
+                topology.getNodeByUuid(uuid) == nullptr &&
+                !extra_owners.contains(uuid)) {
                 return selection_error(
                     lfs::ErrorCode::FailedPrecondition,
                     "A saved node selection refers to a missing scene node.",
