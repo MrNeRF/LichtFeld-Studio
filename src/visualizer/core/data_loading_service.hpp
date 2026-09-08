@@ -55,7 +55,7 @@ namespace lfs::vis {
         void addSOGToScene(const std::filesystem::path& path);
 
         // Helper to determine file type
-        bool isStreamedSogFile(const std::filesystem::path& path) const;
+        bool isSsogFile(const std::filesystem::path& path) const;
         bool isSOGFile(const std::filesystem::path& path) const;
         bool isPLYFile(const std::filesystem::path& path) const;
         bool isCheckpointFile(const std::filesystem::path& path) const;

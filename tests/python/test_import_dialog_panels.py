@@ -119,12 +119,17 @@ def test_new_project_typed_source_path_validates(import_dialog_module, monkeypat
     assert browse_calls == []
 
 
-def test_new_project_recognizes_streamed_sog(import_dialog_module, tmp_path):
+def test_new_project_recognizes_ssog(import_dialog_module, tmp_path):
     module, _, _, _ = import_dialog_module
-    folder = tmp_path / "streamed"
+    folder = tmp_path / "ssog_directory"
     folder.mkdir()
     assert not module.NewProjectPanel._is_splat_path(str(folder))
     (folder / "lod-meta.json").write_text("{}")
     assert module.NewProjectPanel._is_splat_path(str(folder))
     assert module.NewProjectPanel._is_splat_path(str(folder / "lod-meta.json"))
     assert not module.NewProjectPanel._is_splat_path(str(tmp_path / "transforms.json"))
+
+
+def test_new_project_recognizes_ssog_bundle(import_dialog_module, tmp_path):
+    module, _, _, _ = import_dialog_module
+    assert module.NewProjectPanel._is_splat_path(str(tmp_path / "scene.ssog"))

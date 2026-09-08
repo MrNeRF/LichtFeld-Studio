@@ -4,9 +4,9 @@
 #include "io/exporter.hpp"
 
 namespace lfs::io {
-    std::expected<SplatData, std::string> load_streamed_sog(
-        const std::filesystem::path&, const StreamedSogLoadOptions& = {});
-    bool is_streamed_sog_path(const std::filesystem::path&);
+    Result<SplatData> load_ssog(
+        const std::filesystem::path&, const SsogLoadOptions& = {});
+    bool is_ssog_path(const std::filesystem::path&);
     // Structural validation, including unit metadata ranges; does not decode textures or use CUDA.
-    std::expected<void, std::string> validate_streamed_sog(const std::filesystem::path&);
+    Result<void> validate_ssog(const std::filesystem::path&);
 } // namespace lfs::io

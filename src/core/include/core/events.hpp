@@ -31,7 +31,7 @@ namespace lfs::core {
                               NUREC_USDZ = 5,
                               RAD = 6,
                               COLMAP = 7,
-                              STREAMED_SOG = 8 };
+                              SSOG = 8 };
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \

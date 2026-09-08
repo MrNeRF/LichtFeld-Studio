@@ -84,8 +84,8 @@ namespace lfs::app {
             return "ply";
         case core::ExportFormat::SOG:
             return "sog";
-        case core::ExportFormat::STREAMED_SOG:
-            return "streamed_sog";
+        case core::ExportFormat::SSOG:
+            return "ssog";
         case core::ExportFormat::SPZ:
             return "spz";
         case core::ExportFormat::HTML_VIEWER:

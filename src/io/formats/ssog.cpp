@@ -1,9 +1,12 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "streamed_sog.hpp"
+#include "ssog.hpp"
 #include "core/logger.hpp"
+#include "io/atomic_output.hpp"
 #include "sogs.hpp"
-#include "streamed_sog_morton.hpp"
+#include "ssog_morton.hpp"
+#include <archive.h>
+#include <archive_entry.h>
 #if __has_include("io/splat_decimate.hpp")
 #include "io/splat_decimate.hpp"
 #else
@@ -41,21 +44,12 @@ namespace lfs::io {
         using core::Tensor;
         using Clock = std::chrono::steady_clock;
         struct Cancelled {};
-        void progress(const StreamedSogSaveOptions& o, float p, const std::string& stage) {
+        void progress(const SsogSaveOptions& o, float p, const std::string& stage) {
             if (o.progress_callback && !o.progress_callback(p, stage))
                 throw Cancelled{};
         }
         fs::path manifest_path(const fs::path& p) {
             return fs::is_directory(p) ? p / "lod-meta.json" : p;
-        }
-        Json read_json(const fs::path& p) {
-            const auto size = fs::file_size(p);
-            if (size == 0 || size > 64 * 1024 * 1024)
-                throw std::runtime_error("Invalid metadata size: " + p.string());
-            std::ifstream f(p, std::ios::binary);
-            if (!f)
-                throw std::runtime_error("Cannot open " + p.string());
-            return Json::parse(f);
         }
         size_t integer(const Json& j, const char* name) {
             if (!j.is_number_integer() || (j.is_number_integer() && j.get<double>() < 0) ||
@@ -71,23 +65,149 @@ namespace lfs::io {
                 throw std::runtime_error("Invalid unit path");
             for (const auto& part : p)
                 if (part == "..")
-                    throw std::runtime_error("Unit path escapes streamed SOG directory");
+                    throw std::runtime_error("Unit path escapes SSOG directory");
             const auto root = fs::weakly_canonical(base);
             const auto resolved = fs::weakly_canonical(base / p);
             const auto rel = resolved.lexically_relative(root);
             if (rel.empty() || *rel.begin() == "..")
-                throw std::runtime_error("Unit path escapes streamed SOG directory");
+                throw std::runtime_error("Unit path escapes SSOG directory");
             return base / p;
         }
+        // One provider owns either a directory root or bounded in-memory ZIP entries.
+        class EntryProvider {
+            fs::path base_;
+            std::map<std::string, std::vector<uint8_t>> entries_;
+            bool bundled_;
+            static constexpr uint64_t max_bytes = 4ULL * 1024 * 1024 * 1024;
+
+            static std::string safe_name(const std::string& name) {
+                const auto p = core::utf8_to_path(name);
+                if (p.empty() || p.is_absolute() || p.has_root_name() || name.find('\\') != std::string::npos || name.find(':') != std::string::npos)
+                    throw std::runtime_error("Invalid SSOG entry path");
+                for (const auto& part : p)
+                    if (part == "..")
+                        throw std::runtime_error("SSOG entry escapes archive root");
+                return p.lexically_normal().generic_string();
+            }
+
+        public:
+            explicit EntryProvider(const fs::path& path) : bundled_(core::path_to_utf8(path.extension()) == ".ssog" && !fs::is_directory(path)) {
+                if (!bundled_) {
+                    base_ = fs::absolute(manifest_path(path)).parent_path();
+                    return;
+                }
+                const auto size = fs::file_size(path);
+                if (size < 4 || size > max_bytes || size > std::numeric_limits<size_t>::max())
+                    throw std::runtime_error("Invalid SSOG archive size (limit 4 GiB)");
+                std::ifstream file(path, std::ios::binary);
+                std::vector<uint8_t> bytes(static_cast<size_t>(size));
+                if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+                    throw std::runtime_error("Cannot read complete SSOG archive");
+                if (bytes[0] != 'P' || bytes[1] != 'K' || bytes[2] != 3 || bytes[3] != 4)
+                    throw std::runtime_error("Invalid SSOG ZIP magic");
+                std::unique_ptr<archive, decltype(&archive_read_free)> reader(archive_read_new(), archive_read_free);
+                if (!reader || archive_read_support_format_zip(reader.get()) != ARCHIVE_OK ||
+                    archive_read_open_memory(reader.get(), bytes.data(), bytes.size()) != ARCHIVE_OK)
+                    throw std::runtime_error("Cannot open SSOG ZIP archive");
+                archive_entry* entry = nullptr;
+                uint64_t total = 0;
+                size_t count = 0;
+                int status;
+                while ((status = archive_read_next_header(reader.get(), &entry)) == ARCHIVE_OK) {
+                    if (++count > 1000000)
+                        throw std::runtime_error("Too many SSOG archive entries");
+                    const auto* raw_name = archive_entry_pathname(entry);
+                    if (!raw_name)
+                        throw std::runtime_error("Missing SSOG archive entry name");
+                    const auto name = safe_name(raw_name);
+                    if (archive_entry_filetype(entry) == AE_IFDIR) {
+                        if (archive_read_data_skip(reader.get()) != ARCHIVE_OK)
+                            throw std::runtime_error("Invalid SSOG directory entry");
+                        continue;
+                    }
+                    if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_symlink(entry) || archive_entry_hardlink(entry))
+                        throw std::runtime_error("SSOG archive entries must be regular files");
+                    const auto n = archive_entry_size(entry);
+                    const uint64_t limit = fs::path(name).extension() == ".json" ? 64ULL * 1024 * 1024 : 512ULL * 1024 * 1024;
+                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > max_bytes - total)
+                        throw std::runtime_error("SSOG archive entry exceeds size limit");
+                    total += uint64_t(n);
+                    auto [it, inserted] = entries_.try_emplace(name);
+                    if (!inserted)
+                        throw std::runtime_error("Duplicate SSOG archive entry");
+                    auto& data = it->second;
+                    data.resize(static_cast<size_t>(n));
+                    size_t offset = 0;
+                    while (offset < data.size()) {
+                        const auto got = archive_read_data(reader.get(), data.data() + offset, data.size() - offset);
+                        if (got <= 0)
+                            throw std::runtime_error("Truncated SSOG archive entry");
+                        offset += static_cast<size_t>(got);
+                    }
+                }
+                if (status != ARCHIVE_EOF)
+                    throw std::runtime_error("Invalid SSOG archive headers");
+            }
+            Result<std::vector<uint8_t>> read(const std::string& raw_name, size_t limit) const {
+                try {
+                    const auto name = safe_name(raw_name);
+                    if (bundled_) {
+                        const auto it = entries_.find(name);
+                        if (it == entries_.end())
+                            return make_error(ErrorCode::MISSING_REQUIRED_FILES, "Missing SSOG entry: " + name);
+                        if (it->second.empty() || it->second.size() > limit)
+                            return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SSOG entry size: " + name);
+                        return it->second;
+                    }
+                    const auto path = related(base_, name);
+                    const auto size = fs::file_size(path);
+                    if (!size || size > limit)
+                        return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SSOG entry size", path);
+                    std::vector<uint8_t> data(static_cast<size_t>(size));
+                    std::ifstream file(path, std::ios::binary);
+                    if (!file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size)))
+                        return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SSOG entry", path);
+                    return data;
+                } catch (const std::exception& e) { return make_error(ErrorCode::READ_FAILURE, e.what()); }
+            }
+            Json json(const std::string& name) const {
+                auto bytes = read(name, 64 * 1024 * 1024);
+                if (!bytes)
+                    throw std::runtime_error(bytes.error().message);
+                return Json::parse(bytes->begin(), bytes->end());
+            }
+            Result<SogDirectoryReconstruct> prepare(const std::string& manifest) const {
+                auto prefix = fs::path(manifest).parent_path().generic_string();
+                if (!prefix.empty())
+                    prefix += '/';
+                return prepare_sog_entries([this](const std::string& name, size_t limit) { return read(name, limit); }, prefix);
+            }
+        };
+
+        // Unit workers encode concurrently; only complete entry writes share a lock.
+        class UnitArchiveSink final : public SogSink {
+            SogSink& archive_;
+            std::mutex& mutex_;
+            std::string prefix_;
+
+        public:
+            UnitArchiveSink(SogSink& archive, std::mutex& mutex, std::string prefix)
+                : archive_(archive), mutex_(mutex), prefix_(std::move(prefix)) {}
+            Result<void> add_file(const std::string& name, const void* data, size_t size) override {
+                std::lock_guard lock(mutex_);
+                return archive_.add_file(prefix_ + name, data, size);
+            }
+            Result<void> close() override { return {}; }
+        };
         struct Manifest {
             Json json;
-            fs::path base;
+            std::shared_ptr<EntryProvider> entries;
             std::vector<std::map<size_t, size_t>> files;
             std::vector<size_t> counts;
         };
         Manifest parse_manifest(const fs::path& path) {
-            const auto p = fs::absolute(manifest_path(path));
-            Manifest m{read_json(p), p.parent_path(), {}, {}};
+            auto entries = std::make_shared<EntryProvider>(path);
+            Manifest m{entries->json("lod-meta.json"), entries, {}, {}};
             const auto& j = m.json;
             if (!j.is_object())
                 throw std::runtime_error("Invalid lod-meta.json object");
@@ -101,10 +221,10 @@ namespace lfs::io {
             std::vector<size_t> unit_counts;
             std::set<fs::path> unique;
             for (const auto& name : j.at("filenames")) {
-                const auto unit = related(m.base, name);
-                if (!unique.insert(fs::weakly_canonical(unit)).second)
+                const auto unit = core::utf8_to_path(name.get<std::string>()).lexically_normal();
+                if (!unique.insert(unit).second)
                     throw std::runtime_error("Duplicate SOG unit filename");
-                unit_counts.push_back(integer(read_json(unit).at("count"), "unit count"));
+                unit_counts.push_back(integer(m.entries->json(unit.generic_string()).at("count"), "unit count"));
             }
             m.files.resize(levels);
             m.counts.resize(levels);
@@ -186,7 +306,7 @@ namespace lfs::io {
             if (j.contains("count") && integer(j["count"], "count") != std::accumulate(m.counts.begin(), m.counts.end(), size_t{0}))
                 throw std::runtime_error("Total LOD count mismatch");
             if (j.contains("environment"))
-                (void)read_json(related(m.base, j["environment"]));
+                (void)m.entries->json(j["environment"].get<std::string>());
             return m;
         }
 
@@ -285,7 +405,7 @@ namespace lfs::io {
             const float* q = rotation + i * 4;
             const double len = std::sqrt(double(q[0]) * q[0] + double(q[1]) * q[1] + double(q[2]) * q[2] + double(q[3]) * q[3]);
             if (!std::isfinite(len) || len == 0)
-                throw std::runtime_error("Invalid quaternion in streamed SOG input");
+                throw std::runtime_error("Invalid quaternion in SSOG input");
             const double w = q[0] / len, x = q[1] / len, y = q[2] / len, z = q[3] / len;
             const double r[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)}, {2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)}, {2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)}};
             std::array<double, 3> scales;
@@ -300,7 +420,7 @@ namespace lfs::io {
                 b.min[a] = p - extent;
                 b.max[a] = p + extent;
                 if (!std::isfinite(b.min[a]) || !std::isfinite(b.max[a]))
-                    throw std::runtime_error("Non-finite geometry in streamed SOG input");
+                    throw std::runtime_error("Non-finite geometry in SSOG input");
             }
             return b;
         }
@@ -345,18 +465,19 @@ namespace lfs::io {
         }
     } // namespace
 
-    bool is_streamed_sog_path(const std::filesystem::path& p) {
+    bool is_ssog_path(const std::filesystem::path& p) {
         std::error_code ec;
-        return (p.filename() == "lod-meta.json" && fs::is_regular_file(p, ec)) ||
+        return (p.extension() == ".ssog" && fs::is_regular_file(p, ec)) ||
+               (p.filename() == "lod-meta.json" && fs::is_regular_file(p, ec)) ||
                (fs::is_directory(p, ec) && fs::is_regular_file(p / "lod-meta.json", ec));
     }
-    std::expected<void, std::string> validate_streamed_sog(const std::filesystem::path& p) {
+    Result<void> validate_ssog(const std::filesystem::path& p) {
         try {
             (void)parse_manifest(p);
             return {};
-        } catch (const std::exception& e) { return std::unexpected(std::string("Invalid streamed SOG: ") + e.what()); }
+        } catch (const std::exception& e) { return make_error(ErrorCode::INVALID_HEADER, std::string("Invalid SSOG: ") + e.what(), p); }
     }
-    std::expected<SplatData, std::string> load_streamed_sog(const std::filesystem::path& p, const StreamedSogLoadOptions& options) {
+    Result<SplatData> load_ssog(const std::filesystem::path& p, const SsogLoadOptions& options) {
         try {
             const auto m = parse_manifest(p);
             const int level = options.lod_level < 0 ? static_cast<int>(m.files.size()) + options.lod_level : options.lod_level;
@@ -366,24 +487,24 @@ namespace lfs::io {
             size_t count = 0;
             // Read and WebP-decode one unit ahead, but reconstruct CUDA tensors only
             // on this thread. The queued work owns CPU buffers and uses no CUDA state.
-            std::vector<std::pair<fs::path, size_t>> files;
+            std::vector<std::pair<std::string, size_t>> files;
             for (auto [file, expected] : m.files[level])
-                files.emplace_back(related(m.base, m.json["filenames"][file]).parent_path(), expected);
+                files.emplace_back(m.json["filenames"][file].get<std::string>(), expected);
             const auto prepare = [&](size_t i) {
-                return std::async(std::launch::async, [path = files[i].first] { return prepare_sog_directory(path); });
+                return std::async(std::launch::async, [entries = m.entries, name = files[i].first] { return entries->prepare(name); });
             };
-            std::future<std::expected<SogDirectoryReconstruct, std::string>> next;
+            std::future<Result<SogDirectoryReconstruct>> next;
             if (!files.empty())
                 next = prepare(0);
             for (size_t i = 0; i < files.size(); ++i) {
                 auto ready = next.get();
                 if (!ready)
-                    throw std::runtime_error(ready.error());
+                    throw std::runtime_error(ready.error().message);
                 if (i + 1 < files.size())
                     next = prepare(i + 1);
                 auto unit = (*ready)();
                 if (!unit)
-                    throw std::runtime_error(unit.error());
+                    throw std::runtime_error(unit.error().message);
                 if (unit->size() != files[i].second)
                     throw std::runtime_error("Decoded SOG unit count mismatch");
                 count += unit->size();
@@ -392,20 +513,23 @@ namespace lfs::io {
             if (count != m.counts[level])
                 throw std::runtime_error("Decoded LOD count mismatch");
             if (m.json.contains("environment")) {
-                auto env = load_sog(related(m.base, m.json["environment"]));
+                auto ready = m.entries->prepare(m.json["environment"].get<std::string>());
+                if (!ready)
+                    throw std::runtime_error(ready.error().message);
+                auto env = (*ready)();
                 if (!env)
-                    throw std::runtime_error(env.error());
+                    throw std::runtime_error(env.error().message);
                 parts.emplace_back(*env);
             }
             return concatenate(parts);
-        } catch (const std::exception& e) { return std::unexpected(std::string("Failed to load streamed SOG: ") + e.what()); }
+        } catch (const std::exception& e) { return make_error(ErrorCode::DECODING_FAILED, std::string("Failed to load SSOG: ") + e.what(), p); }
     }
 
-    Result<void> save_streamed_sog(const SplatData& input, const StreamedSogSaveOptions& o) {
+    Result<void> save_ssog(const SplatData& input, const SsogSaveOptions& o) {
         try {
             const auto started = Clock::now();
             if (o.output_path.empty() || o.lod_levels < 1 || o.lod_levels > 1024 || !std::isfinite(o.lod_ratio) || o.lod_ratio <= 0 || o.lod_ratio >= 1 || o.chunk_count_k <= 0 || o.chunk_min_k < 0 || !std::isfinite(o.chunk_extent) || o.chunk_extent <= 0 || o.kmeans_iterations < 1)
-                return make_error(ErrorCode::INVALID_DATASET, "Invalid streamed SOG export options", o.output_path);
+                return make_error(ErrorCode::INVALID_DATASET, "Invalid SSOG export options", o.output_path);
             if (!input.size())
                 return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", o.output_path);
             auto requested = o.output_path.filename() == "lod-meta.json" ? o.output_path.parent_path() : o.output_path;
@@ -421,10 +545,20 @@ namespace lfs::io {
 #else
             const auto pid = getpid();
 #endif
-            TempDirectory temp{fs::path(out.string() + std::format(".tmp-{}-{}", pid, sequence++))};
-            if (!fs::create_directory(temp.path))
+            const bool bundled = out.extension() == ".ssog";
+            std::unique_ptr<ScopedAtomicOutputFile> atomic_output;
+            std::unique_ptr<SogSink> archive;
+            std::mutex archive_mutex;
+            if (bundled) {
+                atomic_output = std::make_unique<ScopedAtomicOutputFile>(out);
+                archive = make_sog_archive(atomic_output->temp_path());
+                if (auto opened = archive->open(); !opened)
+                    return opened;
+            }
+            TempDirectory temp{bundled ? fs::path{} : fs::path(out.string() + std::format(".tmp-{}-{}", pid, sequence++))};
+            if (!bundled && !fs::create_directory(temp.path))
                 throw std::runtime_error("Temporary export directory already exists");
-            progress(o, 0, "Preparing streamed SOG");
+            progress(o, 0, "Preparing SSOG");
             std::vector<HostSplats> levels;
             size_t free_cuda = 0, total_cuda = 0;
             const bool memory_known = cudaMemGetInfo(&free_cuda, &total_cuda) == cudaSuccess;
@@ -433,7 +567,7 @@ namespace lfs::io {
             // Reserve most available VRAM for decimation, original storage, and
             // two encoder workspaces. Large scenes retain pageable level staging.
             const bool resident = memory_known && resident_bytes < std::min<double>(1024.0 * 1024 * 1024, free_cuda * 0.25);
-            LOG_DEBUG("Streamed SOG level storage: resident={} estimated_bytes={:.0f} free_cuda={}", resident, resident_bytes, free_cuda);
+            LOG_DEBUG("SSOG level storage: resident={} estimated_bytes={:.0f} free_cuda={}", resident, resident_bytes, free_cuda);
             levels.emplace_back(input, resident);
             if (input.has_deleted_mask())
                 levels[0].filter(input.deleted().logical_not().to_pageable_host());
@@ -465,13 +599,13 @@ namespace lfs::io {
                 if (cancelled)
                     throw Cancelled{};
                 if (!result)
-                    return make_error(ErrorCode::ENCODING_FAILED, result.error(), out);
+                    return std::unexpected(result.error());
                 previous_level.emplace(std::move(*result));
                 levels.emplace_back(*previous_level, resident);
             }
             previous_level.reset();
             const auto decimated = Clock::now();
-            progress(o, 0.30f, "Partitioning streamed SOG");
+            progress(o, 0.30f, "Partitioning SSOG");
             std::vector<size_t> cum{0}, counts;
             std::vector<std::array<float, 3>> positions;
             std::vector<Bound> bounds;
@@ -598,7 +732,7 @@ namespace lfs::io {
                     offsets.push_back(offsets.back() + n);
                 const auto* positions = l.means.ptr<float>();
                 tbb::parallel_for(size_t{0}, u.bins.size(), [&](size_t bin) {
-                    sort_streamed_sog_leaf(positions, std::span<int>(u.rows).subspan(offsets[bin], u.bins[bin]));
+                    sort_ssog_leaf(positions, std::span<int>(u.rows).subspan(offsets[bin], u.bins[bin]));
                 });
                 const double sort_ms = std::chrono::duration<double, std::milli>(Clock::now() - sort_start).count();
                 const auto encode_start = Clock::now();
@@ -621,10 +755,16 @@ namespace lfs::io {
                         cancelled = true;
                     return !cancelled;
                 };
-                auto result = encode_sog_directory(data, encode);
+                Result<void> result;
+                if (bundled) {
+                    UnitArchiveSink sink(*archive, archive_mutex, std::format("{}_{}/", u.level, u.index));
+                    result = encode_sog(data, encode, sink);
+                } else {
+                    result = encode_sog_directory(data, encode);
+                }
                 if (!result)
                     return std::unexpected(result.error());
-                LOG_DEBUG("Streamed SOG unit: file={} level={} rows={} leaves={} morton_ms={:.3f} gather_ms={:.3f} encode_ms={:.3f}", filenames[f], u.level, u.rows.size(), u.bins.size(), sort_ms, std::chrono::duration<double, std::milli>(gathered - encode_start).count(), std::chrono::duration<double, std::milli>(Clock::now() - gathered).count());
+                LOG_DEBUG("SSOG unit: file={} level={} rows={} leaves={} morton_ms={:.3f} gather_ms={:.3f} encode_ms={:.3f}", filenames[f], u.level, u.rows.size(), u.bins.size(), sort_ms, std::chrono::duration<double, std::milli>(gathered - encode_start).count(), std::chrono::duration<double, std::milli>(Clock::now() - gathered).count());
                 return UnitTiming{sort_ms, std::chrono::duration<double, std::milli>(Clock::now() - encode_start).count()};
             };
             if (workers == 1) {
@@ -658,7 +798,13 @@ namespace lfs::io {
             Json manifest{{"version", 1}, {"asset", {{"generator", "LichtFeld Studio"}, {"chunkGaussians", bin_size}, {"chunkExtent", o.chunk_extent}, {"chunkMinGaussians", bin_min}}}, {"count", cum.back()}, {"counts", counts}, {"lodLevels", o.lod_levels}, {"lodErrors", false}, {"filenames", filenames}, {"tree", std::move(root)}};
             round_numbers(manifest);
             manifest["asset"]["lichtfeld_provenance"] = Json::parse(core::provenance_to_json(stamp));
-            {
+            if (bundled) {
+                const auto json = manifest.dump();
+                if (auto added = archive->add_file("lod-meta.json", json.data(), json.size()); !added)
+                    return added;
+                if (auto closed = archive->close(); !closed)
+                    return closed;
+            } else {
                 std::ofstream file(temp.path / "lod-meta.json", std::ios::binary);
                 file << manifest.dump();
                 file.close();
@@ -669,51 +815,56 @@ namespace lfs::io {
             const auto encoded = Clock::now();
             // Preserve unrelated user files. Move all format-owned old paths to a rollback
             // directory before installing units, then publish the completed manifest last.
-            fs::create_directories(out);
-            TempDirectory backup{fs::path(temp.path.string() + ".backup")};
-            fs::create_directory(backup.path);
-            std::vector<fs::path> old_paths, installed;
-            const bool replacing = fs::exists(out / "lod-meta.json");
-            const std::regex unit_name("[0-9]+_[0-9]+");
-            for (const auto& e : fs::directory_iterator(out)) {
-                const auto name = e.path().filename();
-                const bool owned = name == "lod-meta.json" || name == "env" || std::regex_match(name.string(), unit_name);
-                if (owned && replacing)
-                    old_paths.push_back(name);
-            }
-            for (const auto& u : units) {
-                const auto name = fs::path(std::format("{}_{}", u.level, u.index));
-                if (fs::exists(out / name) && !replacing)
-                    throw std::runtime_error("Output unit already exists in unrelated directory");
-            }
-            std::vector<fs::path> moved;
-            try {
-                for (const auto& name : old_paths) {
-                    fs::rename(out / name, backup.path / name);
-                    moved.push_back(name);
+            if (bundled) {
+                if (auto committed = atomic_output->commit(); !committed)
+                    return committed;
+            } else {
+                fs::create_directories(out);
+                TempDirectory backup{fs::path(temp.path.string() + ".backup")};
+                fs::create_directory(backup.path);
+                std::vector<fs::path> old_paths, installed;
+                const bool replacing = fs::exists(out / "lod-meta.json");
+                const std::regex unit_name("[0-9]+_[0-9]+");
+                for (const auto& e : fs::directory_iterator(out)) {
+                    const auto name = e.path().filename();
+                    const bool owned = name == "lod-meta.json" || name == "env" || std::regex_match(name.string(), unit_name);
+                    if (owned && replacing)
+                        old_paths.push_back(name);
                 }
                 for (const auto& u : units) {
                     const auto name = fs::path(std::format("{}_{}", u.level, u.index));
-                    fs::rename(temp.path / name, out / name);
-                    installed.push_back(name);
+                    if (fs::exists(out / name) && !replacing)
+                        throw std::runtime_error("Output unit already exists in unrelated directory");
                 }
-                fs::rename(temp.path / "lod-meta.json", out / "lod-meta.json");
-            } catch (...) {
-                std::error_code ec;
-                for (const auto& name : installed)
-                    fs::remove_all(out / name, ec);
-                for (const auto& name : moved)
-                    fs::rename(backup.path / name, out / name, ec);
-                // Retain a backup if rollback itself fails, rather than deleting recoverable data.
-                if (!fs::is_empty(backup.path))
-                    backup.path.clear();
-                throw;
+                std::vector<fs::path> moved;
+                try {
+                    for (const auto& name : old_paths) {
+                        fs::rename(out / name, backup.path / name);
+                        moved.push_back(name);
+                    }
+                    for (const auto& u : units) {
+                        const auto name = fs::path(std::format("{}_{}", u.level, u.index));
+                        fs::rename(temp.path / name, out / name);
+                        installed.push_back(name);
+                    }
+                    fs::rename(temp.path / "lod-meta.json", out / "lod-meta.json");
+                } catch (...) {
+                    std::error_code ec;
+                    for (const auto& name : installed)
+                        fs::remove_all(out / name, ec);
+                    for (const auto& name : moved)
+                        fs::rename(backup.path / name, out / name, ec);
+                    // Retain a backup if rollback itself fails, rather than deleting recoverable data.
+                    if (!fs::is_empty(backup.path))
+                        backup.path.clear();
+                    throw;
+                }
             }
             const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
-            LOG_DEBUG("Streamed SOG export stages: prepare_ms={:.3f} decimate_ms={:.3f} partition_ms={:.3f} morton_ms={:.3f} encode_ms={:.3f} unit_wall_ms={:.3f} commit_ms={:.3f} total_ms={:.3f} units={} workers={}", ms(started, prepared), ms(prepared, decimated), ms(decimated, partitioned), morton_ms, encode_ms, ms(partitioned, encoded), ms(encoded, Clock::now()), ms(started, Clock::now()), units.size(), workers);
+            LOG_DEBUG("SSOG export stages: prepare_ms={:.3f} decimate_ms={:.3f} partition_ms={:.3f} morton_ms={:.3f} encode_ms={:.3f} unit_wall_ms={:.3f} commit_ms={:.3f} total_ms={:.3f} units={} workers={}", ms(started, prepared), ms(prepared, decimated), ms(decimated, partitioned), morton_ms, encode_ms, ms(partitioned, encoded), ms(encoded, Clock::now()), ms(started, Clock::now()), units.size(), workers);
             return {};
         } catch (const Cancelled&) { return make_error(ErrorCode::CANCELLED, "Export cancelled by user", o.output_path); } catch (const std::exception& e) {
-            return make_error(ErrorCode::ENCODING_FAILED, std::string("Failed to save streamed SOG: ") + e.what(), o.output_path);
+            return make_error(ErrorCode::ENCODING_FAILED, std::string("Failed to save SSOG: ") + e.what(), o.output_path);
         }
     }
 } // namespace lfs::io

@@ -170,7 +170,7 @@ def test_export_panel_builds_format_and_model_records(export_panel_module):
     assert panel._handle.records["formats"] == [
         {"index": "0", "label": "export.format.ply_standard", "selected": False},
         {"index": "1", "label": "export.format.sog_supersplat", "selected": False},
-        {"index": "8", "label": "export.format.streamed_sog", "selected": False},
+        {"index": "8", "label": "export.format.ssog", "selected": False},
         {"index": "2", "label": "export.format.spz_niantic", "selected": True},
         {"index": "6", "label": "export.format.rad_random_access", "selected": False},
         {"index": "4", "label": "export.format.usd_openusd", "selected": False},
@@ -475,10 +475,11 @@ def test_export_panel_cancel_colmap_overwrite(export_panel_module, tmp_path):
     assert state.export_calls == []
 
 
-def test_streamed_sog_directory_and_options(export_panel_module, tmp_path, monkeypatch):
+def test_ssog_directory_and_options(export_panel_module, tmp_path, monkeypatch):
     module, state = export_panel_module
     panel = module.ExportPanel()
-    panel._format = module.ExportFormat.STREAMED_SOG
+    panel._format = module.ExportFormat.SSOG
+    panel._set_ssog_bundle(False)
     panel._selected_nodes = {"Tree"}
     state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
     state.folder_dialog_result = str(tmp_path)
@@ -498,10 +499,11 @@ def test_streamed_sog_directory_and_options(export_panel_module, tmp_path, monke
 
 
 @pytest.mark.parametrize("reply,expected_exports", [("Overwrite", 1), ("Cancel", 0)])
-def test_streamed_sog_overwrite_confirmation(export_panel_module, tmp_path, reply, expected_exports):
+def test_ssog_overwrite_confirmation(export_panel_module, tmp_path, reply, expected_exports):
     module, state = export_panel_module
     panel = module.ExportPanel()
-    panel._format = module.ExportFormat.STREAMED_SOG
+    panel._format = module.ExportFormat.SSOG
+    panel._set_ssog_bundle(False)
     panel._selected_nodes = {"Tree"}
     state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
     state.folder_dialog_result = str(tmp_path)
@@ -514,35 +516,74 @@ def test_streamed_sog_overwrite_confirmation(export_panel_module, tmp_path, repl
     assert len(state.export_calls) == expected_exports
 
 
-def test_streamed_sog_cancel_folder_picker(export_panel_module):
+def test_ssog_cancel_folder_picker(export_panel_module):
     module, state = export_panel_module
     panel = module.ExportPanel()
-    panel._format = module.ExportFormat.STREAMED_SOG
+    panel._format = module.ExportFormat.SSOG
+    panel._set_ssog_bundle(False)
     state.folder_dialog_result = ""
     assert panel._get_save_path("Tree") == ""
     assert not state.export_calls
 
 
 @pytest.mark.parametrize("name", ["..", ".", "../escape", "/absolute", "a\\b"])
-def test_streamed_sog_rejects_path_in_folder_name(export_panel_module, name):
+def test_ssog_rejects_path_in_folder_name(export_panel_module, name):
     module, _ = export_panel_module
     panel = module.ExportPanel()
-    panel._format = module.ExportFormat.STREAMED_SOG
+    panel._format = module.ExportFormat.SSOG
+    panel._set_ssog_bundle(False)
     panel._selected_nodes = {"Tree"}
     panel._set_ssog_folder_name(name)
     assert not panel._can_export()
 
 
-def test_streamed_sog_progress_and_cancel(export_panel_module):
+def test_ssog_progress_and_cancel(export_panel_module):
     module, state = export_panel_module
     panel = module.ExportPanel()
     panel._handle = _HandleStub()
     for progress in (0.0, 0.3, 0.4, 0.59, 0.9, 0.99):
         state.export_state = {
             "active": True, "format": 8, "progress": progress,
-            "stage": "Encoding streamed SOG", "path": "/tmp/garden_ssog",
+            "stage": "Encoding SSOG", "path": "/tmp/garden_ssog",
         }
         panel._update_export_progress()
         assert float(panel._progress_value) == progress
     panel._on_cancel_export(None, None, None)
     assert state.cancel_calls == 1
+
+
+@pytest.mark.parametrize("chosen", ["/tmp/Tree.ssog", ""])
+def test_ssog_bundle_default_and_option_forwarding(export_panel_module, monkeypatch, chosen):
+    module, state = export_panel_module
+    panel = module.ExportPanel()
+    panel._format = module.ExportFormat.SSOG
+    panel._selected_nodes = {"Tree"}
+    state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
+    picked = []
+    monkeypatch.setattr(module.lf.ui, "save_ssog_file_dialog", lambda name: picked.append(name) or chosen, raising=False)
+    calls = []
+    monkeypatch.setattr(module.lf, "export_scene", lambda *args, **kwargs: calls.append((args, kwargs)))
+    assert panel._ssog_bundle is True
+    panel._set_ssog_folder_name("../unused")
+    assert panel._can_export()
+    panel._set_ssog_setting("lod_levels", "3")
+    panel._do_export()
+    assert picked == ["Tree"]
+    assert not state.folder_dialog_calls
+    if chosen:
+        assert calls[0][0] == (8, chosen, ["Tree"], 3)
+        assert calls[0][1]["lod_levels"] == 3
+    else:
+        assert not calls
+
+
+def test_ssog_bundle_checkbox_toggles_folder_flow(export_panel_module):
+    module, _ = export_panel_module
+    panel = module.ExportPanel()
+    panel._handle = _HandleStub()
+    assert panel._ssog_bundle
+    panel._on_toggle_ssog_bundle(None, None, None)
+    assert not panel._ssog_bundle
+    assert "show_ssog_folder" in panel._handle.dirty_fields
+    panel._on_toggle_ssog_bundle(None, None, None)
+    assert panel._ssog_bundle

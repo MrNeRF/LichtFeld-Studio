@@ -4,8 +4,8 @@
 #include <core/export.hpp>
 #include <core/splat_data.hpp>
 #include <cstddef>
-#include <expected>
 #include <functional>
+#include <io/error.hpp>
 #include <string>
 
 namespace lfs::io {
@@ -19,6 +19,6 @@ namespace lfs::io {
 
     // Ignores deleted rows. Output owns CUDA tensors; input is never mutated.
     // knn_k: 1..32; candidates_k: 1..knn_k. Cancellation error is "cancelled".
-    LFS_IO_API std::expected<lfs::core::SplatData, std::string>
+    LFS_IO_API Result<lfs::core::SplatData>
     decimate_splats(const lfs::core::SplatData& input, const DecimateOptions& options);
 } // namespace lfs::io

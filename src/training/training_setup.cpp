@@ -1315,7 +1315,7 @@ namespace lfs::training {
             switch (format) {
             case OutputFormat::PLY: return ".ply";
             case OutputFormat::SOG: return ".sog";
-            case OutputFormat::STREAMED_SOG: return "_ssog/lod-meta.json";
+            case OutputFormat::SSOG: return ".ssog";
             case OutputFormat::SPZ: return ".spz";
             case OutputFormat::HTML: return ".html";
             case OutputFormat::USD: return ".usd";
@@ -1335,15 +1335,15 @@ namespace lfs::training {
             switch (format) {
             case OutputFormat::PLY:
                 return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .provenance = provenance});
-            case OutputFormat::STREAMED_SOG:
-                return lfs::io::save_streamed_sog(splat, {.output_path = output,
-                                                          .lod_levels = params.lod_levels,
-                                                          .lod_ratio = params.lod_ratio,
-                                                          .chunk_count_k = params.lod_chunk_count,
-                                                          .chunk_extent = params.lod_chunk_extent,
-                                                          .chunk_min_k = params.lod_chunk_min,
-                                                          .kmeans_iterations = params.sog_iterations,
-                                                          .provenance = provenance});
+            case OutputFormat::SSOG:
+                return lfs::io::save_ssog(splat, {.output_path = output,
+                                                  .lod_levels = params.lod_levels,
+                                                  .lod_ratio = params.lod_ratio,
+                                                  .chunk_count_k = params.lod_chunk_count,
+                                                  .chunk_extent = params.lod_chunk_extent,
+                                                  .chunk_min_k = params.lod_chunk_min,
+                                                  .kmeans_iterations = params.sog_iterations,
+                                                  .provenance = provenance});
             case OutputFormat::SOG:
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = 10, .provenance = provenance});
             case OutputFormat::SPZ:

@@ -29,7 +29,7 @@ Use this flow when you need to export one or more scene nodes to `PLY`, `SOG`, `
 Other export entry points:
 
 - `scene_export_sog`
-- `scene_export_streamed_sog` (directory with `lod-meta.json`)
+- `scene_export_ssog` (`.ssog` bundle or directory with `lod-meta.json`)
 - `scene_export_spz`
 - `scene_export_usd`
 - `scene_export_html`
@@ -57,15 +57,15 @@ In the current GUI implementation:
 - `scene_export_status` reports idle state
 - `scene_export_cancel` returns an error because there is nothing cancellable once export starts
 
-## Streamed SOG
+## SSOG
 
-`scene_export_streamed_sog` writes a PlayCanvas multi-LOD directory. `path` is
+`scene_export_ssog` writes SSOG (.ssog, lod-meta.json). A path ending in `.ssog` creates a ZIP bundle with `lod-meta.json` at its root and each unit in its own folder. Unzipping the bundle produces a valid PlayCanvas streamed SOG directory. Otherwise, `path` is
 required and names the output directory. Optional settings are `lod_levels` (4,
 1–8), `lod_ratio` (0.5, 0.1–0.9), `chunk_count_k` (512), `chunk_extent` (16),
 `chunk_min_k` (8), and `kmeans_iterations` (10). Node selection accepts `node`,
 `nodes`, `uuid`, `uuids`, or session-local integer `node_ids`, with the same
 selection fallback as SOG. `sh_degree` defaults to 3 and `include_provenance`
 to true. The call completes synchronously; `scene_export_status` includes
-`streamed_sog` in `supported_formats` and reports idle after completion.
+`ssog` in `supported_formats` and reports idle after completion.
 
-Import either the directory or its `lod-meta.json` with `lf.io.load(path)` in Python.
+Import the `.ssog` bundle, directory, or its `lod-meta.json` with `lf.io.load(path)` in Python or `scene_load_ply`.

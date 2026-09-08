@@ -82,9 +82,13 @@
         </div>
       </div>
 
-      <!-- RAD Settings - only shown for RAD format -->
-      <div class="ep-section" data-if="show_streamed_sog_settings">
+      <!-- SSOG settings -->
+      <div class="ep-section" data-if="show_ssog_settings">
         <div class="setting-row setting-row--aligned">
+          <span class="setting-row__label-col">@tr:export_dialog.ssog_bundle</span>
+          <div class="setting-row__control-col"><input type="checkbox" data-attrif-checked="ssog_bundle" data-event-change="toggle_ssog_bundle" /></div>
+        </div>
+        <div class="setting-row setting-row--aligned" data-if="show_ssog_folder">
           <span class="setting-row__label-col">@tr:export_dialog.folder_name</span>
           <div class="setting-row__control-col setting-row__control-col--fill"><input type="text" data-value="ssog_folder_name" /></div>
         </div>

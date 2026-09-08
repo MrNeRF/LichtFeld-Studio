@@ -349,7 +349,7 @@ class NewProjectPanel(_ImportDialogPanel):
         if source.name == "lod-meta.json" or (source / "lod-meta.json").is_file():
             return True
         suffix = source.suffix.lower()
-        return suffix in {".ply", ".sog", ".spz", ".rad"} or suffix.startswith(".usd")
+        return suffix in {".ply", ".sog", ".ssog", ".spz", ".rad"} or suffix.startswith(".usd")
 
     def _set_source_path(self, value, derive_name=False):
         previous = self._source_path

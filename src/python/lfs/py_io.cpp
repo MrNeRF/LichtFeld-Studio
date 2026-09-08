@@ -701,11 +701,11 @@ namespace lfs::python {
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(
-            "save_streamed_sog",
+            "save_ssog",
             [](const PySplatData& data, const std::filesystem::path& path, int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent,
                int chunk_min_k, int kmeans_iterations, bool use_gpu,
                nb::object progress, bool include_provenance) {
-                io::StreamedSogSaveOptions options;
+                io::SsogSaveOptions options;
                 options.output_path = path;
                 options.lod_levels = lod_levels;
                 options.lod_ratio = lod_ratio;
@@ -726,16 +726,16 @@ namespace lfs::python {
 
                 auto result = [&] {
                     nb::gil_scoped_release release;
-                    return io::save_streamed_sog(*data.data(), options);
+                    return io::save_ssog(*data.data(), options);
                 }();
                 if (!result)
-                    throw_io_error(result.error(), "Failed to save Streamed SOG");
+                    throw_io_error(result.error(), "Failed to save SSOG");
             },
             nb::arg("splat"), nb::arg("path"), nb::arg("lod_levels") = 4, nb::arg("lod_ratio") = 0.5f,
             nb::arg("chunk_count_k") = 512, nb::arg("chunk_extent") = 16.0f, nb::arg("chunk_min_k") = 8, nb::arg("kmeans_iterations") = 10, nb::arg("use_gpu") = true,
             nb::arg("progress") = nb::none(),
             nb::arg("include_provenance") = true,
-            "Save splat data as a PlayCanvas multi-LOD Streamed SOG directory (lod-meta.json). "
+            "Save splat data as a PlayCanvas multi-LOD SSOG (.ssog, lod-meta.json). "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
 
         m.def(

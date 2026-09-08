@@ -491,7 +491,7 @@ namespace lfs::core {
                                   USDA,
                                   USDC,
                                   RAD,
-                                  STREAMED_SOG };
+                                  SSOG };
 
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades

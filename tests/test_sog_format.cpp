@@ -243,7 +243,7 @@ TEST_F(SogFormatTest, LoadSogBundle) {
     }
 
     auto result = lfs::io::load_sog(sog_bundle);
-    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error();
+    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().message;
 
     const auto& splat = *result;
     std::cout << "Loaded SOG bundle: " << splat.size() << " splats" << std::endl;
@@ -264,7 +264,7 @@ TEST_F(SogFormatTest, LoadSogDirectory) {
     }
 
     auto result = lfs::io::load_sog(test_dir);
-    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error();
+    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().message;
 
     const auto& splat = *result;
     std::cout << "Loaded SOG directory: " << splat.size() << " splats" << std::endl;
@@ -283,7 +283,7 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 
     std::cout << "Loading SOG bundle..." << std::endl;
     auto sog_result = lfs::io::load_sog(sog_bundle);
-    ASSERT_TRUE(sog_result.has_value()) << "Failed to load SOG: " << sog_result.error();
+    ASSERT_TRUE(sog_result.has_value()) << "Failed to load SOG: " << sog_result.error().message;
 
     std::cout << "Loading original PLY..." << std::endl;
     auto ply_result = lfs::io::load_ply(original_ply);
@@ -373,8 +373,8 @@ TEST_F(SogFormatTest, RejectsTextureSmallerThanDeclaredCountBeforeCudaUpload) {
     const auto result = lfs::io::load_sog(input.path());
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("means_l.webp"), std::string::npos)
-        << result.error();
+    EXPECT_NE(result.error().message.find("means_l.webp"), std::string::npos)
+        << result.error().message;
 }
 
 TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
@@ -384,7 +384,7 @@ TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
 
     const auto result = lfs::io::load_sog(input.path());
 
-    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(result.has_value()) << result.error().message;
     EXPECT_EQ(result->size(), 1);
 }
 
@@ -397,8 +397,8 @@ TEST_F(SogFormatTest, RejectsShortMeansBoundsBeforeReadingTextures) {
     const auto result = lfs::io::load_sog(input.path());
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("three values"), std::string::npos)
-        << result.error();
+    EXPECT_NE(result.error().message.find("three values"), std::string::npos)
+        << result.error().message;
 }
 
 TEST_F(SogFormatTest, RejectsUnsupportedShDegreeBeforeReadingTextures) {
@@ -415,8 +415,8 @@ TEST_F(SogFormatTest, RejectsUnsupportedShDegreeBeforeReadingTextures) {
     const auto result = lfs::io::load_sog(input.path());
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("SH degree"), std::string::npos)
-        << result.error();
+    EXPECT_NE(result.error().message.find("SH degree"), std::string::npos)
+        << result.error().message;
 }
 
 TEST_F(SogFormatTest, InvalidArchiveReturnsErrorWithoutEscaping) {
@@ -430,7 +430,7 @@ TEST_F(SogFormatTest, InvalidArchiveReturnsErrorWithoutEscaping) {
     const auto result = lfs::io::load_sog(archive);
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_FALSE(result.error().empty());
+    EXPECT_FALSE(result.error().message.empty());
 }
 
 // Test: Load meta.json directly
@@ -441,7 +441,7 @@ TEST_F(SogFormatTest, LoadMetaJsonDirectly) {
     }
 
     auto result = lfs::io::load_sog(meta_json);
-    ASSERT_TRUE(result.has_value()) << "Failed to load via meta.json: " << result.error();
+    ASSERT_TRUE(result.has_value()) << "Failed to load via meta.json: " << result.error().message;
 
     std::cout << "Loaded via meta.json: " << result->size() << " splats" << std::endl;
 }
@@ -459,7 +459,7 @@ TEST_F(SogFormatTest, CompareWithSplatTransformDecompression) {
 
     std::cout << "Loading SOG with our loader..." << std::endl;
     auto our_result = lfs::io::load_sog(sog_bundle);
-    ASSERT_TRUE(our_result.has_value()) << "Failed to load SOG: " << our_result.error();
+    ASSERT_TRUE(our_result.has_value()) << "Failed to load SOG: " << our_result.error().message;
 
     std::cout << "Loading splat-transform decompressed PLY..." << std::endl;
     auto ref_result = lfs::io::load_ply(sog_decompressed);
@@ -519,7 +519,7 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
     // Reimport the SOG
     std::cout << "Reimporting SOG..." << std::endl;
     auto reimport_result = lfs::io::load_sog(export_path);
-    ASSERT_TRUE(reimport_result.has_value()) << "Failed to reimport SOG: " << reimport_result.error();
+    ASSERT_TRUE(reimport_result.has_value()) << "Failed to reimport SOG: " << reimport_result.error().message;
 
     EXPECT_EQ(reimport_result->size(), orig_result->value.size())
         << "Reimported splat count differs from original";
@@ -603,7 +603,7 @@ TEST_F(SogFormatTest, SyntheticExportRoundtripWithShN) {
     ASSERT_TRUE(write_result.has_value()) << "SOG export failed: " << write_result.error().format();
 
     auto reimport = lfs::io::load_sog(export_path);
-    ASSERT_TRUE(reimport.has_value()) << "SOG reimport failed: " << reimport.error();
+    ASSERT_TRUE(reimport.has_value()) << "SOG reimport failed: " << reimport.error().message;
     EXPECT_EQ(reimport->size(), N);
     EXPECT_EQ(reimport->get_max_sh_degree(), sh_degree);
     EXPECT_TRUE(reimport->means().is_valid());

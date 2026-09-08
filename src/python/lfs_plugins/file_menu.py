@@ -272,9 +272,9 @@ class ImportPlyOperator(Operator):
         return {"FINISHED"}
 
 
-class ImportStreamedSogOperator(Operator):
-    label = "menu.file.import_streamed_sog"
-    description = "Import a Streamed SOG folder containing lod-meta.json"
+class ImportSsogOperator(Operator):
+    label = "file_menu.import_ssog"
+    description = "Import a SSOG folder containing lod-meta.json"
 
     def execute(self, context) -> set:
         path = lf.ui.open_folder_dialog()
@@ -583,7 +583,7 @@ class FileMenu:
                 [
                     menu_operator(ImportDatasetOperator),
                     menu_operator(ImportPlyOperator),
-                    menu_operator(ImportStreamedSogOperator),
+                    menu_operator(ImportSsogOperator),
                     menu_operator(ImportMeshOperator),
                     menu_operator(ImportCheckpointOperator),
                     menu_separator(),
@@ -609,7 +609,7 @@ _operator_classes = [
     CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,
-    ImportStreamedSogOperator,
+    ImportSsogOperator,
     ImportMeshOperator,
     ImportCheckpointOperator,
     ImportConfigOperator,

@@ -365,6 +365,7 @@ def test_imports_are_grouped_before_exports(monkeypatch):
     assert operator_names == [
         "ImportDatasetOperator",
         "ImportPlyOperator",
+        "ImportSsogOperator",
         "ImportMeshOperator",
         "ImportCheckpointOperator",
         "ImportConfigOperator",
@@ -589,3 +590,11 @@ def test_load_file_confirmation_reissues_in_order_with_replace_on_first(
             },
         ),
     ]
+
+
+def test_splat_picker_imports_ssog_as_splat(monkeypatch):
+    file_menu = _load_file_menu(monkeypatch)
+    selected = "/tmp/garden.ssog"
+    file_menu.lf.ui.open_ply_file_dialog = lambda _default: selected
+    assert file_menu.ImportPlyOperator().execute(None) == {"FINISHED"}
+    assert file_menu.lf.load_file_calls == [((selected,), {"is_dataset": False})]

@@ -1,13 +1,15 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../src/io/cuda/morton_encoding.hpp"
+#include "app/include/app/converter.hpp"
 #include "core/argument_parser.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/sogs.hpp"
-#include "io/formats/streamed_sog.hpp"
-#include "io/formats/streamed_sog_morton.hpp"
+#include "io/formats/ssog.hpp"
+#include "io/formats/ssog_morton.hpp"
 #include "io/loader.hpp"
+#include "io/loaders/ssog_loader.hpp"
 #include "io/splat_path.hpp"
 #include <algorithm>
 #include <archive.h>
@@ -32,14 +34,14 @@ namespace {
     using Json = nlohmann::json;
     using namespace lfs::core;
     using namespace lfs::io;
-    struct ScopedStreamedSogDirectory {
+    struct ScopedSsogDirectory {
         fs::path path;
-        ScopedStreamedSogDirectory() {
+        ScopedSsogDirectory() {
             static std::atomic_uint64_t sequence{0};
             path = fs::temp_directory_path() / std::format("lichtfeld_ssog_{}_{}", std::chrono::steady_clock::now().time_since_epoch().count(), sequence++);
             fs::create_directories(path);
         }
-        ~ScopedStreamedSogDirectory() {
+        ~ScopedSsogDirectory() {
             std::error_code ec;
             fs::remove_all(path, ec);
         }
@@ -71,8 +73,8 @@ namespace {
             v = normal(rng) * 0.08f;
         return SplatData(degree, Tensor::from_vector(means, {n, 3}), Tensor::from_vector(sh0, {n, 1, 3}), Tensor::from_vector(shN, {n, k, 3}), Tensor::from_vector(scales, {n, 3}), Tensor::from_vector(quats, {n, 4}), Tensor::from_vector(opacity, {n, 1}), 1);
     }
-    StreamedSogSaveOptions options(const fs::path& path, int levels = 1) {
-        StreamedSogSaveOptions o;
+    SsogSaveOptions options(const fs::path& path, int levels = 1) {
+        SsogSaveOptions o;
         o.output_path = path;
         o.lod_levels = levels;
         o.chunk_count_k = 16;
@@ -90,7 +92,7 @@ namespace {
         std::vector<std::vector<std::pair<size_t, size_t>>> ranges(files.size());
         for (const auto& f : files) {
             auto unit = load_sog(path / f);
-            ASSERT_TRUE(unit) << unit.error();
+            ASSERT_TRUE(unit) << unit.error().message;
             sizes.push_back(unit->size());
             means.push_back(unit->means().cpu());
             EXPECT_TRUE(read(path / f)["asset"].contains("lichtfeld_provenance"));
@@ -190,28 +192,28 @@ namespace {
         return q + "'";
     }
 } // namespace
-TEST(StreamedSogFormat, WriteReadRoundtripSyntheticSh1) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, WriteReadRoundtripSyntheticSh1) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(60000);
     auto o = options(dir.path, 3);
-    auto result = save_streamed_sog(s, o);
+    auto result = save_ssog(s, o);
     ASSERT_TRUE(result) << result.error().format();
     const auto m = read(dir.path / "lod-meta.json");
     ASSERT_EQ(m["lodLevels"], 3);
     EXPECT_EQ(m["counts"], Json::array({60000, 30000, 15000}));
     EXPECT_GT(m["filenames"].size(), 3);
     assert_structure(dir.path, m);
-    auto loaded = load_streamed_sog(dir.path);
-    ASSERT_TRUE(loaded) << loaded.error();
+    auto loaded = load_ssog(dir.path);
+    ASSERT_TRUE(loaded) << loaded.error().message;
     compare(*loaded, s);
-    auto coarse = load_streamed_sog(dir.path / "lod-meta.json", {.lod_level = -1});
-    ASSERT_TRUE(coarse) << coarse.error();
+    auto coarse = load_ssog(dir.path / "lod-meta.json", {.lod_level = -1});
+    ASSERT_TRUE(coarse) << coarse.error().message;
     EXPECT_EQ(coarse->size(), m["counts"].back().get<size_t>());
 }
-TEST(StreamedSogFormat, SingleLevelNoDecimation) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, SingleLevelNoDecimation) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(3000, 0);
-    auto result = save_streamed_sog(s, options(dir.path));
+    auto result = save_ssog(s, options(dir.path));
     ASSERT_TRUE(result) << result.error().format();
     const auto m = read(dir.path / "lod-meta.json");
     EXPECT_EQ(m["counts"], Json::array({3000}));
@@ -223,12 +225,12 @@ TEST(StreamedSogFormat, SingleLevelNoDecimation) {
     validate.validate_only = true;
     auto loaded = loader->load(dir.path, validate);
     ASSERT_TRUE(loaded) << loaded.error().format();
-    EXPECT_EQ(loaded->loader_used, "Streamed SOG");
+    EXPECT_EQ(loaded->loader_used, "SSOG");
 }
-TEST(StreamedSogFormat, RejectsInvalidManifest) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, RejectsInvalidManifest) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(300, 0);
-    auto saved = save_streamed_sog(s, options(dir.path));
+    auto saved = save_ssog(s, options(dir.path));
     ASSERT_TRUE(saved) << saved.error().format();
     const auto original = read(dir.path / "lod-meta.json");
     std::vector<Json> invalid;
@@ -252,26 +254,26 @@ TEST(StreamedSogFormat, RejectsInvalidManifest) {
     invalid.push_back(m);
     for (const auto& bad : invalid) {
         write(dir.path / "lod-meta.json", bad);
-        EXPECT_FALSE(validate_streamed_sog(dir.path));
-        EXPECT_FALSE(load_streamed_sog(dir.path));
+        EXPECT_FALSE(validate_ssog(dir.path));
+        EXPECT_FALSE(load_ssog(dir.path));
     }
     m = original;
     m.erase("version");
     m.erase("counts");
     m.erase("count");
     write(dir.path / "lod-meta.json", m);
-    EXPECT_TRUE(validate_streamed_sog(dir.path));
-    EXPECT_TRUE(load_streamed_sog(dir.path));
+    EXPECT_TRUE(validate_ssog(dir.path));
+    EXPECT_TRUE(load_ssog(dir.path));
 }
-TEST(StreamedSogFormat, ReplacesPreviousExport) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, ReplacesPreviousExport) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(2000, 0);
-    auto first = save_streamed_sog(s, options(dir.path, 2));
+    auto first = save_ssog(s, options(dir.path, 2));
     ASSERT_TRUE(first) << first.error().format();
     fs::create_directory(dir.path / "env");
     fs::create_directory(dir.path / "9_8");
     write(dir.path / "notes.json", {{"keep", true}});
-    auto second = save_streamed_sog(s, options(dir.path / "lod-meta.json", 1));
+    auto second = save_ssog(s, options(dir.path / "lod-meta.json", 1));
     ASSERT_TRUE(second) << second.error().format();
     const auto m = read(dir.path / "lod-meta.json");
     EXPECT_EQ(m["lodLevels"], 1);
@@ -279,30 +281,30 @@ TEST(StreamedSogFormat, ReplacesPreviousExport) {
     EXPECT_FALSE(fs::exists(dir.path / "9_8"));
     EXPECT_FALSE(fs::exists(dir.path / "1_0"));
     EXPECT_TRUE(fs::exists(dir.path / "notes.json"));
-    EXPECT_TRUE(load_streamed_sog(dir.path));
+    EXPECT_TRUE(load_ssog(dir.path));
 }
-TEST(StreamedSogFormat, CancellationPreservesPreviousExport) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, CancellationPreservesPreviousExport) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(500, 0);
     auto o = options(dir.path);
-    ASSERT_TRUE(save_streamed_sog(s, o));
+    ASSERT_TRUE(save_ssog(s, o));
     const auto original = read(dir.path / "lod-meta.json");
     for (const float threshold : {0.0f, 0.5f, 1.0f}) {
         o.progress_callback = [=](float p, const std::string&) { return p < threshold; };
-        auto result = save_streamed_sog(s, o);
+        auto result = save_ssog(s, o);
         ASSERT_FALSE(result);
         EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
         EXPECT_EQ(read(dir.path / "lod-meta.json"), original);
-        EXPECT_TRUE(load_streamed_sog(dir.path));
+        EXPECT_TRUE(load_ssog(dir.path));
     }
 }
-TEST(StreamedSogFormat, VisibleRowsAndEnvironment) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, VisibleRowsAndEnvironment) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(1000, 0);
     std::vector<bool> deleted(1000);
     std::fill_n(deleted.begin(), 100, true);
     s.deleted() = Tensor::from_vector(deleted, {1000});
-    auto saved = save_streamed_sog(s, options(dir.path));
+    auto saved = save_ssog(s, options(dir.path));
     ASSERT_TRUE(saved) << saved.error().format();
     auto m = read(dir.path / "lod-meta.json");
     EXPECT_EQ(m["counts"][0], 900);
@@ -313,37 +315,38 @@ TEST(StreamedSogFormat, VisibleRowsAndEnvironment) {
     ASSERT_TRUE(encoded) << encoded.error().format();
     m["environment"] = "env/meta.json";
     write(dir.path / "lod-meta.json", m);
-    auto loaded = load_streamed_sog(dir.path);
-    ASSERT_TRUE(loaded) << loaded.error();
+    auto loaded = load_ssog(dir.path);
+    ASSERT_TRUE(loaded) << loaded.error().message;
     EXPECT_EQ(loaded->size(), 1000);
     EXPECT_EQ(loaded->get_max_sh_degree(), 1);
     auto rest = loaded->shN_canonical_cpu();
     for (size_t i = 0; i < 900 * 9; ++i)
         ASSERT_EQ(rest.ptr<float>()[i], 0);
 }
-TEST(StreamedSogFormat, ReadsReferenceStreamedSog) {
+TEST(SsogFormat, ReadsReferenceSsog) {
     const char* reference = std::getenv("LFS_SSOG_REFERENCE");
     if (!reference)
         GTEST_SKIP() << "Set LFS_SSOG_REFERENCE to lod-meta.json";
     const auto m = read(reference);
     for (int l : {0, 3}) {
-        auto result = load_streamed_sog(reference, {.lod_level = l});
-        ASSERT_TRUE(result) << result.error();
+        auto result = load_ssog(reference, {.lod_level = l});
+        ASSERT_TRUE(result) << result.error().message;
         EXPECT_EQ(result->size(), m["counts"][l].get<size_t>());
         for (auto t : {result->means().cpu(), result->scaling_raw().cpu(), result->rotation_raw().cpu(), result->opacity_raw().cpu(), result->sh0().cpu(), result->shN_canonical_cpu()})
             for (size_t i = 0; i < t.numel(); ++i)
                 ASSERT_TRUE(std::isfinite(t.ptr<float>()[i]));
     }
 }
-TEST(StreamedSogFormat, ReferenceReadsOurs) {
+TEST(SsogFormat, ReferenceReadsOurs) {
     const char* cli = std::getenv("LFS_SPLAT_TRANSFORM");
     if (!cli || std::system("node --version > /dev/null 2>&1") != 0)
         GTEST_SKIP() << "Set LFS_SPLAT_TRANSFORM and install node";
-    ScopedStreamedSogDirectory dir;
+    ScopedSsogDirectory dir;
     auto s = synthetic(3000, 1);
     const auto out = dir.path / "ssog";
-    auto result = save_streamed_sog(s, options(out, 3));
+    auto result = save_ssog(s, options(dir.path / "scene.ssog", 3));
     ASSERT_TRUE(result) << result.error().format();
+    ASSERT_EQ(std::system(("python3 -E -m zipfile -e " + shell_quote((dir.path / "scene.ssog").string()) + " " + shell_quote(out.string())).c_str()), 0);
     const auto m = read(out / "lod-meta.json");
     const std::string base = "node " + shell_quote(cli) + " -g cpu --max-workers 0 " + shell_quote((out / "lod-meta.json").string());
     const auto ply = dir.path / "back.ply";
@@ -363,11 +366,11 @@ TEST(StreamedSogFormat, ReferenceReadsOurs) {
     EXPECT_EQ(info_json.at("numLods"), m["lodLevels"]);
 }
 
-TEST(StreamedSogFormat, CliOptionsAndAliases) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, CliOptions) {
+    ScopedSsogDirectory dir;
     const auto input = (dir.path / "input.ply").string();
     std::ofstream(input).put('\n');
-    for (const char* alias : {"ssog", "streamed-sog", "lod-meta.json"}) {
+    for (const char* alias : {"ssog"}) {
         const char* argv[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", alias,
                               "--lod-levels", "2", "--lod-ratio", "0.25", "--lod-chunk-count", "32",
                               "--lod-chunk-extent", "8", "--lod-chunk-min", "2", "-o", "result_ssog"};
@@ -375,7 +378,7 @@ TEST(StreamedSogFormat, CliOptionsAndAliases) {
         ASSERT_TRUE(parsed) << parsed.error();
         const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
         ASSERT_NE(mode, nullptr);
-        EXPECT_EQ(mode->params.format, lfs::core::param::OutputFormat::STREAMED_SOG);
+        EXPECT_EQ(mode->params.format, lfs::core::param::OutputFormat::SSOG);
         EXPECT_EQ(mode->params.output_path, fs::path("result_ssog"));
         EXPECT_EQ(mode->params.lod_levels, 2);
         EXPECT_FLOAT_EQ(mode->params.lod_ratio, 0.25f);
@@ -387,8 +390,8 @@ TEST(StreamedSogFormat, CliOptionsAndAliases) {
     EXPECT_FALSE(lfs::core::args::parse_args(std::size(bad), bad));
 }
 
-TEST(StreamedSogFormat, BundleAndDirectoryPayloadsMatch) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, BundleAndDirectoryPayloadsMatch) {
+    ScopedSsogDirectory dir;
     auto splats = synthetic(2048);
     const auto stamp = make_minimal_provenance_stamp();
     const auto bundle = dir.path / "bundle.sog";
@@ -438,19 +441,19 @@ TEST(StreamedSogFormat, BundleAndDirectoryPayloadsMatch) {
     EXPECT_EQ(names, (std::vector<std::string>{"means_l.webp", "means_u.webp", "quats.webp", "scales.webp", "sh0.webp", "shN_centroids.webp", "shN_labels.webp", "meta.json"}));
 }
 
-TEST(StreamedSogFormat, TinyInputHasEmptyCoarsestLevel) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, TinyInputHasEmptyCoarsestLevel) {
+    ScopedSsogDirectory dir;
     auto splats = synthetic(3, 0);
-    auto saved = save_streamed_sog(splats, options(dir.path, 4));
+    auto saved = save_ssog(splats, options(dir.path, 4));
     ASSERT_TRUE(saved) << saved.error().format();
     EXPECT_EQ(read(dir.path / "lod-meta.json")["counts"], Json::array({3, 2, 1, 0}));
-    auto loaded = load_streamed_sog(dir.path, {.lod_level = -1});
-    ASSERT_TRUE(loaded) << loaded.error();
+    auto loaded = load_ssog(dir.path, {.lod_level = -1});
+    ASSERT_TRUE(loaded) << loaded.error().message;
     EXPECT_EQ(loaded->size(), 0);
 }
 
-TEST(StreamedSogFormat, ImportNamesUseAssetDirectories) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, ImportNamesUseAssetDirectories) {
+    ScopedSsogDirectory dir;
     const auto asset = dir.path / "garden.mcp";
     fs::create_directories(asset / "1_0");
     std::ofstream(asset / "lod-meta.json") << "{}";
@@ -465,8 +468,8 @@ TEST(StreamedSogFormat, ImportNamesUseAssetDirectories) {
     EXPECT_EQ(splat_import_name(dir.path / "garden.spz"), "garden");
 }
 
-TEST(StreamedSogFormat, WorkerProgressIsSerializedMonotoneAndCancellable) {
-    ScopedStreamedSogDirectory dir;
+TEST(SsogFormat, WorkerProgressIsSerializedMonotoneAndCancellable) {
+    ScopedSsogDirectory dir;
     auto s = synthetic(12000, 1);
     auto o = options(dir.path, 3);
     float last = -1;
@@ -482,7 +485,7 @@ TEST(StreamedSogFormat, WorkerProgressIsSerializedMonotoneAndCancellable) {
         callbacks.fetch_sub(1);
         return true;
     };
-    ASSERT_TRUE(save_streamed_sog(s, o));
+    ASSERT_TRUE(save_ssog(s, o));
     EXPECT_EQ(last, 1.0f);
     if (!std::getenv("LFS_SSOG_UNIT_WORKERS"))
         EXPECT_TRUE(saw_worker);
@@ -493,13 +496,13 @@ TEST(StreamedSogFormat, WorkerProgressIsSerializedMonotoneAndCancellable) {
         last = p;
         return p < 0.65f;
     };
-    auto cancelled = save_streamed_sog(s, o);
+    auto cancelled = save_ssog(s, o);
     ASSERT_FALSE(cancelled);
     EXPECT_EQ(cancelled.error().code, ErrorCode::CANCELLED);
     EXPECT_EQ(read(dir.path / "lod-meta.json"), original);
 }
 
-TEST(StreamedSogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {
+TEST(SsogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {
     for (const size_t n : {1u, 17u, 4096u, 30001u}) {
         auto s = synthetic(n, 0);
         auto positions = s.means().cpu();
@@ -512,10 +515,141 @@ TEST(StreamedSogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {
                     std::copy_n(positions.ptr<float>(), 3, positions.ptr<float>() + i * 3);
             std::vector<int> rows(n);
             std::iota(rows.begin(), rows.end(), 0);
-            sort_streamed_sog_leaf(positions.ptr<float>(), rows);
+            sort_ssog_leaf(positions.ptr<float>(), rows);
             auto gpu = morton_sort_indices_for_positions(positions.cuda()).cpu();
             ASSERT_TRUE(gpu.is_valid());
             EXPECT_TRUE(std::equal(rows.begin(), rows.end(), gpu.ptr<int>())) << "n=" << n << " mode=" << mode;
         }
     }
+}
+
+TEST(SsogFormat, BundleEntriesRoundtripAndRegistry) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "scene.ssog";
+    const auto unpacked = dir.path / "unpacked.ssog";
+    auto saved = save_ssog(synthetic(2048, 1), options(bundle, 3));
+    ASSERT_TRUE(saved) << saved.error().format();
+    ASSERT_TRUE(fs::is_regular_file(bundle));
+    std::unique_ptr<archive, decltype(&archive_read_free)> zip(archive_read_new(), archive_read_free);
+    ASSERT_EQ(archive_read_support_format_zip(zip.get()), ARCHIVE_OK);
+#ifdef _WIN32
+    ASSERT_EQ(archive_read_open_filename_w(zip.get(), bundle.wstring().c_str(), 10240), ARCHIVE_OK);
+#else
+    ASSERT_EQ(archive_read_open_filename(zip.get(), bundle.c_str(), 10240), ARCHIVE_OK);
+#endif
+    archive_entry* entry = nullptr;
+    std::set<std::string> names;
+    std::string last;
+    int status;
+    while ((status = archive_read_next_header(zip.get(), &entry)) == ARCHIVE_OK) {
+        last = archive_entry_pathname(entry);
+        ASSERT_TRUE(names.insert(last).second);
+        const auto destination = unpacked / last;
+        fs::create_directories(destination.parent_path());
+        std::ofstream output(destination, std::ios::binary);
+        std::array<char, 65536> bytes;
+        la_ssize_t n;
+        while ((n = archive_read_data(zip.get(), bytes.data(), bytes.size())) > 0)
+            output.write(bytes.data(), n);
+        ASSERT_EQ(n, 0);
+        ASSERT_TRUE(output);
+    }
+    ASSERT_EQ(status, ARCHIVE_EOF);
+    EXPECT_EQ(last, "lod-meta.json");
+    const auto manifest = read(unpacked / "lod-meta.json");
+    for (const auto& name : manifest["filenames"]) {
+        const fs::path unit = name.get<std::string>();
+        for (const auto* file : {"meta.json", "means_l.webp", "means_u.webp", "scales.webp", "quats.webp", "sh0.webp", "shN_centroids.webp", "shN_labels.webp"})
+            EXPECT_TRUE(names.contains((unit.parent_path() / file).generic_string()));
+    }
+    for (int level : {0, 1, 2, -1}) {
+        auto bundled = load_ssog(bundle, {.lod_level = level});
+        auto directory = load_ssog(unpacked, {.lod_level = level});
+        ASSERT_TRUE(bundled) << bundled.error().format();
+        ASSERT_TRUE(directory) << directory.error().format();
+        ASSERT_EQ(bundled->size(), directory->size());
+        // Identical manifest traversal guarantees row order too, a stronger check than sorting.
+        EXPECT_EQ(bundled->means().cpu().to_vector(), directory->means().cpu().to_vector());
+        EXPECT_EQ(bundled->scaling_raw().cpu().to_vector(), directory->scaling_raw().cpu().to_vector());
+        EXPECT_EQ(bundled->opacity_raw().cpu().to_vector(), directory->opacity_raw().cpu().to_vector());
+        EXPECT_EQ(bundled->rotation_raw().cpu().to_vector(), directory->rotation_raw().cpu().to_vector());
+        EXPECT_EQ(bundled->shN_canonical_cpu().to_vector(), directory->shN_canonical_cpu().to_vector());
+    }
+    EXPECT_TRUE(is_ssog_path(bundle));
+    SsogLoader format_loader;
+    EXPECT_EQ(format_loader.supportedExtensions(), std::vector<std::string>{".ssog"});
+    EXPECT_TRUE(format_loader.canLoad(bundle));
+    EXPECT_FALSE(Loader::isDatasetPath(bundle));
+    EXPECT_EQ(Loader::getDatasetType(bundle), DatasetType::Unknown);
+    auto registry = Loader::create();
+    EXPECT_TRUE(registry->canLoad(bundle));
+    auto loaded = registry->load(bundle);
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    EXPECT_EQ(std::get<std::shared_ptr<SplatData>>(loaded->data)->size(), 2048);
+}
+
+TEST(SsogFormat, BundleCancellationPreservesDestination) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "scene.ssog";
+    std::ofstream(bundle) << "existing destination";
+    auto o = options(bundle, 2);
+    o.progress_callback = [](float p, const std::string&) { return p < 1; };
+    auto saved = save_ssog(synthetic(512), o);
+    ASSERT_FALSE(saved);
+    EXPECT_EQ(saved.error().code, ErrorCode::CANCELLED);
+    std::ifstream file(bundle);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing destination");
+    for (const auto& entry : fs::directory_iterator(dir.path))
+        EXPECT_EQ(entry.path(), bundle);
+    fs::remove(bundle);
+    saved = save_ssog(synthetic(512), o);
+    EXPECT_FALSE(saved);
+    EXPECT_TRUE(fs::is_empty(dir.path));
+}
+
+TEST(SsogFormat, RejectsInvalidBundle) {
+    ScopedSsogDirectory dir;
+    const auto bundle = dir.path / "bad.ssog";
+    std::ofstream(bundle) << "not a ZIP archive";
+    EXPECT_FALSE(validate_ssog(bundle));
+    EXPECT_FALSE(load_ssog(bundle));
+    {
+        std::ofstream file(bundle, std::ios::binary);
+        file << "PK\x03\x04";
+    }
+    EXPECT_FALSE(validate_ssog(bundle));
+}
+
+TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
+    ScopedSsogDirectory dir;
+    const auto input = dir.path / "input.ply";
+    ASSERT_TRUE(save_ply(synthetic(128, 0), {.output_path = input}));
+    for (const auto& destination : {dir.path / "out.ssog", dir.path / "outdir", fs::path{}}) {
+        const auto input_string = input.string();
+        const auto output_string = destination.string();
+        std::vector<const char*> argv{"LichtFeld-Studio", "convert", input_string.c_str(), "-f", "ssog", "--lod-levels", "2", "-y"};
+        if (!destination.empty()) {
+            argv.push_back("-o");
+            argv.push_back(output_string.c_str());
+        }
+        auto parsed = lfs::core::args::parse_args(static_cast<int>(argv.size()), argv.data());
+        ASSERT_TRUE(parsed) << parsed.error();
+        const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+        ASSERT_NE(mode, nullptr);
+        ASSERT_EQ(lfs::app::run_converter(mode->params), 0);
+        const auto actual = destination.empty() ? dir.path / "input.ssog" : destination;
+        auto loaded = load_ssog(actual);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        EXPECT_EQ(loaded->size(), 128);
+        EXPECT_EQ(fs::is_regular_file(actual), actual.extension() == ".ssog");
+    }
+    lfs::core::param::ConvertParameters back;
+    back.input_path = dir.path / "out.ssog";
+    back.output_path = dir.path / "back.ply";
+    back.format = lfs::core::param::OutputFormat::PLY;
+    back.overwrite = true;
+    ASSERT_EQ(lfs::app::run_converter(back), 0);
+    auto loaded = Loader::create()->load(back.output_path);
+    ASSERT_TRUE(loaded) << loaded.error().format();
+    EXPECT_EQ(std::get<std::shared_ptr<SplatData>>(loaded->data)->size(), 128);
 }

@@ -11,7 +11,7 @@
 namespace lfs::io {
     // Same 21-bit per-axis normalization and stable ties as the CUDA SOG
     // sorter. Work directly on host level rows, without a CUDA round trip per leaf.
-    inline void sort_streamed_sog_leaf(const float* positions, std::span<int> rows) {
+    inline void sort_ssog_leaf(const float* positions, std::span<int> rows) {
         if (rows.empty())
             return;
         std::array<float, 3> low, high, multiplier;

@@ -73,7 +73,7 @@ namespace lfs::io {
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
-    struct StreamedSogSaveOptions {
+    struct SsogSaveOptions {
         std::filesystem::path output_path;
         int lod_levels = 4;
         float lod_ratio = 0.5f;
@@ -86,9 +86,9 @@ namespace lfs::io {
         std::optional<core::ProvenanceStamp> provenance{};
     };
 
-    [[nodiscard]] LFS_IO_API Result<void> save_streamed_sog(const SplatData&, const StreamedSogSaveOptions&);
+    [[nodiscard]] LFS_IO_API Result<void> save_ssog(const SplatData&, const SsogSaveOptions&);
 
-    struct StreamedSogLoadOptions {
+    struct SsogLoadOptions {
         int lod_level = 0; // Negative levels count from the coarsest (-1).
     };
 

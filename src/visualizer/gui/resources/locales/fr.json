@@ -1,4 +1,7 @@
 {
+  "file_menu": {
+    "import_ssog": "Import SSOG…"
+  },
   "_language_name": "Français",
   "menu": {
     "file": "Fichier",
@@ -22,8 +25,7 @@
     "file.dataset_not_recognized": "Le dossier sélectionné n’est pas reconnu comme un dataset pris en charge :\n{path}",
     "file.checkpoint_not_recognized": "Le fichier sélectionné n’est pas reconnu comme un checkpoint valide :\n{path}",
     "file.import_dataset": "Importer un Dataset",
-    "file.import_streamed_sog": "Import Streamed SOG…",
-    "file.import_ply": "Importer un PLY, SOG, SPZ, RAD, USD",
+    "file.import_ply": "Importer un PLY, SOG, SSOG, SPZ, RAD, USD",
     "file.import_mesh": "Importer un Mesh",
     "file.import_checkpoint": "Importer un Point de Contrôle",
     "file.import_config": "Importer une Configuration",
@@ -667,7 +669,7 @@
   "export": {
     "overwrite": "Écraser",
     "format.ply_standard": "PLY (Standard)",
-    "format.streamed_sog": "Streamed SOG (PlayCanvas LOD)",
+    "format.ssog": "SSOG (PlayCanvas streamed)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1324,7 +1326,8 @@
     "chunk_min_k": "Minimum chunk gaussians (K)",
     "kmeans_iterations": "K-means iterations",
     "invalid_folder_name": "Enter a single folder name without path separators.",
-    "streamed_sog_overwrite": "Streamed SOG data already exists in this folder. Overwrite it?",
+    "ssog_bundle": "Bundle into a single .ssog file",
+    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
     "format": "FORMAT",
     "models": "MODÈLES",
     "no_models": "Aucun modèle dans la scène",
@@ -1640,10 +1643,10 @@
     "click_to_continue": "Cliquez n'importe où pour continuer",
     "loaded_plugins": "Plugins de démarrage chargés {}/{}",
     "drop_files_title": "Déposez des fichiers ici pour commencer",
-    "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, dataset COLMAP ou fichier de projet",
+    "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, dataset COLMAP ou fichier de projet",
     "drop_files_hint": "Ou utilisez Fichier > Importer Dataset / Importer PLY",
     "drop_to_import": "Déposer pour Importer",
-    "drop_to_import_subtitle": "PLY, SOG, SPZ, RAD, USD, dataset COLMAP ou Projet",
+    "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, dataset COLMAP ou Projet",
     "discord": "Discord",
     "donate": "Faire un don",
     "discovering_plugins": "Recherche des plugins de démarrage...",

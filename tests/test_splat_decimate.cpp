@@ -77,7 +77,7 @@ TEST(SplatDecimate, ExactTargetCount) {
     DecimateOptions options;
     options.target_count = 7000;
     auto out = decimate_splats(input, options);
-    ASSERT_TRUE(out) << out.error();
+    ASSERT_TRUE(out) << out.error().message;
     EXPECT_EQ(out->size(), 7000);
     finite(*out);
     EXPECT_EQ(out->get_scene_scale(), 2.5f);
@@ -85,7 +85,7 @@ TEST(SplatDecimate, ExactTargetCount) {
     for (size_t target : {20000u, 25000u}) {
         options.target_count = target;
         auto same = decimate_splats(input, options);
-        ASSERT_TRUE(same) << same.error();
+        ASSERT_TRUE(same) << same.error().message;
         EXPECT_EQ(same->size(), input.size());
         std::array<const Tensor*, 6> a{&input.means(), &input.rotation_raw(), &input.scaling_raw(), &input.opacity_raw(), &input.sh0(), &input.shN()};
         std::array<const Tensor*, 6> b{&same->means(), &same->rotation_raw(), &same->scaling_raw(), &same->opacity_raw(), &same->sh0(), &same->shN()};
@@ -123,8 +123,8 @@ TEST(SplatDecimate, GpuMatchesCpuReference) {
             auto a = decimate_splats(input, o);
             o.use_gpu = false;
             auto b = decimate_splats(input, o);
-            ASSERT_TRUE(a) << a.error();
-            ASSERT_TRUE(b) << b.error();
+            ASSERT_TRUE(a) << a.error().message;
+            ASSERT_TRUE(b) << b.error().message;
             EXPECT_EQ(a->size(), target);
             EXPECT_EQ(b->size(), target);
             auto x = a->means().cpu(), y = b->means().cpu();
@@ -246,22 +246,22 @@ TEST(SplatDecimate, DeletedCancellationAndSmallInputs) {
     DecimateOptions o;
     o.target_count = 17;
     auto visible = decimate_splats(input, o);
-    ASSERT_TRUE(visible) << visible.error();
+    ASSERT_TRUE(visible) << visible.error().message;
     EXPECT_EQ(visible->size(), 15);
     EXPECT_EQ(input.size(), 17);
     o.target_count = 1;
     auto one = decimate_splats(input, o);
-    ASSERT_TRUE(one) << one.error();
+    ASSERT_TRUE(one) << one.error().message;
     EXPECT_EQ(one->size(), 1);
     finite(*one);
     o.progress = [](float, const std::string&) { return false; };
     auto cancelled = decimate_splats(input, o);
     ASSERT_FALSE(cancelled);
-    EXPECT_EQ(cancelled.error(), "cancelled");
+    EXPECT_EQ(cancelled.error().code, lfs::io::ErrorCode::CANCELLED);
     o.progress = {};
     input.deleted() = Tensor::ones({17}, Device::CUDA, DataType::Bool);
     auto empty = decimate_splats(input, o);
-    ASSERT_TRUE(empty) << empty.error();
+    ASSERT_TRUE(empty) << empty.error().message;
     EXPECT_EQ(empty->size(), 0);
     o.target_count = 0;
     EXPECT_FALSE(decimate_splats(input, o));
@@ -285,7 +285,7 @@ TEST(SplatDecimate, DecimatePerfSmoke) {
     auto out = decimate_splats(input, o);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
-    ASSERT_TRUE(out) << out.error();
+    ASSERT_TRUE(out) << out.error().message;
     EXPECT_EQ(out->size(), count / 2);
     std::cout << "Decimate " << count << " SH3 -> " << count / 2 << " total: " << ms << " ms\n";
     EXPECT_LT(ms, 3000.0 * count / 1000000);

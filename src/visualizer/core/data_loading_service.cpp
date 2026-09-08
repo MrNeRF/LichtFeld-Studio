@@ -132,9 +132,9 @@ namespace lfs::vis {
         }
     }
 
-    bool DataLoadingService::isStreamedSogFile(const std::filesystem::path& path) const {
+    bool DataLoadingService::isSsogFile(const std::filesystem::path& path) const {
         std::error_code ec;
-        return path.filename() == "lod-meta.json" ||
+        return path.extension() == ".ssog" || path.filename() == "lod-meta.json" ||
                std::filesystem::is_regular_file(path / "lod-meta.json", ec);
     }
 
@@ -240,7 +240,7 @@ namespace lfs::vis {
 
         try {
             // Determine file type
-            if (isStreamedSogFile(path) || isSOGFile(path)) {
+            if (isSsogFile(path) || isSOGFile(path)) {
                 return loadSOG(path);
             } else if (isPLYFile(path)) {
                 return loadPLY(path);
@@ -328,7 +328,7 @@ namespace lfs::vis {
     }
 
     void DataLoadingService::addSplatFileToScene(const std::filesystem::path& path) {
-        if (isStreamedSogFile(path) || isSOGFile(path)) {
+        if (isSsogFile(path) || isSOGFile(path)) {
             addSOGToScene(path);
         } else if (isPLYFile(path)) {
             addPLYToScene(path);

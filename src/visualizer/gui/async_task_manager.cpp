@@ -110,7 +110,7 @@ namespace lfs::vis::gui {
         switch (format) {
         case ExportFormat::PLY: return "PLY";
         case ExportFormat::SOG: return "SOG";
-        case ExportFormat::STREAMED_SOG: return "SSOG";
+        case ExportFormat::SSOG: return "SSOG";
         case ExportFormat::SPZ: return "SPZ";
         case ExportFormat::HTML_VIEWER: return "HTML";
         case ExportFormat::USD: return "USD";
@@ -1696,8 +1696,8 @@ namespace lfs::vis::gui {
                             }
                             break;
                         }
-                        case ExportFormat::STREAMED_SOG: {
-                            const lfs::io::StreamedSogSaveOptions options{
+                        case ExportFormat::SSOG: {
+                            const lfs::io::SsogSaveOptions options{
                                 .output_path = path,
                                 .lod_levels = lod_levels,
                                 .lod_ratio = lod_ratio,
@@ -1707,7 +1707,7 @@ namespace lfs::vis::gui {
                                 .kmeans_iterations = kmeans_iterations,
                                 .progress_callback = update_progress,
                                 .provenance = provenance};
-                            if (auto result = lfs::io::save_streamed_sog(*splat_data, options); result) {
+                            if (auto result = lfs::io::save_ssog(*splat_data, options); result) {
                                 success = true;
                             } else {
                                 error_msg = result.error().message;

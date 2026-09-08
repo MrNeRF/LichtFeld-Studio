@@ -3,12 +3,12 @@
 #pragma once
 #include "io/loader_interface.hpp"
 namespace lfs::io {
-    class StreamedSogLoader final : public IDataLoader {
+    class SsogLoader final : public IDataLoader {
     public:
         Result<LoadResult> load(const std::filesystem::path&, const LoadOptions& = {}) override;
         bool canLoad(const std::filesystem::path&) const override;
-        std::string name() const override { return "Streamed SOG"; }
-        std::vector<std::string> supportedExtensions() const override { return {}; }
+        std::string name() const override { return "SSOG"; }
+        std::vector<std::string> supportedExtensions() const override { return {".ssog"}; }
         int priority() const override { return 18; }
     };
 } // namespace lfs::io

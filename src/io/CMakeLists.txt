@@ -251,8 +251,8 @@ add_library(lfs_io STATIC
         formats/transforms.cpp
         formats/sogs.hpp
         formats/sogs.cpp
-        formats/streamed_sog.hpp
-        formats/streamed_sog.cpp
+        formats/ssog.hpp
+        formats/ssog.cpp
         formats/html.hpp
         formats/html.cpp
         formats/rad.hpp
@@ -286,8 +286,8 @@ add_library(lfs_io STATIC
         loaders/blender_loader.cpp
         loaders/sogs_loader.hpp
         loaders/sogs_loader.cpp
-        loaders/streamed_sog_loader.hpp
-        loaders/streamed_sog_loader.cpp
+        loaders/ssog_loader.hpp
+        loaders/ssog_loader.cpp
         loaders/spz_loader.hpp
         loaders/spz_loader.cpp
         loaders/usd_loader.hpp

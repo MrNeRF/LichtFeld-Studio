@@ -1,4 +1,7 @@
 {
+  "file_menu": {
+    "import_ssog": "Import SSOG…"
+  },
   "_language_name": "Polski",
   "menu": {
     "file": "Plik",
@@ -22,8 +25,7 @@
     "file.dataset_not_recognized": "Wybrany folder nie został rozpoznany jako obsługiwany zbiór danych:\n{path}",
     "file.checkpoint_not_recognized": "Wybrany plik nie został rozpoznany jako prawidłowy checkpoint:\n{path}",
     "file.import_dataset": "Importuj Zbiór Danych",
-    "file.import_streamed_sog": "Import Streamed SOG…",
-    "file.import_ply": "Importuj PLY, SOG, SPZ, RAD, USD",
+    "file.import_ply": "Importuj PLY, SOG, SSOG, SPZ, RAD, USD",
     "file.import_mesh": "Importuj Mesh",
     "file.import_checkpoint": "Importuj Punkt Kontrolny",
     "file.import_config": "Importuj Konfigurację",
@@ -667,7 +669,7 @@
   "export": {
     "overwrite": "Zastąp",
     "format.ply_standard": "PLY (Standard)",
-    "format.streamed_sog": "Streamed SOG (PlayCanvas LOD)",
+    "format.ssog": "SSOG (PlayCanvas streamed)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1324,7 +1326,8 @@
     "chunk_min_k": "Minimum chunk gaussians (K)",
     "kmeans_iterations": "K-means iterations",
     "invalid_folder_name": "Enter a single folder name without path separators.",
-    "streamed_sog_overwrite": "Streamed SOG data already exists in this folder. Overwrite it?",
+    "ssog_bundle": "Bundle into a single .ssog file",
+    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
     "format": "FORMAT",
     "models": "MODELE",
     "no_models": "Brak modeli w scenie",
@@ -1640,10 +1643,10 @@
     "click_to_continue": "Kliknij gdziekolwiek, aby kontynuować",
     "loaded_plugins": "Wczytano wtyczki startowe {}/{}",
     "drop_files_title": "Upuść pliki tutaj, aby rozpocząć",
-    "drop_files_subtitle": "PLY, SOG, SPZ, RAD, USD, zbiór danych COLMAP lub plik projektu",
+    "drop_files_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, zbiór danych COLMAP lub plik projektu",
     "drop_files_hint": "Lub użyj Plik > Importuj Zbiór Danych / Importuj PLY",
     "drop_to_import": "Upuść, aby Zaimportować",
-    "drop_to_import_subtitle": "PLY, SOG, SPZ, RAD, USD, zbiór danych COLMAP lub Projekt",
+    "drop_to_import_subtitle": "PLY, SOG, SSOG, SPZ, RAD, USD, zbiór danych COLMAP lub Projekt",
     "discord": "Discord",
     "donate": "Wesprzyj",
     "discovering_plugins": "Trwa wyszukiwanie wtyczek startowych...",

@@ -322,8 +322,8 @@ namespace {
             return {};
         }
 
-        constexpr std::array<std::string_view, 17> SUPPORTED_EXTENSIONS = {
-            ".ply", ".sog", ".spz", ".rad", ".resume",
+        constexpr std::array<std::string_view, 18> SUPPORTED_EXTENSIONS = {
+            ".ply", ".sog", ".ssog", ".spz", ".rad", ".resume",
             ".usd", ".usda", ".usdc", ".usdz",
             ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
         const auto is_supported = [&](const std::filesystem::path& p) {
@@ -396,8 +396,8 @@ namespace {
         using lfs::core::param::OutputFormat;
         if (str == "ply" || str == ".ply")
             return OutputFormat::PLY;
-        if (str == "ssog" || str == "streamed-sog" || str == "lod-meta.json")
-            return OutputFormat::STREAMED_SOG;
+        if (str == "ssog")
+            return OutputFormat::SSOG;
         if (str == "sog" || str == ".sog")
             return OutputFormat::SOG;
         if (str == "spz" || str == ".spz")
@@ -454,7 +454,7 @@ namespace {
             ::args::ArgumentParser parser(
                 "LichtFeld Studio: High-performance CUDA implementation of 3D Gaussian Splatting algorithm.\n",
                 "\nSUBCOMMANDS:\n"
-                "convert -- Convert between .ply, .sog, .spz, .usd/.usda/.usdc, .html\n"
+                "convert -- Convert between .ply, .sog, .ssog, .spz, .usd/.usda/.usdc, .html\n"
                 "mesh2splat -- Convert a mesh file to Gaussian splats\n"
                 "preprocess -- Generate depth and/or normal maps for an image dataset\n"
                 "plugin -- Manage plugins (create, check, list)\n"
@@ -485,7 +485,7 @@ namespace {
             ::args::Group mode_group(parser, "MODE SELECTION:");
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
-            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports projects (.licht), splat (.ply, .sog, .ssog, .spz, .rad, .usd, .usda, .usdc, .usdz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from a .resume checkpoint or .licht project", {"resume"});
             ::args::ValueFlag<std::string> render_camera_path(mode_group, "path", "Render a JSON camera-keyframe path to video, headless (no GUI/window). Requires --render-load and --render-output; see RENDER PATH options.", {"render-camera-path"});
             ::args::CompletionFlag completion(parser, {"complete"});
@@ -499,7 +499,7 @@ namespace {
             ::args::ValueFlag<std::string> output_path(paths_group, "output_path", "Directory for project.licht and --export files", {'o', "output-path"});
             ::args::ValueFlag<std::string> output_name(paths_group, "output_name", "Output filename (replaces default splat_ITER.ply stem)", {"output-name"});
             ::args::ValueFlag<std::string> config_file(paths_group, "config_file", "LichtFeldStudio config file (json)", {"config"});
-            ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
+            ::args::ValueFlag<std::string> init_path(paths_group, "path", "Initialize from splat file (.ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .usdz, .resume)", {"init"});
             ::args::ValueFlagList<std::string> add_splats(paths_group, "path", "Append trained splat file(s) to the training model before optimizer initialization", {"add-splat"});
             ::args::CounterFlag freeze(paths_group, "freeze", "Freeze the immediately preceding --add-splat rows from optimizer gradients and densification", {"freeze"});
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
@@ -520,7 +520,7 @@ namespace {
             // =============================================================================
             ::args::Group render_path_sep(parser, " ");
             ::args::Group render_path_group(parser, "RENDER PATH (used with --render-camera-path):");
-            ::args::ValueFlag<std::string> render_load(render_path_group, "path", "Trained scene to render (.ply/.sog/.spz or .resume checkpoint)", {"render-load"});
+            ::args::ValueFlag<std::string> render_load(render_path_group, "path", "Trained scene to render (.ply/.sog/.ssog/.spz or .resume checkpoint)", {"render-load"});
             ::args::ValueFlag<std::string> render_output(render_path_group, "path", "Output video file (.mp4)", {"render-output"});
             ::args::ValueFlag<int> render_width(render_path_group, "width", "Output width (default 1920)", {"render-width"});
             ::args::ValueFlag<int> render_height(render_path_group, "height", "Output height (default 1080)", {"render-height"});
@@ -989,7 +989,7 @@ namespace {
             if (lod_chunk_min)
                 params.lod_chunk_min = ::args::get(lod_chunk_min);
             if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
-                return std::unexpected("Invalid streamed SOG LOD options");
+                return std::unexpected("Invalid SSOG LOD options");
             if (export_formats) {
                 auto formats = parseFormatList(::args::get(export_formats));
                 if (!formats) {
@@ -1729,8 +1729,8 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, lod-meta.json (Streamed SOG), .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
-        "  Output: .ply, .sog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Input:  .ply, .sog, .ssog, SSOG (.ssog, lod-meta.json), .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
+        "  Output: .ply, .sog, .ssog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1746,7 +1746,7 @@ namespace {
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
-        "  Output: .ply, .sog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Output: .ply, .sog, .ssog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1783,7 +1783,7 @@ namespace {
         ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
         ::args::Positional<std::string> input(parser, "input", "Input file or directory");
         ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
-        ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or Streamed SOG directory", {'o', "output"});
+        ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or SSOG directory", {'o', "output"});
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, ssog, spz, html, usd, usda, usdc, rad", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
@@ -1860,7 +1860,7 @@ namespace {
         if (lod_chunk_min)
             params.lod_chunk_min = ::args::get(lod_chunk_min);
         if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
-            return std::unexpected("Invalid streamed SOG LOD options");
+            return std::unexpected("Invalid SSOG LOD options");
 
         params.overwrite = overwrite;
 
@@ -2010,7 +2010,7 @@ namespace {
         if (lod_chunk_min)
             params.lod_chunk_min = ::args::get(lod_chunk_min);
         if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
-            return std::unexpected("Invalid streamed SOG LOD options");
+            return std::unexpected("Invalid SSOG LOD options");
 
         params.overwrite = overwrite;
 

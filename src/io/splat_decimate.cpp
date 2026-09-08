@@ -169,31 +169,31 @@ namespace lfs::io::decimate {
 } // namespace lfs::io::decimate
 
 namespace lfs::io {
-    std::expected<core::SplatData, std::string> decimate_splats(const core::SplatData& input, const DecimateOptions& o) {
+    Result<core::SplatData> decimate_splats(const core::SplatData& input, const DecimateOptions& o) {
         using namespace decimate;
         using core::Device;
         try {
             if (!o.target_count)
-                return std::unexpected("decimation target must be at least 1");
+                return make_error(ErrorCode::INVALID_DATASET, "decimation target must be at least 1");
             if (o.knn_k < 1 || o.knn_k > max_knn || o.candidates_k < 1 || o.candidates_k > o.knn_k)
-                return std::unexpected("decimation requires 1 <= candidates_k <= knn_k <= 32");
+                return make_error(ErrorCode::INVALID_DATASET, "decimation requires 1 <= candidates_k <= knn_k <= 32");
             auto progress = [&](float p, const std::string& stage) { if(o.progress && !o.progress(p,stage)) throw std::runtime_error("cancelled"); };
             progress(0, "Preparing decimation");
             if (!input.means().is_valid() || input.means().ndim() != 2 || input.means().size(1) != 3)
-                return std::unexpected("decimation requires means with shape [N,3]");
+                return make_error(ErrorCode::INVALID_DATASET, "decimation requires means with shape [N,3]");
             const size_t input_n = input.size();
             auto valid_attribute = [&](const core::Tensor& t, size_t width) {
                 return t.is_valid() && t.dtype() == core::DataType::Float32 && t.numel() == input_n * width;
             };
             if (!valid_attribute(input.means(), 3) || !valid_attribute(input.rotation_raw(), 4) ||
                 !valid_attribute(input.scaling_raw(), 3) || !valid_attribute(input.opacity_raw(), 1) || !valid_attribute(input.sh0(), 3))
-                return std::unexpected("decimation requires float32 position, rotation, scale, opacity and DC attributes");
+                return make_error(ErrorCode::INVALID_DATASET, "decimation requires float32 position, rotation, scale, opacity and DC attributes");
             const core::SplatData* source = &input;
             core::SplatData visible;
             if (input.has_deleted_mask()) {
                 const auto& mask = input.deleted();
                 if (mask.dtype() != core::DataType::Bool || mask.ndim() != 1 || mask.numel() != input_n)
-                    return std::unexpected("decimation deleted mask must be bool [N]");
+                    return make_error(ErrorCode::INVALID_DATASET, "decimation deleted mask must be bool [N]");
                 // apply_deleted deliberately refuses to remove every row. The IO
                 // contract must still exclude an entirely soft-deleted scene.
                 if (size_t(mask.sum_scalar()) == input_n) {
@@ -209,7 +209,7 @@ namespace lfs::io {
             }
             size_t n = source->size();
             if (n > size_t(std::numeric_limits<int>::max()) || n * o.candidates_k > std::numeric_limits<uint32_t>::max())
-                return std::unexpected("decimation input exceeds index capacity");
+                return make_error(ErrorCode::INVALID_DATASET, "decimation input exceeds index capacity");
             Device device = o.use_gpu ? Device::CUDA : Device::CPU;
             auto materialize = [&](const core::Tensor& t) { return t.device() == device ? t.contiguous() : t.to(device).contiguous(); };
             Data data{materialize(source->means()), materialize(source->rotation_raw()), materialize(source->scaling_raw()),
@@ -244,6 +244,6 @@ namespace lfs::io {
             result.set_active_sh_degree(source->get_active_sh_degree());
             progress(1, "Decimation complete");
             return result;
-        } catch (const std::exception& e) { return std::unexpected(std::string(e.what())); }
+        } catch (const std::exception& e) { return make_error(std::string_view(e.what()) == "cancelled" ? ErrorCode::CANCELLED : ErrorCode::INTERNAL_ERROR, e.what()); }
     }
 } // namespace lfs::io

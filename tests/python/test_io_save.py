@@ -381,12 +381,12 @@ class TestSaveProgress:
         assert output_path.exists()
 
 
-class TestSaveStreamedSOG:
+class TestSaveSSOG:
     """Nightly CUDA roundtrip using a small synthetic splat, without a GUI."""
 
     @pytest.mark.gpu
     @pytest.mark.slow
-    def test_streamed_sog_roundtrip(self, lf, numpy, gpu_available, tmp_output):
+    def test_ssog_roundtrip(self, lf, numpy, gpu_available, tmp_output):
         if not gpu_available:
             pytest.skip("GPU not available")
         n = 256
@@ -407,14 +407,14 @@ class TestSaveStreamedSOG:
         header += "".join(f"property float {name}\n" for name in fields) + "end_header\n"
         source.write_bytes(header.encode() + points.tobytes())
         splat = lf.io.load(str(source)).splat_data
-        output = tmp_output / "streamed"
+        output = tmp_output / "ssog_directory"
         progress = []
 
         def on_progress(value, stage):
             progress.append((value, stage))
             return True
 
-        lf.io.save_streamed_sog(splat, str(output), lod_levels=2, chunk_count_k=1,
+        lf.io.save_ssog(splat, str(output), lod_levels=2, chunk_count_k=1,
                                 chunk_min_k=0, kmeans_iterations=2, progress=on_progress)
         assert (output / "lod-meta.json").is_file()
         assert progress
@@ -428,6 +428,24 @@ class TestSaveStreamedSOG:
             assert float(distances.min(axis=1).max()) < 0.01
             assert numpy.isfinite(loaded.get_scaling().cpu().numpy()).all()
 
+        import zipfile
+        bundle = tmp_output / "scene.ssog"
+        lf.io.save_ssog(splat, bundle, lod_levels=2, chunk_count_k=1,
+                        chunk_min_k=0, kmeans_iterations=2)
+        with zipfile.ZipFile(bundle) as archive:
+            assert archive.namelist()[-1] == "lod-meta.json"
+            assert all(info.compress_type == (zipfile.ZIP_STORED if info.filename.endswith(".webp") else zipfile.ZIP_DEFLATED)
+                       for info in archive.infolist())
+            archive.extractall(tmp_output / "unzipped")
+        bundled = lf.io.load(bundle).splat_data
+        unzipped = lf.io.load(tmp_output / "unzipped").splat_data
+        assert bundled.num_points == unzipped.num_points == n
+        numpy.testing.assert_array_equal(bundled.get_means().cpu().numpy(), unzipped.get_means().cpu().numpy())
+        numpy.testing.assert_array_equal(bundled.get_scaling().cpu().numpy(), unzipped.get_scaling().cpu().numpy())
         with pytest.raises(RuntimeError, match="[Cc]ancel"):
-            lf.io.save_streamed_sog(splat, str(tmp_output / "cancelled"),
+            lf.io.save_ssog(splat, tmp_output / "cancelled.ssog", progress=lambda _value, _stage: False)
+        assert not (tmp_output / "cancelled.ssog").exists()
+
+        with pytest.raises(RuntimeError, match="[Cc]ancel"):
+            lf.io.save_ssog(splat, str(tmp_output / "cancelled"),
                                     progress=lambda _value, _stage: False)

@@ -1158,47 +1158,23 @@ namespace lfs::io {
             return reconstruct_splat_data(meta, *images);
         }
 
-        std::expected<SogDirectoryReconstruct, std::string> prepare_sog_directory_impl(
-            const std::filesystem::path& path) {
+    } // anonymous namespace
 
-            LOG_INFO("Reading SOG from directory: {}", lfs::core::path_to_utf8(path));
-
-            // Read meta.json
-            auto meta_path = path / "meta.json";
-            if (!std::filesystem::exists(meta_path)) {
-                return std::unexpected("Missing meta.json");
-            }
-
-            std::error_code file_error;
-            const uintmax_t metadata_size = std::filesystem::file_size(meta_path, file_error);
-            if (file_error) {
-                return std::unexpected(std::format(
-                    "Failed to inspect meta.json: {}", file_error.message()));
-            }
-            if (metadata_size == 0 || metadata_size > MAX_METADATA_BYTES) {
-                return std::unexpected(std::format(
-                    "SOG metadata must contain 1..{} bytes", MAX_METADATA_BYTES));
-            }
-
-            std::ifstream meta_file;
-            if (!lfs::core::open_file_for_read(meta_path, std::ios::binary, meta_file)) {
-                return std::unexpected("Failed to open meta.json");
-            }
-            std::string metadata_json(static_cast<size_t>(metadata_size), '\0');
-            if (!meta_file.read(metadata_json.data(),
-                                static_cast<std::streamsize>(metadata_json.size()))) {
-                return std::unexpected("Failed to read complete meta.json");
-            }
-
+    Result<SogDirectoryReconstruct> prepare_sog_entries(const SogEntryReader& read, const std::string& prefix) {
+        try {
+            auto metadata = read(prefix + "meta.json", MAX_METADATA_BYTES);
+            if (!metadata)
+                return std::unexpected(metadata.error());
+            const std::string metadata_json(metadata->begin(), metadata->end());
             SogMetadata meta;
             {
                 LOG_TIMER_DEBUG("SOG load: meta");
                 auto meta_result = parse_metadata(metadata_json);
                 if (!meta_result) {
-                    return std::unexpected(meta_result.error());
+                    return make_error(ErrorCode::INVALID_HEADER, meta_result.error());
                 }
                 if (auto validation = validate_metadata(*meta_result); !validation) {
-                    return std::unexpected(validation.error());
+                    return make_error(ErrorCode::INVALID_HEADER, validation.error());
                 }
                 meta = std::move(*meta_result);
             }
@@ -1207,50 +1183,18 @@ namespace lfs::io {
 
             // Helper to read and decode WebP files
             auto read_webp = [&](const std::string& filename)
-                -> std::expected<void, std::string> {
+                -> Result<void> {
                 if (encoded_images.contains(filename)) {
-                    return std::unexpected(std::format(
-                        "SOG metadata references duplicate texture '{}'", filename));
+                    return make_error(ErrorCode::INVALID_HEADER, std::format(
+                                                                     "SOG metadata references duplicate texture '{}'", filename));
                 }
-                auto file_path = path / filename;
-
-                if (!std::filesystem::exists(file_path)) {
-                    return std::unexpected(std::format(
-                        "Missing SOG texture '{}'", lfs::core::path_to_utf8(file_path)));
-                }
-
-                std::error_code image_error;
-                const uintmax_t image_size = std::filesystem::file_size(file_path, image_error);
-                if (image_error) {
-                    return std::unexpected(std::format(
-                        "Failed to inspect '{}': {}", filename, image_error.message()));
-                }
-                if (image_size == 0 || image_size > MAX_ENCODED_IMAGE_BYTES) {
-                    return std::unexpected(std::format(
-                        "Encoded SOG texture '{}' must contain 1..{} bytes",
-                        filename,
-                        MAX_ENCODED_IMAGE_BYTES));
-                }
-
-                std::ifstream file;
-                if (!lfs::core::open_file_for_read(file_path, std::ios::binary, file)) {
-                    return std::unexpected(std::format(
-                        "Failed to open SOG texture '{}'", filename));
-                }
-
-                const size_t size = static_cast<size_t>(image_size);
+                auto bytes = read(prefix + filename, MAX_ENCODED_IMAGE_BYTES);
+                if (!bytes)
+                    return std::unexpected(bytes.error());
+                const size_t size = bytes->size();
                 auto data = std::make_unique_for_overwrite<uint8_t[]>(size);
-                if (!file.read(reinterpret_cast<char*>(data.get()),
-                               static_cast<std::streamsize>(size))) {
-                    return std::unexpected(std::format(
-                        "Failed to read complete SOG texture '{}'", filename));
-                }
-
-                encoded_images.emplace(
-                    filename,
-                    EncodedImage{
-                        std::move(data),
-                        size});
+                std::copy(bytes->begin(), bytes->end(), data.get());
+                encoded_images.emplace(filename, EncodedImage{std::move(data), size});
                 return {};
             };
 
@@ -1282,61 +1226,63 @@ namespace lfs::io {
 
             auto images = decode_sog_images(meta, encoded_images);
             if (!images) {
-                return std::unexpected(images.error().message);
+                return std::unexpected(images.error());
             }
-            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(*images)]() {
-                return reconstruct_splat_data(meta, images);
+            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(*images)]() -> Result<SplatData> {
+                auto result = reconstruct_splat_data(meta, images);
+                if (!result)
+                    return make_error(ErrorCode::DECODING_FAILED, result.error());
+                return Result<SplatData>(std::move(*result));
             });
-        }
-
-    } // anonymous namespace
-
-    std::expected<SogDirectoryReconstruct, std::string> prepare_sog_directory(const std::filesystem::path& path) {
-        try {
-            return prepare_sog_directory_impl(path);
         } catch (const std::exception& e) {
-            return std::unexpected(std::string("Failed to read SOG directory: ") + e.what());
+            return make_error(ErrorCode::READ_FAILURE, e.what());
         }
     }
 
-    std::expected<SplatData, std::string> read_sog_directory(const std::filesystem::path& path) {
-        try {
-            auto ready = prepare_sog_directory(path);
-            if (!ready)
-                return std::unexpected(ready.error());
-            return (*ready)();
-        } catch (const std::exception& e) {
-            return std::unexpected(std::string("Failed to decode SOG directory: ") + e.what());
-        }
+    Result<SogDirectoryReconstruct> prepare_sog_directory(const std::filesystem::path& path) {
+        return prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
+            const auto file_path = path / core::utf8_to_path(name);
+            std::error_code ec;
+            const auto size = std::filesystem::file_size(file_path, ec);
+            if (ec)
+                return make_error(ErrorCode::READ_FAILURE, ec.message(), file_path);
+            if (!size || size > limit)
+                return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SOG entry size", file_path);
+            std::ifstream file(file_path, std::ios::binary);
+            std::vector<uint8_t> bytes(static_cast<size_t>(size));
+            if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
+                return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG entry", file_path);
+            return bytes;
+        },
+                                   "");
     }
 
-    std::expected<SplatData, std::string> load_sog(const std::filesystem::path& path) {
-        LOG_TIMER("SOG File Loading");
+    Result<SplatData> read_sog_directory(const std::filesystem::path& path) {
+        auto ready = prepare_sog_directory(path);
+        if (!ready)
+            return std::unexpected(ready.error());
+        return (*ready)();
+    }
 
+    Result<SplatData> load_sog(const std::filesystem::path& path) {
         try {
-            if (!std::filesystem::exists(path)) {
-                std::string error_msg = std::format("SOG file/directory does not exist: {}", lfs::core::path_to_utf8(path));
-                LOG_ERROR("{}", error_msg);
-                return std::unexpected(error_msg);
-            }
-
-            // Check if it's a .sog bundle
+            if (!std::filesystem::exists(path))
+                return make_error(ErrorCode::PATH_NOT_FOUND, "SOG file/directory does not exist", path);
             if (path.extension() == ".sog") {
-                return read_sog_bundle(path);
+                auto result = read_sog_bundle(path);
+                if (!result)
+                    return make_error(ErrorCode::DECODING_FAILED, result.error(), path);
+                return std::move(*result);
             }
-            // Check if it's a meta.json file
-            if (path.filename() == "meta.json") {
+            if (path.filename() == "meta.json")
                 return read_sog_directory(path.parent_path());
-            }
-            // Check if it's a directory
-            if (std::filesystem::is_directory(path)) {
+            if (std::filesystem::is_directory(path))
                 return read_sog_directory(path);
-            }
-            return std::unexpected(std::format("Unknown SOG format: {}", lfs::core::path_to_utf8(path)));
+            return make_error(ErrorCode::UNSUPPORTED_FORMAT, "Unknown SOG format", path);
         } catch (const std::bad_alloc&) {
-            return std::unexpected("SOG input exceeds available memory");
-        } catch (const std::exception& error) {
-            return std::unexpected(std::format("Failed to load SOG: {}", error.what()));
+            return make_error(ErrorCode::RESOURCE_EXHAUSTED, "SOG input exceeds available memory", path);
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::READ_FAILURE, e.what(), path);
         }
     }
 
@@ -2462,6 +2408,10 @@ namespace lfs::io {
                               std::format("Failed to save SOG: {}", e.what()),
                               options.output_path);
         }
+    }
+
+    std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path& path) {
+        return std::make_unique<SogArchive>(path);
     }
 
     Result<void> save_sog(const SplatData& data, const SogSaveOptions& options) {

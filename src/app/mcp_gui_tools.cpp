@@ -1620,7 +1620,7 @@ namespace lfs::app {
                                                             const std::filesystem::path& path,
                                                             const int sh_degree,
                                                             const bool include_provenance = true,
-                                                            io::StreamedSogSaveOptions streamed_options = {}) {
+                                                            io::SsogSaveOptions ssog_options = {}) {
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -1666,10 +1666,10 @@ namespace lfs::app {
                     return std::unexpected(result.error().message);
                 break;
             }
-            case core::ExportFormat::STREAMED_SOG: {
-                streamed_options.output_path = path;
-                streamed_options.provenance = stamp;
-                if (auto result = io::save_streamed_sog(*merged, streamed_options); !result)
+            case core::ExportFormat::SSOG: {
+                ssog_options.output_path = path;
+                ssog_options.provenance = stamp;
+                if (auto result = io::save_ssog(*merged, ssog_options); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
@@ -2119,11 +2119,11 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "scene.load_ply",
-                .description = "Load a PLY file for viewing",
+                .description = "Load a splat file for viewing, including SSOG (.ssog, lod-meta.json)",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to PLY file"}}}},
+                        {"path", json{{"type", "string"}, {"description", "Path to a splat file or SSOG directory"}}}},
                     .required = {"path"}}},
             [viewer](const json& args) -> json {
                 std::filesystem::path path = args["path"].get<std::string>();
@@ -3385,12 +3385,12 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
-                .name = "scene.export_streamed_sog",
-                .description = "Export scene nodes synchronously to a PlayCanvas multi-LOD Streamed SOG directory",
+                .name = "scene.export_ssog",
+                .description = "Export scene nodes synchronously to a PlayCanvas multi-LOD SSOG bundle or directory",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Destination directory (contains lod-meta.json)"}}},
+                        {"path", json{{"type", "string"}, {"description", "Destination .ssog file or directory (contains lod-meta.json)"}}},
                         {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
                         {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
                         {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
@@ -3419,7 +3419,7 @@ namespace lfs::app {
                     if (!node_names)
                         return json{{"error", node_names.error()}};
 
-                    io::StreamedSogSaveOptions options;
+                    io::SsogSaveOptions options;
                     options.lod_levels = args.value("lod_levels", 4);
                     options.lod_ratio = args.value("lod_ratio", 0.5f);
                     options.chunk_count_k = args.value("chunk_count_k", 512);
@@ -3430,16 +3430,16 @@ namespace lfs::app {
                         !(options.lod_ratio >= 0.1f && options.lod_ratio <= 0.9f) ||
                         options.chunk_count_k < 1 || !(options.chunk_extent > 0.0f) ||
                         options.chunk_min_k < 0 || options.kmeans_iterations < 1)
-                        return json{{"error", "Invalid Streamed SOG export options"}};
+                        return json{{"error", "Invalid SSOG export options"}};
 
-                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::STREAMED_SOG, path, sh_degree, include_provenance, options); !result)
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SSOG, path, sh_degree, include_provenance, options); !result)
                         return json{{"error", result.error()}};
 
                     return json{
                         {"success", true},
                         {"started", false},
                         {"completed", true},
-                        {"format", "streamed_sog"},
+                        {"format", "ssog"},
                         {"path", core::path_to_utf8(path)},
                         {"nodes", *node_names},
                     };
@@ -3720,7 +3720,7 @@ namespace lfs::app {
                         {"success", true},
                         {"active", false},
                         {"mode", "synchronous"},
-                        {"supported_formats", {"ply", "sog", "streamed_sog", "spz", "usd", "usdz_nurec", "html", "rad", "colmap"}},
+                        {"supported_formats", {"ply", "sog", "ssog", "spz", "usd", "usdz_nurec", "html", "rad", "colmap"}},
                         {"stage", "idle"},
                     };
                 });

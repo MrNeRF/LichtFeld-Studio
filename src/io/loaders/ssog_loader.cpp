@@ -1,30 +1,30 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
-#include "streamed_sog_loader.hpp"
-#include "formats/streamed_sog.hpp"
+#include "ssog_loader.hpp"
+#include "formats/ssog.hpp"
 #include <chrono>
 namespace lfs::io {
-    bool StreamedSogLoader::canLoad(const std::filesystem::path& path) const {
-        return is_streamed_sog_path(path);
+    bool SsogLoader::canLoad(const std::filesystem::path& path) const {
+        return is_ssog_path(path);
     }
-    Result<LoadResult> StreamedSogLoader::load(const std::filesystem::path& path, const LoadOptions& options) {
+    Result<LoadResult> SsogLoader::load(const std::filesystem::path& path, const LoadOptions& options) {
         const auto start = std::chrono::steady_clock::now();
         if (!canLoad(path))
-            return make_error(ErrorCode::PATH_NOT_FOUND, "Streamed SOG manifest does not exist", path);
+            return make_error(ErrorCode::PATH_NOT_FOUND, "SSOG manifest does not exist", path);
         if (options.progress)
-            options.progress(0, "Loading streamed SOG");
+            options.progress(0, "Loading SSOG");
         std::shared_ptr<SplatData> data;
         if (options.validate_only) {
-            if (auto result = validate_streamed_sog(path); !result)
-                return make_error(ErrorCode::INVALID_HEADER, result.error(), path);
+            if (auto result = validate_ssog(path); !result)
+                return std::unexpected(result.error());
         } else {
-            auto result = load_streamed_sog(path);
+            auto result = load_ssog(path);
             if (!result)
-                return make_error(ErrorCode::CORRUPTED_DATA, result.error(), path);
+                return std::unexpected(result.error());
             data = std::make_shared<SplatData>(std::move(*result));
         }
         if (options.progress)
-            options.progress(100, "Streamed SOG complete");
+            options.progress(100, "SSOG complete");
         LoadResult result;
         result.data = std::move(data);
         result.scene_center = core::Tensor::zeros({3}, core::Device::CPU);
