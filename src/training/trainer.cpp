@@ -8378,6 +8378,9 @@ namespace lfs::training {
         }
         apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
+        if (params_.optimization.gut && params_.optimization.use_normal_loss) {
+            LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
+        }
         if (PerfBenchCollector::enabled()) {
             PerfBenchCollector::instance().on_training_start(get_total_iterations());
         }
@@ -8489,9 +8492,7 @@ namespace lfs::training {
                     fitDepthAnchors(cameras_with_depth);
                 }
             }
-            aux_pipeline_config.load_normals =
-                params_.optimization.use_normal_loss &&
-                params_.optimization.normal_loss_weight > 0.0f;
+            aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
             if (aux_pipeline_config.load_normals || params_.optimization.normal_consistency_weight > 0.0f) {
                 const auto mode = params_.optimization.mask_mode;
                 const bool user_masks_normal_terms =

@@ -1942,3 +1942,53 @@ TEST(MRNFStrategyTest, BackgroundImprovementsOnKeepsProfileMechanisms) {
     EXPECT_FLOAT_EQ(strategy.effective_far_decay_scale(), kFarDecayScale);
     EXPECT_FLOAT_EQ(strategy.effective_mean_step_ratio_max(), kPerSplatMeanStepRatioMax);
 }
+
+TEST(MRNFStrategyTest, PermutationRepublishesFarMask) {
+    auto splat = create_mrnf_test_splat_data(4, 0);
+    auto params = vanilla_mrnf_params();
+    params.background_improvements = true;
+    params.max_cap = 8;
+    MRNF strategy(splat);
+    strategy.initialize(params);
+    strategy._camera_hull_valid = true;
+    strategy._far_field_mask = Tensor::from_vector(
+                                   std::vector<int>{0, 1, 0, 1}, TensorShape({4}), Device::CUDA)
+                                   .to(DataType::Bool);
+    strategy._far_growth.outside_mask = strategy._far_field_mask;
+    strategy.publish_mean_step_far_mask();
+    auto& optimizer = strategy.get_optimizer();
+    ASSERT_EQ(optimizer.mean_step_far_mask(), strategy._far_field_mask.ptr<bool>());
+    ASSERT_EQ(optimizer.mean_step_far_mask_n(), 4);
+    // Keep the old allocation alive so allocator reuse cannot hide a stale pointer.
+    const auto old_mask = strategy._far_field_mask;
+    const auto permutation = Tensor::from_vector(
+                                 std::vector<int>{1, 3, 0, 2}, TensorShape({4}), Device::CUDA)
+                                 .to(DataType::Int64);
+
+    strategy.permute_gaussian_rows(permutation);
+
+    EXPECT_NE(strategy._far_field_mask.ptr<bool>(), old_mask.ptr<bool>());
+    EXPECT_EQ(optimizer.mean_step_far_mask(), strategy._far_field_mask.ptr<bool>());
+    EXPECT_EQ(optimizer.mean_step_far_mask_n(), strategy._far_field_mask.numel());
+    EXPECT_EQ(strategy._far_growth.outside_mask.ptr<bool>(), strategy._far_field_mask.ptr<bool>());
+    const auto reordered = strategy._far_field_mask.cpu();
+    const bool* values = reordered.ptr<bool>();
+    EXPECT_TRUE(values[0]);
+    EXPECT_TRUE(values[1]);
+    EXPECT_FALSE(values[2]);
+    EXPECT_FALSE(values[3]);
+
+    // A hull refresh with no cameras must clear the borrowed pointer immediately.
+    strategy.refresh_camera_hull();
+    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+    EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+
+    strategy._camera_hull_valid = true;
+    strategy.publish_mean_step_far_mask();
+    params.background_improvements = false;
+    strategy._params = std::make_unique<const param::OptimizationParameters>(params);
+    strategy.refresh_camera_hull();
+    EXPECT_FALSE(strategy._far_field_mask.is_valid());
+    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+    EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+}

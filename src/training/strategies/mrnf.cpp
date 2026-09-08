@@ -1247,6 +1247,7 @@ namespace lfs::training {
         if (_far_growth.outside_mask.is_valid()) {
             _far_growth.outside_mask = _far_field_mask;
         }
+        publish_mean_step_far_mask();
     }
 
     bool MRNF::is_refining(int iter) const {
@@ -1502,6 +1503,8 @@ namespace lfs::training {
 
     void MRNF::refresh_camera_hull() {
         _camera_hull_valid = false;
+        // Invalidate the borrowed pointer before any census allocation or early return.
+        publish_mean_step_far_mask();
         _cam_centroid[0] = 0.0f;
         _cam_centroid[1] = 0.0f;
         _cam_centroid[2] = 0.0f;
