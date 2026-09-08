@@ -389,7 +389,12 @@ namespace lfs::python {
             state.offset_y = std::clamp(offset_y, -1.0f, 1.0f);
             // The manager clamps near/far with the tool's clamps and bumps the
             // projection generation whenever it touches the projection.
-            rm->setDepthWindowForPanel(panel, state);
+            if (!rm->setDepthWindowForPanel(panel, state)) {
+                if (enabled) {
+                    throw std::runtime_error("Panel depth windows are suspended while an independent pair is parked in GT comparison");
+                }
+                return;
+            }
 
             // Carry the global enabled flag without moving the band: re-read the
             // projection the write just settled and hand those values back.
@@ -673,6 +678,11 @@ namespace lfs::python {
                                                                                                                                                                                                                                                               "- 'left' / 'right': that panel's own window. Outside unsynced\n"
                                                                                                                                                                                                                                                               "  independent-dual split, or while panel sync is on, the write fans out\n"
                                                                                                                                                                                                                                                               "  to both panels exactly as a global write does.\n"
+                                                                                                                                                                                                                                                              "Explicit panel requests are refused while an independent pair is parked\n"
+                                                                                                                                                                                                                                                              "in GT: enabled=True raises RuntimeError; enabled=False is a silent atomic\n"
+                                                                                                                                                                                                                                                              "no-op, including the global enabled flag. panel=None remains global.\n"
+                                                                                                                                                                                                                                                              "A retained Disabled interval accepts global edits; changed geometry\n"
+                                                                                                                                                                                                                                                              "discards the retained pair. No-op geometry and enable-only edits retain it.\n"
                                                                                                                                                                                                                                                               "Any other string raises ValueError. The enabled flag is global in every\n"
                                                                                                                                                                                                                                                               "case; only the window geometry is per-panel.");
 

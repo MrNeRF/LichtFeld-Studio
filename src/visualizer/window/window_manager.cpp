@@ -1061,11 +1061,14 @@ namespace lfs::vis {
             // the frame cannot tell a viewport press from one on a GUI-owned
             // edge that overlaps the viewport (the left-dock resize strip), and
             // the layout it compares against may have moved in between.
+            // Input routing below consumes this same hit, including keyboard intent.
+            gui::GuiHitTestResult press_hit;
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-                auto* const gui = services().guiOrNull();
+                if (auto* const gui = services().guiOrNull())
+                    press_hit = gui->hitTestMouseButton(event.button.x, event.button.y);
                 frame_input_.notePressOwner(
                     event.button.button,
-                    gui && gui->pressBelongsToGui(event.button.x, event.button.y));
+                    press_hit.blocks_pointer || press_hit.blocks_mouse_button);
             }
             if (event.button.button == SDL_BUTTON_LEFT) {
                 if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
@@ -1101,7 +1104,7 @@ namespace lfs::vis {
                 break;
             const int button = input::sdlMouseButtonToApp(event.button.button);
             const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
-            input_router_.beginMouseButton(action, event.button.x, event.button.y);
+            input_router_.beginMouseButton(action, event.button.x, event.button.y, press_hit);
             input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
             input_router_.endMouseButton(action);
             break;

@@ -69,6 +69,9 @@ namespace lfs::vis::gui::rml_input {
     //       they land.
     //   `owns_element`    -- would this host take an event that landed on this
     //       element? Called with nullptr for an event outside the rectangle.
+    //   `allow_new_presses` -- false while the underlay is blocked. Still walk
+    //       every event: a refused DOWN revokes that button's prior ownership,
+    //       while an UP with a still-owned DOWN is delivered at its real point.
     //
     // Returns whether anything was delivered, which is the host's cue to mark
     // a pointer-button repaint. (The overlay marked that reason once per
@@ -82,7 +85,8 @@ namespace lfs::vis::gui::rml_input {
                                                  const glm::vec2 viewport_size,
                                                  const int mods,
                                                  const bool capture_active,
-                                                 OwnsElementFn owns_element) {
+                                                 OwnsElementFn owns_element,
+                                                 const bool allow_new_presses = true) {
         bool replayed = false;
         for (const auto& event : events) {
             if (event.button >= 3)
@@ -101,12 +105,12 @@ namespace lfs::vis::gui::rml_input {
             // release landed -- and REJECTED when it did not, so an UP can
             // never take ownership from another button, from an earlier
             // same-button press, or from a press this host never delivered.
-            const bool deliver = event.down ? (capture_active || owns_element(event_element))
+            const bool deliver = event.down ? (allow_new_presses && (capture_active || owns_element(event_element)))
                                             : down_delivered[slot];
             if (!deliver) {
                 // A press this host refused supersedes whatever that button was
                 // doing before: the flag is cleared so a stale DOWN (one whose
-                // UP was eaten by a focus loss) cannot lend its delivery right
+                // UP never reached this consumer) cannot lend its delivery right
                 // to this press's release.
                 if (event.down)
                     down_delivered[slot] = false;

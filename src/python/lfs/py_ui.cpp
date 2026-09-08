@@ -5929,6 +5929,9 @@ namespace lfs::python {
                 case vis::RenderingManager::DepthWindowLineageKind::ProjectRestore:
                     kind = "project_restore";
                     break;
+                case vis::RenderingManager::DepthWindowLineageKind::RetainedPairDiscard:
+                    kind = "retained_pair_discard";
+                    break;
                 case vis::RenderingManager::DepthWindowLineageKind::LeaveCollapse:
                     break;
                 }
@@ -5939,9 +5942,10 @@ namespace lfs::python {
             },
             "The last depth-window reference-lineage stamp, as\n"
             "('left'|'right', generation, kind).\n"
-            "kind is 'leave_collapse', 'sync_copy' or 'project_restore', naming\n"
-            "the four writes that invalidate slot-derived per-panel state (a\n"
-            "sync undo/redo restore also reports 'project_restore'). The\n"
+            "kind is 'leave_collapse', 'sync_copy', 'project_restore' or\n"
+            "'retained_pair_discard'. These invalidate slot-derived references;\n"
+            "sync undo/redo also reports 'project_restore'. A retained-pair discard\n"
+            "requires fresh baselines from live windows, not from source. The\n"
             "generation counts them, so a poller whose delta exceeds the\n"
             "transitions it observed slept through boundaries and cannot replay\n"
             "anything it cached; the kind says how to recover from the ones it\n"
@@ -5963,16 +5967,17 @@ namespace lfs::python {
                 if (!rm)
                     return false;
                 rm->setDepthWindowSync(sync);
-                // The manager silently ignores the change while a depth-window
-                // drag is in flight, so report the ACTUAL post-call state rather
-                // than the requested one.
+                // Refused drag/parked-GT requests return the actual flag.
                 return rm->getDepthWindowSync();
             },
             nb::arg("sync"), "Set the per-panel depth-window sync flag. Turning it on with\n"
                              "differing panels copies the focused panel's window to the other as\n"
-                             "one undo step. The call is silently ignored while a depth-window\n"
-                             "drag is in flight; the return value is the flag's ACTUAL state\n"
-                             "after the call, not the requested one.");
+                             "one undo step. Both ON and OFF changes are silently ignored while a\n"
+                             "depth-window drag owns a panel, including subthreshold presses, or\n"
+                             "while an independent pair is parked in GT. GT without a parked pair\n"
+                             "is unaffected. In a retained Disabled interval an actual flag change\n"
+                             "discards the pair before applying; a same-value request preserves it.\n"
+                             "Returns the flag's actual state after the call, not the requested one.");
 
         m.def(
             "get_current_camera_id", []() -> int {

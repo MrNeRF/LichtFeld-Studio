@@ -358,6 +358,7 @@ namespace lfs::vis {
             const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handleSceneLoaded(settings_);
+            discardRetainedDepthWindowPairLocked(pre_transition_focus);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             syncGridPlanesLocked(settings_.grid_plane);
         }
@@ -388,6 +389,7 @@ namespace lfs::vis {
             const SplitViewPanelId pre_transition_focus = split_view_service_.focusedPanel();
             const SplitViewMode previous_mode = settings_.split_view_mode;
             result = split_view_service_.handleSceneCleared(settings_);
+            discardRetainedDepthWindowPairLocked(pre_transition_focus);
             applyDepthWindowModeTransitionLocked(previous_mode, result.current_mode, pre_transition_focus);
             syncGridPlanesLocked(settings_.grid_plane);
         }

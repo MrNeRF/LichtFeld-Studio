@@ -52,6 +52,8 @@
 #include <vector>
 #include <vulkan/vulkan.h>
 
+class PythonIntegrationTest_ParkedGtPanelWindowRequestsAreAtomicallyRefused_Test;
+
 namespace lfs::core {
     class Camera;
     class Scene;
@@ -306,36 +308,15 @@ namespace lfs::vis {
         // Internal drag-preview signal for the shader-approximate live reveal; never touches
         // RenderSettings.
         [[nodiscard]] bool depthWindowDragPreview() const;
-        // Drag OWNERSHIP bracket, PER PANEL: opened at the drag operator's
-        // INVOKE and closed at its DESTRUCTION. The registry invokes a
-        // replacement modal BEFORE destroying the outgoing one, so this bracket
-        // makes the panel continuously owned across a handoff - the count never
-        // passes through zero mid-replacement, and the incoming drag inherits
-        // the pre-drag backup the outgoing one recorded.
-        // A panel's backup follows the CLAIM RULE (ownership is the authority,
-        // not backup presence): a drag claiming an OWNED slot takes over and
-        // RETAINS the recorded backup (first-wins across an unbroken ownership
-        // chain - the replacement handoff); a drag claiming an UNOWNED slot
-        // REFRESHES the backup from the live value, so an orphan left by a
-        // cancelled chain can never become a later drag's false undo baseline.
-        // A backup is released by a successful commit on that panel, by the
-        // DEPTH-RELEVANT mode transition that consumes it, or by any
-        // legitimate non-drag write to that slot - NEVER by this bracket's
-        // close, which would strand an uncommitted preview with nothing left
-        // to fold back to.
-        // Returns TRUE when this drag also pinned the OTHER panel's backup
-        // (the fan-out predicate), i.e. when its writes may reach both slots,
-        // and reports through out_drag_token the OWNERSHIP token minted for
-        // this drag. The drag hands that token back on every subsequent
-        // manager call: it is the single identity that decides whether this
-        // drag may still write, restore or release a given slot (see the
-        // ownership note on depth_window_pin_owners_).
+        // Ownership spans invoke to destruction, including replacement overlap.
+        // Claiming an owned slot retains its backup; claiming an unowned slot
+        // records the live value. Returns whether the other slot was pinned too
+        // and mints the token required for subsequent drag operations.
+        // See docs/docs/development/depth-window-state.md for the lifecycle.
         bool beginDepthWindowDrag(SplitViewPanelId panel, uint64_t& out_drag_token);
         void endDepthWindowDrag(SplitViewPanelId panel, uint64_t drag_token);
-        // PREVIEW gate, deliberately separate from the ownership bracket: it
-        // spans only the drag's LATCH lifetime (startLatch..finishLatch), so a
-        // subthreshold press that never starts a draw is not a live preview.
-        // Still a counter, for the same replacement reason as above.
+        // Preview spans the latch, excluding subthreshold presses. Counts allow
+        // the same replacement overlap as ownership.
         void beginDepthWindowPreview(SplitViewPanelId panel);
         void endDepthWindowPreview(SplitViewPanelId panel);
         [[nodiscard]] bool isIndependentSplitViewActive() const;
@@ -358,62 +339,42 @@ namespace lfs::vis {
             std::array<DepthWindowState, 2> panel_windows{};
         };
         [[nodiscard]] DepthWindowOverlaySnapshot getDepthWindowOverlaySnapshot() const;
-        void setDepthWindowForPanel(SplitViewPanelId panel, const DepthWindowState& state);
-        // DRAG-LANE preview write. Guarded by BOTH identities: the mode epoch
-        // (the drag's lifetime against transitions) and the drag's OWNERSHIP
-        // token against the pressed panel's slot. A legitimate non-drag write
-        // clears that slot's owner, so a superseded drag's next write refuses
-        // and can never overwrite the newer state.
+        // Refuses the entire explicit-panel write while a pair is parked in GT.
+        bool setDepthWindowForPanel(SplitViewPanelId panel, const DepthWindowState& state);
+        // Preview writes require both the current epoch and slot ownership.
+        // Non-drag writes revoke ownership so stale drags cannot overwrite them.
         bool applyDepthWindowForPanelIfEpoch(SplitViewPanelId panel,
                                              const DepthWindowState& state,
                                              uint64_t expected_epoch,
                                              uint64_t drag_token);
-        // RESTORE mode: safety machinery, not a user edit. Writes exactly the
-        // one slot (plus the projection when that panel is focused) and NEVER
-        // fans out, whatever the sync flag says - a teardown/cancel restore
-        // must not push the restored panel's value over the other panel, whose
-        // slot may legitimately carry a different, later window.
+        // Restore one slot without sync fan-out; update the projection when
+        // focused or outside independent view.
         bool restoreDepthWindowForPanelIfEpoch(SplitViewPanelId panel,
                                                const DepthWindowState& state,
                                                uint64_t expected_epoch);
-        // TEARDOWN restore, per slot, decided UNDER ONE LOCK against the slot
-        // OWNERS. A drag may only put back a slot it still OWNS: any legitimate
-        // non-drag write cleared that slot's owner (the user superseded the
-        // pre-drag value) and any later drag took the owner over, so the newer
-        // intent wins.
-        // own_state is the pressed panel's pre-drag value; other_state carries
-        // the other slot's pre-drag value iff this drag pinned it (fan-out).
-        // Each slot is written individually in RESTORE mode - never a fan-out.
-        // Returns false only when the epoch moved (the caller is expired).
+        // Restore each still-owned slot independently under one lock. States
+        // are the pre-drag values; other_state exists only for a fan-out drag.
+        // Returns false if the epoch expired.
         bool restorePinnedDepthWindowSlots(SplitViewPanelId panel,
                                            const DepthWindowState& own_state,
                                            const std::optional<DepthWindowState>& other_state,
                                            uint64_t expected_epoch,
                                            uint64_t drag_token);
-        // Release-time commit: the epoch check, the final panel write and the
-        // snapshot the undo entry is built from all happen under ONE lock. A
-        // refused commit therefore leaves NO trace - the caller skips both the
-        // undo push and the draw-commit publication.
+        // Atomically check epoch/ownership, write and capture the undo snapshot.
+        // On refusal the caller must skip undo and draw-commit publication.
         bool commitDepthWindowForPanelIfEpoch(SplitViewPanelId panel,
                                               const DepthWindowState& state,
                                               uint64_t expected_epoch,
                                               uint64_t drag_token,
                                               op::DepthWindowModeSnapshot& out_snapshot);
-        // Serializes a depth-window drag's RELEASE SEQUENCE against split-mode
-        // transitions - see the lock-order note on
-        // depth_window_transition_mutex_. The release holds this across
-        // {commit + epoch re-check + undo push + draw-commit publication};
-        // every mode-change site holds it around the mode change.
+        // Hold across release commit, undo and publication, or a mode change.
+        // Acquire before settings/history locks; see the member's lock order.
         [[nodiscard]] std::unique_lock<std::mutex> acquireDepthWindowTransitionLock() {
             return std::unique_lock<std::mutex>(depth_window_transition_mutex_);
         }
         void setDepthWindowSync(bool sync);
         [[nodiscard]] bool getDepthWindowSync() const;
-        // WHICH kind of slot-invalidating write the last lineage stamp
-        // described. A consumer that caches per-panel state derived from the
-        // slots cannot replay that cache across any of these, but WHAT it
-        // should do instead differs per kind, so the kind travels with the
-        // record rather than being guessed from the endpoint.
+        // Describes how consumers recover references after slot replacement.
         enum class DepthWindowLineageKind {
             // Leaving independent-dual folded the pre-transition focused
             // panel's window into the single remaining one.
@@ -423,81 +384,41 @@ namespace lfs::vis {
             // A project restore seeded BOTH slots from the restored
             // projection; no previously cached slot survives it.
             ProjectRestore,
+            // A retained GT pair was discarded; cached panel references expire.
+            RetainedPairDiscard,
         };
-        // One slot-invalidating write's provenance: which panel it took the
-        // surviving window from, how many such writes had happened when it did,
-        // and what kind of write it was.
+        // Source and kind of the latest replacement, plus its generation.
         struct DepthWindowCollapseRecord {
             SplitViewPanelId source = SplitViewPanelId::Left;
             uint64_t generation = 0;
             DepthWindowLineageKind kind = DepthWindowLineageKind::LeaveCollapse;
         };
-        // PROVENANCE of the last LINEAGE EVENT, not only of a collapse: the
-        // panel the surviving window was taken from. For a leave collapse that
-        // is the PRE-transition focused panel whose window
-        // applyDepthWindowModeTransitionLocked folded into the single remaining
-        // one, and the split service resets the observable focus to Left on the
-        // way out (split_view_service.cpp:214), so this is the only surface a
-        // poller can learn it from. A sync-ON copy and a project/sync-undo
-        // restore overwrite this field too, so it names the source of whichever
-        // write stamped LAST - use getDepthWindowCollapseRecord() to learn
-        // which kind that was.
+        // Source of the latest lineage event, not necessarily a leave collapse.
+        // Use the complete record when the event kind also matters.
         [[nodiscard]] SplitViewPanelId getDepthWindowCollapseSource() const;
-        // The REFERENCE-LINEAGE record: the same provenance, stamped with a
-        // monotonically increasing generation and the kind of write that
-        // stamped it. Endpoint identity alone cannot describe a
-        // leave -> enter -> leave cycle that a 100ms poller slept through: the
-        // final source names the last write only, while the poller's cached
-        // per-panel state predates the FIRST one. Counting the writes is what
-        // lets a consumer tell "the one transition I observed" from "boundaries
-        // I missed", and the kind is what tells it how to recover. Source,
-        // generation and kind are read under ONE lock, so a consumer can never
-        // pair fields from different instants. The counter bumps at exactly the
-        // FOUR writes that invalidate a slot-derived cache - the leave
-        // collapse, the sync-ON copy, the project restore, and a SYNC undo/redo
-        // restore - and nowhere else: not on mode-enter, not on GT boundaries,
-        // not on an ordinary per-panel write. (depthWindowModeEpoch counts
-        // mode-enter and GT boundaries too, which is why it cannot serve here.)
-        // The first three stamp inside the critical section that does the write;
-        // the fourth stamps from its call site through the public
-        // stampDepthWindowSyncRestoreLineage, which takes settings_mutex_ a
-        // SECOND time just after the restore released it (see that method).
-        // Two of the four kinds COLLAPSE to one window (leave, sync-ON copy) and
-        // two restore two possibly-DIFFERING absolute windows (project restore,
-        // sync undo/redo - which is why the latter carries the ProjectRestore
-        // kind), so a consumer holding per-panel references must re-baseline
-        // each of them from its OWN slot rather than from the projection.
+        // Read source, generation and kind atomically. Generation distinguishes
+        // an observed replacement from multiple boundaries a poller missed.
+        // Leave collapse, sync copy and project restore stamp with their write;
+        // sync undo/redo stamps separately through stampDepthWindowSyncRestoreLineage.
+        // Retained-pair discard stamps with its invalidating write. Ordinary
+        // edits without a retained pair and nondestructive boundaries do not.
         [[nodiscard]] DepthWindowCollapseRecord getDepthWindowCollapseRecord() const;
         // One locked read of the whole depth-window state, so an absolute undo
         // snapshot can never mix slots, sync and epoch from different instants.
         [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshot() const;
-        // The same locked read, composed for a DRAG's baseline capture: every
-        // slot this drag OWNS reports the manager's RECORDED BACKUP instead of
-        // the live value. That backup is the authoritative pre-drag value by
-        // construction - first-wins on record, preserved across a take-over -
-        // so a replacement drag's undo baseline and teardown target are the
-        // clean state, never the abandoned live preview its predecessor left
-        // in the slots. Slots this drag does not own report the live value
-        // unchanged. A drag_token of 0 (never minted) composes nothing.
+        // Substitute recorded backups for slots owned by this token, so a
+        // replacement inherits the original baseline rather than a preview.
+        // Unowned slots keep their live values; token 0 substitutes nothing.
         [[nodiscard]] op::DepthWindowModeSnapshot
         depthWindowBaselineSnapshotForDrag(uint64_t drag_token) const;
         void restoreDepthWindowStateFromProject();
-        // Epoch comparison and the absolute restore under ONE lock: an undo
-        // entry can never observe a matching epoch and then write into a newer
-        // one. `restore_sync` is false for drag entries — only the dedicated
-        // sync entry owns the sync flag, and a drag undo recomputes the
-        // projection from whichever panel is focused when it runs.
+        // Check epoch and restore atomically. Drag entries preserve sync and
+        // project the panel focused at execution; sync entries also restore sync.
         bool restoreDepthWindowSnapshotIfEpoch(const op::DepthWindowModeSnapshot& snapshot,
                                                uint64_t expected_epoch,
                                                bool restore_sync);
-        // The FOURTH stamp site, and the only one outside this class: a SYNC
-        // undo/redo restore. It is stamped from the sync entry's call site
-        // rather than from restoreDepthWindowSnapshotIfEpoch, because that
-        // shared body also serves every DRAG undo - which invalidates nothing
-        // and must keep stamping nothing. The kind is ProjectRestore because a
-        // sync undo restores two possibly-differing ABSOLUTE window snapshots:
-        // no cached per-panel reference survives it, which is exactly the
-        // fresh-baseline rule that kind carries.
+        // Sync undo/redo uses ProjectRestore lineage so each panel reference
+        // rebases from its own restored slot. Drag undo does not stamp.
         void stampDepthWindowSyncRestoreLineage();
         [[nodiscard]] uint64_t depthWindowProjectionGeneration() const;
         [[nodiscard]] uint64_t depthWindowModeEpoch() const;
@@ -1024,6 +945,7 @@ namespace lfs::vis {
         // (depth_window_undo_entry.cpp:100). A consumer that reads the slots
         // and the record separately can therefore observe one without the
         // other, and must revalidate the generation around its reads.
+        void discardRetainedDepthWindowPairLocked(SplitViewPanelId source);
         void stampDepthWindowLineageLocked(SplitViewPanelId source,
                                            DepthWindowLineageKind kind);
         // boundary_carries_global_depth_write says the SAME write that moved the
@@ -1189,28 +1111,9 @@ namespace lfs::vis {
         std::array<int, 2> depth_window_drag_counts_{};
         std::array<int, 2> depth_window_preview_counts_{};
         std::array<std::optional<DepthWindowState>, 2> depth_window_drag_backups_{};
-        // PER-SLOT DRAG OWNERSHIP. A slot's pre-drag
-        // backup is guarded by exactly ONE owning drag, named by the
-        // monotonically increasing token beginDepthWindowDrag minted for it.
-        // This single identity replaces the earlier {aggregate pin counts, pin
-        // generation, mode epoch} triple, whose gaps were that the
-        // three partial identities could each say "still mine" about a slot
-        // some newer writer had legitimately taken over.
-        // OWNERSHIP LIFECYCLE. An owner is SET by beginDepthWindowDrag on every
-        // slot that drag needs (its own panel; the other iff its writes fan
-        // out) - taking over from any earlier owner while KEEPING the recorded
-        // backup value, since first-wins value semantics are the replacement
-        // handoff's contract and the take-over is same-thread sequential. It is
-        // CLEARED by (a) the owning drag's own endDepthWindowDrag, which
-        // releases only slots it still owns; (b) the depth-relevant mode
-        // transition and the project restore, which consume every backup; or
-        // (c) any legitimate non-drag write to that slot
-        // (releaseDepthWindowBackupsLocked / releaseIdleDepthWindowBackupsLocked),
-        // which supersedes the pre-drag value outright.
-        // Ownership is the ONLY licence to write a slot from the drag lane
-        // (applyDepthWindowForPanelIfEpoch, commitDepthWindowForPanelIfEpoch),
-        // to restore it at teardown (restorePinnedDepthWindowSlots), and to
-        // release it at end - a superseded drag's very next call refuses.
+        // One drag token owns each slot's preview and backup. Replacement takes
+        // over ownership; non-drag writes, mode transitions and project restore
+        // revoke it. Teardown may affect only slots still owned by its token.
         std::array<std::optional<uint64_t>, 2> depth_window_pin_owners_{};
         // Source of the tokens above. Monotonic and NEVER reused, so a token
         // that no longer matches a slot's owner is unambiguously stale; token
@@ -1223,22 +1126,13 @@ namespace lfs::vis {
         // session and only when GT was entered DIRECTLY from independent-dual.
         // GT fully suspends the depth filter (viewport_request_builder.cpp:251,
         // depthWindowOverlaySuppressed, the drag operator's poll), so the two
-        // windows are DORMANT for its duration rather than collapsed onto the
-        // focused one: both must come back exactly as they were. The park is
-        // needed because an ordinary GLOBAL depth write during GT fans out
-        // through BOTH slots (applyDepthWindowForPanelLocked is
-        // non-independent there), so the slots themselves cannot carry the
-        // dormant values across. Written only under settings_mutex_, by
-        // applyDepthWindowModeTransitionLocked - which parks on the
-        // independent -> GT leg, restores on the GT -> independent leg, and
-        // drops it at every other boundary it runs for - and cleared by the
-        // project restore, which is a lifetime discontinuity. Engaged, it also
-        // means "a dormant pair is live somewhere other than the slots", and
-        // setDepthWindowSync READS it under the same lock for exactly that:
-        // the sync flag cannot move while the pair it constrains is parked.
+        // pair survives GT and unedited Disabled intervals until Independent
+        // entry consumes it. GT global writes may replace live slots without
+        // replacing this snapshot. Disabled geometry/committed drag/sync edits,
+        // other comparisons and scene/project reset discard it under settings_mutex_.
         std::optional<std::array<DepthWindowState, 2>> depth_window_dormant_panels_;
         bool depth_window_sync_ = false;
-        // Written by stampDepthWindowLineageLocked at each of the four
+        // Written by stampDepthWindowLineageLocked at each of the
         // slot-invalidating writes (settings_mutex_ held by every caller,
         // including the sync undo/redo's own re-acquisition in
         // stampDepthWindowSyncRestoreLineage), read under the same lock.
@@ -1251,35 +1145,12 @@ namespace lfs::vis {
         uint64_t depth_window_projection_generation_ = 0;
         uint64_t depth_window_mode_epoch_ = 0;
         mutable std::mutex settings_mutex_;
-        // Serializes a depth-window drag's release sequence against split-mode
-        // transitions, so a transition can never interleave between a
-        // successful commit and the undo push / draw-commit publication that
-        // belong to it (no born-expired undo entry, no stale rebase signal).
-        //
-        // LOCK ORDER (STRICT, outermost first):
-        //     depth_window_transition_mutex_
-        //         -> settings_mutex_
-        //             -> the undo history's internal mutex (via push())
-        //
-        // Nothing may acquire depth_window_transition_mutex_ while holding
-        // settings_mutex_ or the history mutex. Every acquisition site is
-        // therefore OUTSIDE any settings_mutex_ scope: the drag operator's
-        // release sequence, the seven pre-collapse cancel hook regions in
-        // rendering_manager_events.cpp, and restoreDepthWindowStateFromProject.
-        //
-        // CONDITIONAL SITE - updateSettings. It acquires this mutex ONLY when
-        // the incoming settings actually move split_view_mode, and it does so
-        // by releasing settings_mutex_ first, taking this mutex, re-taking
-        // settings_mutex_ and RE-CHECKING the mode (which may have moved in
-        // the gap). The acquisition is unreachable on the re-entrant chains
-        // that already hold this mutex on the SAME thread - the mode-change
-        // event sites' cancel hook and the drag release both reach
-        // updateSettings through finishLatch ->
-        // SelectionTool::setDepthWindowDragInProgress ->
-        // applySelectionFilterSettings, which builds its RenderSettings from a
-        // fresh getSettings() and therefore always carries the CURRENT
-        // split_view_mode. An equal-mode write never touches this mutex, so
-        // those chains cannot self-deadlock on a non-recursive mutex.
+        // Serializes release commit/undo/publication with mode transitions.
+        // Acquire transition before settings; history pushes release settings
+        // first. Never acquire this while holding settings/history locks.
+        // updateSettings releases settings
+        // before acquiring this and rechecks the mode afterward. Equal-mode
+        // writes bypass this nonrecursive lock for latch-release reentrancy.
         mutable std::mutex depth_window_transition_mutex_;
         mutable std::mutex camera_metrics_mutex_;
         mutable std::mutex vulkan_mesh_frame_mutex_;
@@ -1306,6 +1177,8 @@ namespace lfs::vis {
         lfs::event::ScopedHandler event_handlers_;
 
         friend class RenderingManagerEventsTest_SceneClearedResetsFrustumLoaderSyncCache_Test;
+        friend class DepthWindowPanelsTest_ParkedGtPanelWriteRefusesWithoutMutation_Test;
+        friend class ::PythonIntegrationTest_ParkedGtPanelWindowRequestsAreAtomicallyRefused_Test;
         friend class SceneManager;
     };
 

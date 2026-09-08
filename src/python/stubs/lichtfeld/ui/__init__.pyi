@@ -2466,22 +2466,24 @@ def clear_keyframes() -> None:
 def set_playback_speed(speed: float) -> None:
     """Set sequencer playback speed"""
 
-def get_video_reconstruction_selection() -> dict[str, str]:
-    """Return the saved backend_id, preset_id and fallback. Raises RuntimeError if the viewer is unavailable."""
+def get_video_reconstruction_selection() -> dict:
+    """
+    Return the saved video reconstruction selection used by both export entry points.
+    """
 
 def set_video_reconstruction_selection(backend_id: str, preset_id: str, fallback: str = 'abort') -> None:
-    """Set the saved selection for both export entry points, without loading a backend.
-
-    Invalid metadata raises ValueError without changing the previous selection.
-    Raises RuntimeError if the viewer is unavailable.
+    """
+    Set the persisted video reconstruction selection. Validates metadata only, without loading a backend.
     """
 
 def reset_video_reconstruction_selection() -> None:
-    """Restore native/native with abort policy. Raises RuntimeError if the viewer is unavailable."""
+    """
+    Reset the saved video reconstruction selection to native/native with abort policy.
+    """
 
 def export_video(width: int, height: int, framerate: int, crf: int, path: str = '', include_provenance: bool = True) -> None:
     """
-    Export video with specified settings and the saved reconstruction selection, as does the Sequencer button. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded. Raises RuntimeError if the viewer is unavailable.
+    Export video with specified settings. Without a path a save dialog opens, which a script cannot answer; pass one to export directly. Uses the saved video reconstruction selection, as does the Sequencer button. include_provenance (default true) writes a full provenance stamp into the video comment; when false, a minimal build stamp is still embedded.
     """
 
 def add_keyframe() -> None:
@@ -2875,9 +2877,10 @@ def get_depth_window_collapse_record() -> tuple:
     """
     The last depth-window reference-lineage stamp, as
     ('left'|'right', generation, kind).
-    kind is 'leave_collapse', 'sync_copy' or 'project_restore', naming
-    the four writes that invalidate slot-derived per-panel state (a
-    sync undo/redo restore also reports 'project_restore'). The
+    kind is 'leave_collapse', 'sync_copy', 'project_restore' or
+    'retained_pair_discard'. These invalidate slot-derived references;
+    sync undo/redo also reports 'project_restore'. A retained-pair discard
+    requires fresh baselines from live windows, not from source. The
     generation counts them, so a poller whose delta exceeds the
     transitions it observed slept through boundaries and cannot replay
     anything it cached; the kind says how to recover from the ones it
@@ -2898,9 +2901,12 @@ def set_depth_window_sync(sync: bool) -> bool:
     """
     Set the per-panel depth-window sync flag. Turning it on with
     differing panels copies the focused panel's window to the other as
-    one undo step. The call is silently ignored while a depth-window
-    drag is in flight; the return value is the flag's ACTUAL state
-    after the call, not the requested one.
+    one undo step. Both ON and OFF changes are silently ignored while a
+    depth-window drag owns a panel, including subthreshold presses, or
+    while an independent pair is parked in GT. GT without a parked pair
+    is unaffected. In a retained Disabled interval an actual flag change
+    discards the pair before applying; a same-value request preserves it.
+    Returns the flag's actual state after the call, not the requested one.
     """
 
 def get_current_camera_id() -> int:

@@ -7337,15 +7337,20 @@ namespace lfs::vis::gui {
             });
         };
         resolve_project_asset_drag();
-        PanelInputState viewport_overlay_input = panel_input;
-        if (has_floating_panels &&
-            reg.isPositionOverFloatingPanel(panel_input.mouse_x, panel_input.mouse_y)) {
-            viewport_overlay_input = maskInputForBlockedUi(std::move(viewport_overlay_input));
-        }
+        // Other underlay consumers use masked copies. The overlay must retain
+        // the canonical stream so an already delivered DOWN can receive its UP.
+        const PanelInputState viewport_overlay_input = buildPanelInputFromSDL(sdl_input);
         {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
-            if (!block_underlay_input)
-                rml_viewport_overlay_.processInput(viewport_overlay_input);
+            rml_viewport_overlay_.processInput(viewport_overlay_input, {
+                                                                           .startup = startup_overlay_blocking,
+                                                                           .modal = modal_overlay_open,
+                                                                           .pending_modal = modal_overlay_pending,
+                                                                           .context_menu = context_menu_open,
+                                                                           .menu_pointer = menu_blocks_underlay_pointer,
+                                                                           .floating_panel = has_floating_panels &&
+                                                                                             reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
+                                                                       });
         }
         // Rules in overlayPressMayFocusPanel (rml_viewport_overlay.hpp). This
         // runs after processInput() above, so a press that dismissed a text
@@ -7367,8 +7372,10 @@ namespace lfs::vis::gui {
         // moved. When several are eligible the last one naturally wins, which is
         // the frame's visible outcome; when none is, focus stays where it was.
         // The overlay's list carries the two facts only it can compute, entry i
-        // beside this frame's i-th left DOWN; a frame the overlay did not
-        // process reports no presses and moves nothing.
+        // beside this frame's i-th left DOWN. Explicit blockers and invalid
+        // bounds report no presses. External capture still classifies earlier
+        // viewport presses before blocking motion, so their text blur can
+        // commit before the corresponding panel focus change.
         const auto& overlay_left_presses = rml_viewport_overlay_.leftPressClassifications();
         std::size_t overlay_press_index = 0;
         for (const auto& overlay_event : viewport_overlay_input.mouse_button_events) {
@@ -8389,10 +8396,10 @@ namespace lfs::vis::gui {
                y < last_ui_layout_work_pos_.y + last_ui_layout_work_size_.y;
     }
 
-    bool GuiManager::pressBelongsToGui(const double x, const double y) const {
+    GuiHitTestResult GuiManager::hitTestMouseButton(const double x, const double y) const {
         const auto hit = hitTestPointer(x, y);
         if (hit.blocks_pointer || hit.blocks_mouse_button)
-            return true;
+            return hit;
 
         // The left dock's resize strip is the one GUI-owned edge hitTestPointer
         // cannot answer geometrically: it reports it only through
@@ -8401,10 +8408,12 @@ namespace lfs::vis::gui {
         // reached the strip finds that latch still false, so ask the geometry
         // directly -- the same geometry renderLeftDock() will use a moment
         // later to start the resize.
-        return panel_layout_.isPositionOverLeftDockResizeEdge(
-            static_cast<float>(x), static_cast<float>(y),
-            last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
-            last_ui_layout_work_size_.y);
+        if (panel_layout_.isPositionOverLeftDockResizeEdge(
+                static_cast<float>(x), static_cast<float>(y),
+                last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,
+                last_ui_layout_work_size_.y))
+            return {.blocks_mouse_button = true};
+        return hit;
     }
 
     GuiHitTestResult GuiManager::hitTestPointer(const double x, const double y) const {

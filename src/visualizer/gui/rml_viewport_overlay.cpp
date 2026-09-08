@@ -212,6 +212,7 @@ namespace lfs::vis::gui {
         // lifecycle it was tracking goes with it.
         left_press_classifications_.clear();
         std::fill(std::begin(pointer_down_delivered_), std::end(pointer_down_delivered_), false);
+        last_valid_input_origin_.reset();
     }
 
     void RmlViewportOverlay::reloadResources() {
@@ -251,6 +252,7 @@ namespace lfs::vis::gui {
         // deliver an UP to, so the press lifecycle starts clean.
         left_press_classifications_.clear();
         std::fill(std::begin(pointer_down_delivered_), std::end(pointer_down_delivered_), false);
+        last_valid_input_origin_.reset();
         last_render_w_ = 0;
         last_render_h_ = 0;
         last_document_hook_run_ = {};
@@ -364,6 +366,8 @@ namespace lfs::vis::gui {
         vp_pos_ = pos;
         vp_size_ = size;
         screen_origin_ = screen_origin;
+        if (size.x > 0.0f && size.y > 0.0f)
+            last_valid_input_origin_ = pos;
         if (context_size_changed && project_drag_overlay_.visible)
             applyProjectDragOverlay();
     }
@@ -1020,7 +1024,8 @@ namespace lfs::vis::gui {
         }
     }
 
-    void RmlViewportOverlay::processInput(const PanelInputState& input) {
+    void RmlViewportOverlay::processInput(const PanelInputState& input,
+                                          const ViewportOverlayInputBlockers& blockers) {
         wants_input_ = false;
         // Per-frame press classification, read by GuiManager immediately after
         // this call to decide, for EACH left press in arrival order, whether it
@@ -1029,8 +1034,34 @@ namespace lfs::vis::gui {
         left_press_classifications_.clear();
         if (!rml_context_ || !document_)
             return;
-        if (vp_size_.x <= 0 || vp_size_.y <= 0)
+        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                      input.key_alt, input.key_super);
+        const auto release_owned_buttons = [&](const glm::vec2 origin) {
+            if (rml_input::replayButtonEvents(
+                    *rml_context_, pointer_down_delivered_, input.mouse_button_events,
+                    origin, vp_size_, mods, false,
+                    [](const Rml::Element*) { return false; }, false)) {
+                markRenderNeeded(RenderReason::PointerButton);
+            }
+            // Only real event-point moves were delivered. Frame-end hover and
+            // masked sentinel movement stay blocked until ordinary input resumes.
+            hovered_interactive_ = false;
+            last_hover_element_ = nullptr;
+            mouse_pos_valid_ = false;
+            tooltip_.setHover({}, nullptr);
+        };
+        if (vp_size_.x <= 0 || vp_size_.y <= 0) {
+            // renderCached() retains the context's dimensions on this path.
+            // Preserve the coordinate frame of that same live context, rather
+            // than mapping its releases through an empty/new layout origin.
+            if (last_valid_input_origin_)
+                release_owned_buttons(*last_valid_input_origin_);
             return;
+        }
+        if (blockers.blocksInput()) {
+            release_owned_buttons(vp_pos_);
+            return;
+        }
         if (rml_manager_) {
             rml_manager_->trackContextFrame(rml_context_,
                                             static_cast<int>(vp_pos_.x - screen_origin_.x),
@@ -1040,8 +1071,6 @@ namespace lfs::vis::gui {
 
         const float mx = input.mouse_x - vp_pos_.x;
         const float my = input.mouse_y - vp_pos_.y;
-        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
-                                      input.key_alt, input.key_super);
         const int rml_mx = static_cast<int>(mx);
         const int rml_my = static_cast<int>(my);
 
@@ -1056,7 +1085,7 @@ namespace lfs::vis::gui {
             input.mouse_clicked[0] || input.mouse_released[0] ||
             input.mouse_clicked[1] || input.mouse_released[1] ||
             input.mouse_clicked[2] || input.mouse_released[2] ||
-            input.mouse_wheel != 0.0f;
+            input.mouse_wheel != 0.0f || !input.mouse_button_events.empty();
         const bool pointer_drag =
             input.mouse_down[0] || input.mouse_down[1] || input.mouse_down[2];
         const bool keyboard_event =
@@ -1186,9 +1215,11 @@ namespace lfs::vis::gui {
             // can move the focused panel for this same press.
             markRenderNeeded(RenderReason::Keyboard);
         }
+        // External capture describes the latest hover. Earlier viewport presses
+        // still classify and commit a focused edit before GuiManager moves focus.
         if (external_mouse_capture && !point_interactive && !hovered_interactive_ &&
             !vram_drag_capture && !toolbar_drag_capture && !has_interactive_button_event) {
-            tooltip_.setHover({}, nullptr);
+            release_owned_buttons(vp_pos_);
             return;
         }
         const bool should_process_mouse_move =

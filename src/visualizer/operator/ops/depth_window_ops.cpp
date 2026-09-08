@@ -888,20 +888,9 @@ namespace lfs::vis::op {
                 // clean-state no-op that pushes no undo entry.
                 captureBaselineIfNeeded();
 
-                // Commit under start_epoch_ or not at all: the release never
-                // adopts an epoch or a route it did not start with. The final
-                // write, the epoch check and the snapshot the undo entry is built
-                // from happen under ONE manager lock, so a REFUSED commit leaves
-                // no trace at all - no undo entry and no draw-commit publication.
-                // The entry is captured and pushed BEFORE the latch is released,
-                // so no sync toggle can interleave between the gate clearing and
-                // the push and land its own entry out of order.
-                // The whole release sequence - commit, epoch re-check, undo push
-                // and draw-commit publication - is serialized against split-mode
-                // transitions by the manager's transition mutex, so no
-                // transition can interleave inside it. Lock order is
-                // transition -> settings -> history, and this scope holds
-                // NEITHER of the inner two on entry.
+                // Serialize commit, undo and publication with mode transitions.
+                // Enter without the settings/history locks; push undo before
+                // releasing the latch so a sync toggle cannot reorder history.
                 auto transition_lock = rendering_manager_->acquireDepthWindowTransitionLock();
 
                 DepthWindowModeSnapshot after_snapshot{};
@@ -912,13 +901,7 @@ namespace lfs::vis::op {
                     cancel(ctx);
                     return OperatorResult::CANCELLED;
                 }
-                // KEPT AS A CHEAP ASSERT. The transition mutex above already
-                // makes this re-read redundant: every split-mode-change site
-                // takes that mutex around the mode change, so no transition can
-                // land between the commit and the publications below. The
-                // previously documented publish sliver is gone with it. The
-                // check stays because it costs one locked read and it fails
-                // closed if a future mode-change site forgets the mutex.
+                // Fail closed if a future transition bypasses the mutex.
                 const bool epoch_intact =
                     rendering_manager_->depthWindowModeEpoch() == start_epoch_;
                 if (!epoch_intact) {
@@ -934,8 +917,6 @@ namespace lfs::vis::op {
                 if (epoch_intact && drag_kind_ == DragKind::Draw) {
                     publish_depth_window_draw_commit(panel_.panel);
                 }
-                // Every publication that belongs to this commit has landed;
-                // transitions may proceed again from here.
                 transition_lock.unlock();
                 if (auto* const selection = ctx.scene().getSelectionService()) {
                     selection->invalidateInteractiveBrushFilterCache();

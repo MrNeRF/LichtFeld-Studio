@@ -10,10 +10,13 @@
 #include "core/error_bus.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
+#include "core/event_bridge/event_bridge.hpp"
+#include "core/event_bus.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "io/loader.hpp"
+#include "operation/undo_history.hpp"
 #include "python/gil.hpp"
 #include "python/python_buffer_analysis.hpp"
 #include "python/python_runtime.hpp"
@@ -27,6 +30,7 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer_impl.hpp"
 
 #include <array>
 #include <atomic>
@@ -1347,6 +1351,173 @@ TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
 // immediately before applying the named property, so the outbound proxy already
 // carries the newly focused panel's depth window and the DirtyFlag::ALL callback
 // cannot back-route stale depth values onto that panel.
+namespace {
+    // The real viewer registers the manager used by the compiled binding.
+    // No window loop or SelectionTool is initialized: this is its no-tool lane.
+    class DepthWindowBindingState {
+    public:
+        DepthWindowBindingState() {
+            lfs::vis::ViewerOptions options;
+            options.show_startup_overlay = false;
+            options.safe_mode = true;
+            viewer = std::make_unique<lfs::vis::VisualizerImpl>(options);
+        }
+
+        ~DepthWindowBindingState() {
+            lfs::vis::op::undoHistory().clear();
+            viewer.reset();
+            lfs::vis::services().clear();
+        }
+
+        lfs::vis::RenderingManager& prepare(const bool enabled, const bool park) {
+            using namespace lfs::vis;
+            auto& manager = *viewer->getRenderingManager();
+            manager.restoreDepthWindowStateFromProject();
+            auto settings = manager.getSettings();
+            settings.split_view_mode = SplitViewMode::IndependentDual;
+            settings.depth_filter_enabled = enabled;
+            manager.updateSettings(settings);
+            manager.setDepthWindowSync(false);
+            manager.setDepthWindowForPanel(SplitViewPanelId::Left, pair[0]);
+            manager.setDepthWindowForPanel(SplitViewPanelId::Right, pair[1]);
+            manager.setFocusedSplitPanel(SplitViewPanelId::Left);
+            if (!park) {
+                settings = manager.getSettings();
+                settings.split_view_mode = SplitViewMode::Disabled;
+                manager.updateSettings(settings);
+            }
+            settings = manager.getSettings();
+            settings.split_view_mode = SplitViewMode::GTComparison;
+            manager.updateSettings(settings);
+            lfs::vis::op::undoHistory().clear();
+            return manager;
+        }
+
+        const std::array<lfs::vis::DepthWindowState, 2> pair{
+            lfs::vis::DepthWindowState{1.0f, 10.0f, 0.31f, 0.32f, 0.10f, 0.11f},
+            lfs::vis::DepthWindowState{2.0f, 20.0f, 0.62f, 0.63f, -0.20f, -0.21f}};
+        std::unique_ptr<lfs::vis::VisualizerImpl> viewer;
+    };
+} // namespace
+
+TEST_F(PythonIntegrationTest, ParkedGtPanelWindowRequestsAreAtomicallyRefused) {
+    DepthWindowBindingState state;
+    ASSERT_EQ(state.viewer->getSelectionTool(), nullptr);
+    ASSERT_EQ(lfs::python::get_rendering_manager(), state.viewer->getRenderingManager());
+    const lfs::python::GilAcquire gil;
+    const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+    std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+    ASSERT_NE(globals, nullptr);
+    ASSERT_EQ(PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins()), 0);
+    for (const bool initial_enabled : {false, true}) {
+        for (const bool requested_enabled : {false, true}) {
+            auto& manager = state.prepare(initial_enabled, true);
+            const auto before = manager.getSettings();
+            const auto snapshot = manager.depthWindowSnapshot();
+            const auto generation = manager.depthWindowProjectionGeneration();
+            const auto lineage = manager.getDepthWindowCollapseRecord().generation;
+            manager.dirty_mask_.store(0);
+            ASSERT_EQ(PyDict_SetItemString(globals.get(), "requested", requested_enabled ? Py_True : Py_False), 0);
+            ASSERT_NO_THROW(execPythonInGlobals(globals.get(), R"PY(
+import importlib.machinery
+import lichtfeld as lf
+assert any(lf.__file__.endswith(s) for s in importlib.machinery.EXTENSION_SUFFIXES), lf.__file__
+before = [lf.selection.get_depth_filter_window(panel=p) for p in ('left', 'right')]
+for panel in ('left', 'right', 'main'):
+    raised = False
+    try:
+        lf.selection.set_depth_filter_window(requested, 7.0, 70.0, 0.77, 0.07, 0.08, 0.78, panel=panel)
+    except RuntimeError as error:
+        assert 'parked' in str(error), str(error)
+        raised = True
+    assert raised is requested, (requested, raised)
+    assert [lf.selection.get_depth_filter_window(panel=p) for p in ('left', 'right')] == before
+)PY"));
+            const auto after = manager.getSettings();
+            EXPECT_EQ(manager.dirty_mask_.load(), 0u);
+            EXPECT_EQ(after.depth_filter_enabled, initial_enabled);
+            EXPECT_EQ(after.depth_filter_min, before.depth_filter_min);
+            EXPECT_EQ(after.depth_filter_max, before.depth_filter_max);
+            EXPECT_EQ(after.depth_filter_transform.getTranslation(), before.depth_filter_transform.getTranslation());
+            EXPECT_EQ(after.depth_filter_transform.getRotation(), before.depth_filter_transform.getRotation());
+            EXPECT_EQ(manager.depthWindowSnapshot().panels, snapshot.panels);
+            EXPECT_EQ(manager.depthWindowSnapshot().projection, snapshot.projection);
+            EXPECT_EQ(manager.depthWindowModeEpoch(), snapshot.mode_epoch);
+            EXPECT_EQ(manager.depthWindowProjectionGeneration(), generation);
+            EXPECT_EQ(manager.getDepthWindowCollapseRecord().generation, lineage);
+            EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+            auto settings = manager.getSettings();
+            settings.split_view_mode = lfs::vis::SplitViewMode::IndependentDual;
+            manager.updateSettings(settings);
+            EXPECT_EQ(manager.depthWindowSnapshot().panels, state.pair);
+        }
+    }
+}
+
+TEST_F(PythonIntegrationTest, GtGlobalWindowCompatibilityPathsRemainWritable) {
+    DepthWindowBindingState state;
+    ASSERT_EQ(state.viewer->getSelectionTool(), nullptr);
+    const lfs::python::GilAcquire gil;
+    const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+    std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+    ASSERT_NE(globals, nullptr);
+    ASSERT_EQ(PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins()), 0);
+    for (const bool park : {false, true}) {
+        for (const bool requested_enabled : {false, true}) {
+            auto& manager = state.prepare(!requested_enabled, park);
+            const auto lineage = manager.getDepthWindowCollapseRecord().generation;
+            ASSERT_EQ(PyDict_SetItemString(globals.get(), "requested", requested_enabled ? Py_True : Py_False), 0);
+            ASSERT_EQ(PyDict_SetItemString(globals.get(), "parked", park ? Py_True : Py_False), 0);
+            ASSERT_NO_THROW(execPythonInGlobals(globals.get(), R"PY(
+import math
+import lichtfeld as lf
+# None remains global even with a parked pair; no-park GT also accepts explicit panels.
+lf.selection.set_depth_filter_window(requested, 7.0, 70.0, 0.77, 0.07, 0.08, 0.78,
+                                     panel=None if parked else 'right')
+expected = (7.0, 70.0, 0.77, 0.78, 0.07, 0.08)
+for panel in ('left', 'right'):
+    value = lf.selection.get_depth_filter_window(panel=panel)
+    assert value[0] is requested
+    assert all(math.isclose(a, b, abs_tol=1e-6) for a, b in zip(value[1:], expected)), value
+)PY"));
+            EXPECT_EQ(manager.getSettings().depth_filter_enabled, requested_enabled);
+            EXPECT_EQ(manager.getDepthWindowCollapseRecord().generation, lineage);
+            const auto global = manager.depthWindowSnapshot().projection;
+            auto settings = manager.getSettings();
+            settings.split_view_mode = lfs::vis::SplitViewMode::IndependentDual;
+            manager.updateSettings(settings);
+            EXPECT_EQ(manager.depthWindowSnapshot().panels, park ? state.pair : (std::array{global, global}));
+        }
+    }
+}
+
+TEST_F(PythonIntegrationTest, RetainedDisabledPanelWritePublishesDiscardLineage) {
+    DepthWindowBindingState state;
+    auto& manager = state.prepare(false, true);
+    auto settings = manager.getSettings();
+    settings.split_view_mode = lfs::vis::SplitViewMode::Disabled;
+    manager.updateSettings(settings);
+    const lfs::python::GilAcquire gil;
+    const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+    std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+    ASSERT_NE(globals, nullptr);
+    ASSERT_EQ(PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins()), 0);
+    ASSERT_NO_THROW(execPythonInGlobals(globals.get(), R"PY(
+import lichtfeld as lf
+before = lf.ui.get_depth_window_collapse_record()
+lf.selection.set_depth_filter_window(True, 7.0, 70.0, 0.77, 0.07, 0.08, 0.78, panel='right')
+after = lf.ui.get_depth_window_collapse_record()
+assert after[1] == before[1] + 1, (before, after)
+assert after[2] == 'retained_pair_discard', after
+assert lf.selection.get_depth_filter_window(panel='right')[0] is True
+)PY"));
+    const auto global = manager.depthWindowSnapshot().projection;
+    settings = manager.getSettings();
+    settings.split_view_mode = lfs::vis::SplitViewMode::IndependentDual;
+    manager.updateSettings(settings);
+    EXPECT_EQ(manager.depthWindowSnapshot().panels, (std::array{global, global}));
+}
+
 TEST_F(PythonIntegrationTest, RetainedRenderSettingsMergeFreshStateBeforeCallback) {
     using lfs::vis::DepthWindowState;
     using lfs::vis::SplitViewPanelId;

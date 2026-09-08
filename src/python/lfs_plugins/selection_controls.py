@@ -84,19 +84,20 @@ def _depth_window_collapse_record():
     and every per-panel value it cached predates the first collapse of the
     cycle. The generation (rendering_manager.cpp,
     stampDepthWindowLineageLocked, which always holds settings_mutex_ and
-    always moves source, generation and kind together) counts the four writes
+    always moves source, generation and kind together) counts the writes
     that invalidate a slot-derived cache, so the delta between two reads says
-    how many boundaries went by. Three of those four stamp from INSIDE the
-    writing critical section; the sync undo/redo stamps from its call site
+    how many destructive boundaries went by. Retained-pair discards stamp too;
+    valid GT/Disabled excursions and restoration do not. Writers stamp inside
+    their critical section except sync undo/redo, which stamps from its call site
     (depth_window_undo_entry.cpp:100) after the restore released the lock, so
     it takes settings_mutex_ a SECOND time. The record is therefore always
     self-consistent, but it is not always written under the same lock hold as
     the slots it describes -- which is why _refresh_panel_context revalidates
     the generation around its endpoint reads instead of trusting one read.
     The kind names WHICH write stamped it -- a leave collapse, a sync-ON copy,
-    or a fresh-baseline restore (a project load OR a sync undo/redo, which share
-    the 'project_restore' kind) -- because the recovery differs per kind and the
-    endpoint alone does not identify it.
+    a fresh-baseline restore (project load or sync undo/redo), or a retained-pair
+    discard -- because recovery differs per kind and the endpoint alone does
+    not identify it.
 
     Returns (source, generation, kind). generation and kind are None when the
     binding is not exposed (an older module, or a test stub that does not need
@@ -132,10 +133,9 @@ def _split_mode_touches_depth_window(previous_mode, new_mode):
     applyDepthWindowModeTransitionLocked (rendering_manager.cpp): only crossing
     the independent-dual boundary (where per-panel windows exist at all) or the
     GT-comparison boundary (which suspends the depth filter entirely) moves any
-    depth-window state. Every other change -- Disabled <-> PLYComparison, say --
-    is a COMPLETE native no-op: no collapse, no seed, not even an epoch bump. A
-    consumer that treated those as boundaries would cancel a legitimate in-
-    flight text edit for a transition that changed nothing it was editing.
+    depth-window state. Other mode changes normally do nothing. Discarding a
+    retained pair on Disabled -> PLYComparison is witnessed separately by the
+    lineage stamp; without one, that edge must not cancel a legitimate edit.
     """
     if previous_mode == new_mode:
         return False
@@ -173,17 +173,17 @@ _DEFERRED_BLURRED = "blurred"
 _COMMIT_DONE = "done"
 _COMMIT_DEFERRED = "deferred"
 _COMMIT_RETARGETED = "retargeted"
-# The four native writes that invalidate slot-derived per-panel state, as the
-# lineage record reports them (rendering_manager.hpp, DepthWindowLineageKind).
-# Three KINDS for four writes: a sync undo/redo restore reports
-# 'project_restore' too, because both restore absolute windows wholesale.
+# Native reference invalidations (rendering_manager.hpp, DepthWindowLineageKind).
+# Sync undo/redo shares the project-restore recovery of absolute windows.
 _LINEAGE_LEAVE_COLLAPSE = "leave_collapse"
 _LINEAGE_SYNC_COPY = "sync_copy"
 _LINEAGE_PROJECT_RESTORE = "project_restore"
+_LINEAGE_RETAINED_PAIR_DISCARD = "retained_pair_discard"
 _LINEAGE_KINDS = (
     _LINEAGE_LEAVE_COLLAPSE,
     _LINEAGE_SYNC_COPY,
     _LINEAGE_PROJECT_RESTORE,
+    _LINEAGE_RETAINED_PAIR_DISCARD,
 )
 # How many times _refresh_panel_context re-reads the panel context when the
 # lineage generation moves underneath it. Bounded so a stamp storm cannot spin;
@@ -376,12 +376,19 @@ class SelectionControlsController:
             _PANEL_RIGHT: _DEFAULT_WINDOW_SCALE,
         }
         self._ref_scale_y = dict(self._ref_scale_x)
+        # The left/right entries survive a GT excursion only while native has
+        # invalidated nothing since they were retained. Keep this witness apart
+        # from the current record, which advances on every successful refresh.
+        self._retained_reference_generation = None
+        # Observing GT without a prior pair cannot recover the user's baselines;
+        # on return, baseline each restored slot from its own current window.
+        self._gt_baseline_pending = False
         self._focused_panel = _PANEL_LEFT
         self._split_mode = "none"
         self._depth_sync = False
         # The reference-lineage channel, cached as ONE triple read atomically
         # from the manager (see _depth_window_collapse_record). The generation
-        # counts the four native writes that invalidate slot-derived state;
+        # counts native writes that invalidate slot-derived state;
         # comparing its delta against the transition this poll actually observed
         # is how a cycle that happened entirely between two polls becomes
         # visible, and the kind is how the recovery is chosen. None means "not
@@ -709,8 +716,8 @@ class SelectionControlsController:
         #
         # So the record is read FIRST, then the endpoint, then the record AGAIN.
         # The generation is a monotonic counter bumped once per slot-
-        # invalidating write (three of the four stamp inside the write's own
-        # critical section, the sync undo/redo from its call site under a
+        # invalidating write (writers stamp inside their own critical section,
+        # except sync undo/redo from its call site under a
         # second lock -- see _depth_window_collapse_record), so a generation
         # that moved across the two reads is proof that the set is TORN.
         #
@@ -1138,6 +1145,47 @@ class SelectionControlsController:
         # in the same endpoint while invalidating every cached reference, and
         # the channel is the only witness to them.
         delta = self._lineage_delta(previous_generation)
+        if delta not in (None, 0) or previous_sync != self._depth_sync:
+            self._retained_reference_generation = None
+            self._gt_baseline_pending = False
+        if self._split_mode == _GT_COMPARISON:
+            # First observed in GT: neither the dormant pair's user baselines
+            # nor a preceding shared reference has been seen by this consumer.
+            # A known shared reference from global-origin GT keeps normal seeding.
+            if previous_generation is None:
+                self._gt_baseline_pending = True
+        elif self._split_mode not in ("none", _INDEPENDENT_DUAL):
+            self._retained_reference_generation = None
+            self._gt_baseline_pending = False
+        retained_leave = (
+            previous_mode == _INDEPENDENT_DUAL
+            and self._split_mode in (_GT_COMPARISON, "none")
+            and delta == 0
+        )
+        if retained_leave:
+            # A plain Independent -> Disabled leave stamps a collapse. No stamp
+            # means the GT park (possibly its Disabled leg too) was coalesced.
+            self._retained_reference_generation = previous_generation
+            if previous_sync:
+                # The parked synced pair shares one baseline. Keep it in the
+                # pair entries while GT/global edits may rebase shared itself.
+                for key in (_PANEL_LEFT, _PANEL_RIGHT):
+                    self._ref_scale_x[key] = self._ref_scale_x[_PANEL_SHARED]
+                    self._ref_scale_y[key] = self._ref_scale_y[_PANEL_SHARED]
+        retained_return = (
+            self._split_mode == _INDEPENDENT_DUAL
+            and previous_mode != _INDEPENDENT_DUAL
+            and self._retained_reference_generation is not None
+            and self._retained_reference_generation == self._collapse_generation
+        )
+        baseline_gt_return = (
+            self._split_mode == _INDEPENDENT_DUAL
+            and previous_mode != _INDEPENDENT_DUAL
+            and self._gt_baseline_pending
+        )
+        if self._split_mode == _INDEPENDENT_DUAL:
+            self._retained_reference_generation = None
+            self._gt_baseline_pending = False
         # The ONE advance an endpoint transition fully explains: the single
         # leave collapse this refresh actually watched happen. (An unknown kind
         # is an older module reporting only a count; it keeps the plain
@@ -1179,9 +1227,17 @@ class SelectionControlsController:
                 scale_x, scale_y = self._native_window_scales()
                 self._fresh_baseline_references(scale_x, scale_y)
             return
+        if retained_return:
+            if self._depth_sync:
+                self._ref_scale_x[_PANEL_SHARED] = self._ref_scale_x[_PANEL_LEFT]
+                self._ref_scale_y[_PANEL_SHARED] = self._ref_scale_y[_PANEL_LEFT]
+            return
+        if baseline_gt_return:
+            self._fresh_baseline_references(*self._native_window_scales())
+            return
         if entering_two:
-            # Both panels were just seeded from the one global window,
-            # so both references start from the shared one.
+            # Ordinary shared -> independent entry seeds both slots from
+            # the global window, so its reference belongs to both as well.
             for key in (_PANEL_LEFT, _PANEL_RIGHT):
                 self._ref_scale_x[key] = self._ref_scale_x[_PANEL_SHARED]
                 self._ref_scale_y[key] = self._ref_scale_y[_PANEL_SHARED]
@@ -1279,11 +1335,11 @@ class SelectionControlsController:
                     str(exc).strip()
                     or _ui_label("selection.update_depth_failed", "Could not update selection depth filter.")
                 )
-        # The manager silently ignores the change while a depth-window drag is
-        # in flight, so re-read the flag rather than assuming it flipped
-        # -- and go through the shared refresh, which reconciles the references
-        # on the true before/after values. Doing it here rather than leaving it
-        # to update() is what makes a refused toggle reconcile nothing.
+        # The manager refuses changes during an owned drag or parked GT. An
+        # actual Disabled sync change discards retention and applies normally;
+        # a same-value request preserves it. Re-read the actual flag through
+        # the shared refresh rather than assuming it flipped, so references
+        # reconcile only the true before/after state, including any discard.
         self._refresh_panel_context()
 
     # ---- text-edit guard ----------------------------------------------

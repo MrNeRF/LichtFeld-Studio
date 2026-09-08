@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rml_viewport_overlay.hpp"
@@ -30,6 +31,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/EventListener.h>
 #include <RmlUi/Core/RenderInterface.h>
 #include <algorithm>
@@ -882,8 +884,14 @@ namespace lfs::vis {
         // A GLOBAL depth write while GT is active fans out through BOTH slots
         // outside independent-dual, so the dormant pair cannot live in the
         // slots alone - this is what proves it is parked elsewhere.
-        rendering_manager_->setDepthWindowForPanel(
-            SplitViewPanelId::Left, makeWindow(7.0f, 70.0f, 0.77f, 0.78f, 0.07f, 0.08f));
+        auto gt_settings = rendering_manager_->getSettings();
+        gt_settings.depth_filter_max.z = -7.0f;
+        gt_settings.depth_filter_min.z = -70.0f;
+        gt_settings.depth_filter_scale_x = 0.77f;
+        gt_settings.depth_filter_scale_y = 0.78f;
+        gt_settings.depth_filter_offset_x = 0.07f;
+        gt_settings.depth_filter_offset_y = 0.08f;
+        rendering_manager_->updateSettings(gt_settings);
 
         lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewer_->getViewport()}.emit();
         ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::IndependentDual);
@@ -944,7 +952,7 @@ namespace lfs::vis {
         EXPECT_EQ(projectionDepthWindow(*rendering_manager_), right_pre);
 
         // The leg that makes the leak visible to the user: GT -> Disabled
-        // discards the park, so whatever the projection holds becomes the
+        // retains the parked pair while the projection becomes the global
         // single window.
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::Disabled);
@@ -2430,7 +2438,7 @@ namespace lfs::vis {
         lfs::vis::FrameInputBuffer buffer;
         buffer.beginFrame();
         buffer.processEvent(mouseDownEvent(SDL_BUTTON_LEFT, 320.0f, 300.0f));
-        // What WindowManager does at the event, from GuiManager::pressBelongsToGui.
+        // What WindowManager does at the event, from GuiManager::hitTestMouseButton.
         buffer.notePressOwner(SDL_BUTTON_LEFT, /*gui_owned=*/true);
         // A second verdict for the SAME press is ignored: the owner and the
         // coordinates it was taken at must describe one event.
@@ -3523,5 +3531,379 @@ namespace lfs::vis {
         [](const ::testing::TestParamInfo<DoubleClickCase>& info) {
             return std::string(info.param.name);
         });
+
+    // Exercise the compiled overlay entry point used by GuiManager, including
+    // its blockers and early returns. Only the headless context attachment is
+    // fixture access; ownership, coordinates and delivery are production code.
+    class RmlViewportInputRoutingTest : public RmlPointerReplayTest {
+    protected:
+        void SetUp() override {
+            RmlPointerReplayTest::SetUp();
+            gui::guiFocusState().reset();
+            static constexpr const char* kControls =
+                "<rml><head><style>"
+                "body { width: 400px; height: 300px; }"
+                "input { position: absolute; left: 20px; top: 20px; width: 300px; height: 24px; }"
+                "slidertrack { height: 24px; }"
+                "sliderbar { width: 20px; height: 24px; }"
+                "sliderarrowdec, sliderarrowinc { width: 0px; height: 0px; }"
+                "button { position: absolute; left: 20px; top: 100px; width: 100px; height: 40px; }"
+                "#text { top: 180px; }"
+                "</style></head><body>"
+                "<input id=\"range\" type=\"range\" min=\"0\" max=\"100\" step=\"1\" value=\"50\"/>"
+                "<button id=\"action\"/><input id=\"text\" type=\"text\" value=\"keep\"/>"
+                "</body></rml>";
+            controls_ = context_->LoadDocumentFromMemory(kControls);
+            ASSERT_NE(controls_, nullptr);
+            controls_->Show();
+            context_->Update();
+            range_ = dynamic_cast<Rml::ElementFormControlInput*>(controls_->GetElementById("range"));
+            text_ = dynamic_cast<Rml::ElementFormControlInput*>(controls_->GetElementById("text"));
+            button_ = controls_->GetElementById("action");
+            ASSERT_NE(range_, nullptr);
+            ASSERT_NE(text_, nullptr);
+            ASSERT_NE(button_, nullptr);
+            bar_ = findBar(range_);
+            ASSERT_NE(bar_, nullptr);
+            bar_->SetId("range-bar");
+            const auto bar_offset = bar_->GetAbsoluteOffset();
+            range_point_ = {bar_offset.x + bar_->GetOffsetWidth() / 2,
+                            bar_offset.y + bar_->GetOffsetHeight() / 2};
+            ASSERT_EQ(context_->GetElementAtPoint({range_point_.x, range_point_.y}), bar_);
+            ASSERT_EQ(context_->GetElementAtPoint({button_point_.x, button_point_.y}), button_);
+            ASSERT_EQ(bar_->GetComputedValues().drag(), Rml::Style::Drag::Drag);
+            recorder_.listen(bar_);
+            recorder_.listen(button_);
+            for (const char* event : {"dragend", "dragdrop", "mousescroll"})
+                bar_->AddEventListener(event, &recorder_);
+            range_->AddEventListener("change", &recorder_);
+            text_->AddEventListener("keydown", &recorder_);
+            overlay_ = std::make_unique<gui::RmlViewportOverlay>();
+            overlay_->rml_context_ = context_;
+            overlay_->document_ = controls_;
+            overlay_->setViewportBounds(origin_, {400.0f, 300.0f}, {0.0f, 0.0f});
+            recorder_.clear();
+        }
+
+        void TearDown() override {
+            if (overlay_) {
+                overlay_->rml_context_ = nullptr;
+                overlay_->document_ = nullptr;
+                overlay_.reset();
+            }
+            gui::guiFocusState().reset();
+            RmlPointerReplayTest::TearDown();
+        }
+
+        static Rml::Element* findBar(Rml::Element* element) {
+            if (element->GetTagName() == "sliderbar")
+                return element;
+            for (int i = 0; i < element->GetNumChildren(true); ++i) {
+                if (auto* bar = findBar(element->GetChild(i)))
+                    return bar;
+            }
+            return nullptr;
+        }
+
+        gui::PanelInputState inputAt(const glm::vec2 local) const {
+            gui::PanelInputState input;
+            input.mouse_x = local.x + origin_.x;
+            input.mouse_y = local.y + origin_.y;
+            return input;
+        }
+
+        FrameMouseButtonEvent transition(const bool down, const glm::vec2 local,
+                                         const uint8_t button = 0) const {
+            return {.button = button,
+                    .down = down,
+                    .x = local.x + origin_.x,
+                    .y = local.y + origin_.y,
+                    .timestamp = down ? 1001u : 1002u,
+                    .clicks = 1,
+                    .gui_owned = true};
+        }
+
+        void route(const gui::PanelInputState& input,
+                   const gui::ViewportOverlayInputBlockers blockers = {}) {
+            const auto original = input.mouse_button_events;
+            overlay_->processInput(input, blockers);
+            ASSERT_EQ(input.mouse_button_events.size(), original.size());
+            for (std::size_t i = 0; i < original.size(); ++i) {
+                const auto& event = input.mouse_button_events[i];
+                EXPECT_EQ(event.button, original[i].button);
+                EXPECT_EQ(event.down, original[i].down);
+                EXPECT_FLOAT_EQ(event.x, original[i].x);
+                EXPECT_FLOAT_EQ(event.y, original[i].y);
+                EXPECT_EQ(event.timestamp, original[i].timestamp);
+                EXPECT_EQ(event.clicks, original[i].clicks);
+                EXPECT_EQ(event.gui_owned, original[i].gui_owned);
+            }
+        }
+
+        void arm(const glm::vec2 point, const uint8_t button = 0) {
+            auto input = inputAt(point);
+            input.mouse_button_events = {transition(true, point, button)};
+            input.mouse_clicked[button] = true;
+            input.mouse_down[button] = true;
+            route(input);
+            ASSERT_TRUE(owns(button));
+            recorder_.clear();
+        }
+
+        bool owns(const uint8_t button = 0) const { return overlay_->pointer_down_delivered_[button]; }
+        bool hoveredInteractive() const { return overlay_->hovered_interactive_; }
+        bool hasCoordinateOrigin() const { return overlay_->last_valid_input_origin_.has_value(); }
+
+        void expectRangeInert() {
+            ASSERT_FALSE(owns());
+            EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
+            const auto value = range_->GetValue();
+            recorder_.clear();
+            route(inputAt(range_point_ + glm::vec2(80.0f, 0.0f)));
+            EXPECT_EQ(range_->GetValue(), value);
+            EXPECT_EQ(recorder_.countOf("range-bar:dragstart"), 0) << recorder_.joined();
+            EXPECT_EQ(recorder_.countOf("range:change"), 0) << recorder_.joined();
+        }
+
+        std::unique_ptr<gui::RmlViewportOverlay> overlay_;
+        Rml::ElementDocument* controls_ = nullptr;
+        Rml::ElementFormControlInput* range_ = nullptr;
+        Rml::ElementFormControlInput* text_ = nullptr;
+        Rml::Element* bar_ = nullptr;
+        Rml::Element* button_ = nullptr;
+        const glm::vec2 origin_{40.0f, 60.0f};
+        const glm::vec2 button_point_{70.0f, 120.0f};
+        glm::vec2 range_point_{};
+    };
+
+    struct OverlayBlockerCase {
+        const char* name;
+        gui::ViewportOverlayInputBlockers blockers;
+    };
+
+    class RmlViewportInputRoutingBlockerTest : public RmlViewportInputRoutingTest,
+                                               public ::testing::WithParamInterface<OverlayBlockerCase> {};
+
+    TEST_P(RmlViewportInputRoutingBlockerTest, HeldRangeDoesNotReceiveMaskedMotionAndTrueReleaseDisarms) {
+        arm(range_point_);
+        ASSERT_EQ(range_->GetValue(), "50.000000");
+        auto held = inputAt({390.0f, 280.0f});
+        held.mouse_down[0] = true;
+        held.mouse_wheel = 3.0f;
+        held.keys_pressed = {SDL_SCANCODE_RIGHT};
+        held.text_inputs = {"x"};
+        route(held, GetParam().blockers);
+        EXPECT_TRUE(owns());
+        EXPECT_TRUE(bar_->IsPseudoClassSet("active"));
+        EXPECT_EQ(range_->GetValue(), "50.000000");
+        EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
+        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
+
+        auto released = inputAt({390.0f, 280.0f});
+        released.mouse_button_events = {transition(false, range_point_)};
+        route(released, GetParam().blockers);
+        EXPECT_EQ(recorder_.countOf("range-bar:click"), 1) << recorder_.joined();
+        EXPECT_EQ(range_->GetValue(), "50.000000");
+        expectRangeInert();
+    }
+
+    TEST_P(RmlViewportInputRoutingBlockerTest, ButtonReleaseCompletesButNewBlockedPressCannotFocusOrClick) {
+        arm(button_point_);
+        auto released = inputAt(button_point_);
+        released.mouse_button_events = {transition(false, button_point_)};
+        route(released, GetParam().blockers);
+        EXPECT_FALSE(owns());
+        EXPECT_EQ(recorder_.countOf("action:click"), 1) << recorder_.joined();
+        recorder_.clear();
+        released.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
+        released.mouse_clicked[0] = true;
+        released.mouse_released[0] = true;
+        route(released, GetParam().blockers);
+        EXPECT_FALSE(owns());
+        EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
+        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
+    }
+
+    INSTANTIATE_TEST_SUITE_P(
+        GuiBlockers, RmlViewportInputRoutingBlockerTest,
+        ::testing::Values(OverlayBlockerCase{"Startup", {.startup = true}},
+                          OverlayBlockerCase{"Modal", {.modal = true}},
+                          OverlayBlockerCase{"PendingModal", {.pending_modal = true}},
+                          OverlayBlockerCase{"ContextMenu", {.context_menu = true}},
+                          OverlayBlockerCase{"MenuPointer", {.menu_pointer = true}},
+                          OverlayBlockerCase{"FloatingPanel", {.floating_panel = true}}),
+        [](const ::testing::TestParamInfo<OverlayBlockerCase>& info) { return info.param.name; });
+
+    TEST_F(RmlViewportInputRoutingTest, CanonicalReleaseBypassesIdleShortcutWithoutAggregateBits) {
+        arm(range_point_);
+        auto released = inputAt(range_point_);
+        released.mouse_button_events = {transition(false, range_point_)};
+        route(released);
+        EXPECT_EQ(recorder_.countOf("range-bar:click"), 1) << recorder_.joined();
+        expectRangeInert();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, BlockedSameButtonInterleavingsKeepTheirOwnLifecycle) {
+        arm(button_point_);
+        auto input = inputAt(button_point_);
+        input.mouse_button_events = {transition(false, button_point_),
+                                     transition(true, button_point_),
+                                     transition(false, button_point_)};
+        route(input, {.modal = true});
+        EXPECT_FALSE(owns());
+        EXPECT_EQ(recorder_.countOf("action:click"), 1) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("action:mousedown"), 0);
+
+        arm(button_point_);
+        input.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
+        route(input, {.modal = true});
+        EXPECT_FALSE(owns());
+        EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
+        // A replacement DOWN revokes ownership. The old Rml press is the
+        // disclosed supersession residual; its UP cannot be borrowed here.
+        EXPECT_TRUE(button_->IsPseudoClassSet("active"));
+        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, BlockedReleasesRemainIndependentAcrossButtons) {
+        arm(range_point_);
+        arm(range_point_, 1);
+        auto input = inputAt(range_point_);
+        input.mouse_button_events = {transition(false, range_point_, 2), transition(false, range_point_, 1)};
+        route(input, {.menu_pointer = true});
+        EXPECT_TRUE(owns(0));
+        EXPECT_FALSE(owns(1));
+        EXPECT_FALSE(owns(2));
+        EXPECT_EQ(recorder_.countOfWithButton("range-bar:mouseup", 1), 1) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOfWithButton("range-bar:mouseup", 2), 0);
+        input.mouse_button_events = {transition(false, range_point_)};
+        route(input, {.menu_pointer = true});
+        expectRangeInert();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, OutsideAndMovedReleasesUseEventCoordinatesInsteadOfLatestHover) {
+        arm(button_point_);
+        auto input = inputAt(button_point_);
+        input.mouse_button_events = {transition(false, {450.0f, 350.0f})};
+        route(input, {.floating_panel = true});
+        EXPECT_FALSE(owns());
+        EXPECT_FALSE(button_->IsPseudoClassSet("active"));
+        EXPECT_EQ(recorder_.countOf("action:click"), 0) << recorder_.joined();
+
+        arm(range_point_);
+        input = inputAt(range_point_);
+        input.mouse_button_events = {transition(false, range_point_ + glm::vec2(60.0f, 0.0f))};
+        route(input, {.floating_panel = true});
+        EXPECT_EQ(recorder_.countOf("range-bar:dragstart"), 1) << recorder_.joined();
+        EXPECT_GE(recorder_.countOf("range:change"), 1);
+        EXPECT_NE(range_->GetValue(), "50.000000");
+        expectRangeInert();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, CollapsedBoundsUseRetainedLiveContextOriginAndResetOnShutdown) {
+        arm(button_point_);
+        const auto dimensions = context_->GetDimensions();
+        ASSERT_EQ(dimensions, Rml::Vector2i(400, 300));
+        overlay_->setViewportBounds({900.0f, 800.0f}, {0.0f, 0.0f}, {0.0f, 0.0f});
+        EXPECT_EQ(context_->GetDimensions(), dimensions);
+        auto input = inputAt(button_point_);
+        input.mouse_button_events = {transition(false, button_point_)};
+        route(input);
+        EXPECT_FALSE(owns());
+        EXPECT_EQ(recorder_.countOf("action:click"), 1) << recorder_.joined();
+        EXPECT_TRUE(hasCoordinateOrigin());
+        overlay_->shutdown();
+        EXPECT_FALSE(hasCoordinateOrigin());
+        EXPECT_FALSE(owns());
+        recorder_.clear();
+        input.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
+        route(input);
+        EXPECT_TRUE(recorder_.log().empty());
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, ExternalCaptureCannotSkipOwnedReleaseOutsideOverlay) {
+        arm(range_point_);
+        auto outside = inputAt({-50.0f, -50.0f});
+        outside.mouse_down[0] = true;
+        route(outside);
+        ASSERT_FALSE(hoveredInteractive());
+        ASSERT_TRUE(owns());
+        recorder_.clear();
+        gui::guiFocusState().want_capture_mouse = true;
+        outside.mouse_down[0] = false;
+        outside.mouse_button_events = {transition(false, {-50.0f, -50.0f})};
+        route(outside);
+        expectRangeInert();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, ExternalCapturePreservesEarlierViewportTextDismissClassification) {
+        const glm::vec2 bare_point{350.0f, 250.0f};
+        const glm::vec2 outside_point{450.0f, 250.0f};
+        auto* const bare_element = context_->GetElementAtPoint({bare_point.x, bare_point.y});
+        ASSERT_NE(bare_element, nullptr);
+        recorder_.listen(bare_element);
+        text_->AddEventListener("blur", &recorder_);
+        ASSERT_TRUE(text_->Focus());
+        route(inputAt(bare_point));
+        ASSERT_FALSE(hoveredInteractive());
+        ASSERT_EQ(context_->GetFocusElement(), text_);
+        recorder_.clear();
+
+        // A completed viewport click retains its event-time ownership even
+        // when later motion leaves the overlay for a capturing GUI panel.
+        FrameInputBuffer buffer;
+        buffer.beginFrame();
+        const auto press_point = bare_point + origin_;
+        pressAt(buffer, SDL_BUTTON_LEFT, press_point.x, press_point.y, false, 1001, 1);
+        buffer.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, press_point.x, press_point.y, 1002, 1));
+        const auto latest_point = outside_point + origin_;
+        buffer.processEvent(mouseMotionEvent(latest_point.x, latest_point.y));
+        settleLiveCursor(buffer, latest_point.x, latest_point.y);
+        const auto input = gui::buildPanelInputFromSDL(buffer);
+        ASSERT_EQ(input.mouse_button_events.size(), 2u);
+        ASSERT_FALSE(input.mouse_button_events[0].gui_owned);
+        ASSERT_FALSE(input.mouse_button_events[1].gui_owned);
+        ASSERT_FALSE(input.mouse_down[0]);
+        gui::guiFocusState().want_capture_mouse = true;
+        route(input);
+
+        // Blur listeners commit synchronously, before GuiManager consumes this
+        // classification and decides whether that original press may focus.
+        EXPECT_NE(context_->GetFocusElement(), text_);
+        EXPECT_EQ(recorder_.countOf("text:blur"), 1) << recorder_.joined();
+        EXPECT_FALSE(owns());
+        EXPECT_EQ(recorder_.countOf(bare_element->GetId() + ":mousedown"), 0) << recorder_.joined();
+        ASSERT_EQ(overlay_->leftPressClassifications().size(), 1u);
+        const auto& classification = overlay_->leftPressClassifications()[0];
+        EXPECT_FALSE(classification.on_interactive_control);
+        EXPECT_TRUE(classification.blurred_text_input);
+        EXPECT_TRUE(gui::overlayPressMayFocusPanel({
+            .left_pressed = true,
+            .overlay_wants_input = overlay_->wantsInput(),
+            .pressed_interactive_control = classification.on_interactive_control,
+            .press_blurred_text_input = classification.blurred_text_input,
+            .press_inside_viewport = gui::pointInsideViewport(press_point, origin_, {400.0f, 300.0f}),
+            .press_gui_owned = input.mouse_button_events[0].gui_owned,
+        }));
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, BlockedTextInputNeitherBlursNorReceivesKeys) {
+        ASSERT_TRUE(text_->Focus());
+        auto input = inputAt(button_point_);
+        input.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
+        input.keys_pressed = {SDL_SCANCODE_BACKSPACE};
+        input.text_inputs = {"x"};
+        input.text_codepoints = {U'x'};
+        const auto value = text_->GetValue();
+        route(input, {.pending_modal = true});
+        EXPECT_EQ(context_->GetFocusElement(), text_);
+        EXPECT_EQ(text_->GetValue(), value);
+        EXPECT_EQ(recorder_.countOf("text:keydown"), 0);
+        EXPECT_TRUE(overlay_->leftPressClassifications().empty());
+        input.mouse_button_events.clear();
+        input.keys_pressed.clear();
+        route(input);
+        EXPECT_NE(text_->GetValue(), value);
+    }
 
 } // namespace lfs::vis

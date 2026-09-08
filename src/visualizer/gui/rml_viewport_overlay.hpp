@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/vram_hud_overlay.hpp"
@@ -29,10 +30,26 @@ namespace Rml {
 
 namespace lfs::vis {
     struct Theme;
-}
+    class RmlViewportInputRoutingTest;
+} // namespace lfs::vis
 namespace lfs::vis::gui {
 
     struct PanelInputState;
+
+    // Frame-level blockers captured by GuiManager before underlay routing.
+    // The original event stream remains available for still-owned releases.
+    struct ViewportOverlayInputBlockers {
+        bool startup = false;
+        bool modal = false;
+        bool pending_modal = false;
+        bool context_menu = false;
+        bool menu_pointer = false;
+        bool floating_panel = false;
+
+        [[nodiscard]] bool blocksInput() const {
+            return startup || modal || pending_modal || context_menu || menu_pointer || floating_panel;
+        }
+    };
 
     // Is `point` (window coordinates) inside the viewport rectangle?
     //
@@ -153,14 +170,14 @@ namespace lfs::vis::gui {
 
         using VramHudOverlayState = VramHudOverlay::State;
 
-        RmlViewportOverlay();
-        ~RmlViewportOverlay();
+        LFS_VIS_API RmlViewportOverlay();
+        LFS_VIS_API ~RmlViewportOverlay();
         RmlViewportOverlay(const RmlViewportOverlay&) = delete;
         RmlViewportOverlay& operator=(const RmlViewportOverlay&) = delete;
 
         void init(RmlUIManager* mgr);
-        void shutdown();
-        void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
+        LFS_VIS_API void shutdown();
+        LFS_VIS_API void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void setViewportContentOffset(float x);
         void setToolbarPanels(float primary_x, float primary_width,
                               bool show_secondary = false,
@@ -176,7 +193,10 @@ namespace lfs::vis::gui {
         void render();
         void renderCached();
         void renderFrostedGlass();
-        void processInput(const PanelInputState& input);
+        // Shared production routing boundary: input is the original frame,
+        // never a masked copy with sentinel coordinates or removed events.
+        LFS_VIS_API void processInput(const PanelInputState& input,
+                                      const ViewportOverlayInputBlockers& blockers = {});
         bool wantsInput() const { return wants_input_; }
         // Every left DOWN of the frame the last processInput() saw, classified
         // from that press's OWN coordinates, in SDL arrival order. Empty when
@@ -253,6 +273,8 @@ namespace lfs::vis::gui {
         void markRenderNeeded(RenderReason reason);
         [[nodiscard]] std::string renderReasonSources() const;
 
+        friend class lfs::vis::RmlViewportInputRoutingTest;
+
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -261,6 +283,9 @@ namespace lfs::vis::gui {
         glm::vec2 vp_pos_{0, 0};
         glm::vec2 vp_size_{0, 0};
         glm::vec2 screen_origin_{0, 0};
+        // A collapsed layout leaves the live Rml context at its previous size.
+        // Its outstanding releases still use that last valid window origin.
+        std::optional<glm::vec2> last_valid_input_origin_;
         float primary_toolbar_x_ = 0.0f;
         float primary_toolbar_width_ = 0.0f;
         bool show_secondary_toolbar_ = false;

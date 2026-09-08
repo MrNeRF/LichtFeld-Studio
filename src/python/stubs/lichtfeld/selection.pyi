@@ -107,6 +107,11 @@ def set_depth_filter_window(enabled: bool, depth_near: float = 0.0, depth_far: f
     - 'left' / 'right': that panel's own window. Outside unsynced
       independent-dual split, or while panel sync is on, the write fans out
       to both panels exactly as a global write does.
+    Explicit panel requests are refused while an independent pair is parked
+    in GT: enabled=True raises RuntimeError; enabled=False is a silent atomic
+    no-op, including the global enabled flag. panel=None remains global.
+    A retained Disabled interval accepts global edits; changed geometry
+    discards the retained pair. No-op geometry and enable-only edits retain it.
     Any other string raises ValueError. The enabled flag is global in every
     case; only the window geometry is per-panel.
     """

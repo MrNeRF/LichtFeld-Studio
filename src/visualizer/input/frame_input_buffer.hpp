@@ -23,7 +23,7 @@ namespace lfs::vis {
         uint64_t timestamp = 0;
         uint8_t clicks = 0;
         // Did the GUI own THIS press when it happened, from the GUI's own hit
-        // test (GuiManager::pressBelongsToGui), recorded at the SDL event by
+        // test (GuiManager::hitTestMouseButton), recorded at the SDL event by
         // the window layer through notePressOwner()?
         //
         // Rectangle containment recomputed later in the GUI frame answers

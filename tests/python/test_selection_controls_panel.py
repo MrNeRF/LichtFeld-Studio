@@ -5,6 +5,7 @@
 from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from xml.etree import ElementTree
 import re
 import sys
 
@@ -1328,6 +1329,504 @@ def test_size_reference_is_per_panel_across_focus_switches(
     assert panel._ref_scale_x["right"] == pytest.approx(0.35)
 
 
+_GT_SIZE_REFERENCES = {"left": (0.60, 0.30), "right": (0.40, 0.20)}
+
+
+def _focus_reference_panel(state, panel):
+    state.focused_panel = panel
+    state.depth_scale, state.depth_scale_y = state.panel_scales[panel]
+
+
+def _mounted_gt_references(module, state, *, focused="right"):
+    """Give the real controller two drawn baselines, then scale both windows."""
+    _independent_dual(state)
+    panel, model, doc = _mounted_panel(module, state)
+    for key, scales in _GT_SIZE_REFERENCES.items():
+        state.panel_scales[key] = scales
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        _publish_draw_commit(module, key)
+        panel.update(doc)
+        state.panel_scales[key] = (0.30, 0.15)
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+    _focus_reference_panel(state, focused)
+    panel.update(doc)
+    return panel, model, doc
+
+
+def _assert_gt_references_and_size_edits(panel, model, doc, state):
+    # Equal native windows still have DIFFERENT reference identities. Comparing
+    # restored geometry alone, or only checking 100%, would miss this regression.
+    for key, percent in (("left", "50"), ("right", "75")):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == percent
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx(
+            _GT_SIZE_REFERENCES[key]
+        )
+    for key, scales in _GT_SIZE_REFERENCES.items():
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        doc.scale.emit("focus")
+        model.bound_binds["selection_depth_scale_str"][1]("125")
+        doc.scale.emit("change", _InputEventStub(linebreak=True))
+        assert state.write_targets[-1] == key
+        write = state.window_calls[-1]
+        assert (write[3], write[6]) == pytest.approx(tuple(v * 1.25 for v in scales))
+        doc.scale.emit("blur")
+
+
+@pytest.mark.parametrize("focused", ["left", "right"])
+@pytest.mark.parametrize(
+    "schedule",
+    ["direct", "observed", "only_gt", "only_disabled", "coalesced", "hidden",
+     "repeated", "repeated_coalesced", "repeated_hidden"],
+)
+def test_gt_roundtrip_preserves_panel_reference_identity(
+    selection_controls_module, focused, schedule
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_gt_references(module, state, focused=focused)
+    generation = state.depth_window_collapse_generation
+    # Native park/retained Disabled/restore do not invalidate either slot, so
+    # these published endpoints have NO lineage stamp. Focus resets to Left.
+    modes = ["gt_comparison"]
+    if schedule != "direct":
+        modes.append("none")
+    if schedule.startswith("repeated"):
+        modes += ["gt_comparison", "none"]
+    hidden = schedule in ("hidden", "repeated_hidden")
+    if hidden:
+        state.active_tool = "builtin.move"
+        panel.update(doc)
+    # An external focus change can coalesce with park and its reset to Left.
+    state.focused_panel = "right" if focused == "left" else "left"
+    for mode in modes:
+        state.split_view_mode = mode
+        state.focused_panel = "left"
+        if hidden or schedule in ("direct", "observed", "repeated") or (
+            schedule == "only_gt" and mode == "gt_comparison"
+        ) or (schedule == "only_disabled" and mode == "none"):
+            panel.update(doc)
+    _independent_dual(state)
+    _focus_reference_panel(state, "left")
+    state.active_tool = "builtin.select"
+    panel.update(doc)
+    assert state.depth_window_collapse_generation == generation
+    _assert_gt_references_and_size_edits(panel, model, doc, state)
+
+
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("through_disabled", [False, True])
+def test_first_mount_in_gt_baselines_without_inventing_reference_history(
+    selection_controls_module, through_disabled, sync
+):
+    module, state = selection_controls_module
+    state.split_view_mode = "gt_comparison"
+    state.depth_sync = sync
+    state.panel_scales = {"left": (0.30, 0.15), "right": (0.30, 0.15) if sync else (0.20, 0.10)}
+    # A global GT write can differ from either retained window.
+    state.depth_scale, state.depth_scale_y = (0.80, 0.40)
+    panel, model, doc = _mounted_panel(module, state)
+    if through_disabled:
+        state.split_view_mode = "none"
+        panel.update(doc)
+    _independent_dual(state, sync=sync)
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx(
+            state.panel_scales[key]
+        )
+
+
+def _mounted_synced_gt_reference(module, state):
+    _independent_dual(state, sync=True)
+    baseline = (0.60, 0.30)
+    parked_scales = (0.30, 0.15)
+    state.depth_scale, state.depth_scale_y = baseline
+    state.panel_scales = {key: baseline for key in ("left", "right")}
+    panel, model, doc = _mounted_panel(module, state)
+    state.depth_scale, state.depth_scale_y = parked_scales
+    state.panel_scales = {key: parked_scales for key in ("left", "right")}
+    panel.update(doc)
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+    return panel, model, doc
+
+
+@pytest.mark.parametrize("schedule", ["direct", "observed", "only_disabled", "coalesced", "hidden", "repeated"])
+@pytest.mark.parametrize("gt_scales", [(0.80, 0.20), (0.80, 0.40), (0.30, 0.15)],
+                         ids=["changed_aspect", "same_aspect", "noop"])
+def test_synced_gt_roundtrip_preserves_shared_size_reference(
+    selection_controls_module, schedule, gt_scales
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_synced_gt_reference(module, state)
+    baseline = (0.60, 0.30)
+    parked_scales = (0.30, 0.15)
+    generation = state.depth_window_collapse_generation
+    if schedule == "hidden":
+        state.active_tool = "builtin.move"
+        panel.update(doc)
+    # Native park/GT global write retain the synced pair without stamping.
+    state.split_view_mode = "gt_comparison"
+    state.depth_scale, state.depth_scale_y = gt_scales
+    state.panel_scales = {key: gt_scales for key in ("left", "right")}
+    if schedule in ("direct", "observed", "hidden", "repeated"):
+        panel.update(doc)
+    if schedule != "direct":
+        state.split_view_mode = "none"
+        if schedule != "coalesced":
+            panel.update(doc)
+    if schedule == "repeated":
+        for mode in ("gt_comparison", "none"):
+            state.split_view_mode = mode
+            panel.update(doc)
+    # Restoration replaces GT's live projection with the original synced pair.
+    state.panel_scales = {key: parked_scales for key in ("left", "right")}
+    state.depth_scale, state.depth_scale_y = parked_scales
+    _independent_dual(state, sync=True)
+    state.active_tool = "builtin.select"
+    panel.update(doc)
+    assert state.depth_window_collapse_generation == generation
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+    assert (panel._ref_scale_x["shared"], panel._ref_scale_y["shared"]) == pytest.approx(baseline)
+    # Disabling sync must seed both panels from that same retained shared base.
+    state.depth_sync = False
+    panel.update(doc)
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+        doc.scale.emit("focus")
+        model.bound_binds["selection_depth_scale_str"][1]("125")
+        doc.scale.emit("change", _InputEventStub(linebreak=True))
+        assert state.write_targets[-1] == key
+        write = state.window_calls[-1]
+        assert (write[3], write[6]) == pytest.approx((0.75, 0.375))
+        doc.scale.emit("blur")
+
+
+@pytest.mark.parametrize("schedule", ["observed", "coalesced", "hidden"])
+@pytest.mark.parametrize("invalidator", ["geometry", "disabled_sync", "scene_reset"])
+def test_synced_retained_discard_does_not_restore_shared_size_reference(
+    selection_controls_module, schedule, invalidator
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_synced_gt_reference(module, state)
+    if schedule == "hidden":
+        state.active_tool = "builtin.move"
+        panel.update(doc)
+    state.split_view_mode = "gt_comparison"
+    state.depth_scale, state.depth_scale_y = (0.80, 0.20)
+    state.panel_scales = {key: (0.80, 0.20) for key in ("left", "right")}
+    if schedule != "coalesced":
+        panel.update(doc)
+    state.split_view_mode = "none"
+    if schedule != "coalesced":
+        panel.update(doc)
+    changes = {
+        "geometry": {"depth_scale": 0.45, "depth_scale_y": 0.225},
+        "disabled_sync": {"depth_sync": False},
+        "scene_reset": {"has_scene": False},
+    }[invalidator]
+    _publish_retained_discard(state, changes)
+    if schedule != "coalesced":
+        panel.update(doc)
+    current_scales = (state.depth_scale, state.depth_scale_y)
+    state.panel_scales = {key: current_scales for key in ("left", "right")}
+    _independent_dual(state, sync=state.depth_sync)
+    state.has_scene = True
+    state.active_tool = "builtin.select"
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx(current_scales)
+    assert panel._retained_reference_generation is None
+
+
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("through_disabled", [False, True])
+def test_global_origin_gt_aspect_edit_keeps_current_global_reference(
+    selection_controls_module, sync, through_disabled
+):
+    module, state = selection_controls_module
+    state.depth_sync = sync
+    state.depth_scale, state.depth_scale_y = (0.60, 0.30)
+    panel, model, doc = _mounted_panel(module, state)
+    state.depth_scale, state.depth_scale_y = (0.30, 0.15)
+    panel.update(doc)
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+    state.split_view_mode = "gt_comparison"
+    state.depth_scale, state.depth_scale_y = (0.80, 0.20)
+    state.panel_scales = {key: (0.80, 0.20) for key in ("left", "right")}
+    panel.update(doc)
+    if through_disabled:
+        state.split_view_mode = "none"
+        panel.update(doc)
+    _independent_dual(state, sync=sync)
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+        assert (panel._ref_scale_x[panel._ref_key()], panel._ref_scale_y[panel._ref_key()]) == pytest.approx((0.80, 0.20))
+    assert panel._retained_reference_generation is None
+
+
+def _visit_retained_disabled(panel, doc, state, schedule):
+    if schedule == "hidden":
+        state.active_tool = "builtin.move"
+        panel.update(doc)
+    for mode in ("gt_comparison", "none"):
+        state.split_view_mode = mode
+        state.focused_panel = "left"
+        if schedule in ("observed", "hidden"):
+            panel.update(doc)
+
+
+def _publish_retained_discard(state, changes, *, kind="retained_pair_discard"):
+    # A published native result, not an implementation of its setters: native
+    # tests must establish WHICH writes stamp. The real consumer must recover
+    # from this packet regardless of polling schedule or latest source panel.
+    for field, value in changes.items():
+        setattr(state, field, value)
+    state.depth_window_collapse_source = "right"
+    state.depth_window_collapse_kind = kind
+    state.depth_window_collapse_generation += 1
+
+
+@pytest.mark.parametrize("schedule", ["observed", "coalesced", "hidden"])
+@pytest.mark.parametrize(
+    "changes,kind",
+    [
+        pytest.param({"depth_scale": 0.25, "depth_scale_y": 0.125}, "project_restore", id="project_reset"),
+        pytest.param({"has_scene": False}, "retained_pair_discard", id="scene_reset"),
+        pytest.param({"split_view_mode": "ply_comparison"}, "retained_pair_discard", id="other_comparison"),
+        pytest.param({"depth_near": 0.50}, "retained_pair_discard", id="near_write"),
+        pytest.param({"depth_far": 12.0}, "retained_pair_discard", id="far_write"),
+        pytest.param({"depth_scale": 0.45}, "retained_pair_discard", id="scale_x_write"),
+        pytest.param({"depth_scale_y": 0.225}, "retained_pair_discard", id="scale_y_write"),
+        pytest.param({"depth_offset_x": 0.20}, "retained_pair_discard", id="offset_x_write"),
+        pytest.param({"depth_offset_y": -0.20}, "retained_pair_discard", id="offset_y_write"),
+        pytest.param({"depth_scale": 0.45, "depth_scale_y": 0.225}, "retained_pair_discard", id="changed_drag_commit"),
+        pytest.param({"depth_sync": True}, "retained_pair_discard", id="disabled_sync_change"),
+    ],
+)
+def test_retained_pair_discard_invalidates_size_references(
+    selection_controls_module, changes, kind, schedule
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_gt_references(module, state)
+    _visit_retained_disabled(panel, doc, state, schedule)
+    _publish_retained_discard(state, changes, kind=kind)
+    if schedule in ("observed", "hidden"):
+        panel.update(doc)
+    # With eligibility discarded, native entry seeds both windows from global.
+    current_scales = (state.depth_scale, state.depth_scale_y)
+    state.panel_scales = {key: current_scales for key in ("left", "right")}
+    _independent_dual(state, sync=state.depth_sync)
+    state.has_scene = True
+    state.active_tool = "builtin.select"
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx(current_scales)
+    assert panel._collapse_generation == state.depth_window_collapse_generation
+    assert panel._retained_reference_generation is None
+    # A subsequent valid excursion must not resurrect the discarded references.
+    state.depth_sync = False
+    panel.update(doc)
+    _visit_retained_disabled(panel, doc, state, "observed")
+    _independent_dual(state)
+    panel.update(doc)
+    for key in ("left", "right"):
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx(current_scales)
+
+
+@pytest.mark.parametrize("schedule", ["observed", "coalesced", "hidden"])
+@pytest.mark.parametrize(
+    "operation",
+    ["equal_normalized_write", "enable_only", "viz_only", "same_sync", "refused_write",
+     "cancelled_drag", "subthreshold_drag", "unchanged_drag_commit", "gt_global_geometry"],
+)
+def test_retained_pair_preserving_updates_keep_size_references(
+    selection_controls_module, operation, schedule
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_gt_references(module, state)
+    generation = state.depth_window_collapse_generation
+    original_windows = dict(state.panel_scales)
+    _visit_retained_disabled(panel, doc, state, schedule)
+    if operation == "enable_only":
+        state.depth_enabled = False
+    elif operation == "viz_only":
+        module.lf.get_render_settings = lambda: SimpleNamespace(depth_filter_viz_mode=2)
+    elif operation == "same_sync":
+        assert module.lf.ui.set_depth_window_sync(False) is False
+    elif operation == "refused_write":
+        state.window_write_error = True
+        with pytest.raises(RuntimeError, match="rejected"):
+            module.lf.selection.set_depth_filter_window(True, 2.0, 20.0, 0.80, 0.2, 0.3)
+        state.window_write_error = False
+    elif operation in ("cancelled_drag", "subthreshold_drag", "gt_global_geometry"):
+        if operation == "gt_global_geometry":
+            state.split_view_mode = "gt_comparison"
+        # Global preview / GT compatibility writes may even change aspect ratio.
+        # Only shared is addressed here; retained per-panel baselines must survive.
+        state.depth_scale, state.depth_scale_y = (0.80, 0.35)
+        if schedule in ("observed", "hidden"):
+            panel.update(doc)
+        if operation != "gt_global_geometry":
+            state.depth_scale, state.depth_scale_y = (0.30, 0.15)
+    else:
+        # Equal normalized write and unchanged commit publish unchanged state.
+        # Normalization/commit eligibility is exercised by the native tests;
+        # this consumer receives only these already-normalized getter values.
+        module.lf.selection.set_depth_filter_window(
+            state.depth_enabled, state.depth_near, state.depth_far,
+            state.depth_scale, state.depth_offset_x, state.depth_offset_y, state.depth_scale_y,
+        )
+    if schedule in ("observed", "hidden"):
+        panel.update(doc)
+    assert state.depth_window_collapse_generation == generation
+    state.panel_scales = original_windows
+    _independent_dual(state)
+    _focus_reference_panel(state, "left")
+    state.active_tool = "builtin.select"
+    panel.update(doc)
+    _assert_gt_references_and_size_edits(panel, model, doc, state)
+
+
+def test_retained_discard_between_record_reads_retries_before_using_references(
+    selection_controls_module,
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_gt_references(module, state)
+    _visit_retained_disabled(panel, doc, state, "observed")
+    settled_record = module.lf.ui.get_depth_window_collapse_record
+    reads = []
+
+    def record_with_discard():
+        record = settled_record()
+        reads.append(record)
+        if len(reads) == 1:
+            _publish_retained_discard(state, {"depth_scale": 0.45, "depth_scale_y": 0.225})
+            state.panel_scales = {key: (0.45, 0.225) for key in ("left", "right")}
+            _independent_dual(state)
+        return record
+
+    module.lf.ui.get_depth_window_collapse_record = record_with_discard
+    panel.update(doc)
+    assert len(reads) == 4
+    assert panel._context_read_exhausted is False
+    assert panel._retained_reference_generation is None
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+    for key in ("left", "right"):
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx((0.45, 0.225))
+
+
+def test_retained_discard_exhaustion_consumes_neither_references_nor_stale_size_edit(
+    selection_controls_module,
+):
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_gt_references(module, state)
+    _visit_retained_disabled(panel, doc, state, "observed")
+    generation = panel._retained_reference_generation
+    assert generation == state.depth_window_collapse_generation
+    doc.scale.emit("focus")
+    model.bound_binds["selection_depth_scale_str"][1]("150")
+    settled_record = module.lf.ui.get_depth_window_collapse_record
+    reads = []
+
+    def storming_record():
+        reads.append(1)
+        if len(reads) % 2 == 0:
+            # Each read spans another park -> Disabled edit -> Independent
+            # cycle. Only its destructive edit stamps, and the endpoint can
+            # still be identical to the preceding attempt's endpoint.
+            _publish_retained_discard(state, {
+                "depth_near": state.depth_near + 0.1,
+                "depth_scale": 0.45, "depth_scale_y": 0.225,
+            })
+            state.panel_scales = {key: (0.45, 0.225) for key in ("left", "right")}
+            _independent_dual(state)
+        return settled_record()
+
+    module.lf.ui.get_depth_window_collapse_record = storming_record
+    panel.update(doc)
+    assert len(reads) == 2 * module._CONTEXT_READ_ATTEMPTS
+    assert panel._context_read_exhausted is True
+    assert panel._collapse_generation == generation
+    assert panel._retained_reference_generation == generation
+    for key, scales in _GT_SIZE_REFERENCES.items():
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx(scales)
+    writes_before = len(state.window_calls)
+    doc.scale.emit("change", _InputEventStub(linebreak=True))
+    assert len(state.window_calls) == writes_before
+    assert panel._retained_reference_generation == generation
+    assert panel._depth_text_bufs["selection_depth_scale_str"] == "150"
+    module.lf.ui.get_depth_window_collapse_record = settled_record
+    panel.update(doc)
+    assert panel._context_read_exhausted is False
+    assert panel._retained_reference_generation is None
+    assert panel._collapse_generation == state.depth_window_collapse_generation
+    # A deferred live edit can replay the freshly canonicalized 100% as a no-op;
+    # it must never apply the stale 150% text or either discarded baseline.
+    for write in state.window_calls[writes_before:]:
+        assert (write[3], write[6]) == pytest.approx((0.45, 0.225))
+    assert (state.depth_scale, state.depth_scale_y) == pytest.approx((0.45, 0.225))
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+    for key in ("left", "right"):
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx((0.45, 0.225))
+
+
+def test_first_mount_in_disabled_keeps_shared_to_independent_seed(selection_controls_module):
+    module, state = selection_controls_module
+    # No prior observed GT/panel references: mode='none' cannot reveal history.
+    state.depth_scale, state.depth_scale_y = (0.60, 0.30)
+    panel, model, doc = _mounted_panel(module, state)
+    state.depth_scale, state.depth_scale_y = (0.30, 0.15)
+    panel.update(doc)
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+    state.panel_scales = {key: (0.30, 0.15) for key in ("left", "right")}
+    _independent_dual(state)
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx((0.60, 0.30))
+
+
+@pytest.mark.parametrize("through_disabled", [False, True])
+def test_global_origin_gt_keeps_known_shared_size_reference(
+    selection_controls_module, through_disabled
+):
+    module, state = selection_controls_module
+    state.depth_scale, state.depth_scale_y = (0.60, 0.30)
+    panel, model, doc = _mounted_panel(module, state)
+    state.depth_scale, state.depth_scale_y = (0.30, 0.15)
+    panel.update(doc)
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+    state.split_view_mode = "gt_comparison"
+    panel.update(doc)
+    if through_disabled:
+        state.split_view_mode = "none"
+        panel.update(doc)
+    # No independent pair was parked. This is ordinary global-window seeding,
+    # whose already-observed shared baseline must survive the GT detour.
+    state.panel_scales = {key: (0.30, 0.15) for key in ("left", "right")}
+    _independent_dual(state)
+    for key in ("left", "right"):
+        _focus_reference_panel(state, key)
+        panel.update(doc)
+        assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+        assert (panel._ref_scale_x[key], panel._ref_scale_y[key]) == pytest.approx((0.60, 0.30))
+
+
 def test_draw_commit_rebases_the_panel_the_signal_names(selection_controls_module):
     """Undoing an R drag while L is focused must not touch L."""
     module, state = selection_controls_module
@@ -1482,8 +1981,8 @@ def test_every_depth_toolbar_icon_names_an_asset_that_exists(selection_controls_
     RmlUi does not fail loudly on an `img src` it cannot open, so a typo in
     any of these names is invisible until someone looks at the button. Each is
     resolved the way the RML resolves it -- relative to the RCSS/RML resource
-    directory, whose `../icon/` is the asset folder -- and asserted to be a
-    real 24x24 file.
+    directory, whose `../icon/` is the asset folder. The five new icons use the
+    canonical 40px exporter; the existing sync-ON icon remains 24px.
     """
     icons, _state = selection_controls_module
     assets = (
@@ -1494,17 +1993,45 @@ def test_every_depth_toolbar_icon_names_an_asset_that_exists(selection_controls_
         icons._SYNC_ICON_ON,
         *icons._SYNC_ICON_OFF.values(),
     ]
+    expected_sizes = {
+        "../icon/depth-show.png": (40, 40),
+        "../icon/depth-dim.png": (40, 40),
+        "../icon/depth-hide.png": (40, 40),
+        "../icon/layout-columns-left.png": (40, 40),
+        "../icon/layout-columns-right.png": (40, 40),
+        "../icon/layout-columns.png": (24, 24),
+    }
+    assert set(names) == set(expected_sizes), names
     for name in names:
         assert name.startswith("../icon/"), name
         path = assets / name.removeprefix("../")
         assert path.is_file(), f"{name} names no file (looked at {path})"
-        # 24x24 is what every icon in this set is; a stray size would render
-        # scaled beside its neighbours.
         header = path.read_bytes()[:24]
         assert header[:8] == b"\x89PNG\r\n\x1a\n", f"{name} is not a PNG"
         width = int.from_bytes(header[16:20], "big")
         height = int.from_bytes(header[20:24], "big")
-        assert (width, height) == (24, 24), f"{name} is {width}x{height}, not 24x24"
+        expected_size = expected_sizes[name]
+        assert (width, height) == expected_size, (
+            f"{name} is {width}x{height}, expected {expected_size}"
+        )
+        if expected_size == (40, 40):
+            source = path.parent / "src" / path.with_suffix(".svg").name
+            assert source.is_file(), f"{name} has no canonical SVG source at {source}"
+            assert not path.with_suffix(".svg").exists(), (
+                f"{name} still has a duplicate source outside icon/src"
+            )
+            svg = ElementTree.parse(source).getroot()
+            assert svg.get("viewBox") == "0 0 24 24", source
+            colors = {
+                element.attrib[attr]
+                for element in svg.iter()
+                for attr in ("stroke", "fill")
+                if attr in element.attrib
+            }
+            assert "currentColor" in colors, f"{source} has no currentColor glyph"
+            assert colors <= {"none", "currentColor"}, (
+                f"{source} has hardcoded glyph colors: {colors}"
+            )
     # The Dim frame must NOT be the file the selection toolbar's invert button
     # uses: they sit four seats apart in the same panel and were identical.
     invert = _read_src(
@@ -1522,7 +2049,7 @@ def test_every_depth_toolbar_icon_names_an_asset_that_exists(selection_controls_
 def _png_alpha(path):
     """Decode a small RGBA PNG to a list of per-row alpha lists.
 
-    Only what these 24x24 icons actually use: 8-bit RGBA, no interlace, the
+    Only what these small icons actually use: 8-bit RGBA, no interlace, the
     five standard row filters. Enough to compare two frames pixel for pixel
     without pulling an image library into the test requirements.
     """
@@ -1595,9 +2122,9 @@ def test_the_three_viz_frames_are_one_family_around_one_unchanging_box(
     alpha the set would read as three unrelated glyphs instead of one control
     changing state, which is exactly the failure the eye / eye-slash pair had.
 
-    The box occupies x=8..16 y=8..16 in the 24-unit grid, so a 12x12 window at
-    (6, 6) covers it plus its stroke and nothing else -- the Off frame's dotted
-    border lives out at x=2..3 and x=20..21, well clear.
+    The box occupies x=8..16 y=8..16 in the 24-unit source grid. At the 40px
+    export size, a 20x20 crop at (10, 10) covers the same source region from
+    (6, 6) to (18, 18), containing its stroke but none of the outside decoration.
     """
     icons, _state = selection_controls_module
     assets = (
@@ -1622,11 +2149,11 @@ def test_the_three_viz_frames_are_one_family_around_one_unchanging_box(
     boxes = {}
     for mode, name in frames.items():
         rows = _png_alpha(assets / name.removeprefix("../"))
-        assert len(rows) == 24 and len(rows[0]) == 24, name
-        boxes[mode] = tuple(tuple(row[6:18]) for row in rows[6:18])
+        assert len(rows) == 40 and len(rows[0]) == 40, name
+        boxes[mode] = tuple(tuple(row[10:30]) for row in rows[10:30])
 
     assert boxes[0] == boxes[1] == boxes[2], (
-        "the three viz frames do not draw the same box: their 12x12 centres "
+        "the three viz frames do not draw the same box: their 20x20 centres "
         "differ, so one frame's stroke weight or alpha is off and the frames "
         "differ by more than composition"
     )
