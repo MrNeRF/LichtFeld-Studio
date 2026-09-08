@@ -9,6 +9,8 @@
  * and produce comparable results to the original PLY.
  */
 
+#include <archive.h>
+#include <archive_entry.h>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -243,7 +245,7 @@ TEST_F(SogFormatTest, LoadSogBundle) {
     }
 
     auto result = lfs::io::load_sog(sog_bundle);
-    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error();
+    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().message;
 
     const auto& splat = *result;
     std::cout << "Loaded SOG bundle: " << splat.size() << " splats" << std::endl;
@@ -264,7 +266,7 @@ TEST_F(SogFormatTest, LoadSogDirectory) {
     }
 
     auto result = lfs::io::load_sog(test_dir);
-    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error();
+    ASSERT_TRUE(result.has_value()) << "Failed to load: " << result.error().message;
 
     const auto& splat = *result;
     std::cout << "Loaded SOG directory: " << splat.size() << " splats" << std::endl;
@@ -283,7 +285,7 @@ TEST_F(SogFormatTest, CompareWithOriginalPly) {
 
     std::cout << "Loading SOG bundle..." << std::endl;
     auto sog_result = lfs::io::load_sog(sog_bundle);
-    ASSERT_TRUE(sog_result.has_value()) << "Failed to load SOG: " << sog_result.error();
+    ASSERT_TRUE(sog_result.has_value()) << "Failed to load SOG: " << sog_result.error().message;
 
     std::cout << "Loading original PLY..." << std::endl;
     auto ply_result = lfs::io::load_ply(original_ply);
@@ -373,8 +375,8 @@ TEST_F(SogFormatTest, RejectsTextureSmallerThanDeclaredCountBeforeCudaUpload) {
     const auto result = lfs::io::load_sog(input.path());
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("means_l.webp"), std::string::npos)
-        << result.error();
+    EXPECT_NE(result.error().message.find("means_l.webp"), std::string::npos)
+        << result.error().message;
 }
 
 TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
@@ -384,7 +386,7 @@ TEST_F(SogFormatTest, LoadsValidatedMinimalDirectory) {
 
     const auto result = lfs::io::load_sog(input.path());
 
-    ASSERT_TRUE(result.has_value()) << result.error();
+    ASSERT_TRUE(result.has_value()) << result.error().message;
     EXPECT_EQ(result->size(), 1);
 }
 
@@ -397,8 +399,8 @@ TEST_F(SogFormatTest, RejectsShortMeansBoundsBeforeReadingTextures) {
     const auto result = lfs::io::load_sog(input.path());
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("three values"), std::string::npos)
-        << result.error();
+    EXPECT_NE(result.error().message.find("three values"), std::string::npos)
+        << result.error().message;
 }
 
 TEST_F(SogFormatTest, RejectsUnsupportedShDegreeBeforeReadingTextures) {
@@ -415,8 +417,8 @@ TEST_F(SogFormatTest, RejectsUnsupportedShDegreeBeforeReadingTextures) {
     const auto result = lfs::io::load_sog(input.path());
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_NE(result.error().find("SH degree"), std::string::npos)
-        << result.error();
+    EXPECT_NE(result.error().message.find("SH degree"), std::string::npos)
+        << result.error().message;
 }
 
 TEST_F(SogFormatTest, InvalidArchiveReturnsErrorWithoutEscaping) {
@@ -430,7 +432,7 @@ TEST_F(SogFormatTest, InvalidArchiveReturnsErrorWithoutEscaping) {
     const auto result = lfs::io::load_sog(archive);
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_FALSE(result.error().empty());
+    EXPECT_FALSE(result.error().message.empty());
 }
 
 // Test: Load meta.json directly
@@ -441,7 +443,7 @@ TEST_F(SogFormatTest, LoadMetaJsonDirectly) {
     }
 
     auto result = lfs::io::load_sog(meta_json);
-    ASSERT_TRUE(result.has_value()) << "Failed to load via meta.json: " << result.error();
+    ASSERT_TRUE(result.has_value()) << "Failed to load via meta.json: " << result.error().message;
 
     std::cout << "Loaded via meta.json: " << result->size() << " splats" << std::endl;
 }
@@ -459,7 +461,7 @@ TEST_F(SogFormatTest, CompareWithSplatTransformDecompression) {
 
     std::cout << "Loading SOG with our loader..." << std::endl;
     auto our_result = lfs::io::load_sog(sog_bundle);
-    ASSERT_TRUE(our_result.has_value()) << "Failed to load SOG: " << our_result.error();
+    ASSERT_TRUE(our_result.has_value()) << "Failed to load SOG: " << our_result.error().message;
 
     std::cout << "Loading splat-transform decompressed PLY..." << std::endl;
     auto ref_result = lfs::io::load_ply(sog_decompressed);
@@ -519,7 +521,7 @@ TEST_F(SogFormatTest, ExportRoundtrip) {
     // Reimport the SOG
     std::cout << "Reimporting SOG..." << std::endl;
     auto reimport_result = lfs::io::load_sog(export_path);
-    ASSERT_TRUE(reimport_result.has_value()) << "Failed to reimport SOG: " << reimport_result.error();
+    ASSERT_TRUE(reimport_result.has_value()) << "Failed to reimport SOG: " << reimport_result.error().message;
 
     EXPECT_EQ(reimport_result->size(), orig_result->value.size())
         << "Reimported splat count differs from original";
@@ -603,7 +605,7 @@ TEST_F(SogFormatTest, SyntheticExportRoundtripWithShN) {
     ASSERT_TRUE(write_result.has_value()) << "SOG export failed: " << write_result.error().format();
 
     auto reimport = lfs::io::load_sog(export_path);
-    ASSERT_TRUE(reimport.has_value()) << "SOG reimport failed: " << reimport.error();
+    ASSERT_TRUE(reimport.has_value()) << "SOG reimport failed: " << reimport.error().message;
     EXPECT_EQ(reimport->size(), N);
     EXPECT_EQ(reimport->get_max_sh_degree(), sh_degree);
     EXPECT_TRUE(reimport->means().is_valid());
@@ -678,4 +680,61 @@ TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
     EXPECT_TRUE(routed("SplatData.scaling"));
     EXPECT_TRUE(routed("SplatData.rotation"));
     EXPECT_TRUE(routed("SplatData.opacity"));
+}
+
+TEST_F(SogFormatTest, BundleAndDirectoryPayloadsMatch) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    ScopedSogDirectory dir;
+    constexpr size_t n = 2048;
+    SplatData splats(1, Tensor::randn({n, 3}, Device::CUDA),
+                     Tensor::randn({n, 1, 3}, Device::CUDA), Tensor::randn({n, 3, 3}, Device::CUDA),
+                     Tensor::full({n, 3}, -3.0f, Device::CUDA), Tensor::randn({n, 4}, Device::CUDA),
+                     Tensor::zeros({n, 1}, Device::CUDA), 1);
+    const auto stamp = make_minimal_provenance_stamp();
+    const auto bundle = dir.path() / "bundle.sog";
+    auto saved = save_sog(splats, {.output_path = bundle, .provenance = stamp});
+    ASSERT_TRUE(saved) << saved.error().format();
+    SogEncodeOptions o;
+    o.output_path = dir.path() / "directory";
+    o.provenance = stamp;
+    auto encoded = encode_sog_directory(splats, o);
+    ASSERT_TRUE(encoded) << encoded.error().format();
+    auto fast = o;
+    fast.output_path = dir.path() / "fast_directory";
+    fast.fast_webp = true;
+    ASSERT_TRUE(encode_sog_directory(splats, fast));
+    std::unique_ptr<archive, decltype(&archive_read_free)> input(archive_read_new(), archive_read_free);
+    ASSERT_EQ(archive_read_support_format_zip(input.get()), ARCHIVE_OK);
+#ifdef _WIN32
+    ASSERT_EQ(archive_read_open_filename_w(input.get(), bundle.wstring().c_str(), 10240), ARCHIVE_OK);
+#else
+    ASSERT_EQ(archive_read_open_filename(input.get(), bundle.c_str(), 10240), ARCHIVE_OK);
+#endif
+    archive_entry* entry = nullptr;
+    std::vector<std::string> names;
+    while (archive_read_next_header(input.get(), &entry) == ARCHIVE_OK) {
+        const std::string name = archive_entry_pathname(entry);
+        names.push_back(name);
+        std::string bytes(static_cast<size_t>(archive_entry_size(entry)), '\0');
+        ASSERT_EQ(archive_read_data(input.get(), bytes.data(), bytes.size()), static_cast<la_ssize_t>(bytes.size()));
+        std::ifstream file(o.output_path / name, std::ios::binary);
+        const std::string other((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        EXPECT_EQ(bytes, other) << name;
+        std::ifstream fast_file(fast.output_path / name, std::ios::binary);
+        const std::string fast_bytes((std::istreambuf_iterator<char>(fast_file)), std::istreambuf_iterator<char>());
+        if (name.ends_with(".webp")) {
+            int w = 0, h = 0, fw = 0, fh = 0;
+            std::unique_ptr<uint8_t, decltype(&WebPFree)> pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), &w, &h), WebPFree);
+            std::unique_ptr<uint8_t, decltype(&WebPFree)> fast_pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(fast_bytes.data()), fast_bytes.size(), &fw, &fh), WebPFree);
+            ASSERT_TRUE(pixels);
+            ASSERT_TRUE(fast_pixels);
+            ASSERT_EQ(w, fw);
+            ASSERT_EQ(h, fh);
+            EXPECT_TRUE(std::equal(pixels.get(), pixels.get() + size_t(w) * h * 4, fast_pixels.get())) << name;
+        } else {
+            EXPECT_EQ(bytes, fast_bytes) << name;
+        }
+    }
+    EXPECT_EQ(names, (std::vector<std::string>{"means_l.webp", "means_u.webp", "quats.webp", "scales.webp", "sh0.webp", "shN_centroids.webp", "shN_labels.webp", "meta.json"}));
 }

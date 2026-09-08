@@ -17,6 +17,7 @@
 #include "io/loaders/rad_loader.hpp"
 #include "io/loaders/sogs_loader.hpp"
 #include "io/loaders/spz_loader.hpp"
+#include "io/loaders/ssog_loader.hpp"
 #include "io/loaders/usd_loader.hpp"
 
 #include <algorithm>
@@ -32,6 +33,7 @@ namespace lfs::io {
         // Register default loaders
         registry_->registerLoader(std::make_unique<PLYLoader>());
         registry_->registerLoader(std::make_unique<SogLoader>());
+        registry_->registerLoader(std::make_unique<SsogLoader>());
         registry_->registerLoader(std::make_unique<SpzLoader>());
         registry_->registerLoader(std::make_unique<USDLoader>());
         registry_->registerLoader(std::make_unique<RadLoader>());
@@ -185,6 +187,7 @@ namespace lfs::io {
                 message = std::format(
                     "Cannot open '{}' - unsupported file format.\n\n"
                     "Supported formats:\n"
+                    "  - SSOG (.ssog, lod-meta.json): bundle or directory\n"
                     "  - Gaussian Splat files: .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz\n"
                     "  - Mesh files: .obj, .fbx, .gltf, .glb, .stl, .dae\n"
                     "  - Training checkpoints: .resume\n"

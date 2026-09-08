@@ -554,6 +554,7 @@ namespace lfs::vis {
                 state.outcome = tasks.getExportOutcome();
                 const auto fmt = tasks.getExportFormat();
                 state.format = fmt == core::ExportFormat::PLY           ? "PLY"
+                               : fmt == core::ExportFormat::SSOG        ? "SSOG"
                                : fmt == core::ExportFormat::SOG         ? "SOG"
                                : fmt == core::ExportFormat::SPZ         ? "SPZ"
                                : fmt == core::ExportFormat::HTML_VIEWER ? "HTML"
@@ -822,7 +823,8 @@ namespace lfs::vis {
         python::set_export_callback([](int format, const char* path, const char** node_names,
                                        int node_count, int sh_degree, bool rad_flip_y,
                                        bool rad_streamable, int spz_version,
-                                       bool include_provenance) {
+                                       bool include_provenance,
+                                       int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             if (auto* gm = python::get_gui_manager()) {
                 std::vector<std::string> names;
                 names.reserve(node_count);
@@ -834,7 +836,7 @@ namespace lfs::vis {
                                                rad_flip_y,
                                                rad_streamable,
                                                spz_version,
-                                               include_provenance);
+                                               include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
             }
         });
         callback_cleanup_.add([] { python::set_export_callback(nullptr); });
