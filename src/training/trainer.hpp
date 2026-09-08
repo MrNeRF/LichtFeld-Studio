@@ -564,6 +564,7 @@ namespace lfs::training {
             lfs::core::Tensor grad_corrected;
             lfs::core::Tensor grad_raw;
             lfs::core::Tensor grad_alpha;
+            lfs::core::Tensor normal_pixel_weight;
         };
 
         // Masked photometric loss with optional alpha gradient
