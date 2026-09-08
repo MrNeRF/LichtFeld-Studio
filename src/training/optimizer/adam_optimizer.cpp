@@ -198,6 +198,18 @@ namespace lfs::training {
         mean_step_far_mask_n_ = mask != nullptr ? n : 0;
     }
 
+    void AdamOptimizer::validate_mean_step_far_mask() {
+        const auto& means = splat_data_.means();
+        const size_t n = means.is_valid() && means.ndim() > 0 ? means.shape()[0] : 0;
+        if (mean_step_far_mask_ != nullptr &&
+            (mean_step_far_mask_n_ < 0 || static_cast<size_t>(mean_step_far_mask_n_) != n)) {
+            LOG_WARN("AdamOptimizer: mean_step_far_mask row-count mismatch (mask={}, means={}); "
+                     "ignoring binding until the strategy republishes it",
+                     mean_step_far_mask_n_, n);
+            set_mean_step_far_mask(nullptr, 0);
+        }
+    }
+
     void AdamOptimizer::set_screen_share_cap(const float* max_share, const int n,
                                              const float limit, const float penalty) {
         screen_share_max_ = max_share;
@@ -221,6 +233,7 @@ namespace lfs::training {
 
     void AdamOptimizer::step(const int iteration) {
         LFS_TRACE("kernel.adam.step");
+        validate_mean_step_far_mask();
         refresh_screen_share_buffer();
         if (fused_step_iteration_ == iteration) {
             last_step_zeroed_gradients_ = true;
@@ -834,6 +847,7 @@ namespace lfs::training {
     FastGSFusedAdamState AdamOptimizer::prepare_fastgs_fused_adam(
         const int iteration,
         const cudaStream_t execution_stream) {
+        validate_mean_step_far_mask();
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }

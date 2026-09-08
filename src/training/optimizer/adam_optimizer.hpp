@@ -242,6 +242,7 @@ namespace lfs::training {
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
         void step_param(ParamType type, int iteration);
+        void validate_mean_step_far_mask();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 
         // Quantized-moment helpers. Moments are uint8 (m signed @ zero-point 128, v as

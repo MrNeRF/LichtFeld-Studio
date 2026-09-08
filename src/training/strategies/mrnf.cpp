@@ -2651,6 +2651,7 @@ namespace lfs::training {
 
         remap_frozen_ranges_after_compaction(*_splat_data, valid_indices, old_size);
         apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+        ensure_mean_step_far_mask();
     }
 
     void MRNF::inject_noise(int /*iter*/) {
@@ -3650,6 +3651,7 @@ namespace lfs::training {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
         }
+        ensure_mean_step_far_mask();
         publish_vram_attribution();
     }
 
