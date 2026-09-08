@@ -72,8 +72,10 @@ namespace lfs::training::joint_adam {
 
         static void us_to_g1g2(float u, float log_s, float& g1, float& g2) {
             const float sqrt_g2 = inverse_sqrt_g2(log_s);
-            g1 = u * (sqrt_g2 + kEps);
             g2 = sqrt_g2 * sqrt_g2;
+            // Mixed-sign block bounds need not quantize u=0 exactly. With no
+            // variance, discard that residue before Adam amplifies it by 1/eps.
+            g1 = (g2 == 0.0f) ? 0.0f : u * (sqrt_g2 + kEps);
         }
 
         /// Decode (u, log_s) from packed cell `idx` with bounds mm = (umin,umax,smin,smax).
