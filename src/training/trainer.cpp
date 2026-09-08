@@ -1861,13 +1861,18 @@ namespace lfs::training {
              mode == param::MaskMode::Ignore ||
              mode == param::MaskMode::SegmentAndIgnore);
 
+        const bool normal_terms_on =
+            (opt_params.use_normal_loss && opt_params.normal_loss_weight > 0.0f) ||
+            opt_params.normal_consistency_weight > 0.0f;
+
         // Fused mask preprocess: SegmentAndIgnore band remap + optional ROI → one kernel.
         // Steady state is allocation-free via mask_preprocess_workspace_ (grow-only).
         const Tensor photometric_weight = losses::fuse_photometric_mask_weight(
             mask_preprocess_workspace_,
             user_masks_photometric ? mask_2d : Tensor{},
             roi_weight,
-            mode == param::MaskMode::SegmentAndIgnore);
+            mode == param::MaskMode::SegmentAndIgnore,
+            user_masks_photometric && normal_terms_on);
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
         const bool use_decoupled_appearance_loss =
@@ -1958,7 +1963,8 @@ namespace lfs::training {
             .loss = loss,
             .grad_corrected = grad_corrected,
             .grad_raw = grad_raw,
-            .grad_alpha = grad_alpha};
+            .grad_alpha = grad_alpha,
+            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? photometric_weight : Tensor{}};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -6853,6 +6859,8 @@ namespace lfs::training {
                         lfs::core::Tensor tile_grad_normal;
                         lfs::core::Tensor tile_error_map;
                         lfs::core::Tensor mask_tile;
+                        // Retain the photometric workspace view through all normal terms.
+                        lfs::core::Tensor normal_terms_weight;
                         bool depth_grad_buffers_active = false;
                         const auto roi_weight_ptr_on_stream =
                             [&](const cudaStream_t stream) -> const float* {
@@ -6861,6 +6869,15 @@ namespace lfs::training {
                             }
                             roi_weight.sync_to_stream(stream);
                             return roi_weight.ptr<float>();
+                        };
+
+                        const auto normal_weight_ptr_on_stream =
+                            [&](const cudaStream_t stream) -> const float* {
+                            if (!normal_terms_weight.is_valid()) {
+                                return roi_weight_ptr_on_stream(stream);
+                            }
+                            normal_terms_weight.sync_to_stream(stream);
+                            return normal_terms_weight.ptr<float>();
                         };
 
                         const auto ensure_depth_grad_buffers =
@@ -6951,6 +6968,7 @@ namespace lfs::training {
                                 tile_grad = result->grad_corrected;
                                 tile_grad_raw = result->grad_raw;
                                 tile_grad_alpha = result->grad_alpha;
+                                normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
                                     corrected_image, gt_tile, params_.optimization, raw_loss_input);
@@ -7186,7 +7204,7 @@ namespace lfs::training {
                                     normal_loss_partials_.set_stream(normal_stream);
 
                                     const float* const normal_pixel_weight =
-                                        roi_weight_ptr_on_stream(normal_stream);
+                                        normal_weight_ptr_on_stream(normal_stream);
                                     lfs::core::pin_operands({&rendered_normal, &rendered_alpha, &target_normal});
                                     lfs::training::kernels::launch_normal_loss(
                                         rendered_normal.ptr<float>(),
@@ -7363,7 +7381,7 @@ namespace lfs::training {
                                 lfs::core::pin_operands(
                                     {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal});
                                 const float* const consistency_pixel_weight =
-                                    roi_weight_ptr_on_stream(consistency_stream);
+                                    normal_weight_ptr_on_stream(consistency_stream);
                                 lfs::training::kernels::launch_normal_consistency_loss(
                                     rendered_normal.ptr<float>(),
                                     rendered_depth.ptr<float>(),
@@ -8475,6 +8493,22 @@ namespace lfs::training {
                 }
             }
             aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
+            if (aux_pipeline_config.load_normals || params_.optimization.normal_consistency_weight > 0.0f) {
+                const auto mode = params_.optimization.mask_mode;
+                const bool user_masks_normal_terms =
+                    (mode == lfs::core::param::MaskMode::Segment ||
+                     mode == lfs::core::param::MaskMode::Ignore ||
+                     mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
+                    std::any_of(train_dataset_->get_cameras().begin(), train_dataset_->get_cameras().end(),
+                                [&](const auto& camera) {
+                                    return camera && (camera->has_mask() ||
+                                                      (params_.optimization.use_alpha_as_mask && camera->has_alpha()));
+                                });
+                LOG_INFO("Normal terms use user mask: {} (where available); prior-depth gate: count >= {}, weight >= {}",
+                         user_masks_normal_terms ? "yes" : "no",
+                         lfs::training::kernels::kNormalConsistencyMinValidCount,
+                         lfs::training::kernels::kNormalConsistencyMinValidWeight);
+            }
             if (aux_pipeline_config.load_normals) {
                 ensure_training_normal_maps(params_, train_dataset_->get_cameras());
                 if (val_dataset_) {

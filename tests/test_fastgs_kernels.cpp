@@ -2077,3 +2077,200 @@ TEST(FastGSFusedAdamSettingsTest, BoundsFarMaskCountToLiveRows) {
     settings.per_splat_mean_step = false;
     EXPECT_FALSE(make_fastgs_fused_adam_settings(settings).per_splat_mean_step);
 }
+
+TEST(NormalLossHunt, JointRotationCodec100kSteps) {
+    using C = joint_adam::Codec16;
+    constexpr int cells = 256 * 4, steps = 100000;
+    for (int mode = 0; mode < 3; ++mode) {
+        std::vector<float> m(cells, 0), v(cells, 0), mf(cells, 0), vf(cells, 0);
+        std::vector<double> param(cells, 0), reference(cells, 0);
+        std::vector<std::uint8_t> packed(cells * 4, 0);
+        float mm[4] = {0, 0, 0, 0};
+        double max_zero_step = 0;
+        for (int step = 1; step <= steps; ++step) {
+            const float b1 = .9f, b2 = .999f, eps = 1e-15f, lr = .002f;
+            const float bc1 = 1 - std::pow(b1, step), bc2 = std::sqrt(1 - std::pow(b2, step));
+            for (int c = 0; c < cells; ++c) {
+                C::decode_g1g2(packed.data(), c, mm[0], mm[1], mm[2], mm[3], m[c], v[c]);
+                // Four large components, four 1e6-times smaller, remaining exact-zero gradients.
+                float g = c < 4 ? ((c % 2) ? -7e-5f : 1e-4f) : c < 8 ? ((c % 2) ? -7e-11f : 1e-10f)
+                                                                     : 0.f;
+                if (mode == 1)
+                    g *= std::sin(step * .017f + c * .31f);
+                if (mode == 2 && step > 1000)
+                    g = c < 4 ? g : 0.f;
+                m[c] = b1 * m[c] + (1 - b1) * g;
+                v[c] = b2 * v[c] + (1 - b2) * g * g;
+                mf[c] = b1 * mf[c] + (1 - b1) * g;
+                vf[c] = b2 * vf[c] + (1 - b2) * g * g;
+                const double delta = lr / bc1 * m[c] / (std::sqrt(v[c]) / bc2 + eps);
+                param[c] -= delta;
+                reference[c] -= lr / bc1 * mf[c] / (std::sqrt(vf[c]) / bc2 + eps);
+                if (c == 8)
+                    max_zero_step = std::max(max_zero_step, std::abs(delta));
+            }
+            C::reduce_bounds(m.data(), v.data(), cells, mm);
+            for (int c = 0; c < cells; ++c)
+                C::encode_g1g2(packed.data(), c, m[c], v[c], mm[0], mm[1], mm[2], mm[3]);
+        }
+        std::cout << "HUNT codec mode=" << mode << " zero_drift=" << param[8] << " max_zero_step=" << max_zero_step
+                  << " tiny_drift=" << param[4] << " tiny_fp32=" << reference[4] << " tiny_error=" << param[4] - reference[4]
+                  << " tiny_final_m=" << m[4] << " tiny_final_v=" << v[4] << " zero_final_m=" << m[8]
+                  << " bounds=" << mm[0] << ',' << mm[1] << ',' << mm[2] << ',' << mm[3] << '\n';
+        EXPECT_TRUE(std::isfinite(param[4]));
+        EXPECT_LT(std::abs(param[8]), 1e-6);
+        EXPECT_EQ(max_zero_step, 0.0);
+        EXPECT_EQ(m[8], 0.0f);
+        EXPECT_EQ(v[8], 0.0f);
+        // Measured pre-fix errors, rounded upward only to the printed precision.
+        constexpr double baseline_error[] = {30.135, 0.000488, 0.021965};
+        EXPECT_LE(std::abs(param[4] - reference[4]), baseline_error[mode]);
+    }
+}
+
+TEST(NormalLossHunt, JointRotationCuda100kSteps) {
+    constexpr int rows = 256, attrs = 4, cells = rows * attrs;
+    auto p = Tensor::zeros({size_t{rows}, size_t{attrs}}, Device::CUDA);
+    auto packed = Tensor::zeros({size_t{rows}, size_t{attrs * 4}}, Device::CUDA, DataType::UInt8);
+    auto bounds = Tensor::zeros({size_t{1}, size_t{4}}, Device::CUDA);
+    std::vector<float> g(cells, 0);
+    for (int c = 0; c < 8; ++c)
+        g[c] = (c % 2 ? -7.f : 10.f) * (c < 4 ? 1e-5f : 1e-11f);
+    auto grad = Tensor::from_vector(g, {size_t{rows}, size_t{attrs}}, Device::CUDA);
+    for (int step = 1; step <= 100000; ++step) {
+        float bc1 = 1 / (1 - std::pow(.9f, step)), bc2 = 1 / std::sqrt(1 - std::pow(.999f, step));
+        fast_lfs::optimizer::adam_step_joint_contiguous_raw(p.ptr<float>(), packed.ptr<uint8_t>(), bounds.ptr<float>(), grad.ptr<float>(),
+                                                            nullptr, 0, 1, nullptr, 0, 1, rows, attrs, 16, .002, .9, .999, 1e-15, bc1, bc2);
+    }
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    auto pc = p.cpu(), bc = bounds.cpu(), qc = packed.cpu();
+    float m, v;
+    const float* b = bc.ptr<float>();
+    joint_adam::Codec16::decode_g1g2(qc.ptr<uint8_t>(), 4, b[0], b[1], b[2], b[3], m, v);
+    std::cout << "HUNT CUDA codec zero_drift=" << pc.ptr<float>()[8] << " tiny_drift=" << pc.ptr<float>()[4]
+              << " tiny_final_m=" << m << " tiny_final_v=" << v << " bounds=" << b[0] << ',' << b[1] << ',' << b[2] << ',' << b[3] << '\n';
+    EXPECT_TRUE(std::isfinite(pc.ptr<float>()[4]));
+    EXPECT_LT(std::abs(pc.ptr<float>()[8]), 1e-6);
+    // Host FP32-moment reference is -200.003; pre-fix CUDA travel is -229.930.
+    EXPECT_LE(std::abs(pc.ptr<float>()[4] + 200.003f), 29.929f);
+
+    // Starting a real gradient after zero history must not skip its first step.
+    g[8] = 1e-10f;
+    grad = Tensor::from_vector(g, {size_t{rows}, size_t{attrs}}, Device::CUDA);
+    fast_lfs::optimizer::adam_step_joint_contiguous_raw(
+        p.ptr<float>(), packed.ptr<uint8_t>(), bounds.ptr<float>(), grad.ptr<float>(),
+        nullptr, 0, 1, nullptr, 0, 1, rows, attrs, 16, .002f, .9f, .999f, 1e-15f, 1, 1);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto resumed = p.cpu();
+    const float expected_delta = .002f * (1.0f - .9f) * g[8] /
+                                 (std::sqrt((1.0f - .999f) * g[8] * g[8]) + 1e-15f);
+    EXPECT_NEAR(resumed.ptr<float>()[8] - pc.ptr<float>()[8], -expected_delta, 1e-8f);
+}
+
+TEST(JointAdamUpdates, ZeroHistoryStaysFixedInOrdinaryAndFusedAllGroups) {
+    if (!torch::cuda::is_available()) {
+        GTEST_SKIP() << "CUDA not available";
+    }
+    constexpr size_t rows = 256;
+    constexpr int steps = 16;
+    const std::vector<ParamType> types = {ParamType::Means, ParamType::Scaling,
+                                          ParamType::Rotation, ParamType::Opacity,
+                                          ParamType::Sh0, ParamType::ShN};
+    for (const bool fused : {false, true}) {
+        SCOPED_TRACE(fused ? "fused backward" : "ordinary optimizer");
+        auto splat = make_adam_test_splat(rows, 3);
+        // Exercise both visible and invisible zero-gradient rows in fused preprocessing.
+        auto means = splat.means().cpu();
+        for (size_t row = rows / 2; row < rows; ++row)
+            means.ptr<float>()[row * 3] = 10000.0f;
+        splat.means() = means.cuda();
+        AdamOptimizer optimizer(splat, AdamConfig{});
+        optimizer.allocate_gradients();
+        const int slots = static_cast<int>(sh_float4_slots_for_rest(splat.max_sh_coeffs_rest()));
+        const std::vector<Tensor*> params = {&splat.means(), &splat.scaling_raw(),
+                                             &splat.rotation_raw(), &splat.opacity_raw(),
+                                             &splat.sh0(), &splat.shN()};
+        std::vector<Tensor> before;
+        for (size_t group = 0; group < types.size(); ++group) {
+            const bool shn = types[group] == ParamType::ShN;
+            const int bits = shn ? 8 : 16;
+            // Gradients are lazy: allocate_gradients() only creates moment state.
+            if (!fused)
+                optimizer.get_grad(types[group]).fill_(0.0f);
+            auto* state = optimizer.get_state_mutable(types[group]);
+            ASSERT_NE(state, nullptr);
+            ASSERT_EQ(state->joint_bits, bits);
+            ASSERT_EQ(params[group]->dtype(), DataType::Float32);
+            before.push_back(params[group]->cpu());
+            auto packed = state->exp_avg.cpu();
+            auto bounds = state->joint_bounds.cpu();
+            const float mm[] = {-1.0f, 1.0f, 0.0f, 25.0f};
+            std::memcpy(bounds.ptr<float>(), mm, sizeof(mm));
+            const size_t attrs = shn ? static_cast<size_t>(slots * 4) : params[group]->numel() / rows;
+            for (size_t row = 0; row < rows; ++row) {
+                for (size_t attr = 0; attr < attrs; ++attr) {
+                    const size_t cell = shn ? static_cast<size_t>(joint_sh_cell(row, attr / 4, attr % 4, slots))
+                                            : row * attrs + attr;
+                    // Opposite-sign history in two neighbours, exact-zero history elsewhere.
+                    const float u = row == 0 ? -1.0f : row == 1 ? 1.0f
+                                                                : 0.0f;
+                    const float s = row < 2 ? 25.0f : 0.0f;
+                    if (shn)
+                        joint_adam::Codec8::encode_us(packed.ptr<uint8_t>(), cell, u, s, mm[0], mm[1], mm[2], mm[3]);
+                    else
+                        joint_adam::Codec16::encode_us(packed.ptr<uint8_t>(), cell, u, s, mm[0], mm[1], mm[2], mm[3]);
+                }
+            }
+            ASSERT_EQ(cudaMemcpy(state->exp_avg.data_ptr(), packed.data_ptr(), packed.bytes(), cudaMemcpyHostToDevice), cudaSuccess);
+            ASSERT_EQ(cudaMemcpy(state->joint_bounds.data_ptr(), bounds.data_ptr(), bounds.bytes(), cudaMemcpyHostToDevice), cudaSuccess);
+        }
+        Camera camera(Tensor::eye(3, Device::CUDA),
+                      Tensor::from_vector(std::vector<float>{0, 0, 4}, {3}, Device::CUDA),
+                      8.0f, 8.0f, 3.5f, 3.5f, {}, {}, CameraModelType::PINHOLE,
+                      "joint_zero_history", "", {}, 8, 8, 0);
+        auto background = Tensor::zeros({3}, Device::CUDA);
+        for (int step = 0; step < steps; ++step) {
+            const int iteration = 1001 + step;
+            optimizer.zero_grad(iteration);
+            if (fused) {
+                auto forward = fast_rasterize_forward(camera, splat, background, 0, 0, 0, 0, false);
+                ASSERT_TRUE(forward.has_value());
+                fast_rasterize_backward(forward->second, Tensor::zeros_like(forward->first.image),
+                                        splat, optimizer, {}, {}, DensificationType::None, iteration);
+            } else {
+                optimizer.step(iteration);
+            }
+        }
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        for (size_t group = 0; group < types.size(); ++group) {
+            SCOPED_TRACE(static_cast<int>(types[group]));
+            const bool shn = types[group] == ParamType::ShN;
+            const auto after = params[group]->cpu();
+            const auto* state = optimizer.get_state(types[group]);
+            const auto packed = state->exp_avg.cpu();
+            const auto bounds = state->joint_bounds.cpu();
+            const auto* mm = bounds.ptr<float>();
+            const size_t attrs = shn ? static_cast<size_t>(slots * 4) : after.numel() / rows;
+            double history_travel = 0.0;
+            for (size_t row = 0; row < rows; ++row) {
+                for (size_t attr = 0; attr < attrs; ++attr) {
+                    const size_t cell = shn ? static_cast<size_t>(joint_sh_cell(row, attr / 4, attr % 4, slots))
+                                            : row * attrs + attr;
+                    if (row < 2) {
+                        history_travel += std::abs(after.ptr<float>()[cell] - before[group].ptr<float>()[cell]);
+                        continue;
+                    }
+                    ASSERT_EQ(after.ptr<float>()[cell], before[group].ptr<float>()[cell]) << "row=" << row << " attr=" << attr;
+                    float m, v;
+                    if (shn)
+                        joint_adam::Codec8::decode_g1g2(packed.ptr<uint8_t>(), cell, mm[0], mm[1], mm[2], mm[3], m, v);
+                    else
+                        joint_adam::Codec16::decode_g1g2(packed.ptr<uint8_t>(), cell, mm[0], mm[1], mm[2], mm[3], m, v);
+                    ASSERT_EQ(m, 0.0f);
+                    ASSERT_EQ(v, 0.0f);
+                }
+            }
+            EXPECT_GT(history_travel, 0.0) << "Zero gradient must still decay real momentum";
+        }
+    }
+}
