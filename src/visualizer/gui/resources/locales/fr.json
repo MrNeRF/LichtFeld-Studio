@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "Français",
   "menu": {
     "file": "Fichier",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "Le fichier sélectionné n’est pas reconnu comme un checkpoint valide :\n{path}",
     "file.import_dataset": "Importer un Dataset",
     "file.import_ply": "Importer un PLY, SOG, SSOG, SPZ, RAD, USD",
+    "file.import_ssog": "Importer SSOG…",
     "file.import_mesh": "Importer un Mesh",
     "file.import_checkpoint": "Importer un Point de Contrôle",
     "file.import_config": "Importer une Configuration",
@@ -669,7 +667,7 @@
   "export": {
     "overwrite": "Écraser",
     "format.ply_standard": "PLY (Standard)",
-    "format.ssog": "SSOG (PlayCanvas streamed)",
+    "format.ssog": "SSOG (chargement progressif PlayCanvas)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1318,16 +1316,16 @@
     "blocked_during_training": "Arrêtez l'entraînement avant de charger une nouvelle scène."
   },
   "export_dialog": {
-    "folder_name": "Folder name",
-    "lod_levels": "LOD levels",
-    "lod_ratio": "LOD ratio",
-    "chunk_count_k": "Chunk gaussians (K)",
-    "chunk_extent": "Chunk extent",
-    "chunk_min_k": "Minimum chunk gaussians (K)",
-    "kmeans_iterations": "K-means iterations",
-    "invalid_folder_name": "Enter a single folder name without path separators.",
-    "ssog_bundle": "Bundle into a single .ssog file",
-    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
+    "folder_name": "Nom du dossier",
+    "lod_levels": "Niveaux LOD",
+    "lod_ratio": "Ratio LOD",
+    "chunk_count_k": "Gaussiennes par bloc (K)",
+    "chunk_extent": "Étendue du bloc",
+    "chunk_min_k": "Minimum de gaussiennes par bloc (K)",
+    "kmeans_iterations": "Itérations k-means",
+    "invalid_folder_name": "Saisissez un nom de dossier sans séparateurs de chemin.",
+    "ssog_bundle": "Regrouper dans un seul fichier .ssog",
+    "ssog_overwrite": "Ce dossier contient déjà des données SSOG. Les écraser ?",
     "format": "FORMAT",
     "models": "MODÈLES",
     "no_models": "Aucun modèle dans la scène",

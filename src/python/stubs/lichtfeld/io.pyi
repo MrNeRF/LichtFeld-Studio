@@ -319,6 +319,9 @@ def export_html(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans
     Export splat data as self-contained HTML viewer. include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.
     """
 
+def is_ssog_path(path: str | os.PathLike) -> bool:
+    """Check for an SSOG bundle, manifest or directory."""
+
 def is_dataset_path(path: str | os.PathLike) -> bool:
     """Check if path is a dataset directory"""
 

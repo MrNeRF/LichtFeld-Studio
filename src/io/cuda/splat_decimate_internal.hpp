@@ -7,7 +7,8 @@
 
 namespace lfs::io::decimate {
     constexpr uint32_t invalid = 0xffffffffu;
-    constexpr int max_knn = 32;
+    constexpr int knn_k = 16;
+    constexpr int candidates_k = 4;
     struct View {
         float *pos, *rot, *scale, *opacity, *dc, *sh;
         int rest;
@@ -32,8 +33,8 @@ namespace lfs::io::decimate {
     };
     Data allocate(size_t n, int rest, core::Device device);
     Selection select(const Candidates&, size_t n, int k, size_t needed);
-    Candidates cpu_candidates(const Data&, int knn, int k);
-    Candidates gpu_candidates(const Data&, int knn, int k);
+    Candidates cpu_candidates(const Data&);
+    Candidates gpu_candidates(const Data&);
     Data cpu_merge(const Data&, const Selection&);
     Data gpu_merge(const Data&, const Selection&);
 } // namespace lfs::io::decimate

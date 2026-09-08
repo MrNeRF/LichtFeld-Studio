@@ -2,10 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
-// Host/device adaptation of core/lod_merge_math.hpp's Jacobi procedure.
-// Both decimation backends use this single adapter. Reference differences:
-// binary64 scratch, 24 iterations, and JavaScript Math.sign(0) == 0.
-// Keep the core LOD builders' float/10-iteration behavior untouched.
 namespace lfs::io::decimate {
     DEC_HD inline void decompose(double* a, double* scales, double* quaternion) {
         double v[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};

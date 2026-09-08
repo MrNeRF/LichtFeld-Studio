@@ -10,7 +10,9 @@
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "core/user_paths.hpp"
+#include "io/exporter.hpp"
 #include "io/project_path.hpp"
+#include "io/splat_path.hpp"
 #include <algorithm>
 #include <any>
 #include <args.hxx>
@@ -307,6 +309,55 @@ namespace {
         return lfs::core::LogLevel::Info; // Default
     }
 
+    struct SogFlags {
+        ::args::ValueFlag<int> iterations, levels, chunk_count, chunk_min;
+        ::args::ValueFlag<float> ratio, chunk_extent;
+
+        explicit SogFlags(::args::Group& group)
+            : iterations(group, "iterations", "SOG k-means iterations (default: 10)", {"sog-iterations"}),
+              levels(group, "value", "LOD levels including finest [1-8] (default: 4)", {"lod-levels"}),
+              chunk_count(group, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"}),
+              chunk_min(group, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"}),
+              ratio(group, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"}),
+              chunk_extent(group, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"}) {}
+
+        bool read(auto& params) {
+            if (iterations)
+                params.sog_iterations = ::args::get(iterations);
+            if (levels)
+                params.lod_levels = ::args::get(levels);
+            if (ratio)
+                params.lod_ratio = ::args::get(ratio);
+            if (chunk_count)
+                params.lod_chunk_count = ::args::get(chunk_count);
+            if (chunk_extent)
+                params.lod_chunk_extent = ::args::get(chunk_extent);
+            if (chunk_min)
+                params.lod_chunk_min = ::args::get(chunk_min);
+            return lfs::io::SsogSaveOptions{
+                .lod_levels = params.lod_levels,
+                .lod_ratio = params.lod_ratio,
+                .chunk_count_k = params.lod_chunk_count,
+                .chunk_extent = params.lod_chunk_extent,
+                .chunk_min_k = params.lod_chunk_min,
+                .kmeans_iterations = params.sog_iterations}
+                .validate();
+        }
+    };
+
+    struct LogLevelFlag {
+        ::args::ValueFlag<std::string> level;
+        explicit LogLevelFlag(::args::Group& group)
+            : level(group, "level", "Log level (trace, debug, info, perf, warn, error, critical, off)", {"log-level"}) {}
+
+        void apply() {
+            if (level)
+                lfs::core::Logger::get().init(parse_log_level(::args::get(level)));
+            else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL"))
+                lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
+        }
+    };
+
     std::expected<void, std::string> apply_view_path(
         lfs::core::param::TrainingParameters& params, const std::string& view_path_str) {
         const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
@@ -316,8 +367,7 @@ namespace {
                 std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
         }
 
-        if (view_path.filename() == "lod-meta.json" ||
-            (std::filesystem::is_directory(view_path) && std::filesystem::is_regular_file(view_path / "lod-meta.json"))) {
+        if (lfs::io::is_ssog_path(view_path)) {
             params.view_paths.push_back(view_path);
             return {};
         }
@@ -396,7 +446,7 @@ namespace {
         using lfs::core::param::OutputFormat;
         if (str == "ply" || str == ".ply")
             return OutputFormat::PLY;
-        if (str == "ssog")
+        if (str == "ssog" || str == ".ssog")
             return OutputFormat::SSOG;
         if (str == "sog" || str == ".sog")
             return OutputFormat::SOG;
@@ -506,12 +556,7 @@ namespace {
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
             ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
             ::args::ValueFlag<std::string> export_formats(paths_group, "formats", "Also export the final trained splat next to project.licht: comma-separated ply, sog, ssog, spz, usd, usda, usdc, html, rad", {"export"});
-            ::args::ValueFlag<int> sog_iter(paths_group, "iterations", "SOG k-means iterations (default: 10)", {"sog-iterations"});
-            ::args::ValueFlag<int> lod_levels(paths_group, "value", "LOD levels including finest (default: 4)", {"lod-levels"});
-            ::args::ValueFlag<float> lod_ratio(paths_group, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"});
-            ::args::ValueFlag<int> lod_chunk_count(paths_group, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"});
-            ::args::ValueFlag<float> lod_chunk_extent(paths_group, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"});
-            ::args::ValueFlag<int> lod_chunk_min(paths_group, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"});
+            SogFlags sog_flags(paths_group);
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -976,19 +1021,7 @@ namespace {
                 }
             }
 
-            if (sog_iter)
-                params.sog_iterations = ::args::get(sog_iter);
-            if (lod_levels)
-                params.lod_levels = ::args::get(lod_levels);
-            if (lod_ratio)
-                params.lod_ratio = ::args::get(lod_ratio);
-            if (lod_chunk_count)
-                params.lod_chunk_count = ::args::get(lod_chunk_count);
-            if (lod_chunk_extent)
-                params.lod_chunk_extent = ::args::get(lod_chunk_extent);
-            if (lod_chunk_min)
-                params.lod_chunk_min = ::args::get(lod_chunk_min);
-            if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
+            if (!sog_flags.read(params))
                 return std::unexpected("Invalid SSOG LOD options");
             if (export_formats) {
                 auto formats = parseFormatList(::args::get(export_formats));
@@ -1729,8 +1762,8 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .ssog, SSOG (.ssog, lod-meta.json), .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
-        "  Output: .ply, .sog, .ssog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Input:  .ply, .sog, .ssog, lod-meta.json, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
+        "  Output: .ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1746,7 +1779,7 @@ namespace {
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
-        "  Output: .ply, .sog, .ssog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Output: .ply, .sog, .ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1788,13 +1821,8 @@ namespace {
         ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, ssog, spz, html, usd, usda, usdc, rad", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
-        ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
-        ::args::ValueFlag<std::string> log_level(parser, "level", "Log level (trace, debug, info, warn, error, off)", {"log-level"});
-        ::args::ValueFlag<int> lod_levels(parser, "value", "LOD levels including finest (default: 4)", {"lod-levels"});
-        ::args::ValueFlag<float> lod_ratio(parser, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"});
-        ::args::ValueFlag<int> lod_chunk_count(parser, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"});
-        ::args::ValueFlag<float> lod_chunk_extent(parser, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"});
-        ::args::ValueFlag<int> lod_chunk_min(parser, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"});
+        SogFlags sog_flags(parser);
+        LogLevelFlag log_level(parser);
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
         ::args::Flag rad_stream(parser, "stream", "RAD output: streamable Spark-compatible chunks (default)", {"stream"});
@@ -1818,11 +1846,7 @@ namespace {
             return std::unexpected(std::format("Missing input path\n\n{}", parser.Help()));
         }
 
-        if (log_level) {
-            lfs::core::Logger::get().init(parse_log_level(::args::get(log_level)));
-        } else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
-            lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
-        }
+        log_level.apply();
 
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
@@ -1847,19 +1871,7 @@ namespace {
             params.output_path = lfs::core::utf8_to_path(::args::get(output_flag));
         else if (output)
             params.output_path = lfs::core::utf8_to_path(::args::get(output));
-        if (sog_iter)
-            params.sog_iterations = ::args::get(sog_iter);
-        if (lod_levels)
-            params.lod_levels = ::args::get(lod_levels);
-        if (lod_ratio)
-            params.lod_ratio = ::args::get(lod_ratio);
-        if (lod_chunk_count)
-            params.lod_chunk_count = ::args::get(lod_chunk_count);
-        if (lod_chunk_extent)
-            params.lod_chunk_extent = ::args::get(lod_chunk_extent);
-        if (lod_chunk_min)
-            params.lod_chunk_min = ::args::get(lod_chunk_min);
-        if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
+        if (!sog_flags.read(params))
             return std::unexpected("Invalid SSOG LOD options");
 
         params.overwrite = overwrite;
@@ -1941,13 +1953,8 @@ namespace {
         ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
-        ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
-        ::args::ValueFlag<std::string> log_level(parser, "level", "Log level (trace, debug, info, warn, error, off)", {"log-level"});
-        ::args::ValueFlag<int> lod_levels(parser, "value", "LOD levels including finest (default: 4)", {"lod-levels"});
-        ::args::ValueFlag<float> lod_ratio(parser, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"});
-        ::args::ValueFlag<int> lod_chunk_count(parser, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"});
-        ::args::ValueFlag<float> lod_chunk_extent(parser, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"});
-        ::args::ValueFlag<int> lod_chunk_min(parser, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"});
+        SogFlags sog_flags(parser);
+        LogLevelFlag log_level(parser);
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
 
         std::vector<std::string> args_vec(argv + 1, argv + argc);
@@ -1970,11 +1977,7 @@ namespace {
             return std::unexpected("Use either positional output or --output, not both");
         }
 
-        if (log_level) {
-            lfs::core::Logger::get().init(parse_log_level(::args::get(log_level)));
-        } else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
-            lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
-        }
+        log_level.apply();
 
         param::Mesh2SplatParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
@@ -1997,19 +2000,7 @@ namespace {
             params.options.resolution_target = ::args::get(resolution);
         if (sigma)
             params.options.sigma = ::args::get(sigma);
-        if (sog_iter)
-            params.sog_iterations = ::args::get(sog_iter);
-        if (lod_levels)
-            params.lod_levels = ::args::get(lod_levels);
-        if (lod_ratio)
-            params.lod_ratio = ::args::get(lod_ratio);
-        if (lod_chunk_count)
-            params.lod_chunk_count = ::args::get(lod_chunk_count);
-        if (lod_chunk_extent)
-            params.lod_chunk_extent = ::args::get(lod_chunk_extent);
-        if (lod_chunk_min)
-            params.lod_chunk_min = ::args::get(lod_chunk_min);
-        if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
+        if (!sog_flags.read(params))
             return std::unexpected("Invalid SSOG LOD options");
 
         params.overwrite = overwrite;

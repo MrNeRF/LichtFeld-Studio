@@ -779,11 +779,10 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    std::filesystem::path SaveSsogFileDialog(const std::string& defaultName,
-                                             const std::filesystem::path& defaultPath) {
+    std::filesystem::path SaveSsogFileDialog(const std::string& defaultName) {
         std::filesystem::path result;
         runDialog(makeSaveFileRequest(singleExtensionFilter("SSOG Files", ".ssog"),
-                                      defaultPath,
+                                      {},
                                       defaultName,
                                       ".ssog"),
                   result);

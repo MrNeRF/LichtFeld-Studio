@@ -11,14 +11,11 @@
 namespace lfs::io {
     struct DecimateOptions {
         size_t target_count = 0;
-        int knn_k = 16;
-        int candidates_k = 4;
         bool use_gpu = true;
         std::function<bool(float progress, const std::string& stage)> progress;
     };
 
     // Ignores deleted rows. Output owns CUDA tensors; input is never mutated.
-    // knn_k: 1..32; candidates_k: 1..knn_k. Cancellation error is "cancelled".
     LFS_IO_API Result<lfs::core::SplatData>
     decimate_splats(const lfs::core::SplatData& input, const DecimateOptions& options);
 } // namespace lfs::io

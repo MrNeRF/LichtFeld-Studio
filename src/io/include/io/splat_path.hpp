@@ -6,6 +6,13 @@
 #include <string>
 
 namespace lfs::io {
+    inline bool is_ssog_path(const std::filesystem::path& p) {
+        std::error_code ec;
+        return (p.extension() == ".ssog" && std::filesystem::is_regular_file(p, ec)) ||
+               (p.filename() == "lod-meta.json" && std::filesystem::is_regular_file(p, ec)) ||
+               (std::filesystem::is_directory(p, ec) && std::filesystem::is_regular_file(p / "lod-meta.json", ec));
+    }
+
     // Use the asset folder, rather than its generic JSON manifest, in the scene.
     inline std::string splat_import_name(const std::filesystem::path& source) {
         namespace fs = std::filesystem;

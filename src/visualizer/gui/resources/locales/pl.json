@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "Polski",
   "menu": {
     "file": "Plik",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "Wybrany plik nie został rozpoznany jako prawidłowy checkpoint:\n{path}",
     "file.import_dataset": "Importuj Zbiór Danych",
     "file.import_ply": "Importuj PLY, SOG, SSOG, SPZ, RAD, USD",
+    "file.import_ssog": "Importuj SSOG…",
     "file.import_mesh": "Importuj Mesh",
     "file.import_checkpoint": "Importuj Punkt Kontrolny",
     "file.import_config": "Importuj Konfigurację",
@@ -669,7 +667,7 @@
   "export": {
     "overwrite": "Zastąp",
     "format.ply_standard": "PLY (Standard)",
-    "format.ssog": "SSOG (PlayCanvas streamed)",
+    "format.ssog": "SSOG (strumieniowanie PlayCanvas)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1318,16 +1316,16 @@
     "blocked_during_training": "Zatrzymaj trening przed załadowaniem nowej sceny."
   },
   "export_dialog": {
-    "folder_name": "Folder name",
-    "lod_levels": "LOD levels",
-    "lod_ratio": "LOD ratio",
-    "chunk_count_k": "Chunk gaussians (K)",
-    "chunk_extent": "Chunk extent",
-    "chunk_min_k": "Minimum chunk gaussians (K)",
-    "kmeans_iterations": "K-means iterations",
-    "invalid_folder_name": "Enter a single folder name without path separators.",
-    "ssog_bundle": "Bundle into a single .ssog file",
-    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
+    "folder_name": "Nazwa folderu",
+    "lod_levels": "Poziomy LOD",
+    "lod_ratio": "Współczynnik LOD",
+    "chunk_count_k": "Gaussowskie splaty w bloku (K)",
+    "chunk_extent": "Rozmiar bloku",
+    "chunk_min_k": "Minimum gaussowskich splatów w bloku (K)",
+    "kmeans_iterations": "Iteracje k-means",
+    "invalid_folder_name": "Wpisz nazwę folderu bez separatorów ścieżki.",
+    "ssog_bundle": "Spakuj do jednego pliku .ssog",
+    "ssog_overwrite": "Ten folder zawiera już dane SSOG. Nadpisać je?",
     "format": "FORMAT",
     "models": "MODELE",
     "no_models": "Brak modeli w scenie",

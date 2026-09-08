@@ -80,7 +80,8 @@ namespace lfs::io::decimate {
         return s;
     }
     // Independent CPU exact-kNN oracle: balanced median kd-tree, double distances.
-    Candidates cpu_candidates(const Data& data, int knn, int k) {
+    Candidates cpu_candidates(const Data& data) {
+        constexpr int knn = knn_k, k = candidates_k;
         auto v = data.view();
         size_t n = data.n;
         std::vector<Cache> cache(n);
@@ -102,7 +103,7 @@ namespace lfs::io::decimate {
         build(build, 0, n, 0);
         Candidates out{std::vector<uint32_t>(n * k, invalid), std::vector<float>(n * k, INFINITY)};
         for (uint32_t i = 0; i < n; ++i) {
-            std::array<std::pair<double, uint32_t>, max_knn> best;
+            std::array<std::pair<double, uint32_t>, knn_k> best;
             best.fill({INFINITY, invalid});
             auto visit = [&](auto&& self, size_t begin, size_t end, int axis) -> void {
                 if (begin >= end)
@@ -137,7 +138,7 @@ namespace lfs::io::decimate {
                 }
             };
             visit(visit, 0, n, 0);
-            std::array<std::pair<float, uint32_t>, max_knn> candidates;
+            std::array<std::pair<float, uint32_t>, knn_k> candidates;
             candidates.fill({INFINITY, invalid});
             for (int a = 0; a < knn; ++a)
                 if (best[a].second != invalid) {
@@ -169,15 +170,17 @@ namespace lfs::io::decimate {
 } // namespace lfs::io::decimate
 
 namespace lfs::io {
+    namespace {
+        struct Cancelled {};
+    } // namespace
+
     Result<core::SplatData> decimate_splats(const core::SplatData& input, const DecimateOptions& o) {
         using namespace decimate;
         using core::Device;
         try {
             if (!o.target_count)
                 return make_error(ErrorCode::INVALID_DATASET, "decimation target must be at least 1");
-            if (o.knn_k < 1 || o.knn_k > max_knn || o.candidates_k < 1 || o.candidates_k > o.knn_k)
-                return make_error(ErrorCode::INVALID_DATASET, "decimation requires 1 <= candidates_k <= knn_k <= 32");
-            auto progress = [&](float p, const std::string& stage) { if(o.progress && !o.progress(p,stage)) throw std::runtime_error("cancelled"); };
+            auto progress = [&](float p, const std::string& stage) { if(o.progress && !o.progress(p,stage)) throw Cancelled{}; };
             progress(0, "Preparing decimation");
             if (!input.means().is_valid() || input.means().ndim() != 2 || input.means().size(1) != 3)
                 return make_error(ErrorCode::INVALID_DATASET, "decimation requires means with shape [N,3]");
@@ -208,7 +211,7 @@ namespace lfs::io {
                 source = &visible;
             }
             size_t n = source->size();
-            if (n > size_t(std::numeric_limits<int>::max()) || n * o.candidates_k > std::numeric_limits<uint32_t>::max())
+            if (n > size_t(std::numeric_limits<int>::max()) || n * candidates_k > std::numeric_limits<uint32_t>::max())
                 return make_error(ErrorCode::INVALID_DATASET, "decimation input exceeds index capacity");
             Device device = o.use_gpu ? Device::CUDA : Device::CPU;
             auto materialize = [&](const core::Tensor& t) { return t.device() == device ? t.contiguous() : t.to(device).contiguous(); };
@@ -225,10 +228,10 @@ namespace lfs::io {
             while (data.n > o.target_count) {
                 float p = float(initial - data.n) / float(initial - o.target_count);
                 progress(p, "Decimation generation " + std::to_string(++generation) + ": neighbours and costs");
-                auto c = o.use_gpu ? gpu_candidates(data, o.knn_k, o.candidates_k) : cpu_candidates(data, o.knn_k, o.candidates_k);
+                auto c = o.use_gpu ? gpu_candidates(data) : cpu_candidates(data);
                 progress(p, "Selecting merges");
                 size_t needed = data.n - std::max(o.target_count, data.n - data.n / 2);
-                auto s = select(c, data.n, o.candidates_k, needed);
+                auto s = select(c, data.n, candidates_k, needed);
                 if (!s.removed)
                     throw std::runtime_error("decimation found no finite merge candidates");
                 if (s.removed < needed && double(s.removed) < 0.05 * data.n)
@@ -244,6 +247,8 @@ namespace lfs::io {
             result.set_active_sh_degree(source->get_active_sh_degree());
             progress(1, "Decimation complete");
             return result;
-        } catch (const std::exception& e) { return make_error(std::string_view(e.what()) == "cancelled" ? ErrorCode::CANCELLED : ErrorCode::INTERNAL_ERROR, e.what()); }
+        } catch (const Cancelled&) { return make_error(ErrorCode::CANCELLED, "Decimation cancelled by user"); } catch (const std::exception& e) {
+            return make_error(ErrorCode::INTERNAL_ERROR, e.what());
+        }
     }
 } // namespace lfs::io

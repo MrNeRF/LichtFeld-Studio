@@ -9,6 +9,7 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -84,6 +85,13 @@ namespace lfs::io {
         bool use_gpu = true;
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{};
+
+        [[nodiscard]] bool validate() const {
+            return lod_levels >= 1 && lod_levels <= 8 &&
+                   std::isfinite(lod_ratio) && lod_ratio > 0 && lod_ratio < 1 &&
+                   chunk_count_k > 0 && chunk_min_k >= 0 &&
+                   std::isfinite(chunk_extent) && chunk_extent > 0 && kmeans_iterations >= 1;
+        }
     };
 
     [[nodiscard]] LFS_IO_API Result<void> save_ssog(const SplatData&, const SsogSaveOptions&);

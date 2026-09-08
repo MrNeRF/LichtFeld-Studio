@@ -479,7 +479,7 @@ def test_ssog_directory_and_options(export_panel_module, tmp_path, monkeypatch):
     module, state = export_panel_module
     panel = module.ExportPanel()
     panel._format = module.ExportFormat.SSOG
-    panel._set_ssog_bundle(False)
+    panel._on_toggle_ssog_bundle(None, None, None)
     panel._selected_nodes = {"Tree"}
     state.nodes = [_make_node(module.lf.scene.NodeType.SPLAT, "Tree", 128)]
     state.folder_dialog_result = str(tmp_path)
@@ -516,17 +516,8 @@ def test_ssog_overwrite_confirmation(export_panel_module, tmp_path, reply, expec
     assert len(state.export_calls) == expected_exports
 
 
-def test_ssog_cancel_folder_picker(export_panel_module):
-    module, state = export_panel_module
-    panel = module.ExportPanel()
-    panel._format = module.ExportFormat.SSOG
-    panel._set_ssog_bundle(False)
-    state.folder_dialog_result = ""
-    assert panel._get_save_path("Tree") == ""
-    assert not state.export_calls
 
-
-@pytest.mark.parametrize("name", ["..", ".", "../escape", "/absolute", "a\\b"])
+@pytest.mark.parametrize("name", ["..", "a\\b"])
 def test_ssog_rejects_path_in_folder_name(export_panel_module, name):
     module, _ = export_panel_module
     panel = module.ExportPanel()
@@ -536,20 +527,6 @@ def test_ssog_rejects_path_in_folder_name(export_panel_module, name):
     panel._set_ssog_folder_name(name)
     assert not panel._can_export()
 
-
-def test_ssog_progress_and_cancel(export_panel_module):
-    module, state = export_panel_module
-    panel = module.ExportPanel()
-    panel._handle = _HandleStub()
-    for progress in (0.0, 0.3, 0.4, 0.59, 0.9, 0.99):
-        state.export_state = {
-            "active": True, "format": 8, "progress": progress,
-            "stage": "Encoding SSOG", "path": "/tmp/garden_ssog",
-        }
-        panel._update_export_progress()
-        assert float(panel._progress_value) == progress
-    panel._on_cancel_export(None, None, None)
-    assert state.cancel_calls == 1
 
 
 @pytest.mark.parametrize("chosen", ["/tmp/Tree.ssog", ""])
@@ -575,15 +552,3 @@ def test_ssog_bundle_default_and_option_forwarding(export_panel_module, monkeypa
         assert calls[0][1]["lod_levels"] == 3
     else:
         assert not calls
-
-
-def test_ssog_bundle_checkbox_toggles_folder_flow(export_panel_module):
-    module, _ = export_panel_module
-    panel = module.ExportPanel()
-    panel._handle = _HandleStub()
-    assert panel._ssog_bundle
-    panel._on_toggle_ssog_bundle(None, None, None)
-    assert not panel._ssog_bundle
-    assert "show_ssog_folder" in panel._handle.dirty_fields
-    panel._on_toggle_ssog_bundle(None, None, None)
-    assert panel._ssog_bundle

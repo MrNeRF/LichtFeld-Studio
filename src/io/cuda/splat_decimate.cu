@@ -2,9 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "morton_encoding.hpp"
 #include "splat_decimate_math.hpp"
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
 #include <cuda_runtime.h>
 #include <stdexcept>
 #include <thrust/device_ptr.h>
@@ -20,21 +17,6 @@ namespace lfs::io::decimate {
             if (error != cudaSuccess)
                 throw std::runtime_error(cudaGetErrorString(error));
         }
-        class StageTimer {
-            bool enabled_ = std::getenv("LFS_DECIMATE_TIMING") != nullptr;
-            std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
-
-        public:
-            void mark(const char* stage) {
-                if (!enabled_)
-                    return;
-                check(cudaDeviceSynchronize());
-                auto now = std::chrono::steady_clock::now();
-                std::fprintf(stderr, "decimate %s: %.3f ms\n", stage,
-                             std::chrono::duration<double, std::milli>(now - start_).count());
-                start_ = now;
-            }
-        };
         struct Box {
             float low[3], high[3];
         };
@@ -94,31 +76,20 @@ namespace lfs::io::decimate {
             int dim = 0, shift = 0;
             float low[3], step[3], padding[3];
         };
-        __device__ uint32_t grid_morton(int x, int y, int z) {
-            uint32_t key = 0;
-#pragma unroll
-            for (int bit = 0; bit < 7; ++bit) {
-                key |= ((x >> bit) & 1) << (3 * bit);
-                key |= ((y >> bit) & 1) << (3 * bit + 1);
-                key |= ((z >> bit) & 1) << (3 * bit + 2);
-            }
-            return key;
-        }
         __global__ void grid_counts(const int64_t* keys, uint32_t* counts, uint32_t n, int shift) {
             const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
             if (i < n)
                 atomicAdd(counts + (uint64_t(keys[i]) >> shift), 1u);
         }
-        template <int FixedK>
-        __global__ void neighbours(View v, const uint32_t* order, const Box* boxes, uint32_t n, uint32_t leaves, int requested_k, uint32_t* result, Grid grid) {
+        __global__ void neighbours(View v, const uint32_t* order, const Box* boxes, uint32_t n, uint32_t leaves, uint32_t* result, Grid grid) {
             uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
             if (t >= n)
                 return;
             uint32_t i = order[t];
             const float* p = v.pos + size_t(i) * 3;
-            const int k = FixedK ? FixedK : requested_k;
-            float distances[FixedK ? FixedK : max_knn];
-            uint32_t ids[FixedK ? FixedK : max_knn];
+            constexpr int k = knn_k;
+            float distances[knn_k];
+            uint32_t ids[knn_k];
             double worst = INFINITY;
             float search_limit = INFINITY;
             uint32_t worst_id = invalid;
@@ -140,8 +111,6 @@ namespace lfs::io::decimate {
                 double d2 = point_distance(p, v.pos + size_t(j) * 3);
                 if (d2 > worst || (d2 == worst && j >= worst_id))
                     return;
-                // Maintain an exact max-heap: replacing the worst now
-                // takes log2(K) comparisons instead of a full K reduction.
                 // Rounded keys are monotone; resolve equal keys in double.
                 const auto farther = [&](float da, uint32_t ia, float db, uint32_t ib) {
                     if (da != db)
@@ -167,8 +136,9 @@ namespace lfs::io::decimate {
                 distances[slot] = key;
                 ids[slot] = j;
                 worst = ids[0] == invalid ? INFINITY : point_distance(p, v.pos + size_t(ids[0]) * 3);
-                // Absolute allowance also covers rounded subnormal squared
-                // distances (relative error alone is insufficient there).
+                // Expand float broad-phase bounds by over 16 ulps plus upward
+                // conversion; the absolute allowance covers subnormal squares.
+                // Accepted distances and ties are evaluated in double.
                 search_limit = __double2float_ru(worst * 1.000002 + 0x1p-146);
                 worst_id = ids[0];
             };
@@ -185,7 +155,7 @@ namespace lfs::io::decimate {
                             for (int x = max(0, center[0] - radius); x <= min(grid.dim - 1, center[0] + radius); ++x) {
                                 if (radius && max(abs(x - center[0]), max(abs(y - center[1]), abs(z - center[2]))) != radius)
                                     continue;
-                                const auto c = grid_morton(x, y, z);
+                                const auto c = morton_encode(x, y, z);
                                 const uint32_t begin = grid.offsets[c], end = grid.offsets[c + 1];
                                 if (begin == end)
                                     continue;
@@ -214,11 +184,7 @@ namespace lfs::io::decimate {
                         break;
                 }
             } else {
-                // Balanced heap depth <= 29 for supported counts; at most one deferred
-                // sibling per depth. Float broad-phase distances use a conservatively
-                // expanded bound (over 16 float ulps, plus upward conversion). This
-                // covers subtraction/square/sum rounding, including subnormals and
-                // overflow. Accepted distances and all ties are evaluated in double.
+                // At most one deferred sibling per depth; balanced heap depth <= 29.
                 uint32_t stack[32];
                 int sp = 0;
                 stack[sp++] = 1;
@@ -257,13 +223,14 @@ namespace lfs::io::decimate {
             if (i < n)
                 cache[i] = cache_one(v, i);
         }
-        __global__ void candidates(View v, const Cache* cache, const uint32_t* order, const uint32_t* nb, uint32_t n, int knn, int k, uint32_t* idx, float* costs) {
+        __global__ void candidates(View v, const Cache* cache, const uint32_t* order, const uint32_t* nb, uint32_t n, uint32_t* idx, float* costs) {
             uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
             if (t >= n)
                 return;
             uint32_t i = order[t];
-            float best[max_knn];
-            uint32_t ids[max_knn];
+            constexpr int knn = knn_k, k = candidates_k;
+            float best[k];
+            uint32_t ids[k];
             for (int a = 0; a < k; ++a) {
                 best[a] = INFINITY;
                 ids[a] = invalid;
@@ -314,13 +281,12 @@ namespace lfs::io::decimate {
             return t;
         }
     } // namespace
-    Candidates gpu_candidates(const Data& d, int knn, int k) {
-        StageTimer timer;
+    Candidates gpu_candidates(const Data& d) {
+        constexpr int knn = knn_k, k = candidates_k;
         Tensor keys;
         auto order = morton_sort_indices_for_positions(d.pos, &keys);
         if (!order.is_valid())
             throw std::runtime_error("decimation Morton sort failed");
-        timer.mark("Morton sort");
         uint32_t leaves = 1;
         while (leaves < (d.n + leaf_size - 1) / leaf_size)
             leaves *= 2;
@@ -373,29 +339,21 @@ namespace lfs::io::decimate {
                 }
             }
         }
-        timer.mark("hierarchy");
         auto nb = Tensor::empty({d.n * knn}, Device::CUDA, DataType::Int32);
         auto np = reinterpret_cast<uint32_t*>(nb.ptr<int32_t>());
-        if (knn == 16)
-            neighbours<16><<<(d.n + threads - 1) / threads, threads>>>(d.view(), ids, bp, d.n, leaves, knn, np, grid);
-        else
-            neighbours<0><<<(d.n + threads - 1) / threads, threads>>>(d.view(), ids, bp, d.n, leaves, knn, np, grid);
+        neighbours<<<(d.n + threads - 1) / threads, threads>>>(d.view(), ids, bp, d.n, leaves, np, grid);
         check(cudaGetLastError());
-        timer.mark(grid.dim ? "exact knn (grid)" : "exact knn (BVH)");
         auto cache = Tensor::empty({d.n * sizeof(Cache) / 4}, Device::CUDA);
         auto cp = reinterpret_cast<Cache*>(cache.ptr<float>());
         make_cache<<<(d.n + threads - 1) / threads, threads>>>(d.view(), cp, d.n);
         check(cudaGetLastError());
-        timer.mark("cost cache");
         auto idx = Tensor::empty({d.n * k}, Device::CUDA, DataType::Int32);
         auto cost = Tensor::empty({d.n * k}, Device::CUDA);
-        candidates<<<(d.n + threads - 1) / threads, threads>>>(d.view(), cp, ids, np, d.n, knn, k, reinterpret_cast<uint32_t*>(idx.ptr<int32_t>()), cost.ptr<float>());
+        candidates<<<(d.n + threads - 1) / threads, threads>>>(d.view(), cp, ids, np, d.n, reinterpret_cast<uint32_t*>(idx.ptr<int32_t>()), cost.ptr<float>());
         check(cudaGetLastError());
-        timer.mark("edge costs and best-K");
         Candidates out{std::vector<uint32_t>(d.n * k), std::vector<float>(d.n * k)};
         check(cudaMemcpy(out.idx.data(), idx.ptr<int32_t>(), out.idx.size() * 4, cudaMemcpyDeviceToHost));
         check(cudaMemcpy(out.cost.data(), cost.ptr<float>(), out.cost.size() * 4, cudaMemcpyDeviceToHost));
-        timer.mark("candidate download");
         return out;
     }
     Data gpu_merge(const Data& d, const Selection& s) {

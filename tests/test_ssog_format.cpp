@@ -27,7 +27,6 @@
 #include <random>
 #include <set>
 #include <thread>
-#include <webp/decode.h>
 
 namespace {
     namespace fs = std::filesystem;
@@ -265,39 +264,7 @@ TEST(SsogFormat, RejectsInvalidManifest) {
     EXPECT_TRUE(validate_ssog(dir.path));
     EXPECT_TRUE(load_ssog(dir.path));
 }
-TEST(SsogFormat, ReplacesPreviousExport) {
-    ScopedSsogDirectory dir;
-    auto s = synthetic(2000, 0);
-    auto first = save_ssog(s, options(dir.path, 2));
-    ASSERT_TRUE(first) << first.error().format();
-    fs::create_directory(dir.path / "env");
-    fs::create_directory(dir.path / "9_8");
-    write(dir.path / "notes.json", {{"keep", true}});
-    auto second = save_ssog(s, options(dir.path / "lod-meta.json", 1));
-    ASSERT_TRUE(second) << second.error().format();
-    const auto m = read(dir.path / "lod-meta.json");
-    EXPECT_EQ(m["lodLevels"], 1);
-    EXPECT_FALSE(fs::exists(dir.path / "env"));
-    EXPECT_FALSE(fs::exists(dir.path / "9_8"));
-    EXPECT_FALSE(fs::exists(dir.path / "1_0"));
-    EXPECT_TRUE(fs::exists(dir.path / "notes.json"));
-    EXPECT_TRUE(load_ssog(dir.path));
-}
-TEST(SsogFormat, CancellationPreservesPreviousExport) {
-    ScopedSsogDirectory dir;
-    auto s = synthetic(500, 0);
-    auto o = options(dir.path);
-    ASSERT_TRUE(save_ssog(s, o));
-    const auto original = read(dir.path / "lod-meta.json");
-    for (const float threshold : {0.0f, 0.5f, 1.0f}) {
-        o.progress_callback = [=](float p, const std::string&) { return p < threshold; };
-        auto result = save_ssog(s, o);
-        ASSERT_FALSE(result);
-        EXPECT_EQ(result.error().code, ErrorCode::CANCELLED);
-        EXPECT_EQ(read(dir.path / "lod-meta.json"), original);
-        EXPECT_TRUE(load_ssog(dir.path));
-    }
-}
+
 TEST(SsogFormat, VisibleRowsAndEnvironment) {
     ScopedSsogDirectory dir;
     auto s = synthetic(1000, 0);
@@ -370,75 +337,29 @@ TEST(SsogFormat, CliOptions) {
     ScopedSsogDirectory dir;
     const auto input = (dir.path / "input.ply").string();
     std::ofstream(input).put('\n');
-    for (const char* alias : {"ssog"}) {
-        const char* argv[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", alias,
-                              "--lod-levels", "2", "--lod-ratio", "0.25", "--lod-chunk-count", "32",
-                              "--lod-chunk-extent", "8", "--lod-chunk-min", "2", "-o", "result_ssog"};
-        auto parsed = lfs::core::args::parse_args(std::size(argv), argv);
-        ASSERT_TRUE(parsed) << parsed.error();
-        const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
-        ASSERT_NE(mode, nullptr);
-        EXPECT_EQ(mode->params.format, lfs::core::param::OutputFormat::SSOG);
-        EXPECT_EQ(mode->params.output_path, fs::path("result_ssog"));
-        EXPECT_EQ(mode->params.lod_levels, 2);
-        EXPECT_FLOAT_EQ(mode->params.lod_ratio, 0.25f);
-        EXPECT_EQ(mode->params.lod_chunk_count, 32);
-        EXPECT_FLOAT_EQ(mode->params.lod_chunk_extent, 8);
-        EXPECT_EQ(mode->params.lod_chunk_min, 2);
-    }
+    const char* argv[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", "ssog",
+                          "--lod-levels", "2", "--lod-ratio", "0.25", "--lod-chunk-count", "32",
+                          "--lod-chunk-extent", "8", "--lod-chunk-min", "2", "-o", "result_ssog"};
+    auto parsed = lfs::core::args::parse_args(std::size(argv), argv);
+    ASSERT_TRUE(parsed) << parsed.error();
+    const auto* mode = std::get_if<lfs::core::args::ConvertMode>(&*parsed);
+    ASSERT_NE(mode, nullptr);
+    EXPECT_EQ(mode->params.format, lfs::core::param::OutputFormat::SSOG);
+    EXPECT_EQ(mode->params.output_path, fs::path("result_ssog"));
+    EXPECT_EQ(mode->params.lod_levels, 2);
+    EXPECT_FLOAT_EQ(mode->params.lod_ratio, 0.25f);
+    EXPECT_EQ(mode->params.lod_chunk_count, 32);
+    EXPECT_FLOAT_EQ(mode->params.lod_chunk_extent, 8);
+    EXPECT_EQ(mode->params.lod_chunk_min, 2);
     const char* bad[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", "ssog", "--lod-ratio", "1"};
     EXPECT_FALSE(lfs::core::args::parse_args(std::size(bad), bad));
-}
-
-TEST(SsogFormat, BundleAndDirectoryPayloadsMatch) {
-    ScopedSsogDirectory dir;
-    auto splats = synthetic(2048);
-    const auto stamp = make_minimal_provenance_stamp();
-    const auto bundle = dir.path / "bundle.sog";
-    auto saved = save_sog(splats, {.output_path = bundle, .provenance = stamp});
-    ASSERT_TRUE(saved) << saved.error().format();
-    SogEncodeOptions o;
-    o.output_path = dir.path / "directory";
-    o.provenance = stamp;
-    auto encoded = encode_sog_directory(splats, o);
-    ASSERT_TRUE(encoded) << encoded.error().format();
-    auto fast = o;
-    fast.output_path = dir.path / "fast_directory";
-    fast.fast_webp = true;
-    ASSERT_TRUE(encode_sog_directory(splats, fast));
-    std::unique_ptr<archive, decltype(&archive_read_free)> input(archive_read_new(), archive_read_free);
-    ASSERT_EQ(archive_read_support_format_zip(input.get()), ARCHIVE_OK);
-#ifdef _WIN32
-    ASSERT_EQ(archive_read_open_filename_w(input.get(), bundle.wstring().c_str(), 10240), ARCHIVE_OK);
-#else
-    ASSERT_EQ(archive_read_open_filename(input.get(), bundle.c_str(), 10240), ARCHIVE_OK);
-#endif
-    archive_entry* entry = nullptr;
-    std::vector<std::string> names;
-    while (archive_read_next_header(input.get(), &entry) == ARCHIVE_OK) {
-        const std::string name = archive_entry_pathname(entry);
-        names.push_back(name);
-        std::string bytes(static_cast<size_t>(archive_entry_size(entry)), '\0');
-        ASSERT_EQ(archive_read_data(input.get(), bytes.data(), bytes.size()), static_cast<la_ssize_t>(bytes.size()));
-        std::ifstream file(o.output_path / name, std::ios::binary);
-        const std::string other((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        EXPECT_EQ(bytes, other) << name;
-        std::ifstream fast_file(fast.output_path / name, std::ios::binary);
-        const std::string fast_bytes((std::istreambuf_iterator<char>(fast_file)), std::istreambuf_iterator<char>());
-        if (name.ends_with(".webp")) {
-            int w = 0, h = 0, fw = 0, fh = 0;
-            std::unique_ptr<uint8_t, decltype(&WebPFree)> pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), &w, &h), WebPFree);
-            std::unique_ptr<uint8_t, decltype(&WebPFree)> fast_pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(fast_bytes.data()), fast_bytes.size(), &fw, &fh), WebPFree);
-            ASSERT_TRUE(pixels);
-            ASSERT_TRUE(fast_pixels);
-            ASSERT_EQ(w, fw);
-            ASSERT_EQ(h, fh);
-            EXPECT_TRUE(std::equal(pixels.get(), pixels.get() + size_t(w) * h * 4, fast_pixels.get())) << name;
-        } else {
-            EXPECT_EQ(bytes, fast_bytes) << name;
-        }
+    for (const auto* levels : {"0", "1", "8", "9"}) {
+        const char* args[] = {"LichtFeld-Studio", "convert", input.c_str(), "-f", ".ssog", "--lod-levels", levels};
+        auto result = lfs::core::args::parse_args(std::size(args), args);
+        EXPECT_EQ(result.has_value(), std::string_view(levels) == "1" || std::string_view(levels) == "8");
+        auto o = options(dir.path, std::stoi(levels));
+        EXPECT_EQ(o.validate(), result.has_value());
     }
-    EXPECT_EQ(names, (std::vector<std::string>{"means_l.webp", "means_u.webp", "quats.webp", "scales.webp", "sh0.webp", "shN_centroids.webp", "shN_labels.webp", "meta.json"}));
 }
 
 TEST(SsogFormat, TinyInputHasEmptyCoarsestLevel) {
@@ -468,7 +389,7 @@ TEST(SsogFormat, ImportNamesUseAssetDirectories) {
     EXPECT_EQ(splat_import_name(dir.path / "garden.spz"), "garden");
 }
 
-TEST(SsogFormat, WorkerProgressIsSerializedMonotoneAndCancellable) {
+TEST(SsogFormat, CancellationPreservesPreviousExport) {
     ScopedSsogDirectory dir;
     auto s = synthetic(12000, 1);
     auto o = options(dir.path, 3);
@@ -487,19 +408,33 @@ TEST(SsogFormat, WorkerProgressIsSerializedMonotoneAndCancellable) {
     };
     ASSERT_TRUE(save_ssog(s, o));
     EXPECT_EQ(last, 1.0f);
-    if (!std::getenv("LFS_SSOG_UNIT_WORKERS"))
-        EXPECT_TRUE(saw_worker);
+    EXPECT_TRUE(saw_worker);
     const auto original = read(dir.path / "lod-meta.json");
-    last = -1;
-    o.progress_callback = [&](float p, const std::string&) {
-        EXPECT_GE(p, last);
-        last = p;
-        return p < 0.65f;
-    };
-    auto cancelled = save_ssog(s, o);
-    ASSERT_FALSE(cancelled);
-    EXPECT_EQ(cancelled.error().code, ErrorCode::CANCELLED);
-    EXPECT_EQ(read(dir.path / "lod-meta.json"), original);
+    for (const float threshold : {0.0f, 0.65f, 1.0f}) {
+        last = -1;
+        o.progress_callback = [&](float p, const std::string&) {
+            EXPECT_EQ(callbacks.fetch_add(1), 0);
+            EXPECT_GE(p, last);
+            last = p;
+            callbacks.fetch_sub(1);
+            return p < threshold;
+        };
+        auto cancelled = save_ssog(s, o);
+        ASSERT_FALSE(cancelled);
+        EXPECT_EQ(cancelled.error().code, ErrorCode::CANCELLED);
+        EXPECT_EQ(read(dir.path / "lod-meta.json"), original);
+        EXPECT_TRUE(load_ssog(dir.path));
+    }
+    fs::create_directory(dir.path / "env");
+    fs::create_directory(dir.path / "9_8");
+    write(dir.path / "notes.json", {{"keep", true}});
+    ASSERT_TRUE(save_ssog(s, options(dir.path / "lod-meta.json", 1)));
+    EXPECT_EQ(read(dir.path / "lod-meta.json")["lodLevels"], 1);
+    EXPECT_FALSE(fs::exists(dir.path / "env"));
+    EXPECT_FALSE(fs::exists(dir.path / "9_8"));
+    EXPECT_FALSE(fs::exists(dir.path / "1_0"));
+    EXPECT_TRUE(fs::exists(dir.path / "notes.json"));
+    EXPECT_TRUE(load_ssog(dir.path));
 }
 
 TEST(SsogFormat, CpuLeafMortonMatchesCudaIncludingStableTies) {

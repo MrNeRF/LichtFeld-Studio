@@ -3397,7 +3397,7 @@ namespace lfs::app {
                         {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
                         {"node_ids", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Optional session-local node IDs"}}},
                         {"lod_levels", json{{"type", "integer"}, {"default", 4}, {"minimum", 1}, {"maximum", 8}}},
-                        {"lod_ratio", json{{"type", "number"}, {"default", 0.5}, {"minimum", 0.1}, {"maximum", 0.9}}},
+                        {"lod_ratio", json{{"type", "number"}, {"default", 0.5}, {"exclusiveMinimum", 0}, {"exclusiveMaximum", 1}}},
                         {"chunk_count_k", json{{"type", "integer"}, {"default", 512}, {"minimum", 1}}},
                         {"chunk_extent", json{{"type", "number"}, {"default", 16.0}, {"minimum", 0.01}}},
                         {"chunk_min_k", json{{"type", "integer"}, {"default", 8}, {"minimum", 0}}},
@@ -3426,10 +3426,7 @@ namespace lfs::app {
                     options.chunk_extent = args.value("chunk_extent", 16.0f);
                     options.chunk_min_k = args.value("chunk_min_k", 8);
                     options.kmeans_iterations = args.value("kmeans_iterations", 10);
-                    if (options.lod_levels < 1 || options.lod_levels > 8 ||
-                        !(options.lod_ratio >= 0.1f && options.lod_ratio <= 0.9f) ||
-                        options.chunk_count_k < 1 || !(options.chunk_extent > 0.0f) ||
-                        options.chunk_min_k < 0 || options.kmeans_iterations < 1)
+                    if (!options.validate())
                         return json{{"error", "Invalid SSOG export options"}};
 
                     if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SSOG, path, sh_degree, include_provenance, options); !result)
@@ -3720,7 +3717,6 @@ namespace lfs::app {
                         {"success", true},
                         {"active", false},
                         {"mode", "synchronous"},
-                        {"supported_formats", {"ply", "sog", "ssog", "spz", "usd", "usdz_nurec", "html", "rad", "colmap"}},
                         {"stage", "idle"},
                     };
                 });

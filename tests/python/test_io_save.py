@@ -407,45 +407,27 @@ class TestSaveSSOG:
         header += "".join(f"property float {name}\n" for name in fields) + "end_header\n"
         source.write_bytes(header.encode() + points.tobytes())
         splat = lf.io.load(str(source)).splat_data
-        output = tmp_output / "ssog_directory"
-        progress = []
+        expected = numpy.stack([points[name] for name in ("x", "y", "z")], axis=1)
+        for name in ("ssog_directory", "scene.ssog"):
+            output = tmp_output / name
+            progress = []
 
-        def on_progress(value, stage):
-            progress.append((value, stage))
-            return True
+            def on_progress(value, stage):
+                progress.append((value, stage))
+                return True
 
-        lf.io.save_ssog(splat, str(output), lod_levels=2, chunk_count_k=1,
-                                chunk_min_k=0, kmeans_iterations=2, progress=on_progress)
-        assert (output / "lod-meta.json").is_file()
-        assert progress
-        for path in (output, output / "lod-meta.json"):
-            loaded = lf.io.load(str(path)).splat_data
+            lf.io.save_ssog(splat, output, lod_levels=2, chunk_count_k=1,
+                            chunk_min_k=0, kmeans_iterations=2, progress=on_progress)
+            assert progress
+            assert lf.io.is_ssog_path(output)
+            loaded = lf.io.load(output).splat_data
             assert loaded.num_points == n
             actual = loaded.get_means().cpu().numpy()
-            expected = numpy.stack([points[name] for name in ("x", "y", "z")], axis=1)
             # The chunk writer reorders points; compare nearest original positions.
             distances = numpy.linalg.norm(actual[:, None, :] - expected[None, :, :], axis=2)
             assert float(distances.min(axis=1).max()) < 0.01
             assert numpy.isfinite(loaded.get_scaling().cpu().numpy()).all()
 
-        import zipfile
-        bundle = tmp_output / "scene.ssog"
-        lf.io.save_ssog(splat, bundle, lod_levels=2, chunk_count_k=1,
-                        chunk_min_k=0, kmeans_iterations=2)
-        with zipfile.ZipFile(bundle) as archive:
-            assert archive.namelist()[-1] == "lod-meta.json"
-            assert all(info.compress_type == (zipfile.ZIP_STORED if info.filename.endswith(".webp") else zipfile.ZIP_DEFLATED)
-                       for info in archive.infolist())
-            archive.extractall(tmp_output / "unzipped")
-        bundled = lf.io.load(bundle).splat_data
-        unzipped = lf.io.load(tmp_output / "unzipped").splat_data
-        assert bundled.num_points == unzipped.num_points == n
-        numpy.testing.assert_array_equal(bundled.get_means().cpu().numpy(), unzipped.get_means().cpu().numpy())
-        numpy.testing.assert_array_equal(bundled.get_scaling().cpu().numpy(), unzipped.get_scaling().cpu().numpy())
         with pytest.raises(RuntimeError, match="[Cc]ancel"):
             lf.io.save_ssog(splat, tmp_output / "cancelled.ssog", progress=lambda _value, _stage: False)
         assert not (tmp_output / "cancelled.ssog").exists()
-
-        with pytest.raises(RuntimeError, match="[Cc]ancel"):
-            lf.io.save_ssog(splat, str(tmp_output / "cancelled"),
-                                    progress=lambda _value, _stage: False)

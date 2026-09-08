@@ -9,8 +9,6 @@ namespace lfs::io {
     }
     Result<LoadResult> SsogLoader::load(const std::filesystem::path& path, const LoadOptions& options) {
         const auto start = std::chrono::steady_clock::now();
-        if (!canLoad(path))
-            return make_error(ErrorCode::PATH_NOT_FOUND, "SSOG manifest does not exist", path);
         if (options.progress)
             options.progress(0, "Loading SSOG");
         std::shared_ptr<SplatData> data;

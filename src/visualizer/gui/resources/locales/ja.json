@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "日本語",
   "menu": {
     "file": "ファイル",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "選択したファイルは有効なチェックポイントとして認識されませんでした:\n{path}",
     "file.import_dataset": "データセットをインポート",
     "file.import_ply": "PLY, SOG, SSOG, SPZ, RAD, USDをインポート",
+    "file.import_ssog": "Import SSOG…",
     "file.import_mesh": "メッシュをインポート",
     "file.import_checkpoint": "チェックポイントをインポート",
     "file.import_config": "設定をインポート",

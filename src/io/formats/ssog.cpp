@@ -3,23 +3,18 @@
 #include "ssog.hpp"
 #include "core/logger.hpp"
 #include "io/atomic_output.hpp"
+#include "io/splat_decimate.hpp"
 #include "sogs.hpp"
 #include "ssog_morton.hpp"
+#include <algorithm>
 #include <archive.h>
 #include <archive_entry.h>
-#if __has_include("io/splat_decimate.hpp")
-#include "io/splat_decimate.hpp"
-#else
-#include "cuda/splat_decimate.hpp"
-#endif
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <charconv>
 #include <chrono>
 #include <climits>
 #include <cmath>
-#include <cstdlib>
 #include <cuda_runtime.h>
 #include <deque>
 #include <fstream>
@@ -52,20 +47,13 @@ namespace lfs::io {
             return fs::is_directory(p) ? p / "lod-meta.json" : p;
         }
         size_t integer(const Json& j, const char* name) {
-            if (!j.is_number_integer() || (j.is_number_integer() && j.get<double>() < 0) ||
+            if (!j.is_number_integer() || j.get<double>() < 0 ||
                 j.get<double>() > static_cast<double>(INT_MAX))
                 throw std::runtime_error(std::string("Invalid lod-meta.json ") + name);
             return j.get<size_t>();
         }
-        fs::path related(const fs::path& base, const Json& name) {
-            if (!name.is_string())
-                throw std::runtime_error("Invalid lod-meta.json filename");
-            const fs::path p = core::utf8_to_path(name.get<std::string>());
-            if (p.empty() || p.is_absolute() || p.has_root_name())
-                throw std::runtime_error("Invalid unit path");
-            for (const auto& part : p)
-                if (part == "..")
-                    throw std::runtime_error("Unit path escapes SSOG directory");
+        fs::path related(const fs::path& base, const std::string& name) {
+            const auto p = core::utf8_to_path(name);
             const auto root = fs::weakly_canonical(base);
             const auto resolved = fs::weakly_canonical(base / p);
             const auto rel = resolved.lexically_relative(root);
@@ -78,7 +66,6 @@ namespace lfs::io {
             fs::path base_;
             std::map<std::string, std::vector<uint8_t>> entries_;
             bool bundled_;
-            static constexpr uint64_t max_bytes = 4ULL * 1024 * 1024 * 1024;
 
             static std::string safe_name(const std::string& name) {
                 const auto p = core::utf8_to_path(name);
@@ -97,7 +84,7 @@ namespace lfs::io {
                     return;
                 }
                 const auto size = fs::file_size(path);
-                if (size < 4 || size > max_bytes || size > std::numeric_limits<size_t>::max())
+                if (size < 4 || size > MAX_ARCHIVE_BYTES || size > std::numeric_limits<size_t>::max())
                     throw std::runtime_error("Invalid SSOG archive size (limit 4 GiB)");
                 std::ifstream file(path, std::ios::binary);
                 std::vector<uint8_t> bytes(static_cast<size_t>(size));
@@ -128,8 +115,8 @@ namespace lfs::io {
                     if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_symlink(entry) || archive_entry_hardlink(entry))
                         throw std::runtime_error("SSOG archive entries must be regular files");
                     const auto n = archive_entry_size(entry);
-                    const uint64_t limit = fs::path(name).extension() == ".json" ? 64ULL * 1024 * 1024 : 512ULL * 1024 * 1024;
-                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > max_bytes - total)
+                    const uint64_t limit = fs::path(name).extension() == ".json" ? MAX_METADATA_BYTES : MAX_ENCODED_IMAGE_BYTES;
+                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > MAX_ARCHIVE_BYTES - total)
                         throw std::runtime_error("SSOG archive entry exceeds size limit");
                     total += uint64_t(n);
                     auto [it, inserted] = entries_.try_emplace(name);
@@ -155,7 +142,7 @@ namespace lfs::io {
                         const auto it = entries_.find(name);
                         if (it == entries_.end())
                             return make_error(ErrorCode::MISSING_REQUIRED_FILES, "Missing SSOG entry: " + name);
-                        if (it->second.empty() || it->second.size() > limit)
+                        if (it->second.size() > limit)
                             return make_error(ErrorCode::CORRUPTED_DATA, "Invalid SSOG entry size: " + name);
                         return it->second;
                     }
@@ -171,7 +158,7 @@ namespace lfs::io {
                 } catch (const std::exception& e) { return make_error(ErrorCode::READ_FAILURE, e.what()); }
             }
             Json json(const std::string& name) const {
-                auto bytes = read(name, 64 * 1024 * 1024);
+                auto bytes = read(name, MAX_METADATA_BYTES);
                 if (!bytes)
                     throw std::runtime_error(bytes.error().message);
                 return Json::parse(bytes->begin(), bytes->end());
@@ -197,17 +184,15 @@ namespace lfs::io {
                 std::lock_guard lock(mutex_);
                 return archive_.add_file(prefix_ + name, data, size);
             }
-            Result<void> close() override { return {}; }
         };
         struct Manifest {
             Json json;
             std::shared_ptr<EntryProvider> entries;
             std::vector<std::map<size_t, size_t>> files;
-            std::vector<size_t> counts;
         };
         Manifest parse_manifest(const fs::path& path) {
             auto entries = std::make_shared<EntryProvider>(path);
-            Manifest m{entries->json("lod-meta.json"), entries, {}, {}};
+            Manifest m{entries->json("lod-meta.json"), entries, {}};
             const auto& j = m.json;
             if (!j.is_object())
                 throw std::runtime_error("Invalid lod-meta.json object");
@@ -227,7 +212,7 @@ namespace lfs::io {
                 unit_counts.push_back(integer(m.entries->json(unit.generic_string()).at("count"), "unit count"));
             }
             m.files.resize(levels);
-            m.counts.resize(levels);
+            std::vector<size_t> counts(levels);
             using Range = std::pair<size_t, size_t>;
             std::vector<std::vector<Range>> ranges(unit_counts.size());
             std::vector<int> owner(unit_counts.size(), -1);
@@ -278,7 +263,7 @@ namespace lfs::io {
                         owner[f] = static_cast<int>(l);
                         ranges[f].emplace_back(off, n);
                         m.files[l][f] += n;
-                        m.counts[l] += n;
+                        counts[l] += n;
                     }
                 }
             };
@@ -300,10 +285,10 @@ namespace lfs::io {
                 if (!j["counts"].is_array() || j["counts"].size() != levels)
                     throw std::runtime_error("Invalid lod-meta.json counts");
                 for (size_t l = 0; l < levels; ++l)
-                    if (integer(j["counts"][l], "counts") != m.counts[l])
+                    if (integer(j["counts"][l], "counts") != counts[l])
                         throw std::runtime_error("LOD count mismatch");
             }
-            if (j.contains("count") && integer(j["count"], "count") != std::accumulate(m.counts.begin(), m.counts.end(), size_t{0}))
+            if (j.contains("count") && integer(j["count"], "count") != std::accumulate(counts.begin(), counts.end(), size_t{0}))
                 throw std::runtime_error("Total LOD count mismatch");
             if (j.contains("environment"))
                 (void)m.entries->json(j["environment"].get<std::string>());
@@ -465,12 +450,6 @@ namespace lfs::io {
         }
     } // namespace
 
-    bool is_ssog_path(const std::filesystem::path& p) {
-        std::error_code ec;
-        return (p.extension() == ".ssog" && fs::is_regular_file(p, ec)) ||
-               (p.filename() == "lod-meta.json" && fs::is_regular_file(p, ec)) ||
-               (fs::is_directory(p, ec) && fs::is_regular_file(p / "lod-meta.json", ec));
-    }
     Result<void> validate_ssog(const std::filesystem::path& p) {
         try {
             (void)parse_manifest(p);
@@ -484,7 +463,6 @@ namespace lfs::io {
             if (level < 0 || level >= static_cast<int>(m.files.size()))
                 throw std::runtime_error("Requested LOD level out of range");
             std::vector<HostSplats> parts;
-            size_t count = 0;
             // Read and WebP-decode one unit ahead, but reconstruct CUDA tensors only
             // on this thread. The queued work owns CPU buffers and uses no CUDA state.
             std::vector<std::pair<std::string, size_t>> files;
@@ -507,11 +485,8 @@ namespace lfs::io {
                     throw std::runtime_error(unit.error().message);
                 if (unit->size() != files[i].second)
                     throw std::runtime_error("Decoded SOG unit count mismatch");
-                count += unit->size();
                 parts.emplace_back(*unit);
             }
-            if (count != m.counts[level])
-                throw std::runtime_error("Decoded LOD count mismatch");
             if (m.json.contains("environment")) {
                 auto ready = m.entries->prepare(m.json["environment"].get<std::string>());
                 if (!ready)
@@ -528,7 +503,7 @@ namespace lfs::io {
     Result<void> save_ssog(const SplatData& input, const SsogSaveOptions& o) {
         try {
             const auto started = Clock::now();
-            if (o.output_path.empty() || o.lod_levels < 1 || o.lod_levels > 1024 || !std::isfinite(o.lod_ratio) || o.lod_ratio <= 0 || o.lod_ratio >= 1 || o.chunk_count_k <= 0 || o.chunk_min_k < 0 || !std::isfinite(o.chunk_extent) || o.chunk_extent <= 0 || o.kmeans_iterations < 1)
+            if (o.output_path.empty() || !o.validate())
                 return make_error(ErrorCode::INVALID_DATASET, "Invalid SSOG export options", o.output_path);
             if (!input.size())
                 return make_error(ErrorCode::EMPTY_DATASET, "No splats to write", o.output_path);
@@ -629,8 +604,6 @@ namespace lfs::io {
                     bounds[base + i] = splat_bound(means, rotation, scaling, i);
                 });
             }
-            if (cum.back() > INT_MAX)
-                throw std::runtime_error("Too many total LOD rows");
             std::vector<int> indices(cum.back());
             std::iota(indices.begin(), indices.end(), 0);
             std::vector<TreeNode> tree;
@@ -705,18 +678,7 @@ namespace lfs::io {
             const auto partitioned = Clock::now();
             double morton_ms = 0, encode_ms = 0;
             auto stamp = o.provenance.value_or(core::make_minimal_provenance_stamp());
-            // Two units reduced garden unit-write wall time by about a third, with
-            // under 2 GiB process RSS. Keep the pool bounded and allow a lower-memory
-            // single-worker override. CUDA scratch is per-call; host levels are immutable.
-            size_t workers = 2;
-            if (const auto* value = std::getenv("LFS_SSOG_UNIT_WORKERS")) {
-                const std::string_view text(value);
-                size_t requested = 0;
-                const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), requested);
-                if (ec != std::errc{} || end != text.data() + text.size() || requested < 1 || requested > 3)
-                    throw std::runtime_error("LFS_SSOG_UNIT_WORKERS must be 1, 2 or 3");
-                workers = requested;
-            }
+            constexpr size_t workers = 2;
             struct UnitTiming {
                 double morton, encode;
             };
@@ -767,33 +729,23 @@ namespace lfs::io {
                 LOG_DEBUG("SSOG unit: file={} level={} rows={} leaves={} morton_ms={:.3f} gather_ms={:.3f} encode_ms={:.3f}", filenames[f], u.level, u.rows.size(), u.bins.size(), sort_ms, std::chrono::duration<double, std::milli>(gathered - encode_start).count(), std::chrono::duration<double, std::milli>(Clock::now() - gathered).count());
                 return UnitTiming{sort_ms, std::chrono::duration<double, std::milli>(Clock::now() - encode_start).count()};
             };
-            if (workers == 1) {
-                for (size_t f = 0; f < units.size(); ++f) {
-                    auto result = encode_unit(f);
-                    if (!result)
-                        return std::unexpected(result.error());
-                    morton_ms += result->morton;
-                    encode_ms += result->encode;
-                }
-            } else {
-                std::deque<std::future<Result<UnitTiming>>> pending;
-                size_t next_unit = 0;
-                const auto launch = [&] {
-                    const size_t f = next_unit++;
-                    pending.push_back(std::async(std::launch::async, [&, f] { return encode_unit(f); }));
-                };
-                while (next_unit < std::min(workers, units.size()))
+            std::deque<std::future<Result<UnitTiming>>> pending;
+            size_t next_unit = 0;
+            const auto launch = [&] {
+                const size_t f = next_unit++;
+                pending.push_back(std::async(std::launch::async, [&, f] { return encode_unit(f); }));
+            };
+            while (next_unit < std::min(workers, units.size()))
+                launch();
+            while (!pending.empty()) {
+                auto result = pending.front().get();
+                pending.pop_front();
+                if (!result)
+                    return std::unexpected(result.error());
+                morton_ms += result->morton;
+                encode_ms += result->encode;
+                if (next_unit < units.size())
                     launch();
-                while (!pending.empty()) {
-                    auto result = pending.front().get();
-                    pending.pop_front();
-                    if (!result)
-                        return std::unexpected(result.error());
-                    morton_ms += result->morton;
-                    encode_ms += result->encode;
-                    if (next_unit < units.size())
-                        launch();
-                }
             }
             Json manifest{{"version", 1}, {"asset", {{"generator", "LichtFeld Studio"}, {"chunkGaussians", bin_size}, {"chunkExtent", o.chunk_extent}, {"chunkMinGaussians", bin_min}}}, {"count", cum.back()}, {"counts", counts}, {"lodLevels", o.lod_levels}, {"lodErrors", false}, {"filenames", filenames}, {"tree", std::move(root)}};
             round_numbers(manifest);

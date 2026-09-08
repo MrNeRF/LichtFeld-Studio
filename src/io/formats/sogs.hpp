@@ -9,6 +9,10 @@
 
 namespace lfs::io {
 
+    inline constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
+    inline constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;
+    inline constexpr size_t MAX_ARCHIVE_BYTES = 4ULL * 1024 * 1024 * 1024;
+
     struct SogEncodeOptions : SogSaveOptions {
         bool presorted = false;
         // Lossless pixels, lower compression effort for streamed units.
@@ -20,7 +24,7 @@ namespace lfs::io {
         virtual ~SogSink() = default;
         virtual Result<void> open() { return {}; }
         virtual Result<void> add_file(const std::string& name, const void* data, size_t size) = 0;
-        virtual Result<void> close() = 0;
+        virtual Result<void> close() { return {}; }
     };
 
     Result<void> encode_sog(const SplatData&, const SogEncodeOptions&, SogSink&);
@@ -31,8 +35,6 @@ namespace lfs::io {
     using SogEntryReader = std::function<Result<std::vector<uint8_t>>(const std::string&, size_t)>;
     Result<SogDirectoryReconstruct> prepare_sog_entries(const SogEntryReader&, const std::string& prefix);
     std::unique_ptr<SogSink> make_sog_archive(const std::filesystem::path&);
-    Result<SogDirectoryReconstruct> prepare_sog_directory(const std::filesystem::path&);
-    Result<SplatData> read_sog_directory(const std::filesystem::path&);
 
     // Internal: Loading function (not in public API)
     Result<SplatData> load_sog(const std::filesystem::path& filepath);

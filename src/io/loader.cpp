@@ -5,8 +5,8 @@
 #include "io/loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
-#include "formats/ssog.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/splat_path.hpp"
 #include "loader_service.hpp"
 #include <algorithm>
 #include <cctype>
@@ -251,9 +251,6 @@ namespace lfs::io {
             }
             return DatasetType::Unknown;
         }
-
-        if (is_ssog_path(path))
-            return DatasetType::Unknown;
 
         // Check if it's a SOG directory (not a dataset)
         if (safe_exists(path / "meta.json")) {

@@ -16,23 +16,6 @@ namespace lfs::io {
 
     namespace {
 
-        // Spread 21 input bits into every third bit of a 63-bit Morton key.
-        // https://fgiesen.wordpress.com/2009/12/13/decoding-morton-codes/
-        __device__ __forceinline__ uint64_t part1by2_21(uint64_t x) {
-            x &= 0x1fffffULL;
-            x = (x | (x << 32)) & 0x1f00000000ffffULL;
-            x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
-            x = (x | (x << 8)) & 0x100f00f00f00f00fULL;
-            x = (x | (x << 4)) & 0x10c30c30c30c30c3ULL;
-            x = (x | (x << 2)) & 0x1249249249249249ULL;
-            return x;
-        }
-
-        // Morton encoding: Z-major order, with 21 bits per axis.
-        __device__ __forceinline__ uint64_t encodeMorton3(uint32_t x, uint32_t y, uint32_t z) {
-            return (part1by2_21(z) << 2) | (part1by2_21(y) << 1) | part1by2_21(x);
-        }
-
         __global__ void morton_encode_kernel(
             const float* __restrict__ positions,
             int64_t* __restrict__ morton_codes,
@@ -48,14 +31,10 @@ namespace lfs::io {
             const float y = positions[idx * 3 + 1];
             const float z = positions[idx * 3 + 2];
 
-            // Normalize to [0, 2^21 - 1] range per-axis. The resulting 63-bit
-            // key is stored in signed int64 because all encoded keys are positive.
-            constexpr uint32_t AXIS_MAX = (1u << 21) - 1u;
-            const uint32_t ix = min(AXIS_MAX, static_cast<uint32_t>((x - min_x) * xmul));
-            const uint32_t iy = min(AXIS_MAX, static_cast<uint32_t>((y - min_y) * ymul));
-            const uint32_t iz = min(AXIS_MAX, static_cast<uint32_t>((z - min_z) * zmul));
-
-            morton_codes[idx] = static_cast<int64_t>(encodeMorton3(ix, iy, iz));
+            morton_codes[idx] = static_cast<int64_t>(morton_encode(
+                morton_coordinate(x, min_x, xmul),
+                morton_coordinate(y, min_y, ymul),
+                morton_coordinate(z, min_z, zmul)));
         }
 
         struct float3_minmax {
@@ -156,10 +135,9 @@ namespace lfs::io {
             const float ylen = params.bbox.max_val.y - params.bbox.min_val.y;
             const float zlen = params.bbox.max_val.z - params.bbox.min_val.z;
 
-            constexpr float AXIS_GRID_SIZE = static_cast<float>(1u << 21);
-            params.xmul = (xlen == 0.0f) ? 0.0f : AXIS_GRID_SIZE / xlen;
-            params.ymul = (ylen == 0.0f) ? 0.0f : AXIS_GRID_SIZE / ylen;
-            params.zmul = (zlen == 0.0f) ? 0.0f : AXIS_GRID_SIZE / zlen;
+            params.xmul = morton_multiplier(xlen);
+            params.ymul = morton_multiplier(ylen);
+            params.zmul = morton_multiplier(zlen);
             return params;
         }
 

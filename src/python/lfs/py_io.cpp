@@ -27,6 +27,7 @@
 #include "io/project_chapters.hpp"
 #include "io/project_container.hpp"
 #include "io/project_document.hpp"
+#include "io/splat_path.hpp"
 #include "training/dataset.hpp"
 
 #include <filesystem>
@@ -828,6 +829,9 @@ namespace lfs::python {
             nb::arg("include_provenance") = true,
             "Export splat data as self-contained HTML viewer. "
             "include_provenance (default true) writes a full provenance stamp; when false, a minimal build stamp is still embedded.");
+
+        m.def("is_ssog_path", &io::is_ssog_path, nb::arg("path"),
+              "Check for an SSOG bundle, manifest or directory.");
 
         m.def(
             "is_dataset_path",

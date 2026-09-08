@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "Italiano",
   "menu": {
     "file": "File",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "Il file selezionato non è riconosciuto come checkpoint valido:\n{path}",
     "file.import_dataset": "Importa Dataset",
     "file.import_ply": "Importa PLY, SOG, SSOG, SPZ, RAD, USD",
+    "file.import_ssog": "Importa SSOG…",
     "file.import_mesh": "Importa Mesh",
     "file.import_checkpoint": "Importa Checkpoint",
     "file.import_config": "Importa Configurazione",
@@ -669,7 +667,7 @@
   "export": {
     "overwrite": "Sovrascrivi",
     "format.ply_standard": "PLY (Standard)",
-    "format.ssog": "SSOG (PlayCanvas streamed)",
+    "format.ssog": "SSOG (streaming PlayCanvas)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1318,16 +1316,16 @@
     "blocked_during_training": "Arresta l'addestramento prima di caricare una nuova scena."
   },
   "export_dialog": {
-    "folder_name": "Folder name",
-    "lod_levels": "LOD levels",
-    "lod_ratio": "LOD ratio",
-    "chunk_count_k": "Chunk gaussians (K)",
-    "chunk_extent": "Chunk extent",
-    "chunk_min_k": "Minimum chunk gaussians (K)",
-    "kmeans_iterations": "K-means iterations",
-    "invalid_folder_name": "Enter a single folder name without path separators.",
-    "ssog_bundle": "Bundle into a single .ssog file",
-    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
+    "folder_name": "Nome della cartella",
+    "lod_levels": "Livelli LOD",
+    "lod_ratio": "Rapporto LOD",
+    "chunk_count_k": "Gaussiane per blocco (K)",
+    "chunk_extent": "Estensione del blocco",
+    "chunk_min_k": "Minimo di gaussiane per blocco (K)",
+    "kmeans_iterations": "Iterazioni k-means",
+    "invalid_folder_name": "Inserisci un nome di cartella senza separatori di percorso.",
+    "ssog_bundle": "Raggruppa in un unico file .ssog",
+    "ssog_overwrite": "Questa cartella contiene già dati SSOG. Sovrascriverli?",
     "format": "FORMATO",
     "models": "MODELLI",
     "no_models": "Nessun modello nella scena",

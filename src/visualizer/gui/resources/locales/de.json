@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "Deutsch",
   "menu": {
     "file": "Datei",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "Die ausgewählte Datei wurde nicht als gültiger Checkpoint erkannt:\n{path}",
     "file.import_dataset": "Datensatz importieren",
     "file.import_ply": "PLY, SOG, SSOG, SPZ, RAD, USD importieren",
+    "file.import_ssog": "SSOG importieren…",
     "file.import_mesh": "Mesh importieren",
     "file.import_checkpoint": "Checkpoint importieren",
     "file.import_config": "Konfiguration importieren",
@@ -669,7 +667,7 @@
   "export": {
     "overwrite": "Überschreiben",
     "format.ply_standard": "PLY (Standard)",
-    "format.ssog": "SSOG (PlayCanvas streamed)",
+    "format.ssog": "SSOG (PlayCanvas-Streaming)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1318,16 +1316,16 @@
     "blocked_during_training": "Beenden Sie das Training, bevor Sie eine neue Szene laden."
   },
   "export_dialog": {
-    "folder_name": "Folder name",
-    "lod_levels": "LOD levels",
-    "lod_ratio": "LOD ratio",
-    "chunk_count_k": "Chunk gaussians (K)",
-    "chunk_extent": "Chunk extent",
-    "chunk_min_k": "Minimum chunk gaussians (K)",
-    "kmeans_iterations": "K-means iterations",
-    "invalid_folder_name": "Enter a single folder name without path separators.",
-    "ssog_bundle": "Bundle into a single .ssog file",
-    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
+    "folder_name": "Ordnername",
+    "lod_levels": "LOD-Stufen",
+    "lod_ratio": "LOD-Verhältnis",
+    "chunk_count_k": "Gaußfunktionen pro Block (K)",
+    "chunk_extent": "Blockausdehnung",
+    "chunk_min_k": "Mindestanzahl Gaußfunktionen pro Block (K)",
+    "kmeans_iterations": "K-Means-Iterationen",
+    "invalid_folder_name": "Einen einzelnen Ordnernamen ohne Pfadtrennzeichen eingeben.",
+    "ssog_bundle": "In eine .ssog-Datei bündeln",
+    "ssog_overwrite": "Dieser Ordner enthält bereits SSOG-Daten. Überschreiben?",
     "format": "FORMAT",
     "models": "MODELLE",
     "no_models": "Keine Modelle in der Szene",

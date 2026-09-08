@@ -65,7 +65,6 @@ required and names the output directory. Optional settings are `lod_levels` (4,
 `chunk_min_k` (8), and `kmeans_iterations` (10). Node selection accepts `node`,
 `nodes`, `uuid`, `uuids`, or session-local integer `node_ids`, with the same
 selection fallback as SOG. `sh_degree` defaults to 3 and `include_provenance`
-to true. The call completes synchronously; `scene_export_status` includes
-`ssog` in `supported_formats` and reports idle after completion.
+to true. The call completes synchronously; `scene_export_status` reports idle after completion.
 
 Import the `.ssog` bundle, directory, or its `lod-meta.json` with `lf.io.load(path)` in Python or `scene_load_ply`.

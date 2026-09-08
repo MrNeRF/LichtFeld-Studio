@@ -30,6 +30,10 @@ def import_dialog_module(monkeypatch, tmp_path):
         params=SimpleNamespace(dataset_path=str(dataset), output_path=str(tmp_path / "output")),
     )
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.io = SimpleNamespace(is_ssog_path=lambda path: (
+        Path(path).is_file() and (Path(path).suffix == ".ssog" or Path(path).name == "lod-meta.json")
+        or (Path(path) / "lod-meta.json").is_file()
+    ))
     lf_stub.ui = SimpleNamespace(
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),
         PanelHeightMode=SimpleNamespace(CONTENT="CONTENT"),

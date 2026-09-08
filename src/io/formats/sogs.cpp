@@ -70,9 +70,6 @@ namespace lfs::io {
 
         // Bound allocations derived from untrusted SOG metadata.
         constexpr size_t MAX_SOG_SPLATS = 100'000'000;
-        constexpr size_t MAX_METADATA_BYTES = 16ULL * 1024 * 1024;
-        constexpr size_t MAX_ENCODED_IMAGE_BYTES = 512ULL * 1024 * 1024;
-        constexpr size_t MAX_ARCHIVE_BYTES = 4ULL * 1024 * 1024 * 1024;
         constexpr size_t MAX_DECODED_IMAGE_BYTES = 2ULL * 1024 * 1024 * 1024;
         constexpr size_t MAX_TOTAL_DECODED_BYTES = 8ULL * 1024 * 1024 * 1024;
         constexpr size_t MAX_RECONSTRUCTION_BYTES = 8ULL * 1024 * 1024 * 1024;
@@ -1181,7 +1178,6 @@ namespace lfs::io {
 
             EncodedImages encoded_images;
 
-            // Helper to read and decode WebP files
             auto read_webp = [&](const std::string& filename)
                 -> Result<void> {
                 if (encoded_images.contains(filename)) {
@@ -1198,7 +1194,6 @@ namespace lfs::io {
                 return {};
             };
 
-            // Read all required files
             for (const auto& file : meta.means_files) {
                 if (auto result = read_webp(file); !result)
                     return std::unexpected(result.error());
@@ -1216,7 +1211,6 @@ namespace lfs::io {
                     return std::unexpected(result.error());
             }
 
-            // Read optional SH files
             if (meta.shN.has_value()) {
                 for (const auto& file : meta.shN->files) {
                     if (auto result = read_webp(file); !result)
@@ -1239,8 +1233,8 @@ namespace lfs::io {
         }
     }
 
-    Result<SogDirectoryReconstruct> prepare_sog_directory(const std::filesystem::path& path) {
-        return prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
+    static Result<SplatData> read_sog_directory(const std::filesystem::path& path) {
+        auto ready = prepare_sog_entries([&](const std::string& name, size_t limit) -> Result<std::vector<uint8_t>> {
             const auto file_path = path / core::utf8_to_path(name);
             std::error_code ec;
             const auto size = std::filesystem::file_size(file_path, ec);
@@ -1254,11 +1248,7 @@ namespace lfs::io {
                 return make_error(ErrorCode::READ_FAILURE, "Cannot read complete SOG entry", file_path);
             return bytes;
         },
-                                   "");
-    }
-
-    Result<SplatData> read_sog_directory(const std::filesystem::path& path) {
-        auto ready = prepare_sog_directory(path);
+                                         "");
         if (!ready)
             return std::unexpected(ready.error());
         return (*ready)();
@@ -1334,7 +1324,6 @@ namespace lfs::io {
         class SogArchive final : public SogSink {
             struct archive* a_ = nullptr;
             std::filesystem::path output_path_;
-            std::string last_error_;
             bool valid_ = false;
 
         public:
@@ -1342,45 +1331,32 @@ namespace lfs::io {
                 : output_path_(output_path) {}
 
             Result<void> open() override {
-                initialize();
-                if (!valid_)
-                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, last_error_, output_path_);
-                return {};
-            }
-
-        private:
-            void initialize() {
-                const auto& output_path = output_path_;
                 a_ = archive_write_new();
                 if (!a_) {
-                    last_error_ = "Failed to allocate archive structure";
-                    return;
+                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, "Failed to allocate archive structure", output_path_);
                 }
 
                 if (archive_write_set_format_zip(a_) != ARCHIVE_OK) {
-                    last_error_ = std::format("Failed to set ZIP format: {}",
-                                              archive_error_string(a_) ? archive_error_string(a_) : "unknown error");
-                    return;
+                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
+                                      std::format("Failed to set ZIP format: {}", archive_error_string(a_) ? archive_error_string(a_) : "unknown error"), output_path_);
                 }
 
                 // Use wide-character API on Windows for proper Unicode path handling
                 int result;
 #ifdef _WIN32
-                result = archive_write_open_filename_w(a_, output_path.wstring().c_str());
+                result = archive_write_open_filename_w(a_, output_path_.wstring().c_str());
 #else
-                result = archive_write_open_filename(a_, output_path.c_str());
+                result = archive_write_open_filename(a_, output_path_.c_str());
 #endif
                 if (result != ARCHIVE_OK) {
-                    last_error_ = std::format("Failed to create archive '{}': {}",
-                                              lfs::core::path_to_utf8(output_path),
-                                              archive_error_string(a_) ? archive_error_string(a_) : "unknown error");
-                    return;
+                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED,
+                                      std::format("Failed to create archive: {}", archive_error_string(a_) ? archive_error_string(a_) : "unknown error"), output_path_);
                 }
 
                 valid_ = true;
+                return {};
             }
 
-        public:
             ~SogArchive() override {
                 if (a_) {
                     if (valid_) {
@@ -1395,9 +1371,6 @@ namespace lfs::io {
             SogArchive& operator=(const SogArchive&) = delete;
             SogArchive(SogArchive&&) = delete;
             SogArchive& operator=(SogArchive&&) = delete;
-
-            [[nodiscard]] bool is_valid() const { return valid_; }
-            [[nodiscard]] const std::string& last_error() const { return last_error_; }
 
             [[nodiscard]] Result<void> close() override {
                 if (!a_ || !valid_) {
@@ -1419,10 +1392,6 @@ namespace lfs::io {
             }
 
             [[nodiscard]] Result<void> add_file(const std::string& filename, const void* data, size_t size) override {
-                if (!valid_) {
-                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, last_error_, output_path_);
-                }
-
                 auto* entry = archive_entry_new();
                 if (!entry) {
                     return make_error(ErrorCode::INTERNAL_ERROR,
@@ -2442,7 +2411,6 @@ namespace lfs::io {
                     return make_error(ErrorCode::WRITE_FAILURE, "Failed to write SOG unit file", directory_ / name);
                 return {};
             }
-            Result<void> close() override { return {}; }
         };
         try {
             std::filesystem::create_directories(options.output_path);

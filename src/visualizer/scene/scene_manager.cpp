@@ -903,8 +903,7 @@ namespace lfs::vis {
             auto ext = path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
-            if (ext == ".sog" || path.filename() == "lod-meta.json" ||
-                (std::filesystem::is_directory(path) && std::filesystem::exists(path / "lod-meta.json"))) {
+            if (ext == ".sog" || lfs::io::is_ssog_path(path)) {
                 file_type = state::SceneLoaded::Type::SOG;
             } else if (ext == ".spz") {
                 file_type = state::SceneLoaded::Type::SPZ;
@@ -3643,9 +3642,7 @@ namespace lfs::vis {
                 // Determine specific type from extension
                 auto ext = info.source_path.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (info.source_path.filename() == "lod-meta.json" ||
-                    (std::filesystem::is_directory(info.source_path) &&
-                     std::filesystem::exists(info.source_path / "lod-meta.json"))) {
+                if (lfs::io::is_ssog_path(info.source_path)) {
                     info.source_type = "SSOG";
                 } else if (ext == ".sog") {
                     info.source_type = "SOG";

@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "English",
   "menu": {
     "file": "File",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "The selected file is not recognized as a valid checkpoint:\n{path}",
     "file.import_dataset": "Import Dataset",
     "file.import_ply": "Import PLY, SOG, SSOG, SPZ, RAD, USD",
+    "file.import_ssog": "Import SSOG…",
     "file.import_mesh": "Import Mesh",
     "file.import_checkpoint": "Import Checkpoint",
     "file.import_config": "Import Config",

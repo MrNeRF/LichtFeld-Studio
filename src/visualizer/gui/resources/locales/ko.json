@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "한국어",
   "menu": {
     "file": "파일",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "선택한 파일이 유효한 체크포인트로 인식되지 않습니다:\n{path}",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SSOG, SPZ, RAD, USD 가져오기",
+    "file.import_ssog": "Import SSOG…",
     "file.import_mesh": "메시 가져오기",
     "file.import_checkpoint": "체크포인트 가져오기",
     "file.import_config": "설정 가져오기",

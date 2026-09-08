@@ -345,10 +345,9 @@ class NewProjectPanel(_ImportDialogPanel):
 
     @staticmethod
     def _is_splat_path(path: str) -> bool:
-        source = Path(path)
-        if source.name == "lod-meta.json" or (source / "lod-meta.json").is_file():
+        if lf.io.is_ssog_path(path):
             return True
-        suffix = source.suffix.lower()
+        suffix = Path(path).suffix.lower()
         return suffix in {".ply", ".sog", ".ssog", ".spz", ".rad"} or suffix.startswith(".usd")
 
     def _set_source_path(self, value, derive_name=False):

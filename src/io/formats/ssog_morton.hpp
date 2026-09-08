@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
+#include "../cuda/morton_encoding.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -9,8 +10,6 @@
 #include <vector>
 
 namespace lfs::io {
-    // Same 21-bit per-axis normalization and stable ties as the CUDA SOG
-    // sorter. Work directly on host level rows, without a CUDA round trip per leaf.
     inline void sort_ssog_leaf(const float* positions, std::span<int> rows) {
         if (rows.empty())
             return;
@@ -24,16 +23,8 @@ namespace lfs::io {
             }
         for (int axis = 0; axis < 3; ++axis) {
             const float extent = high[axis] - low[axis];
-            multiplier[axis] = extent == 0 ? 0 : float(1u << 21) / extent;
+            multiplier[axis] = morton_multiplier(extent);
         }
-        const auto spread = [](uint64_t x) {
-            x &= 0x1fffffULL;
-            x = (x | (x << 32)) & 0x1f00000000ffffULL;
-            x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
-            x = (x | (x << 8)) & 0x100f00f00f00f00fULL;
-            x = (x | (x << 4)) & 0x10c30c30c30c30c3ULL;
-            return (x | (x << 2)) & 0x1249249249249249ULL;
-        };
         struct KeyRow {
             uint64_t key;
             int row;
@@ -43,9 +34,7 @@ namespace lfs::io {
         for (int row : rows) {
             uint64_t key = 0;
             for (int axis = 0; axis < 3; ++axis) {
-                const float normalized = (positions[size_t(row) * 3 + axis] - low[axis]) * multiplier[axis];
-                const auto coordinate = std::min((1u << 21) - 1, static_cast<uint32_t>(normalized));
-                key |= spread(coordinate) << axis;
+                key |= morton_spread(morton_coordinate(positions[size_t(row) * 3 + axis], low[axis], multiplier[axis])) << axis;
             }
             keys.push_back({key, row});
         }

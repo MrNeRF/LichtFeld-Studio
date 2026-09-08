@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "Nederlands",
   "menu": {
     "file": "Bestand",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "Het geselecteerde bestand wordt niet herkend als een geldig checkpoint:\n{path}",
     "file.import_dataset": "Dataset Importeren",
     "file.import_ply": "PLY, SOG, SSOG, SPZ, RAD, USD Importeren",
+    "file.import_ssog": "SSOG importeren…",
     "file.import_mesh": "Mesh Importeren",
     "file.import_checkpoint": "Controlepunt Importeren",
     "file.import_config": "Configuratie Importeren",
@@ -669,7 +667,7 @@
   "export": {
     "overwrite": "Overschrijven",
     "format.ply_standard": "PLY (Standaard)",
-    "format.ssog": "SSOG (PlayCanvas streamed)",
+    "format.ssog": "SSOG (PlayCanvas-streaming)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1318,16 +1316,16 @@
     "blocked_during_training": "Stop de training voordat je een nieuwe scène laadt."
   },
   "export_dialog": {
-    "folder_name": "Folder name",
-    "lod_levels": "LOD levels",
-    "lod_ratio": "LOD ratio",
-    "chunk_count_k": "Chunk gaussians (K)",
-    "chunk_extent": "Chunk extent",
-    "chunk_min_k": "Minimum chunk gaussians (K)",
-    "kmeans_iterations": "K-means iterations",
-    "invalid_folder_name": "Enter a single folder name without path separators.",
-    "ssog_bundle": "Bundle into a single .ssog file",
-    "ssog_overwrite": "SSOG data already exists in this folder. Overwrite it?",
+    "folder_name": "Mapnaam",
+    "lod_levels": "LOD-niveaus",
+    "lod_ratio": "LOD-verhouding",
+    "chunk_count_k": "Gaussians per blok (K)",
+    "chunk_extent": "Blokafmeting",
+    "chunk_min_k": "Minimumaantal gaussians per blok (K)",
+    "kmeans_iterations": "K-means-iteraties",
+    "invalid_folder_name": "Voer één mapnaam in zonder padscheidingstekens.",
+    "ssog_bundle": "Bundelen in één .ssog-bestand",
+    "ssog_overwrite": "Deze map bevat al SSOG-gegevens. Overschrijven?",
     "format": "FORMAAT",
     "models": "MODELLEN",
     "no_models": "Geen modellen in scène",

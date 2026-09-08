@@ -1,7 +1,4 @@
 {
-  "file_menu": {
-    "import_ssog": "Import SSOG…"
-  },
   "_language_name": "简体中文",
   "menu": {
     "file": "文件",
@@ -26,6 +23,7 @@
     "file.checkpoint_not_recognized": "所选文件未被识别为有效检查点：\n{path}",
     "file.import_dataset": "导入数据集",
     "file.import_ply": "导入PLY, SOG, SSOG, SPZ, RAD, USD",
+    "file.import_ssog": "Import SSOG…",
     "file.import_mesh": "导入网格",
     "file.import_checkpoint": "导入检查点",
     "file.import_config": "导入配置",

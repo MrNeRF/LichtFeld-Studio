@@ -273,7 +273,7 @@ class ImportPlyOperator(Operator):
 
 
 class ImportSsogOperator(Operator):
-    label = "file_menu.import_ssog"
+    label = "menu.file.import_ssog"
     description = "Import a SSOG folder containing lod-meta.json"
 
     def execute(self, context) -> set:

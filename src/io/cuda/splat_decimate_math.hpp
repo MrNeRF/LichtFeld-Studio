@@ -105,7 +105,7 @@ namespace lfs::io::decimate {
         s[0] += 1e-8;
         s[4] += 1e-8;
         s[8] += 1e-8;
-        // Exact binary64 outputs of makeGaussianSamples(1, 0), verified by tsx.
+        // Fixed binary64 sample from makeGaussianSamples(1, 0).
         const double z[3] = {1.6264323081902676, 0.0033697340332619848, 1.0509958442185130};
         double x[3], y[3], sa[3], sb[3];
         for (int c = 0; c < 3; ++c) {
@@ -123,7 +123,6 @@ namespace lfs::io::decimate {
         }
         return float(cost);
     }
-    // Implemented below using the shared eigensolver adapter.
     DEC_HD inline void decompose(double* s, double* scales, double* quaternion);
     DEC_HD inline void merge_one(View v, const uint32_t* ids, int count, View out, uint32_t row) {
         double weights[4], w = 0, mean[3] = {}, sig[9] = {};
