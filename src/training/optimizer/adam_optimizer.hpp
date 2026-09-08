@@ -132,7 +132,8 @@ namespace lfs::training {
     public:
         explicit AdamOptimizer(lfs::core::SplatData& splat_data, const AdamConfig& config);
 
-        void step(int iteration);
+        // Post-training refinement can update resident SH coefficients immediately.
+        void step(int iteration, bool apply_sh_warmup = true);
         FastGSFusedAdamState prepare_fastgs_fused_adam(int iteration, cudaStream_t execution_stream = nullptr);
         void commit_fastgs_fused_adam(int iteration);
         void set_frozen_mask(lfs::core::Tensor mask);
@@ -241,7 +242,7 @@ namespace lfs::training {
         std::string param_name(ParamType type) const;
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
-        void step_param(ParamType type, int iteration);
+        void step_param(ParamType type, int iteration, bool apply_sh_warmup);
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 
         // Quantized-moment helpers. Moments are uint8 (m signed @ zero-point 128, v as

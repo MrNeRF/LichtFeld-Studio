@@ -21,8 +21,19 @@ namespace fast_lfs::optimizer {
             JointContiguousBatchEntry* pinned = nullptr;
             JointContiguousBatchEntry* device = nullptr;
             int cap = 0;
+            cudaEvent_t upload_done = nullptr;
+            cudaEvent_t kernel_done = nullptr;
+            bool pending = false;
 
             void ensure(int n, cudaStream_t stream) {
+                if (pending) {
+                    // The CPU must not overwrite pinned entries until the prior
+                    // asynchronous upload has finished reading them. Device-table
+                    // reuse additionally waits for the prior kernel, on the GPU,
+                    // so callers may safely switch execution streams.
+                    LFS_CUDA_CHECK(cudaEventSynchronize(upload_done));
+                    LFS_CUDA_CHECK(cudaStreamWaitEvent(stream, kernel_done, 0));
+                }
                 if (n <= cap && pinned && device) {
                     return;
                 }
@@ -39,7 +50,10 @@ namespace fast_lfs::optimizer {
                 pinned = h;
                 device = d;
                 cap = kMaxContiguousBatch;
-                (void)stream;
+                if (!upload_done) {
+                    LFS_CUDA_CHECK(cudaEventCreateWithFlags(&upload_done, cudaEventDisableTiming));
+                    LFS_CUDA_CHECK(cudaEventCreateWithFlags(&kernel_done, cudaEventDisableTiming));
+                }
             }
         };
 
@@ -183,6 +197,7 @@ namespace fast_lfs::optimizer {
             cache.device, cache.pinned,
             sizeof(JointContiguousBatchEntry) * static_cast<size_t>(n_entries),
             cudaMemcpyHostToDevice, stream));
+        LFS_CUDA_CHECK(cudaEventRecord(cache.upload_done, stream));
         constexpr int kBS = 256;
         const int n_blocks = (max_prims + kBS - 1) / kBS;
         const dim3 grid(n_blocks, n_entries);
@@ -195,6 +210,8 @@ namespace fast_lfs::optimizer {
             mean_step_r_min, mean_step_r_max, mean_step_far_mask, mean_step_far_mask_n,
             screen_share_max, screen_share_n, screen_share_limit, screen_share_penalty);
         LFS_CUDA_LAUNCH_CHECK(stream, "adam_step_joint_contiguous_batched");
+        LFS_CUDA_CHECK(cudaEventRecord(cache.kernel_done, stream));
+        cache.pending = true;
     }
 
     void joint_encode_zero_rows_at_indices(

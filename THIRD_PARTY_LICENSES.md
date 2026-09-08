@@ -9,6 +9,7 @@ This project builds upon and is inspired by the following:
 | [gsplat](https://github.com/nerfstudio-project/gsplat) | Optimized CUDA rasterization backend | Apache-2.0 |
 | [VkSplat](https://github.com/vksplat/vksplat) | High-performance 3DGS training in Vulkan compute | Apache-2.0 |
 | [PPISP](https://github.com/nv-tlabs/ppisp) | Physically-Plausible Image Signal Processing for radiance field reconstruction | Apache-2.0 |
+| [KissGsVanilla](https://github.com/OpsiClear/KissGsVanilla/tree/5d5212a33a45a6668beb822f17b4b2d88e0f5f8a) | Reference equations, optimization profile and numerical behavior for the optional POPSpa sparsification implementation; independently implemented in LFS C++/CUDA | Apache-2.0 |
 
 ## Gaussian Splatting Tools & Inspiration
 | Project | Description | License |

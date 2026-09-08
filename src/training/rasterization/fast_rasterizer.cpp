@@ -8,10 +8,12 @@
 #include "core/path_utils.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_exportable_storage.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <ctime>
@@ -600,7 +602,8 @@ namespace lfs::training {
         int iteration,
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const core::Tensor& grad_depth,
-        const core::Tensor& grad_normal) {
+        const core::Tensor& grad_normal,
+        const bool defer_optimizer_step) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -730,7 +733,10 @@ namespace lfs::training {
         auto raw_image = ctx.image;
 
         fast_lfs::rasterization::FusedAdamSettings fused_adam;
-        const auto optimizer_fused = optimizer.prepare_fastgs_fused_adam(iteration, stream);
+        std::array<core::Tensor*, 6> captured_gradients{};
+        size_t captured_count = 0;
+        const cudaStream_t backward_stream = ctx.forward_ctx.stream;
+        const auto optimizer_fused = defer_optimizer_step ? FastGSFusedAdamState{} : optimizer.prepare_fastgs_fused_adam(iteration, stream);
         auto convert_param = [](const FastGSFusedAdamParam& src) {
             fast_lfs::rasterization::FusedAdamParam dst;
             dst.param = src.param;
@@ -779,6 +785,32 @@ namespace lfs::training {
         fused_adam.opacity = convert_param(optimizer_fused.opacity);
         fused_adam.sh0 = convert_param(optimizer_fused.sh0);
         fused_adam.shN = convert_param(optimizer_fused.shN);
+        if (defer_optimizer_step) {
+            auto capture = [&](auto& param, ParamType type, const core::Tensor& value, int attributes) {
+                auto& grad = optimizer.get_grad(type);
+                captured_gradients[captured_count++] = &grad;
+                param.gradient_out = grad.ptr<float>();
+                param.param = const_cast<float*>(value.ptr<float>());
+                param.n_primitives = n_primitives;
+                param.n_elements = static_cast<int>(grad.numel());
+                param.n_attributes = attributes;
+            };
+            capture(fused_adam.means, ParamType::Means, ctx.means, 3);
+            capture(fused_adam.scaling, ParamType::Scaling, ctx.raw_scales, 3);
+            capture(fused_adam.rotation, ParamType::Rotation, ctx.raw_rotations, 4);
+            capture(fused_adam.opacity, ParamType::Opacity, ctx.raw_opacities, 1);
+            capture(fused_adam.sh0, ParamType::Sh0, gaussian_model.sh0(), 3);
+            if (ctx.active_sh_bases > 1) {
+                // SH values may be packed; capture uses only the swizzled Float32 gradient.
+                auto& grad = optimizer.get_grad(ParamType::ShN);
+                captured_gradients[captured_count++] = &grad;
+                fused_adam.shN.gradient_out = grad.ptr<float>();
+                fused_adam.shN.n_primitives = n_primitives;
+            }
+            fused_adam.enabled = true;
+            for (size_t i = 0; i < captured_count; ++i)
+                captured_gradients[i]->sync_to_stream(backward_stream);
+        }
         if (!fused_adam.enabled) {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
@@ -849,11 +881,13 @@ namespace lfs::training {
             fused_extra_gradients.edge_score_out);
 
         ctx.mark_forward_context_released();
+        for (size_t i = 0; i < captured_count; ++i)
+            captured_gradients[i]->set_stream(backward_stream);
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
         }
-        if (fused_adam.enabled) {
+        if (fused_adam.enabled && !defer_optimizer_step) {
             optimizer.commit_fastgs_fused_adam(iteration);
         }
     }

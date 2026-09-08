@@ -16,6 +16,8 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/l1_loss.cu
     kernels/ssim_reduction.cu
     kernels/regularization.cu
+    kernels/effective_rank_regularization.cu
+    kernels/popspa.cu
     kernels/bilateral_grid_forward.cu
     kernels/bilateral_grid_backward.cu
     kernels/bilateral_grid_tv.cu
@@ -87,15 +89,18 @@ set(TRAINING_NEW_SOURCES
     live_model_mutation_guard.cpp
     optimizer/scheduler.cpp
     losses/regularization.cpp
+    losses/effective_rank_regularization.cpp
     losses/photometric_loss.cpp
     losses/mask_loss.cpp
     strategies/strategy_utils.cpp
+    strategies/postprocess_compaction.cpp
     strategies/mcmc.cpp
     strategies/mrnf.cpp
     strategies/strategy_factory.cpp
     strategies/improved_gs_plus.cpp
     rasterization/fast_rasterizer.cpp
     rasterization/gsplat_rasterizer.cpp
+    rasterization/pop_scores.cpp
     components/config_serialization.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp
@@ -103,6 +108,7 @@ set(TRAINING_NEW_SOURCES
     components/ppisp_controller_pool.cu
     components/ppisp_file.cpp
     components/sparsity_optimizer.cpp
+    components/popspa_controller.cpp
     control/command_api.cpp
     metrics/metrics.cpp
         checkpoint.cpp
@@ -111,6 +117,7 @@ set(TRAINING_NEW_SOURCES
         progress.cpp
         training_cropbox_mask.cpp
         trainer.cpp
+        trainer_popspa.cpp
         normal_auto_generate.cpp
         vram_ledger.cpp
         perf_bench.cpp

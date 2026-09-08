@@ -6,6 +6,7 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
@@ -538,6 +539,13 @@ namespace lfs::training {
         int get_sparsity_boundary_iteration() const;
         lfs::core::param::OptimizationParameters get_runtime_optimization_params() const;
         void sync_strategy_optimization_params();
+        [[nodiscard]] bool popspa_enabled() const;
+        [[nodiscard]] bool popspa_optimizing() const noexcept;
+        [[nodiscard]] lfs::Status advance_popspa_boundaries(int completed_iteration, std::stop_token stop_token);
+        void initialize_popspa_optimizer();
+        AdamOptimizer& active_gaussian_optimizer();
+        [[nodiscard]] lfs::core::param::OptimizationParameters popspa_step_parameters() const;
+        void preserve_active_popspa_parameters(lfs::core::param::TrainingParameters& update) const;
         std::expected<void, std::string> initialize_camera_loss_heatmap(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
         void update_camera_loss_heatmap(const lfs::core::Camera& camera,
@@ -767,6 +775,10 @@ namespace lfs::training {
         std::unique_ptr<PPISPControllerPool> ppisp_controller_pool_;
 
         std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
+        POPSpaController popspa_controller_;
+        std::unique_ptr<AdamOptimizer> popspa_optimizer_;
+        bool popspa_dataset_validated_ = false;
+        std::atomic<int> popspa_completed_iteration_{-1};
 
         std::unique_ptr<TrainingSnapshotService>
             project_snapshot_service_;
@@ -774,6 +786,10 @@ namespace lfs::training {
             prepared_project_snapshot_;
         std::shared_ptr<ProjectSnapshotChapters>
             prestaged_project_chapters_;
+        // Independent of coalesced explicit requests; reserved before the
+        // target POPSpa step and consumed only by its CLI capture.
+        std::shared_ptr<ProjectSnapshotChapters>
+            popspa_cli_project_chapters_;
         std::uint64_t
             prestaged_project_request_id_ = 0;
         std::filesystem::path prepared_project_path_;

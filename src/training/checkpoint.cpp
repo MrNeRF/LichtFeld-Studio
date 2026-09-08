@@ -3,6 +3,7 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#include "components/popspa_controller.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
 #include "components/sparsity_optimizer.hpp"
@@ -15,6 +16,7 @@
 #include "strategies/strategy_factory.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <limits>
@@ -28,6 +30,85 @@
 namespace lfs::training {
 
     namespace {
+        void validate_popspa_checkpoint(
+            const POPSpaController& controller,
+            const AdamOptimizer& optimizer,
+            const lfs::core::param::OptimizationParameters& params,
+            const lfs::core::SplatData& model,
+            const int iteration) {
+            const size_t rows = model.size();
+            if (const auto error = params.validate(); !error.empty())
+                throw std::runtime_error("Invalid POPSpa checkpoint parameters: " + error);
+            if (!params.enable_sparsity || params.sparsity_method != lfs::core::param::SparsityMethod::POPSpa ||
+                !controller.is_initialized() || controller.state_size() != rows)
+                throw std::runtime_error("Invalid POPSpa checkpoint: method or model row count disagrees");
+            const auto& config = controller.config();
+            const size_t expected_first_count = params.popspa_first_prune_count == 0
+                                                    ? std::max(config.target_count, static_cast<size_t>(std::round(
+                                                                                        std::sqrt(static_cast<long double>(controller.input_size()) * config.target_count))))
+                                                    : static_cast<size_t>(params.popspa_first_prune_count);
+            if (config.target_count != static_cast<size_t>(params.popspa_target_count) ||
+                config.first_prune_count != expected_first_count ||
+                config.sparsify_steps != static_cast<uint32_t>(params.popspa_sparsify_steps) ||
+                config.refine_steps != static_cast<uint32_t>(params.popspa_refine_steps) ||
+                config.projection_interval != static_cast<uint32_t>(params.popspa_projection_interval) ||
+                config.rho != params.popspa_rho || config.erank_weight != params.popspa_erank_weight ||
+                config.thin_scale_weight != params.popspa_thin_scale_weight || config.erank_epsilon != params.popspa_erank_epsilon)
+                throw std::runtime_error("Invalid POPSpa checkpoint: controller config disagrees with saved parameters");
+
+            uint64_t completed_steps = 0;
+            uint64_t optimizer_age = 0;
+            switch (controller.phase()) {
+            case POPSpaPhase::FirstScore:
+            case POPSpaPhase::FirstPrune:
+                break;
+            case POPSpaPhase::Sparsify:
+                completed_steps = optimizer_age = controller.phase_step();
+                break;
+            case POPSpaPhase::SecondScore:
+            case POPSpaPhase::FinalPrune:
+                completed_steps = optimizer_age = config.sparsify_steps;
+                break;
+            case POPSpaPhase::Recover:
+                optimizer_age = controller.phase_step();
+                completed_steps = uint64_t(config.sparsify_steps) + optimizer_age;
+                break;
+            case POPSpaPhase::Complete:
+                optimizer_age = config.refine_steps;
+                completed_steps = uint64_t(config.sparsify_steps) + config.refine_steps;
+                break;
+            default:
+                throw std::runtime_error("Invalid POPSpa checkpoint phase");
+            }
+            if (uint64_t(iteration) != uint64_t(params.iterations) + completed_steps)
+                throw std::runtime_error("Invalid POPSpa checkpoint: phase and iteration disagree");
+            const auto& adam = optimizer.get_config();
+            if (adam.beta1 != 0.9 || adam.beta2 != 0.999 || adam.eps != 1e-15)
+                throw std::runtime_error("Invalid POPSpa checkpoint: Adam profile disagrees");
+            const std::pair<ParamType, float> learning_rates[] = {
+                {ParamType::Means, params.popspa_means_lr},
+                {ParamType::Scaling, params.popspa_scales_lr},
+                {ParamType::Rotation, params.popspa_quaternions_lr},
+                {ParamType::Opacity, params.popspa_opacities_lr},
+                {ParamType::Sh0, params.popspa_sh0_lr},
+                {ParamType::ShN, params.popspa_shn_lr}};
+            for (const auto& [type, rate] : learning_rates) {
+                const double expected_rate = type == ParamType::Means
+                                                 ? rate * static_cast<double>(model.get_scene_scale())
+                                                 : static_cast<double>(rate);
+                if (!optimizer.has_param_lr(type) || optimizer.get_param_lr(type) != expected_rate)
+                    throw std::runtime_error("Invalid POPSpa checkpoint: Adam learning rate disagrees");
+                const auto step = optimizer.get_step_count(type);
+                // Higher SH coefficients may be inactive during warmup.
+                if (step < 0 || static_cast<uint64_t>(step) > optimizer_age ||
+                    (type != ParamType::ShN && static_cast<uint64_t>(step) != optimizer_age))
+                    throw std::runtime_error("Invalid POPSpa checkpoint: Adam step count disagrees with phase");
+                if (const auto* state = optimizer.get_state(type);
+                    state && type != ParamType::ShN && state->size != rows)
+                    throw std::runtime_error("Invalid POPSpa checkpoint: Adam row count disagrees");
+            }
+        }
+
         [[nodiscard]] lfs::core::SplatTensorAllocator make_checkpoint_tensor_allocator(
             lfs::core::SplatTensorAllocator allocator,
             const std::size_t target_row_capacity) {
@@ -86,7 +167,9 @@ namespace lfs::training {
         const BilateralGrid* bilateral_grid,
         const PPISP* ppisp,
         const PPISPControllerPool* ppisp_controller_pool,
-        const ADMMSparsityOptimizer* sparsity_optimizer) {
+        const ADMMSparsityOptimizer* sparsity_optimizer,
+        const POPSpaController* popspa_controller,
+        const AdamOptimizer* popspa_optimizer) {
         try {
             if (iteration < 0) {
                 return checkpoint_stream_error(
@@ -117,6 +200,16 @@ namespace lfs::training {
             const bool save_sparsity =
                 sparsity_optimizer &&
                 sparsity_optimizer->is_initialized();
+            const bool save_popspa = popspa_controller && popspa_controller->is_initialized();
+            if (save_popspa) {
+                if (save_sparsity || !popspa_optimizer)
+                    throw std::runtime_error("POPSpa checkpoint requires dedicated Adam and excludes legacy sparsity");
+                validate_popspa_checkpoint(*popspa_controller, *popspa_optimizer, params.optimization, model, iteration);
+            } else if (params.optimization.enable_sparsity &&
+                       params.optimization.sparsity_method == lfs::core::param::SparsityMethod::POPSpa &&
+                       (save_sparsity || uint64_t(iteration) > params.optimization.iterations)) {
+                throw std::runtime_error("POPSpa checkpoint is missing initialized controller state");
+            }
             if (save_sparsity) {
                 // The legacy standalone writer used its byte estimate to
                 // validate this invariant before serialization. CKPT is now
@@ -148,6 +241,8 @@ namespace lfs::training {
                     header.flags | CheckpointFlags::HAS_SPARSITY;
 
             const auto header_pos = destination.tellp();
+            if (save_popspa)
+                header.flags = header.flags | CheckpointFlags::HAS_POPSPA;
             if (header_pos == std::streampos(-1)) {
                 return checkpoint_stream_error(
                     lfs::ErrorCode::FailedPrecondition,
@@ -203,6 +298,13 @@ namespace lfs::training {
                 LOG_DEBUG(
                     "Sparsity ADMM state staged: {} rows",
                     sparsity_optimizer->state_size());
+            }
+
+            if (save_popspa) {
+                auto serialized = popspa_controller->serialize(destination);
+                if (!serialized)
+                    return std::move(serialized).error();
+                popspa_optimizer->serialize(destination);
             }
 
             const auto params_pos = destination.tellp();
@@ -317,7 +419,9 @@ namespace lfs::training {
         PPISP* ppisp,
         PPISPControllerPool* ppisp_controller_pool,
         ADMMSparsityOptimizer* sparsity_optimizer,
-        lfs::core::SplatTensorAllocator tensor_allocator) {
+        lfs::core::SplatTensorAllocator tensor_allocator,
+        POPSpaController* popspa_controller,
+        AdamOptimizer* popspa_optimizer) {
         std::ifstream file;
         if (!lfs::core::open_file_for_read(
                 path, std::ios::binary, file)) {
@@ -338,7 +442,8 @@ namespace lfs::training {
             file, file_size, strategy, params, bilateral_grid,
             ppisp, ppisp_controller_pool, sparsity_optimizer,
             std::move(tensor_allocator),
-            lfs::core::path_to_utf8(path));
+            lfs::core::path_to_utf8(path), nullptr,
+            popspa_controller, popspa_optimizer);
     }
 
     CheckpointLoadResult load_checkpoint(
@@ -352,9 +457,13 @@ namespace lfs::training {
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator,
         const std::string_view source_name,
-        lfs::core::SplatData* preloaded_model) {
+        lfs::core::SplatData* preloaded_model,
+        POPSpaController* popspa_controller,
+        AdamOptimizer* popspa_optimizer) {
         try {
             const auto load_started = std::chrono::steady_clock::now();
+            if (bool(popspa_controller) != bool(popspa_optimizer))
+                return std::unexpected("POPSpa checkpoint load requires paired controller and Adam destinations");
             const auto milliseconds = [](const auto begin, const auto end) {
                 return std::chrono::duration<double, std::milli>(end - begin).count();
             };
@@ -393,6 +502,7 @@ namespace lfs::training {
             // Load params from checkpoint up front so strategy internals can be synced before deserialization.
             const auto strategy_state_pos = file.tellg();
             auto loaded_params = params;
+            auto saved_optimization = loaded_params.optimization;
             if (header.params_json_size > 0) {
                 file.seekg(static_cast<std::streamoff>(header.params_json_offset));
                 std::string params_str(header.params_json_size, '\0');
@@ -428,6 +538,7 @@ namespace lfs::training {
                     loaded_params.optimization.bg_color;
 
                 loaded_params = lfs::core::parse_checkpoint_params_json(params_str, std::move(loaded_params));
+                saved_optimization = loaded_params.optimization;
 
                 if (!cli_data_path.empty())
                     loaded_params.dataset.data_path = cli_data_path;
@@ -596,6 +707,39 @@ namespace lfs::training {
                 }
             }
 
+            const bool has_popspa = has_flag(header.flags, CheckpointFlags::HAS_POPSPA);
+            std::unique_ptr<POPSpaController> loaded_popspa;
+            std::unique_ptr<AdamOptimizer> loaded_popspa_optimizer;
+            if (has_popspa) {
+                if (header.params_json_size == 0)
+                    throw std::runtime_error("Invalid POPSpa checkpoint: missing saved parameters");
+                if (saved_optimization.popspa_seed != loaded_params.optimization.popspa_seed ||
+                    saved_optimization.popspa_ssim_weight != loaded_params.optimization.popspa_ssim_weight)
+                    throw std::runtime_error("Invalid POPSpa checkpoint: resume overrides change seed or photometric loss");
+                loaded_popspa = std::make_unique<POPSpaController>();
+                auto parsed = loaded_popspa->deserialize(file);
+                if (!parsed)
+                    throw std::runtime_error(lfs::format_for_developer(parsed.error()));
+                loaded_popspa_optimizer = std::make_unique<AdamOptimizer>(loaded_model, AdamConfig{});
+                loaded_popspa_optimizer->deserialize(file);
+                // Gradients are transient and absent from checkpoint payloads.
+                // Materialize every resident group before the commit so an empty
+                // first view still advances the full Adam state after resume.
+                for (const auto type : AdamOptimizer::all_param_types()) {
+                    if (type == ParamType::ShN && loaded_model.max_sh_coeffs_rest() == 0)
+                        continue;
+                    (void)loaded_popspa_optimizer->get_grad(type);
+                }
+                validate_popspa_checkpoint(*loaded_popspa, *loaded_popspa_optimizer,
+                                           saved_optimization, loaded_model, header.iteration);
+                validate_popspa_checkpoint(*loaded_popspa, *loaded_popspa_optimizer,
+                                           loaded_params.optimization, loaded_model, header.iteration);
+            } else if (loaded_params.optimization.enable_sparsity &&
+                       loaded_params.optimization.sparsity_method == lfs::core::param::SparsityMethod::POPSpa &&
+                       (has_sparsity || uint64_t(header.iteration) > loaded_params.optimization.iterations)) {
+                throw std::runtime_error("Invalid POPSpa checkpoint: missing controller state");
+            }
+
             // Reserve capacity for densification after the checkpoint params are resolved.
             if (header.params_json_size > 0) {
                 const auto serialized_state_end = file.tellg();
@@ -652,6 +796,13 @@ namespace lfs::training {
                 LOG_INFO("Sparsity ADMM state restored: {} rows", sparsity_optimizer->state_size());
             } else if (sparsity_optimizer && !has_sparsity) {
                 sparsity_optimizer->reset();
+            }
+
+            if (popspa_controller && loaded_popspa) {
+                popspa_controller->adopt_checkpoint_state(*loaded_popspa);
+                popspa_optimizer->adopt_checkpoint_state(*loaded_popspa_optimizer);
+            } else if (popspa_controller) {
+                popspa_controller->reset();
             }
 
             LOG_INFO("Checkpoint loaded: {} ({} Gaussians, iter {})",

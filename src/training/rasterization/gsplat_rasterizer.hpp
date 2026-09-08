@@ -6,6 +6,7 @@
 
 #include "core/camera.hpp"
 #include "core/cuda/memory_arena.hpp"
+#include "core/error.hpp"
 #include "core/splat_data.hpp"
 #include "gsplat/Common.h"
 #include "optimizer/adam_optimizer.hpp"
@@ -105,6 +106,10 @@ namespace lfs::training {
         // Background image for per-pixel blending (optional, empty = use bg_color)
         lfs::core::Tensor bg_image;
     };
+
+    // Accumulates FP64 removal energy into aligned CUDA UInt8 [N, sizeof(double)] storage.
+    // The caller zeros these bytes once; each call adds a view without clearing them.
+    lfs::Status gsplat_accumulate_pop_scores(const GsplatRasterizeContext& ctx, lfs::core::Tensor& scores);
 
     // Forward pass with optional tiling (tile_width/height=0 = full image)
     // bg_image is optional - if provided, uses per-pixel background blending instead of solid color

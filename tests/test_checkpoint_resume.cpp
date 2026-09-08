@@ -16,6 +16,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -28,6 +29,7 @@
 #include "core/checkpoint_format.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/event_bridge/control_boundary.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -44,6 +46,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "licht_test_support.hpp"
 #include "training/checkpoint.hpp"
+#include "training/components/popspa_controller.hpp"
 #include "training/components/sparsity_optimizer.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fastgs/rasterization/include/rasterization_api.h"
@@ -54,6 +57,10 @@
 
 namespace lfs::training {
     struct TrainerRetryTestAccess {
+        static lfs::core::param::OptimizationParameters runtime_optimization_params(const Trainer& trainer) {
+            return trainer.get_runtime_optimization_params();
+        }
+
         static bool should_retry(const lfs::Error& error, const unsigned attempts) {
             const Trainer::MutationStamp stamp{
                 .iteration = 1,
@@ -76,6 +83,8 @@ namespace lfs::training {
 } // namespace lfs::training
 
 namespace {
+
+    void add_checkpoint_test_camera(lfs::core::Scene& scene);
 
     lfs::Error make_retry_test_error(const lfs::ErrorCode code) {
         return lfs::make_error(lfs::ErrorInit{
@@ -103,6 +112,29 @@ namespace {
 
         const auto invalid = make_retry_test_error(lfs::ErrorCode::InvalidArgument);
         EXPECT_FALSE(lfs::training::TrainerRetryTestAccess::should_retry(invalid, 1));
+    }
+
+    TEST(TrainerPOPSpaTest, KeepsRegularStrategyHorizonAndLegacyAdmmSchedule) {
+        lfs::core::Scene scene;
+        add_checkpoint_test_camera(scene);
+        lfs::training::Trainer trainer(scene);
+        auto params = trainer.getParams();
+        params.optimization = lfs::core::param::OptimizationParameters::mrnf_defaults();
+        params.optimization.iterations = 30000;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        params.optimization.popspa_sparsify_steps = 5000;
+        params.optimization.popspa_refine_steps = 5000;
+        ASSERT_TRUE(params.validate().empty()) << params.validate();
+        trainer.setParams(params);
+        EXPECT_EQ(trainer.get_total_iterations(), 40000);
+        EXPECT_EQ(lfs::training::TrainerRetryTestAccess::runtime_optimization_params(trainer).iterations, 30000);
+
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::OpacityADMM;
+        params.optimization.sparsify_steps = 15000;
+        trainer.setParams(params);
+        EXPECT_EQ(trainer.get_total_iterations(), 45000);
+        EXPECT_EQ(lfs::training::TrainerRetryTestAccess::runtime_optimization_params(trainer).iterations, 45000);
     }
 
     TEST(TrainerRetrySemantics, InvalidDimensionsAreNotResourceExhaustion) {
@@ -472,6 +504,17 @@ namespace {
         EXPECT_NE(
             result.error().find("Unsupported version: " + std::to_string(header.version)),
             std::string::npos);
+    }
+
+    TEST(CheckpointVersionTest, POPSpaRequiresVersionFourAndExcludesLegacySparsity) {
+        lfs::core::CheckpointHeader header;
+        header.version = 3;
+        header.flags = lfs::core::CheckpointFlags::HAS_POPSPA;
+        EXPECT_FALSE(lfs::core::validate_checkpoint_header(header, sizeof(header)).has_value());
+        header.version = 4;
+        EXPECT_TRUE(lfs::core::validate_checkpoint_header(header, sizeof(header)).has_value());
+        header.flags = header.flags | lfs::core::CheckpointFlags::HAS_SPARSITY;
+        EXPECT_FALSE(lfs::core::validate_checkpoint_header(header, sizeof(header)).has_value());
     }
 
     TEST(CheckpointVersionTest, UnknownFlagsAreRejectedForCurrentVersion) {
@@ -1804,6 +1847,159 @@ namespace {
         }
     };
 
+    TEST_F(ProjectCheckpointTrainerInstall, POPSpaMidPhaseSnapshotSurvivesRegularPhaseSave) {
+        const auto dataset = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        if (!std::filesystem::is_directory(dataset / TEST_IMAGES))
+            GTEST_SKIP() << "bicycle dataset is required for the real Trainer snapshot contract";
+        const auto output = std::filesystem::temp_directory_path() /
+                            std::format("lfs_popspa_mid_snapshot_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        std::filesystem::create_directories(output);
+        const auto mid_path = output / "mid.licht";
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.max_width = 64;
+        params.dataset.output_path = output;
+        params.optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        params.optimization.iterations = 2;
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 1000;
+        params.optimization.start_refine = 0;
+        params.optimization.stop_refine = 0;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        params.optimization.popspa_first_prune_count = 800;
+        params.optimization.popspa_target_count = 600;
+        params.optimization.popspa_sparsify_steps = 2;
+        params.optimization.popspa_refine_steps = 2;
+        params.optimization.save_steps = {6};
+        params.save_project_at_iteration = 3;
+        params.save_project_path = mid_path;
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized) << initialized.error();
+            lfs::training::grant_headless_project_saves(trainer, params);
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 6);
+            trainer.shutdown();
+        }
+        ASSERT_TRUE(std::filesystem::is_regular_file(mid_path));
+        auto document = lfs::io::project::ProjectDocument::open(mid_path);
+        ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+        const auto ids = document->checkpoint_uuids();
+        ASSERT_EQ(ids.size(), 1u);
+        const auto* checkpoint = document->find_checkpoint(ids.front());
+        ASSERT_NE(checkpoint, nullptr);
+        std::optional<int> captured_iteration;
+        ASSERT_TRUE(checkpoint->visit_stream([&](std::istream& stream, uint64_t bytes) -> lfs::Result<void> {
+            auto header = lfs::core::load_checkpoint_header(stream, bytes);
+            EXPECT_TRUE(header.has_value());
+            if (header)
+                captured_iteration = header->iteration;
+            return {};
+        }));
+        EXPECT_EQ(captured_iteration, 3);
+        std::error_code ignored;
+        std::filesystem::remove_all(output, ignored);
+    }
+
+    TEST_F(ProjectCheckpointTrainerInstall, POPSpaExplicitRequestAndCLISnapshotBothCaptureTargetIteration) {
+        const auto dataset = std::filesystem::path(TEST_DATA_DIR) / "bicycle";
+        if (!std::filesystem::is_directory(dataset / TEST_IMAGES))
+            GTEST_SKIP() << "bicycle dataset is required for the real Trainer snapshot contract";
+        const auto output = std::filesystem::temp_directory_path() /
+                            std::format("lfs_popspa_interleaved_snapshot_{}", std::chrono::steady_clock::now().time_since_epoch().count());
+        std::filesystem::create_directories(output);
+        const auto mid_path = output / "mid.licht";
+        const auto explicit_path = output / "explicit.licht";
+        std::uint64_t explicit_request_id = 0;
+        lfs::core::param::TrainingParameters params;
+        params.dataset.data_path = dataset;
+        params.dataset.images = TEST_IMAGES;
+        params.dataset.max_width = 64;
+        params.dataset.output_path = output;
+        params.optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
+        params.optimization.iterations = 2;
+        params.optimization.sh_degree = 0;
+        params.optimization.headless = true;
+        params.optimization.max_cap = 1000;
+        params.optimization.start_refine = 0;
+        params.optimization.stop_refine = 0;
+        params.optimization.enable_sparsity = true;
+        params.optimization.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        params.optimization.popspa_first_prune_count = 800;
+        params.optimization.popspa_target_count = 600;
+        params.optimization.popspa_sparsify_steps = 2;
+        params.optimization.popspa_refine_steps = 2;
+        params.optimization.save_steps = {6};
+        params.save_project_at_iteration = 3;
+        params.save_project_path = mid_path;
+        {
+            lfs::core::Scene scene;
+            ASSERT_TRUE(lfs::training::loadTrainingDataIntoScene(params, scene));
+            ASSERT_TRUE(lfs::training::initializeTrainingModel(params, scene));
+            lfs::training::Trainer trainer(scene);
+            const auto initialized = trainer.initialize(params);
+            ASSERT_TRUE(initialized) << initialized.error();
+            lfs::training::grant_headless_project_saves(trainer, params);
+            auto& boundary = lfs::training::ControlBoundary::instance();
+            const auto callback_id = boundary.register_callback(
+                lfs::training::ControlHook::PostStep,
+                [&](const lfs::training::HookContext& ctx) {
+                    if (ctx.trainer == &trainer && ctx.iteration == 2 && explicit_request_id == 0)
+                        explicit_request_id = trainer.request_project_save(explicit_path);
+                });
+            struct CallbackGuard {
+                std::size_t id;
+                ~CallbackGuard() {
+                    lfs::training::ControlBoundary::instance().unregister_callback(
+                        lfs::training::ControlHook::PostStep, id);
+                }
+            } callback_guard{callback_id};
+            ASSERT_NE(callback_id, 0u);
+            const auto trained = trainer.train();
+            ASSERT_TRUE(trained) << lfs::format_for_developer(trained.error());
+            EXPECT_EQ(trainer.get_current_iteration(), 6);
+            trainer.shutdown();
+        }
+        ASSERT_NE(explicit_request_id, 0u);
+        std::vector<std::string> captured_uuids;
+        for (const auto& path : {explicit_path, mid_path}) {
+            ASSERT_TRUE(std::filesystem::is_regular_file(path)) << path;
+            auto document = lfs::io::project::ProjectDocument::open(path);
+            ASSERT_TRUE(document) << lfs::format_for_developer(document.error());
+            bool found_target = false;
+            for (const auto& id : document->checkpoint_uuids()) {
+                const auto* checkpoint = document->find_checkpoint(id);
+                ASSERT_NE(checkpoint, nullptr);
+                std::optional<int> captured_iteration;
+                ASSERT_TRUE(checkpoint->visit_stream([&](std::istream& stream, uint64_t bytes) -> lfs::Result<void> {
+                    auto header = lfs::core::load_checkpoint_header(stream, bytes);
+                    EXPECT_TRUE(header.has_value());
+                    if (header)
+                        captured_iteration = header->iteration;
+                    return {};
+                }));
+                if (captured_iteration == 3) {
+                    found_target = true;
+                    captured_uuids.push_back(id.to_string());
+                    break;
+                }
+            }
+            EXPECT_TRUE(found_target) << path;
+        }
+        ASSERT_EQ(captured_uuids.size(), 2u);
+        EXPECT_NE(captured_uuids[0], captured_uuids[1]);
+        std::error_code ignored;
+        std::filesystem::remove_all(output, ignored);
+    }
+
     TEST_F(ProjectCheckpointTrainerInstall,
            SharedHelperRestoresTrainerAndGaussianCount) {
         const auto output_path =
@@ -2781,6 +2977,161 @@ namespace {
         EXPECT_LT(s2, s1 + s1 / 2);
 
         std::filesystem::remove_all(output_path, ec);
+    }
+
+    lfs::training::AdamConfig popspa_test_adam_config(const lfs::core::param::OptimizationParameters& p, float scene_scale) {
+        lfs::training::AdamConfig config;
+        config.param_lrs = {{"means", p.popspa_means_lr * static_cast<double>(scene_scale)}, {"scaling", p.popspa_scales_lr}, {"rotation", p.popspa_quaternions_lr}, {"opacity", p.popspa_opacities_lr}, {"sh0", p.popspa_sh0_lr}, {"shN", p.popspa_shn_lr}};
+        return config;
+    }
+
+    TEST(CheckpointPOPSpaTest, EveryPhaseRoundTripsAndRejectsIncoherentIterationTransactionally) {
+        using namespace lfs::training;
+        lfs::core::param::TrainingParameters params;
+        auto& p = params.optimization;
+        p.strategy = "mcmc";
+        p.iterations = 2000;
+        p.max_cap = 4;
+        p.enable_sparsity = true;
+        p.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        p.popspa_target_count = 4;
+        p.popspa_first_prune_count = 4;
+        p.popspa_sparsify_steps = 2;
+        p.popspa_refine_steps = 2;
+        p.popspa_projection_interval = 1;
+        auto model = make_checkpoint_test_splat(4, lfs::core::Device::CUDA);
+        model->set_scene_scale(2.5f);
+        MCMC strategy(*model);
+        POPSpaController controller;
+        POPSpaController::Config config;
+        config.target_count = 4;
+        config.first_prune_count = 4;
+        config.sparsify_steps = 2;
+        config.refine_steps = 2;
+        config.projection_interval = 1;
+        ASSERT_TRUE(controller.initialize(config, model->opacity_raw(), 2).has_value());
+        auto optimizer = std::make_unique<AdamOptimizer>(*model, popspa_test_adam_config(p, model->get_scene_scale()));
+        optimizer->allocate_gradients();
+        int iteration = static_cast<int>(p.iterations);
+        std::set<POPSpaPhase> observed;
+        for (int guard = 0; guard < 20; ++guard) {
+            observed.insert(controller.phase());
+            std::ostringstream output(std::ios::binary);
+            auto serialized = serialize_checkpoint(output, iteration, strategy, params,
+                                                   nullptr, nullptr, nullptr, nullptr, &controller, optimizer.get());
+            ASSERT_TRUE(serialized.has_value()) << lfs::format_for_developer(serialized.error());
+            EXPECT_TRUE(lfs::core::has_flag(serialized->header.flags, lfs::core::CheckpointFlags::HAS_POPSPA));
+            auto target_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA);
+            MCMC target_strategy(*target_model);
+            POPSpaController target_controller;
+            AdamOptimizer target_optimizer(*target_model, AdamConfig{});
+            auto target_params = params;
+            std::istringstream input(output.str(), std::ios::binary);
+            const auto loaded = load_checkpoint(input, output.str().size(), target_strategy, target_params,
+                                                nullptr, nullptr, nullptr, nullptr, {}, "POPSpa test", nullptr,
+                                                &target_controller, &target_optimizer);
+            ASSERT_TRUE(loaded.has_value()) << loaded.error();
+            EXPECT_EQ(*loaded, iteration);
+            EXPECT_EQ(target_controller.phase(), controller.phase());
+            EXPECT_EQ(target_controller.phase_step(), controller.phase_step());
+            EXPECT_EQ(target_controller.score_view(), controller.score_view());
+            EXPECT_EQ(tensor_fingerprint(target_controller.proxy()), tensor_fingerprint(controller.proxy()));
+            EXPECT_EQ(tensor_fingerprint(target_controller.dual()), tensor_fingerprint(controller.dual()));
+            EXPECT_EQ(tensor_fingerprint(target_model->means()), tensor_fingerprint(model->means()));
+            EXPECT_EQ(tensor_fingerprint(target_model->opacity_raw()), tensor_fingerprint(model->opacity_raw()));
+            for (const auto type : AdamOptimizer::all_param_types()) {
+                EXPECT_EQ(target_optimizer.get_step_count(type), optimizer->get_step_count(type));
+                if (type == ParamType::ShN && model->max_sh_coeffs_rest() == 0)
+                    continue;
+                const auto* source_state = optimizer->get_state(type);
+                const auto* restored_state = target_optimizer.get_state(type);
+                ASSERT_NE(source_state, nullptr);
+                ASSERT_NE(restored_state, nullptr);
+                EXPECT_EQ(tensor_fingerprint(source_state->exp_avg), tensor_fingerprint(restored_state->exp_avg));
+                EXPECT_EQ(tensor_fingerprint(source_state->joint_bounds), tensor_fingerprint(restored_state->joint_bounds));
+            }
+
+            // A valid payload with an incoherent completed-iteration header must not
+            // alter the destination's model, params, controller, or optimizer.
+            std::string invalid = output.str();
+            auto bad_header = serialized->header;
+            ++bad_header.iteration;
+            std::memcpy(invalid.data(), &bad_header, sizeof(bad_header));
+            const auto before = tensor_fingerprint(target_model->means());
+            const auto old_phase = target_controller.phase();
+            const auto old_steps = target_optimizer.get_step_count(ParamType::Means);
+            std::istringstream corrupt(invalid, std::ios::binary);
+            EXPECT_FALSE(load_checkpoint(corrupt, invalid.size(), target_strategy, target_params,
+                                         nullptr, nullptr, nullptr, nullptr, {}, "invalid POPSpa", nullptr,
+                                         &target_controller, &target_optimizer)
+                             .has_value());
+            EXPECT_EQ(tensor_fingerprint(target_model->means()), before);
+            EXPECT_EQ(target_controller.phase(), old_phase);
+            EXPECT_EQ(target_optimizer.get_step_count(ParamType::Means), old_steps);
+            EXPECT_EQ(target_params.optimization.iterations, p.iterations);
+
+            // Model-only readers still consume and validate both component blocks.
+            auto consume_model = make_checkpoint_test_splat(1, lfs::core::Device::CUDA);
+            MCMC consume_strategy(*consume_model);
+            auto consume_params = params;
+            std::istringstream consume(output.str(), std::ios::binary);
+            EXPECT_TRUE(load_checkpoint(consume, output.str().size(), consume_strategy, consume_params,
+                                        nullptr, nullptr, nullptr, nullptr)
+                            .has_value());
+            if (controller.phase() == POPSpaPhase::Complete)
+                break;
+            if (controller.phase() == POPSpaPhase::FirstScore || controller.phase() == POPSpaPhase::SecondScore) {
+                ASSERT_TRUE(controller.finish_score_view().has_value());
+            } else if (controller.phase() == POPSpaPhase::FirstPrune || controller.phase() == POPSpaPhase::FinalPrune) {
+                ASSERT_TRUE(controller.accept_prune(model->opacity_raw()).has_value());
+                optimizer = std::make_unique<AdamOptimizer>(*model, popspa_test_adam_config(p, model->get_scene_scale()));
+                optimizer->allocate_gradients();
+            } else {
+                optimizer->zero_grad(iteration + 1);
+                target_optimizer.zero_grad(iteration + 1);
+                for (const auto type : AdamOptimizer::all_param_types()) {
+                    if (type == ParamType::ShN && model->max_sh_coeffs_rest() == 0)
+                        continue;
+                    optimizer->get_grad(type).zero_();
+                }
+                // Alternate a visible and an empty view. The empty resume step
+                // must use restored momentum and advance every resident group,
+                // without backward requesting any gradient buffers.
+                if (controller.phase_step() == 0) {
+                    optimizer->get_grad(ParamType::Means).fill_(0.01f);
+                    target_optimizer.get_grad(ParamType::Means).fill_(0.01f);
+                    optimizer->get_grad(ParamType::Opacity).fill_(0.1f);
+                    target_optimizer.get_grad(ParamType::Opacity).fill_(0.1f);
+                }
+                ASSERT_TRUE(controller.after_backward(model->opacity_raw()).has_value());
+                ASSERT_TRUE(target_controller.after_backward(target_model->opacity_raw()).has_value());
+                optimizer->step(iteration + 1, false);
+                // Intentionally launch back-to-back: the native Adam batch table
+                // must retain each optimizer's entries until its GPU work finishes.
+                target_optimizer.step(iteration + 1, false);
+                ASSERT_TRUE(controller.finish_optimization_step().has_value());
+                ASSERT_TRUE(target_controller.finish_optimization_step().has_value());
+                EXPECT_EQ(tensor_fingerprint(model->means()), tensor_fingerprint(target_model->means()));
+                EXPECT_EQ(tensor_fingerprint(model->opacity_raw()), tensor_fingerprint(target_model->opacity_raw()));
+                EXPECT_EQ(tensor_fingerprint(controller.dual()), tensor_fingerprint(target_controller.dual()));
+                ++iteration;
+            }
+        }
+        EXPECT_EQ(observed.size(), 7u);
+    }
+
+    TEST(CheckpointPOPSpaTest, TensorV1HeaderPaddingIsDeterministic) {
+        const auto tensor = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::CPU);
+        std::ostringstream first(std::ios::binary), second(std::ios::binary);
+        first << tensor;
+        second << tensor;
+        const auto bytes = first.str();
+        ASSERT_GE(bytes.size(), sizeof(lfs::core::TensorFileHeader));
+        EXPECT_EQ(bytes, second.str());
+        constexpr size_t padding_begin = offsetof(lfs::core::TensorFileHeader, rank) + sizeof(uint16_t);
+        constexpr size_t padding_end = offsetof(lfs::core::TensorFileHeader, numel);
+        for (size_t i = padding_begin; i < padding_end; ++i)
+            EXPECT_EQ(static_cast<unsigned char>(bytes[i]), 0u) << "header padding byte " << i;
     }
 
 } // namespace

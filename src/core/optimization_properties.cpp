@@ -745,6 +745,155 @@ namespace lfs::core::param {
 
             // Sparsity
             .all_strategies()
+            .enum_prop(&OptimizationParameters::sparsity_method,
+                       "sparsity_method", "Sparsity Method", d.sparsity_method,
+                       {{"OpacityADMM", SparsityMethod::OpacityADMM, "training.options.sparsity.opacity_admm", "opacity_admm"},
+                        {"POPSpa", SparsityMethod::POPSpa, "training.options.sparsity.popspa", "popspa"}},
+                       "Post-training sparsity method")
+            .locale("training_params.sparsity_method")
+            .all_strategies()
+            .int_prop(&OptimizationParameters::popspa_target_count,
+                      "popspa_target_count", "Target Gaussians", d.popspa_target_count, 1, 2147483647,
+                      "Exact final Gaussian count.")
+            .locale("training_params.popspa_target_count")
+            .tooltip("training.tooltip.popspa_target_count")
+            .precision(0)
+            .ui_step(1000)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::popspa_first_prune_count,
+                      "popspa_first_prune_count", "First Prune Count", d.popspa_first_prune_count, 0, 2147483647,
+                      "Intermediate Gaussian count; zero chooses the geometric-mean budget automatically.")
+            .locale("training_params.popspa_first_prune_count")
+            .tooltip("training.tooltip.popspa_first_prune_count")
+            .precision(0)
+            .ui_step(1000)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::popspa_sparsify_steps,
+                      "popspa_sparsify_steps", "Sparsify Steps", d.popspa_sparsify_steps, 0, 2147483647,
+                      "GaussianSpa and shape optimization steps after the first prune.")
+            .locale("training_params.popspa_sparsify_steps")
+            .tooltip("training.tooltip.popspa_sparsify_steps")
+            .precision(0)
+            .ui_step(100)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::popspa_refine_steps,
+                      "popspa_refine_steps", "Recovery Steps", d.popspa_refine_steps, 0, 2147483647,
+                      "Photometric recovery steps after the final prune.")
+            .locale("training_params.popspa_refine_steps")
+            .tooltip("training.tooltip.popspa_refine_steps")
+            .precision(0)
+            .ui_step(100)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::popspa_projection_interval,
+                      "popspa_projection_interval", "Projection Interval", d.popspa_projection_interval, 1, 2147483647,
+                      "Number of sparse steps between projection and dual updates.")
+            .locale("training_params.popspa_projection_interval")
+            .tooltip("training.tooltip.popspa_projection_interval")
+            .precision(0)
+            .ui_step(1)
+            .all_strategies()
+            .int_prop(&OptimizationParameters::popspa_seed,
+                      "popspa_seed", "Seed", d.popspa_seed, 0, 2147483647,
+                      "Random seed for POPSpa optimization.")
+            .locale("training_params.popspa_seed")
+            .tooltip("training.tooltip.popspa_seed")
+            .precision(0)
+            .ui_step(1)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_rho,
+                        "popspa_rho", "ADMM Penalty", d.popspa_rho, 1e-12f, 1.0f,
+                        "GaussianSpa penalty coefficient.")
+            .locale("training_params.popspa_rho")
+            .tooltip("training.tooltip.popspa_rho")
+            .precision(8)
+            .ui_step(0.00005)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_erank_weight,
+                        "popspa_erank_weight", "Effective Rank Weight", d.popspa_erank_weight, 0.0f, 100.0f,
+                        "Weight of the effective-rank shape regularizer.")
+            .locale("training_params.popspa_erank_weight")
+            .tooltip("training.tooltip.popspa_erank_weight")
+            .precision(8)
+            .ui_step(0.001)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_thin_scale_weight,
+                        "popspa_thin_scale_weight", "Thin Scale Weight", d.popspa_thin_scale_weight, 0.0f, 100.0f,
+                        "Weight of the thin-scale shape regularizer.")
+            .locale("training_params.popspa_thin_scale_weight")
+            .tooltip("training.tooltip.popspa_thin_scale_weight")
+            .precision(8)
+            .ui_step(0.1)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_erank_epsilon,
+                        "popspa_erank_epsilon", "Effective Rank Epsilon", d.popspa_erank_epsilon, 1e-12f, 1.0f,
+                        "Positive numerical epsilon for effective-rank normalization.")
+            .locale("training_params.popspa_erank_epsilon")
+            .tooltip("training.tooltip.popspa_erank_epsilon")
+            .precision(8)
+            .ui_step(1e-8)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_means_lr,
+                        "popspa_means_lr", "Position Learning Rate", d.popspa_means_lr, 0.0f, 1.0f,
+                        "Position learning rate for POPSpa optimization.")
+            .locale("training_params.popspa_means_lr")
+            .tooltip("training.tooltip.popspa_means_lr")
+            .precision(8)
+            .ui_step(1.6e-7)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_scales_lr,
+                        "popspa_scales_lr", "Scale Learning Rate", d.popspa_scales_lr, 0.0f, 1.0f,
+                        "Scale learning rate for POPSpa optimization.")
+            .locale("training_params.popspa_scales_lr")
+            .tooltip("training.tooltip.popspa_scales_lr")
+            .precision(8)
+            .ui_step(0.0005)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_opacities_lr,
+                        "popspa_opacities_lr", "Opacity Learning Rate", d.popspa_opacities_lr, 0.0f, 1.0f,
+                        "Opacity learning rate for POPSpa optimization.")
+            .locale("training_params.popspa_opacities_lr")
+            .tooltip("training.tooltip.popspa_opacities_lr")
+            .precision(8)
+            .ui_step(0.005)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_quaternions_lr,
+                        "popspa_quaternions_lr", "Rotation Learning Rate", d.popspa_quaternions_lr, 0.0f, 1.0f,
+                        "Quaternion learning rate for POPSpa optimization.")
+            .locale("training_params.popspa_quaternions_lr")
+            .tooltip("training.tooltip.popspa_quaternions_lr")
+            .precision(8)
+            .ui_step(0.0001)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_sh0_lr,
+                        "popspa_sh0_lr", "Base Color Learning Rate", d.popspa_sh0_lr, 0.0f, 1.0f,
+                        "Degree-zero spherical-harmonic learning rate.")
+            .locale("training_params.popspa_sh0_lr")
+            .tooltip("training.tooltip.popspa_sh0_lr")
+            .precision(8)
+            .ui_step(0.00025)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_shn_lr,
+                        "popspa_shn_lr", "Higher Color Learning Rate", d.popspa_shn_lr, 0.0f, 1.0f,
+                        "Higher-degree spherical-harmonic learning rate.")
+            .locale("training_params.popspa_shn_lr")
+            .tooltip("training.tooltip.popspa_shn_lr")
+            .precision(8)
+            .ui_step(0.0000125)
+            .flags(PROP_ADVANCED)
+            .all_strategies()
+            .float_prop(&OptimizationParameters::popspa_ssim_weight,
+                        "popspa_ssim_weight", "SSIM Weight", d.popspa_ssim_weight, 0.0f, 1.0f,
+                        "SSIM fraction in the POPSpa photometric loss; the remainder uses L1.")
+            .locale("training_params.popspa_ssim_weight")
+            .tooltip("training.tooltip.popspa_ssim_weight")
+            .precision(8)
+            .ui_step(0.02)
+            .all_strategies()
             .bool_prop(&OptimizationParameters::enable_sparsity,
                        "enable_sparsity", "Enable Sparsity", d.enable_sparsity,
                        "Enable sparsity optimization")

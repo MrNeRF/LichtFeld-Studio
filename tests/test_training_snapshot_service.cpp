@@ -12,6 +12,7 @@
 #include "lfs/training/sh_value_codec.hpp"
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/checkpoint.hpp"
+#include "training/components/popspa_controller.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/project_snapshot_chapters.hpp"
 #include "training/strategies/mcmc.hpp"
@@ -1024,6 +1025,57 @@ namespace {
             metrics.regression_percent, 9.0, 1e-12);
         EXPECT_TRUE(metrics.gate_evaluated);
         EXPECT_TRUE(metrics.within_gate);
+    }
+
+    TEST(TrainingSnapshotServiceTest, POPSpaControllerAndDedicatedAdamUseSnapshotStaging) {
+        if (!cuda_device_available())
+            GTEST_SKIP() << "CUDA device unavailable";
+        const ScopedEnvironmentVariable host_memory(
+            "LFS_TRAINING_SNAPSHOT_HOST_MEMORY_AVAILABLE_BYTES",
+            std::to_string(64ull * 1024 * 1024 * 1024));
+        auto model = make_snapshot_test_splat(4);
+        auto params = make_snapshot_test_params(4);
+        auto& p = params.optimization;
+        p.enable_sparsity = true;
+        p.sparsity_method = lfs::core::param::SparsityMethod::POPSpa;
+        p.popspa_target_count = 4;
+        p.popspa_first_prune_count = 4;
+        lfs::training::MCMC strategy(*model);
+        lfs::training::POPSpaController controller;
+        lfs::training::POPSpaController::Config config;
+        config.target_count = 4;
+        config.first_prune_count = 4;
+        ASSERT_TRUE(controller.initialize(config, model->opacity_raw(), 2).has_value());
+        lfs::training::AdamConfig adam_config;
+        adam_config.param_lrs = {{"means", p.popspa_means_lr}, {"scaling", p.popspa_scales_lr}, {"rotation", p.popspa_quaternions_lr}, {"opacity", p.popspa_opacities_lr}, {"sh0", p.popspa_sh0_lr}, {"shN", p.popspa_shn_lr}};
+        lfs::training::AdamOptimizer optimizer(*model, adam_config);
+        optimizer.allocate_gradients();
+        const int iteration = static_cast<int>(p.iterations);
+        std::ostringstream reference(std::ios::binary);
+        ASSERT_TRUE(lfs::training::serialize_checkpoint(reference, iteration, strategy, params,
+                                                        nullptr, nullptr, nullptr, nullptr, &controller, &optimizer)
+                        .has_value());
+        const auto bytes = reference.str();
+        lfs::training::TrainingSnapshotService service({.ring_slots = 2, .band_bytes = 64 * 1024, .calibration_bytes = 64, .calibration_iterations = 1});
+        const lfs::training::TrainingSnapshotCaptureRequest request{
+            .iteration = iteration,
+            .strategy = strategy,
+            .params = params,
+            .popspa_controller = &controller,
+            .popspa_optimizer = &optimizer};
+        ASSERT_TRUE(service.initialize(request).has_value());
+        auto prepared = service.prepare(request);
+        ASSERT_TRUE(prepared.has_value()) << lfs::format_for_developer(prepared.error());
+        EXPECT_EQ(prepared->checkpoint_bytes(), bytes.size());
+        auto pending = service.capture(std::move(*prepared), request);
+        ASSERT_TRUE(pending.has_value()) << lfs::format_for_developer(pending.error());
+        model->opacity_raw().fill_(3.0f);
+        ASSERT_TRUE(controller.finish_score_view().has_value());
+        auto captured = pending->wait();
+        ASSERT_TRUE(captured.has_value()) << lfs::format_for_developer(captured.error());
+        ASSERT_EQ(captured->checkpoint_bytes->size(), bytes.size());
+        EXPECT_EQ(std::memcmp(captured->checkpoint_bytes->data(), bytes.data(), bytes.size()), 0);
+        EXPECT_TRUE(captured->metrics.consistency_proven);
     }
 
 } // namespace

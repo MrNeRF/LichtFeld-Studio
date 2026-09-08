@@ -1914,7 +1914,8 @@ namespace lfs::training {
                     request.strategy, request.params,
                     request.bilateral_grid, request.ppisp,
                     request.ppisp_controller_pool,
-                    request.sparsity_optimizer);
+                    request.sparsity_optimizer,
+                    request.popspa_controller, request.popspa_optimizer);
                 if (!serialized) {
                     return lfs::Status::failure(
                         std::move(serialized)
@@ -2008,7 +2009,8 @@ namespace lfs::training {
                 request.strategy, request.params,
                 request.bilateral_grid, request.ppisp,
                 request.ppisp_controller_pool,
-                request.sparsity_optimizer);
+                request.sparsity_optimizer,
+                request.popspa_controller, request.popspa_optimizer);
             if (!serialized) {
                 return std::move(serialized)
                     .error()
@@ -2286,7 +2288,9 @@ namespace lfs::training {
                         request
                             .ppisp_controller_pool,
                         request
-                            .sparsity_optimizer);
+                            .sparsity_optimizer,
+                        request.popspa_controller,
+                        request.popspa_optimizer);
                 if (!serialized) {
                     const auto& error =
                         serialized.error();
