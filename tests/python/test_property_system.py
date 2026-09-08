@@ -42,6 +42,8 @@ class TestOptimizationParams:
             params.gut = False
             assert params.raster_backend == "3dgs"
             assert set(params.backend_capabilities.values()) == {"supported"}
+            params.raster_backend = "3dgs"
+            assert params.gut is False
             params.set("raster_backend", "3dgut")
             assert params.gut is True
             with pytest.raises(ValueError, match="Unknown training raster_backend"):

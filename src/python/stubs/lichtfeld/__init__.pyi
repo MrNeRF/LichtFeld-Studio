@@ -430,10 +430,6 @@ def trainer_eta_seconds() -> float:
 def trainer_strategy_type() -> str:
     """Get training strategy type (mcmc, default, etc.)"""
 
-def training_backends() -> list[dict[str, object]]:
-    """Available backends and their complete high-level capability maps."""
-
-
 def trainer_is_gut_enabled() -> bool:
     """Check if GUT is enabled"""
 
@@ -1958,6 +1954,9 @@ class BackgroundMode(enum.Enum):
 
     RANDOM = 3
 
+def training_backends() -> list:
+    """Available training backends and their viewer mapping"""
+
 class OptimizationParams:
     def __init__(self) -> None: ...
 
@@ -2216,14 +2215,14 @@ class OptimizationParams:
 
     @property
     def raster_backend(self) -> str:
-        """Training backend: 3dgs or 3dgut; shares storage with legacy gut."""
+        """Training raster backend: 3dgs or 3dgut; shares storage with legacy gut"""
 
     @raster_backend.setter
-    def raster_backend(self, value: str) -> None: ...
+    def raster_backend(self, arg: str, /) -> None: ...
 
     @property
-    def backend_capabilities(self) -> dict[str, str]:
-        """Feature support states: supported or unsupported."""
+    def backend_capabilities(self) -> dict:
+        """Verified capabilities for the selected training backend"""
 
     @property
     def gut(self) -> bool:

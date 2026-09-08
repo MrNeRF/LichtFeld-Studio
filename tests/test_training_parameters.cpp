@@ -643,8 +643,15 @@ namespace {
         EXPECT_EQ(default_backend.raster_backend(), RasterBackendId::ThreeDGS);
         json["raster_backend"] = "future_backend";
         EXPECT_THROW((void)OptimizationParameters::from_json(json), std::invalid_argument);
-        json["raster_backend"] = nullptr;
-        EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::type_error);
+        for (const auto& invalid : {nlohmann::json(nullptr), nlohmann::json(true),
+                                    nlohmann::json(7), nlohmann::json(1.5),
+                                    nlohmann::json::array(), nlohmann::json::object()}) {
+            SCOPED_TRACE(invalid.dump());
+            json["raster_backend"] = invalid;
+            EXPECT_THROW((void)OptimizationParameters::from_json(json), nlohmann::json::type_error);
+        }
+        EXPECT_EQ(parse_training_backend("3dgs"), RasterBackendId::ThreeDGS);
+        EXPECT_EQ(parse_training_backend("3dgut"), RasterBackendId::ThreeDGUT);
         EXPECT_FALSE(parse_training_backend("future_backend").has_value());
         ASSERT_EQ(kTrainingBackends.size(), 2);
         EXPECT_EQ(training_backend_descriptor(RasterBackendId::ThreeDGS).viewer_name, "3dgs");
@@ -689,6 +696,10 @@ namespace {
         };
 
         auto params = baseline;
+        params.undistort = true;
+        expect_non_blocking("undistortion", params);
+
+        params = baseline;
         params.mask_mode = MaskMode::Segment;
         expect_non_blocking("masking and segmentation", params);
 

@@ -144,8 +144,30 @@ TEST(ArgumentParserTest, ExplicitBackendSelectionAndLegacyAlias) {
         apply_explicit_training_overrides(restored, (*parsed)->overrides);
         EXPECT_EQ(restored.optimization.gut, gut);
         const auto combined = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
-        EXPECT_EQ(combined.has_value(), gut);
+        ASSERT_EQ(combined.has_value(), gut);
+        const char* reversed_argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                                       "--strategy", "mcmc", "--gut", "--raster-backend", name};
+        const auto reversed = lfs::core::args::parse_args_and_params(
+            static_cast<int>(std::size(reversed_argv)), reversed_argv);
+        ASSERT_EQ(reversed.has_value(), gut);
+        if (gut) {
+            EXPECT_TRUE((*reversed)->optimization.gut);
+        } else {
+            EXPECT_NE(combined.error().find("Conflicting --gut"), std::string::npos);
+            EXPECT_NE(reversed.error().find("Conflicting --gut"), std::string::npos);
+        }
     }
+}
+
+TEST(ArgumentParserTest, ExplicitGutBackendAcceptsUndistort) {
+    const auto data = make_test_path("lfs_explicit_gut_undistort_data");
+    const auto output = make_test_path("lfs_explicit_gut_undistort_output");
+    const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                          "--strategy", "mcmc", "--raster-backend", "3dgut", "--undistort"};
+    const auto parsed = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.gut);
+    EXPECT_TRUE((*parsed)->optimization.undistort);
 }
 
 TEST(ArgumentParserTest, BackendCliOverrideReplacesConfigAliasesTogether) {
@@ -168,6 +190,35 @@ TEST(ArgumentParserTest, BackendCliOverrideReplacesConfigAliasesTogether) {
     restored.optimization.gut = true;
     apply_explicit_training_overrides(restored, (*parsed)->overrides);
     EXPECT_FALSE(restored.optimization.gut);
+}
+
+TEST(ArgumentParserTest, ConfigBackendDisagreementKeepsLegacySelection) {
+    const auto data = make_test_path("lfs_backend_legacy_config_data");
+    const auto output = make_test_path("lfs_backend_legacy_config_output");
+    const auto config = std::filesystem::path(output) / "backend.json";
+    auto params = lfs::core::param::OptimizationParameters::mcmc_defaults();
+    params.gut = true;
+    auto json = params.to_json();
+    json["raster_backend"] = "3dgs";
+    {
+        std::ofstream file(config);
+        file << json;
+    }
+    const auto config_text = config.string();
+    const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
+                          "--config", config_text.c_str()};
+    const auto legacy = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(legacy.has_value()) << legacy.error();
+    EXPECT_TRUE((*legacy)->optimization.gut);
+
+    json.erase("gut");
+    {
+        std::ofstream file(config);
+        file << json;
+    }
+    const auto named = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(named.has_value()) << named.error();
+    EXPECT_FALSE((*named)->optimization.gut);
 }
 
 TEST(ArgumentParserTest, ViewerBackendSelectionSurvivesParameterDefaults) {

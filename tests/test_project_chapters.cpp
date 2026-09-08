@@ -421,6 +421,11 @@ namespace {
         ASSERT_TRUE(chapter.set_snapshot(snapshot));
         auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
         ASSERT_TRUE(reparsed);
+        const auto persisted = lfs::io::JsonChapterDom::Json::parse(reparsed->dom().dump());
+        EXPECT_EQ(persisted["presets"]["mrnf"]["current"]["raster_backend"], "3dgut");
+        EXPECT_EQ(persisted["presets"]["mrnf"]["current"]["gut"], true);
+        EXPECT_EQ(persisted["presets"]["mrnf"]["session"]["raster_backend"], "3dgs");
+        EXPECT_EQ(persisted["presets"]["mrnf"]["session"]["gut"], false);
         auto restored = reparsed->snapshot();
         ASSERT_TRUE(restored);
         EXPECT_TRUE(restored->mrnf_current.gut);
@@ -443,7 +448,6 @@ namespace {
         ASSERT_TRUE(legacy_snapshot);
         EXPECT_TRUE(legacy_snapshot->mrnf_current.gut);
         EXPECT_FALSE(legacy_snapshot->mrnf_session.gut);
-
     }
 
     TEST(ProjectChapterTest, ParametersMutationRetainsUnknownNestedObjects) {

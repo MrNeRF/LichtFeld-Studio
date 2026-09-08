@@ -56,6 +56,12 @@ result instead of duplicating UI text in the descriptor.
   storage, its value takes precedence if a previous application preserved a stale
   known `raster_backend` field while changing `gut`. Unknown identifiers and
   incorrect JSON types are still errors.
+- This precedence also applies to `--config` JSON. If both fields disagree,
+  `gut` wins and a warning is logged. When editing a config, update both fields
+  consistently or remove `gut` to select solely through `raster_backend`.
+  For example, `{"gut": true, "raster_backend": "3dgs"}` still selects 3DGUT;
+  `{"raster_backend": "3dgs"}` selects 3DGS. An explicit CLI backend selection
+  overrides either valid config after loading it.
 - `--raster-backend 3dgs|3dgut` is additive. `--gut` remains an alias for 3DGUT.
   `--gut --raster-backend 3dgs` is an error, independent of argument order.
 - Explicit CLI selection overrides a valid configuration's backend. Its captured
@@ -90,6 +96,12 @@ and active trainer state. The future RmlUi selector should use the descriptors
 and the existing scene/lifecycle commands rather than mutating active training
 from a parameter setter.
 
+Training and evaluation dispatch use the named identity. The existing viewer
+hand-off in `application.cpp` and `visualizer_impl.cpp`, status-bar label, and
+training panel still consume the compatibility `gut` boolean. These consumers
+must also migrate before a backend beyond the current two can be installed.
+Training and viewer identifiers use the same `3dgs`/`3dgut` vocabulary.
+
 ## Adding another backend later
 
 This is a compatibility step, not runtime backend registration. An additional
@@ -101,14 +113,28 @@ assume that adding a descriptor installs a rasterizer.
 
 ## Verification
 
-After updating the native binaries, run from the repository in the normal
-PowerShell development environment:
+After updating the native binaries, run from the repository with the application's
+runtime libraries on the library search path. The chapter test belongs to
+`lichtfeld_format_tests`, not `lichtfeld_tests`.
 
 ```powershell
-lfsdev
-.\build\tests\lichtfeld_tests.exe --gtest_filter="TrainingParametersTest.BackendIdentityCompatibility:TrainingParametersTest.SupportedThreeDGUTCapabilitiesRemainNonBlocking:TrainingParametersTest.StoredBackendConflictPreservesSettingsButStillRejectsInvalidNumbers:ArgumentParserTest.ExplicitBackendSelectionAndLegacyAlias:ArgumentParserTest.BackendCliOverrideReplacesConfigAliasesTogether:ArgumentParserTest.ViewerBackendSelectionSurvivesParameterDefaults:ProjectChapterTest.TrainingBackendIdentityRoundTripAndCompatibility:ParameterManagerTest.PendingProjectRestoreChangesOnlyRoleQualifiedManagerState" --gtest_color=no
-lfspytest tests/python/test_property_system.py -q -p no:cacheprovider
+.\build\tests\lichtfeld_tests.exe '--gtest_filter=TrainingParametersTest.*:ArgumentParserTest.*Backend*:ArgumentParserTest.Gut*:TrainerConstructionTest.*:CheckpointParamsJsonTest.*:ParameterManagerTest.PendingProjectRestoreChangesOnlyRoleQualifiedManagerState' --gtest_color=no
+.\build\tests\lichtfeld_format_tests.exe '--gtest_filter=ProjectChapterTest.TrainingBackendIdentityRoundTripAndCompatibility' --gtest_color=no
+python -m pytest tests/python/test_property_system.py -q -p no:cacheprovider
 ```
+
+On Linux, with the build's Python module and libraries available:
+
+```sh
+./build/tests/lichtfeld_tests --gtest_filter='TrainingParametersTest.*:ArgumentParserTest.*Backend*:ArgumentParserTest.Gut*:TrainerConstructionTest.*:CheckpointParamsJsonTest.*:ParameterManagerTest.PendingProjectRestoreChangesOnlyRoleQualifiedManagerState'
+./build/tests/lichtfeld_format_tests --gtest_filter='ProjectChapterTest.TrainingBackendIdentityRoundTripAndCompatibility'
+python3 -m pytest tests/python/test_property_system.py -q -p no:cacheprovider
+```
+
+Use the Python interpreter matching the built extension. Local shell helpers
+are not repository prerequisites. After changing native Python bindings,
+generate the committed stubs from the rebuilt module via `refresh_python_stubs`
+and run `check_python_stubs`; do not maintain binding stubs by hand.
 
 Manual checks: open legacy 3DGS and 3DGUT projects/checkpoints, save and reopen
 them, change the backend through Python and the existing panel, and verify a
