@@ -1013,10 +1013,10 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientInterleavedVisibleRo
     }
 
     NormalChannelScene scene;
-    // 8x1 so A and B sit on different pixel centers with several pixels of
-    // gap. Dilation (~0.3) gives ~1.1 px extent, so adjacent pixels would
-    // leak a blend-weight rotation derivative into the FD; pixel 0 vs 7
-    // keeps each splat's supervision on its own pixel-centered sample.
+    // With largest covariance eigenvalue exp(-2), depth 5 and fx = fy = 8,
+    // the projected covariance (including dilation) gives a cutoff radius
+    // below 2.5 px at the 1/255 alpha threshold. Pixels 0 and 7 are therefore
+    // independent, keeping each splat's supervision on its own centered sample.
     scene.width = 8;
     scene.height = 1;
     scene.fx = 8.0f;
@@ -1051,6 +1051,10 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientInterleavedVisibleRo
     rotations.insert(rotations.end(), quat_a.begin(), quat_a.end());
     rotations.insert(rotations.end(), identity.begin(), identity.end());
     rotations.insert(rotations.end(), quat_b.begin(), quat_b.end());
+
+    ASSERT_EQ(scene.means_data.size(), 12u);
+    ASSERT_EQ(scene.scaling_data.size(), 12u);
+    ASSERT_EQ(rotations.size(), 16u);
 
     auto camera = scene.make_camera();
     auto bg = Tensor::zeros({3}, Device::CUDA);

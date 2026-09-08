@@ -331,6 +331,18 @@ namespace fast_lfs::rasterization {
             return base_;
         }
 
+        static size_t align_allocation_size(size_t size) {
+            // The phase slice also contains CUB workspaces whose contract is
+            // 256-byte alignment.  Every suballocation must therefore keep
+            // the cursor on that boundary; aligning only the arena growth
+            // and the workspace's relative offset is insufficient when an
+            // earlier phase buffer has an odd 128-byte-sized footprint.
+            constexpr size_t alignment = 256;
+            if (size > std::numeric_limits<size_t>::max() - alignment + 1)
+                throw std::overflow_error("FastGS phase allocation size overflow");
+            return (size + alignment - 1) & ~(alignment - 1);
+        }
+
     private:
         static size_t align_size(size_t size) {
             constexpr size_t alignment = 256;
@@ -367,18 +379,6 @@ namespace fast_lfs::rasterization {
             char* result = base_ + cursor_;
             cursor_ += aligned;
             return result;
-        }
-
-        static size_t align_allocation_size(size_t size) {
-            // The phase slice also contains CUB workspaces whose contract is
-            // 256-byte alignment.  Every suballocation must therefore keep
-            // the cursor on that boundary; aligning only the arena growth
-            // and the workspace's relative offset is insufficient when an
-            // earlier phase buffer has an odd 128-byte-sized footprint.
-            constexpr size_t alignment = 256;
-            if (size > std::numeric_limits<size_t>::max() - alignment + 1)
-                throw std::overflow_error("FastGS phase allocation size overflow");
-            return (size + alignment - 1) & ~(alignment - 1);
         }
 
         std::function<char*(size_t)> backing_;

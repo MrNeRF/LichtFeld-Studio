@@ -341,13 +341,16 @@ namespace fast_lfs::rasterization {
             // visible primitives, while the full-N backward preprocess uses the
             // original->workset map to apply Adam/momentum to invisible rows.
             const size_t n_visible = static_cast<size_t>(forward_result.n_visible);
-            // Normal-gradient helper is bumped from this phase at backward
-            // dispatch; reserve it when the forward normal channel is on.
+            // Reserve each helper's aligned allocation size. The normal-gradient
+            // helper is reserved here when the forward normal channel is on and
+            // still bump-allocated from this phase at backward dispatch.
             const size_t backward_phase_bytes = n_visible > 0
-                                                    ? n_visible * (sizeof(float2) + sizeof(float3) +
-                                                                   sizeof(float) + sizeof(float) +
-                                                                   3 * sizeof(float)) +
-                                                          (normal_ptr != nullptr ? n_visible * sizeof(float3) : 0)
+                                                    ? FastGSPhaseArena::align_allocation_size(n_visible * sizeof(float2)) +
+                                                          FastGSPhaseArena::align_allocation_size(n_visible * sizeof(float3)) +
+                                                          FastGSPhaseArena::align_allocation_size(n_visible * sizeof(float)) +
+                                                          FastGSPhaseArena::align_allocation_size(n_visible * sizeof(float)) +
+                                                          FastGSPhaseArena::align_allocation_size(n_visible * 3 * sizeof(float)) +
+                                                          (normal_ptr != nullptr ? FastGSPhaseArena::align_allocation_size(n_visible * sizeof(float3)) : 0)
                                                     : 0;
             phase_arena->begin_phase(FastGSPhaseArena::Phase::Backward, backward_phase_bytes);
             char* grad_mean2d_helper = n_visible > 0
