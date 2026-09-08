@@ -750,7 +750,9 @@ namespace lfs::app {
                                 return 1;
                             }
                         } else if (auto updated = trainer->setParams(effective_params); !updated) {
-                            LOG_ERROR("Failed to apply training parameters: {}", updated.error());
+                            LOG_ERROR(
+                                "Failed to apply training parameters: {}",
+                                lfs::format_for_developer(updated.error()));
                             return 1;
                         }
                         training::grant_headless_project_saves(

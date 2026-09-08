@@ -3840,7 +3840,8 @@ namespace lfs::vis {
         if (auto preflight =
                 trainer_manager_->preflightStartParameters();
             !preflight) {
-            return std::unexpected(preflight.error());
+            return std::unexpected(
+                lfs::format_for_developer(preflight.error()));
         }
         if (project_lifecycle_) {
             if (auto prepared =

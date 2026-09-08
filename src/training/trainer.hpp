@@ -309,7 +309,7 @@ namespace lfs::training {
             std::lock_guard<std::mutex> lock(params_mutex_);
             return params_;
         }
-        [[nodiscard]] std::expected<void, std::string>
+        [[nodiscard]] lfs::Status
         setParams(
             const lfs::core::param::TrainingParameters& params,
             lfs::core::param::ParameterValidationMode validation_mode =

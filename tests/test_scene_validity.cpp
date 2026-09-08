@@ -370,14 +370,17 @@ namespace lfs::python {
         const auto updated = trainer.setParams(invalid);
 
         ASSERT_FALSE(updated.has_value());
-        EXPECT_NE(updated.error().find("Depth Loss"), std::string::npos);
+        EXPECT_NE(
+            updated.error().user_message().find("Depth Loss"),
+            std::string::npos);
         EXPECT_EQ(
             trainer.getParams().optimization.to_json(),
             original.optimization.to_json());
 
         const auto restored = trainer.setParams(
             invalid, core::param::ParameterValidationMode::Storage);
-        ASSERT_TRUE(restored.has_value()) << restored.error();
+        ASSERT_TRUE(restored.has_value())
+            << lfs::format_for_developer(restored.error());
         EXPECT_EQ(
             trainer.getParams().optimization.to_json(),
             invalid.optimization.to_json());

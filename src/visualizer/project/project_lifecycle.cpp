@@ -831,7 +831,8 @@ namespace lfs::vis::project {
                         params,
                         lfs::core::param::ParameterValidationMode::Storage);
                     !updated) {
-                    notifyTrainerRestoreFailure(viewer, updated.error());
+                    notifyTrainerRestoreFailure(
+                        viewer, lfs::format_for_developer(updated.error()));
                     return;
                 }
                 trainer_manager->setScene(

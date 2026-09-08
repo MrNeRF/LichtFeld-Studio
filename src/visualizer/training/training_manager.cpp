@@ -1081,11 +1081,15 @@ namespace lfs::vis {
         // immediate rejection without starting a worker or touching the scene.
         auto start_params = pendingParamsCandidate();
         if (auto error = start_params.validate(); !error.empty()) {
-            return rejectStart(std::move(error), lfs::ErrorCode::InvalidArgument);
+            static_cast<void>(
+                rejectStart(std::move(error), lfs::ErrorCode::InvalidArgument));
+            return false;
         }
 
         if (scene_ && !scene_->hasTrainingData()) {
-            return rejectStart("Scene has no cameras", lfs::ErrorCode::FailedPrecondition);
+            static_cast<void>(
+                rejectStart("Scene has no cameras", lfs::ErrorCode::FailedPrecondition));
+            return false;
         }
 
         {
@@ -1104,37 +1108,36 @@ namespace lfs::vis {
         return true;
     }
 
-    std::expected<void, std::string>
+    lfs::Status
     TrainerManager::preflightStartParameters() {
         if (!trainer_) {
-            return std::unexpected("No trainer available");
+            return lfs::Status::failure(training_initialization_error(
+                "No trainer available"));
         }
         auto error = pendingParamsCandidate().validate();
         if (!error.empty()) {
-            const auto result = error;
-            rejectStart(std::move(error), lfs::ErrorCode::InvalidArgument);
-            return std::unexpected(result);
+            return lfs::Status::failure(
+                rejectStart(std::move(error), lfs::ErrorCode::InvalidArgument));
         }
         if (scene_ && !scene_->hasTrainingData()) {
-            constexpr std::string_view error = "Scene has no cameras";
-            rejectStart(std::string(error), lfs::ErrorCode::FailedPrecondition);
-            return std::unexpected(std::string(error));
+            return lfs::Status::failure(
+                rejectStart("Scene has no cameras", lfs::ErrorCode::FailedPrecondition));
         }
         return {};
     }
 
-    bool TrainerManager::rejectStart(
+    lfs::Error TrainerManager::rejectStart(
         std::string message, const lfs::ErrorCode code) {
         LOG_ERROR("Cannot start training: {}", message);
         last_error_ = std::move(message);
-        lfs::Error typed = lfs::make_legacy_error(
-            last_error_, lfs::LegacyErrorContext{
-                             .code = code,
-                             .domain = lfs::ErrorDomain::Training,
-                             .operation = "training.start",
-                             .source = LFS_SOURCE_SITE_CURRENT(),
-                             .operation_id = lfs::OperationId::generate(),
-                         });
+        lfs::Error typed = lfs::make_error(lfs::ErrorInit{
+            .code = code,
+            .domain = lfs::ErrorDomain::Training,
+            .operation_id = lfs::OperationId::generate(),
+            .user_message = last_error_,
+            .detail = "Training start rejected: " + last_error_,
+            .detection = LFS_SOURCE_SITE_CURRENT(),
+        });
         {
             std::lock_guard lock(initialization_mutex_);
             start_params_candidate_.reset();
@@ -1151,8 +1154,8 @@ namespace lfs::vis {
             .error = last_error_,
             .error_info = core::to_wire_error(typed)}
             .emit();
-        last_training_error_.set(std::move(typed));
-        return false;
+        last_training_error_.set(typed);
+        return typed;
     }
 
     lfs::Result<void> TrainerManager::waitForInitialization() {
@@ -1182,7 +1185,9 @@ namespace lfs::vis {
         // to gate initialization.
         if (auto applied = applyPendingParams(); !applied) {
             return lfs::Result<void>::failure(
-                training_initialization_error(applied.error()));
+                std::move(applied).error().with_context(
+                    "apply pending training parameters",
+                    LFS_SOURCE_SITE_CURRENT()));
         }
 
         if (evaluation_weights_preparer_ && trainer_->getParams().optimization.enable_eval)
@@ -1789,7 +1794,9 @@ namespace lfs::vis {
             auto params = trainer_->getParams();
             apply_save_steps(params.optimization, save_steps);
             if (auto updated = trainer_->setParams(params); !updated) {
-                LOG_ERROR("Could not update save steps: {}", updated.error());
+                LOG_ERROR(
+                    "Could not update save steps: {}",
+                    lfs::format_for_developer(updated.error()));
             }
         }
     }
@@ -2296,16 +2303,11 @@ namespace lfs::vis {
         trainer_->setOnIterationStart([this] {
             if (auto* pm = services().paramsOrNull(); pm && pm->consumeDirty()) {
                 if (auto applied = applyPendingParams(); !applied) {
-                    last_error_ = applied.error();
-                    auto typed = lfs::make_legacy_error(
-                        last_error_, lfs::LegacyErrorContext{
-                                         .code = lfs::ErrorCode::InvalidArgument,
-                                         .domain = lfs::ErrorDomain::Training,
-                                         .operation = "training.params.update",
-                                         .source = LFS_SOURCE_SITE_CURRENT(),
-                                         .operation_id = lfs::OperationId::generate(),
-                                     });
-                    last_training_error_.set(std::move(typed));
+                    auto typed = std::move(applied).error();
+                    last_error_ = typed.user_message().empty()
+                                      ? std::string(typed.detail())
+                                      : std::string(typed.user_message());
+                    last_training_error_.set(typed);
                     pm->importTrainingParams(trainer_->getParams());
                     LOG_ERROR("Rejected training parameter update: {}", last_error_);
                 }
@@ -2490,7 +2492,7 @@ namespace lfs::vis {
         return params;
     }
 
-    std::expected<void, std::string> TrainerManager::applyPendingParams() {
+    lfs::Status TrainerManager::applyPendingParams() {
         if (!trainer_)
             return {};
 
@@ -2505,11 +2507,17 @@ namespace lfs::vis {
                           ? std::move(*frozen_start_params)
                           : pendingParamsCandidate();
         if (auto error = params.validate(); !error.empty()) {
-            return std::unexpected(std::move(error));
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = error,
+                .detail = "Rejected invalid pending training parameters: " + error,
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
         }
         if (trainer_->isInitialized() && previous_params.resume_checkpoint.has_value()) {
             if (auto updated = trainer_->setParams(params); !updated) {
-                return std::unexpected(updated.error());
+                return lfs::Status::failure(std::move(updated).error());
             }
             if (auto* const param_mgr = services().paramsOrNull()) {
                 param_mgr->importTrainingParams(params);

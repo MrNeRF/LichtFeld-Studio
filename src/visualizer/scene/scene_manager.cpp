@@ -2968,7 +2968,8 @@ namespace lfs::vis {
             if (scene_.hasTrainingData()) {
                 auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
                 if (auto updated = trainer->setParams(dataset_params); !updated) {
-                    return std::unexpected(updated.error());
+                    return std::unexpected(
+                        lfs::format_for_developer(updated.error()));
                 }
 
                 if (!services().trainerOrNull()) {
@@ -3053,7 +3054,8 @@ namespace lfs::vis {
             // Create Trainer from Scene
             auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
             if (auto updated = trainer->setParams(dataset_params); !updated) {
-                return std::unexpected(updated.error());
+                return std::unexpected(
+                    lfs::format_for_developer(updated.error()));
             }
 
             // Pass trainer to manager

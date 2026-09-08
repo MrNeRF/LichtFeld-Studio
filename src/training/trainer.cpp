@@ -127,6 +127,18 @@ namespace lfs::training {
             });
         }
 
+        [[nodiscard]] lfs::Error training_parameter_update_error(
+            std::string message,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = message,
+                .detail = "Rejected invalid training parameter update: " + message,
+                .detection = source,
+            });
+        }
+
         // Dataset-level normal-prior convention resolution. Prior maps come in
         // several flavors (camera-space OpenCV/OpenGL, world-space in the
         // renderer's frame, linear or sRGB-encoded); wrong assumptions feed the
@@ -3654,13 +3666,14 @@ namespace lfs::training {
         training_complete_ = false;
     }
 
-    std::expected<void, std::string>
+    lfs::Status
     Trainer::setParams(
         const lfs::core::param::TrainingParameters& params,
         const lfs::core::param::ParameterValidationMode validation_mode) {
         if (const auto validation_error = params.validate(validation_mode); !validation_error.empty()) {
             LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
-            return std::unexpected(validation_error);
+            return lfs::Status::failure(training_parameter_update_error(
+                validation_error, LFS_SOURCE_SITE_CURRENT()));
         }
 
         bool bg_image_path_changed = false;
