@@ -11,10 +11,14 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/formats/ply.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
+#include "lfs/training/morton_reorder.hpp"
 #include "rasterization/fastgs/rasterization/include/forward.h"
 #include "rasterization/fastgs/utils/utils.h"
+#include "training/kernels/normal_consistency_loss.hpp"
+#include "training/kernels/normal_loss.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "training/strategies/mrnf.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -23,6 +27,7 @@
 #include <filesystem>
 #include <gtest/gtest.h>
 #include <limits>
+#include <numeric>
 #include <random>
 #include <stdexcept>
 #include <torch/torch.h>
@@ -2030,6 +2035,391 @@ TEST(JointEncodeZero, SwizzledShN8BitMultiIndexSameBlock) {
             }
         }
     }
+}
+
+namespace {
+    torch::Tensor normal_regression_cuda(const torch::Tensor& t) { return t.detach().contiguous().to(torch::kCUDA); }
+    double normal_regression_error(const torch::Tensor& actual, const torch::Tensor& expected) {
+        return (actual.cpu() - expected.detach()).abs().max().item<double>();
+    }
+} // namespace
+
+// Guards direct normal-prior loss and gradients against CPU autograd with optional pixel weights.
+// Invalid pixels and batches below the participation threshold must have zero gradients.
+TEST(NormalLossRegression, PriorAutogradAndInactivePixels) {
+    torch::manual_seed(2309);
+    constexpr int h = 17, w = 19, p = h * w;
+    for (bool weighted : {false, true}) {
+        SCOPED_TRACE(::testing::Message() << "weighted=" << weighted);
+        auto n = torch::randn({3, p}) * .4;
+        auto a = torch::rand({p}) * .7 + .3;
+        auto t = torch::randn({3, p});
+        auto weights = torch::rand({p});
+        n.index_put_({torch::indexing::Slice(), 0}, 1e-8);
+        a.index_put_({1}, 1e-8);
+        t.index_put_({torch::indexing::Slice(), 2}, 0);
+        n.index_put_({torch::indexing::Slice(), 3}, .059); // just above norm threshold
+        weights.index_put_({4}, 0);
+        n.set_requires_grad(true);
+        auto nn = n.norm(2, 0), tn = t.norm(2, 0);
+        auto valid = (nn >= .1) & (tn >= .5) & (a > .001);
+        auto aw = a * (weighted ? weights : torch::ones_like(a)) * valid;
+        auto cos = (n * t).sum(0) / (nn.clamp_min(1e-12) * tn.clamp_min(1e-12));
+        auto loss = .005 * (aw * (1 - cos)).sum() / aw.sum().clamp_min(1);
+        loss.backward();
+        auto nc = normal_regression_cuda(n), ac = normal_regression_cuda(a), tc = normal_regression_cuda(t), wc = normal_regression_cuda(weights);
+        auto gn = torch::full_like(nc, 123), out = torch::zeros({1}, nc.options());
+        auto part = torch::zeros({(long)kernels::normal_loss_partial_count(p)}, nc.options());
+        kernels::launch_normal_loss(nc.data_ptr<float>(), ac.data_ptr<float>(), tc.data_ptr<float>(),
+                                    gn.data_ptr<float>(), out.data_ptr<float>(), part.data_ptr<float>(), w, h, .005, nullptr,
+                                    weighted ? wc.data_ptr<float>() : nullptr);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        double err = normal_regression_error(gn, n.grad());
+        EXPECT_LT(err, 2e-8);
+        EXPECT_NEAR(out.item<float>(), loss.item<float>(), 2e-8);
+        // Fewer than 64 participating pixels must overwrite every gradient with zero.
+        ac.zero_();
+        ac.slice(0, 0, 63).fill_(.8);
+        kernels::launch_normal_loss(nc.data_ptr<float>(), ac.data_ptr<float>(), tc.data_ptr<float>(),
+                                    gn.data_ptr<float>(), out.data_ptr<float>(), part.data_ptr<float>(), w, h, .005);
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_EQ(gn.abs().max().item<float>(), 0);
+        EXPECT_EQ(out.item<float>(), 0);
+    }
+}
+
+// Guards consistency and prior-depth geometry gradients against CPU autograd across depth scales.
+// The reference includes invalid stencils and detached coverage weights and facing decisions.
+TEST(NormalLossRegression, DepthConsistencyAndPriorDepthAutograd) {
+    using torch::indexing::Slice;
+    torch::manual_seed(2310);
+    constexpr int h = 17, w = 19, p = h * w;
+    for (bool prior : {false, true})
+        for (float z : {0.01f, 5.f, 500.f}) {
+            SCOPED_TRACE(::testing::Message() << "prior=" << prior << " depth=" << z);
+            auto a = torch::rand({h, w}) * .3 + .65;
+            auto d = (torch::rand({h, w}) * .004 + .998) * z * a;
+            auto n = torch::randn({3, h, w}) * .4;
+            a.index_put_({4, 4}, .1);                // alpha gate, including neighbor propagation
+            d.index_put_({8, 8}, z * 1.3 * a[8][8]); // jump gate
+            n.index_put_({Slice(), 10, 10}, 0);      // invalid normal/prior
+            a.set_requires_grad(true);
+            d.set_requires_grad(true);
+            n.set_requires_grad(!prior);
+            auto xs = torch::arange(w).view({1, w}).expand({h, w});
+            auto ys = torch::arange(h).view({h, 1}).expand({h, w});
+            constexpr float fx = 300, fy = 280, cx = 9.5, cy = 8.5;
+            auto ray = torch::stack({(xs + .5 - cx) / fx, (ys + .5 - cy) / fy, torch::ones({h, w})});
+            auto e = d.clamp_min(0) / a;
+            auto point = e.unsqueeze(0) * ray;
+            auto tx = point.index({Slice(), Slice(1, h - 1), Slice(2, w)}) - point.index({Slice(), Slice(1, h - 1), Slice(0, w - 2)});
+            auto ty = point.index({Slice(), Slice(2, h), Slice(1, w - 1)}) - point.index({Slice(), Slice(0, h - 2), Slice(1, w - 1)});
+            auto raw = torch::cross(tx, ty, 0);
+            auto sign = torch::where((raw * ray.index({Slice(), Slice(1, h - 1), Slice(1, w - 1)})).sum(0) > 0, -1., 1.);
+            auto nd = raw / raw.norm(2, 0).clamp_min(1e-30) * sign;
+            auto mid = n.index({Slice(), Slice(1, h - 1), Slice(1, w - 1)});
+            auto nn = mid.norm(2, 0);
+            auto cos = (nd * mid).sum(0) / nn.clamp_min(1e-12);
+            auto ec = e.index({Slice(1, h - 1), Slice(1, w - 1)});
+            auto ac = a.index({Slice(1, h - 1), Slice(1, w - 1)});
+            auto valid = (ac >= .5) & (ec >= 1e-6) & (nn >= (prior ? .5 : .1)) & (raw.square().sum(0) >= 1e-24);
+            for (auto [dy, dx] : std::vector<std::pair<int, int>>{{0, 1}, {0, -1}, {1, 0}, {-1, 0}}) {
+                auto en = e.index({Slice(1 + dy, h - 1 + dy), Slice(1 + dx, w - 1 + dx)});
+                auto an = a.index({Slice(1 + dy, h - 1 + dy), Slice(1 + dx, w - 1 + dx)});
+                valid = valid & (an >= .5) & (en >= 1e-6) & ((en - ec).abs() <= .05 * ec);
+            }
+            // Coverage weights and validity decisions are intentionally detached in the kernels.
+            auto aw = ac.detach() * valid.detach();
+            auto loss = .005 * (aw * (1 - cos)).sum() / aw.sum().clamp_min(1);
+            loss.backward();
+            auto nc = normal_regression_cuda(n), dc = normal_regression_cuda(d), alc = normal_regression_cuda(a);
+            auto gn = torch::zeros_like(nc), gd = torch::zeros_like(dc), ga = torch::zeros_like(alc);
+            auto out = torch::zeros({1}, nc.options());
+            auto part = torch::zeros({(long)kernels::normal_consistency_partial_count(p)}, nc.options());
+            if (prior)
+                kernels::launch_normal_prior_depth_loss(nc.data_ptr<float>(), dc.data_ptr<float>(), alc.data_ptr<float>(),
+                                                        gd.data_ptr<float>(), ga.data_ptr<float>(), out.data_ptr<float>(), part.data_ptr<float>(), w, h, fx, fy, cx, cy, .005);
+            else
+                kernels::launch_normal_consistency_loss(nc.data_ptr<float>(), dc.data_ptr<float>(), alc.data_ptr<float>(),
+                                                        gn.data_ptr<float>(), gd.data_ptr<float>(), ga.data_ptr<float>(), out.data_ptr<float>(), part.data_ptr<float>(), w, h, fx, fy, cx, cy, .005);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            const double ed = normal_regression_error(gd, d.grad()), ea = normal_regression_error(ga, a.grad());
+            EXPECT_NEAR(out.item<float>(), loss.item<float>(), 2e-7);
+            EXPECT_LT(ed, 2e-4 * std::max(1e-3, d.grad().abs().max().item<double>()));
+            EXPECT_LT(ea, 2e-4 * std::max(1e-3, a.grad().abs().max().item<double>()));
+            if (!prior)
+                EXPECT_LT(normal_regression_error(gn, n.grad()), 2e-8);
+        }
+}
+
+// Guards fused normal-channel gradients for means, scales, rotations, and opacity using finite differences.
+// Overlapping off-center splats exercise all minimum axes, facing signs, and near-opaque coverage.
+TEST(NormalLossRegression, OffCenterOverlappingFullFusedGradients) {
+    for (int scenario = 0; scenario < 5; ++scenario) {
+        NormalChannelScene scene;
+        scene.means_data = {.35f, -.22f, 1.f, -.28f, .3f, 1.3f, .16f, .12f, 1.7f};
+        scene.scaling_data = {.3f, -.1f, -1.f, .1f, .4f, -.8f, .2f, 0.f, -.9f};
+        std::vector<float> q = {.95f, .15f, -.1f, .05f, .15f, .95f, .05f, -.1f, .9f, -.2f, .15f, .1f};
+        std::vector<float> op = {-.3f, .4f, .1f};
+        if (scenario == 1)
+            op[0] = 8.f;
+        if (scenario == 2)
+            for (int i = 0; i < 3; ++i) {
+                scene.scaling_data[3 * i] = -1.f;
+                scene.scaling_data[3 * i + 2] = .3f;
+            }
+        if (scenario == 3)
+            for (int i = 0; i < 3; ++i) {
+                scene.scaling_data[3 * i + 1] = -1.f;
+                scene.scaling_data[3 * i + 2] = .3f;
+            }
+        if (scenario == 4) {
+            scene.scaling_data[0] = -.799f;
+            scene.scaling_data[1] = -.8f;
+            scene.scaling_data[2] = .3f;
+        }
+        auto camera = scene.make_camera();
+        auto bg = Tensor::zeros({3}, Device::CUDA);
+        auto make = [&](const std::vector<float>& m, const std::vector<float>& s, const std::vector<float>& r, const std::vector<float>& o) {
+            auto local = scene;
+            local.means_data = m;
+            local.scaling_data = s;
+            auto splat = local.make_splat(r);
+            splat.opacity_raw() = Tensor::from_vector(o, {size_t{3}}, Device::CUDA);
+            return splat;
+        };
+        std::vector<float> upstream = {.7f, -.4f, 1.1f};
+        auto loss = [&](const std::vector<float>& m, const std::vector<float>& s, const std::vector<float>& r, const std::vector<float>& o) {
+            auto splat = make(m, s, r, o);
+            auto f = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+            if (!f)
+                throw lfs::Exception(std::move(f.error()));
+            auto nc = f->first.normal.cpu();
+            double v = 0;
+            for (int c = 0; c < 3; ++c)
+                v += nc.ptr<float>()[c] * upstream[c];
+            f->second.release_forward_context();
+            return v;
+        };
+        auto splat = make(scene.means_data, scene.scaling_data, q, op);
+        auto f = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+        ASSERT_TRUE(f.has_value());
+        AdamConfig cfg{.lr = .001f, .beta1 = .9, .beta2 = .999, .eps = 1e-15};
+        AdamOptimizer opt(splat, cfg);
+        opt.allocate_gradients();
+        opt.zero_grad(0);
+        auto gn = Tensor::from_vector(upstream, {size_t{3}, size_t{1}, size_t{1}}, Device::CUDA);
+        fast_rasterize_backward(f->second, Tensor::zeros_like(f->first.image), splat, opt, {}, {}, DensificationType::None, 1, {}, {}, gn);
+        int group = 0;
+        for (auto type : {ParamType::Means, ParamType::Scaling, ParamType::Rotation, ParamType::Opacity}) {
+            auto g = recovered_fused_grad(opt, type).cpu();
+            for (size_t c = 0; c < g.numel(); ++c) {
+                auto m = scene.means_data, s = scene.scaling_data, r = q, o = op;
+                auto* v = group == 0 ? &m : group == 1 ? &s
+                                        : group == 2   ? &r
+                                                       : &o;
+                const float step = scenario == 4 && group == 1 ? 1e-4f : 1e-3f;
+                (*v)[c] += step;
+                double plus = loss(m, s, r, o);
+                (*v)[c] -= 2 * step;
+                double minus = loss(m, s, r, o);
+                double fd = (plus - minus) / (2 * step), actual = g.ptr<float>()[c];
+                EXPECT_NEAR(actual, fd, std::max(3e-4, std::abs(fd) * .015)) << "scenario=" << scenario << " group=" << group << " c=" << c;
+            }
+            ++group;
+        }
+    }
+}
+
+// Guards exact model-row permutation and bounded joint-moment drift through four 50,000-row Morton reorders.
+// Covers means, SH0, scales, rotations, and opacity with distinguishable row payloads.
+TEST(NormalLossRegression, Morton50kFourReordersJointAllParameters) {
+    constexpr size_t n = 50000;
+    auto splat = make_adam_test_splat(n);
+    lfs::core::param::OptimizationParameters params;
+    params.max_cap = n;
+    params.sh_degree = 0;
+    MRNF strategy(splat);
+    strategy.initialize(params);
+    auto& opt = strategy.get_optimizer();
+    opt.allocate_gradients(n);
+    std::mt19937 rng(2311);
+    std::uniform_real_distribution<float> unit(-1, 1);
+    std::vector<float> pos(n * 3);
+    for (auto& x : pos)
+        x = unit(rng);
+    splat.means() = Tensor::from_vector(pos, {n, size_t{3}}, Device::CUDA);
+    // Unique finite row payloads make a wrong permutation observable even with SH0.
+    for (auto* t : {&splat.sh0(), &splat.scaling_raw(), &splat.rotation_raw(), &splat.opacity_raw()}) {
+        auto host = t->cpu();
+        for (size_t c = 0; c < host.numel(); ++c)
+            host.ptr<float>()[c] = unit(rng);
+        *t = host.cuda();
+    }
+    std::vector<ParamType> types = {ParamType::Means, ParamType::Sh0, ParamType::Scaling, ParamType::Rotation, ParamType::Opacity};
+    std::vector<Tensor> originals;
+    std::vector<std::vector<float>> initial_m, initial_v;
+    auto model_tensors = [&]() { return std::vector<Tensor*>{&splat.means(), &splat.sh0(), &splat.scaling_raw(), &splat.rotation_raw(), &splat.opacity_raw()}; };
+    for (auto* t : model_tensors())
+        originals.push_back(t->cpu());
+    auto decode = [&](const AdamParamState& state) {
+        auto pc = state.exp_avg.cpu(), bc = state.joint_bounds.cpu();
+        size_t attrs = pc.shape()[1] / 4;
+        std::vector<float> m(n * attrs), v(n * attrs);
+        for (size_t c = 0; c < m.size(); ++c) {
+            const float* b = bc.ptr<float>() + 4 * ((c / attrs) / 256);
+            joint_adam::Codec16::decode_g1g2(pc.ptr<uint8_t>(), c, b[0], b[1], b[2], b[3], m[c], v[c]);
+        }
+        return std::make_pair(m, v);
+    };
+    for (auto type : types) {
+        auto* state = opt.get_state_mutable(type);
+        ASSERT_NE(state, nullptr);
+        ASSERT_TRUE(state->is_joint());
+        ASSERT_EQ(state->joint_bits, 16);
+        auto pc = state->exp_avg.cpu(), bc = state->joint_bounds.cpu();
+        size_t attrs = pc.shape()[1] / 4;
+        for (size_t b = 0; b < (n + 255) / 256; ++b) {
+            size_t start = b * 256 * attrs, stop = std::min(n, (b + 1) * 256) * attrs;
+            std::vector<float> m(stop - start), v(stop - start);
+            for (size_t j = 0; j < m.size(); ++j) {
+                float scale = j < attrs ? 1e-4f : 1e-10f;
+                m[j] = unit(rng) * scale;
+                v[j] = scale * scale;
+            }
+            float* mm = bc.ptr<float>() + b * 4;
+            joint_adam::Codec16::reduce_bounds(m.data(), v.data(), m.size(), mm);
+            for (size_t j = 0; j < m.size(); ++j)
+                joint_adam::Codec16::encode_g1g2(pc.ptr<uint8_t>(), start + j, m[j], v[j], mm[0], mm[1], mm[2], mm[3]);
+        }
+        state->exp_avg = pc.cuda();
+        state->joint_bounds = bc.cuda();
+        auto [m, v] = decode(*state);
+        initial_m.push_back(std::move(m));
+        initial_v.push_back(std::move(v));
+    }
+    std::vector<int64_t> order(n);
+    std::iota(order.begin(), order.end(), 0);
+    for (int round = 0; round < 4; ++round) {
+        SCOPED_TRACE(::testing::Message() << "round=" << round);
+        // Rotate spatial axes between passes to make all four reorderings nontrivial.
+        if (round) {
+            auto mc = splat.means().cpu();
+            float* p = mc.ptr<float>();
+            for (size_t i = 0; i < n; ++i)
+                std::swap(p[3 * i], p[3 * i + 1]);
+            splat.means() = mc.cuda();
+            auto* orig = originals[0].ptr<float>();
+            for (size_t i = 0; i < n; ++i)
+                std::swap(orig[3 * i], orig[3 * i + 1]);
+        }
+        auto result = morton::apply_morton_reorder(splat, &opt);
+        ASSERT_TRUE(result.applied);
+        strategy.permute_gaussian_rows(result.permutation);
+        auto p = result.permutation.cpu();
+        auto previous = order;
+        for (size_t i = 0; i < n; ++i)
+            order[i] = previous[p.ptr<int64_t>()[i]];
+        auto tensors = model_tensors();
+        size_t bad = 0;
+        for (size_t t = 0; t < tensors.size(); ++t) {
+            auto h = tensors[t]->cpu();
+            size_t attrs = h.numel() / n;
+            for (size_t i = 0; i < n; ++i)
+                if (std::memcmp(h.ptr<float>() + i * attrs, originals[t].ptr<float>() + order[i] * attrs, attrs * 4))
+                    ++bad;
+        }
+        EXPECT_EQ(bad, 0); // Host inverse permutation must be bitwise exact for raw model attributes.
+        for (size_t t = 0; t < types.size(); ++t) {
+            SCOPED_TRACE(::testing::Message() << "parameter group=" << t);
+            auto [m, v] = decode(*opt.get_state(types[t]));
+            size_t attrs = m.size() / n;
+            double em = 0, eu = 0;
+            for (size_t i = 0; i < n; ++i)
+                for (size_t a = 0; a < attrs; ++a) {
+                    size_t c = i * attrs + a, old = order[i] * attrs + a;
+                    ASSERT_TRUE(std::isfinite(m[c]));
+                    ASSERT_TRUE(std::isfinite(v[c]));
+                    ASSERT_GE(v[c], 0);
+                    em = std::max(em, std::abs(double(m[c]) - initial_m[t][old]));
+
+                    double u = m[c] / (std::sqrt(v[c]) + 1e-15), u0 = initial_m[t][old] / (std::sqrt(initial_v[t][old]) + 1e-15);
+                    eu = std::max(eu, std::abs(u - u0));
+                }
+            EXPECT_LT(em, 1e-7);
+            EXPECT_LT(eu, .001);
+        }
+    }
+}
+
+// Guards the direct normal-prior cutoff below 64 valid pixels and populated prior-depth statistics.
+// Prior-depth statistics are checked independently of its activation gate.
+TEST(NormalLossRegression, SparsePriorDisablesAndPriorDepthStatsRemainPopulated) {
+    constexpr int h = 17, w = 19, p = h * w;
+    for (int count : {1, 16, 64, 255})
+        for (float z : {.01f, 5.f, 500.f}) {
+            SCOPED_TRACE(::testing::Message() << "count=" << count << " depth=" << z);
+            auto n = torch::zeros({3, h, w});
+            n[2].fill_(-.8f);
+            auto t = torch::zeros_like(n);
+            int left = count;
+            for (int y = 1; y < h - 1 && left; ++y)
+                for (int x = 1; x < w - 1 && left; ++x, --left) {
+                    t[0][y][x] = .70710678f;
+                    t[2][y][x] = -.70710678f;
+                }
+            auto nc = normal_regression_cuda(n), tc = normal_regression_cuda(t);
+            auto a = torch::full({h, w}, .8f, nc.options()), d = torch::full({h, w}, .8f * z, nc.options());
+            auto gn = torch::zeros_like(nc), gd = torch::zeros_like(d), ga = torch::zeros_like(a);
+            auto out = torch::zeros({1}, nc.options()), priorout = torch::zeros_like(out);
+            auto part = torch::zeros({(long)kernels::normal_consistency_partial_count(p)}, nc.options());
+            kernels::launch_normal_loss(nc.data_ptr<float>(), a.data_ptr<float>(), tc.data_ptr<float>(), gn.data_ptr<float>(),
+                                        priorout.data_ptr<float>(), part.data_ptr<float>(), w, h, .05f);
+            part.zero_();
+            kernels::launch_normal_prior_depth_loss(tc.data_ptr<float>(), d.data_ptr<float>(), a.data_ptr<float>(),
+                                                    gd.data_ptr<float>(), ga.data_ptr<float>(), out.data_ptr<float>(), part.data_ptr<float>(), w, h, 1000, 1000, 9.5, 8.5, .05f);
+            ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+            EXPECT_EQ(part[kernels::normal_consistency_slots::kCount].item<float>(), count);
+            EXPECT_NEAR(part[kernels::normal_consistency_slots::kSumAlpha].item<float>(), .8f * count, 2e-5);
+            EXPECT_NEAR(part[kernels::normal_consistency_slots::kMeanCos].item<float>(), std::sqrt(.5f), 2e-6);
+            if (count < 64) {
+                EXPECT_EQ(priorout.item<float>(), 0);
+                EXPECT_EQ(gn.abs().max().item<float>(), 0);
+            } else {
+                EXPECT_GT(priorout.item<float>(), 0);
+                EXPECT_GT(gn.abs().max().item<float>(), 0);
+            }
+        }
+}
+
+// Guards deterministic minimum-axis tie selection and the camera-facing sign change across grazing angles.
+TEST(NormalLossRegression, AxisTieAndGrazingBranchDiscontinuities) {
+    NormalChannelScene scene;
+    scene.means_data = {0, 0, 1};
+    scene.opacity_value = .8;
+    auto camera = scene.make_camera();
+    auto bg = Tensor::zeros({3}, Device::CUDA);
+    auto normal = [&](std::vector<float> scales, std::vector<float> q) {
+        scene.scaling_data = scales;
+        auto splat = scene.make_splat(q);
+        auto f = fast_rasterize_forward(camera, splat, bg, 0, 0, 0, 0, false, Tensor{}, true);
+        if (!f)
+            throw lfs::Exception(std::move(f.error()));
+        auto v = f->first.normal.cpu();
+        std::vector<float> result(v.ptr<float>(), v.ptr<float>() + 3);
+        f->second.release_forward_context();
+        return result;
+    };
+    auto a = normal({-1, -1, 0}, {1, 0, 0, 0});
+    auto b = normal({-.999999f, -1, 0}, {1, 0, 0, 0});
+    EXPECT_NEAR(a[0], .8, 1e-5);
+    EXPECT_NEAR(b[1], .8, 1e-5);
+    auto g1 = normal({0, 0, -1}, {.70710678f + .000001f, .70710678f, 0, 0});
+    auto g2 = normal({0, 0, -1}, {.70710678f - .000001f, .70710678f, 0, 0});
+    float grazing_jump = 0;
+    for (int c = 0; c < 3; ++c)
+        grazing_jump += (g1[c] - g2[c]) * (g1[c] - g2[c]);
+    EXPECT_GT(std::sqrt(grazing_jump), 1.5);
 }
 
 TEST(FastGSFusedAdamSettingsTest, CarriesPerSplatMeanStepAndFarMask) {
