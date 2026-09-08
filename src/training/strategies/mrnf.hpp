@@ -19,6 +19,7 @@ namespace lfs::training::sh_value {
     class ShNMutationBatch;
 }
 
+class MRNFStrategyTest_PermutationRepublishesFarMask_Test;
 class MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
 class MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
 class MRNFStrategyTest_SHDegree0KeepsShNEmptyAndFusedAdamUsableAfterGrowth_Test;
@@ -114,6 +115,7 @@ namespace lfs::training {
         void on_edge_score_accumulated(int iter) override;
 
     private:
+        friend class ::MRNFStrategyTest_PermutationRepublishesFarMask_Test;
         friend class ::MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Test;
         friend class ::MRNFStrategyTest_EdgeGuidanceFactorPrefersHigherPrecomputedEdgeScores_Test;
         friend class ::MRNFStrategyTest_GrowAndSplitResetsOptimizerStateForParents_Test;
