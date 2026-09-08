@@ -22,6 +22,7 @@
 #include "io/loader.hpp"
 #include "io/project_document.hpp"
 #include "lfs/training/sh_value_storage.hpp"
+#include "normal_auto_generate.hpp"
 #include "trainer.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -733,9 +734,8 @@ namespace lfs::training {
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
-            .load_normals = (params.optimization.use_normal_loss &&
-                             params.optimization.normal_loss_weight > 0.0f) ||
-                            params.optimization.enable_eval,
+            .load_normals = training_normal_priors_enabled(params.optimization) ||
+                            (!params.optimization.gut && params.optimization.enable_eval),
             .normal_auto_generate = params.optimization.normal_auto_generate,
             .centralize = parse_centralize(params.dataset.centralize_dataset),
             .progress = [&data_path](float percentage, const std::string& message) {
@@ -1091,8 +1091,7 @@ namespace lfs::training {
             .load_masks = params.optimization.mask_mode != lfs::core::param::MaskMode::None,
             .load_depths = params.optimization.use_depth_loss &&
                            params.optimization.depth_loss_weight > 0.0f,
-            .load_normals = params.optimization.use_normal_loss &&
-                            params.optimization.normal_loss_weight > 0.0f,
+            .load_normals = training_normal_priors_enabled(params.optimization),
             .normal_auto_generate = params.optimization.normal_auto_generate};
 
         auto result = data_loader->load(params.dataset.data_path, load_options);
