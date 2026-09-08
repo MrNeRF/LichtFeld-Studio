@@ -73,6 +73,25 @@ namespace lfs::io {
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
+    struct StreamedSogSaveOptions {
+        std::filesystem::path output_path;
+        int lod_levels = 4;
+        float lod_ratio = 0.5f;
+        int chunk_count_k = 512;
+        float chunk_extent = 16.0f;
+        int chunk_min_k = 8;
+        int kmeans_iterations = 10;
+        bool use_gpu = true;
+        ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{};
+    };
+
+    [[nodiscard]] LFS_IO_API Result<void> save_streamed_sog(const SplatData&, const StreamedSogSaveOptions&);
+
+    struct StreamedSogLoadOptions {
+        int lod_level = 0; // Negative levels count from the coarsest (-1).
+    };
+
     /**
      * @brief Save SplatData to SOG (SuperSplat) format
      * @return Result<void> - success or Error with details (disk space, encoding, archive errors)

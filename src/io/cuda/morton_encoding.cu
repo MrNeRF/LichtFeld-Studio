@@ -165,7 +165,7 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    Tensor morton_sort_indices_for_positions(const Tensor& positions) {
+    Tensor morton_sort_indices_for_positions(const Tensor& positions, Tensor* sorted_keys) {
         using lfs::core::DataType;
         using lfs::core::Device;
 
@@ -211,6 +211,8 @@ namespace lfs::io {
         }
 
         cudaDeviceSynchronize();
+        if (sorted_keys)
+            *sorted_keys = std::move(morton_codes);
         return indices;
     }
 

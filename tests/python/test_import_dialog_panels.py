@@ -117,3 +117,14 @@ def test_new_project_typed_source_path_validates(import_dialog_module, monkeypat
     assert panel._source_kind == "dataset"
     assert panel._can_create() is True
     assert browse_calls == []
+
+
+def test_new_project_recognizes_streamed_sog(import_dialog_module, tmp_path):
+    module, _, _, _ = import_dialog_module
+    folder = tmp_path / "streamed"
+    folder.mkdir()
+    assert not module.NewProjectPanel._is_splat_path(str(folder))
+    (folder / "lod-meta.json").write_text("{}")
+    assert module.NewProjectPanel._is_splat_path(str(folder))
+    assert module.NewProjectPanel._is_splat_path(str(folder / "lod-meta.json"))
+    assert not module.NewProjectPanel._is_splat_path(str(tmp_path / "transforms.json"))

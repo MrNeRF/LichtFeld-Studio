@@ -332,6 +332,8 @@ set(TEST_FILES
     test_tensor_cat_reduction_bug.cpp
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
+    test_streamed_sog_format.cpp
+    test_splat_decimate.cpp
     test_ply_error_taxonomy.cpp
     test_ply_io_throughput.cpp
     test_gsplat_rasterizer.cpp
@@ -1200,3 +1202,8 @@ message(STATUS "  Run tests: ninja run_tests")
 message(STATUS "  Run full tests: ninja run_full_tests")
 message(STATUS "  Bench (not ctest): bench_tensor_launch_overhead")
 message(STATUS "  Phase 6C device-fault tests: test_device_fault.cpp + device_fault_cuda_utils.cu")
+
+add_test(NAME lichtfeld.decimate.perf
+    COMMAND lichtfeld_tests --gtest_filter=SplatDecimate.DecimatePerfSmoke)
+set_tests_properties(lichtfeld.decimate.perf PROPERTIES
+    LABELS "nightly;gpu" ENVIRONMENT "LFS_DECIMATE_PERF=1" TIMEOUT 60)

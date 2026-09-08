@@ -5,6 +5,7 @@
 #include "io/loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "formats/streamed_sog.hpp"
 #include "io/filesystem_utils.hpp"
 #include "loader_service.hpp"
 #include <algorithm>
@@ -38,6 +39,9 @@ namespace lfs::io {
                     LOG_TRACE("Path does not exist: {}", lfs::core::path_to_utf8(path));
                     return false;
                 }
+
+                if (is_streamed_sog_path(path))
+                    return true;
 
                 // Check for SOG files
                 if (path.extension() == ".sog" || path.extension() == ".SOG") {
@@ -137,6 +141,8 @@ namespace lfs::io {
     }
 
     bool Loader::isDatasetPath(const std::filesystem::path& path) {
+        if (is_streamed_sog_path(path))
+            return false;
         if (!safe_exists(path)) {
             LOG_TRACE("Path does not exist for dataset check: {}", lfs::core::path_to_utf8(path));
             return false;
@@ -243,6 +249,9 @@ namespace lfs::io {
             }
             return DatasetType::Unknown;
         }
+
+        if (is_streamed_sog_path(path))
+            return DatasetType::Unknown;
 
         // Check if it's a SOG directory (not a dataset)
         if (safe_exists(path / "meta.json")) {

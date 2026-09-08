@@ -13,6 +13,7 @@
 #include "indicators.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/rad.hpp"
+#include "io/formats/streamed_sog.hpp"
 #include "io/loader.hpp"
 #include "io/ply_to_rad_lod.hpp"
 #include "io/project_document.hpp"
@@ -69,8 +70,14 @@ namespace lfs::app {
         template <size_t N>
         std::vector<std::filesystem::path> getInputFiles(const std::filesystem::path& path, const char* const (&valid_extensions)[N]) {
             std::vector<std::filesystem::path> files;
+            if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_streamed_sog_path(path))
+                return {path};
             if (std::filesystem::is_directory(path)) {
                 for (const auto& entry : std::filesystem::directory_iterator(path)) {
+                    if (&valid_extensions[0] == &CONVERT_EXTENSIONS[0] && lfs::io::is_streamed_sog_path(entry.path())) {
+                        files.push_back(entry.path());
+                        continue;
+                    }
                     if (!entry.is_regular_file())
                         continue;
                     auto ext = entry.path().extension().string();
@@ -94,6 +101,7 @@ namespace lfs::app {
             switch (format) {
             case param::OutputFormat::PLY: return ".ply";
             case param::OutputFormat::SOG: return ".sog";
+            case param::OutputFormat::STREAMED_SOG: return "_ssog/lod-meta.json";
             case param::OutputFormat::SPZ: return ".spz";
             case param::OutputFormat::HTML: return ".html";
             case param::OutputFormat::USD: return ".usd";
@@ -117,6 +125,12 @@ namespace lfs::app {
             const char* suffix,
             const bool replace_output_extension = false) {
 
+            if (format == param::OutputFormat::STREAMED_SOG) {
+                auto out = output_template.empty() ? input.parent_path() / (input.stem().string() + "_ssog") : output_template;
+                if (out.filename() != "lod-meta.json")
+                    out /= "lod-meta.json";
+                return std::filesystem::absolute(out);
+            }
             const auto ext = getFormatExtension(format);
             const auto cwd = std::filesystem::current_path();
             const auto converted_name = input.stem().string() + suffix + ext;
@@ -224,6 +238,17 @@ namespace lfs::app {
             std::string last_stage_;
         };
 
+        template <typename Parameters>
+        lfs::io::StreamedSogSaveOptions streamedOptions(const Parameters& p) {
+            lfs::io::StreamedSogSaveOptions o;
+            o.lod_levels = p.lod_levels;
+            o.lod_ratio = p.lod_ratio;
+            o.chunk_count_k = p.lod_chunk_count;
+            o.chunk_extent = p.lod_chunk_extent;
+            o.chunk_min_k = p.lod_chunk_min;
+            return o;
+        }
+
         lfs::io::Result<void> saveSplat(
             const SplatData& splat,
             const std::filesystem::path& output,
@@ -232,10 +257,17 @@ namespace lfs::app {
             const param::RadExportMode rad_export_mode,
             const int spz_version,
             const core::ProvenanceStamp& provenance,
+            lfs::io::StreamedSogSaveOptions streamed,
             const lfs::io::ExportProgressCallback& progress = nullptr) {
             switch (format) {
             case param::OutputFormat::PLY:
                 return lfs::io::save_ply(splat, {.output_path = output, .binary = true, .progress_callback = progress, .provenance = provenance});
+            case param::OutputFormat::STREAMED_SOG:
+                streamed.output_path = output;
+                streamed.kmeans_iterations = sog_iterations;
+                streamed.provenance = provenance;
+                streamed.progress_callback = progress;
+                return lfs::io::save_streamed_sog(splat, streamed);
             case param::OutputFormat::SOG:
                 return lfs::io::save_sog(splat, {.output_path = output, .kmeans_iterations = sog_iterations, .progress_callback = progress, .provenance = provenance});
             case param::OutputFormat::SPZ:
@@ -594,7 +626,7 @@ namespace lfs::app {
             const auto result = saveSplat(
                 *splat, output, params.format, params.sog_iterations,
                 params.rad_export_mode, params.spz_version,
-                make_convert_provenance(params.include_provenance, input),
+                make_convert_provenance(params.include_provenance, input), streamedOptions(params),
                 [&bar](const float progress, const std::string& stage) {
                     return bar.report(progress, stage);
                 });
@@ -656,7 +688,7 @@ namespace lfs::app {
                 std::println("  Saving: {}", path_to_utf8(output.path));
                 const auto result = saveSplat(**splat, output.path, output.format, params.sog_iterations,
                                               param::RadExportMode::Stream, params.spz_version,
-                                              make_convert_provenance(params.include_provenance));
+                                              make_convert_provenance(params.include_provenance), streamedOptions(params));
                 if (!result) {
                     LOG_ERROR("Save failed: {}", result.error().format());
                     std::println(stderr, "  Error: {}", result.error().message);
@@ -685,7 +717,10 @@ namespace lfs::app {
         bool overwrite_all = false;
 
         for (const auto& input : files) {
-            const auto output = generateOutputPath(input, params.output_path, params.format, "_converted");
+            auto output_template = params.output_path;
+            if (params.format == param::OutputFormat::STREAMED_SOG && files.size() > 1 && !output_template.empty())
+                output_template /= input.stem().string() + "_ssog";
+            const auto output = generateOutputPath(input, output_template, params.format, "_converted");
 
             if (std::filesystem::exists(output) && !overwrite_all && !params.overwrite) {
                 const auto choice = askOverwrite(output);

@@ -20,6 +20,7 @@
 #include "io/cache_image_loader.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loader.hpp"
+#include "io/splat_path.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "python/python_runtime.hpp"
@@ -890,7 +891,7 @@ namespace lfs::vis {
 
             std::string attached_name;
 
-            const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
+            const std::string base_name = name_hint.empty() ? lfs::io::splat_import_name(path) : name_hint;
             std::string name = base_name;
             if (!replace_scene) {
                 int counter = 1;
@@ -902,7 +903,8 @@ namespace lfs::vis {
             auto ext = path.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
             state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
-            if (ext == ".sog") {
+            if (ext == ".sog" || path.filename() == "lod-meta.json" ||
+                (std::filesystem::is_directory(path) && std::filesystem::exists(path / "lod-meta.json"))) {
                 file_type = state::SceneLoaded::Type::SOG;
             } else if (ext == ".spz") {
                 file_type = state::SceneLoaded::Type::SPZ;
@@ -1146,7 +1148,7 @@ namespace lfs::vis {
             }
             quantizeViewerLoadedPlyShN(path, load_result);
 
-            const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
+            const std::string base_name = name_hint.empty() ? lfs::io::splat_import_name(path) : name_hint;
             std::string name = base_name;
             int counter = 1;
             while (scene_.getNode(name) != nullptr) {
@@ -1263,7 +1265,7 @@ namespace lfs::vis {
                                            const bool is_visible) {
         if (content_type_ != ContentType::SplatFiles) {
             loadSplatFile(path);
-            return lfs::core::path_to_utf8(path.stem());
+            return lfs::io::splat_import_name(path);
         }
 
         auto load_result = stageSplatFile(path);
@@ -3641,7 +3643,11 @@ namespace lfs::vis {
                 // Determine specific type from extension
                 auto ext = info.source_path.extension().string();
                 std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-                if (ext == ".sog") {
+                if (info.source_path.filename() == "lod-meta.json" ||
+                    (std::filesystem::is_directory(info.source_path) &&
+                     std::filesystem::exists(info.source_path / "lod-meta.json"))) {
+                    info.source_type = "SSOG";
+                } else if (ext == ".sog") {
                     info.source_type = "SOG";
                 } else if (ext == ".ply") {
                     info.source_type = "PLY";

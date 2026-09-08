@@ -22,6 +22,7 @@
     "file.dataset_not_recognized": "La cartella selezionata non è riconosciuta come dataset supportato:\n{path}",
     "file.checkpoint_not_recognized": "Il file selezionato non è riconosciuto come checkpoint valido:\n{path}",
     "file.import_dataset": "Importa Dataset",
+    "file.import_streamed_sog": "Import Streamed SOG…",
     "file.import_ply": "Importa PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "Importa Mesh",
     "file.import_checkpoint": "Importa Checkpoint",
@@ -666,6 +667,7 @@
   "export": {
     "overwrite": "Sovrascrivi",
     "format.ply_standard": "PLY (Standard)",
+    "format.streamed_sog": "Streamed SOG (PlayCanvas LOD)",
     "format.sog_supersplat": "SOG (SuperSplat)",
     "format.spz_niantic": "SPZ (Niantic)",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1314,6 +1316,15 @@
     "blocked_during_training": "Arresta l'addestramento prima di caricare una nuova scena."
   },
   "export_dialog": {
+    "folder_name": "Folder name",
+    "lod_levels": "LOD levels",
+    "lod_ratio": "LOD ratio",
+    "chunk_count_k": "Chunk gaussians (K)",
+    "chunk_extent": "Chunk extent",
+    "chunk_min_k": "Minimum chunk gaussians (K)",
+    "kmeans_iterations": "K-means iterations",
+    "invalid_folder_name": "Enter a single folder name without path separators.",
+    "streamed_sog_overwrite": "Streamed SOG data already exists in this folder. Overwrite it?",
     "format": "FORMATO",
     "models": "MODELLI",
     "no_models": "Nessun modello nella scena",

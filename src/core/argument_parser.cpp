@@ -316,6 +316,12 @@ namespace {
                 std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
         }
 
+        if (view_path.filename() == "lod-meta.json" ||
+            (std::filesystem::is_directory(view_path) && std::filesystem::is_regular_file(view_path / "lod-meta.json"))) {
+            params.view_paths.push_back(view_path);
+            return {};
+        }
+
         constexpr std::array<std::string_view, 17> SUPPORTED_EXTENSIONS = {
             ".ply", ".sog", ".spz", ".rad", ".resume",
             ".usd", ".usda", ".usdc", ".usdz",
@@ -390,6 +396,8 @@ namespace {
         using lfs::core::param::OutputFormat;
         if (str == "ply" || str == ".ply")
             return OutputFormat::PLY;
+        if (str == "ssog" || str == "streamed-sog" || str == "lod-meta.json")
+            return OutputFormat::STREAMED_SOG;
         if (str == "sog" || str == ".sog")
             return OutputFormat::SOG;
         if (str == "spz" || str == ".spz")
@@ -423,7 +431,7 @@ namespace {
             if (!token.empty()) {
                 auto fmt = parseFormat(token);
                 if (!fmt) {
-                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", token));
+                    return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, html, usd, usda, usdc, rad", token));
                 }
                 if (std::ranges::find(formats, *fmt) == formats.end()) {
                     formats.push_back(*fmt);
@@ -497,7 +505,13 @@ namespace {
             ::args::ValueFlag<float> freeze_lr_scale(paths_group, "scale", "Learning-rate scale for frozen splats (0 = fully frozen, default; try 0.01-0.1 to let frozen splats absorb small appearance mismatch)", {"freeze-lr-scale"});
             ::args::Flag exclude_export(paths_group, "exclude_export", "Exclude frozen --add-splat rows from PLY exports", {"exclude-export"});
             ::args::Flag no_provenance(paths_group, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
-            ::args::ValueFlag<std::string> export_formats(paths_group, "formats", "Also export the final trained splat next to project.licht: comma-separated ply, sog, spz, usd, usda, usdc, html, rad", {"export"});
+            ::args::ValueFlag<std::string> export_formats(paths_group, "formats", "Also export the final trained splat next to project.licht: comma-separated ply, sog, ssog, spz, usd, usda, usdc, html, rad", {"export"});
+            ::args::ValueFlag<int> sog_iter(paths_group, "iterations", "SOG k-means iterations (default: 10)", {"sog-iterations"});
+            ::args::ValueFlag<int> lod_levels(paths_group, "value", "LOD levels including finest (default: 4)", {"lod-levels"});
+            ::args::ValueFlag<float> lod_ratio(paths_group, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"});
+            ::args::ValueFlag<int> lod_chunk_count(paths_group, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"});
+            ::args::ValueFlag<float> lod_chunk_extent(paths_group, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"});
+            ::args::ValueFlag<int> lod_chunk_min(paths_group, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"});
 
             ::args::ValueFlag<std::string> import_cameras(paths_group, "path", "Import COLMAP cameras from sparse folder (no images required)", {"import-cameras"});
 
@@ -962,6 +976,20 @@ namespace {
                 }
             }
 
+            if (sog_iter)
+                params.sog_iterations = ::args::get(sog_iter);
+            if (lod_levels)
+                params.lod_levels = ::args::get(lod_levels);
+            if (lod_ratio)
+                params.lod_ratio = ::args::get(lod_ratio);
+            if (lod_chunk_count)
+                params.lod_chunk_count = ::args::get(lod_chunk_count);
+            if (lod_chunk_extent)
+                params.lod_chunk_extent = ::args::get(lod_chunk_extent);
+            if (lod_chunk_min)
+                params.lod_chunk_min = ::args::get(lod_chunk_min);
+            if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
+                return std::unexpected("Invalid streamed SOG LOD options");
             if (export_formats) {
                 auto formats = parseFormatList(::args::get(export_formats));
                 if (!formats) {
@@ -1701,8 +1729,8 @@ namespace {
         "  LichtFeld-Studio convert project.licht output.ply\n"
         "\n"
         "SUPPORTED FORMATS:\n"
-        "  Input:  .ply, .sog, .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
-        "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Input:  .ply, .sog, lod-meta.json (Streamed SOG), .spz, .usd, .usda, .usdc, .usdz, .resume (checkpoint), .licht (project)\n"
+        "  Output: .ply, .sog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  SPZ:    --spz-version 4 (default, zstd) or 3 (legacy gzip)\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1718,7 +1746,7 @@ namespace {
         "\n"
         "SUPPORTED FORMATS:\n"
         "  Input:  .obj, .fbx, .gltf, .glb, .stl, .dae, .3ds, .ply\n"
-        "  Output: .ply, .sog, .spz, .usd, .usda, .usdc, .html, .rad\n"
+        "  Output: .ply, .sog, ssog, .spz, .usd, .usda, .usdc, .html, .rad\n"
         "  Multiple output formats: pass a comma-separated list to --format\n"
         "  Metadata: --no-provenance strips identifying metadata; a minimal build stamp is always embedded\n"
         "\n";
@@ -1755,11 +1783,18 @@ namespace {
         ::args::HelpFlag help(parser, "help", "Display help menu", {'h', "help"});
         ::args::Positional<std::string> input(parser, "input", "Input file or directory");
         ::args::Positional<std::string> output(parser, "output", "Output file (optional)");
+        ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or Streamed SOG directory", {'o', "output"});
         ::args::ValueFlag<int> sh_degree(parser, "degree", "SH degree [0-3], -1 to keep original (default: -1)", {"sh-degree"});
-        ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, spz, html, usd, usda, usdc, rad", {'f', "format"});
+        ::args::ValueFlag<std::string> format(parser, "format", "Output format: ply, sog, ssog, spz, html, usd, usda, usdc, rad", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG (default: 10)", {"sog-iterations"});
+        ::args::ValueFlag<std::string> log_level(parser, "level", "Log level (trace, debug, info, warn, error, off)", {"log-level"});
+        ::args::ValueFlag<int> lod_levels(parser, "value", "LOD levels including finest (default: 4)", {"lod-levels"});
+        ::args::ValueFlag<float> lod_ratio(parser, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"});
+        ::args::ValueFlag<int> lod_chunk_count(parser, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"});
+        ::args::ValueFlag<float> lod_chunk_extent(parser, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"});
+        ::args::ValueFlag<int> lod_chunk_min(parser, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"});
         ::args::ValueFlag<std::string> tiles(parser, "AxB", "Replicate a PLY source across an AxB ground-plane grid (RAD output only)", {"tiles"});
         ::args::ValueFlag<std::string> lod_builder(parser, "builder", "PLY->RAD LOD tree builder: bhatt (default) or octree (hybrid: octree fine levels + similarity-ordered bhatt top, much faster)", {"lod-builder"});
         ::args::Flag rad_stream(parser, "stream", "RAD output: streamable Spark-compatible chunks (default)", {"stream"});
@@ -1783,6 +1818,12 @@ namespace {
             return std::unexpected(std::format("Missing input path\n\n{}", parser.Help()));
         }
 
+        if (log_level) {
+            lfs::core::Logger::get().init(parse_log_level(::args::get(log_level)));
+        } else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+            lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
+        }
+
         param::ConvertParameters params;
         params.input_path = lfs::core::utf8_to_path(::args::get(input));
         params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
@@ -1800,17 +1841,34 @@ namespace {
             return std::unexpected("--spz-version must be 3 or 4");
         }
 
-        if (output)
+        if (output && output_flag)
+            return std::unexpected("Specify output either positionally or with --output");
+        if (output_flag)
+            params.output_path = lfs::core::utf8_to_path(::args::get(output_flag));
+        else if (output)
             params.output_path = lfs::core::utf8_to_path(::args::get(output));
         if (sog_iter)
             params.sog_iterations = ::args::get(sog_iter);
+        if (lod_levels)
+            params.lod_levels = ::args::get(lod_levels);
+        if (lod_ratio)
+            params.lod_ratio = ::args::get(lod_ratio);
+        if (lod_chunk_count)
+            params.lod_chunk_count = ::args::get(lod_chunk_count);
+        if (lod_chunk_extent)
+            params.lod_chunk_extent = ::args::get(lod_chunk_extent);
+        if (lod_chunk_min)
+            params.lod_chunk_min = ::args::get(lod_chunk_min);
+        if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
+            return std::unexpected("Invalid streamed SOG LOD options");
+
         params.overwrite = overwrite;
 
         if (format) {
             if (const auto fmt = parseFormat(::args::get(format))) {
                 params.format = *fmt;
             } else {
-                return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, spz, html, usd, usda, usdc, rad", ::args::get(format)));
+                return std::unexpected(std::format("Invalid format '{}'. Use: ply, sog, ssog, spz, html, usd, usda, usdc, rad", ::args::get(format)));
             }
         } else if (!params.output_path.empty()) {
             if (const auto fmt = parseFormat(params.output_path.extension().string())) {
@@ -1878,12 +1936,18 @@ namespace {
         ::args::Positional<std::string> input(parser, "input", "Input mesh file or directory");
         ::args::Positional<std::string> output(parser, "output", "Output file or directory (optional)");
         ::args::ValueFlag<std::string> output_flag(parser, "path", "Output file or directory", {'o', "output"});
-        ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
+        ::args::ValueFlag<std::string> format(parser, "formats", "Output format(s): ply, sog, ssog, spz, html, usd, usda, usdc, rad. Use commas for multiple outputs", {'f', "format"});
         ::args::ValueFlag<int> spz_version(parser, "version", "SPZ container version: 3 (legacy gzip) or 4 (zstd, default)", {"spz-version"});
         ::args::Flag no_provenance(parser, "no-provenance", "Strip identifying metadata (export id, timestamps, training info) from outputs; a minimal build stamp is always embedded", {"no-provenance"});
         ::args::ValueFlag<int> resolution(parser, "pixels", "Mesh2Splat raster resolution target (default: 1024)", {"resolution"});
         ::args::ValueFlag<float> sigma(parser, "scale", "Gaussian scale sigma (default: 0.65)", {"sigma"});
         ::args::ValueFlag<int> sog_iter(parser, "iterations", "K-means iterations for SOG/HTML output (default: 10)", {"sog-iterations"});
+        ::args::ValueFlag<std::string> log_level(parser, "level", "Log level (trace, debug, info, warn, error, off)", {"log-level"});
+        ::args::ValueFlag<int> lod_levels(parser, "value", "LOD levels including finest (default: 4)", {"lod-levels"});
+        ::args::ValueFlag<float> lod_ratio(parser, "value", "LOD keep ratio (default: 0.5)", {"lod-ratio"});
+        ::args::ValueFlag<int> lod_chunk_count(parser, "value", "Target unit size in K gaussians (default: 512)", {"lod-chunk-count"});
+        ::args::ValueFlag<float> lod_chunk_extent(parser, "value", "Leaf extent in world units (default: 16)", {"lod-chunk-extent"});
+        ::args::ValueFlag<int> lod_chunk_min(parser, "value", "Minimum extent split size in K gaussians (default: 8)", {"lod-chunk-min"});
         ::args::Flag overwrite(parser, "overwrite", "Overwrite existing files without prompting", {'y', "overwrite"});
 
         std::vector<std::string> args_vec(argv + 1, argv + argc);
@@ -1904,6 +1968,12 @@ namespace {
         }
         if (output && output_flag) {
             return std::unexpected("Use either positional output or --output, not both");
+        }
+
+        if (log_level) {
+            lfs::core::Logger::get().init(parse_log_level(::args::get(log_level)));
+        } else if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+            lfs::core::Logger::get().init(parse_log_level(std::string(*env)));
         }
 
         param::Mesh2SplatParameters params;
@@ -1929,6 +1999,19 @@ namespace {
             params.options.sigma = ::args::get(sigma);
         if (sog_iter)
             params.sog_iterations = ::args::get(sog_iter);
+        if (lod_levels)
+            params.lod_levels = ::args::get(lod_levels);
+        if (lod_ratio)
+            params.lod_ratio = ::args::get(lod_ratio);
+        if (lod_chunk_count)
+            params.lod_chunk_count = ::args::get(lod_chunk_count);
+        if (lod_chunk_extent)
+            params.lod_chunk_extent = ::args::get(lod_chunk_extent);
+        if (lod_chunk_min)
+            params.lod_chunk_min = ::args::get(lod_chunk_min);
+        if (params.lod_levels < 1 || params.lod_levels > 1024 || !std::isfinite(params.lod_ratio) || params.lod_ratio <= 0 || params.lod_ratio >= 1 || params.lod_chunk_count <= 0 || !std::isfinite(params.lod_chunk_extent) || params.lod_chunk_extent <= 0 || params.lod_chunk_min < 0)
+            return std::unexpected("Invalid streamed SOG LOD options");
+
         params.overwrite = overwrite;
 
         if (params.options.resolution_target < lfs::core::Mesh2SplatOptions::kMinResolution) {

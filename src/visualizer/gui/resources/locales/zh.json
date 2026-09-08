@@ -22,6 +22,7 @@
     "file.dataset_not_recognized": "所选文件夹未被识别为受支持的数据集：\n{path}",
     "file.checkpoint_not_recognized": "所选文件未被识别为有效检查点：\n{path}",
     "file.import_dataset": "导入数据集",
+    "file.import_streamed_sog": "Import Streamed SOG…",
     "file.import_ply": "导入PLY, SOG, SPZ, RAD, USD",
     "file.import_mesh": "导入网格",
     "file.import_checkpoint": "导入检查点",
@@ -666,6 +667,7 @@
   "export": {
     "overwrite": "覆盖",
     "format.ply_standard": "PLY（标准）",
+    "format.streamed_sog": "Streamed SOG (PlayCanvas LOD)",
     "format.sog_supersplat": "SOG（SuperSplat）",
     "format.spz_niantic": "SPZ（Niantic）",
     "format.usd_openusd": "USD (OpenUSD)",
@@ -1314,6 +1316,15 @@
     "blocked_during_training": "请先停止训练，再加载新场景。"
   },
   "export_dialog": {
+    "folder_name": "Folder name",
+    "lod_levels": "LOD levels",
+    "lod_ratio": "LOD ratio",
+    "chunk_count_k": "Chunk gaussians (K)",
+    "chunk_extent": "Chunk extent",
+    "chunk_min_k": "Minimum chunk gaussians (K)",
+    "kmeans_iterations": "K-means iterations",
+    "invalid_folder_name": "Enter a single folder name without path separators.",
+    "streamed_sog_overwrite": "Streamed SOG data already exists in this folder. Overwrite it?",
     "format": "格式",
     "models": "模型",
     "no_models": "场景中无模型",

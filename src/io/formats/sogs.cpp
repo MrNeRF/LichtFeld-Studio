@@ -1158,7 +1158,7 @@ namespace lfs::io {
             return reconstruct_splat_data(meta, *images);
         }
 
-        std::expected<SplatData, std::string> read_sog_directory(
+        std::expected<SogDirectoryReconstruct, std::string> prepare_sog_directory_impl(
             const std::filesystem::path& path) {
 
             LOG_INFO("Reading SOG from directory: {}", lfs::core::path_to_utf8(path));
@@ -1284,10 +1284,31 @@ namespace lfs::io {
             if (!images) {
                 return std::unexpected(images.error().message);
             }
-            return reconstruct_splat_data(meta, *images);
+            return SogDirectoryReconstruct([meta = std::move(meta), images = std::move(*images)]() {
+                return reconstruct_splat_data(meta, images);
+            });
         }
 
     } // anonymous namespace
+
+    std::expected<SogDirectoryReconstruct, std::string> prepare_sog_directory(const std::filesystem::path& path) {
+        try {
+            return prepare_sog_directory_impl(path);
+        } catch (const std::exception& e) {
+            return std::unexpected(std::string("Failed to read SOG directory: ") + e.what());
+        }
+    }
+
+    std::expected<SplatData, std::string> read_sog_directory(const std::filesystem::path& path) {
+        try {
+            auto ready = prepare_sog_directory(path);
+            if (!ready)
+                return std::unexpected(ready.error());
+            return (*ready)();
+        } catch (const std::exception& e) {
+            return std::unexpected(std::string("Failed to decode SOG directory: ") + e.what());
+        }
+    }
 
     std::expected<SplatData, std::string> load_sog(const std::filesystem::path& path) {
         LOG_TIMER("SOG File Loading");
@@ -1364,7 +1385,7 @@ namespace lfs::io {
             return best;
         }
 
-        class SogArchive {
+        class SogArchive final : public SogSink {
             struct archive* a_ = nullptr;
             std::filesystem::path output_path_;
             std::string last_error_;
@@ -1372,7 +1393,18 @@ namespace lfs::io {
 
         public:
             explicit SogArchive(const std::filesystem::path& output_path)
-                : output_path_(output_path) {
+                : output_path_(output_path) {}
+
+            Result<void> open() override {
+                initialize();
+                if (!valid_)
+                    return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, last_error_, output_path_);
+                return {};
+            }
+
+        private:
+            void initialize() {
+                const auto& output_path = output_path_;
                 a_ = archive_write_new();
                 if (!a_) {
                     last_error_ = "Failed to allocate archive structure";
@@ -1402,7 +1434,8 @@ namespace lfs::io {
                 valid_ = true;
             }
 
-            ~SogArchive() {
+        public:
+            ~SogArchive() override {
                 if (a_) {
                     if (valid_) {
                         archive_write_close(a_);
@@ -1420,7 +1453,7 @@ namespace lfs::io {
             [[nodiscard]] bool is_valid() const { return valid_; }
             [[nodiscard]] const std::string& last_error() const { return last_error_; }
 
-            [[nodiscard]] Result<void> close() {
+            [[nodiscard]] Result<void> close() override {
                 if (!a_ || !valid_) {
                     return {};
                 }
@@ -1439,7 +1472,7 @@ namespace lfs::io {
                 return {};
             }
 
-            [[nodiscard]] Result<void> add_file(const std::string& filename, const void* data, size_t size) {
+            [[nodiscard]] Result<void> add_file(const std::string& filename, const void* data, size_t size) override {
                 if (!valid_) {
                     return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, last_error_, output_path_);
                 }
@@ -1615,8 +1648,8 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    Result<void> save_sog(const SplatData& splat_data, const SogSaveOptions& options_in) {
-        SogSaveOptions options = options_in;
+    Result<void> encode_sog(const SplatData& splat_data, const SogEncodeOptions& options_in, SogSink& archive) {
+        SogEncodeOptions options = options_in;
         if (!options.provenance) {
             options.provenance = core::make_minimal_provenance_stamp();
         }
@@ -1807,30 +1840,26 @@ namespace lfs::io {
 
             const auto morton_started = std::chrono::steady_clock::now();
             auto means_cuda = as_cuda_contiguous(splat_data.means_raw());
-            auto sort_indices_tensor = morton_sort_indices_for_positions(means_cuda);
-            if (!sort_indices_tensor.is_valid()) {
+            auto sort_indices_tensor = options.presorted ? Tensor{} : morton_sort_indices_for_positions(means_cuda);
+            if (!options.presorted && !sort_indices_tensor.is_valid()) {
                 join_sh_kmeans_if_started();
                 return make_error(ErrorCode::ENCODING_FAILED,
                                   "Failed to compute Morton order for SOG export",
                                   options.output_path);
             }
-            auto sort_indices_cpu = sort_indices_tensor.to_pageable_host();
-            const auto* indices = sort_indices_cpu.ptr<int32_t>();
+            auto sort_indices_cpu = options.presorted ? Tensor{} : sort_indices_tensor.to_pageable_host();
+            const auto* indices = options.presorted ? nullptr : sort_indices_cpu.ptr<int32_t>();
 
             auto means_cpu = means_cuda.to_pageable_host();
             const auto* means_ptr = means_cpu.ptr<float>();
             const auto morton_finished = std::chrono::steady_clock::now();
             const auto source_index = [&](int64_t sorted_index) -> int64_t {
-                return static_cast<int64_t>(indices[sorted_index]);
+                return options.presorted ? sorted_index : static_cast<int64_t>(indices[sorted_index]);
             };
 
-            ScopedAtomicOutputFile atomic_output(options.output_path);
-            SogArchive archive(atomic_output.temp_path());
-
-            // Check archive was created successfully
-            if (!archive.is_valid()) {
+            if (auto result = archive.open(); !result) {
                 join_sh_kmeans_if_started();
-                return make_error(ErrorCode::ARCHIVE_CREATION_FAILED, archive.last_error(), options.output_path);
+                return result;
             }
 
             struct PendingWebp {
@@ -1866,8 +1895,8 @@ namespace lfs::io {
                                       std::format("Invalid WebP configuration for '{}'", image.filename),
                                       options.output_path);
                 }
-                config.method = image.method;
-                config.quality = image.quality;
+                config.method = options.fast_webp ? 1 : image.method;
+                config.quality = options.fast_webp ? 75.0f : image.quality;
                 config.exact = 1;
                 if (!WebPValidateConfig(&config)) {
                     return make_error(ErrorCode::ENCODING_FAILED,
@@ -2385,10 +2414,6 @@ namespace lfs::io {
                 return make_error(ErrorCode::CANCELLED, "Export cancelled by user");
             }
 
-            if (auto result = atomic_output.commit(); !result) {
-                return std::unexpected(result.error());
-            }
-
             const auto export_finished = std::chrono::steady_clock::now();
             if (debug_logging_enabled) {
                 std::string webp_timing_fields;
@@ -2399,12 +2424,14 @@ namespace lfs::io {
                     webp_timing_fields += std::format("{}={:.3f}ms", timing.filename, timing.milliseconds);
                 }
                 LOG_DEBUG(
-                    "SOG export stages: morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
+                    "SOG export stages: path={} rows={} presorted={} fast_webp={} webp_threads=1 prepare_ms={:.3f} morton_ms={:.3f} pack_ms={:.3f} cluster_scales_ms={:.3f} "
                     "cluster_sh0_ms={:.3f} kmeans_sh_ms={:.3f} kmeans_sh_wait_ms={:.3f} "
                     "t_kmeans_launch_ms={:.3f} t_join_ms={:.3f} t_kmeans_done_ms={:.3f} "
                     "t_labels_encoded_ms={:.3f} t_webp5_archived_ms={:.3f} "
                     "t_archive_done_ms={:.3f} webp_total_ms={:.3f} "
                     "{} archive_ms={:.3f} total_ms={:.3f}",
+                    core::path_to_utf8(options.output_path), num_rows, options.presorted, options.fast_webp,
+                    milliseconds(export_started, morton_started),
                     milliseconds(morton_started, morton_finished),
                     pack_ms,
                     cluster_scales_ms,
@@ -2434,6 +2461,45 @@ namespace lfs::io {
             return make_error(ErrorCode::ENCODING_FAILED,
                               std::format("Failed to save SOG: {}", e.what()),
                               options.output_path);
+        }
+    }
+
+    Result<void> save_sog(const SplatData& data, const SogSaveOptions& options) {
+        try {
+            ScopedAtomicOutputFile output(options.output_path);
+            SogArchive sink(output.temp_path());
+            SogEncodeOptions encode_options;
+            static_cast<SogSaveOptions&>(encode_options) = options;
+            if (auto result = encode_sog(data, encode_options, sink); !result)
+                return result;
+            return output.commit();
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::ENCODING_FAILED, e.what(), options.output_path);
+        }
+    }
+
+    Result<void> encode_sog_directory(const SplatData& data, const SogEncodeOptions& options) {
+        class DirectorySink final : public SogSink {
+            std::filesystem::path directory_;
+
+        public:
+            explicit DirectorySink(std::filesystem::path directory) : directory_(std::move(directory)) {}
+            Result<void> add_file(const std::string& name, const void* bytes, size_t size) override {
+                std::ofstream file(directory_ / name, std::ios::binary | std::ios::trunc);
+                file.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(size));
+                file.close();
+                if (!file)
+                    return make_error(ErrorCode::WRITE_FAILURE, "Failed to write SOG unit file", directory_ / name);
+                return {};
+            }
+            Result<void> close() override { return {}; }
+        };
+        try {
+            std::filesystem::create_directories(options.output_path);
+            DirectorySink sink(options.output_path);
+            return encode_sog(data, options, sink);
+        } catch (const std::exception& e) {
+            return make_error(ErrorCode::WRITE_FAILURE, e.what(), options.output_path);
         }
     }
 

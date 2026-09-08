@@ -272,6 +272,19 @@ class ImportPlyOperator(Operator):
         return {"FINISHED"}
 
 
+class ImportStreamedSogOperator(Operator):
+    label = "menu.file.import_streamed_sog"
+    description = "Import a Streamed SOG folder containing lod-meta.json"
+
+    def execute(self, context) -> set:
+        path = lf.ui.open_folder_dialog()
+        if not path:
+            return {"CANCELLED"}
+        if not _run_import(path, lambda: lf.load_file(path, is_dataset=False)):
+            return {"CANCELLED"}
+        return {"FINISHED"}
+
+
 class ImportMeshOperator(Operator):
     label = "menu.file.import_mesh"
     description = "Import a 3D mesh file"
@@ -570,6 +583,7 @@ class FileMenu:
                 [
                     menu_operator(ImportDatasetOperator),
                     menu_operator(ImportPlyOperator),
+                    menu_operator(ImportStreamedSogOperator),
                     menu_operator(ImportMeshOperator),
                     menu_operator(ImportCheckpointOperator),
                     menu_separator(),
@@ -595,6 +609,7 @@ _operator_classes = [
     CompactProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,
+    ImportStreamedSogOperator,
     ImportMeshOperator,
     ImportCheckpointOperator,
     ImportConfigOperator,

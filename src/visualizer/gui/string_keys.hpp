@@ -12,6 +12,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MENU = "menu.file";
             inline constexpr const char* NEW_PROJECT = "menu.file.new_project";
             inline constexpr const char* IMPORT_DATASET = "menu.file.import_dataset";
+            inline constexpr const char* IMPORT_STREAMED_SOG = "menu.file.import_streamed_sog";
             inline constexpr const char* IMPORT_PLY = "menu.file.import_ply";
             inline constexpr const char* IMPORT_CHECKPOINT = "menu.file.import_checkpoint";
             inline constexpr const char* IMPORT_CONFIG = "menu.file.import_config";
@@ -284,6 +285,7 @@ namespace lichtfeld::Strings {
 
     namespace Export {
         inline constexpr const char* FORMAT_PLY_STANDARD = "export.format.ply_standard";
+        inline constexpr const char* FORMAT_STREAMED_SOG = "export.format.streamed_sog";
         inline constexpr const char* FORMAT_SOG_SUPERSPLAT = "export.format.sog_supersplat";
         inline constexpr const char* FORMAT_SPZ_NIANTIC = "export.format.spz_niantic";
         inline constexpr const char* FORMAT_USD_OPENUSD = "export.format.usd_openusd";

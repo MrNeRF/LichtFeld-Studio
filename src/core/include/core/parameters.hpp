@@ -462,6 +462,12 @@ namespace lfs::core {
             // Additional final-splat exports written next to project.licht after
             // training completes. Empty = only the .licht project is written.
             std::vector<OutputFormat> export_formats;
+            int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
 
             // True when --bg-color was provided on the command line.
             bool cli_bg_color_set = false;
@@ -484,7 +490,8 @@ namespace lfs::core {
                                   USD,
                                   USDA,
                                   USDC,
-                                  RAD };
+                                  RAD,
+                                  STREAMED_SOG };
 
         // PLY -> RAD only: per-bucket LOD tree builder for the out-of-core
         // converter. BHATT is the quality-validated default; OCTREE trades
@@ -502,6 +509,11 @@ namespace lfs::core {
             OutputFormat format = OutputFormat::PLY;
             int sh_degree = 3; // 0-3, -1 = keep original
             int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             // PLY -> RAD only: replicate the source across an AxB ground-plane
             // grid instead of pre-tiling the input file.
@@ -521,6 +533,11 @@ namespace lfs::core {
             std::vector<OutputFormat> formats{OutputFormat::PLY};
             Mesh2SplatOptions options;
             int sog_iterations = 10;
+            int lod_levels = 4;
+            float lod_ratio = 0.5f;
+            int lod_chunk_count = 512;
+            float lod_chunk_extent = 16.0f;
+            int lod_chunk_min = 8;
             int spz_version = 4; // SPZ container version: 4 (zstd) or 3 (legacy gzip)
             bool overwrite = false;
             bool include_provenance = true; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal

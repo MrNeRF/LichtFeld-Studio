@@ -1504,6 +1504,19 @@ namespace lfs::app {
                 if (!node)
                     return std::unexpected(node.error().message);
                 requested.push_back((*node)->name);
+            } else if (args.contains("node_ids")) {
+                const auto& ids = args["node_ids"];
+                if (!ids.is_array())
+                    return std::unexpected("Field 'node_ids' must be an array of node IDs");
+                for (const auto& id : ids) {
+                    if (!id.is_number_integer() || id.get<int64_t>() < 0 ||
+                        id.get<uint64_t>() > static_cast<uint64_t>(std::numeric_limits<core::NodeId>::max()))
+                        return std::unexpected("Field 'node_ids' must contain valid non-negative node IDs");
+                    const auto* node = scene.getNodeById(id.get<core::NodeId>());
+                    if (!node)
+                        return std::unexpected("Node ID does not resolve");
+                    requested.push_back(node->name);
+                }
             } else if (args.contains("nodes")) {
                 const auto& nodes = args["nodes"];
                 if (!nodes.is_array())
@@ -1606,7 +1619,8 @@ namespace lfs::app {
                                                             const core::ExportFormat format,
                                                             const std::filesystem::path& path,
                                                             const int sh_degree,
-                                                            const bool include_provenance = true) {
+                                                            const bool include_provenance = true,
+                                                            io::StreamedSogSaveOptions streamed_options = {}) {
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -1649,6 +1663,13 @@ namespace lfs::app {
             }
             case core::ExportFormat::SOG: {
                 if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10, .provenance = stamp}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
+            case core::ExportFormat::STREAMED_SOG: {
+                streamed_options.output_path = path;
+                streamed_options.provenance = stamp;
+                if (auto result = io::save_streamed_sog(*merged, streamed_options); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
@@ -3364,6 +3385,69 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "scene.export_streamed_sog",
+                .description = "Export scene nodes synchronously to a PlayCanvas multi-LOD Streamed SOG directory",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination directory (contains lod-meta.json)"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"node_ids", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Optional session-local node IDs"}}},
+                        {"lod_levels", json{{"type", "integer"}, {"default", 4}, {"minimum", 1}, {"maximum", 8}}},
+                        {"lod_ratio", json{{"type", "number"}, {"default", 0.5}, {"minimum", 0.1}, {"maximum", 0.9}}},
+                        {"chunk_count_k", json{{"type", "integer"}, {"default", 512}, {"minimum", 1}}},
+                        {"chunk_extent", json{{"type", "number"}, {"default", 16.0}, {"minimum", 0.01}}},
+                        {"chunk_min_k", json{{"type", "integer"}, {"default", 8}, {"minimum", 0}}},
+                        {"kmeans_iterations", json{{"type", "integer"}, {"default", 10}, {"minimum", 1}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    io::StreamedSogSaveOptions options;
+                    options.lod_levels = args.value("lod_levels", 4);
+                    options.lod_ratio = args.value("lod_ratio", 0.5f);
+                    options.chunk_count_k = args.value("chunk_count_k", 512);
+                    options.chunk_extent = args.value("chunk_extent", 16.0f);
+                    options.chunk_min_k = args.value("chunk_min_k", 8);
+                    options.kmeans_iterations = args.value("kmeans_iterations", 10);
+                    if (options.lod_levels < 1 || options.lod_levels > 8 ||
+                        !(options.lod_ratio >= 0.1f && options.lod_ratio <= 0.9f) ||
+                        options.chunk_count_k < 1 || !(options.chunk_extent > 0.0f) ||
+                        options.chunk_min_k < 0 || options.kmeans_iterations < 1)
+                        return json{{"error", "Invalid Streamed SOG export options"}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::STREAMED_SOG, path, sh_degree, include_provenance, options); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "streamed_sog"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "scene.export_spz",
                 .description = "Start an asynchronous export of one or more scene nodes to SPZ",
                 .input_schema = {
@@ -3636,6 +3720,7 @@ namespace lfs::app {
                         {"success", true},
                         {"active", false},
                         {"mode", "synchronous"},
+                        {"supported_formats", {"ply", "sog", "streamed_sog", "spz", "usd", "usdz_nurec", "html", "rad", "colmap"}},
                         {"stage", "idle"},
                     };
                 });

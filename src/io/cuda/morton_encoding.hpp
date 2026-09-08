@@ -18,8 +18,9 @@ namespace lfs::io {
      * retaining the source order for equal keys.
      *
      * @param positions Tensor of shape [N, 3] containing 3D positions (Float32, CUDA)
+     * @param sorted_keys Optional output for the correspondingly sorted 63-bit keys.
      * @return Tensor of sorted indices (Int32, CUDA)
      */
-    Tensor morton_sort_indices_for_positions(const Tensor& positions);
+    Tensor morton_sort_indices_for_positions(const Tensor& positions, Tensor* sorted_keys = nullptr);
 
 } // namespace lfs::io

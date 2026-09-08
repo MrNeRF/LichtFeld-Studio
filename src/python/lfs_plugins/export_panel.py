@@ -27,11 +27,13 @@ class ExportFormat(IntEnum):
     NUREC_USDZ = 5
     RAD = 6
     COLMAP = 7
+    STREAMED_SOG = 8
 
 
 FORMAT_INFO = (
     (ExportFormat.PLY, "export.format.ply_standard"),
     (ExportFormat.SOG, "export.format.sog_supersplat"),
+    (ExportFormat.STREAMED_SOG, "export.format.streamed_sog"),
     (ExportFormat.SPZ, "export.format.spz_niantic"),
     (ExportFormat.RAD, "export.format.rad_random_access"),
     (ExportFormat.USD, "export.format.usd_openusd"),
@@ -43,6 +45,7 @@ FORMAT_INFO = (
 EXPORT_PROGRESS_FORMAT_NAMES = {
     ExportFormat.PLY: "PLY",
     ExportFormat.SOG: "SOG",
+    ExportFormat.STREAMED_SOG: "SSOG",
     ExportFormat.SPZ: "SPZ",
     ExportFormat.HTML_VIEWER: "HTML",
     ExportFormat.USD: "USD",
@@ -73,6 +76,11 @@ class ExportPanel(Panel):
         self._max_export_sh_degree = 3
         self._export_sh_degree = 3
         self._pinned_sh_degree = True
+        self._ssog_folder_name = ""
+        self._ssog_settings = {
+            "lod_levels": 4, "lod_ratio": 0.5, "chunk_count_k": 512,
+            "chunk_extent": 16.0, "chunk_min_k": 8, "kmeans_iterations": 10,
+        }
         self._spz_version = 4  # SPZ container: 4 (zstd) or 3 (legacy gzip)
         self._selection_seeded = False
         self._handle = None
@@ -109,6 +117,11 @@ class ExportPanel(Panel):
         model.bind_func("show_no_models", lambda: not self._has_models)
         model.bind_func("show_model_selection", lambda: self._format != ExportFormat.COLMAP)
         model.bind_func("show_sh_degree", lambda: self._format != ExportFormat.COLMAP)
+        model.bind_func("show_streamed_sog_settings", lambda: self._format == ExportFormat.STREAMED_SOG)
+        model.bind("ssog_folder_name", self._get_ssog_folder_name, self._set_ssog_folder_name)
+        for field in self._ssog_settings:
+            model.bind(field, lambda f=field: str(self._ssog_settings[f]),
+                       lambda value, f=field: self._set_ssog_setting(f, value))
         model.bind_func("show_spz_version", lambda: self._format == ExportFormat.SPZ)
         model.bind_func("export_error_text", self._get_export_error_text)
         model.bind_func("can_export", self._can_export)
@@ -150,6 +163,33 @@ class ExportPanel(Panel):
         model.bind_record_list("models")
 
         self._handle = model.get_handle()
+
+    def _get_ssog_folder_name(self):
+        if self._ssog_folder_name:
+            return self._ssog_folder_name
+        names = self._get_selected_node_names()
+        return f"{names[0]}_ssog" if names else "scene_ssog"
+
+    def _set_ssog_folder_name(self, value):
+        self._ssog_folder_name = str(value).strip()
+        self._dirty_model("ssog_folder_name", "can_export", "export_error_text")
+
+    def _valid_ssog_folder_name(self):
+        name = self._get_ssog_folder_name()
+        return bool(name) and name not in {".", ".."} and not any(c in name for c in '/\\:')
+
+    def _set_ssog_setting(self, field, value):
+        bounds = {
+            "lod_levels": (int, 1, 8), "lod_ratio": (float, 0.1, 0.9),
+            "chunk_count_k": (int, 1, 2147483), "chunk_extent": (float, 0.01, 1e6),
+            "chunk_min_k": (int, 0, 2147483), "kmeans_iterations": (int, 1, 1000),
+        }
+        cast, low, high = bounds[field]
+        try:
+            self._ssog_settings[field] = cast(max(low, min(high, float(value))))
+        except (ValueError, TypeError, OverflowError):
+            return
+        self._dirty_model(field)
 
     def _set_sh_degree(self, v):
         try:
@@ -440,6 +480,8 @@ class ExportPanel(Panel):
 
     def _get_export_error_text(self):
         tr = lf.ui.tr
+        if self._format == ExportFormat.STREAMED_SOG and not self._valid_ssog_folder_name():
+            return tr("export_dialog.invalid_folder_name")
         if self._format != ExportFormat.COLMAP:
             return tr("export.select_at_least_one")
 
@@ -522,6 +564,8 @@ class ExportPanel(Panel):
         )
 
     def _rebuild_model_records(self, nodes):
+        if self._format == ExportFormat.STREAMED_SOG:
+            self._dirty_model("ssog_folder_name")
         if self._handle:
             self._handle.update_record_list(
                 "models",
@@ -559,6 +603,8 @@ class ExportPanel(Panel):
         self._rebuild_format_records()
         # Dirty format-dependent settings visibility when format changes
         self._dirty_model(
+            "show_streamed_sog_settings",
+            "ssog_folder_name",
             "show_rad_settings",
             "show_model_selection",
             "show_sh_degree",
@@ -647,7 +693,8 @@ class ExportPanel(Panel):
     def _can_export(self):
         if self._format == ExportFormat.COLMAP:
             return self._can_export_colmap()
-        return bool(self._selected_nodes)
+        return bool(self._selected_nodes) and (
+            self._format != ExportFormat.STREAMED_SOG or self._valid_ssog_folder_name())
 
     def _get_selected_node_names(self):
         selected = []
@@ -657,6 +704,11 @@ class ExportPanel(Panel):
         return selected
 
     def _get_save_path(self, default_name):
+        if self._format == ExportFormat.STREAMED_SOG:
+            if not self._valid_ssog_folder_name():
+                return ""
+            parent = lf.ui.open_folder_dialog()
+            return str(Path(parent) / self._get_ssog_folder_name()) if parent else ""
         if self._format == ExportFormat.PLY:
             return lf.ui.save_ply_file_dialog(default_name)
         if self._format == ExportFormat.SOG:
@@ -724,6 +776,16 @@ class ExportPanel(Panel):
         path = self._get_save_path(default_name)
 
         if path:
+            if self._format == ExportFormat.STREAMED_SOG and (Path(path) / "lod-meta.json").exists():
+                tr = lf.ui.tr
+                overwrite_label = tr("export.overwrite")
+                lf.ui.confirm_dialog(
+                    tr("export.format.streamed_sog"),
+                    f"{tr('export_dialog.streamed_sog_overwrite')}\n{path}",
+                    [overwrite_label, tr("common.cancel")],
+                    lambda reply: self._start_export(path, selected_nodes) if reply == overwrite_label else None,
+                )
+                return
             if self._format == ExportFormat.COLMAP:
                 if self._colmap_sparse_data_exists(path):
                     self._confirm_colmap_overwrite(path, selected_nodes)
@@ -761,6 +823,7 @@ class ExportPanel(Panel):
                     rad_streamable=self._rad_streamable,
                     spz_version=self._spz_version,
                     include_provenance=self._include_provenance,
+                    **self._ssog_settings,
                 )
             finally:
                 self._request_reactive_update()

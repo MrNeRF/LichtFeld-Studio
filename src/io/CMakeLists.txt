@@ -8,6 +8,7 @@ add_library(lfs_io_cuda STATIC
         cuda/morton_encoding.cu
         cuda/kmeans.hpp
         cuda/kmeans.cu
+        cuda/splat_decimate.cu
         cuda/image_format_kernels.cuh
         cuda/image_format_kernels.cu
 )
@@ -232,6 +233,7 @@ endif()
 add_library(lfs_io STATIC
         # Implementation file only (header is in include/io/)
         loader.cpp
+        splat_decimate.cpp
 
         # Internal implementation files
         # Core interfaces and types
@@ -249,6 +251,8 @@ add_library(lfs_io STATIC
         formats/transforms.cpp
         formats/sogs.hpp
         formats/sogs.cpp
+        formats/streamed_sog.hpp
+        formats/streamed_sog.cpp
         formats/html.hpp
         formats/html.cpp
         formats/rad.hpp
@@ -282,6 +286,8 @@ add_library(lfs_io STATIC
         loaders/blender_loader.cpp
         loaders/sogs_loader.hpp
         loaders/sogs_loader.cpp
+        loaders/streamed_sog_loader.hpp
+        loaders/streamed_sog_loader.cpp
         loaders/spz_loader.hpp
         loaders/spz_loader.cpp
         loaders/usd_loader.hpp
@@ -467,3 +473,9 @@ message(STATUS "I/O module configured with SOG support")
 message(STATUS "  IO CUDA library: lfs_io_cuda (morton, k-means)")
 message(STATUS "  WebP decoder library: ${WEBP_DECODE_LIB}")
 message(STATUS "  Archive library: ${ARCHIVE_LIB}")
+
+# Reference decimation needs IEEE arithmetic despite the IO CUDA fast-math defaults.
+set_source_files_properties(cuda/splat_decimate.cu PROPERTIES
+    COMPILE_OPTIONS "--fmad=false;--ftz=false;--prec-div=true;--prec-sqrt=true")
+set_source_files_properties(splat_decimate.cpp PROPERTIES
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:GNU,Clang>:-ffp-contract=off>")

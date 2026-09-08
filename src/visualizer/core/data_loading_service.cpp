@@ -10,6 +10,7 @@
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
+#include "io/splat_path.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
@@ -94,7 +95,7 @@ namespace lfs::vis {
         try {
             if (!cmd.replace &&
                 scene_manager_->getContentType() == SceneManager::ContentType::SplatFiles) {
-                const std::string name = lfs::core::path_to_utf8(cmd.path.stem());
+                const std::string name = lfs::io::splat_import_name(cmd.path);
                 if (!viewer_ || !viewer_->getGuiManager() ||
                     !viewer_->getGuiManager()->asyncTasks().startSplatLoad({cmd.path}, false, {name})) {
                     throw std::runtime_error("Import already in progress");
@@ -129,6 +130,12 @@ namespace lfs::vis {
                 .error = result.error()}
                 .emit();
         }
+    }
+
+    bool DataLoadingService::isStreamedSogFile(const std::filesystem::path& path) const {
+        std::error_code ec;
+        return path.filename() == "lod-meta.json" ||
+               std::filesystem::is_regular_file(path / "lod-meta.json", ec);
     }
 
     bool DataLoadingService::isSOGFile(const std::filesystem::path& path) const {
@@ -233,7 +240,7 @@ namespace lfs::vis {
 
         try {
             // Determine file type
-            if (isSOGFile(path)) {
+            if (isStreamedSogFile(path) || isSOGFile(path)) {
                 return loadSOG(path);
             } else if (isPLYFile(path)) {
                 return loadPLY(path);
@@ -277,7 +284,7 @@ namespace lfs::vis {
             LOG_DEBUG("Adding PLY to scene: {}", lfs::core::path_to_utf8(path));
 
             // Extract name from path
-            std::string name = lfs::core::path_to_utf8(path.stem());
+            std::string name = lfs::io::splat_import_name(path);
             LOG_TRACE("Extracted PLY name: {}", name);
 
             // Add through scene manager
@@ -302,7 +309,7 @@ namespace lfs::vis {
             LOG_DEBUG("Adding SOG to scene: {}", lfs::core::path_to_utf8(path));
 
             // Extract name from path
-            std::string name = lfs::core::path_to_utf8(path.stem());
+            std::string name = lfs::io::splat_import_name(path);
             LOG_TRACE("Extracted SOG name: {}", name);
 
             // Add through the shared asynchronous loader.
@@ -321,13 +328,13 @@ namespace lfs::vis {
     }
 
     void DataLoadingService::addSplatFileToScene(const std::filesystem::path& path) {
-        if (isSOGFile(path)) {
+        if (isStreamedSogFile(path) || isSOGFile(path)) {
             addSOGToScene(path);
         } else if (isPLYFile(path)) {
             addPLYToScene(path);
         } else {
             // Generic add
-            std::string name = lfs::core::path_to_utf8(path.stem());
+            std::string name = lfs::io::splat_import_name(path);
             if (!viewer_ || !viewer_->getGuiManager() ||
                 !viewer_->getGuiManager()->asyncTasks().startSplatLoad({path}, false, {name})) {
                 throw std::runtime_error("Import already in progress");
