@@ -854,7 +854,6 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
     // Generic quaternion away from symmetry; keeps the smallest-axis column
     // pointed toward the camera so the orientation sign stays fixed.
     const std::vector<float> base_quat{0.95f, 0.15f, -0.1f, 0.05f};
-    const std::vector<float> upstream{0.7f, -0.4f, 1.1f};
     auto camera = scene.make_camera();
     auto bg = Tensor::zeros({3}, Device::CUDA);
 
@@ -864,9 +863,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
         if (!forward.has_value()) {
             throw lfs::Exception(std::move(forward.error()));
         }
-        const auto normal_cpu = forward->first.normal.to(Device::CPU);
-        const float* n = normal_cpu.ptr<float>();
-        const float loss = upstream[0] * n[0] + upstream[1] * n[1] + upstream[2] * n[2];
+        const float loss = scene.normal_loss(forward->first.normal);
         forward->second.release_forward_context();
         return loss;
     };
@@ -880,9 +877,8 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientMatchesFiniteDiffere
     opt.allocate_gradients();
     opt.zero_grad(0);
 
-    std::vector<float> upstream_data = upstream;
     auto grad_image = Tensor::zeros_like(forward->first.image);
-    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto grad_normal = scene.make_grad_normal();
     fast_rasterize_backward(
         forward->second,
         grad_image,
@@ -930,7 +926,6 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIn
                           -1.0f, -1.5f, -3.0f,
                           -1.0f, -1.5f, -3.0f};
     const std::vector<float> base_quat{0.95f, 0.15f, -0.1f, 0.05f};
-    const std::vector<float> upstream{0.7f, -0.4f, 1.1f};
     std::vector<float> rotations;
     for (int row = 0; row < 3; ++row) {
         rotations.insert(rotations.end(), base_quat.begin(), base_quat.end());
@@ -952,9 +947,7 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIn
         if (!forward.has_value()) {
             throw lfs::Exception(std::move(forward.error()));
         }
-        const auto normal_cpu = forward->first.normal.to(Device::CPU);
-        const float* n = normal_cpu.ptr<float>();
-        const float loss = upstream[0] * n[0] + upstream[1] * n[1] + upstream[2] * n[2];
+        const float loss = scene.normal_loss(forward->first.normal);
         forward->second.release_forward_context();
         return loss;
     };
@@ -976,9 +969,8 @@ TEST(FastGSNormalChannelTest, BackwardNormalRotationGradientUsesCompactVisibleIn
     opt.allocate_gradients();
     opt.zero_grad(0);
 
-    std::vector<float> upstream_data = upstream;
     auto grad_image = Tensor::zeros_like(forward->first.image);
-    auto grad_normal = Tensor::from_blob(upstream_data.data(), {3, 1, 1}, Device::CPU, DataType::Float32).to(Device::CUDA);
+    auto grad_normal = scene.make_grad_normal();
     fast_rasterize_backward(
         forward->second,
         grad_image,
