@@ -486,7 +486,8 @@ namespace lfs::training::kernels {
 
             const double sum_alpha = sums[0];
             const double count = sums[1];
-            const bool valid = sum_alpha > 0.0;
+            const bool valid = count >= kNormalConsistencyMinValidCount &&
+                               sum_alpha >= kNormalConsistencyMinValidWeight;
 
             finals[slots::kValid] = valid ? 1.0f : 0.0f;
             finals[slots::kSumAlpha] = static_cast<float>(sum_alpha);
