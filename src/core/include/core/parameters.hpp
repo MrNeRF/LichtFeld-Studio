@@ -30,6 +30,18 @@ namespace lfs::core {
             NormalSupervision,
         };
 
+        // Data-only description: presentation layers render one shared message
+        // template instead of maintaining a sentence for every combination.
+        struct TrainingBackendConflictDescriptor {
+            std::string_view id;
+            std::string_view backend_name;
+            std::string_view feature_name;
+            std::string_view fallback_backend_name;
+        };
+
+        [[nodiscard]] LFS_CORE_API TrainingBackendConflictDescriptor
+        training_backend_conflict_descriptor(TrainingBackendConflict conflict);
+
         enum class ParameterValidationMode {
             Runtime,
             Storage,
@@ -491,7 +503,8 @@ namespace lfs::core {
 
             std::vector<int> disabled_camera_uids;
 
-            [[nodiscard]] std::string validate() const;
+            [[nodiscard]] std::string validate(
+                ParameterValidationMode mode = ParameterValidationMode::Runtime) const;
         };
 
         // Output format for conversion tool

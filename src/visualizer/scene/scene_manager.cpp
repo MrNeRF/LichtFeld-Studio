@@ -2967,7 +2967,9 @@ namespace lfs::vis {
 
             if (scene_.hasTrainingData()) {
                 auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-                trainer->setParams(dataset_params);
+                if (auto updated = trainer->setParams(dataset_params); !updated) {
+                    return std::unexpected(updated.error());
+                }
 
                 if (!services().trainerOrNull()) {
                     return std::unexpected("No trainer manager");
@@ -3050,7 +3052,9 @@ namespace lfs::vis {
 
             // Create Trainer from Scene
             auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-            trainer->setParams(dataset_params);
+            if (auto updated = trainer->setParams(dataset_params); !updated) {
+                return std::unexpected(updated.error());
+            }
 
             // Pass trainer to manager
             if (services().trainerOrNull()) {
@@ -3305,10 +3309,9 @@ namespace lfs::vis {
                 throw std::runtime_error("Failed to initialize trainer: " + init_result.error());
             }
 
-            const auto ckpt_load_result = trainer->load_checkpoint(path);
-            if (!ckpt_load_result) {
-                LOG_WARN("Failed to restore checkpoint state: {}", ckpt_load_result.error());
-            }
+            // initialize() has already restored resume_checkpoint, propagating
+            // load errors. Do not load the same state a second time.
+            const auto effective_checkpoint_params = trainer->getParams();
 
             if (!services().trainerOrNull()) {
                 throw std::runtime_error("No trainer manager available");
@@ -3318,7 +3321,7 @@ namespace lfs::vis {
 
             // Keep the viewer's editable state aligned with the restored trainer state.
             if (auto* param_mgr = services().paramsOrNull()) {
-                param_mgr->importTrainingParams(checkpoint_params);
+                param_mgr->importTrainingParams(effective_checkpoint_params);
             }
 
             LOG_INFO("Checkpoint loaded: {} gaussians, iteration {}", num_gaussians, checkpoint_iteration);

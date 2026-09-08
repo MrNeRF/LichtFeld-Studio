@@ -322,8 +322,8 @@ namespace {
         };
         const std::array cases{
             Case{&OptimizationParameters::mip_filter, Conflict::MipFilter, "Mip Filter"},
-            Case{&OptimizationParameters::use_depth_loss, Conflict::DepthSupervision, "Depth Supervision"},
-            Case{&OptimizationParameters::use_normal_loss, Conflict::NormalSupervision, "Normal Supervision"},
+            Case{&OptimizationParameters::use_depth_loss, Conflict::DepthSupervision, "Depth Loss"},
+            Case{&OptimizationParameters::use_normal_loss, Conflict::NormalSupervision, "Normal Loss"},
         };
         for (const auto* strategy : {"mrnf", "mcmc", "igs+"}) {
             for (const auto& item : cases) {
@@ -335,7 +335,18 @@ namespace {
                 params.gut = true;
                 const auto expected = std::string_view(strategy) == "igs+" ? Conflict::IGSPlus : item.conflict;
                 EXPECT_EQ(params.backend_conflict(), expected);
-                EXPECT_FALSE(params.validate().empty());
+                const auto descriptor =
+                    lfs::core::param::training_backend_conflict_descriptor(expected);
+                ASSERT_FALSE(descriptor.id.empty());
+                EXPECT_EQ(descriptor.backend_name, "3DGUT");
+                EXPECT_EQ(descriptor.fallback_backend_name, "3DGS");
+                EXPECT_EQ(
+                    params.backend_conflict_message(),
+                    std::string(descriptor.backend_name) + " cannot be used with " +
+                        std::string(descriptor.feature_name) +
+                        ". Change this setting or select " +
+                        std::string(descriptor.fallback_backend_name) + ".");
+                EXPECT_EQ(params.validate(), params.backend_conflict_message());
                 if (expected != Conflict::IGSPlus)
                     EXPECT_NE(params.validate().find(item.label), std::string::npos);
                 const auto restored = OptimizationParameters::from_json(params.to_json());
@@ -346,6 +357,9 @@ namespace {
                 EXPECT_EQ(training.validate(), params.validate());
             }
         }
+        EXPECT_TRUE(lfs::core::param::training_backend_conflict_descriptor(
+                        Conflict::None)
+                        .id.empty());
     }
 
     TEST_F(TrainingParametersTest, GutConflictValidationAllowsUndistortAndDoesNotNormalizeSettings) {
@@ -376,6 +390,10 @@ namespace {
         EXPECT_FALSE(params.validate().empty());
         EXPECT_TRUE(params.validate(ParameterValidationMode::Storage).empty());
         EXPECT_EQ(params.to_json(), before);
+        lfs::core::param::TrainingParameters training;
+        training.optimization = params;
+        EXPECT_FALSE(training.validate().empty());
+        EXPECT_TRUE(training.validate(ParameterValidationMode::Storage).empty());
         params.refine_every = 0;
         EXPECT_NE(params.validate(ParameterValidationMode::Storage).find("refine_every"), std::string::npos);
     }
@@ -595,7 +613,13 @@ namespace {
             const auto fixture_path = std::filesystem::path(PROJECT_ROOT_PATH) /
                                       "tests" / "data" / "param_json_golden" /
                                       (std::string(name) + ".json");
-            const auto fixture_bytes = read_file_bytes(fixture_path);
+            auto fixture_bytes = read_file_bytes(fixture_path);
+            // Git may check out the golden files with CRLF on Windows. Keep
+            // the exact formatting comparison independent of checkout EOLs.
+            for (size_t pos = 0; (pos = fixture_bytes.find("\r\n", pos)) != std::string::npos;) {
+                fixture_bytes.erase(pos, 1);
+                ++pos;
+            }
             const auto expected = nlohmann::json::parse(fixture_bytes);
             const auto actual = params.to_json();
 

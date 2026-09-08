@@ -109,6 +109,34 @@ STRATEGY_LABEL_KEYS = {
     "igs+": "training.options.strategy.igs_plus",
 }
 
+BACKEND_CONFLICT_FEATURE_LABEL_KEYS = {
+    "igs_plus": "training.options.strategy.igs_plus",
+    "mip_filter": "training_params.mip_filter",
+    "depth_supervision": "training_params.use_depth_loss",
+    "normal_supervision": "training_params.use_normal_loss",
+}
+
+
+def _localized_backend_conflict_message(
+    conflict,
+    *,
+    backend="3DGUT",
+    fallback_backend="3DGS",
+    feature_fallback="",
+):
+    label_key = BACKEND_CONFLICT_FEATURE_LABEL_KEYS.get(str(conflict), "")
+    feature = (
+        tr(label_key).rstrip(" \t\r\n:：")
+        if label_key
+        else str(feature_fallback or conflict)
+    )
+    return (
+        tr("training.backend_conflict.message")
+        .replace("{backend}", str(backend))
+        .replace("{feature}", feature)
+        .replace("{fallback_backend}", str(fallback_backend))
+    )
+
 DATASET_BOOL_PROPS = ["use_cpu_cache", "use_16bit_color"]
 
 def _resolved_ppisp_activation_step(
@@ -1784,7 +1812,7 @@ class TrainingPanel(Panel):
 
             lf.ui.confirm_dialog(
                 tr("training.error.strategy_gut_title"),
-                tr("training.conflict.strategy_gut_strategy_message"),
+                _localized_backend_conflict_message("igs_plus"),
                 [btn_gut, btn_cancel],
                 _on_conflict,
             )
@@ -2453,12 +2481,26 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            conflict = str(getattr(params, "backend_conflict", ""))
+            raw_context = getattr(params, "backend_conflict_context", {})
+            context = raw_context if isinstance(raw_context, dict) else {}
+            conflict = str(
+                context.get("id") or getattr(params, "backend_conflict", "")
+            )
             conflict_message = str(
                 getattr(params, "backend_conflict_message", "")
             )
             is_backend_conflict = bool(
                 conflict and conflict_message and error == conflict_message
+            )
+            localized_conflict_message = (
+                _localized_backend_conflict_message(
+                    conflict,
+                    backend=context.get("backend", "3DGUT"),
+                    fallback_backend=context.get("fallback_backend", "3DGS"),
+                    feature_fallback=context.get("feature", ""),
+                )
+                if is_backend_conflict
+                else ""
             )
             if is_backend_conflict and conflict == "igs_plus":
                 btn_mcmc = tr("training.conflict.btn_use_mcmc")
@@ -2481,14 +2523,14 @@ class TrainingPanel(Panel):
 
                 lf.ui.confirm_dialog(
                     tr("training.error.strategy_gut_title"),
-                    tr("training.conflict.strategy_gut_start_message"),
+                    localized_conflict_message,
                     [btn_mcmc, btn_gut, btn_cancel],
                     _on_conflict,
                 )
                 return
 
             message = (
-                tr(f"training.backend_conflict.{conflict}")
+                localized_conflict_message
                 if is_backend_conflict
                 else error
             )

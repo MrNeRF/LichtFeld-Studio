@@ -309,7 +309,11 @@ namespace lfs::training {
             std::lock_guard<std::mutex> lock(params_mutex_);
             return params_;
         }
-        void setParams(const lfs::core::param::TrainingParameters& params);
+        [[nodiscard]] std::expected<void, std::string>
+        setParams(
+            const lfs::core::param::TrainingParameters& params,
+            lfs::core::param::ParameterValidationMode validation_mode =
+                lfs::core::param::ParameterValidationMode::Runtime);
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);

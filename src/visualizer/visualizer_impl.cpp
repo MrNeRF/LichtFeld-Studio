@@ -3837,6 +3837,11 @@ namespace lfs::vis {
                 trainer_manager_->getActionBlockedReason(
                     TrainingAction::Start)));
         }
+        if (auto preflight =
+                trainer_manager_->preflightStartParameters();
+            !preflight) {
+            return std::unexpected(preflight.error());
+        }
         if (project_lifecycle_) {
             if (auto prepared =
                     project_lifecycle_
@@ -3847,8 +3852,15 @@ namespace lfs::vis {
                         prepared.error()));
             }
         }
-        if (!trainer_manager_->startTraining())
+        if (!trainer_manager_->startTraining()) {
+            if (const auto typed = trainer_manager_->lastTrainingError()) {
+                return std::unexpected(lfs::format_for_developer(*typed));
+            }
+            if (!trainer_manager_->getLastError().empty()) {
+                return std::unexpected(trainer_manager_->getLastError());
+            }
             return std::unexpected("The training manager rejected the start request");
+        }
         return {};
     }
 

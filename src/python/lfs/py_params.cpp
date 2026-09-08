@@ -31,25 +31,6 @@ namespace lfs::python {
     using namespace lfs::core::prop;
     using lfs::training::CommandCenter;
 
-    namespace {
-        [[nodiscard]] std::string_view backend_conflict_id(
-            const TrainingBackendConflict conflict) {
-            switch (conflict) {
-            case TrainingBackendConflict::IGSPlus:
-                return "igs_plus";
-            case TrainingBackendConflict::MipFilter:
-                return "mip_filter";
-            case TrainingBackendConflict::DepthSupervision:
-                return "depth_supervision";
-            case TrainingBackendConflict::NormalSupervision:
-                return "normal_supervision";
-            case TrainingBackendConflict::None:
-                return {};
-            }
-            return {};
-        }
-    } // namespace
-
     std::any resolve_optimization_default(
         const PropertyMeta& meta,
         const OptimizationParameters& source) {
@@ -847,9 +828,27 @@ namespace lfs::python {
             .def_prop_ro(
                 "backend_conflict",
                 [](PyOptimizationParams& self) {
-                    return std::string(backend_conflict_id(self.params().backend_conflict()));
+                    return std::string(training_backend_conflict_descriptor(
+                                           self.params().backend_conflict())
+                                           .id);
                 },
                 "Stable identifier for the selected backend incompatibility, or an empty string")
+            .def_prop_ro(
+                "backend_conflict_context",
+                [](PyOptimizationParams& self) {
+                    const auto descriptor = training_backend_conflict_descriptor(
+                        self.params().backend_conflict());
+                    nb::dict context;
+                    if (!descriptor.id.empty()) {
+                        context["id"] = std::string(descriptor.id);
+                        context["backend"] = std::string(descriptor.backend_name);
+                        context["feature"] = std::string(descriptor.feature_name);
+                        context["fallback_backend"] =
+                            std::string(descriptor.fallback_backend_name);
+                    }
+                    return context;
+                },
+                "Structured values used to render the selected backend incompatibility")
             .def_prop_ro(
                 "backend_conflict_message",
                 [](PyOptimizationParams& self) { return self.params().backend_conflict_message(); },

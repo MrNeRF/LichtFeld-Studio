@@ -8258,7 +8258,7 @@ namespace lfs::vis {
         viewer.getDataLoader()->setParameters(params);
 
         auto trainer = std::make_unique<lfs::training::Trainer>(viewer.getScene());
-        trainer->setParams(params);
+        ASSERT_TRUE(trainer->setParams(params));
         viewer.getTrainerManager()->setTrainer(std::move(trainer));
 
         // Hold the worker before its first scene snapshot so ResetTraining is
@@ -8510,7 +8510,7 @@ namespace lfs::vis {
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
             params.dataset.output_path_explicit = false;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
 
             auto prepared =
                 lifecycle->prepareTrainingStartProject();
@@ -8610,7 +8610,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto trainer_params = trainer->getParams();
             trainer_params.dataset.output_path = output_path;
-            trainer->setParams(trainer_params);
+            ASSERT_TRUE(trainer->setParams(trainer_params));
 
             auto prepared =
                 lifecycle->prepareTrainingStartProject();
@@ -8618,6 +8618,42 @@ namespace lfs::vis {
                 << lfs::format_for_developer(
                        prepared.error());
         }
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           InvalidStartReturnsReasonBeforeCreatingProject) {
+        auto options = projectOptions();
+        VisualizerImpl viewer(options);
+        auto* const parameter_manager = viewer.getParameterManager();
+        ASSERT_NE(parameter_manager, nullptr);
+        ASSERT_TRUE(parameter_manager->ensureLoaded());
+        parameter_manager->setActiveStrategy("mcmc");
+        parameter_manager->modifyActiveParams([](auto& params) {
+            params.gut = true;
+            params.use_depth_loss = true;
+        });
+        viewer.input_controller_ =
+            std::make_unique<InputController>(nullptr, viewer.getViewport());
+        auto* const lifecycle = viewer.project_lifecycle_.get();
+        ASSERT_NE(lifecycle, nullptr);
+        ASSERT_FALSE(lifecycle->hasSourcePath());
+
+        auto& scene = viewer.getScene();
+        const auto cameras = scene.addGroup("Train cameras");
+        scene.addCamera(
+            "camera.png", cameras,
+            make_project_request_test_camera());
+        auto* const trainer_manager = viewer.getTrainerManager();
+        ASSERT_NE(trainer_manager, nullptr);
+        trainer_manager->setTrainer(
+            std::make_unique<lfs::training::Trainer>(scene));
+
+        const auto started = viewer.startTraining();
+
+        ASSERT_FALSE(started.has_value());
+        EXPECT_NE(started.error().find("Depth Loss"), std::string::npos);
+        EXPECT_FALSE(lifecycle->hasSourcePath());
+        EXPECT_FALSE(trainer_manager->isCompletionPending());
     }
 
     TEST_F(VisualizerImplResetTest,
@@ -8654,7 +8690,7 @@ namespace lfs::vis {
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
             params.dataset.output_path_explicit = true;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
 
             auto prepared =
                 lifecycle->prepareTrainingStartProject();
@@ -8771,7 +8807,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
             const auto ungranted =
                 trainer->trainer_project_save_policy();
             EXPECT_FALSE(ungranted.on_completion);
@@ -8978,7 +9014,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
             EXPECT_FALSE(
                 lifecycle->trainingStartOverwriteConflict()
                     .has_value());
@@ -9488,7 +9524,7 @@ namespace lfs::vis {
             ASSERT_NE(trainer, nullptr);
             auto params = trainer->getParams();
             params.dataset.output_path = output_path;
-            trainer->setParams(params);
+            ASSERT_TRUE(trainer->setParams(params));
             const lfs::training::Trainer::
                 TrainerProjectSavePolicy granted{
                     .on_completion = true,
@@ -13373,7 +13409,12 @@ namespace lfs::vis {
                        info->hydration_state ==
                            "complete";
             }));
+        const auto editable_before =
+            viewer.getParameterManager()->copyActiveParams().to_json();
         ASSERT_TRUE(restoreTrainerAndWait(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        // Restoring CKPT must not replace independent editable PRMS settings.
+        EXPECT_EQ(viewer.getParameterManager()->copyActiveParams().to_json(),
+                  editable_before);
 
         auto* const manager =
             viewer.getTrainerManager();

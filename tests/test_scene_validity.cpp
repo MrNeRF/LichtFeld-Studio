@@ -332,7 +332,7 @@ namespace lfs::python {
         core::param::TrainingParameters initial;
         initial.optimization.iterations = 1;
         initial.dataset.output_name = "generation_1";
-        trainer.setParams(initial);
+        ASSERT_TRUE(trainer.setParams(initial));
 
         std::atomic<bool> writer_done{false};
         std::thread writer([&] {
@@ -340,7 +340,7 @@ namespace lfs::python {
                 auto params = trainer.getParams();
                 params.optimization.iterations = generation;
                 params.dataset.output_name = "generation_" + std::to_string(generation);
-                trainer.setParams(params);
+                static_cast<void>(trainer.setParams(params));
             }
             writer_done.store(true, std::memory_order_release);
         });
@@ -355,6 +355,32 @@ namespace lfs::python {
         const auto final_snapshot = trainer.getParams();
         EXPECT_EQ(final_snapshot.dataset.output_name,
                   "generation_" + std::to_string(final_snapshot.optimization.iterations));
+    }
+
+    TEST(TrainerConstructionTest, InvalidParameterUpdateReturnsTheRejectionReason) {
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+        const auto original = trainer.getParams();
+        auto invalid = original;
+        invalid.optimization.gut = true;
+        invalid.optimization.use_depth_loss = true;
+
+        const auto updated = trainer.setParams(invalid);
+
+        ASSERT_FALSE(updated.has_value());
+        EXPECT_NE(updated.error().find("Depth Loss"), std::string::npos);
+        EXPECT_EQ(
+            trainer.getParams().optimization.to_json(),
+            original.optimization.to_json());
+
+        const auto restored = trainer.setParams(
+            invalid, core::param::ParameterValidationMode::Storage);
+        ASSERT_TRUE(restored.has_value()) << restored.error();
+        EXPECT_EQ(
+            trainer.getParams().optimization.to_json(),
+            invalid.optimization.to_json());
     }
 
     TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
@@ -775,8 +801,13 @@ namespace lfs::python {
 
         EXPECT_FALSE(manager.startTraining());
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
-        EXPECT_NE(manager.getLastError().find("Depth Supervision"),
+        EXPECT_NE(manager.getLastError().find("Depth Loss"),
                   std::string::npos);
+        const auto initialization = manager.waitForInitialization();
+        ASSERT_FALSE(initialization.has_value());
+        EXPECT_NE(
+            lfs::format_for_developer(initialization.error()).find("Depth Loss"),
+            std::string::npos);
         ASSERT_NE(manager.getTrainer(), nullptr);
         EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
                   installed_params.optimization.to_json());
@@ -806,7 +837,7 @@ namespace lfs::python {
         params.init_path = (std::filesystem::temp_directory_path() /
                             "lichtfeld-missing-training-init.ply")
                                .string();
-        trainer->setParams(params);
+        ASSERT_TRUE(trainer->setParams(params));
         std::unique_lock initialization_lock(trainer->getRenderMutex());
 
         lfs::vis::TrainerManager manager;

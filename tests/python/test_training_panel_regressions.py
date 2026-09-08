@@ -56,12 +56,10 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert "tooltip.grow_until_iter" in data["training"]
         assert data["training"]["overwrite.btn_save_as_start"]
         assert data["training"]["save_pc.message_project"]
-        for conflict in (
-            "mip_filter",
-            "depth_supervision",
-            "normal_supervision",
-        ):
-            assert data["training"][f"backend_conflict.{conflict}"]
+        conflict_template = data["training"]["backend_conflict.message"]
+        assert "{backend}" in conflict_template
+        assert "{feature}" in conflict_template
+        assert "{fallback_backend}" in conflict_template
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
@@ -81,19 +79,70 @@ def training_panel_module(monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("conflict", "feature"),
+    [
+        ("igs_plus", "IGS+"),
+        ("mip_filter", "Mip Filter"),
+        ("depth_supervision", "Depth Loss"),
+        ("normal_supervision", "Normal Loss"),
+    ],
+)
+def test_backend_conflict_messages_share_one_localized_template(
+    training_panel_module, monkeypatch, conflict, feature
+):
+    translations = {
+        "training.backend_conflict.message": (
+            "{backend} conflicts with {feature}; choose {fallback_backend}."
+        ),
+        "training.options.strategy.igs_plus": "IGS+",
+        "training_params.mip_filter": "Mip Filter:",
+        "training_params.use_depth_loss": "Depth Loss:",
+        "training_params.use_normal_loss": "Normal Loss:",
+    }
+    monkeypatch.setattr(
+        training_panel_module, "tr", lambda key: translations.get(key, key)
+    )
+
+    assert training_panel_module._localized_backend_conflict_message(conflict) == (
+        f"3DGUT conflicts with {feature}; choose 3DGS."
+    )
+
+
+def test_backend_conflict_template_accepts_descriptor_context_for_future_backends(
+    training_panel_module, monkeypatch
+):
+    monkeypatch.setattr(
+        training_panel_module,
+        "tr",
+        lambda key: (
+            "{backend} conflicts with {feature}; choose {fallback_backend}."
+            if key == "training.backend_conflict.message"
+            else key
+        ),
+    )
+
+    assert training_panel_module._localized_backend_conflict_message(
+        "temporal_filter",
+        backend="FutureGS",
+        feature_fallback="Temporal Filter",
+        fallback_backend="3DGS",
+    ) == "FutureGS conflicts with Temporal Filter; choose 3DGS."
+
+
+@pytest.mark.parametrize(
     ("error", "conflict", "conflict_message", "expected_title", "expected_message"),
     [
         (
-            "3DGUT does not support Depth Supervision; disable Depth Supervision or select 3DGS",
+            "3DGUT cannot be used with Depth Loss. Change this setting or select 3DGS.",
             "depth_supervision",
-            "3DGUT does not support Depth Supervision; disable Depth Supervision or select 3DGS",
+            "3DGUT cannot be used with Depth Loss. Change this setting or select 3DGS.",
             "training.error.strategy_gut_title",
-            "training.backend_conflict.depth_supervision",
+            "training.backend_conflict.message",
         ),
         (
             "iterations must be within [1, 2147483647]",
             "depth_supervision",
-            "3DGUT does not support Depth Supervision; disable Depth Supervision or select 3DGS",
+            "3DGUT cannot be used with Depth Loss. Change this setting or select 3DGS.",
             "status.error",
             "iterations must be within [1, 2147483647]",
         ),
@@ -180,7 +229,7 @@ def test_start_igs_gut_conflict_keeps_one_click_resolution(
         @property
         def backend_conflict_message(self):
             return (
-                "3DGUT cannot be used with the IGS+ strategy"
+                "3DGUT cannot be used with IGS+. Change this setting or select 3DGS."
                 if self.backend_conflict
                 else ""
             )
@@ -212,6 +261,7 @@ def test_start_igs_gut_conflict_keeps_one_click_resolution(
 
     panel._start_after_consent()
     assert len(dialogs) == 1
+    assert dialogs[0][1] == "training.backend_conflict.message"
     dialogs[0][3](button)
 
     assert params.strategy == expected_strategy

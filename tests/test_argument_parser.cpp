@@ -70,8 +70,8 @@ TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
     };
     const Case cases[] = {
         {"--enable-mip", "Mip Filter", "mip_filter"},
-        {"--use-depth-loss", "Depth Supervision", "use_depth_loss"},
-        {"--use-normal-loss", "Normal Supervision", "use_normal_loss"},
+        {"--use-depth-loss", "Depth Loss", "use_depth_loss"},
+        {"--use-normal-loss", "Normal Loss", "use_normal_loss"},
     };
     for (const auto& test : cases) {
         SCOPED_TRACE(test.flag);

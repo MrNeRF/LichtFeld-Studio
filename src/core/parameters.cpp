@@ -357,6 +357,25 @@ namespace lfs::core {
             return opt_json;
         }
 
+        TrainingBackendConflictDescriptor training_backend_conflict_descriptor(
+            const TrainingBackendConflict conflict) {
+            constexpr std::string_view backend = "3DGUT";
+            constexpr std::string_view fallback_backend = "3DGS";
+            switch (conflict) {
+            case TrainingBackendConflict::IGSPlus:
+                return {"igs_plus", backend, "IGS+", fallback_backend};
+            case TrainingBackendConflict::MipFilter:
+                return {"mip_filter", backend, "Mip Filter", fallback_backend};
+            case TrainingBackendConflict::DepthSupervision:
+                return {"depth_supervision", backend, "Depth Loss", fallback_backend};
+            case TrainingBackendConflict::NormalSupervision:
+                return {"normal_supervision", backend, "Normal Loss", fallback_backend};
+            case TrainingBackendConflict::None:
+                return {};
+            }
+            return {};
+        }
+
         TrainingBackendConflict OptimizationParameters::backend_conflict() const {
             if (!gut)
                 return TrainingBackendConflict::None;
@@ -372,19 +391,15 @@ namespace lfs::core {
         }
 
         std::string OptimizationParameters::backend_conflict_message() const {
-            switch (backend_conflict()) {
-            case TrainingBackendConflict::IGSPlus:
-                return "3DGUT cannot be used with the IGS+ strategy";
-            case TrainingBackendConflict::MipFilter:
-                return "3DGUT does not support Mip Filter; disable Mip Filter or select 3DGS";
-            case TrainingBackendConflict::DepthSupervision:
-                return "3DGUT does not support Depth Supervision; disable Depth Supervision or select 3DGS";
-            case TrainingBackendConflict::NormalSupervision:
-                return "3DGUT does not support Normal Supervision; disable Normal Supervision or select 3DGS";
-            case TrainingBackendConflict::None:
+            const auto descriptor = training_backend_conflict_descriptor(backend_conflict());
+            if (descriptor.id.empty()) {
                 return {};
             }
-            return {};
+            return std::format(
+                "{} cannot be used with {}. Change this setting or select {}.",
+                descriptor.backend_name,
+                descriptor.feature_name,
+                descriptor.fallback_backend_name);
         }
 
         std::string OptimizationParameters::validate(const ParameterValidationMode mode) const {
@@ -536,8 +551,8 @@ namespace lfs::core {
             return {};
         }
 
-        std::string TrainingParameters::validate() const {
-            if (auto error = optimization.validate(); !error.empty()) {
+        std::string TrainingParameters::validate(const ParameterValidationMode mode) const {
+            if (auto error = optimization.validate(mode); !error.empty()) {
                 return error;
             }
             if (auto error = dataset.validate(); !error.empty()) {

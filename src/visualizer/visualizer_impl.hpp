@@ -337,6 +337,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
         friend class VisualizerImplResetTest_StartTrainingUntitledCreatesRealProjectInProjectLocation_Test;
         friend class VisualizerImplResetTest_PrepareTrainingStartProjectSucceedsAfterInitPlyLoad_Test;
+        friend class VisualizerImplResetTest_InvalidStartReturnsReasonBeforeCreatingProject_Test;
         friend class VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
         friend class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
         friend class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;

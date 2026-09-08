@@ -81,6 +81,8 @@ namespace lfs::vis {
         }
 
         bool startTraining();
+        [[nodiscard]] std::expected<void, std::string>
+        preflightStartParameters();
         // Wait for the off-thread initialization phase. Callers must not be the
         // viewer thread; the GUI start path intentionally returns in Starting.
         [[nodiscard]] lfs::Result<void> waitForInitialization();
@@ -208,7 +210,7 @@ namespace lfs::vis {
         const lfs::core::param::OptimizationParameters& getEditableOptParams() const { return pending_opt_params_; }
         lfs::core::param::DatasetConfig& getEditableDatasetParams() { return pending_dataset_params_; }
         const lfs::core::param::DatasetConfig& getEditableDatasetParams() const { return pending_dataset_params_; }
-        void applyPendingParams();
+        [[nodiscard]] std::expected<void, std::string> applyPendingParams();
 
     private:
         struct TrainingCompletionData {
@@ -238,6 +240,7 @@ namespace lfs::vis {
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
         void dispatchTrainingCompleted(TrainingCompletionData completion);
+        bool rejectStart(std::string message, lfs::ErrorCode code);
 
         // State management
         void handleTrainingComplete(bool success, const std::string& error = "",

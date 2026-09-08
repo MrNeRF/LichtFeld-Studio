@@ -2834,7 +2834,11 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize(const lfs::core::param::TrainingParameters& params) {
-        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+        const auto validation_mode =
+            params.resume_checkpoint.has_value() || params.resume_project.has_value()
+                ? lfs::core::param::ParameterValidationMode::Storage
+                : lfs::core::param::ParameterValidationMode::Runtime;
+        if (const auto validation_error = params.validate(validation_mode); !validation_error.empty()) {
             return std::unexpected("Invalid training parameters: " + validation_error);
         }
 
@@ -3650,10 +3654,13 @@ namespace lfs::training {
         training_complete_ = false;
     }
 
-    void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
-        if (const auto validation_error = params.validate(); !validation_error.empty()) {
+    std::expected<void, std::string>
+    Trainer::setParams(
+        const lfs::core::param::TrainingParameters& params,
+        const lfs::core::param::ParameterValidationMode validation_mode) {
+        if (const auto validation_error = params.validate(validation_mode); !validation_error.empty()) {
             LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
-            return;
+            return std::unexpected(validation_error);
         }
 
         bool bg_image_path_changed = false;
@@ -3661,7 +3668,7 @@ namespace lfs::training {
             std::lock_guard<std::mutex> lock(params_mutex_);
             if (is_running_.load(std::memory_order_acquire)) {
                 pending_params_ = params;
-                return;
+                return {};
             }
             const auto& current = pending_params_ ? *pending_params_ : params_;
             bg_image_path_changed =
@@ -3670,6 +3677,7 @@ namespace lfs::training {
             pending_params_.reset();
         }
         apply_param_side_effects(params, bg_image_path_changed);
+        return {};
     }
 
     void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {

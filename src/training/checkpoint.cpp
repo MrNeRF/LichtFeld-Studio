@@ -59,19 +59,22 @@ namespace lfs::training {
         }
 
         void clear_inherited_3dgut_noop_options_for_resume(
-            lfs::core::param::TrainingParameters& params) {
-            auto& optimization = params.optimization;
-            if (!optimization.gut) {
+            const lfs::core::param::OptimizationParameters& checkpoint_optimization,
+            lfs::core::param::TrainingParameters& effective_params) {
+            if (!checkpoint_optimization.gut ||
+                !effective_params.optimization.gut) {
                 return;
             }
 
-            const auto clear_if_inherited = [&](bool& enabled,
+            const auto clear_if_inherited = [&](const bool checkpoint_enabled,
+                                                bool& effective_enabled,
                                                 const std::string_view key,
                                                 const std::string_view label) {
-                if (!enabled || params.overrides.has_optimization_key(key)) {
+                if (!checkpoint_enabled ||
+                    effective_params.overrides.has_optimization_key(key)) {
                     return;
                 }
-                enabled = false;
+                effective_enabled = false;
                 LOG_WARN(
                     "Checkpoint enabled {} with 3DGUT; the option had no training effect and was disabled for resume",
                     label);
@@ -79,10 +82,20 @@ namespace lfs::training {
 
             // These combinations were accepted by older releases but did not
             // contribute to the 3DGUT optimization. Preserve them when merely
-            // inspecting a checkpoint and clear only the inherited runtime copy.
-            clear_if_inherited(optimization.mip_filter, "mip_filter", "Mip Filter");
-            clear_if_inherited(optimization.use_depth_loss, "use_depth_loss", "Depth Supervision");
-            clear_if_inherited(optimization.use_normal_loss, "use_normal_loss", "Normal Supervision");
+            // inspecting a checkpoint or explicitly switching to 3DGS, and
+            // clear only the inherited 3DGUT runtime copy.
+            clear_if_inherited(
+                checkpoint_optimization.mip_filter,
+                effective_params.optimization.mip_filter,
+                "mip_filter", "Mip Filter");
+            clear_if_inherited(
+                checkpoint_optimization.use_depth_loss,
+                effective_params.optimization.use_depth_loss,
+                "use_depth_loss", "Depth Loss");
+            clear_if_inherited(
+                checkpoint_optimization.use_normal_loss,
+                effective_params.optimization.use_normal_loss,
+                "use_normal_loss", "Normal Loss");
         }
 
         [[nodiscard]] lfs::Error checkpoint_stream_error(
@@ -455,6 +468,7 @@ namespace lfs::training {
                     loaded_params.optimization.bg_color;
 
                 loaded_params = lfs::core::parse_checkpoint_params_json(params_str, std::move(loaded_params));
+                const auto checkpoint_optimization = loaded_params.optimization;
 
                 if (!cli_data_path.empty())
                     loaded_params.dataset.data_path = cli_data_path;
@@ -486,7 +500,8 @@ namespace lfs::training {
                     cli_bg_color_set;
                 lfs::core::param::apply_explicit_training_overrides(
                     loaded_params, loaded_params.overrides);
-                clear_inherited_3dgut_noop_options_for_resume(loaded_params);
+                clear_inherited_3dgut_noop_options_for_resume(
+                    checkpoint_optimization, loaded_params);
             }
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
