@@ -633,33 +633,9 @@ namespace lfs::core {
                 LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth upload sync");
             }
             free_image_float(gray);
-
-            int target_w = native_w;
-            int target_h = native_h;
-            if (resize_factor > 1) {
-                target_w /= resize_factor;
-                target_h /= resize_factor;
-            }
-            if (max_width > 0 && (target_w > max_width || target_h > max_width)) {
-                if (target_w > target_h) {
-                    target_h = std::max(1, max_width * target_h / target_w);
-                    target_w = max_width;
-                } else {
-                    target_w = std::max(1, max_width * target_w / target_h);
-                    target_h = max_width;
-                }
-            }
-            if (target_w != native_w || target_h != native_h) {
-                depth = lanczos_resize_grayscale(depth, target_h, target_w, 2, _stream);
-                if (_stream) {
-                    LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "depth resize sync");
-                }
-            }
         } else {
             const ImageLoadParams params{
                 .path = _depth_path,
-                .resize_factor = resize_factor,
-                .max_width = max_width,
                 .stream = _stream};
 
             depth = load_image_cached(params);
@@ -689,6 +665,10 @@ namespace lfs::core {
         } else if (depth.ndim() == 3 && depth.shape()[2] == 1) {
             depth = depth.squeeze(2);
         }
+
+        if (!_image_size_loaded)
+            load_image_size(resize_factor, max_width);
+        depth = resize_depth_prior(depth.contiguous(), _image_height, _image_width, _stream);
 
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
@@ -766,8 +746,7 @@ namespace lfs::core {
             }
         }
 
-        // Decode the v = n*0.5 + 0.5 file encoding; the loss re-normalizes per
-        // pixel, so quantization/resampling shrinkage is harmless here.
+        // Decode vectors before validity-aware resampling and normalization.
         normal = normal.mul(2.0f).sub(1.0f);
 
         if (decode.srgb || decode.flip_yz || decode.world_space) {
@@ -802,29 +781,9 @@ namespace lfs::core {
             }
         }
 
-        const int native_h = static_cast<int>(normal.shape()[1]);
-        const int native_w = static_cast<int>(normal.shape()[2]);
-        int target_w = native_w;
-        int target_h = native_h;
-        if (resize_factor > 1) {
-            target_w /= resize_factor;
-            target_h /= resize_factor;
-        }
-        if (max_width > 0 && (target_w > max_width || target_h > max_width)) {
-            if (target_w > target_h) {
-                target_h = std::max(1, max_width * target_h / target_w);
-                target_w = max_width;
-            } else {
-                target_w = std::max(1, max_width * target_w / target_h);
-                target_h = max_width;
-            }
-        }
-        if (target_w != native_w || target_h != native_h) {
-            normal = lanczos_resize_float_chw(normal, target_h, target_w, 2, _stream);
-            if (_stream) {
-                LFS_CUDA_TRY(cudaStreamSynchronize(_stream), _stream, "normal resize sync");
-            }
-        }
+        if (!_image_size_loaded)
+            load_image_size(resize_factor, max_width);
+        normal = resize_normal_prior(normal.contiguous(), _image_height, _image_width, _stream);
 
         if (_undistort_prepared) {
             const auto scaled = scale_undistort_params(
@@ -832,6 +791,7 @@ namespace lfs::core {
                 static_cast<int>(normal.shape()[2]),
                 static_cast<int>(normal.shape()[1]));
             normal = undistort_image(normal, scaled, _stream);
+            normal = resize_normal_prior(normal.contiguous(), normal.shape()[1], normal.shape()[2], _stream);
         }
 
         _cached_normal = normal.contiguous();

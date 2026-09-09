@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "io/atomic_output.hpp"
 #include "io/filesystem_utils.hpp"
+#include "io/loaders/loader_utils.hpp"
 #include "io/loaders/missing_dataset_images.hpp"
 #include <algorithm>
 #include <array>
@@ -2840,6 +2841,7 @@ namespace lfs::io {
         std::vector<const CameraDataIntermediate*> camera_data;
         camera_images.reserve(images.size());
         camera_data.reserve(images.size());
+        PriorResolutionSummary prior_resolutions;
         SkipTally image_tally;
         std::vector<std::string> missing_images;
 
@@ -2851,6 +2853,7 @@ namespace lfs::io {
             bool missing_image = false;
             bool depth_matched = false;
             bool normal_matched = false;
+            std::array<int, 4> depth_sizes{}, normal_sizes{};
             size_t undistort_crop_failures = 0;
             size_t undistort_fisheye_crop_failures = 0;
         };
@@ -3080,31 +3083,22 @@ namespace lfs::io {
                 if (image_file_present && options.load_depths && !depth_path.empty()) {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
                     auto [depth_w, depth_h, depth_c] = lfs::core::get_image_info(depth_path);
-                    if (!sidecar_dimensions_match_contract(depth_w,
-                                                           depth_h,
-                                                           img_w,
-                                                           img_h,
-                                                           cam_data.original_width,
-                                                           cam_data.original_height)) {
+                    if (depth_c != 1 || !sidecar_dimensions_match_contract(depth_w, depth_h, img_w, img_h)) {
                         errors[i] = make_error(
                                         ErrorCode::DEPTH_SIZE_MISMATCH,
-                                        std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}",
+                                        std::format("Depth map '{}' is {}x{} but image '{}' is {}x{}; expected a 1-channel map with aspect ratio within 1%",
                                                     lfs::core::path_to_utf8(depth_path.filename()), depth_w, depth_h,
                                                     img.name, img_w, img_h),
                                         depth_path)
                                         .error();
                         return;
                     }
+                    output.depth_sizes = {depth_w, depth_h, img_w, img_h};
                 }
                 if (image_file_present && options.load_normals && !normal_path.empty()) {
                     auto [img_w, img_h, img_c] = get_image_info_cached();
                     auto [normal_w, normal_h, normal_c] = lfs::core::get_image_info(normal_path);
-                    if (!sidecar_dimensions_match_contract(normal_w,
-                                                           normal_h,
-                                                           img_w,
-                                                           img_h,
-                                                           cam_data.original_width,
-                                                           cam_data.original_height)) {
+                    if (normal_c != 3 || !sidecar_dimensions_match_contract(normal_w, normal_h, img_w, img_h)) {
                         if (options.normal_auto_generate) {
                             LOG_WARN("Normal map '{}' is {}x{} but image '{}' is {}x{}; "
                                      "ignoring it so auto-generate can overwrite that file",
@@ -3115,7 +3109,7 @@ namespace lfs::io {
                         } else {
                             errors[i] = make_error(
                                             ErrorCode::NORMAL_SIZE_MISMATCH,
-                                            std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}",
+                                            std::format("Normal map '{}' is {}x{} but image '{}' is {}x{}; expected a 3-channel map with aspect ratio within 1%",
                                                         lfs::core::path_to_utf8(normal_path.filename()), normal_w, normal_h,
                                                         img.name, img_w, img_h),
                                             normal_path)
@@ -3123,6 +3117,8 @@ namespace lfs::io {
                             return;
                         }
                     }
+                    if (!normal_path.empty())
+                        output.normal_sizes = {normal_w, normal_h, img_w, img_h};
                 }
 
                 // Create Camera
@@ -3192,6 +3188,8 @@ namespace lfs::io {
                 if (output.missing_image) {
                     missing_images.push_back(output.image->name);
                 }
+                prior_resolutions.add(output.depth_sizes, false);
+                prior_resolutions.add(output.normal_sizes, true);
                 depth_matched_count += output.depth_matched ? 1 : 0;
                 normal_matched_count += output.normal_matched ? 1 : 0;
                 undistort_camera_count += 1;
@@ -3199,6 +3197,8 @@ namespace lfs::io {
                 undistort_fisheye_crop_failures += output.undistort_fisheye_crop_failures;
             }
         }
+
+        prior_resolutions.log();
 
         std::atomic<bool> observation_cancelled = false;
         {
