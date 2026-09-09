@@ -3789,6 +3789,11 @@ namespace lfs::vis {
     std::expected<void, std::string> VisualizerImpl::startTraining() {
         if (!trainer_manager_)
             return std::unexpected("Trainer manager not initialized");
+        const auto reject = [this](std::string message) {
+            static_cast<void>(trainer_manager_->rejectStart(
+                message, lfs::ErrorCode::FailedPrecondition));
+            return std::unexpected(std::move(message));
+        };
         if (project_lifecycle_ &&
             !trainer_manager_->hasTrainer()) {
             const auto session =
@@ -3796,16 +3801,17 @@ namespace lfs::vis {
             if (session.available && !session.hydrated) {
                 if (auto restored =
                         project_lifecycle_
-                            ->restoreTrainingSession(true);
+                            ->restoreTrainingSession(false);
                     !restored) {
-                    return std::unexpected(
-                        lfs::format_for_developer(
-                            restored.error()));
+                    return reject(std::string(restored.error().user_message()));
                 }
-                return {};
+                return reject("Project training session is being restored. Retry Start after restoration completes.");
             }
         }
         if (trainer_manager_->isPaused()) {
+            if (auto preflight = trainer_manager_->preflightStartParameters(); !preflight) {
+                return std::unexpected(std::string(preflight.error().user_message()));
+            }
             if (project_lifecycle_) {
                 if (auto* const trainer = getTrainer()) {
                     const auto policy =
@@ -3817,9 +3823,7 @@ namespace lfs::vis {
                                 project_lifecycle_
                                     ->prepareTrainingStartProject();
                             !prepared) {
-                            return std::unexpected(
-                                lfs::format_for_developer(
-                                    prepared.error()));
+                            return reject(std::string(prepared.error().user_message()));
                         }
                     }
                 }
@@ -3829,33 +3833,30 @@ namespace lfs::vis {
         }
         if (!trainer_manager_->canStart()) {
             if (trainer_manager_->isFinished()) {
-                return std::unexpected(std::format(
+                return reject(std::format(
                     "Training already completed at iteration {}; starting a new training run requires overwrite consent.",
                     trainer_manager_->getCurrentIteration()));
             }
-            return std::unexpected(std::string(
+            return reject(std::string(
                 trainer_manager_->getActionBlockedReason(
                     TrainingAction::Start)));
         }
         if (auto preflight =
                 trainer_manager_->preflightStartParameters();
             !preflight) {
-            return std::unexpected(
-                lfs::format_for_developer(preflight.error()));
+            return std::unexpected(std::string(preflight.error().user_message()));
         }
         if (project_lifecycle_) {
             if (auto prepared =
                     project_lifecycle_
                         ->prepareTrainingStartProject();
                 !prepared) {
-                return std::unexpected(
-                    lfs::format_for_developer(
-                        prepared.error()));
+                return reject(std::string(prepared.error().user_message()));
             }
         }
         if (!trainer_manager_->startTraining()) {
             if (const auto typed = trainer_manager_->lastTrainingError()) {
-                return std::unexpected(lfs::format_for_developer(*typed));
+                return std::unexpected(std::string(typed->user_message()));
             }
             if (!trainer_manager_->getLastError().empty()) {
                 return std::unexpected(trainer_manager_->getLastError());

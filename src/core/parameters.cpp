@@ -402,7 +402,7 @@ namespace lfs::core {
                 descriptor.fallback_backend_name);
         }
 
-        std::string OptimizationParameters::validate(const ParameterValidationMode mode) const {
+        std::string OptimizationParameters::validate() const {
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)
                     return std::format("{} must be finite and nonnegative (got {})", name, value);
@@ -524,9 +524,7 @@ namespace lfs::core {
                 return std::format("bilateral grid dimensions are too large ({}x{}x{})",
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
             const auto conflict = backend_conflict();
-            if (conflict == TrainingBackendConflict::IGSPlus ||
-                (mode == ParameterValidationMode::Runtime &&
-                 conflict != TrainingBackendConflict::None)) {
+            if (conflict != TrainingBackendConflict::None) {
                 return backend_conflict_message();
             }
             if (use_exposure_correction &&
@@ -551,8 +549,8 @@ namespace lfs::core {
             return {};
         }
 
-        std::string TrainingParameters::validate(const ParameterValidationMode mode) const {
-            if (auto error = optimization.validate(mode); !error.empty()) {
+        std::string TrainingParameters::validate() const {
+            if (auto error = optimization.validate(); !error.empty()) {
                 return error;
             }
             if (auto error = dataset.validate(); !error.empty()) {

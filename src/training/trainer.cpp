@@ -2846,11 +2846,7 @@ namespace lfs::training {
     }
 
     std::expected<void, std::string> Trainer::initialize(const lfs::core::param::TrainingParameters& params) {
-        const auto validation_mode =
-            params.resume_checkpoint.has_value() || params.resume_project.has_value()
-                ? lfs::core::param::ParameterValidationMode::Storage
-                : lfs::core::param::ParameterValidationMode::Runtime;
-        if (const auto validation_error = params.validate(validation_mode); !validation_error.empty()) {
+        if (const auto validation_error = params.validate(); !validation_error.empty()) {
             return std::unexpected("Invalid training parameters: " + validation_error);
         }
 
@@ -3668,9 +3664,8 @@ namespace lfs::training {
 
     lfs::Status
     Trainer::setParams(
-        const lfs::core::param::TrainingParameters& params,
-        const lfs::core::param::ParameterValidationMode validation_mode) {
-        if (const auto validation_error = params.validate(validation_mode); !validation_error.empty()) {
+        const lfs::core::param::TrainingParameters& params) {
+        if (const auto validation_error = params.validate(); !validation_error.empty()) {
             LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
             return lfs::Status::failure(training_parameter_update_error(
                 validation_error, LFS_SOURCE_SITE_CURRENT()));

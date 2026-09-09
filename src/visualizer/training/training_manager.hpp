@@ -83,6 +83,8 @@ namespace lfs::vis {
         bool startTraining();
         [[nodiscard]] lfs::Status
         preflightStartParameters();
+        [[nodiscard]] lfs::Error
+        rejectStart(std::string message, lfs::ErrorCode code);
         // Wait for the off-thread initialization phase. Callers must not be the
         // viewer thread; the GUI start path intentionally returns in Starting.
         [[nodiscard]] lfs::Result<void> waitForInitialization();
@@ -240,9 +242,6 @@ namespace lfs::vis {
         void completionReaperLoop(std::stop_token stop_token);
         void finishTrainingThreadJoin();
         void dispatchTrainingCompleted(TrainingCompletionData completion);
-        [[nodiscard]] lfs::Error
-        rejectStart(std::string message, lfs::ErrorCode code);
-
         // State management
         void handleTrainingComplete(bool success, const std::string& error = "",
                                     bool resource_exhausted = false,

@@ -694,8 +694,6 @@ namespace lfs::vis::project {
                     viewer, installed.error());
                 return;
             }
-            const auto effective_params =
-                installed->trainer->getParams();
             trainer_manager->setScene(
                 &scene_manager.getScene());
             trainer_manager->setTrainerFromCheckpoint(
@@ -706,32 +704,6 @@ namespace lfs::vis::project {
                     viewer,
                     "Checkpoint trainer install was rejected");
                 return;
-            }
-            if (auto* parameter_manager =
-                    viewer.getParameterManager()) {
-                // PRMS remains the editable project state, independent of CKPT.
-                // Only mirror legacy no-op flags actually cleared by restore;
-                // importing all checkpoint parameters would overwrite unrelated
-                // project settings (including strategy, iterations and paths).
-                using Opt = lfs::core::param::OptimizationParameters;
-                constexpr std::array noop_flags{
-                    &Opt::mip_filter, &Opt::use_depth_loss, &Opt::use_normal_loss};
-                const auto active = parameter_manager->copyActiveParams();
-                if (active.gut && ckpt_params.optimization.gut &&
-                    effective_params.optimization.gut) {
-                    const auto cleared = [&](const auto flag) {
-                        return active.*flag && ckpt_params.optimization.*flag &&
-                               !(effective_params.optimization.*flag);
-                    };
-                    if (std::ranges::any_of(noop_flags, cleared)) {
-                        parameter_manager->modifyActiveParams([&](auto& editable) {
-                            for (const auto flag : noop_flags) {
-                                if (cleared(flag))
-                                    editable.*flag = false;
-                            }
-                        });
-                    }
-                }
             }
             if (auto* trainer =
                     trainer_manager->getTrainer()) {
@@ -827,12 +799,9 @@ namespace lfs::vis::project {
                 auto trainer = std::make_unique<
                     lfs::training::Trainer>(
                     scene_manager.getScene());
-                if (auto updated = trainer->setParams(
-                        params,
-                        lfs::core::param::ParameterValidationMode::Storage);
-                    !updated) {
+                if (auto updated = trainer->setParams(params); !updated) {
                     notifyTrainerRestoreFailure(
-                        viewer, lfs::format_for_developer(updated.error()));
+                        viewer, std::string(updated.error().user_message()));
                     return;
                 }
                 trainer_manager->setScene(

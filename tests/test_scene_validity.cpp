@@ -377,13 +377,12 @@ namespace lfs::python {
             trainer.getParams().optimization.to_json(),
             original.optimization.to_json());
 
-        const auto restored = trainer.setParams(
-            invalid, core::param::ParameterValidationMode::Storage);
+        const auto restored = trainer.setParams(original);
         ASSERT_TRUE(restored.has_value())
             << lfs::format_for_developer(restored.error());
         EXPECT_EQ(
             trainer.getParams().optimization.to_json(),
-            invalid.optimization.to_json());
+            original.optimization.to_json());
     }
 
     TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
@@ -747,24 +746,26 @@ namespace lfs::python {
         const auto no_camera_node_count = scene.getNodeCount();
         ASSERT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
 
-        std::promise<std::string> completion_error;
-        auto completion_future = completion_error.get_future();
-        const auto handler_id = lfs::core::events::state::TrainingCompleted::when(
+        std::string rejection_error;
+        int completions = 0;
+        const auto completion_id = lfs::core::events::state::TrainingCompleted::when(
+            [&](const auto&) { ++completions; });
+        const auto handler_id = lfs::core::events::state::TrainingStartRejected::when(
             [&](const auto& event) {
-                if (!event.success) {
-                    completion_error.set_value(event.error.value_or(""));
-                }
+                rejection_error = event.error;
             });
 
         ASSERT_FALSE(manager.startTraining());
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
         EXPECT_FALSE(manager.isCompletionPending());
-        ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
-        EXPECT_FALSE(completion_future.get().empty());
+        EXPECT_FALSE(rejection_error.empty());
+        EXPECT_EQ(completions, 0);
         EXPECT_TRUE(manager.lastTrainingError().has_value());
 
         lfs::event::EventBridge::instance().unsubscribe(
-            typeid(lfs::core::events::state::TrainingCompleted), handler_id);
+            typeid(lfs::core::events::state::TrainingStartRejected), handler_id);
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingCompleted), completion_id);
 
         EXPECT_EQ(initial_node_count, no_camera_node_count + 2);
         EXPECT_EQ(scene.getNodeCount(), no_camera_node_count);
@@ -814,6 +815,32 @@ namespace lfs::python {
         ASSERT_NE(manager.getTrainer(), nullptr);
         EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
                   installed_params.optimization.to_json());
+    }
+
+    TEST(TrainerConstructionTest, ResumeRejectsInvalidPendingParamsWithoutLeavingPaused) {
+        struct EventScope {
+            EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+            ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+        } event_scope;
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); }
+            ~ServicesScope() { lfs::vis::services().clear(); }
+        } services_scope;
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), core::NULL_NODE);
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainerFromCheckpoint(std::make_unique<training::Trainer>(scene), 1);
+        ASSERT_TRUE(manager.isPaused());
+        auto& pending = manager.getEditableOptParams();
+        pending.gut = true;
+        pending.mip_filter = true;
+        manager.resumeTraining();
+        EXPECT_TRUE(manager.isPaused());
+        EXPECT_FALSE(manager.isCompletionPending());
+        EXPECT_NE(manager.getLastError().find("Mip Filter"), std::string::npos);
+        EXPECT_FALSE(manager.waitForInitialization());
     }
 
     TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {

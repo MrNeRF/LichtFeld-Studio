@@ -311,9 +311,7 @@ namespace lfs::training {
         }
         [[nodiscard]] lfs::Status
         setParams(
-            const lfs::core::param::TrainingParameters& params,
-            lfs::core::param::ParameterValidationMode validation_mode =
-                lfs::core::param::ParameterValidationMode::Runtime);
+            const lfs::core::param::TrainingParameters& params);
         void set_lpips_weights_path(std::optional<std::filesystem::path> path);
         void setSplatTensorAllocator(lfs::core::SplatTensorAllocator allocator) {
             splat_tensor_allocator_ = std::move(allocator);

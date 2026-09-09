@@ -1145,16 +1145,11 @@ namespace lfs::vis {
             initialization_error_ = typed;
         }
         initialization_cv_.notify_all();
-        state::TrainingCompleted{
-            .iteration = 0,
-            .final_loss = 0.0f,
-            .elapsed_seconds = 0.0f,
-            .success = false,
-            .user_stopped = false,
+        last_training_error_.set(typed);
+        state::TrainingStartRejected{
             .error = last_error_,
             .error_info = core::to_wire_error(typed)}
             .emit();
-        last_training_error_.set(typed);
         return typed;
     }
 
@@ -1402,12 +1397,11 @@ namespace lfs::vis {
                 viewer_->projectTrainingSessionState();
             if (session.available && !session.hydrated) {
                 if (auto restored =
-                        viewer_->restoreProjectTrainingSession(
-                            true);
+                        viewer_->startTraining();
                     !restored) {
                     LOG_ERROR(
                         "Failed to restore training session: {}",
-                        lfs::format_for_developer(restored.error()));
+                        restored.error());
                 }
                 return;
             }
@@ -1419,8 +1413,20 @@ namespace lfs::vis {
         if (!trainer_)
             return;
 
+        if (auto preflight = preflightStartParameters(); !preflight)
+            return;
+
         const int iter = getCurrentIteration();
         const bool need_thread = !isCompletionPending();
+
+        last_error_.clear();
+        last_training_error_.clear();
+        {
+            std::lock_guard lock(initialization_mutex_);
+            initialization_error_.reset();
+            initialization_complete_ = true;
+        }
+        initialization_cv_.notify_all();
 
         if (!need_thread) {
             trainer_->request_resume();

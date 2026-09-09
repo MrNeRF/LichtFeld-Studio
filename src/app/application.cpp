@@ -728,6 +728,7 @@ namespace lfs::app {
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
+                        // Legacy .resume auto-load remains unchanged.
                         auto trainer =
                             std::make_unique<training::Trainer>(
                                 scene);
@@ -737,22 +738,9 @@ namespace lfs::app {
                                 effective_params
                                     .python_scripts);
                         }
-                        // Restore legacy checkpoints before exposing the TCP
-                        // manager. initialize() auto-loads the checkpoint and
-                        // normalizes inherited no-op flags before start preflight.
-                        if (effective_params.resume_checkpoint) {
-                            if (effective_params.optimization.enable_eval) {
-                                trainer->set_lpips_weights_path(
-                                    prepare_lpips_weights(!effective_params.no_download));
-                            }
-                            if (auto initialized = trainer->initialize(effective_params); !initialized) {
-                                LOG_ERROR("Failed to restore checkpoint before TCP training: {}", initialized.error());
-                                return 1;
-                            }
-                        } else if (auto updated = trainer->setParams(effective_params); !updated) {
-                            LOG_ERROR(
-                                "Failed to apply training parameters: {}",
-                                lfs::format_for_developer(updated.error()));
+                        if (auto updated = trainer->setParams(effective_params); !updated) {
+                            LOG_ERROR("Failed to apply training parameters: {}",
+                                      lfs::format_for_developer(updated.error()));
                             return 1;
                         }
                         training::grant_headless_project_saves(
@@ -1018,12 +1006,8 @@ namespace lfs::app {
                     training::grant_headless_project_saves(
                         *trainer, *ckpt_params_result);
 
-                    const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
-                    if (!ckpt_result) {
-                        LOG_ERROR("Failed to restore checkpoint state: {}", ckpt_result.error());
-                        return 1;
-                    }
-                    LOG_INFO("Resumed from iteration {}", *ckpt_result);
+                    // initialize() already loads resume_checkpoint and propagates errors.
+                    LOG_INFO("Resumed from iteration {}", trainer->get_current_iteration());
                     if (ckpt_params_result->optimization.enable_eval)
                         trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
 

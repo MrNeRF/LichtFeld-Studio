@@ -219,8 +219,7 @@ namespace lfs::core {
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
             if (static_cast<uint64_t>(params.optimization.max_cap) > MAX_CHECKPOINT_GAUSSIANS)
                 return std::unexpected("Invalid checkpoint parameters: max_cap exceeds checkpoint limit");
-            if (const auto validation_error = params.optimization.validate(param::ParameterValidationMode::Storage);
-                !validation_error.empty())
+            if (const auto validation_error = params.optimization.validate(); !validation_error.empty())
                 return std::unexpected("Invalid checkpoint parameters: " + validation_error);
             if (const auto validation_error = params.dataset.validate(); !validation_error.empty())
                 return std::unexpected("Invalid checkpoint dataset parameters: " + validation_error);
@@ -258,8 +257,7 @@ namespace lfs::core {
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
             if (static_cast<uint64_t>(params.optimization.max_cap) > MAX_CHECKPOINT_GAUSSIANS)
                 return std::unexpected("Invalid checkpoint parameters: max_cap exceeds checkpoint limit");
-            if (const auto validation_error = params.optimization.validate(param::ParameterValidationMode::Storage);
-                !validation_error.empty())
+            if (const auto validation_error = params.optimization.validate(); !validation_error.empty())
                 return std::unexpected("Invalid checkpoint parameters: " + validation_error);
             if (const auto validation_error = params.dataset.validate(); !validation_error.empty())
                 return std::unexpected("Invalid checkpoint dataset parameters: " + validation_error);

@@ -1025,7 +1025,9 @@ NB_MODULE(lichtfeld, m) {
             if (trainer_manager && !called_on_viewer) {
                 if (auto initialized = trainer_manager->waitForInitialization();
                     !initialized) {
-                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                    const auto& error = initialized.error();
+                    throw std::runtime_error(std::string(
+                        error.user_message().empty() ? error.detail() : error.user_message()));
                 }
             }
         },

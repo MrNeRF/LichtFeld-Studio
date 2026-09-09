@@ -42,11 +42,6 @@ namespace lfs::core {
         [[nodiscard]] LFS_CORE_API TrainingBackendConflictDescriptor
         training_backend_conflict_descriptor(TrainingBackendConflict conflict);
 
-        enum class ParameterValidationMode {
-            Runtime,
-            Storage,
-        };
-
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -336,10 +331,7 @@ namespace lfs::core {
 
             [[nodiscard]] TrainingBackendConflict backend_conflict() const;
             [[nodiscard]] std::string backend_conflict_message() const;
-            // Storage mode preserves newly unsupported backend options in old
-            // projects/checkpoints, while retaining every pre-existing validation rule.
-            [[nodiscard]] std::string validate(
-                ParameterValidationMode mode = ParameterValidationMode::Runtime) const;
+            [[nodiscard]] std::string validate() const;
 
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();
@@ -503,8 +495,7 @@ namespace lfs::core {
 
             std::vector<int> disabled_camera_uids;
 
-            [[nodiscard]] std::string validate(
-                ParameterValidationMode mode = ParameterValidationMode::Runtime) const;
+            [[nodiscard]] std::string validate() const;
         };
 
         // Output format for conversion tool

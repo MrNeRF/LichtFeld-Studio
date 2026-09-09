@@ -381,30 +381,26 @@ namespace {
         EXPECT_TRUE(params.validate().empty());
     }
 
-    TEST_F(TrainingParametersTest, StoredBackendConflictPreservesSettingsButStillRejectsInvalidNumbers) {
-        using lfs::core::param::ParameterValidationMode;
+    TEST_F(TrainingParametersTest, BackendConflictRejectsWithoutChangingSettings) {
         auto params = OptimizationParameters::mrnf_defaults();
         params.gut = true;
         params.use_depth_loss = true;
         const auto before = params.to_json();
         EXPECT_FALSE(params.validate().empty());
-        EXPECT_TRUE(params.validate(ParameterValidationMode::Storage).empty());
         EXPECT_EQ(params.to_json(), before);
         lfs::core::param::TrainingParameters training;
         training.optimization = params;
         EXPECT_FALSE(training.validate().empty());
-        EXPECT_TRUE(training.validate(ParameterValidationMode::Storage).empty());
         params.refine_every = 0;
-        EXPECT_NE(params.validate(ParameterValidationMode::Storage).find("refine_every"), std::string::npos);
+        EXPECT_NE(params.validate().find("refine_every"), std::string::npos);
     }
 
     TEST_F(TrainingParametersTest, StoredIgsPlusGutConflictRemainsInvalid) {
-        using lfs::core::param::ParameterValidationMode;
         auto params = OptimizationParameters::igs_plus_defaults();
         params.gut = true;
 
         EXPECT_EQ(params.backend_conflict(), lfs::core::param::TrainingBackendConflict::IGSPlus);
-        EXPECT_NE(params.validate(ParameterValidationMode::Storage).find("IGS+"), std::string::npos);
+        EXPECT_NE(params.validate().find("IGS+"), std::string::npos);
     }
 
     TEST_F(TrainingParametersTest, ExposureCorrectionJsonRoundTripAndConflicts) {

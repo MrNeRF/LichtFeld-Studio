@@ -1448,6 +1448,24 @@ class TrainingPanel(Panel):
             self._handle.dirty("show_project_saved")
         self._schedule_deferred_update(2.05)
 
+    def _refresh_native_backend_controls(self):
+        params = lf.optimization_params()
+        if params and params.has_params():
+            backend_controls = tuple(
+                getattr(params, name, None)
+                for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss")
+            )
+            if backend_controls != getattr(self, "_last_backend_controls", None):
+                self._last_backend_controls = backend_controls
+                # Native rollback does not go through Python property setters.
+                # Republish on the UI thread when the effective values change.
+                for binding in self._pv_bindings:
+                    binding.publish()
+                self._sync_text_bufs()
+                self._handle.dirty_all()
+                return True
+        return False
+
     def on_update(self, doc):
         if not self._handle:
             return False
@@ -1455,6 +1473,7 @@ class TrainingPanel(Panel):
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()
+        dirty |= self._refresh_native_backend_controls()
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -2512,7 +2531,11 @@ class TrainingPanel(Panel):
                     if not current or not current.has_params():
                         return
                     if button == _mcmc:
+                        # Repair the preset being left as well as the active one.
+                        # Otherwise the inactive IGS+ preset prevents PRMS saves.
+                        current.gut = False
                         current.set_strategy("mcmc")
+                        current.gut = True
                     elif button == _gut:
                         current.gut = False
                         self._sync_render_setting("gut", False)

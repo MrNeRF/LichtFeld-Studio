@@ -238,6 +238,7 @@ def test_start_igs_gut_conflict_keeps_one_click_resolution(
             return self.backend_conflict_message
 
         def set_strategy(self, strategy):
+            self.departed_preset_gut = self.gut
             self.strategy = strategy
 
     panel = training_panel_module.TrainingPanel()
@@ -268,6 +269,27 @@ def test_start_igs_gut_conflict_keeps_one_click_resolution(
     assert params.gut is expected_gut
     assert updates == expected_viewer_update
     assert starts == [True]
+    if expected_strategy == "mcmc":
+        assert params.departed_preset_gut is False
+
+
+def test_native_backend_rollback_republishes_bound_controls(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", gut=True,
+        mip_filter=True, use_depth_loss=False, use_normal_loss=False,
+    )
+    published, dirty = [], []
+    panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True))]
+    panel._handle = SimpleNamespace(dirty_all=lambda: dirty.append(True))
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    assert panel._refresh_native_backend_controls()
+    assert not panel._refresh_native_backend_controls()
+    params.mip_filter = False
+    assert panel._refresh_native_backend_controls()
+    assert len(published) == 2
+    assert len(dirty) == 2
 
 
 @pytest.mark.parametrize("offer_save", [False, True])
