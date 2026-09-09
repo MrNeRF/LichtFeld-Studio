@@ -184,6 +184,13 @@ namespace lfs::io::decimate {
                         break;
                 }
             } else {
+                // Establish a tight exact upper bound from nearby Morton rows
+                // before traversing broad, overlapping BVH boxes. These rows
+                // are excluded below so every point enters the heap only once.
+                const uint32_t seed_begin = t > 32 ? t - 32 : 0;
+                const uint32_t seed_end = min(n, seed_begin + 65);
+                for (uint32_t row = seed_begin; row < seed_end; ++row)
+                    consider(order[row]);
                 // At most one deferred sibling per depth; balanced heap depth <= 29.
                 uint32_t stack[32];
                 int sp = 0;
@@ -195,8 +202,8 @@ namespace lfs::io::decimate {
                     if (node >= leaves) {
                         uint32_t begin = (node - leaves) * leaf_size;
                         for (uint32_t t2 = begin; t2 < begin + leaf_size && t2 < n; ++t2) {
-                            uint32_t j = order[t2];
-                            consider(j);
+                            if (t2 < seed_begin || t2 >= seed_end)
+                                consider(order[t2]);
                         }
                     } else {
                         uint32_t left = node * 2, right = left + 1;

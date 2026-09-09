@@ -1297,8 +1297,20 @@ namespace lfs::io {
             return tensor.cuda().contiguous();
         }
 
-        int nearest_centroid_1d(const std::vector<float>& centroids, float value) {
-            auto it = std::lower_bound(centroids.begin(), centroids.end(), value);
+        int nearest_centroid_1d(const std::vector<float>& centroids, float value, int hint = -1) {
+            auto it = centroids.begin();
+            if (hint < 0 || !std::isfinite(value)) {
+                it = std::lower_bound(centroids.begin(), centroids.end(), value);
+            } else {
+                // Lloyd updates usually move a label only a few bins. Recover
+                // the same lower_bound (including duplicate-centroid ties)
+                // from its previous label instead of restarting binary search.
+                it += hint;
+                while (it != centroids.begin() && *(it - 1) >= value)
+                    --it;
+                while (it != centroids.end() && *it < value)
+                    ++it;
+            }
             int best = static_cast<int>(std::distance(centroids.begin(), it));
             if (best >= static_cast<int>(centroids.size())) {
                 best = static_cast<int>(centroids.size()) - 1;
@@ -1456,7 +1468,7 @@ namespace lfs::io {
             std::vector<uint8_t> labels;
         };
 
-        Cluster1dResult cluster1d(const float* data, int num_rows, int num_columns, int iterations) {
+        Cluster1dResult cluster1d(const float* data, int num_rows, int num_columns, int iterations, bool pooled = false) {
             constexpr int K = 256;
             const size_t total_points = static_cast<size_t>(num_rows) * static_cast<size_t>(num_columns);
 
@@ -1488,14 +1500,16 @@ namespace lfs::io {
             const size_t worker_count = std::max<size_t>(
                 1, std::min<size_t>(hw_threads, (total_points + 65535) / 65536));
 
+            bool use_hints = false;
             auto accumulate_range = [&](size_t begin, size_t end, const bool write_labels, LocalAccum& accum) {
                 for (size_t linear = begin; linear < end; ++linear) {
                     const int col = static_cast<int>(linear / static_cast<size_t>(num_rows));
                     const int row = static_cast<int>(linear - static_cast<size_t>(col) * static_cast<size_t>(num_rows));
                     const float value = data[row * num_columns + col];
-                    const int label = nearest_centroid_1d(centroid_vals, value);
+                    const int label = nearest_centroid_1d(centroid_vals, value,
+                                                          use_hints ? result.labels[linear] : -1);
 
-                    if (write_labels) {
+                    if (write_labels || pooled) {
                         result.labels[linear] = static_cast<uint8_t>(label);
                     }
                     accum.sums[label] += static_cast<double>(value);
@@ -1510,6 +1524,14 @@ namespace lfs::io {
 
                 if (worker_count == 1) {
                     accumulate_range(0, total_points, write_labels, accumulators[0]);
+                } else if (pooled) {
+                    // Preserve the reference reduction ranges and order, while
+                    // sharing existing workers across simultaneous SSOG units.
+                    tbb::parallel_for(size_t{0}, worker_count, [&](size_t worker) {
+                        accumulate_range(total_points * worker / worker_count,
+                                         total_points * (worker + 1) / worker_count,
+                                         write_labels, accumulators[worker]);
+                    });
                 } else {
                     std::vector<std::thread> workers;
                     workers.reserve(worker_count);
@@ -1534,6 +1556,8 @@ namespace lfs::io {
                         centroid_vals[c] = static_cast<float>(sum / static_cast<double>(count));
                     }
                 }
+                use_hints = pooled && std::is_sorted(centroid_vals.begin(), centroid_vals.end()) &&
+                            std::all_of(centroid_vals.begin(), centroid_vals.end(), [](float v) { return std::isfinite(v); });
             }
 
             std::vector<int> order(K);
@@ -1738,11 +1762,17 @@ namespace lfs::io {
                 sh_kmeans_future = std::async(
                     std::launch::async,
                     [shN_float_swizzled, num_rows, sh_coeffs, palette_size,
-                     iterations = options.kmeans_iterations, export_started]() mutable {
+                     iterations = options.kmeans_iterations, fast = options.fast_webp, export_started]() mutable {
                         const auto started = std::chrono::steady_clock::now();
                         auto [centroids, labels] = lfs::io::kmeans_sh_swizzled(
                             shN_float_swizzled, static_cast<int>(num_rows), sh_coeffs,
-                            palette_size, iterations);
+                            palette_size, iterations, fast);
+                        if (fast) {
+                            // Deliver CPU inputs with the future so packing can
+                            // proceed without a later default-stream readback.
+                            centroids = centroids.to_pageable_host();
+                            labels = labels.to_pageable_host();
+                        }
                         const auto finished = std::chrono::steady_clock::now();
                         return ShKmeansResult{
                             std::move(centroids),
@@ -1810,8 +1840,10 @@ namespace lfs::io {
                                       std::format("Invalid WebP configuration for '{}'", image.filename),
                                       options.output_path);
                 }
-                config.method = options.fast_webp ? 1 : image.method;
-                config.quality = options.fast_webp ? 75.0f : image.quality;
+                // Streamed units favor decode-exact, low-effort compression.
+                // In lossless mode quality controls search effort, not pixels.
+                config.method = options.fast_webp ? 0 : image.method;
+                config.quality = options.fast_webp ? 0.0f : image.quality;
                 config.exact = 1;
                 if (!WebPValidateConfig(&config)) {
                     return make_error(ErrorCode::ENCODING_FAILED,
@@ -2094,7 +2126,7 @@ namespace lfs::io {
             }
 
             const auto cluster_scales_started = std::chrono::steady_clock::now();
-            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
+            auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
             cluster_scales_ms = milliseconds(cluster_scales_started, std::chrono::steady_clock::now());
             std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
             const auto scales_pack_started = std::chrono::steady_clock::now();
@@ -2120,7 +2152,7 @@ namespace lfs::io {
             }
 
             const auto cluster_sh0_started = std::chrono::steady_clock::now();
-            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
+            auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations, options.fast_webp);
             cluster_sh0_ms = milliseconds(cluster_sh0_started, std::chrono::steady_clock::now());
 
             std::vector<uint8_t> sh0_data(width * height * CHANNELS, 0);
@@ -2197,7 +2229,7 @@ namespace lfs::io {
                 }
 
                 const auto codebook_started = std::chrono::steady_clock::now();
-                auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations);
+                auto codebook_result = cluster1d(sh_centroids_grouped.data(), actual_palette_size, sh_dims, options.kmeans_iterations, options.fast_webp);
                 kmeans_sh_ms = sh_kmeans_data.milliseconds +
                                milliseconds(codebook_started, std::chrono::steady_clock::now());
 

@@ -419,8 +419,8 @@ namespace lfs::io {
             }
         }
 
-        template <int N_DIMS>
-        __global__ void __launch_bounds__(BLOCK_SIZE, 3)
+        template <int N_DIMS, int POINTS_PER_THREAD = ASSIGN_POINTS_PER_THREAD, int THREAD_COUNT = BLOCK_SIZE>
+        __global__ void __launch_bounds__(THREAD_COUNT, 3)
             assign_nearest_swizzled_bruteforce_kernel(
                 const float4* __restrict__ shN,
                 const float* __restrict__ centroids,
@@ -428,16 +428,17 @@ namespace lfs::io {
                 int* __restrict__ labels,
                 const int n_points,
                 const int k) {
-            __shared__ float shared_points[ASSIGN_POINT_TILE][ASSIGN_SHARED_K_STRIDE];
+            constexpr int POINT_TILE = THREAD_COUNT / ASSIGN_CENTROID_GROUPS * POINTS_PER_THREAD;
+            __shared__ float shared_points[POINT_TILE][ASSIGN_SHARED_K_STRIDE];
             __shared__ float shared_centroids[ASSIGN_CENTROID_TILE][ASSIGN_SHARED_K_STRIDE];
             __shared__ float shared_centroid_norms[ASSIGN_CENTROID_TILE];
 
             const int tid = threadIdx.x;
-            const int point_row = (tid / ASSIGN_CENTROID_GROUPS) * ASSIGN_POINTS_PER_THREAD;
+            const int point_row = (tid / ASSIGN_CENTROID_GROUPS) * POINTS_PER_THREAD;
             const int centroid_col = (tid % ASSIGN_CENTROID_GROUPS) * ASSIGN_CENTROIDS_PER_THREAD;
-            const int point_start = blockIdx.x * ASSIGN_POINT_TILE;
+            const int point_start = blockIdx.x * POINT_TILE;
             constexpr int point_slots_count = (N_DIMS + 3) / 4;
-            for (int i = tid; i < ASSIGN_POINT_TILE * point_slots_count; i += BLOCK_SIZE) {
+            for (int i = tid; i < POINT_TILE * point_slots_count; i += THREAD_COUNT) {
                 const int point = i / point_slots_count;
                 const int slot = i % point_slots_count;
                 const int global_point = point_start + point;
@@ -452,10 +453,10 @@ namespace lfs::io {
             }
             __syncthreads();
 
-            float best_dist[ASSIGN_POINTS_PER_THREAD];
-            int best_idx[ASSIGN_POINTS_PER_THREAD];
+            float best_dist[POINTS_PER_THREAD];
+            int best_idx[POINTS_PER_THREAD];
 #pragma unroll
-            for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
                 best_dist[p] = 1e30f;
                 best_idx[p] = k;
             }
@@ -463,7 +464,7 @@ namespace lfs::io {
             const int num_tiles = (k + ASSIGN_CENTROID_TILE - 1) / ASSIGN_CENTROID_TILE;
             for (int tile = 0; tile < num_tiles; ++tile) {
                 const int centroid_start = tile * ASSIGN_CENTROID_TILE;
-                for (int i = tid; i < ASSIGN_CENTROID_TILE * N_DIMS; i += BLOCK_SIZE) {
+                for (int i = tid; i < ASSIGN_CENTROID_TILE * N_DIMS; i += THREAD_COUNT) {
                     const int centroid = i / N_DIMS;
                     const int dim = i % N_DIMS;
                     const int global_centroid = centroid_start + centroid;
@@ -471,19 +472,19 @@ namespace lfs::io {
                                                           ? centroids[static_cast<long long>(global_centroid) * N_DIMS + dim]
                                                           : 0.0f;
                 }
-                for (int i = tid; i < ASSIGN_CENTROID_TILE; i += BLOCK_SIZE) {
+                for (int i = tid; i < ASSIGN_CENTROID_TILE; i += THREAD_COUNT) {
                     const int global_centroid = centroid_start + i;
                     shared_centroid_norms[i] = global_centroid < k ? centroid_norms[global_centroid] : 0.0f;
                 }
                 __syncthreads();
 
-                float dots[ASSIGN_POINTS_PER_THREAD][ASSIGN_CENTROIDS_PER_THREAD] = {};
+                float dots[POINTS_PER_THREAD][ASSIGN_CENTROIDS_PER_THREAD] = {};
 #pragma unroll
                 for (int d = 0; d < N_DIMS; ++d) {
-                    float point_values[ASSIGN_POINTS_PER_THREAD];
+                    float point_values[POINTS_PER_THREAD];
                     float centroid_values[ASSIGN_CENTROIDS_PER_THREAD];
 #pragma unroll
-                    for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
                         point_values[p] = shared_points[point_row + p][d];
                     }
 #pragma unroll
@@ -491,7 +492,7 @@ namespace lfs::io {
                         centroid_values[c] = shared_centroids[centroid_col + c][d];
                     }
 #pragma unroll
-                    for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
 #pragma unroll
                         for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
                             dots[p][c] = fmaf(point_values[p], centroid_values[c], dots[p][c]);
@@ -500,7 +501,7 @@ namespace lfs::io {
                 }
 
 #pragma unroll
-                for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+                for (int p = 0; p < POINTS_PER_THREAD; ++p) {
 #pragma unroll
                     for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
                         const int global_centroid = centroid_start + centroid_col + c;
@@ -521,7 +522,7 @@ namespace lfs::io {
             const unsigned group_mask = 0xffffffffu;
             const int group_lane = tid % ASSIGN_CENTROID_GROUPS;
 #pragma unroll
-            for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
                 for (int offset = ASSIGN_CENTROID_GROUPS / 2; offset > 0; offset >>= 1) {
                     const float other_dist = __shfl_down_sync(
                         group_mask, best_dist[p], offset, ASSIGN_CENTROID_GROUPS);
@@ -1091,7 +1092,7 @@ namespace lfs::io {
             const Tensor& shN_swizzled,
             const int n,
             const int k,
-            const int iterations) {
+            const int iterations, const bool fast_assignment) {
             auto shN_gpu = as_cuda_contiguous(shN_swizzled);
             const auto* d_shN = reinterpret_cast<const float4*>(shN_gpu.ptr<float>());
 
@@ -1216,7 +1217,6 @@ namespace lfs::io {
             auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            const int grid_n_exact_assign = (n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
             const int grid_n_super_assign = (n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
 
             const int timed_iterations = std::max(0, iterations);
@@ -1271,9 +1271,7 @@ namespace lfs::io {
                 assign_timers[static_cast<size_t>(iter)].record_start();
 
                 if (use_exact) {
-                    assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n_exact_assign, BLOCK_SIZE>>>(
-                        d_shN, d_centroids, centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
-                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_swizzled");
+                    assign_sh3_labels(shN_gpu, centroids, centroid_norms, labels, fast_assignment);
                 } else {
                     supers_timers[static_cast<size_t>(iter)].record_start();
                     compute_centroid_norms_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
@@ -1380,12 +1378,29 @@ namespace lfs::io {
 
     } // anonymous namespace
 
+    void assign_sh3_labels(const Tensor& shN_swizzled, const Tensor& centroids,
+                           const Tensor& centroid_norms, Tensor& labels, bool fast) {
+        const int n = static_cast<int>(labels.numel());
+        const int k = static_cast<int>(centroids.size(0));
+        const auto* sh = reinterpret_cast<const float4*>(shN_swizzled.ptr<float>());
+        if (fast) {
+            // Share each centroid load across four points. The point tile and
+            // every FP32 dot product/tie comparison match the ordinary kernel.
+            assign_nearest_swizzled_bruteforce_kernel<45, 4, 128><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, 128>>>(
+                sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
+        } else {
+            assign_nearest_swizzled_bruteforce_kernel<45><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
+                sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
+        }
+        LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
+    }
+
     std::tuple<Tensor, Tensor> kmeans_sh_swizzled(
         const Tensor& shN_swizzled,
         const int n_points,
         const int sh_coeffs,
         const int k,
-        const int iterations) {
+        const int iterations, const bool fast_assignment) {
         if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 ||
             shN_swizzled.dtype() != DataType::Float32) {
             LOG_ERROR("kmeans_sh_swizzled expects a 1D float32 swizzled shN tensor");
@@ -1412,7 +1427,7 @@ namespace lfs::io {
             return kmeans_swizzled_bruteforce_impl<24>(shN_swizzled, n_points, k, iterations);
         case 45:
             if (k >= 4096) {
-                return kmeans_swizzled_hierarchical_impl<45>(shN_swizzled, n_points, k, iterations);
+                return kmeans_swizzled_hierarchical_impl<45>(shN_swizzled, n_points, k, iterations, fast_assignment);
             }
             return kmeans_swizzled_bruteforce_impl<45>(shN_swizzled, n_points, k, iterations);
         default:

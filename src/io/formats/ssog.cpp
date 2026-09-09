@@ -16,7 +16,6 @@
 #include <climits>
 #include <cmath>
 #include <cuda_runtime.h>
-#include <deque>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -25,6 +24,8 @@
 #include <regex>
 #include <set>
 #include <tbb/parallel_for.h>
+#include <tbb/parallel_invoke.h>
+#include <thread>
 #ifdef _WIN32
 #include <process.h>
 #else
@@ -540,7 +541,7 @@ namespace lfs::io {
             const double level_rows = input.size() * (1.0 - std::pow(double(o.lod_ratio), o.lod_levels)) / (1.0 - o.lod_ratio);
             const double resident_bytes = level_rows * (14 + 3 * input.max_sh_coeffs_rest()) * sizeof(float);
             // Reserve most available VRAM for decimation, original storage, and
-            // two encoder workspaces. Large scenes retain pageable level staging.
+            // bounded encoder workspaces. Large scenes retain pageable level staging.
             const bool resident = memory_known && resident_bytes < std::min<double>(1024.0 * 1024 * 1024, free_cuda * 0.25);
             LOG_DEBUG("SSOG level storage: resident={} estimated_bytes={:.0f} free_cuda={}", resident, resident_bytes, free_cuda);
             levels.emplace_back(input, resident);
@@ -606,50 +607,91 @@ namespace lfs::io {
             }
             std::vector<int> indices(cum.back());
             std::iota(indices.begin(), indices.end(), 0);
-            std::vector<TreeNode> tree;
-            const auto split = [&](auto&& self, size_t begin, size_t end) -> int {
+            size_t tree_leaves = 1;
+            while ((total + tree_leaves - 1) / tree_leaves > 256)
+                tree_leaves *= 2;
+            // Fixed heap slots let disjoint median partitions run concurrently.
+            // Each partition retains the same nth_element input and tie order.
+            std::vector<TreeNode> tree(tree_leaves * 2 - 1);
+            const auto split = [&](auto&& self, size_t begin, size_t end, int node) -> void {
                 Bound box;
                 for (size_t i = begin; i < end; ++i)
                     for (int a = 0; a < 3; ++a) {
                         box.min[a] = std::min(box.min[a], double(positions[indices[i]][a]));
                         box.max[a] = std::max(box.max[a], double(positions[indices[i]][a]));
                     }
-                const int node = static_cast<int>(tree.size());
-                tree.push_back({begin, end, box});
+                tree[node] = {begin, end, box};
                 if (end - begin > 256) {
                     const auto mid = begin + (end - begin) / 2;
                     const int a = box.axis();
                     std::nth_element(indices.begin() + begin, indices.begin() + mid, indices.begin() + end, [&](int i, int j) { return positions[i][a] < positions[j][a]; });
-                    const int left = self(self, begin, mid), right = self(self, mid, end);
+                    const int left = node * 2 + 1, right = left + 1;
                     tree[node].left = left;
                     tree[node].right = right;
+                    if (end - begin >= 16384) {
+                        tbb::parallel_invoke([&] { self(self, begin, mid, left); },
+                                             [&] { self(self, mid, end, right); });
+                    } else {
+                        self(self, begin, mid, left);
+                        self(self, mid, end, right);
+                    }
                 }
-                return node;
             };
-            split(split, 0, indices.size());
+            split(split, 0, indices.size(), 0);
             const size_t bin_size = size_t(o.chunk_count_k) * 1024, bin_min = size_t(o.chunk_min_k) * 1024;
             std::vector<Unit> units;
             std::vector<int> current(o.lod_levels, -1), next(o.lod_levels, 0);
             std::vector<std::string> filenames;
+            const auto splits_node = [&](const TreeNode& node) {
+                const int a = node.centroids.axis();
+                return node.left >= 0 && (node.end - node.begin > bin_size ||
+                                          (node.centroids.max[a] - node.centroids.min[a] > o.chunk_extent && node.end - node.begin > bin_min));
+            };
+            std::vector<int> leaf_ids;
+            const auto collect_leaves = [&](auto&& self, int id) -> void {
+                if (splits_node(tree[id])) {
+                    self(self, tree[id].left);
+                    self(self, tree[id].right);
+                } else {
+                    leaf_ids.push_back(id);
+                }
+            };
+            collect_leaves(collect_leaves, 0);
+            struct LeafData {
+                std::vector<std::vector<int>> bins;
+                Bound bound;
+            };
+            std::vector<LeafData> leaf_data(leaf_ids.size());
+            // Row membership and bounds are independent per leaf. Preserve the
+            // original row traversal within each leaf and assemble files below
+            // in depth-first order so offsets, ties and filenames stay exact.
+            tbb::parallel_for(size_t{0}, leaf_ids.size(), [&](size_t leaf) {
+                const auto& node = tree[leaf_ids[leaf]];
+                auto& data = leaf_data[leaf];
+                data.bins.resize(o.lod_levels);
+                for (size_t i = node.begin; i < node.end; ++i) {
+                    const int flat = indices[i];
+                    const int l = static_cast<int>(std::upper_bound(cum.begin(), cum.end(), flat) - cum.begin() - 1);
+                    data.bins[l].push_back(static_cast<int>(flat - cum[l]));
+                    data.bound.add(bounds[flat]);
+                }
+            });
+            size_t next_leaf = 0;
             const auto build = [&](auto&& self, int id) -> std::pair<Json, Bound> {
                 const auto& node = tree[id];
-                const int a = node.centroids.axis();
-                if (node.left >= 0 && (node.end - node.begin > bin_size || (node.centroids.max[a] - node.centroids.min[a] > o.chunk_extent && node.end - node.begin > bin_min))) {
+                if (splits_node(node)) {
                     auto [left, lb] = self(self, node.left);
                     auto [right, rb] = self(self, node.right);
                     lb.add(rb);
                     return {Json{{"bound", lb.json()}, {"children", Json::array({std::move(left), std::move(right)})}}, lb};
                 }
-                std::map<int, std::vector<int>> bins;
-                Bound bound;
-                for (size_t i = node.begin; i < node.end; ++i) {
-                    const int flat = indices[i];
-                    const int l = static_cast<int>(std::upper_bound(cum.begin(), cum.end(), flat) - cum.begin() - 1);
-                    bins[l].push_back(static_cast<int>(flat - cum[l]));
-                    bound.add(bounds[flat]);
-                }
+                auto& data = leaf_data[next_leaf++];
+                const auto bound = data.bound;
                 Json lods = Json::object();
-                for (auto& [l, rows] : bins) {
+                for (int l = 0; l < o.lod_levels; ++l) {
+                    const auto& rows = data.bins[l];
+                    if (rows.empty())
+                        continue;
                     if (current[l] < 0) {
                         current[l] = static_cast<int>(units.size());
                         const int index = next[l]++;
@@ -667,6 +709,8 @@ namespace lfs::io {
                 return {Json{{"bound", bound.json()}, {"lods", std::move(lods)}}, bound};
             };
             auto [root, bound] = build(build, 0);
+            leaf_data.clear();
+            leaf_data.shrink_to_fit();
             tree.clear();
             tree.shrink_to_fit();
             positions.clear();
@@ -678,7 +722,21 @@ namespace lfs::io {
             const auto partitioned = Clock::now();
             double morton_ms = 0, encode_ms = 0;
             auto stamp = o.provenance.value_or(core::make_minimal_provenance_stamp());
-            constexpr size_t workers = 2;
+            // Retain the two-workspace bound for pageable large scenes. Small
+            // resident scenes may overlap more units if there is space for their
+            // gathers, swizzled SH, labels and palette scratch in addition to LODs.
+            const auto largest_unit = std::max_element(units.begin(), units.end(), [](const auto& a, const auto& b) {
+                return a.rows.size() < b.rows.size();
+            });
+            const double workspace_bytes = largest_unit->rows.size() *
+                                               (32.0 + 6 * input.max_sh_coeffs_rest()) * sizeof(float) +
+                                           128.0 * 1024 * 1024;
+            const size_t resident_workers = resident
+                                                ? std::max<size_t>(1, (free_cuda - resident_bytes) / workspace_bytes)
+                                                : 1;
+            const size_t workers = std::min(units.size(), resident
+                                                              ? std::min(resident_workers, std::clamp<size_t>(std::thread::hardware_concurrency() / 6, 1, 4))
+                                                              : size_t{2});
             struct UnitTiming {
                 double morton, encode;
             };
@@ -729,23 +787,33 @@ namespace lfs::io {
                 LOG_DEBUG("SSOG unit: file={} level={} rows={} leaves={} morton_ms={:.3f} gather_ms={:.3f} encode_ms={:.3f}", filenames[f], u.level, u.rows.size(), u.bins.size(), sort_ms, std::chrono::duration<double, std::milli>(gathered - encode_start).count(), std::chrono::duration<double, std::milli>(Clock::now() - gathered).count());
                 return UnitTiming{sort_ms, std::chrono::duration<double, std::milli>(Clock::now() - encode_start).count()};
             };
-            std::deque<std::future<Result<UnitTiming>>> pending;
-            size_t next_unit = 0;
-            const auto launch = [&] {
-                const size_t f = next_unit++;
-                pending.push_back(std::async(std::launch::async, [&, f] { return encode_unit(f); }));
-            };
-            while (next_unit < std::min(workers, units.size()))
-                launch();
-            while (!pending.empty()) {
-                auto result = pending.front().get();
-                pending.pop_front();
+            std::atomic_size_t next_unit{0};
+            std::atomic_bool failed{false};
+            std::vector<std::future<Result<UnitTiming>>> pending;
+            for (size_t worker = 0; worker < std::min(workers, units.size()); ++worker) {
+                pending.push_back(std::async(std::launch::async, [&]() -> Result<UnitTiming> {
+                    UnitTiming timing{};
+                    while (!failed.load()) {
+                        const size_t task = next_unit.fetch_add(1);
+                        if (task >= units.size())
+                            break;
+                        auto result = encode_unit(task);
+                        if (!result) {
+                            failed.store(true);
+                            return std::unexpected(result.error());
+                        }
+                        timing.morton += result->morton;
+                        timing.encode += result->encode;
+                    }
+                    return timing;
+                }));
+            }
+            for (auto& worker : pending) {
+                auto result = worker.get();
                 if (!result)
                     return std::unexpected(result.error());
                 morton_ms += result->morton;
                 encode_ms += result->encode;
-                if (next_unit < units.size())
-                    launch();
             }
             Json manifest{{"version", 1}, {"asset", {{"generator", "LichtFeld Studio"}, {"chunkGaussians", bin_size}, {"chunkExtent", o.chunk_extent}, {"chunkMinGaussians", bin_min}}}, {"count", cum.back()}, {"counts", counts}, {"lodLevels", o.lod_levels}, {"lodErrors", false}, {"filenames", filenames}, {"tree", std::move(root)}};
             round_numbers(manifest);
