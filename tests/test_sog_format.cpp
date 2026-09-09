@@ -781,3 +781,51 @@ TEST_F(SogFormatTest, StreamedSh3AssignmentMatchesReferenceTiles) {
         }
     }
 }
+
+TEST_F(SogFormatTest, StreamedSh3ScreeningMatchesReferenceNearTiesAndHalfLimits) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    std::mt19937 rng(1741);
+    std::uniform_real_distribution<float> random(-1.0f, 1.0f);
+    constexpr size_t n = 257, k = 1025;
+    for (const float scale : {1e-20f, 1e-8f, 1e-4f, 0.01f, 1.0f, 100.0f, 100000.0f}) {
+        SCOPED_TRACE(scale);
+        auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
+        auto centroids = Tensor::empty({k, 45}, Device::CPU);
+        auto norms = Tensor::zeros({k}, Device::CPU);
+        for (size_t i = 0; i < k; ++i) {
+            for (size_t d = 0; d < 45; ++d) {
+                // Many centroids round to the same half value. Others exceed
+                // half's finite range and must use the complete FP32 path.
+                const float v = scale * (0.75f + random(rng) * 0.0001f);
+                centroids.ptr<float>()[i * 45 + d] = v;
+                norms.ptr<float>()[i] = std::fma(v, v, norms.ptr<float>()[i]);
+            }
+        }
+        for (size_t i = 0; i < n; ++i) {
+            for (size_t d = 0; d < 45; ++d) {
+                const float a = centroids.ptr<float>()[((i * 17) % k) * 45 + d];
+                const float b = centroids.ptr<float>()[((i * 17 + 1) % k) * 45 + d];
+                points.ptr<float>()[sh_swizzled_index(i, d / 4, 15) * 4 + d % 4] =
+                    i % 2 ? a : (a + b) * 0.5f;
+            }
+        }
+        points = points.cuda();
+        centroids = centroids.cuda();
+        norms = norms.cuda();
+        auto reference = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
+        auto screened = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
+        assign_sh3_labels(points, centroids, norms, reference, false);
+        assign_sh3_labels(points, centroids, norms, screened, true);
+        const auto expected = reference.cpu(), actual = screened.cpu();
+        EXPECT_TRUE(std::equal(expected.ptr<int>(), expected.ptr<int>() + n, actual.ptr<int>()));
+        std::vector<int> seeds(n);
+        for (size_t i = 0; i < n; ++i)
+            seeds[i] = i % 3 == 0 ? -1 : i % 3 == 1 ? int(k + 1)
+                                                    : int(i % k);
+        screened = Tensor::from_vector(seeds, {n}, Device::CUDA);
+        assign_sh3_labels(points, centroids, norms, screened, true, true);
+        const auto seeded = screened.cpu();
+        EXPECT_TRUE(std::equal(expected.ptr<int>(), expected.ptr<int>() + n, seeded.ptr<int>()));
+    }
+}

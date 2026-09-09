@@ -11,10 +11,12 @@
 #endif
 
 namespace lfs::io::decimate {
-    // CPU cost-cache entries in splat-transform are Float32Array, even though
-    // formulas run in double. Keep these rounding points on both backends.
+    // Reference covariance/mass cache entries are Float32Array, even though
+    // formulas run in double. Keep these rounding points on both backends;
+    // derived samples and self-densities retain their original double precision.
     struct Cache {
         float r[9], v[3], inv[3], sigma[9], logdet, mass;
+        double sample[3], self_logpdf;
     };
     DEC_HD inline double hi(double a, double b) { return a > b ? a : b; }
     DEC_HD inline double lo(double a, double b) { return a < b ? a : b; }
@@ -52,6 +54,7 @@ namespace lfs::io::decimate {
         const float* s = v.scale + size_t(i) * 3;
         return sigmoid(v.opacity[i]) * area(hi(exp(double(s[0])), 1e-12), hi(exp(double(s[1])), 1e-12), hi(exp(double(s[2])), 1e-12)) + eps;
     }
+    DEC_HD inline double logpdf(const double* x, const float* m, const Cache& c);
     DEC_HD inline Cache cache_one(View v, uint32_t i) {
         Cache c;
         double variance[3], ld = 0;
@@ -66,6 +69,16 @@ namespace lfs::io::decimate {
         c.mass = mass(v, i, 1e-12);
         rotation(v.rot + size_t(i) * 4, c.r);
         covariance(c.r, variance, c.sigma);
+        // Each edge uses the same fixed sample and its density under this
+        // Gaussian. Cache them in double, retaining the original rounding.
+        const double z[3] = {1.6264323081902676, 0.0033697340332619848, 1.0509958442185130};
+        double scaled[3];
+        for (int a = 0; a < 3; ++a)
+            scaled[a] = z[a] * sqrt(hi(c.v[a], 0));
+        const float* position = v.pos + size_t(i) * 3;
+        for (int a = 0; a < 3; ++a)
+            c.sample[a] = position[a] + scaled[0] * c.r[a * 3] + scaled[1] * c.r[a * 3 + 1] + scaled[2] * c.r[a * 3 + 2];
+        c.self_logpdf = logpdf(c.sample, position, c);
         return c;
     }
     DEC_HD inline double det(const double* a) {
@@ -105,18 +118,7 @@ namespace lfs::io::decimate {
         s[0] += 1e-8;
         s[4] += 1e-8;
         s[8] += 1e-8;
-        // Fixed binary64 sample from makeGaussianSamples(1, 0).
-        const double z[3] = {1.6264323081902676, 0.0033697340332619848, 1.0509958442185130};
-        double x[3], y[3], sa[3], sb[3];
-        for (int c = 0; c < 3; ++c) {
-            sa[c] = z[c] * sqrt(hi(a.v[c], 0));
-            sb[c] = z[c] * sqrt(hi(b.v[c], 0));
-        }
-        for (int c = 0; c < 3; ++c) {
-            x[c] = u[c] + sa[0] * a.r[c * 3] + sa[1] * a.r[c * 3 + 1] + sa[2] * a.r[c * 3 + 2];
-            y[c] = t[c] + sb[0] * b.r[c * 3] + sb[1] * b.r[c * 3 + 1] + sb[2] * b.r[c * 3 + 2];
-        }
-        double cost = p * logadd(lp + logpdf(x, u, a), lq + logpdf(x, t, b)) + q * logadd(lp + logpdf(y, u, a), lq + logpdf(y, t, b)) + 0.5 * (3 * 1.8378770664093453 + log(hi(det(s), 1e-30)) + 3);
+        double cost = p * logadd(lp + a.self_logpdf, lq + logpdf(a.sample, t, b)) + q * logadd(lp + logpdf(b.sample, u, a), lq + b.self_logpdf) + 0.5 * (3 * 1.8378770664093453 + log(hi(det(s), 1e-30)) + 3);
         for (int c = 0; c < 3 + v.rest * 3; ++c) {
             double delta = double(color(v, i, c)) - color(v, j, c);
             cost += delta * delta;
