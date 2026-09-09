@@ -7383,7 +7383,8 @@ namespace lfs::vis::gui {
             } else if (vulkan_context) {
                 rmlui_manager_.clearVulkanQueue();
                 clearLineRendererCommands();
-                if (!vulkan_context->lastError().empty()) {
+                if (vulkan_context->rendererTerminalState() == RendererTerminalState::Running &&
+                    !vulkan_context->lastError().empty()) {
                     LOG_WARN("Vulkan GUI frame begin failed: {} (ui_hidden={}, fullscreen_pending={}, ui_pending={}, settling={}, resume_training_pending={})",
                              vulkan_context->lastError(),
                              ui_hidden_,
