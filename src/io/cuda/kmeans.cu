@@ -1388,11 +1388,12 @@ namespace lfs::io {
             // every FP32 dot product/tie comparison match the ordinary kernel.
             assign_nearest_swizzled_bruteforce_kernel<45, 4, 128><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, 128>>>(
                 sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
         } else {
             assign_nearest_swizzled_bruteforce_kernel<45><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
                 sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
         }
-        LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
     }
 
     std::tuple<Tensor, Tensor> kmeans_sh_swizzled(
