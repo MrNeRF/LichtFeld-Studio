@@ -292,6 +292,29 @@ def test_native_backend_rollback_republishes_bound_controls(training_panel_modul
     assert len(dirty) == 2
 
 
+def test_native_rollback_between_publication_and_update_is_not_missed(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", gut=True,
+        mip_filter=False, use_depth_loss=False, use_normal_loss=False,
+    )
+    published = []
+    binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter))
+    panel._pv_bindings = [binding]
+    panel._handle = SimpleNamespace(dirty_all=lambda: None)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(panel, "_dirty_property_search_models", lambda: None)
+    monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    assert panel._refresh_native_backend_controls()
+    params.mip_filter = True
+    panel._pv_publish_pending = [binding]
+    assert panel._flush_pv_publish()
+    params.mip_filter = False
+    assert panel._refresh_native_backend_controls()
+    assert published == [False, True, False]
+
+
 @pytest.mark.parametrize("offer_save", [False, True])
 def test_valid_start_preserves_point_cloud_save_flow(
     training_panel_module, monkeypatch, offer_save
@@ -1837,7 +1860,7 @@ def test_resume_on_stored_session_restores_before_resuming(
         panel = training_panel_module.TrainingPanel()
         panel._on_action(None, None, ["resume"])
         assert calls[0] == ("restore", True)
-        assert ("resume",) in calls
+        assert calls == [("restore", True)]
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"

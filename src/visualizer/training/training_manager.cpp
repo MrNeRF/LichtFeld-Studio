@@ -1129,25 +1129,22 @@ namespace lfs::vis {
     lfs::Error TrainerManager::rejectStart(
         std::string message, const lfs::ErrorCode code) {
         LOG_ERROR("Cannot start training: {}", message);
-        last_error_ = std::move(message);
         lfs::Error typed = lfs::make_error(lfs::ErrorInit{
             .code = code,
             .domain = lfs::ErrorDomain::Training,
             .operation_id = lfs::OperationId::generate(),
-            .user_message = last_error_,
-            .detail = "Training start rejected: " + last_error_,
+            .user_message = message,
+            .detail = "Training command rejected: " + message,
             .detection = LFS_SOURCE_SITE_CURRENT(),
         });
-        {
-            std::lock_guard lock(initialization_mutex_);
-            start_params_candidate_.reset();
-            initialization_complete_ = true;
-            initialization_error_ = typed;
+        // A rejected command does not own the accepted run's initialization
+        // result, candidate or waiters. Return its error to that caller only.
+        if (!isRunning() && getState() != TrainingState::Starting) {
+            last_error_ = message;
+            last_training_error_.set(typed);
         }
-        initialization_cv_.notify_all();
-        last_training_error_.set(typed);
         state::TrainingStartRejected{
-            .error = last_error_,
+            .error = message,
             .error_info = core::to_wire_error(typed)}
             .emit();
         return typed;
@@ -1391,7 +1388,7 @@ namespace lfs::vis {
         }
     }
 
-    void TrainerManager::resumeTraining() {
+    lfs::Status TrainerManager::resumeTraining() {
         if (!trainer_ && viewer_) {
             const auto session =
                 viewer_->projectTrainingSessionState();
@@ -1399,22 +1396,22 @@ namespace lfs::vis {
                 if (auto restored =
                         viewer_->startTraining();
                     !restored) {
-                    LOG_ERROR(
-                        "Failed to restore training session: {}",
-                        restored.error());
+                    return lfs::Status::failure(training_initialization_error(restored.error()));
                 }
-                return;
+                return {};
             }
         }
         if (!canResume()) {
-            LOG_TRACE("Cannot resume: {}", getActionBlockedReason(TrainingAction::Resume));
-            return;
+            return lfs::Status::failure(rejectStart(
+                std::string(getActionBlockedReason(TrainingAction::Resume)),
+                lfs::ErrorCode::FailedPrecondition));
         }
         if (!trainer_)
-            return;
+            return lfs::Status::failure(rejectStart(
+                "No trainer available", lfs::ErrorCode::FailedPrecondition));
 
         if (auto preflight = preflightStartParameters(); !preflight)
-            return;
+            return preflight;
 
         const int iter = getCurrentIteration();
         const bool need_thread = !isCompletionPending();
@@ -1428,13 +1425,13 @@ namespace lfs::vis {
         }
         initialization_cv_.notify_all();
 
-        if (!need_thread) {
-            trainer_->request_resume();
-        }
-
         training_start_time_ = std::chrono::steady_clock::now();
         if (!state_machine_.transitionTo(TrainingState::Running)) {
-            LOG_WARN("Failed to transition to Running");
+            return lfs::Status::failure(rejectStart(
+                "Cannot transition to running", lfs::ErrorCode::FailedPrecondition));
+        }
+        if (!need_thread) {
+            trainer_->request_resume();
         }
         if (need_thread) {
             // Checkpoint resume: publish Running before the worker begins its
@@ -1444,6 +1441,7 @@ namespace lfs::vis {
 
         state::TrainingResumed{.iteration = iter}.emit();
         LOG_INFO("Training resumed at iteration {}", iter);
+        return {};
     }
 
     void TrainerManager::pauseTrainingTemporary() {

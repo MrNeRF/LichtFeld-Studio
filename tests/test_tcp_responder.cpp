@@ -38,6 +38,19 @@ namespace {
 
     using json = nlohmann::json;
 
+    std::string loopback_endpoint(const lfs::tcp::TCPServer& server) {
+        const auto bound = server.getEndpoint();
+        // A wildcard bind address is not a portable client destination.
+        return "tcp://127.0.0.1" + bound.substr(bound.find_last_of(':'));
+    }
+
+    void configure_test_client(zmq::socket_t& client) {
+        // Do not wait forever for undelivered messages when a test fails.
+        client.set(zmq::sockopt::linger, 0);
+        client.set(zmq::sockopt::sndtimeo, 2000);
+        client.set(zmq::sockopt::rcvtimeo, 2000);
+    }
+
     // Exposes the protected transport primitives so the receive() status
     // machine can be driven directly (Section 5.3.5).
     class DirectTcpServer : public lfs::tcp::TCPServer {
@@ -57,42 +70,32 @@ namespace {
         void SetUp() override {
             responder_ = std::make_unique<lfs::tcp::ResponderServer>(0, nullptr);
             responder_->start();
-            endpoint_ = responder_->getEndpoint();
+            endpoint_ = loopback_endpoint(*responder_);
         }
 
         void TearDown() override {
             responder_->stop();
         }
 
-        json roundtrip(const json& request) {
-            zmq::context_t context;
-            zmq::socket_t client(context, zmq::socket_type::req);
-            client.set(zmq::sockopt::rcvtimeo, 2000);
-            client.connect(endpoint_);
-
-            const std::string payload = request.dump();
-            zmq::message_t out(payload.data(), payload.size());
-            client.send(out, zmq::send_flags::none);
-
-            zmq::message_t reply;
-            const auto received = client.recv(reply, zmq::recv_flags::none);
-            EXPECT_TRUE(received.has_value());
-            return json::parse(reply.to_string());
+        void roundtrip(const json& request, json& response) {
+            std::string body;
+            ASSERT_NO_FATAL_FAILURE(send_raw(request.dump(), body));
+            response = json::parse(body);
         }
 
-        std::string send_raw(const std::string& payload) {
+        void send_raw(const std::string& payload, std::string& response) {
             zmq::context_t context;
             zmq::socket_t client(context, zmq::socket_type::req);
-            client.set(zmq::sockopt::rcvtimeo, 2000);
+            configure_test_client(client);
             client.connect(endpoint_);
 
             zmq::message_t out(payload.data(), payload.size());
-            client.send(out, zmq::send_flags::none);
+            ASSERT_TRUE(client.send(out, zmq::send_flags::none).has_value()) << endpoint_;
 
             zmq::message_t reply;
             const auto received = client.recv(reply, zmq::recv_flags::none);
-            EXPECT_TRUE(received.has_value());
-            return reply.to_string();
+            ASSERT_TRUE(received.has_value()) << endpoint_;
+            response = reply.to_string();
         }
 
         std::unique_ptr<lfs::tcp::ResponderServer> responder_;
@@ -102,7 +105,8 @@ namespace {
 } // namespace
 
 TEST_F(TcpResponderRoundtripTest, UnknownCommandReturnsNotFoundEnvelope) {
-    const auto reply = roundtrip(json{{"command", "bogus"}});
+    json reply;
+    ASSERT_NO_FATAL_FAILURE(roundtrip(json{{"command", "bogus"}}, reply));
     EXPECT_FALSE(reply["success"].get<bool>());
     EXPECT_EQ(reply["command"], "bogus");
     EXPECT_EQ(reply["error"]["code"], "NotFound");
@@ -112,7 +116,8 @@ TEST_F(TcpResponderRoundtripTest, UnknownCommandReturnsNotFoundEnvelope) {
 }
 
 TEST_F(TcpResponderRoundtripTest, MalformedJsonReturnsInvalidArgumentEnvelopeWithoutParserText) {
-    const std::string body = send_raw("{not json");
+    std::string body;
+    ASSERT_NO_FATAL_FAILURE(send_raw("{not json", body));
     EXPECT_EQ(body.find("parse error"), std::string::npos);
 
     const auto reply = json::parse(body);
@@ -122,7 +127,8 @@ TEST_F(TcpResponderRoundtripTest, MalformedJsonReturnsInvalidArgumentEnvelopeWit
 }
 
 TEST_F(TcpResponderRoundtripTest, UnknownGetParameterReturnsEnvelopeWithValueCompat) {
-    const auto reply = roundtrip(json{{"command", "get"}, {"parameter", "bogus_param"}});
+    json reply;
+    ASSERT_NO_FATAL_FAILURE(roundtrip(json{{"command", "get"}, {"parameter", "bogus_param"}}, reply));
     EXPECT_FALSE(reply["success"].get<bool>());
     EXPECT_EQ(reply["parameter"], "bogus_param");
     EXPECT_EQ(reply["error"]["code"], "NotFound");
@@ -140,10 +146,11 @@ TEST(TcpReceiveStatusTest, MalformedFrameReturnsMalformedJsonWithTypedError) {
     DirectTcpServer server;
     zmq::context_t context;
     zmq::socket_t client(context, zmq::socket_type::req);
-    client.connect(server.getEndpoint());
+    configure_test_client(client);
+    client.connect(loopback_endpoint(server));
     const std::string payload = "{not json";
     zmq::message_t out(payload.data(), payload.size());
-    client.send(out, zmq::send_flags::none);
+    ASSERT_TRUE(client.send(out, zmq::send_flags::none).has_value());
 
     lfs::Error out_error = lfs::make_error(lfs::ErrorInit{
         .code = lfs::ErrorCode::Internal,

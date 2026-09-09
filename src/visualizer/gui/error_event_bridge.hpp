@@ -47,6 +47,8 @@ namespace lfs::vis::gui {
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateTrainingCompleted(const core::events::state::TrainingCompleted& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
+    translateTrainingStartRejected(const core::events::state::TrainingStartRejected& e);
+    LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateDatasetLoadCompleted(const core::events::state::DatasetLoadCompleted& e);
     LFS_VIS_API std::optional<lfs::ErrorNotification>
     translateConfigLoadFailed(const core::events::state::ConfigLoadFailed& e);

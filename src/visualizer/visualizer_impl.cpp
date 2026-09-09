@@ -3794,8 +3794,10 @@ namespace lfs::vis {
                 message, lfs::ErrorCode::FailedPrecondition));
             return std::unexpected(std::move(message));
         };
-        if (project_lifecycle_ &&
-            !trainer_manager_->hasTrainer()) {
+        if (project_lifecycle_) {
+            if (project_lifecycle_->isHydrating()) {
+                return reject("Project is still loading. Retry Start after loading completes.");
+            }
             const auto session =
                 project_lifecycle_->trainingSessionState();
             if (session.available && !session.hydrated) {
@@ -3828,7 +3830,9 @@ namespace lfs::vis {
                     }
                 }
             }
-            trainer_manager_->resumeTraining();
+            if (auto resumed = trainer_manager_->resumeTraining(); !resumed) {
+                return std::unexpected(std::string(resumed.error().user_message()));
+            }
             return {};
         }
         if (!trainer_manager_->canStart()) {

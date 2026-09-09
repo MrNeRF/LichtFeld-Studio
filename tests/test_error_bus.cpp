@@ -245,6 +245,18 @@ TEST(ErrorEventBridgeTest, TrainingFailureSurfacesAsModalError) {
     EXPECT_EQ(notification->error.code(), lfs::ErrorCode::Internal);
 }
 
+TEST(ErrorEventBridgeTest, TrainingCommandRejectionSurfacesWithoutFailedRunModal) {
+    lfs::core::events::state::TrainingStartRejected rejected{};
+    rejected.error = "3DGUT does not support Mip Filter";
+    const auto notification = lfs::vis::gui::translateTrainingStartRejected(rejected);
+    ASSERT_TRUE(notification);
+    EXPECT_EQ(notification->surface, lfs::ErrorSurface::Toast);
+    EXPECT_EQ(notification->error.severity(), lfs::Severity::Warning);
+    EXPECT_EQ(notification->error.user_message(), rejected.error);
+    ASSERT_EQ(notification->actions.size(), 1);
+    EXPECT_EQ(notification->actions.front().kind, lfs::ErrorActionKind::Dismiss);
+}
+
 TEST(ErrorEventBridgeTest, TrainingOomMapsToResourceExhausted) {
     lfs::core::events::state::TrainingCompleted oom{};
     oom.success = false;

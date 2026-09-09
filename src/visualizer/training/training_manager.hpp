@@ -89,7 +89,7 @@ namespace lfs::vis {
         // viewer thread; the GUI start path intentionally returns in Starting.
         [[nodiscard]] lfs::Result<void> waitForInitialization();
         void pauseTraining();
-        void resumeTraining();
+        lfs::Status resumeTraining();
         void stopTraining();
         bool requestSaveProject();
         // Suppress the completion notification modal for the next TrainingCompleted

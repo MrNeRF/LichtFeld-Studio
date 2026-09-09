@@ -13712,6 +13712,35 @@ namespace lfs::vis {
     }
 
     TEST_F(VisualizerImplResetTest,
+           StartWhileProjectIsLoadingReturnsRetryReason) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        const auto project_path = temporary_.path / "start-loading.licht";
+        const auto dataset_path = temporary_.path / "start-loading-dataset";
+        write_minimal_transforms_dataset(dataset_path);
+        write_resumable_project_with_checkpoint(
+            project_path, lfs::core::generate_uuid_v4(),
+            lfs::core::generate_uuid_v4(), dataset_path);
+        VisualizerImpl viewer(projectOptions());
+        ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+        ASSERT_TRUE(viewer.getWindowManager()->init());
+        viewer.input_controller_ = std::make_unique<InputController>(nullptr, viewer.getViewport());
+        ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+        // The viewer queue has not committed hydration yet.
+        const auto loading_start = viewer.startTraining();
+        ASSERT_FALSE(loading_start);
+        EXPECT_NE(loading_start.error().find("loading"), std::string::npos);
+        EXPECT_EQ(loading_start.error().find("No dataset"), std::string::npos);
+        viewer.noteGuiSessionRestoreOwnerReady(1);
+        ASSERT_TRUE(waitForHydrationComplete(viewer, viewer.work_queue_mutex_, viewer.work_queue_));
+        const auto restore_start = viewer.startTraining();
+        ASSERT_FALSE(restore_start);
+        EXPECT_NE(restore_start.error().find("being restored"), std::string::npos);
+        EXPECT_FALSE(viewer.getTrainerManager()->isRunning());
+    }
+
+    TEST_F(VisualizerImplResetTest,
            StoredSessionAtPrmsIterationsReportsCompleted) {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";

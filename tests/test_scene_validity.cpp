@@ -807,11 +807,8 @@ namespace lfs::python {
         EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
         EXPECT_NE(manager.getLastError().find("Depth Loss"),
                   std::string::npos);
-        const auto initialization = manager.waitForInitialization();
-        ASSERT_FALSE(initialization.has_value());
-        EXPECT_NE(
-            lfs::format_for_developer(initialization.error()).find("Depth Loss"),
-            std::string::npos);
+        // No run was accepted: a command rejection is not an initialization result.
+        EXPECT_TRUE(manager.waitForInitialization());
         ASSERT_NE(manager.getTrainer(), nullptr);
         EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
                   installed_params.optimization.to_json());
@@ -836,11 +833,13 @@ namespace lfs::python {
         auto& pending = manager.getEditableOptParams();
         pending.gut = true;
         pending.mip_filter = true;
-        manager.resumeTraining();
+        const auto resumed = manager.resumeTraining();
+        ASSERT_FALSE(resumed);
+        EXPECT_NE(resumed.error().user_message().find("Mip Filter"), std::string::npos);
         EXPECT_TRUE(manager.isPaused());
         EXPECT_FALSE(manager.isCompletionPending());
         EXPECT_NE(manager.getLastError().find("Mip Filter"), std::string::npos);
-        EXPECT_FALSE(manager.waitForInitialization());
+        EXPECT_TRUE(manager.waitForInitialization());
     }
 
     TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
@@ -899,8 +898,17 @@ namespace lfs::python {
         // The worker must apply the exact candidate accepted by Start, even if
         // a script changes the pending slot before initialization acquires it.
         manager.getEditableOptParams().enable_eval = false;
+        const auto rejected = manager.rejectStart("Training is starting.", lfs::ErrorCode::FailedPrecondition);
+        EXPECT_EQ(rejected.user_message(), "Training is starting.");
+        EXPECT_TRUE(manager.getLastError().empty());
+        EXPECT_FALSE(manager.lastTrainingError());
+        auto initialization_result = std::async(std::launch::async, [&] {
+            return manager.waitForInitialization();
+        });
+        EXPECT_EQ(initialization_result.wait_for(std::chrono::milliseconds(50)),
+                  std::future_status::timeout);
         initialization_lock.unlock();
-        ASSERT_FALSE(manager.waitForInitialization());
+        ASSERT_FALSE(initialization_result.get());
         EXPECT_TRUE(weights_prepared);
         ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
 

@@ -985,6 +985,11 @@ namespace lfs::vis::project {
                    std::memory_order_acquire);
     }
 
+    bool ProjectLifecycle::isHydrating() const {
+        const auto hydration = hydration_.load(std::memory_order_acquire);
+        return hydration == Hydration::ShellReady || hydration == Hydration::Hydrating;
+    }
+
     ProjectLifecycle::TrainingSessionState
     ProjectLifecycle::trainingSessionState() const {
         TrainingSessionState state;

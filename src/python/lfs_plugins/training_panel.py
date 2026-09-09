@@ -2214,6 +2214,9 @@ class TrainingPanel(Panel):
                 binding.publish()
                 published = True
         if published:
+            # A worker may reject an edit between publication and the next
+            # update, restoring the same values as the previous snapshot.
+            self._last_backend_controls = None
             self._dirty_property_search_models()
             self._sync_section_states()
         return published
@@ -2394,7 +2397,8 @@ class TrainingPanel(Panel):
         elif action == "resume":
             if _training_session_state().get("restoring"):
                 return
-            _restore_stored_session_if_needed(then_start=True)
+            if _restore_stored_session_if_needed(then_start=True):
+                return
             lf.resume_training()
         elif action == "stop":
             lf.stop_training()

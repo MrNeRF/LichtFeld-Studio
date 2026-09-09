@@ -102,6 +102,14 @@ namespace lfs::vis::gui {
     }
 
     std::optional<lfs::ErrorNotification>
+    translateTrainingStartRejected(const state::TrainingStartRejected& e) {
+        return makeNotification(lfs::ErrorCode::FailedPrecondition,
+                                lfs::ErrorDomain::Training, lfs::Severity::Warning,
+                                e.error, error_op::kTrain, LFS_SOURCE_SITE_CURRENT(),
+                                lfs::ErrorSurface::Toast, {dismissAction()});
+    }
+
+    std::optional<lfs::ErrorNotification>
     translateDatasetLoadCompleted(const state::DatasetLoadCompleted& e) {
         if (e.success || !e.error.has_value()) {
             return std::nullopt;
@@ -229,6 +237,8 @@ namespace lfs::vis::gui {
 
         state::TrainingCompleted::when(
             [publish](const auto& e) { publish(translateTrainingCompleted(e)); });
+        state::TrainingStartRejected::when(
+            [publish](const auto& e) { publish(translateTrainingStartRejected(e)); });
         state::DatasetLoadCompleted::when(
             [publish](const auto& e) { publish(translateDatasetLoadCompleted(e)); });
         state::ConfigLoadFailed::when(

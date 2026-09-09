@@ -225,6 +225,7 @@ namespace lfs::vis::project {
         [[nodiscard]] bool hasSourcePath() const;
         [[nodiscard]] bool isScratchBoundSession() const;
         [[nodiscard]] bool isBlankProject() const;
+        [[nodiscard]] bool isHydrating() const;
         [[nodiscard]] bool isBlankUntitledSession() const;
         [[nodiscard]] lfs::Result<ProjectInfo> info();
         [[nodiscard]] lfs::Result<std::optional<lfs::io::project::ProjectLicense>>

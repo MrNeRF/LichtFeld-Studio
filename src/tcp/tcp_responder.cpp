@@ -159,8 +159,12 @@ namespace lfs::tcp {
             trainer_manager_->pauseTraining();
             response["success"] = trainer_manager_->isPaused();
         } else if (command == "resume") {
-            trainer_manager_->resumeTraining();
-            response["success"] = !trainer_manager_->isPaused();
+            const auto resumed = trainer_manager_->resumeTraining();
+            response["success"] = resumed.has_value();
+            if (!resumed) {
+                response["error"] = lfs::core::to_wire_envelope(resumed.error());
+                response["error_message"] = std::string(resumed.error().user_message());
+            }
         } else if (command == "stop") {
             trainer_manager_->stopTraining();
             response["success"] = true;
