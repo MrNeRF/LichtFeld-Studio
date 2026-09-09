@@ -4,6 +4,7 @@
 
 #include "visualizer_impl.hpp"
 #include "core/animatable_property.hpp"
+#include "core/crash_handler.hpp"
 #include "core/cuda_error.hpp"
 #include "core/data_loading_service.hpp"
 #include "core/error.hpp"
@@ -1233,22 +1234,19 @@ namespace lfs::vis {
             code, lfs::ErrorDomain::Vulkan, lfs::Severity::Fatal, lfs::ErrorSurface::Modal,
             LOC(body_key), std::move(detail), std::move(actions), LFS_SOURCE_SITE_CURRENT()));
 
-        if (device_lost) {
-            SDL_Window* const window = window_manager_ ? window_manager_->getWindow() : nullptr;
-            if (!SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-                                          LOC(ErrModalKeys::RENDERER_DEVICE_LOST),
-                                          LOC(ErrModalKeys::RENDERER_DEVICE_LOST_BODY), window)) {
-                LOG_ERROR("Failed to present device-lost dialog: {}", SDL_GetError());
-            }
-        }
+        if (auto* window = window_manager_ ? window_manager_->getWindow() : nullptr)
+            SDL_SetWindowTitle(window, LOC(device_lost ? ErrModalKeys::RENDERER_DEVICE_LOST
+                                                       : ErrModalKeys::RENDERER_STALLED));
+        lfs::core::flush_diagnostics_noexcept();
     }
 
     void VisualizerImpl::onFrameCompleted() noexcept {
         frame_state_.on_frame_success();
-        lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
         if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr) {
             applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
         }
+        if (frame_state_.state() != FrameStateMachine::State::RendererDead)
+            lfs::core::MemoryPressureCoordinator::instance().maybe_recover();
     }
 
     void VisualizerImpl::beginShutdown([[maybe_unused]] const std::string_view reason) {
@@ -2055,7 +2053,8 @@ namespace lfs::vis {
 
         if (pipeline_cache_flush_due_ && update_started_at >= *pipeline_cache_flush_due_) {
             pipeline_cache_flush_due_.reset();
-            if (auto* const context = window_manager_->getVulkanContext())
+            if (auto* const context = window_manager_->getVulkanContext();
+                context && context->rendererTerminalState() == RendererTerminalState::Running)
                 context->flushPipelineCache();
         }
 
@@ -2194,6 +2193,10 @@ namespace lfs::vis {
         if (render_work.empty())
             return;
 
+        if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
+            cancelRemainingWork(render_work, 0, "render", viewer_thread_id_);
+            return;
+        }
         processing_render_work_ = true;
         runPostedWork(render_work, "render", viewer_thread_id_);
         processing_render_work_ = false;
@@ -2396,6 +2399,16 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::render() {
+
+        if (auto* const ctx = window_manager_ ? window_manager_->getVulkanContext() : nullptr)
+            applyFrameStateEffects(frame_state_.on_renderer_terminal(ctx->rendererTerminalState()));
+        if (frame_state_.state() == FrameStateMachine::State::RendererDead) {
+            // Keep the CPU event and MCP queues responsive without issuing another GPU frame.
+            processRenderWorkQueue();
+            if (window_manager_)
+                window_manager_->waitEvents(0.1);
+            return;
+        }
 
         if (motion_only_wake_skipped_) {
             motion_only_wake_skipped_ = false;

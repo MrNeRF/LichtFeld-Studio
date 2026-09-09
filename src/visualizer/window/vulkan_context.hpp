@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <expected>
 #include <format>
 #include <mutex>
@@ -45,6 +46,8 @@ struct SDL_Window;
 namespace lfs::vis {
 
     class VulkanContext {
+        friend struct VulkanContextTestAccess;
+
     public:
         enum class ResizeIntent {
             Interactive,
@@ -61,6 +64,8 @@ namespace lfs::vis {
         void shutdown();
         void notifyFramebufferResized(int width, int height, ResizeIntent intent = ResizeIntent::Exact);
         [[nodiscard]] bool hasPendingSwapchainResize() const {
+            if (rendererTerminalState() != RendererTerminalState::Running)
+                return false;
             // A forced rebuild is pending work too, otherwise render-on-demand can idle for
             // half a second holding an out-of-date swapchain. Zero framebuffers are excluded:
             // beginFrame skips those without rebuilding, so they would never clear the flag.
@@ -72,6 +77,8 @@ namespace lfs::vis {
 
         [[nodiscard]] bool presentBootstrapFrame(float r, float g, float b, float a);
         [[nodiscard]] const std::string& lastError() const { return last_error_; }
+        // Preserve terminal errors crossing a renderer's legacy string-result boundary.
+        void noteFailure(const std::exception& exception);
 
         // Typed terminal-renderer state polled by the frame state machine. Acquire
         // loads of the two 7B cause latches; DeviceLost dominates a bare quarantine.
@@ -368,7 +375,8 @@ namespace lfs::vis {
     private:
         bool fail(std::string message,
                   std::source_location location = std::source_location::current());
-        bool setVkFailure(std::string message);
+        bool setVkFailure(std::string message, VkResult result,
+                          std::source_location location = std::source_location::current());
 
         // Phase 7B: shared WaitContext for the six UI-frame bounded waits.
         [[nodiscard]] lfs::rendering::WaitContext makeWaitContext(std::string_view fingerprint);
@@ -563,6 +571,7 @@ namespace lfs::vis {
         std::atomic<bool> gpu_wait_quarantined_{false};
         // Phase 8 P3: second cause latch — set only at the three DeviceLost sites so
         // rendererTerminalState() distinguishes a lost device from a bare stall.
+        std::atomic<bool> terminal_failure_reported_{false};
         std::atomic<bool> gpu_device_lost_{false};
         // Phase 7B AMB-B3: set at shutdown() entry so mid-teardown waits yield Shutdown.
         std::atomic<bool> context_shutdown_started_{false};

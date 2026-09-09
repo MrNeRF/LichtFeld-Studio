@@ -11,6 +11,7 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -129,6 +130,7 @@ namespace lfs::core {
 
         std::filesystem::path g_crash_log_path;
         std::once_flag g_install_once;
+        std::mutex g_crash_log_mutex;
 
 #ifdef _WIN32
         HANDLE g_crash_log = INVALID_HANDLE_VALUE;
@@ -217,7 +219,7 @@ namespace lfs::core {
                 ::backtrace_symbols_fd(frames.data(), count, g_crash_log_fd);
             }
 
-            struct sigaction action {};
+            struct sigaction action{};
             action.sa_handler = SIG_DFL;
             sigemptyset(&action.sa_mask);
             action.sa_flags = 0;
@@ -287,6 +289,34 @@ namespace lfs::core {
 
     } // namespace
 
+    void write_crash_diagnostic(const std::string_view text) noexcept {
+        try {
+            const std::lock_guard lock(g_crash_log_mutex);
+#ifdef _WIN32
+            if (g_crash_log == INVALID_HANDLE_VALUE)
+                return;
+            size_t offset = 0;
+            while (offset < text.size()) {
+                const DWORD chunk = static_cast<DWORD>(std::min<size_t>(text.size() - offset, MAXDWORD));
+                DWORD written = 0;
+                if (!WriteFile(g_crash_log, text.data() + offset, chunk, &written, nullptr) || written == 0)
+                    return;
+                offset += written;
+            }
+            DWORD written = 0;
+            WriteFile(g_crash_log, "\n", 1, &written, nullptr);
+            FlushFileBuffers(g_crash_log);
+#else
+            write_signal_text(text.data(), text.size());
+            write_signal_text("\n", 1);
+            if (g_crash_log_fd >= 0)
+                (void)::fsync(g_crash_log_fd);
+#endif
+        } catch (...) {
+            // Diagnostics must not replace the original failure.
+        }
+    }
+
     void install_crash_handlers() {
         std::call_once(g_install_once, [] {
             if (crash_handlers_disabled()) {
@@ -301,14 +331,14 @@ namespace lfs::core {
                                                    ? std::filesystem::path(temp_path.data())
                                                    : std::filesystem::current_path();
             g_crash_log_path = base / std::format("lichtfeld-studio-crash-{}.log", GetCurrentProcessId());
-            g_crash_log = CreateFileW(g_crash_log_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ,
+            g_crash_log = CreateFileW(g_crash_log_path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ,
                                       nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
             SetUnhandledExceptionFilter(unhandled_exception_filter);
 #else
             g_crash_log_path = std::filesystem::temp_directory_path() /
                                std::format("lichtfeld-studio-crash-{}.log", ::getpid());
             g_crash_log_fd = ::open(g_crash_log_path.c_str(),
-                                    O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+                                    O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0600);
             if (g_crash_log_fd >= 0) {
                 std::array<void*, 1> warmup{};
                 (void)::backtrace(warmup.data(), static_cast<int>(warmup.size()));
@@ -323,6 +353,10 @@ namespace lfs::core {
             }
 #endif
 
+            write_crash_diagnostic(
+                "LichtFeld Studio crash diagnostics initialized.\n"
+                "Records native crashes and the first report of each handled failure.\n"
+                "A forced process termination cannot invoke a crash handler.");
             std::set_terminate(terminate_handler);
             const std::string path = g_crash_log_path.string();
             std::fprintf(stderr, "Crash diagnostics: %s\n", path.c_str());

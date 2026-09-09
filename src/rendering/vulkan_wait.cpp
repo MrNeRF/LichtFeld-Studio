@@ -221,6 +221,7 @@ namespace lfs::rendering {
         d.cmd_pipeline_barrier2 = ::vkCmdPipelineBarrier2;
         d.cmd_reset_query_pool = ::vkCmdResetQueryPool;
         d.cmd_write_timestamp = ::vkCmdWriteTimestamp;
+        d.get_query_pool_results = ::vkGetQueryPoolResults;
         d.queue_submit = +[](VkQueue queue, uint32_t submit_count, const VkSubmitInfo* submits, VkFence fence) {
             return vk_queue_submit_synced(queue, submit_count, submits, fence);
         };

@@ -603,6 +603,7 @@ namespace lfs::vis {
         std::unique_ptr<MainLoop> main_loop_;
 
         // Frame exception boundary state (viewer thread only).
+        friend class VisualizerImplResetTest_RendererDeadCancelsGpuWorkWithoutDrawing_Test;
         FrameStateMachine frame_state_;
         uint64_t suppressed_frame_errors_ = 0;
         std::chrono::steady_clock::time_point last_frame_error_log_{};

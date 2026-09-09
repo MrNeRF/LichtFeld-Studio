@@ -3,7 +3,9 @@
 
 // Phase 7A: fake-clock bounded-wait matrix (spec §4.4) — GPU-free.
 
+#include "core/logger.hpp"
 #include "rendering/vulkan_wait.hpp"
+#include "window/vulkan_context.hpp"
 
 #include <gtest/gtest.h>
 
@@ -1086,4 +1088,43 @@ TEST(FrameTimelineWaitCursor, WithinFrameDuplicateIsAlreadySatisfied) {
     EXPECT_EQ(cursor.pending, 11u);
     cursor.submit_accepted();
     EXPECT_EQ(cursor.committed, 11u);
+}
+
+namespace lfs::vis {
+    struct VulkanContextTestAccess {
+        static void loseDevice(VulkanContext& context) {
+            (void)context.mapWaitOutcome(lfs::make_error({.code = ErrorCode::DeviceLost, .domain = ErrorDomain::Vulkan, .detail = "injected device loss", .detection = LFS_SOURCE_SITE_CURRENT()}), "test fence");
+        }
+        static void quarantine(VulkanContext& context) {
+            context.gpu_wait_quarantined_.store(true);
+        }
+    };
+} // namespace lfs::vis
+
+TEST(VulkanContextTerminalTest, LostOrQuarantinedDeviceStopsFramesAndFenceRetries) {
+    for (const bool lost : {true, false}) {
+        lfs::vis::VulkanContext context;
+        if (lost)
+            lfs::vis::VulkanContextTestAccess::loseDevice(context);
+        else
+            lfs::vis::VulkanContextTestAccess::quarantine(context);
+        const auto first_error = context.lastError();
+        size_t error_count = 0;
+        const auto token = lfs::core::Logger::get().add_log_handler(
+            [&](lfs::core::LogLevel level, const lfs::core::SourceSite&, std::string_view) {
+                if (level == lfs::core::LogLevel::Error || level == lfs::core::LogLevel::Warn)
+                    ++error_count;
+            });
+        for (int frame = 0; frame < 1000; ++frame) {
+            lfs::vis::VulkanContext::Frame output;
+            EXPECT_FALSE(context.beginFrame({}, output));
+            EXPECT_FALSE(context.endFrame());
+            EXPECT_FALSE(context.waitForSubmittedFrames());
+        }
+        lfs::core::Logger::get().remove_log_handler(token);
+        EXPECT_EQ(error_count, 0u);
+        EXPECT_EQ(context.lastError(), first_error);
+        EXPECT_EQ(context.rendererTerminalState(), lost ? lfs::vis::RendererTerminalState::DeviceLost
+                                                        : lfs::vis::RendererTerminalState::Quarantined);
+    }
 }
