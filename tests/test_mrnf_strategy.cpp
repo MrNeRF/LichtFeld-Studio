@@ -36,6 +36,7 @@ class MRNFStrategyTest_EdgeWindowNormalizesViewsAndClosesBeforeRefineBackward_Te
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/mean_step_scale.cuh"
 #include "lfs/training/sh_value_codec.hpp"
+#include "training/checkpoint.hpp"
 #include "training/dataset.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/optimizer/render_output.hpp"
@@ -373,6 +374,46 @@ TEST(MRNFStrategyTest, DegenerateBoundsStayInvalidAndKeepFiniteMeanLearningRate)
     const float mean_lr = strategy.get_optimizer().get_param_lr(ParamType::Means);
     EXPECT_TRUE(std::isfinite(mean_lr));
     EXPECT_GT(mean_lr, 0.0f);
+}
+
+TEST(MRNFStrategyTest, RefinementPreservesThinSurfacesAndPrunesCollapsedSplats) {
+    auto splat_data = create_mrnf_test_splat_data(8);
+    MRNF strategy(splat_data);
+    auto opt_params = vanilla_mrnf_params();
+    opt_params.iterations = 1'000;
+    opt_params.start_refine = 0;
+    opt_params.stop_refine = 900;
+    opt_params.refine_every = 10;
+    opt_params.grow_until_iter = 0;
+    opt_params.grow_fraction = 0.0f;
+    opt_params.max_cap = 32;
+    strategy.initialize(opt_params);
+
+    // Flattening may shrink any normal axis below the minimum extent while
+    // leaving a useful surface. Only a splat tiny in every axis is collapsed.
+    splat_data.scaling_raw().copy_(Tensor::from_vector(
+        std::vector<float>{-30, 0, 0, 0, -30, 0, 0, 0, -30,
+                           -30, -30, -30, 0, 0, 0, 0, 0, 0,
+                           20, 20, 20, 0, 0, 0},
+        TensorShape({8, 3}), Device::CUDA));
+    splat_data.opacity_raw().copy_(Tensor::from_vector(
+        std::vector<float>{0, 0, 0, 0, -20, 0, 0, 0},
+        TensorShape({8, 1}), Device::CUDA));
+    splat_data.rotation_raw().index_put_(
+        Tensor::from_vector(std::vector<int>{5}, TensorShape({1}), Device::CUDA).to(DataType::Int64),
+        Tensor::zeros({1, 4}, Device::CUDA));
+    splat_data._densification_info.zero_();
+
+    RenderOutput render_output;
+    strategy.post_backward(10, render_output);
+
+    ASSERT_EQ(splat_data.size(), 8u);
+    ASSERT_TRUE(splat_data.deleted().is_valid());
+    const auto deleted_cpu = splat_data.deleted().cpu();
+    const bool* deleted = deleted_cpu.ptr<bool>();
+    for (size_t i = 0; i < 8; ++i) {
+        EXPECT_EQ(deleted[i], i >= 3 && i <= 6) << "splat " << i;
+    }
 }
 
 TEST(MRNFStrategyTest, LineBoundsUseFiniteSceneScaleForMeanLearningRate) {
@@ -2326,4 +2367,46 @@ TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep)
         EXPECT_FALSE(optimizer.per_splat_mean_step());
     }
     EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
+TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
+    auto original_model = create_mrnf_test_splat_data(8);
+    place_deep_far_probe(original_model);
+    MRNF original(original_model);
+    param::TrainingParameters params;
+    params.optimization = mean_step_test_params(true);
+    params.optimization.far_scene_min_fraction = 0.0f;
+    const auto dataset = make_hull_dataset();
+    original.set_training_dataset(dataset);
+    original.initialize(params.optimization);
+    ASSERT_NE(original.get_optimizer().mean_step_far_mask(), nullptr);
+
+    std::vector<uint8_t> expected_mask(8);
+    ASSERT_EQ(cudaMemcpy(expected_mask.data(), original.get_optimizer().mean_step_far_mask(),
+                         expected_mask.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    ASSERT_EQ(expected_mask[1], 0);
+    ASSERT_EQ(expected_mask[7], 1);
+
+    std::stringstream checkpoint(std::ios::in | std::ios::out | std::ios::binary);
+    const auto saved = serialize_checkpoint(checkpoint, 100, original, params,
+                                            nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(saved);
+
+    auto resumed_model = create_mrnf_test_splat_data(8);
+    MRNF resumed(resumed_model);
+    resumed.set_training_dataset(dataset);
+    resumed.initialize(params.optimization);
+    checkpoint.seekg(0);
+    const auto loaded = load_checkpoint(checkpoint, saved->bytes, resumed, params,
+                                        nullptr, nullptr, nullptr, nullptr);
+    ASSERT_TRUE(loaded) << loaded.error();
+    ASSERT_EQ(*loaded, 100);
+    ASSERT_NE(resumed.get_optimizer().mean_step_far_mask(), nullptr);
+    ASSERT_EQ(resumed.get_optimizer().mean_step_far_mask_n(), 8);
+    std::vector<uint8_t> actual_mask(8);
+    ASSERT_EQ(cudaMemcpy(actual_mask.data(), resumed.get_optimizer().mean_step_far_mask(),
+                         actual_mask.size(), cudaMemcpyDeviceToHost),
+              cudaSuccess);
+    EXPECT_EQ(actual_mask, expected_mask);
 }
