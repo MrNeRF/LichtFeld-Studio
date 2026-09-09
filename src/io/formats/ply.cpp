@@ -2611,7 +2611,8 @@ namespace lfs::io {
                 return;
 
             // CPU export tensors may alias the live model. Repair a private
-            // host copy, using the same finite endpoints as PLY import.
+            // pageable host copy so repair adds no VRAM, using the same
+            // finite endpoints as PLY import.
             Tensor repaired = Tensor::empty_pageable_host(opacity.shape(), DataType::Float32);
             float* const output = repaired.ptr<float>();
             tbb::parallel_for(tbb::blocked_range<size_t>(0, opacity.numel(), ply_constants::FINITE_SCAN_BLOCK_SIZE),

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/alloc_counter.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -799,7 +800,7 @@ namespace {
 
 } // namespace
 
-TEST_F(PlyErrorTaxonomyTest, ExportRepairsInfiniteOpacityWithoutChangingSource) {
+TEST_F(PlyErrorTaxonomyTest, ExportRepairsInfiniteOpacityWithoutChangingSourceOrAllocatingVram) {
     using namespace lfs::core;
     const float inf = std::numeric_limits<float>::infinity();
     const std::vector<float> original{inf, -inf, 16.85f, -30.0f};
@@ -809,8 +810,11 @@ TEST_F(PlyErrorTaxonomyTest, ExportRepairsInfiniteOpacityWithoutChangingSource) 
             pc.means = Tensor::zeros({4, 3}, device);
             pc.opacity = Tensor::from_vector(original, {4, 1}, device);
             const auto output = path("infinite_export.ply");
+            const auto allocations_before = alloc_counter::snapshot();
             const auto saved = lfs::io::save_ply(pc, {.output_path = output, .binary = binary});
             ASSERT_TRUE(saved.has_value()) << saved.error().format();
+            EXPECT_EQ(alloc_counter::delta_since(allocations_before), 0u)
+                << "Opacity repair must not allocate VRAM, including transient driver allocations";
             const auto unchanged = pc.opacity.cpu().to_vector();
             EXPECT_EQ(unchanged, original);
             // Inspect the serialized values, without relying on the importer's repair.
