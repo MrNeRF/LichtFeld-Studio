@@ -1659,7 +1659,7 @@ namespace {
             trainer->get_strategy_mutable()
                 .set_optimization_params(
                     resumed_params.optimization);
-            trainer->setParams(resumed_params);
+            ASSERT_TRUE(trainer->setParams(resumed_params));
             lfs::training::grant_headless_project_saves(
                 *trainer, resumed_params);
 

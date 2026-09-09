@@ -272,6 +272,7 @@ namespace lfs::vis {
         friend class DepthWindowGtHookTest;
         friend class P5SessionCaptureTestAccess;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnSave_Test;
+        friend class VisualizerImplResetTest_StartWhileProjectIsLoadingReturnsRetryReason_Test;
         friend class VisualizerImplResetTest_StoredSessionAtPrmsIterationsReportsCompleted_Test;
         friend class VisualizerImplResetTest_StoredSessionBelowPrmsIterationsReportsNotCompleted_Test;
         friend class VisualizerImplResetTest_OpenWithoutRestoreKeepsCheckpointBytesOnAutosave_Test;
@@ -337,6 +338,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainerOwnedSaveTargetsLiveDocumentPath_Test;
         friend class VisualizerImplResetTest_StartTrainingUntitledCreatesRealProjectInProjectLocation_Test;
         friend class VisualizerImplResetTest_PrepareTrainingStartProjectSucceedsAfterInitPlyLoad_Test;
+        friend class VisualizerImplResetTest_InvalidStartReturnsReasonBeforeCreatingProject_Test;
         friend class VisualizerImplResetTest_StartTrainingWithCliOutputPathBindsProjectThere_Test;
         friend class VisualizerImplResetTest_UntitledTrainingSnapshotAdoptionRegistersProjectInMru_Test;
         friend class VisualizerImplResetTest_SaveAsAfterAutoCreatedTrainingKeepsOriginalAndCheckpoint_Test;

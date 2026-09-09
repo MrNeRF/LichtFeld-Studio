@@ -127,6 +127,18 @@ namespace lfs::training {
             });
         }
 
+        [[nodiscard]] lfs::Error training_parameter_update_error(
+            std::string message,
+            const lfs::core::SourceSite source) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = message,
+                .detail = "Rejected invalid training parameter update: " + message,
+                .detection = source,
+            });
+        }
+
         // Dataset-level normal-prior convention resolution. Prior maps come in
         // several flavors (camera-space OpenCV/OpenGL, world-space in the
         // renderer's frame, linear or sRGB-encoded); wrong assumptions feed the
@@ -3650,10 +3662,13 @@ namespace lfs::training {
         training_complete_ = false;
     }
 
-    void Trainer::setParams(const lfs::core::param::TrainingParameters& params) {
+    lfs::Status
+    Trainer::setParams(
+        const lfs::core::param::TrainingParameters& params) {
         if (const auto validation_error = params.validate(); !validation_error.empty()) {
             LOG_ERROR("Rejected invalid training parameter update: {}", validation_error);
-            return;
+            return lfs::Status::failure(training_parameter_update_error(
+                validation_error, LFS_SOURCE_SITE_CURRENT()));
         }
 
         bool bg_image_path_changed = false;
@@ -3661,7 +3676,7 @@ namespace lfs::training {
             std::lock_guard<std::mutex> lock(params_mutex_);
             if (is_running_.load(std::memory_order_acquire)) {
                 pending_params_ = params;
-                return;
+                return {};
             }
             const auto& current = pending_params_ ? *pending_params_ : params_;
             bg_image_path_changed =
@@ -3670,6 +3685,7 @@ namespace lfs::training {
             pending_params_.reset();
         }
         apply_param_side_effects(params, bg_image_path_changed);
+        return {};
     }
 
     void Trainer::set_lpips_weights_path(std::optional<std::filesystem::path> path) {

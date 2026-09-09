@@ -974,7 +974,9 @@ namespace lfs::app {
                     if (!trainer->canResume()) {
                         return std::unexpected("Training cannot be resumed in the current state");
                     }
-                    trainer->resumeTraining();
+                    if (auto resumed = trainer->resumeTraining(); !resumed) {
+                        return std::unexpected(std::string(resumed.error().user_message()));
+                    }
                     return {};
                 }
                 if (action == "cancel") {

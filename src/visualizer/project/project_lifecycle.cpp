@@ -799,7 +799,11 @@ namespace lfs::vis::project {
                 auto trainer = std::make_unique<
                     lfs::training::Trainer>(
                     scene_manager.getScene());
-                trainer->setParams(params);
+                if (auto updated = trainer->setParams(params); !updated) {
+                    notifyTrainerRestoreFailure(
+                        viewer, std::string(updated.error().user_message()));
+                    return;
+                }
                 trainer_manager->setScene(
                     &scene_manager.getScene());
                 trainer_manager->setTrainer(
@@ -979,6 +983,11 @@ namespace lfs::vis::project {
                    StoredTrainingKind::Checkpoint &&
                !training_session_hydrated_.load(
                    std::memory_order_acquire);
+    }
+
+    bool ProjectLifecycle::isHydrating() const {
+        const auto hydration = hydration_.load(std::memory_order_acquire);
+        return hydration == Hydration::ShellReady || hydration == Hydration::Hydrating;
     }
 
     ProjectLifecycle::TrainingSessionState

@@ -1989,6 +1989,22 @@ class OptimizationParams:
         """Validate parameter consistency, returns empty string if valid"""
 
     @property
+    def backend_conflict(self) -> str:
+        """
+        Stable identifier for the selected backend incompatibility, or an empty string
+        """
+
+    @property
+    def backend_conflict_context(self) -> dict:
+        """Structured values used to render the selected backend incompatibility"""
+
+    @property
+    def backend_conflict_message(self) -> str:
+        """
+        Native CLI message for the selected backend incompatibility, or an empty string
+        """
+
+    @property
     def iterations(self) -> int:
         """Maximum training iterations"""
 

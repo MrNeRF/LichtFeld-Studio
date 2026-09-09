@@ -60,6 +60,68 @@ TEST(ArgumentParserTest, DataPathLichtWithoutOutputPathBindsProject) {
     EXPECT_FALSE((*parsed)->dataset.output_path_explicit);
 }
 
+TEST(ArgumentParserTest, GutRejectsUnsupportedFeaturesWithoutChanging3DGS) {
+    const auto data_path = make_test_path("lfs_backend_validation_data");
+    const auto output_path = make_test_path("lfs_backend_validation_output");
+    struct Case {
+        const char* flag;
+        const char* label;
+        const char* field;
+    };
+    const Case cases[] = {
+        {"--enable-mip", "Mip Filter", "mip_filter"},
+        {"--use-depth-loss", "Depth Loss", "use_depth_loss"},
+        {"--use-normal-loss", "Normal Loss", "use_normal_loss"},
+    };
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.flag);
+        const char* argv[] = {
+            "LichtFeld-Studio",
+            "-d",
+            data_path.c_str(),
+            "-o",
+            output_path.c_str(),
+            "--strategy",
+            "mcmc",
+            test.flag,
+            "--gut",
+        };
+        const auto gut = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+        ASSERT_FALSE(gut.has_value());
+        EXPECT_NE(gut.error().find("3DGUT"), std::string::npos);
+        EXPECT_NE(gut.error().find("3DGS"), std::string::npos);
+        EXPECT_EQ(gut.error().find("FastGS"), std::string::npos);
+        EXPECT_NE(gut.error().find(test.label), std::string::npos);
+
+        const auto standard_3dgs = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)) - 1, argv);
+        ASSERT_TRUE(standard_3dgs.has_value()) << standard_3dgs.error();
+        EXPECT_FALSE((*standard_3dgs)->optimization.gut);
+        EXPECT_TRUE((*standard_3dgs)->optimization.to_json().at(test.field).get<bool>());
+    }
+}
+
+TEST(ArgumentParserTest, GutAcceptsUndistort) {
+    const auto data_path = make_test_path("lfs_gut_undistort_data");
+    const auto output_path = make_test_path("lfs_gut_undistort_output");
+    const char* argv[] = {
+        "LichtFeld-Studio",
+        "-d",
+        data_path.c_str(),
+        "-o",
+        output_path.c_str(),
+        "--strategy",
+        "mcmc",
+        "--gut",
+        "--undistort",
+    };
+
+    const auto parsed = lfs::core::args::parse_args_and_params(
+        static_cast<int>(std::size(argv)), argv);
+    ASSERT_TRUE(parsed.has_value()) << parsed.error();
+    EXPECT_TRUE((*parsed)->optimization.gut);
+    EXPECT_TRUE((*parsed)->optimization.undistort);
+}
+
 TEST(ArgumentParserTest,
      GuiProjectAndResumeLichtSelectProjectOpenFlow) {
     const auto directory =

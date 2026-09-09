@@ -738,7 +738,11 @@ namespace lfs::app {
                                 effective_params
                                     .python_scripts);
                         }
-                        trainer->setParams(effective_params);
+                        if (auto updated = trainer->setParams(effective_params); !updated) {
+                            LOG_ERROR("Failed to apply training parameters: {}",
+                                      lfs::format_for_developer(updated.error()));
+                            return 1;
+                        }
                         training::grant_headless_project_saves(
                             *trainer, effective_params,
                             headless_dataset_project_destination(effective_params));
@@ -1002,12 +1006,8 @@ namespace lfs::app {
                     training::grant_headless_project_saves(
                         *trainer, *ckpt_params_result);
 
-                    const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
-                    if (!ckpt_result) {
-                        LOG_ERROR("Failed to restore checkpoint state: {}", ckpt_result.error());
-                        return 1;
-                    }
-                    LOG_INFO("Resumed from iteration {}", *ckpt_result);
+                    // initialize() already loads resume_checkpoint and propagates errors.
+                    LOG_INFO("Resumed from iteration {}", trainer->get_current_iteration());
                     if (ckpt_params_result->optimization.enable_eval)
                         trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
 

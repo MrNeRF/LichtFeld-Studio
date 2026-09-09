@@ -1017,15 +1017,28 @@ NB_MODULE(lichtfeld, m) {
             // the viewer; off-thread scripts retain the synchronous contract.
             const bool called_on_viewer = viewer && viewer->isOnViewerThread();
             auto* const trainer_manager = lfs::python::get_trainer_manager();
+            std::optional<std::string> rejection;
             emit_project_cmd_marshaled(
-                "python.start_training", [] {
-                    lfs::core::events::cmd::StartTraining{}
-                        .emit();
+                "python.start_training", [&] {
+                    if (viewer) {
+                        if (auto started = viewer->startTraining(); !started)
+                            rejection = started.error();
+                    } else if (!trainer_manager) {
+                        rejection = "Trainer manager not initialized";
+                    } else if (!trainer_manager->startTraining()) {
+                        rejection = trainer_manager->getLastError().empty()
+                                        ? std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::Start))
+                                        : trainer_manager->getLastError();
+                    }
                 });
+            if (rejection)
+                throw std::runtime_error(*rejection);
             if (trainer_manager && !called_on_viewer) {
                 if (auto initialized = trainer_manager->waitForInitialization();
                     !initialized) {
-                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                    const auto& error = initialized.error();
+                    throw std::runtime_error(std::string(
+                        error.user_message().empty() ? error.detail() : error.user_message()));
                 }
             }
         },
@@ -1050,7 +1063,18 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "resume_training", []() {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::ResumeTraining{}.emit();
+            std::optional<std::string> rejection;
+            emit_project_cmd_marshaled("python.resume_training", [&] {
+                auto* const manager = lfs::python::get_trainer_manager();
+                if (!manager) {
+                    rejection = "Trainer manager not initialized";
+                } else if (auto resumed = manager->resumeTraining(); !resumed) {
+                    const auto& error = resumed.error();
+                    rejection = std::string(error.user_message().empty() ? error.detail() : error.user_message());
+                }
+            });
+            if (rejection)
+                throw std::runtime_error(*rejection);
         },
         "Resume a paused training run");
     m.def(

@@ -56,6 +56,10 @@ def test_bundled_locales_define_training_panel_strategy_and_color_keys():
         assert "tooltip.grow_until_iter" in data["training"]
         assert data["training"]["overwrite.btn_save_as_start"]
         assert data["training"]["save_pc.message_project"]
+        conflict_template = data["training"]["backend_conflict.message"]
+        assert "{backend}" in conflict_template
+        assert "{feature}" in conflict_template
+        assert "{fallback_backend}" in conflict_template
         assert data["training_panel"]["color_red_prefix"] == "R:"
         assert data["training_panel"]["color_green_prefix"] == "G:"
         assert data["training_panel"]["color_blue_prefix"] == "B:"
@@ -72,6 +76,279 @@ def training_panel_module(monkeypatch):
     sys.modules.pop("lfs_plugins", None)
     _install_lf_stub(monkeypatch)
     return import_module("lfs_plugins.training_panel")
+
+
+@pytest.mark.parametrize(
+    ("conflict", "feature"),
+    [
+        ("igs_plus", "IGS+"),
+        ("mip_filter", "Mip Filter"),
+        ("depth_supervision", "Depth Loss"),
+        ("normal_supervision", "Normal Loss"),
+    ],
+)
+def test_backend_conflict_messages_share_one_localized_template(
+    training_panel_module, monkeypatch, conflict, feature
+):
+    translations = {
+        "training.backend_conflict.message": (
+            "{backend} conflicts with {feature}; choose {fallback_backend}."
+        ),
+        "training.options.strategy.igs_plus": "IGS+",
+        "training_params.mip_filter": "Mip Filter:",
+        "training_params.use_depth_loss": "Depth Loss:",
+        "training_params.use_normal_loss": "Normal Loss:",
+    }
+    monkeypatch.setattr(
+        training_panel_module, "tr", lambda key: translations.get(key, key)
+    )
+
+    assert training_panel_module._localized_backend_conflict_message(conflict) == (
+        f"3DGUT conflicts with {feature}; choose 3DGS."
+    )
+
+
+def test_backend_conflict_template_accepts_descriptor_context_for_future_backends(
+    training_panel_module, monkeypatch
+):
+    monkeypatch.setattr(
+        training_panel_module,
+        "tr",
+        lambda key: (
+            "{backend} conflicts with {feature}; choose {fallback_backend}."
+            if key == "training.backend_conflict.message"
+            else key
+        ),
+    )
+
+    assert training_panel_module._localized_backend_conflict_message(
+        "temporal_filter",
+        backend="FutureGS",
+        feature_fallback="Temporal Filter",
+        fallback_backend="3DGS",
+    ) == "FutureGS conflicts with Temporal Filter; choose 3DGS."
+
+
+@pytest.mark.parametrize(
+    ("error", "conflict", "conflict_message", "expected_title", "expected_message"),
+    [
+        (
+            "3DGUT cannot be used with Depth Loss. Change this setting or select 3DGS.",
+            "depth_supervision",
+            "3DGUT cannot be used with Depth Loss. Change this setting or select 3DGS.",
+            "training.error.strategy_gut_title",
+            "training.backend_conflict.message",
+        ),
+        (
+            "iterations must be within [1, 2147483647]",
+            "depth_supervision",
+            "3DGUT cannot be used with Depth Loss. Change this setting or select 3DGS.",
+            "status.error",
+            "iterations must be within [1, 2147483647]",
+        ),
+        (
+            "exposure correction replaces the standalone bilateral grid and PPISP options",
+            "",
+            "",
+            "status.error",
+            "exposure correction replaces the standalone bilateral grid and PPISP options",
+        ),
+    ],
+)
+def test_start_validation_localizes_typed_backend_conflicts_without_masking_other_errors(
+    training_panel_module,
+    monkeypatch,
+    error,
+    conflict,
+    conflict_message,
+    expected_title,
+    expected_message,
+):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True,
+        validate=lambda: error,
+        backend_conflict=conflict,
+        backend_conflict_message=conflict_message,
+        gut=True,
+    )
+    starts, dialogs, offers = [], [], []
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "start_training", lambda: starts.append(True))
+    monkeypatch.setattr(panel, "_should_offer_pc_save", lambda: offers.append(True))
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "message_dialog",
+        lambda *args, **kwargs: dialogs.append((args, kwargs)),
+        raising=False,
+    )
+
+    panel._start_after_consent()
+
+    assert len(dialogs) == 1
+    (title, message), kwargs = dialogs[0]
+    assert title == expected_title
+    assert message == expected_message
+    assert kwargs == {"style": "error"}
+    assert starts == []
+    assert offers == []
+    assert params.gut is True
+
+
+@pytest.mark.parametrize(
+    ("button", "expected_strategy", "expected_gut", "expected_viewer_update"),
+    [
+        ("training.conflict.btn_use_mcmc", "mcmc", True, []),
+        (
+            "training.conflict.btn_disable_gut",
+            "igs+",
+            False,
+            [("raster_backend", "3dgs")],
+        ),
+    ],
+)
+def test_start_igs_gut_conflict_keeps_one_click_resolution(
+    training_panel_module,
+    monkeypatch,
+    button,
+    expected_strategy,
+    expected_gut,
+    expected_viewer_update,
+):
+    class Params:
+        strategy = "igs+"
+        gut = True
+
+        def has_params(self):
+            return True
+
+        @property
+        def backend_conflict(self):
+            return "igs_plus" if self.strategy == "igs+" and self.gut else ""
+
+        @property
+        def backend_conflict_message(self):
+            return (
+                "3DGUT cannot be used with IGS+. Change this setting or select 3DGS."
+                if self.backend_conflict
+                else ""
+            )
+
+        def validate(self):
+            return self.backend_conflict_message
+
+        def set_strategy(self, strategy):
+            self.departed_preset_gut = self.gut
+            self.strategy = strategy
+
+    panel = training_panel_module.TrainingPanel()
+    params = Params()
+    dialogs, starts, updates = [], [], []
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "start_training", lambda: starts.append(True))
+    monkeypatch.setattr(panel, "_should_offer_pc_save", lambda: False)
+    monkeypatch.setattr(panel, "_refresh_strategy_values", lambda: None)
+    monkeypatch.setattr(
+        training_panel_module.lf,
+        "get_render_settings",
+        lambda: SimpleNamespace(set=lambda *args: updates.append(args)),
+    )
+    monkeypatch.setattr(
+        training_panel_module.lf.ui,
+        "confirm_dialog",
+        lambda *args: dialogs.append(args),
+        raising=False,
+    )
+
+    panel._start_after_consent()
+    assert len(dialogs) == 1
+    assert dialogs[0][1] == "training.backend_conflict.message"
+    dialogs[0][3](button)
+
+    assert params.strategy == expected_strategy
+    assert params.gut is expected_gut
+    assert updates == expected_viewer_update
+    assert starts == [True]
+    if expected_strategy == "mcmc":
+        assert params.departed_preset_gut is False
+
+
+def test_native_backend_rollback_republishes_bound_controls(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", gut=True,
+        mip_filter=True, use_depth_loss=False, use_normal_loss=False,
+    )
+    published, dirty = [], []
+    panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True))]
+    panel._handle = SimpleNamespace(dirty_all=lambda: dirty.append(True))
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    assert panel._refresh_native_backend_controls()
+    assert not panel._refresh_native_backend_controls()
+    params.mip_filter = False
+    assert panel._refresh_native_backend_controls()
+    assert len(published) == 2
+    assert len(dirty) == 2
+
+
+def test_native_rollback_between_publication_and_update_is_not_missed(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mcmc", gut=True,
+        mip_filter=False, use_depth_loss=False, use_normal_loss=False,
+    )
+    published = []
+    binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter))
+    panel._pv_bindings = [binding]
+    panel._handle = SimpleNamespace(dirty_all=lambda: None)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(panel, "_dirty_property_search_models", lambda: None)
+    monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    assert panel._refresh_native_backend_controls()
+    params.mip_filter = True
+    panel._pv_publish_pending = [binding]
+    assert panel._flush_pv_publish()
+    params.mip_filter = False
+    assert panel._refresh_native_backend_controls()
+    assert published == [False, True, False]
+
+
+@pytest.mark.parametrize("offer_save", [False, True])
+def test_valid_start_preserves_point_cloud_save_flow(
+    training_panel_module, monkeypatch, offer_save
+):
+    panel = training_panel_module.TrainingPanel()
+    actions = []
+    params = SimpleNamespace(has_params=lambda: True, validate=lambda: "")
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "start_training", lambda: actions.append("start"))
+    monkeypatch.setattr(panel, "_should_offer_pc_save", lambda: offer_save)
+    monkeypatch.setattr(panel, "_show_save_pc_dialog", lambda: actions.append("save"))
+    panel._start_after_consent()
+    assert actions == (["save"] if offer_save else ["start"])
+
+
+def test_igs_conflict_resolution_synchronizes_viewer(training_panel_module, monkeypatch):
+    panel = training_panel_module.TrainingPanel()
+    params = _StrategyParamsStub()
+    params.gut = True
+    dialogs, updates = [], []
+    monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(training_panel_module.lf, "get_render_settings",
+                        lambda: SimpleNamespace(set=lambda *args: updates.append(args)))
+    monkeypatch.setattr(training_panel_module.lf.ui, "confirm_dialog",
+                        lambda *args: dialogs.append(args), raising=False)
+    monkeypatch.setattr(panel, "_refresh_strategy_values", lambda: None)
+    panel._set_strategy("igs+")
+    dialogs[0][3]("training.conflict.btn_cancel")
+    assert params.gut is True
+    assert updates == []
+    dialogs[0][3]("training.conflict.btn_disable_gut")
+    assert params.gut is False
+    assert params.strategy == "igs+"
+    assert updates == [("raster_backend", "3dgs")]
 
 
 class _HandleStub:
@@ -214,6 +491,40 @@ class _ModelStub:
 
     def bind_string_list(self, name):
         self.bindings[name] = (None, None)
+
+
+def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
+    training_panel_module,
+):
+    params = SimpleNamespace(
+        has_params=lambda: True,
+        strategy="mcmc",
+        gut=True,
+        undistort=False,
+        mip_filter=False,
+        use_depth_loss=True,
+        use_normal_loss=False,
+    )
+    model = _ModelStub()
+    panel = training_panel_module.TrainingPanel()
+    panel._bind_disabled(model, lambda: params)
+
+    def disabled(name):
+        return model.bindings[name][0]()
+
+    assert disabled("gut_disabled") is False
+    assert disabled("gut_depth_supervision_disabled") is False
+    assert disabled("gut_normal_supervision_disabled") is True
+    assert disabled("gut_mip_filter_disabled") is True
+    assert "gut_undistort_disabled" not in model.bindings
+
+    params.gut = False
+    assert disabled("gut_disabled") is True
+    params.use_depth_loss = False
+    params.undistort = True
+    assert disabled("gut_disabled") is False
+    params.strategy = "igs+"
+    assert disabled("gut_disabled") is True
 
 
 def test_strategy_switch_resyncs_generated_rows_and_requests_panel_update(
@@ -1549,7 +1860,7 @@ def test_resume_on_stored_session_restores_before_resuming(
         panel = training_panel_module.TrainingPanel()
         panel._on_action(None, None, ["resume"])
         assert calls[0] == ("restore", True)
-        assert ("resume",) in calls
+        assert calls == [("restore", True)]
     finally:
         runtime.has_trainer._fallback = False
         runtime.training_state._fallback = "idle"
@@ -1640,7 +1951,9 @@ def test_save_modified_pc_unbound_writes_dataset_ply(training_panel_module, monk
 
     training_panel_module.TrainingPanel()._save_modified_pc()
 
-    assert ply_calls == [(pc, "/data/scene_a/sparse/0/points3D.ply")]
+    assert len(ply_calls) == 1
+    assert ply_calls[0][0] is pc
+    assert Path(ply_calls[0][1]) == Path(info.sparse_path) / "points3D.ply"
     assert scene.is_point_cloud_modified is False
 
 

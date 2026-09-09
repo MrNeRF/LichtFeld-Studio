@@ -357,6 +357,51 @@ namespace lfs::core {
             return opt_json;
         }
 
+        TrainingBackendConflictDescriptor training_backend_conflict_descriptor(
+            const TrainingBackendConflict conflict) {
+            constexpr std::string_view backend = "3DGUT";
+            constexpr std::string_view fallback_backend = "3DGS";
+            switch (conflict) {
+            case TrainingBackendConflict::IGSPlus:
+                return {"igs_plus", backend, "IGS+", fallback_backend};
+            case TrainingBackendConflict::MipFilter:
+                return {"mip_filter", backend, "Mip Filter", fallback_backend};
+            case TrainingBackendConflict::DepthSupervision:
+                return {"depth_supervision", backend, "Depth Loss", fallback_backend};
+            case TrainingBackendConflict::NormalSupervision:
+                return {"normal_supervision", backend, "Normal Loss", fallback_backend};
+            case TrainingBackendConflict::None:
+                return {};
+            }
+            return {};
+        }
+
+        TrainingBackendConflict OptimizationParameters::backend_conflict() const {
+            if (!gut)
+                return TrainingBackendConflict::None;
+            if (canonical_strategy_name(strategy) == kStrategyIGSPlus)
+                return TrainingBackendConflict::IGSPlus;
+            if (mip_filter)
+                return TrainingBackendConflict::MipFilter;
+            if (use_depth_loss)
+                return TrainingBackendConflict::DepthSupervision;
+            if (use_normal_loss)
+                return TrainingBackendConflict::NormalSupervision;
+            return TrainingBackendConflict::None;
+        }
+
+        std::string OptimizationParameters::backend_conflict_message() const {
+            const auto descriptor = training_backend_conflict_descriptor(backend_conflict());
+            if (descriptor.id.empty()) {
+                return {};
+            }
+            return std::format(
+                "{} cannot be used with {}. Change this setting or select {}.",
+                descriptor.backend_name,
+                descriptor.feature_name,
+                descriptor.fallback_backend_name);
+        }
+
         std::string OptimizationParameters::validate() const {
             const auto invalid_nonnegative = [](const float value, const std::string_view name) -> std::string {
                 if (!std::isfinite(value) || value < 0.0f)
@@ -478,8 +523,10 @@ namespace lfs::core {
                                    static_cast<uint64_t>(bilateral_grid_W))
                 return std::format("bilateral grid dimensions are too large ({}x{}x{})",
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
-            if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
-                return "GUT and igs+ strategy cannot be used together";
+            const auto conflict = backend_conflict();
+            if (conflict != TrainingBackendConflict::None) {
+                return backend_conflict_message();
+            }
             if (use_exposure_correction &&
                 (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
                 return "use_exposure_correction cannot be combined with use_bilateral_grid, "

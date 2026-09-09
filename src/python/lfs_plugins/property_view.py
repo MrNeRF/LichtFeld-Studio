@@ -146,14 +146,22 @@ BASIC_RUNS = (
     _run(
         "basic_live_start",
         "mask_mode",
+    ),
+    _run(
+        "basic_depth_toggle",
         "use_depth_loss",
+        disabled_condition_id="gut_depth_supervision_disabled",
     ),
     _run(
         "basic_depth_weight",
         "depth_loss_weight",
         visibility_condition_id="dep_depth_loss",
     ),
-    _run("basic_normal_toggle", "use_normal_loss"),
+    _run(
+        "basic_normal_toggle",
+        "use_normal_loss",
+        disabled_condition_id="gut_normal_supervision_disabled",
+    ),
     _run(
         "basic_normal_weights",
         "normal_auto_generate",
@@ -184,7 +192,12 @@ BASIC_RUNS = (
     ),
     _run("basic_sparsity_toggle", "enable_sparsity"),
     _run("basic_gut", "gut", disabled_condition_id="gut_disabled"),
-    _run("basic_after_gut", "undistort", "mip_filter"),
+    _run("basic_undistort", "undistort"),
+    _run(
+        "basic_mip_filter",
+        "mip_filter",
+        disabled_condition_id="gut_mip_filter_disabled",
+    ),
     _run(
         "basic_ppisp_toggle",
         "ppisp",

@@ -22,6 +22,26 @@
 
 namespace lfs::core {
     namespace param {
+        enum class TrainingBackendConflict {
+            None,
+            IGSPlus,
+            MipFilter,
+            DepthSupervision,
+            NormalSupervision,
+        };
+
+        // Data-only description: presentation layers render one shared message
+        // template instead of maintaining a sentence for every combination.
+        struct TrainingBackendConflictDescriptor {
+            std::string_view id;
+            std::string_view backend_name;
+            std::string_view feature_name;
+            std::string_view fallback_backend_name;
+        };
+
+        [[nodiscard]] LFS_CORE_API TrainingBackendConflictDescriptor
+        training_backend_conflict_descriptor(TrainingBackendConflict conflict);
+
         // Mask mode for attention mask behavior during training
         enum class MaskMode {
             None,             // No masking applied
@@ -309,6 +329,8 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
+            [[nodiscard]] TrainingBackendConflict backend_conflict() const;
+            [[nodiscard]] std::string backend_conflict_message() const;
             [[nodiscard]] std::string validate() const;
 
             // Factory methods for strategy presets
