@@ -26,6 +26,7 @@
 #include "rendering/vulkan_wait.hpp"
 #include "viewport/vksplat_compose.comp.spv.h"
 #include "vksplat_input_packer.hpp"
+#include "vksplat_shared_scratch_install.hpp"
 #include "vulkan_external_tensor.hpp"
 #include "window/vulkan_result.hpp"
 
@@ -1962,9 +1963,13 @@ namespace lfs::vis {
         try {
             reset();
         } catch (const lfs::Exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             LOG_ERROR("VkSplat viewport renderer reset failed during destruction: {}",
                       lfs::format_for_developer(e.error()));
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             LOG_ERROR("VkSplat viewport renderer reset failed during destruction: {}", e.what());
         } catch (...) {
             LOG_ERROR("VkSplat viewport renderer reset failed during destruction with an unknown error");
@@ -2049,6 +2054,8 @@ namespace lfs::vis {
         try {
             renderer_.waitForPendingBatch();
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             LOG_WARN("VkSplat scene resource release falling back to device idle: {}", e.what());
             safe_to_release = false;
         }
@@ -2177,9 +2184,13 @@ namespace lfs::vis {
                 renderer_.cleanupBuffers(buffers_);
                 renderer_.cleanup();
             } catch (const lfs::Exception& e) {
+                if (context_)
+                    context_->noteFailure(e);
                 LOG_ERROR("VkSplat renderer cleanup during reset failed: {}",
                           lfs::format_for_developer(e.error()));
             } catch (const std::exception& e) {
+                if (context_)
+                    context_->noteFailure(e);
                 LOG_ERROR("VkSplat renderer cleanup during reset failed: {}", e.what());
             } catch (...) {
                 LOG_ERROR("VkSplat renderer cleanup during reset failed with an unknown error");
@@ -2901,6 +2912,8 @@ namespace lfs::vis {
                 }
             }
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             releaseGpuLodTreeStorage();
             return std::unexpected(std::format("VkSplat GPU LOD tree storage upload failed: {}", e.what()));
         }
@@ -3511,14 +3524,14 @@ namespace lfs::vis {
         // changing this renderer's cached installation flag. Reinstall the same
         // block before either the capacity fast path or growth uses it again.
         if (shared_scratch_.block) {
-            shared_scratch_.installed_in_training_arena =
-                lfs::core::GlobalArenaManager::instance().get_arena().using_external_backing(
-                    shared_scratch_.block->device_ptr);
-            if (!shared_scratch_.installed_in_training_arena) {
-                if (!try_install_existing()) {
-                    return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
-                }
-                shared_scratch_.installed_in_training_arena = true;
+            if (!ensureRetainedSharedScratchInstalled(
+                    shared_scratch_.installed_in_training_arena,
+                    [&] {
+                        return lfs::core::GlobalArenaManager::instance().get_arena().using_external_backing(
+                            shared_scratch_.block->device_ptr);
+                    },
+                    try_install_existing)) {
+                return std::unexpected("VkSplat shared scratch training rasterizer arena is busy");
             }
         }
 
@@ -3907,16 +3920,22 @@ namespace lfs::vis {
             render_complete_timeline_ == VK_NULL_HANDLE || last_submitted_render_value_ == 0;
         const auto release = [&](auto& typed_buffer) {
             auto& dev = typed_buffer.deviceBuffer;
-            if (dev.buffer == VK_NULL_HANDLE || dev.allocation == VK_NULL_HANDLE) {
+            if (dev.buffer == VK_NULL_HANDLE) {
                 return;
             }
-            released_bytes += dev.allocSize;
             const char* const label = dev.label;
+            const auto extra_usage = dev.extra_usage;
             _VulkanBuffer owned = dev;
             dev = {};
             dev.label = label;
+            dev.extra_usage = extra_usage;
             typed_buffer.clear();
             typed_buffer.shrink_to_fit();
+            // Aliases carry capacity but do not own an allocation. Clear them
+            // with their owners, or the next resize can reuse a retired handle.
+            if (owned.allocation == VK_NULL_HANDLE)
+                return;
+            released_bytes += owned.allocSize;
             if (destroy_now) {
                 renderer_.destroyBuffer(owned);
             } else {
@@ -4171,7 +4190,9 @@ namespace lfs::vis {
         }
         try {
             return renderer_.timelineValueComplete(render_complete_timeline_, value);
-        } catch (const std::exception&) {
+        } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             return false;
         }
     }
@@ -4722,6 +4743,8 @@ namespace lfs::vis {
             reset();
         }
         context_ = &context;
+        if (context.rendererTerminalState() != RendererTerminalState::Running)
+            return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         if (initialized_) {
             return {};
         }
@@ -4842,6 +4865,8 @@ namespace lfs::vis {
                                        "vksplat.timeline.render.vulkan");
             last_submitted_render_value_ = 0;
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             return std::unexpected(std::format("VkSplat initialization failed: {}", e.what()));
         }
 
@@ -6520,6 +6545,8 @@ namespace lfs::vis {
         try {
             readback_ring_.markSubmitted(cell, std::move(meta));
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             return std::unexpected(std::format(
                 "VkSplat {} readback ticket bookkeeping failed: {}",
                 operation_label,
@@ -8058,6 +8085,8 @@ namespace lfs::vis {
                     }
                 }
             } catch (const std::exception& e) {
+                if (context_)
+                    context_->noteFailure(e);
                 return std::unexpected(std::format("VkSplat selection query failed: {}", e.what()));
             }
         }
@@ -8252,6 +8281,8 @@ namespace lfs::vis {
             try {
                 overlay_arena_guard.emplace();
             } catch (const std::exception& e) {
+                if (context_)
+                    context_->noteFailure(e);
                 return std::unexpected(std::format(
                     "VkSplat selection overlay arena unavailable: {}", e.what()));
             }
@@ -8328,6 +8359,8 @@ namespace lfs::vis {
                 }
             }
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             // Recording failures cancel without reserving a timeline value.
             // If post-submit bookkeeping threw, the pipeline's host-side record
             // proves that vkQueueSubmit accepted the signal; no completion wait
@@ -9054,6 +9087,8 @@ namespace lfs::vis {
                              sort_region_elems,
                              active_splat_count);
                 } catch (const std::exception& e) {
+                    if (context_)
+                        context_->noteFailure(e);
                     shared_arena_guard.reset();
                     detachSharedScratchBuffers();
                     return std::unexpected(std::format(
@@ -9390,6 +9425,8 @@ namespace lfs::vis {
             // On try-block exit, `batch` submits and publishes its timeline signal before the
             // outer batch_total timer logs.
         } catch (const std::exception& e) {
+            if (context_)
+                context_->noteFailure(e);
             // Recording failures cancel without reserving a value. A rare
             // post-submit bookkeeping failure is distinguished by the pipeline's
             // host-side submission record, so neither path waits on the GPU.

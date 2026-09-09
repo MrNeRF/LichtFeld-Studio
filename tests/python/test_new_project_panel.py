@@ -69,6 +69,7 @@ def new_project_module(monkeypatch, tmp_path):
         state.prompts.append((title, message, buttons, callback))
 
     lf_stub = ModuleType("lichtfeld")
+    lf_stub.io = SimpleNamespace(is_ssog_path=lambda _path: False)
     lf_stub.ui = SimpleNamespace(
         Panel=type("Panel", (), {}),
         PanelSpace=SimpleNamespace(FLOATING="FLOATING"),

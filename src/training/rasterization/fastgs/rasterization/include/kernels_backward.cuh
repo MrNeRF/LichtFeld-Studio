@@ -383,7 +383,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 2.0f * (rotation_scaled.m13 * dL_dcov3d.m13 + rotation_scaled.m23 * dL_dcov3d.m23 + rotation_scaled.m33 * dL_dcov3d.m33)};
 
             if (grad_normal != nullptr) {
-                const float3 g_cam = grad_normal[primitive_idx];
+                const float3 g_cam = grad_normal[work_idx];
                 const float3 g_world = make_float3(
                     w2c_r1.x * g_cam.x + w2c_r2.x * g_cam.y + w2c_r3.x * g_cam.z,
                     w2c_r1.y * g_cam.x + w2c_r2.y * g_cam.y + w2c_r3.y * g_cam.z,

@@ -43,6 +43,8 @@ namespace lfs::vis {
     LFS_VIS_API void preloadVkSplatSpirvFiles();
 
     class VksplatViewportRenderer {
+        friend struct VksplatScratchReleaseTestAccess;
+
     public:
         struct RenderResult {
             VkImage image = VK_NULL_HANDLE;

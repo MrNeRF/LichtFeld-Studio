@@ -14946,3 +14946,18 @@ namespace {
     }
 
 } // namespace
+
+namespace lfs::vis {
+    TEST_F(VisualizerImplResetTest, RendererDeadCancelsGpuWorkWithoutDrawing) {
+        VisualizerImpl viewer(projectOptions());
+        (void)viewer.frame_state_.on_fault(FrameFault::DeviceLost);
+        int ran = 0, cancelled = 0;
+        viewer.render_work_queue_.push_back({.run = [&] { ++ran; }, .cancel = [&] { ++cancelled; }});
+        // No initialized window or Vulkan device: touching a GPU frame would fail.
+        EXPECT_NO_THROW(viewer.render());
+        EXPECT_EQ(ran, 0);
+        EXPECT_EQ(cancelled, 1);
+        EXPECT_FALSE(viewer.hasPendingRenderWork());
+        EXPECT_EQ(viewer.frame_state_.state(), FrameStateMachine::State::RendererDead);
+    }
+} // namespace lfs::vis

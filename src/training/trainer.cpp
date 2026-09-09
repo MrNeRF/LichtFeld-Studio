@@ -1873,13 +1873,18 @@ namespace lfs::training {
              mode == param::MaskMode::Ignore ||
              mode == param::MaskMode::SegmentAndIgnore);
 
+        const bool normal_terms_on =
+            (opt_params.use_normal_loss && opt_params.normal_loss_weight > 0.0f) ||
+            opt_params.normal_consistency_weight > 0.0f;
+
         // Fused mask preprocess: SegmentAndIgnore band remap + optional ROI → one kernel.
         // Steady state is allocation-free via mask_preprocess_workspace_ (grow-only).
         const Tensor photometric_weight = losses::fuse_photometric_mask_weight(
             mask_preprocess_workspace_,
             user_masks_photometric ? mask_2d : Tensor{},
             roi_weight,
-            mode == param::MaskMode::SegmentAndIgnore);
+            mode == param::MaskMode::SegmentAndIgnore,
+            user_masks_photometric && normal_terms_on);
 
         Tensor loss, grad_corrected, grad_raw, grad_alpha;
         const bool use_decoupled_appearance_loss =
@@ -1970,7 +1975,8 @@ namespace lfs::training {
             .loss = loss,
             .grad_corrected = grad_corrected,
             .grad_raw = grad_raw,
-            .grad_alpha = grad_alpha};
+            .grad_alpha = grad_alpha,
+            .normal_pixel_weight = user_masks_photometric && normal_terms_on ? photometric_weight : Tensor{}};
     }
 
     // Returns GPU tensor for loss - NO SYNC!
@@ -4700,11 +4706,13 @@ namespace lfs::training {
 
         photometric_loss_.arena().shrink_to_required();
 
+        std::optional<std::filesystem::path> headless_source_path;
         bool first_publish_to_destination =
             false;
         {
             std::lock_guard lock(
                 project_snapshot_mutex_);
+            headless_source_path = headless_project_source_path_;
             project_step_regression_
                 .arm_after_snapshot(iteration);
             first_publish_to_destination =
@@ -4719,7 +4727,7 @@ namespace lfs::training {
 
         try {
             project_writer_thread_ = std::jthread(
-                [this, path, chapters, cpu_state,
+                [this, path, chapters, cpu_state, headless_source_path,
                  request_id, write_kind,
                  base_explicit_commit_uuid,
                  autosave_sequence,
@@ -4836,6 +4844,13 @@ namespace lfs::training {
                             source_path = path;
                             compact_after_publish =
                                 first_publish_to_destination;
+                        } else if (!document_context && headless_source_path) {
+                            source_path = headless_source_path;
+                        }
+                        // A redirected recovery save does not merge into or own
+                        // the original master. Its owner keeps staging alive.
+                        if (!document_context && recovery_session && !recovery_session->writer_lock().owns(path)) {
+                            recovery_session.reset();
                         }
                         bool save_as =
                             !source_path &&
@@ -4933,6 +4948,42 @@ namespace lfs::training {
                                 !created) {
                                 return std::move(created)
                                     .error();
+                            }
+                        }
+
+                        if (!document_context && save_as && headless_source_path) {
+                            // Save As carries DSRC lazily. Reject broken manifests
+                            // before publication, and bind the effective dataset
+                            // relative to the new project rather than the source.
+                            auto manifest = document->parameters().embedded_dataset();
+                            if (!manifest) {
+                                return std::move(manifest).error();
+                            }
+                            if (*manifest) {
+                                for (const auto& entry : (*manifest)->entries) {
+                                    const auto* row = document->source_reader()->find(
+                                        lfs::io::project::FOURCC_DSRC, entry.chunk_uuid);
+                                    if (!row || !row->is_live() || row->uncompressed_bytes != entry.bytes) {
+                                        return project_snapshot_error(
+                                            lfs::ErrorCode::DataLoss,
+                                            "Embedded dataset manifest has a missing or incorrectly sized DSRC payload",
+                                            LFS_SOURCE_SITE_CURRENT());
+                                    }
+                                }
+                            }
+                            auto existing = document->project().dataset_reference();
+                            if (!existing) {
+                                return std::move(existing).error();
+                            }
+                            auto reference = lfs::io::project::upsert_path_reference(
+                                document->edit_references(), path.parent_path(),
+                                chapters->parameters.dataset.data_path,
+                                "dataset", "dataset", *existing);
+                            if (!reference) {
+                                return std::move(reference).error();
+                            }
+                            if (auto bound = document->edit_project().set_dataset_reference(*reference); !bound) {
+                                return std::move(bound).error();
                             }
                         }
 
@@ -5164,7 +5215,7 @@ namespace lfs::training {
                                         document_context
                                             ? document_context
                                                   ->save_as_project_uuid
-                                            : lfs::core::Uuid{},
+                                            : (headless_source_path && save_as ? project_uuid_ : lfs::core::Uuid{}),
                                     .allow_existing_destination_replacement =
                                         document_context &&
                                         document_context
@@ -6824,6 +6875,8 @@ namespace lfs::training {
                         lfs::core::Tensor tile_grad_normal;
                         lfs::core::Tensor tile_error_map;
                         lfs::core::Tensor mask_tile;
+                        // Retain the photometric workspace view through all normal terms.
+                        lfs::core::Tensor normal_terms_weight;
                         bool depth_grad_buffers_active = false;
                         const auto roi_weight_ptr_on_stream =
                             [&](const cudaStream_t stream) -> const float* {
@@ -6832,6 +6885,15 @@ namespace lfs::training {
                             }
                             roi_weight.sync_to_stream(stream);
                             return roi_weight.ptr<float>();
+                        };
+
+                        const auto normal_weight_ptr_on_stream =
+                            [&](const cudaStream_t stream) -> const float* {
+                            if (!normal_terms_weight.is_valid()) {
+                                return roi_weight_ptr_on_stream(stream);
+                            }
+                            normal_terms_weight.sync_to_stream(stream);
+                            return normal_terms_weight.ptr<float>();
                         };
 
                         const auto ensure_depth_grad_buffers =
@@ -6922,6 +6984,7 @@ namespace lfs::training {
                                 tile_grad = result->grad_corrected;
                                 tile_grad_raw = result->grad_raw;
                                 tile_grad_alpha = result->grad_alpha;
+                                normal_terms_weight = result->normal_pixel_weight;
                             } else {
                                 auto result = compute_photometric_loss_with_gradient(
                                     corrected_image, gt_tile, params_.optimization, raw_loss_input);
@@ -7157,7 +7220,7 @@ namespace lfs::training {
                                     normal_loss_partials_.set_stream(normal_stream);
 
                                     const float* const normal_pixel_weight =
-                                        roi_weight_ptr_on_stream(normal_stream);
+                                        normal_weight_ptr_on_stream(normal_stream);
                                     lfs::core::pin_operands({&rendered_normal, &rendered_alpha, &target_normal});
                                     lfs::training::kernels::launch_normal_loss(
                                         rendered_normal.ptr<float>(),
@@ -7334,7 +7397,7 @@ namespace lfs::training {
                                 lfs::core::pin_operands(
                                     {&rendered_normal, &rendered_depth, &rendered_alpha, &tile_grad_normal});
                                 const float* const consistency_pixel_weight =
-                                    roi_weight_ptr_on_stream(consistency_stream);
+                                    normal_weight_ptr_on_stream(consistency_stream);
                                 lfs::training::kernels::launch_normal_consistency_loss(
                                     rendered_normal.ptr<float>(),
                                     rendered_depth.ptr<float>(),
@@ -8331,6 +8394,9 @@ namespace lfs::training {
         }
         apply_pending_params_at_safe_point();
         LOG_INFO("Starting training loop");
+        if (params_.optimization.gut && params_.optimization.use_normal_loss) {
+            LOG_WARN("normal loss requested but the 3DGUT backend has no normal channel; normal terms are inactive");
+        }
         if (PerfBenchCollector::enabled()) {
             PerfBenchCollector::instance().on_training_start(get_total_iterations());
         }
@@ -8442,9 +8508,23 @@ namespace lfs::training {
                     fitDepthAnchors(cameras_with_depth);
                 }
             }
-            aux_pipeline_config.load_normals =
-                params_.optimization.use_normal_loss &&
-                params_.optimization.normal_loss_weight > 0.0f;
+            aux_pipeline_config.load_normals = training_normal_priors_enabled(params_.optimization);
+            if (aux_pipeline_config.load_normals || params_.optimization.normal_consistency_weight > 0.0f) {
+                const auto mode = params_.optimization.mask_mode;
+                const bool user_masks_normal_terms =
+                    (mode == lfs::core::param::MaskMode::Segment ||
+                     mode == lfs::core::param::MaskMode::Ignore ||
+                     mode == lfs::core::param::MaskMode::SegmentAndIgnore) &&
+                    std::any_of(train_dataset_->get_cameras().begin(), train_dataset_->get_cameras().end(),
+                                [&](const auto& camera) {
+                                    return camera && (camera->has_mask() ||
+                                                      (params_.optimization.use_alpha_as_mask && camera->has_alpha()));
+                                });
+                LOG_INFO("Normal terms use user mask: {} (where available); prior-depth gate: count >= {}, weight >= {}",
+                         user_masks_normal_terms ? "yes" : "no",
+                         lfs::training::kernels::kNormalConsistencyMinValidCount,
+                         lfs::training::kernels::kNormalConsistencyMinValidWeight);
+            }
             if (aux_pipeline_config.load_normals) {
                 ensure_training_normal_maps(params_, train_dataset_->get_cameras());
                 if (val_dataset_) {
@@ -9063,9 +9143,11 @@ namespace lfs::training {
         std::optional<std::filesystem::path> path,
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>
-            context_provider) {
+            context_provider,
+        std::optional<std::filesystem::path> headless_source_path) {
         std::lock_guard lock(project_snapshot_mutex_);
         live_project_path_ = std::move(path);
+        headless_project_source_path_ = std::move(headless_source_path);
         live_document_context_provider_ =
             std::move(context_provider);
     }

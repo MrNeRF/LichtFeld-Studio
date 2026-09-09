@@ -61,4 +61,12 @@ namespace lfs::core {
         int kernel_size = 2,
         cudaStream_t cuda_stream = nullptr);
 
+    // Bilinear prior resampling excludes invalid neighbors and carries validity
+    // with nearest sampling. Depth <= 0/nonfinite and normal norms < 0.5 are
+    // invalid; outputs use zero sentinels and valid normals have unit length.
+    Tensor resize_depth_prior(const Tensor& input, int output_h, int output_w,
+                              cudaStream_t cuda_stream = nullptr);
+    Tensor resize_normal_prior(const Tensor& input, int output_h, int output_w,
+                               cudaStream_t cuda_stream = nullptr);
+
 } // namespace lfs::core

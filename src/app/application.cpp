@@ -388,6 +388,7 @@ namespace lfs::app {
             core::param::TrainingParameters params;
             core::Uuid checkpoint_uuid;
             int iteration = 0;
+            std::optional<std::filesystem::path> snapshot_source_path;
         };
 
         lfs::Result<LoadedTrainingProject>
@@ -538,6 +539,16 @@ namespace lfs::app {
             auto checkpoint_params =
                 std::move(**parsed_params);
 
+            // Only retain the source dataset when the effective training root
+            // still denotes the checkpoint's dataset (including path aliases).
+            std::error_code dataset_error;
+            const bool same_dataset = cli_params.dataset.data_path.empty() ||
+                                      std::filesystem::equivalent(
+                                          cli_params.dataset.data_path,
+                                          checkpoint_params.dataset.data_path, dataset_error);
+            const auto snapshot_source_path = same_dataset
+                                                  ? recovery_document.document().source_path()
+                                                  : std::nullopt;
             if (!cli_params.dataset.data_path.empty()) {
                 checkpoint_params.dataset.data_path =
                     cli_params.dataset.data_path;
@@ -618,6 +629,7 @@ namespace lfs::app {
                     hydration
                         ->checkpoint_header
                         ->iteration,
+                .snapshot_source_path = snapshot_source_path,
             };
         }
 
@@ -724,7 +736,8 @@ namespace lfs::app {
                             *installed->trainer,
                             effective_params,
                             headless_project_save_destination(
-                                *params, *params->resume_project));
+                                *params, *params->resume_project),
+                            training_project->snapshot_source_path);
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -745,7 +758,8 @@ namespace lfs::app {
                         }
                         training::grant_headless_project_saves(
                             *trainer, effective_params,
-                            headless_dataset_project_destination(effective_params));
+                            headless_dataset_project_destination(effective_params),
+                            effective_params.dataset_project);
                         manager->setTrainer(std::move(trainer));
                     }
                 }
@@ -840,7 +854,7 @@ namespace lfs::app {
                     return 1;
                 }
 
-                if (training_project) {
+                if (training_project && !params->dataset.output_path_explicit) {
                     if (auto rebound =
                             training_project->document
                                 .rebind_after_durable_merge();
@@ -948,7 +962,8 @@ namespace lfs::app {
                     training::grant_headless_project_saves(
                         *trainer, project->params,
                         headless_project_save_destination(
-                            *params, *params->resume_project));
+                            *params, *params->resume_project),
+                        project->snapshot_source_path);
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",
@@ -966,9 +981,9 @@ namespace lfs::app {
                                 result.error()));
                         return 1;
                     }
-                    if (auto rebound =
-                            project->document
-                                .rebind_after_durable_merge();
+                    if (auto rebound = params->dataset.output_path_explicit
+                                           ? lfs::Result<void>{}
+                                           : project->document.rebind_after_durable_merge();
                         !rebound) {
                         LOG_ERROR(
                             "Headless recovery merge could not rebind the live project document: {}",
@@ -1058,7 +1073,8 @@ namespace lfs::app {
                         trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
                     training::grant_headless_project_saves(
                         *trainer, *params,
-                        headless_dataset_project_destination(*params));
+                        headless_dataset_project_destination(*params),
+                        params->dataset_project);
 
                     core::Tensor::trim_memory_pool();
 

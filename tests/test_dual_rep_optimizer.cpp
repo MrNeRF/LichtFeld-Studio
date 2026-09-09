@@ -508,7 +508,7 @@ TEST(DualRepOptimizer, MRNF_PerSplatMeanStepWithQuantizedAdamIsFinite) {
     EXPECT_TRUE(means_st->is_joint());
 
     auto far_mask = Tensor::zeros_bool({size_t{8}}, Device::CUDA).logical_not();
-    opt.set_mean_step_far_mask(far_mask.ptr<bool>(), 8);
+    opt.set_mean_step_far_mask(far_mask);
     EXPECT_NE(opt.mean_step_far_mask(), nullptr);
     EXPECT_EQ(opt.mean_step_far_mask_n(), 8);
 

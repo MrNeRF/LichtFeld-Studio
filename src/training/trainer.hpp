@@ -403,7 +403,8 @@ namespace lfs::training {
             std::optional<std::filesystem::path> path,
             std::function<std::optional<
                 ProjectSnapshotDocumentContext>()>
-                context_provider = {});
+                context_provider = {},
+            std::optional<std::filesystem::path> headless_source_path = std::nullopt);
         [[nodiscard]] bool can_flush_project_snapshot() const {
             return project_snapshot_service_ && strategy_ &&
                    scene_;
@@ -565,6 +566,7 @@ namespace lfs::training {
             lfs::core::Tensor grad_corrected;
             lfs::core::Tensor grad_raw;
             lfs::core::Tensor grad_alpha;
+            lfs::core::Tensor normal_pixel_weight;
         };
 
         // Masked photometric loss with optional alpha gradient
@@ -831,6 +833,8 @@ namespace lfs::training {
             last_project_writer_typed_error_;
         std::optional<std::filesystem::path>
             live_project_path_;
+        // Used only to seed a fresh headless destination; never a GUI context.
+        std::optional<std::filesystem::path> headless_project_source_path_;
         TrainerProjectSavePolicy trainer_project_save_policy_{};
         std::function<std::optional<
             ProjectSnapshotDocumentContext>()>

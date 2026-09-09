@@ -825,6 +825,10 @@ namespace lfs::vis {
                                          std::nullopt,
                                          request.orthographic_override,
                                          request.ortho_scale_override);
+        if (last_vulkan_context_ &&
+            last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+            return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
+        }
         releasePreviewImageResources();
 
         lfs::core::Tensor image;
@@ -958,6 +962,9 @@ namespace lfs::vis {
         }
         if (!last_vulkan_context_) {
             return std::unexpected("no Vulkan context is available");
+        }
+        if (last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+            return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
