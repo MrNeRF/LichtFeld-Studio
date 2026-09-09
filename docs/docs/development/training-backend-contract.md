@@ -52,16 +52,13 @@ result instead of duplicating UI text in the descriptor.
   and Python writers of `gut` therefore remain effective.
 - JSON accepts `raster_backend: "3dgs"` or `"3dgut"`. Files containing only
   `gut` retain their original meaning. Missing both selects the existing 3DGS default.
-- New JSON writes both names consistently. While `gut` remains the compatibility
-  storage, its value takes precedence if a previous application preserved a stale
-  known `raster_backend` field while changing `gut`. Unknown identifiers and
-  incorrect JSON types are still errors.
-- This precedence also applies to `--config` JSON. If both fields disagree,
-  `gut` wins and a warning is logged. When editing a config, update both fields
-  consistently or remove `gut` to select solely through `raster_backend`.
-  For example, `{"gut": true, "raster_backend": "3dgs"}` still selects 3DGUT;
-  `{"raster_backend": "3dgs"}` selects 3DGS. An explicit CLI backend selection
-  overrides either valid config after loading it.
+- New JSON writes both names consistently. If both fields are present, they
+  must agree. A disagreement, unknown identifier, or incorrect JSON type is an
+  error, including in configs, checkpoint parameters, and project presets.
+- For example, `{"gut": true, "raster_backend": "3dgs"}` is rejected;
+  `{"raster_backend": "3dgs"}` selects 3DGS. Config authors must update both
+  fields consistently or specify only one. Explicit CLI selection overrides a
+  valid config, not an invalid file that already failed loading.
 - `--raster-backend 3dgs|3dgut` is additive. `--gut` remains an alias for 3DGUT.
   `--gut --raster-backend 3dgs` is an error, independent of argument order.
 - Explicit CLI selection overrides a valid configuration's backend. Its captured
@@ -70,14 +67,10 @@ result instead of duplicating UI text in the descriptor.
   fail their existing load-time validation before CLI overrides are applied.
 - Checkpoint parameter JSON and `.licht` parameter presets use the same adapters.
   The binary checkpoint format and `.licht` chapter schema are unchanged.
-- A stored `.licht` preset may retain an unsupported 3DGUT option so legacy
-  projects can still open without silently changing user data. Storage validation
-  continues to reject malformed values; trainer validation reports the backend
-  conflict when Start is requested.
-- Older applications ignore the new field and continue to read `gut`. In `.licht`,
-  they can preserve the unknown new field while changing `gut`; the precedence
-  rule above ensures that the file still reopens with the legacy application's
-  selected backend.
+- Stored parameters follow the strict validation established by PR #2047.
+  Unsupported 3DGUT combinations are rejected by validating load paths, as
+  well as start/resume preflight. There is no separate storage-validation mode,
+  inherited-option normalization, or older `.licht` writer precedence rule.
 
 ## Python and viewer lifecycle
 
@@ -87,6 +80,9 @@ notification path. `backend_capabilities` returns the complete high-level map fo
 the selected backend using the strings `supported` and `unsupported`.
 `lf.training_backends()` lists IDs, labels, descriptions, viewer IDs, and the
 same capability map without needing to change the current selection.
+`set("raster_backend", value)` rejects non-string values and unknown names with
+an actionable `ValueError`, without changing the selected backend. `None` retains
+the existing binding-level `TypeError` before setter dispatch.
 
 These are next-run parameter APIs, not an atomic command to replace an active
 trainer and viewer. The existing panel change path still updates its viewer
@@ -96,8 +92,11 @@ and active trainer state. The future RmlUi selector should use the descriptors
 and the existing scene/lifecycle commands rather than mutating active training
 from a parameter setter.
 
-Training and evaluation dispatch use the named identity. The existing viewer
-hand-off in `application.cpp` and `visualizer_impl.cpp`, status-bar label, and
+Training and evaluation dispatch use the named identity. The status bar uses
+the active trainer's backend or, before restoration, the saved checkpoint's
+backend. Missing identity is omitted rather than presented as 3DGS. Labels come
+from the backend descriptors, independently of viewer and next-run choices.
+The existing viewer hand-off in `application.cpp` and `visualizer_impl.cpp` and
 training panel still consume the compatibility `gut` boolean. These consumers
 must also migrate before a backend beyond the current two can be installed.
 Training and viewer identifiers use the same `3dgs`/`3dgut` vocabulary.
@@ -107,7 +106,7 @@ Training and viewer identifiers use the same `3dgs`/`3dgut` vocabulary.
 This is a compatibility step, not runtime backend registration. An additional
 backend needs its implementation, descriptor, an explicit state for every
 high-level capability, explicit dispatch, and a replacement for boolean `gut`
-storage with legacy accessors. Unknown enum values are rejected by the
+storage with accessors for the existing API. Unknown enum values are rejected by the
 compatibility setter. Do not map an additional backend to either boolean value or
 assume that adding a descriptor installs a rasterizer.
 
@@ -120,7 +119,7 @@ runtime libraries on the library search path. The chapter test belongs to
 ```powershell
 .\build\tests\lichtfeld_tests.exe '--gtest_filter=TrainingParametersTest.*:ArgumentParserTest.*Backend*:ArgumentParserTest.Gut*:TrainerConstructionTest.*:CheckpointParamsJsonTest.*:ParameterManagerTest.PendingProjectRestoreChangesOnlyRoleQualifiedManagerState' --gtest_color=no
 .\build\tests\lichtfeld_format_tests.exe '--gtest_filter=ProjectChapterTest.TrainingBackendIdentityRoundTripAndCompatibility' --gtest_color=no
-python -m pytest tests/python/test_property_system.py -q -p no:cacheprovider
+.\build\vcpkg_installed\x64-windows\tools\python3\python.exe -m pytest tests/python/test_property_system.py -q -p no:cacheprovider
 ```
 
 On Linux, with the build's Python module and libraries available:
@@ -128,15 +127,18 @@ On Linux, with the build's Python module and libraries available:
 ```sh
 ./build/tests/lichtfeld_tests --gtest_filter='TrainingParametersTest.*:ArgumentParserTest.*Backend*:ArgumentParserTest.Gut*:TrainerConstructionTest.*:CheckpointParamsJsonTest.*:ParameterManagerTest.PendingProjectRestoreChangesOnlyRoleQualifiedManagerState'
 ./build/tests/lichtfeld_format_tests --gtest_filter='ProjectChapterTest.TrainingBackendIdentityRoundTripAndCompatibility'
-python3 -m pytest tests/python/test_property_system.py -q -p no:cacheprovider
+./build/vcpkg_installed/x64-linux/tools/python3/python3.12 -m pytest tests/python/test_property_system.py -q -p no:cacheprovider
 ```
 
-Use the Python interpreter matching the built extension. Local shell helpers
+These paths assume the standard vcpkg triplets. Use the Python interpreter
+matching the built extension, with pytest installed and the built module and
+its runtime libraries available; a system Python is not interchangeable.
+Local shell helpers
 are not repository prerequisites. After changing native Python bindings,
 generate the committed stubs from the rebuilt module via `refresh_python_stubs`
 and run `check_python_stubs`; do not maintain binding stubs by hand.
 
-Manual checks: open legacy 3DGS and 3DGUT projects/checkpoints, save and reopen
+Manual checks: open valid 3DGS and 3DGUT projects/checkpoints, save and reopen
 them, change the backend through Python and the existing panel, and verify a
 valid training run with each backend. Exercise CLI selection, config overrides,
 viewer startup, and invalid aliases. Confirm that changing next-run settings

@@ -61,6 +61,23 @@ class TestOptimizationParams:
         finally:
             params.gut = original
 
+    @pytest.mark.parametrize("value", [5, 1.5, True, None, [], {}, b"3dgs", "unknown"])
+    def test_invalid_backend_set_preserves_selection(self, lf, value):
+        params = lf.optimization_params()
+        original = params.gut
+        try:
+            for backend in ("3dgs", "3dgut"):
+                params.set("raster_backend", backend)
+                # None is rejected by the existing binding before setter dispatch.
+                error_type = TypeError if value is None else ValueError
+                error_match = "incompatible function arguments" if value is None else "raster_backend"
+                with pytest.raises(error_type, match=error_match):
+                    params.set("raster_backend", value)
+                assert params.raster_backend == backend
+                assert params.gut is (backend == "3dgut")
+        finally:
+            params.gut = original
+
     def test_optimization_params_exists(self, lf):
         """optimization_params() function should be available."""
         assert hasattr(lf, "optimization_params")

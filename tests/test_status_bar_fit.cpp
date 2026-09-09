@@ -23,6 +23,19 @@
 
 namespace lfs::vis::gui {
 
+    TEST(StatusBarBackendTest, UsesActiveTrainerBeforeStoredSession) {
+        using lfs::core::param::RasterBackendId;
+        EXPECT_EQ(trainingBackendStatusLabel(RasterBackendId::ThreeDGUT, "3dgs"), "3DGUT");
+        EXPECT_EQ(trainingBackendStatusLabel(RasterBackendId::ThreeDGS, "3dgut"), "3DGS");
+    }
+
+    TEST(StatusBarBackendTest, UsesStoredBackendWithoutInventingDefault) {
+        EXPECT_EQ(trainingBackendStatusLabel(std::nullopt, "3dgut"), "3DGUT");
+        EXPECT_EQ(trainingBackendStatusLabel(std::nullopt, "3dgs"), "3DGS");
+        EXPECT_TRUE(trainingBackendStatusLabel(std::nullopt, "").empty());
+        EXPECT_TRUE(trainingBackendStatusLabel(std::nullopt, "unknown").empty());
+    }
+
     class RmlStatusBarTestAccess {
     public:
         static void attach(RmlStatusBar& status_bar,

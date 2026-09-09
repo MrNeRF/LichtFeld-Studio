@@ -306,11 +306,13 @@ namespace lfs::python {
 
     void PyOptimizationParams::set(const std::string& prop_id, nb::object value) {
         if (prop_id == "raster_backend") {
+            if (!nb::isinstance<nb::str>(value))
+                throw std::invalid_argument("Training raster_backend must be a string: 3dgs or 3dgut");
             const auto name = nb::cast<std::string>(value);
             const auto backend = parse_training_backend(name);
             if (!backend)
                 throw std::invalid_argument("Unknown training raster_backend: " + name);
-            // Reuse the legacy property setter and its notification contract.
+            // Reuse the gut property setter and its notification contract.
             set("gut", nb::cast(*backend == RasterBackendId::ThreeDGUT));
             return;
         }

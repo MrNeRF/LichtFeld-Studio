@@ -622,7 +622,10 @@ namespace {
             EXPECT_EQ(OptimizationParameters::from_json(explicit_only).gut, gut);
             auto conflict = json;
             conflict["gut"] = !gut;
-            EXPECT_EQ(OptimizationParameters::from_json(conflict).gut, !gut);
+            EXPECT_THROW((void)OptimizationParameters::from_json(conflict), std::invalid_argument);
+            EXPECT_THROW((void)lfs::core::parse_checkpoint_params_json(
+                             nlohmann::json{{"optimization", conflict}}.dump()),
+                         std::invalid_argument);
 
             TrainingParameters target;
             target.optimization = params;
@@ -691,7 +694,7 @@ namespace {
                                             const OptimizationParameters& params) {
             SCOPED_TRACE(feature);
             EXPECT_EQ(params.backend_conflict(), TrainingBackendConflict::None);
-            const auto error = params.validate(ParameterValidationMode::Runtime);
+            const auto error = params.validate();
             EXPECT_TRUE(error.empty()) << error;
         };
 

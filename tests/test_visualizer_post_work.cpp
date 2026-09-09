@@ -869,7 +869,8 @@ namespace {
     make_training_autosave_checkpoint_payload(
         const lfs::core::Uuid& checkpoint_uuid,
         const std::filesystem::path& dataset_path = {},
-        const int sh_degree = 0) {
+        const int sh_degree = 0,
+        const bool gut = false) {
         const std::size_t count = sh_degree > 0 ? 8 : 2;
         auto model = sh_degree > 0
                          ? make_degree1_splat(count)
@@ -880,6 +881,7 @@ namespace {
             lfs::core::param::OptimizationParameters::
                 mcmc_defaults();
         parameters.optimization.sh_degree = sh_degree;
+        parameters.optimization.gut = gut;
         parameters.optimization.max_cap =
             static_cast<int>(count);
         parameters.dataset.data_path = dataset_path;
@@ -1023,7 +1025,8 @@ namespace {
                 lfs::io::project::
                     TrainingFinishReason::None,
         const int sh_degree = 0,
-        const int prms_iterations = -1) {
+        const int prms_iterations = -1,
+        const bool gut = false) {
         auto document = lfs::test::licht::make_empty_document(
             lfs::core::generate_uuid_v4(), 1);
         lfs::core::Scene source;
@@ -1073,7 +1076,7 @@ namespace {
                 checkpoint_uuid,
                 make_training_autosave_checkpoint_payload(
                     checkpoint_uuid, dataset_path,
-                    sh_degree)));
+                    sh_degree, gut)));
         if (finish_reason !=
             lfs::io::project::TrainingFinishReason::
                 None) {
@@ -13474,6 +13477,35 @@ namespace lfs::vis {
         EXPECT_EQ(manager->checkpointBaselineIteration(),
                   std::optional<int>{11});
         EXPECT_EQ(manager->getCurrentIteration(), 11);
+    }
+
+    TEST_F(VisualizerImplResetTest,
+           StoredTrainingBackendComesFromCheckpointBeforeTrainerRestore) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+        for (const bool gut : {false, true}) {
+            const auto project_path = temporary_.path / (gut ? "gut-backend.licht" : "gs-backend.licht");
+            const auto dataset_path = temporary_.path / (gut ? "gut-dataset" : "gs-dataset");
+            write_minimal_transforms_dataset(dataset_path);
+            write_resumable_project_with_checkpoint(
+                project_path, lfs::core::generate_uuid_v4(), lfs::core::generate_uuid_v4(),
+                dataset_path, lfs::io::project::TrainingFinishReason::Completed, 0, -1, gut);
+            auto options = projectOptions();
+            VisualizerImpl viewer(options);
+            ASSERT_TRUE(viewer.getParameterManager()->ensureLoaded());
+            ASSERT_TRUE(viewer.getWindowManager()->init());
+            ASSERT_TRUE(viewer.projectOpen(project_path, ProjectSwitchDisposition::DiscardChanges));
+            viewer.noteGuiSessionRestoreOwnerReady(1);
+            ASSERT_TRUE(pumpUntil(viewer.work_queue_mutex_, viewer.work_queue_, [&] {
+                const auto info = viewer.projectGetInfo();
+                return info && info->hydration_state == "complete";
+            }));
+            const auto session = viewer.projectTrainingSessionState();
+            ASSERT_TRUE(session.available);
+            EXPECT_EQ(session.raster_backend, gut ? "3dgut" : "3dgs");
+            EXPECT_FALSE(viewer.getTrainerManager()->hasTrainer());
+        }
     }
 
     TEST_F(VisualizerImplResetTest,

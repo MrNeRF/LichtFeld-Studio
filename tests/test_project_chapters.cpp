@@ -433,9 +433,7 @@ namespace {
         ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.raster_backend", "unknown"));
         EXPECT_FALSE(chapter.snapshot());
         ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.raster_backend", "3dgs"));
-        auto legacy_modified = chapter.snapshot();
-        ASSERT_TRUE(legacy_modified);
-        EXPECT_TRUE(legacy_modified->mrnf_current.gut);
+        EXPECT_FALSE(chapter.snapshot());
 
         auto legacy_json = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
         for (const auto* strategy : {"mcmc", "mrnf", "igs+"}) {

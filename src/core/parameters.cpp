@@ -170,15 +170,14 @@ namespace lfs::core {
                     if (!backend)
                         throw std::invalid_argument("Unknown training raster_backend: " + name);
                     if (json.contains("gut")) {
-                        const bool legacy_gut = json.at("gut").get<bool>();
-                        const auto legacy_backend = legacy_gut
+                        const bool gut = json.at("gut").get<bool>();
+                        const auto boolean_backend = gut
                                                         ? RasterBackendId::ThreeDGUT
                                                         : RasterBackendId::ThreeDGS;
-                        if (*backend != legacy_backend) {
-                            LOG_WARN(
-                                "Conflicting raster_backend '{}' and legacy gut={}; using the legacy value for backward compatibility",
-                                name, legacy_gut);
-                            backend = legacy_backend;
+                        if (*backend != boolean_backend) {
+                            throw std::invalid_argument(std::format(
+                                "Conflicting raster_backend '{}' and gut={}; set both consistently or specify only one",
+                                name, gut));
                         }
                     }
                 }

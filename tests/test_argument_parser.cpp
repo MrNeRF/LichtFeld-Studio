@@ -192,7 +192,7 @@ TEST(ArgumentParserTest, BackendCliOverrideReplacesConfigAliasesTogether) {
     EXPECT_FALSE(restored.optimization.gut);
 }
 
-TEST(ArgumentParserTest, ConfigBackendDisagreementKeepsLegacySelection) {
+TEST(ArgumentParserTest, ConfigBackendDisagreementIsRejected) {
     const auto data = make_test_path("lfs_backend_legacy_config_data");
     const auto output = make_test_path("lfs_backend_legacy_config_output");
     const auto config = std::filesystem::path(output) / "backend.json";
@@ -207,9 +207,9 @@ TEST(ArgumentParserTest, ConfigBackendDisagreementKeepsLegacySelection) {
     const auto config_text = config.string();
     const char* argv[] = {"LichtFeld-Studio", "-d", data.c_str(), "-o", output.c_str(),
                           "--config", config_text.c_str()};
-    const auto legacy = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
-    ASSERT_TRUE(legacy.has_value()) << legacy.error();
-    EXPECT_TRUE((*legacy)->optimization.gut);
+    const auto conflict = lfs::core::args::parse_args_and_params(static_cast<int>(std::size(argv)), argv);
+    ASSERT_FALSE(conflict.has_value());
+    EXPECT_NE(conflict.error().find("Conflicting raster_backend"), std::string::npos);
 
     json.erase("gut");
     {
