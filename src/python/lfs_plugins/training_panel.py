@@ -504,7 +504,7 @@ class TrainingPanel(Panel):
 
     def _bind_property_search(self, model):
         for name in self._BESPOKE_SEARCH:
-            model.bind_func(f"pv_show_{name}", lambda n=name: self._bespoke_matches(n))
+            model.bind_func("pv_show_" + name, lambda n=name: self._bespoke_matches(n))
         model.bind(
             "pv_search_query",
             lambda: self._pv_search_query,
@@ -2386,7 +2386,7 @@ class TrainingPanel(Panel):
             "pv_search_query",
             "pv_search_active",
             *property_view.SEARCH_VISIBILITY_MODEL_KEYS,
-            *(f"pv_show_{name}" for name in self._BESPOKE_SEARCH),
+            *("pv_show_" + name for name in self._BESPOKE_SEARCH),
         ):
             self._handle.dirty(key)
 
