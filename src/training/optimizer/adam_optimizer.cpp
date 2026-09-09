@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cmath>
 #include <cuda_runtime.h>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -188,14 +189,33 @@ namespace lfs::training {
         mean_step_r_min_ = r_min;
         mean_step_r_max_ = r_max;
         if (!enabled) {
-            mean_step_far_mask_ = nullptr;
-            mean_step_far_mask_n_ = 0;
+            set_mean_step_far_mask({});
         }
     }
 
-    void AdamOptimizer::set_mean_step_far_mask(const bool* mask, const int n) {
-        mean_step_far_mask_ = mask;
-        mean_step_far_mask_n_ = mask != nullptr ? n : 0;
+    void AdamOptimizer::set_mean_step_far_mask(lfs::core::Tensor mask) {
+        if (!mask.is_valid() || mask.numel() == 0) {
+            mean_step_far_mask_ = nullptr;
+            mean_step_far_mask_n_ = 0;
+            mean_step_far_mask_storage_ = {};
+            return;
+        }
+        LFS_ASSERT_MSG(mask.dtype() == lfs::core::DataType::Bool && mask.ndim() == 1,
+                       "AdamOptimizer mean-step far mask must be a 1D bool tensor");
+        LFS_ASSERT_MSG(mask.numel() <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "AdamOptimizer mean-step far mask exceeds the supported row count");
+        // Construct fresh handles: assignment to a view copies into its existing
+        // storage, even for mask = mask.cuda() or mask = mask.clone().
+        auto uploaded = mask.device() == lfs::core::Device::CUDA ? mask : mask.cuda();
+        auto storage = uploaded.is_contiguous() && uploaded.owns_memory()
+                           ? uploaded
+                           : uploaded.clone();
+        const auto* pointer = storage.ptr<bool>();
+        LFS_VALIDATE_CUDA_DEVICE_POINTER(pointer, "mean_step_far_mask");
+        // A raw pointer alone cannot keep a replaced strategy tensor alive.
+        mean_step_far_mask_storage_ = std::move(storage);
+        mean_step_far_mask_ = pointer;
+        mean_step_far_mask_n_ = static_cast<int>(mean_step_far_mask_storage_.numel());
     }
 
     void AdamOptimizer::validate_mean_step_far_mask() {
@@ -206,7 +226,7 @@ namespace lfs::training {
             LOG_WARN("AdamOptimizer: mean_step_far_mask row-count mismatch (mask={}, means={}); "
                      "ignoring binding until the strategy republishes it",
                      mean_step_far_mask_n_, n);
-            set_mean_step_far_mask(nullptr, 0);
+            set_mean_step_far_mask({});
         }
     }
 
@@ -323,6 +343,9 @@ namespace lfs::training {
             prepare_contiguous(type);
         }
         if (n_entries > 0) {
+            if (mean_step_far_mask_storage_.is_valid()) {
+                mean_step_far_mask_storage_.sync_to_stream(batch_stream);
+            }
             if (frozen_mask_.is_valid()) {
                 lfs::core::waitForCUDAStream(batch_stream, frozen_mask_.stream());
             }
@@ -780,6 +803,9 @@ namespace lfs::training {
                 throw std::runtime_error("Optimizer state desync: " + name);
             }
             const size_t feature_dim = param_live.numel() / param_size;
+            if (mean_step_far_mask_storage_.is_valid()) {
+                mean_step_far_mask_storage_.sync_to_stream(execution_stream);
+            }
             const float* mean_step_scale_raw = nullptr;
             int mean_step_scale_n = 0;
             if (type == ParamType::Means && per_splat_mean_step_) {
@@ -848,6 +874,9 @@ namespace lfs::training {
         const int iteration,
         const cudaStream_t execution_stream) {
         validate_mean_step_far_mask();
+        if (mean_step_far_mask_storage_.is_valid()) {
+            mean_step_far_mask_storage_.sync_to_stream(execution_stream);
+        }
         if (crop_damping_mask_.is_valid()) {
             crop_damping_mask_.sync_to_stream(execution_stream);
         }
