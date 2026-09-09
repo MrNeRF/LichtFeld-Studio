@@ -28,10 +28,9 @@ namespace lfs::vis::op {
     }
 
     bool DepthWindowSettingsUndoEntry::apply(const DepthWindowSettingsState& state) {
-        // ONE lock does the epoch compare and the absolute restore: there is no
-        // window in which a transition could slip between them. `restore_sync`
-        // is false - a drag never owns the sync flag, and the projection is
-        // recomputed inside the manager from the panel focused at apply time.
+        // Compare epoch and restore absolute state under one lock to exclude transitions.
+        // restore_sync=false preserves the sync flag, which drag entries do not own.
+        // The manager derives projection from the panel focused at apply time.
         return rendering_manager_.restoreDepthWindowSnapshotIfEpoch(
             DepthWindowModeSnapshot{
                 .panels = state.panels,
@@ -86,20 +85,16 @@ namespace lfs::vis::op {
     }
 
     bool DepthWindowSyncUndoEntry::apply(const DepthWindowModeSnapshot& snapshot) {
-        // The sync entry is the only entry that owns the sync flag, so it
-        // restores the whole snapshot - still compare-and-restore under one lock.
+        // Sync undo also owns the flag; check epoch and restore under one lock.
         if (!rendering_manager_.restoreDepthWindowSnapshotIfEpoch(
                 snapshot, snapshot.mode_epoch, /*restore_sync=*/true)) {
-            // Expired: the restore was a no-op, so nothing was invalidated and
-            // nothing is stamped.
+            // An expired restore changes nothing and stamps no lineage.
             return false;
         }
-        // Stamped HERE, not inside the shared restore body, which also serves
-        // drag undo - a drag undo invalidates no slot-derived reference and
-        // must keep stamping nothing. kind=ProjectRestore means
-        // "fresh-baseline required", not literally a project load: this restore
-        // writes two possibly-differing absolute window snapshots at once, so
-        // no cached per-panel reference survives it.
+        // Stamp here because the shared restore also serves drag undo, which preserves
+        // slot-derived references and must not stamp lineage. ProjectRestore means
+        // "fresh baseline required": restoring both possibly unequal absolute windows
+        // invalidates all cached panel references, even without a project load.
         rendering_manager_.stampDepthWindowSyncRestoreLineage();
         return true;
     }

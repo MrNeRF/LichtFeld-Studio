@@ -55,9 +55,7 @@ namespace lfs::python {
 
         vis::RenderingManager* get_rm() { return get_rendering_manager(); }
 
-        // Same idiom as py_ui.cpp:108 / py_ui_modals.cpp:64 / py_ui_panels.cpp:35:
-        // run `fn` on the viewer thread when the caller is not already on it, so
-        // main-thread-owned state can be read without racing the viewer.
+        // Marshal unprotected, viewer-owned state reads to the viewer thread.
         template <typename F>
         auto invoke_on_viewer(F&& fn, std::invoke_result_t<F> fallback) {
             auto* const viewer = get_visualizer();
@@ -289,14 +287,9 @@ namespace lfs::python {
             rm->updateSettings(settings);
         }
 
-        // Panel vocabulary for the keyword-only `panel=` argument.
-        // Mirrors the camera API's parser (py_rendering.cpp parsePanelArg) with
-        // one deliberate difference: there the DEFAULT token is 'main', while
-        // here the default is Python `None`. `None` means "no panel override"
-        // and takes the PROJECTION path -- byte-for-byte the pre-panel code
-        // path, with no branch added ahead of it. 'main' is the EXPLICIT
-        // focused-panel request and routes through the panel-targeted manager
-        // API like 'left'/'right' do.
+        // Keyword-only panel= defaults to None for the legacy projection path, unlike
+        // py_rendering.cpp's main default. Explicit main resolves focus; main/left/right
+        // use the panel-targeted manager API.
         [[nodiscard]] std::optional<vis::SplitViewPanelId>
         parseDepthWindowPanelArg(const std::string& panel) {
             if (panel == "left")
@@ -308,9 +301,8 @@ namespace lfs::python {
             throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
         }
 
-        // Resolves the keyword to a concrete slot, or nullopt for the projection
-        // path. Throws ValueError for an unknown token BEFORE anything is read,
-        // so an invalid call never half-applies.
+        // Resolve a slot or nullopt for projection. Unknown tokens raise ValueError
+        // before state access, preventing partial application.
         [[nodiscard]] std::optional<vis::SplitViewPanelId>
         resolveDepthWindowPanel(const std::optional<std::string>& panel) {
             if (!panel.has_value())
@@ -318,9 +310,7 @@ namespace lfs::python {
             const auto parsed = parseDepthWindowPanelArg(*panel);
             if (parsed)
                 return parsed;
-            // 'main' -- explicit focused panel. focused_panel_ is main-thread-
-            // owned and unprotected (split_view_service.hpp:60), so the read is
-            // marshalled to the viewer thread.
+            // Resolve explicit main on the viewer thread; focused_panel_ is unprotected.
             return invoke_on_viewer(
                 []() -> std::optional<vis::SplitViewPanelId> {
                     auto* const rm = get_rm();
@@ -353,12 +343,9 @@ namespace lfs::python {
             return {depth_near, depth_far};
         }
 
-        // Explicit-panel window write. near/far ride the MANAGER setter so the
-        // projection-mutation generation bumps -- the legacy protection
-        // of calling setDepthFilterRange after the settings write only covers
-        // the projection path. `enabled` stays GLOBAL (per-panel enabled is out
-        // of scope), so it is carried through the usual projection route with
-        // the band left exactly where the panel write just put it.
+        // Use the panel setter so near/far update the projection generation.
+        // Apply global enabled afterward, preserving the band's resulting position;
+        // the legacy setDepthFilterRange protection covers only the projection path.
         void apply_depth_filter_window_panel(const vis::SplitViewPanelId panel,
                                              const bool enabled,
                                              const float depth_near,
@@ -653,9 +640,7 @@ namespace lfs::python {
 
         sel.def(
             "set_depth_filter_window", [](bool enabled, float depth_near, float depth_far, float scale, float offset_x, float offset_y, std::optional<float> scale_y, std::optional<std::string> panel) {
-                // panel=None keeps the pre-panel projection path verbatim: the
-                // resolve is a pure no-op on None and adds no behavioral branch
-                // ahead of apply_depth_filter_window.
+                // None resolves without state access and retains the legacy projection path.
                 if (const auto slot = resolveDepthWindowPanel(panel)) {
                     apply_depth_filter_window_panel(*slot, enabled, depth_near, depth_far, scale, offset_x, offset_y, scale_y);
                     return;

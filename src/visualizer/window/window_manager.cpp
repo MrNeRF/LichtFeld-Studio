@@ -1056,12 +1056,9 @@ namespace lfs::vis {
             const int mouse_x = static_cast<int>(std::round(event.button.x));
             const int mouse_y = static_cast<int>(std::round(event.button.y));
             const bool titlebar_point = isTitlebarDragPoint(mouse_x, mouse_y);
-            // Press ownership is decided HERE, at the event, and carried to the
-            // GUI frame on the frame buffer. Rectangle containment computed in
-            // the frame cannot tell a viewport press from one on a GUI-owned
-            // edge that overlaps the viewport (the left-dock resize strip), and
-            // the layout it compares against may have moved in between.
-            // Input routing below consumes this same hit, including keyboard intent.
+            // Record GUI ownership at the press and carry it in the frame buffer.
+            // Frame-time bounds miss GUI edges overlapping the viewport (the dock resize
+            // strip) and layout changes. Input routing reuses this hit, including keyboard intent.
             gui::GuiHitTestResult press_hit;
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
                 if (auto* const gui = services().guiOrNull())

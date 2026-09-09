@@ -295,9 +295,8 @@ class RuntimeState:
     language_generation = StateSignal[int]("language_generation", 0)
     render_settings_generation = StateSignal[int]("render_settings_generation", 0)
     depth_window_draw_generation = StateSignal[int]("depth_window_draw_generation", 0)
-    # Panel-addressed companion to the scalar generation above: {"generation":
-    # int, "panel": "left"|"right"}. The depth toolbar rebases the Size
-    # reference of the panel the commit names, not the one it is displaying.
+    # Draw-commit companion: {"generation": int, "panel": "left"|"right"}.
+    # Rebase the named panel's Size reference, even when another panel is displayed.
     depth_window_draw_commit = StateSignal[dict[str, object]](
         "depth_window_draw_commit",
         {"generation": 0, "panel": "left"},

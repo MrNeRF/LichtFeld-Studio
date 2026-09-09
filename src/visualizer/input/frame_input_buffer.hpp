@@ -22,24 +22,13 @@ namespace lfs::vis {
         float y = 0.0f;
         uint64_t timestamp = 0;
         uint8_t clicks = 0;
-        // Did the GUI own THIS press when it happened, from the GUI's own hit
-        // test (GuiManager::hitTestMouseButton), recorded at the SDL event by
-        // the window layer through notePressOwner()?
-        //
-        // Rectangle containment recomputed later in the GUI frame answers
-        // "where is this point now", not "would the GUI have taken this press",
-        // and the layout it is compared against may have moved (DPI change,
-        // programmatic resize, dock relayout) in between. Recording the verdict
-        // ON the event keeps it inseparable from the coordinates it was taken
-        // at: they cannot be copied apart.
-        //
-        // A DOWN carries the verdict for its own press -- EVERY DOWN, not just
-        // the frame's first for that button. A matching UP carries the verdict
-        // of the DOWN it releases, even when that DOWN was in an earlier frame
-        // and even when the release lands outside the pressed control. An UP
-        // with no open press of its own, and any event whose verdict was never
-        // recorded, stays false: ownership is never inherited from another
-        // button or from an earlier same-button press.
+        // GUI ownership from GuiManager::hitTestMouseButton, recorded by the window
+        // layer at the SDL event through notePressOwner(). Keep it with event coordinates:
+        // later bounds checks cannot recover ownership after DPI, resize or dock changes.
+        // Every DOWN carries its own verdict. Its matching UP carries the same verdict,
+        // even across frames or outside the pressed control. An unmatched UP or an event
+        // with no recorded verdict stays false; never borrow ownership from another
+        // button or an earlier same-button press.
         bool gui_owned = false;
     };
 
@@ -75,10 +64,8 @@ namespace lfs::vis {
             ++serial;
             mouse_clicked[0] = mouse_clicked[1] = mouse_clicked[2] = false;
             mouse_released[0] = mouse_released[1] = mouse_released[2] = false;
-            // The press LIFECYCLE state (press_open_ / press_owner_) is
-            // deliberately NOT reset here: a press can be held across many
-            // frames, and its release must still find its own DOWN's verdict.
-            // Only the index into this frame's now-cleared event vector is.
+            // Keep press_open_ / press_owner_ across frames so UP retains its DOWN's verdict.
+            // Reset only the index into the event vector being cleared.
             pending_owner_index_ = -1;
             mouse_wheel = 0;
             mouse_wheel_x = 0;
@@ -117,9 +104,7 @@ namespace lfs::vis {
                 const int idx = buttonIndex(event.button.button);
                 if (idx >= 0) {
                     const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
-                    // A release carries the verdict of the press it ends, and
-                    // only of that press: with no open press for this button
-                    // there is nothing to inherit and the event stays unowned.
+                    // UP inherits only this button's open press verdict; without one, it stays unowned.
                     const bool released_owner = !down && press_open_[idx] && press_owner_[idx];
                     mouse_button_events.push_back({
                         .button = static_cast<uint8_t>(idx),
@@ -131,13 +116,9 @@ namespace lfs::vis {
                         .gui_owned = released_owner,
                     });
                     if (down) {
-                        // The verdict itself is the GUI's to give, so the event
-                        // this DOWN just recorded is marked as the one awaiting
-                        // it; the window layer answers before the next event is
-                        // polled (window_manager.cpp). Every DOWN opens its own
-                        // press lifecycle -- a second DOWN for the same button
-                        // in the same frame replaces the first rather than
-                        // being folded into it.
+                        // Mark this DOWN as awaiting the GUI verdict; window_manager.cpp supplies it
+                        // before polling the next event. Every DOWN starts a new press lifecycle,
+                        // replacing any earlier same-button press, even within this frame.
                         pending_owner_index_ = static_cast<int>(mouse_button_events.size()) - 1;
                         press_open_[idx] = true;
                         press_owner_[idx] = false;
@@ -179,16 +160,10 @@ namespace lfs::vis {
             }
         }
 
-        // Record who owned the DOWN that processEvent() has JUST recorded for
-        // `sdl_button`, so the verdict and the coordinates it was taken at are
-        // one event and cannot be copied apart.
-        //
-        // This answers exactly one event: the DOWN of the SDL event currently
-        // being polled. It is a no-op when the buffer recorded no DOWN for that
-        // event (a foreign window, an unsupported button) and when a verdict for
-        // it has already been given, so a stray or duplicated call can never
-        // re-own an earlier press. Deliberately synchronous: nothing between the
-        // press and the GUI frame can move the layout out from under it.
+        // Record the current SDL DOWN's ownership beside its coordinates.
+        // Call immediately after processEvent, before another event or layout change.
+        // With that ordering, foreign-window, unsupported-button and duplicate calls
+        // are no-ops; only the pending matching DOWN receives a verdict.
         void notePressOwner(const int sdl_button, const bool gui_owned) {
             const int idx = buttonIndex(sdl_button);
             if (idx < 0 || pending_owner_index_ < 0 ||
@@ -199,8 +174,7 @@ namespace lfs::vis {
             if (!recorded.down || recorded.button != static_cast<uint8_t>(idx))
                 return;
             recorded.gui_owned = gui_owned;
-            // ...and the same verdict is what this press's release will carry,
-            // however many frames later it arrives.
+            // Keep this verdict for the matching UP, even across frames.
             press_owner_[idx] = gui_owned;
         }
 
@@ -219,16 +193,13 @@ namespace lfs::vis {
         }
 
     private:
-        // Index, in this frame's mouse_button_events, of the DOWN whose owner
-        // has not been given yet. -1 when there is none. Cleared by beginFrame()
-        // with the vector it points into, and consumed by the first
-        // notePressOwner() after the DOWN was recorded.
+        // Index of the DOWN awaiting ownership in this frame's mouse_button_events,
+        // or -1 if none. beginFrame() clears it with the vector; notePressOwner()
+        // consumes it.
         int pending_owner_index_ = -1;
 
-        // The open press lifecycle per button: whether a DOWN is outstanding
-        // and the verdict it was given. These OUTLIVE beginFrame() on purpose --
-        // a button held across frames must still hand its own verdict to the UP
-        // that eventually ends it.
+        // Per-button open DOWN and ownership verdict. Preserve across beginFrame()
+        // so the matching UP inherits its press's verdict, even in a later frame.
         bool press_open_[3] = {};
         bool press_owner_[3] = {};
 

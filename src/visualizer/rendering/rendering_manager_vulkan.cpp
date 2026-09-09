@@ -3933,11 +3933,8 @@ namespace lfs::vis {
                 render_error = "Point-cloud Vulkan render failed";
             }
         } else if (has_visible_gaussian_model) {
-            // In independent-dual the MAIN scene render IS the left panel (the
-            // right panel renders separately with its panel id) - tag it, or
-            // the builder falls back to the focused panel's depth window and
-            // the left panel filters with the right panel's box whenever the
-            // right panel is focused.
+            // The main render is Left in independent-dual mode. Tag it explicitly
+            // so the builder cannot substitute Right's window when Right has focus.
             const std::optional<SplitViewPanelId> main_render_panel =
                 splitViewUsesIndependentPanels(frame_settings.split_view_mode)
                     ? std::optional<SplitViewPanelId>(SplitViewPanelId::Left)

@@ -1345,12 +1345,9 @@ TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
     EXPECT_LE(consumer.count.load(), 1);
 }
 
-// Regression: a Python render-settings object retained across a split panel
-// focus change must not push its stale full snapshot back through the
-// render-settings callback. PyRenderSettings::set re-reads the live settings
-// immediately before applying the named property, so the outbound proxy already
-// carries the newly focused panel's depth window and the DirtyFlag::ALL callback
-// cannot back-route stale depth values onto that panel.
+// A retained Python settings proxy must re-read live settings before applying its named
+// property after a focus change. Otherwise DirtyFlag::ALL back-routes the proxy's stale
+// depth window into the newly focused panel.
 namespace {
     // The real viewer registers the manager used by the compiled binding.
     // No window loop or SelectionTool is initialized: this is its no-tool lane.

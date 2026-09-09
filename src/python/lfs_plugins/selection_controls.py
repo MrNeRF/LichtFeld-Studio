@@ -18,8 +18,7 @@ except Exception:
 
 
 def _split_view_mode():
-    # Defensive like _gt_comparison_active: test stubs replace lf.ui with a bare
-    # namespace that carries only the getters a given test needs.
+    # Test stubs may expose only the getters they need.
     query = getattr(lf.ui, "get_split_view_mode", None)
     if not callable(query):
         return "none"
@@ -51,19 +50,12 @@ def _depth_window_sync():
 
 
 def _depth_window_collapse_source():
-    """Which panel the last independent-dual collapse folded, or None.
+    """Return the last collapse's source panel, or None if unavailable.
 
-    Leaving independent-dual copies the PRE-transition focused panel's window
-    into the single remaining one (rendering_manager.cpp, the collapse branch of
-    applyDepthWindowModeTransitionLocked) while the split service resets the
-    observable focus to Left in the SAME transition
-    (split_view_service.cpp:214). A poller that saw neither the focus change nor
-    the leave separately therefore cannot recover the source panel from its own
-    cache or from get_focused_split_panel(); this is the native record of it.
-
-    None means the binding does not expose it (an older module, or a test stub
-    that does not need it), and the caller falls back to its cached
-    pre-transition panel.
+    Collapse uses pre-transition focus; the split service resets focus to Left.
+    Polling can miss both changes, so cached/current focus cannot recover the
+    source (applyDepthWindowModeTransitionLocked). Without the binding in older
+    modules or test stubs, callers use cached pre-transition focus.
     """
     query = getattr(lf.ui, "get_depth_window_collapse_source", None)
     if not callable(query):
@@ -76,34 +68,24 @@ def _depth_window_collapse_source():
 
 
 def _depth_window_collapse_record():
-    """The reference-lineage stamp: (source, generation, kind), read atomically.
+    """Return the atomic lineage record (source, generation, kind).
 
-    The source alone is endpoint identity: a leave -> enter -> leave cycle
-    completed between two 100ms polls reports only its LAST leg, so a consumer
-    reading it cannot tell that cycle apart from the single leave it observed --
-    and every per-panel value it cached predates the first collapse of the
-    cycle. The generation (rendering_manager.cpp,
-    stampDepthWindowLineageLocked, which always holds settings_mutex_ and
-    always moves source, generation and kind together) counts the writes
-    that invalidate a slot-derived cache, so the delta between two reads says
-    how many destructive boundaries went by. Retained-pair discards stamp too;
-    valid GT/Disabled excursions and restoration do not. Writers stamp inside
-    their critical section except sync undo/redo, which stamps from its call site
-    (depth_window_undo_entry.cpp:100) after the restore released the lock, so
-    it takes settings_mutex_ a SECOND time. The record is therefore always
-    self-consistent, but it is not always written under the same lock hold as
-    the slots it describes -- which is why _refresh_panel_context revalidates
-    the generation around its endpoint reads instead of trusting one read.
-    The kind names WHICH write stamped it -- a leave collapse, a sync-ON copy,
-    a fresh-baseline restore (project load or sync undo/redo), or a retained-pair
-    discard -- because recovery differs per kind and the endpoint alone does
-    not identify it.
+    Source alone hides a leave -> enter -> leave cycle between 100ms polls,
+    leaving cached panel values stale. Generation counts cache-invalidating
+    writes, including retained-pair discards; its delta reveals missed changes.
+    Valid GT/Disabled excursions and pair restoration do not stamp.
+    Kind identifies leave collapse, sync-ON copy, fresh-baseline restore
+    (project load or sync undo/redo), or retained-pair discard for recovery.
 
-    Returns (source, generation, kind). generation and kind are None when the
-    binding is not exposed (an older module, or a test stub that does not need
-    it), in which case the source falls back to the single-value getter and
-    callers keep the pre-lineage behaviour. A two-element tuple from a
-    pre-`kind` module degrades the same way, on the kind alone.
+    stampDepthWindowLineageLocked updates all fields under settings_mutex_.
+    Invalidating writes stamp with slot changes, except sync undo/redo, which
+    stamps afterward under a second acquisition. The record is consistent but
+    not always atomic with the slots; _refresh_panel_context rechecks generation
+    around its endpoint reads.
+
+    Without the binding (older modules/test stubs), use the single-source getter
+    and None for generation/kind, preserving pre-lineage behavior. A two-item
+    record retains source/generation and supplies None for kind.
     """
     query = getattr(lf.ui, "get_depth_window_collapse_record", None)
     if callable(query):
@@ -127,15 +109,12 @@ def _depth_window_collapse_record():
 
 
 def _split_mode_touches_depth_window(previous_mode, new_mode):
-    """Does this split-mode change mean anything to depth-window state?
+    """Detect independent-dual or GT boundaries, matching native transitions.
 
-    The MIRROR of the native predicate that governs the whole of
-    applyDepthWindowModeTransitionLocked (rendering_manager.cpp): only crossing
-    the independent-dual boundary (where per-panel windows exist at all) or the
-    GT-comparison boundary (which suspends the depth filter entirely) moves any
-    depth-window state. Other mode changes normally do nothing. Discarding a
-    retained pair on Disabled -> PLYComparison is witnessed separately by the
-    lineage stamp; without one, that edge must not cancel a legitimate edit.
+    Independent-dual uses per-panel windows; GT suspends filtering
+    (applyDepthWindowModeTransitionLocked). Other mode changes normally do nothing.
+    Disabled -> PLYComparison may discard a retained pair, reported by a separate
+    lineage stamp; without one, that edge must not cancel a valid edit.
     """
     if previous_mode == new_mode:
         return False
@@ -154,22 +133,20 @@ def _gt_comparison_active():
 _SELECTION_TOOL_ID = "builtin.select"
 _PANEL_LEFT = "left"
 _PANEL_RIGHT = "right"
-# The Size slider's 100% reference is per panel. While panel sync
-# is on -- and in every mode that has only one window -- the two references
-# collapse to this single shared entry.
+# Size's 100% reference is per panel; sync ON and single-window modes use
+# this shared entry instead.
 _PANEL_SHARED = "shared"
 _INDEPENDENT_DUAL = "independent_dual"
 _GT_COMPARISON = "gt_comparison"
-# The two kinds of deferred-commit record (_deferred_depth_commits): an edit the
-# user is still in, and one they have already finished with a blur.
+# Deferred records distinguish live edits from completed blurs.
 _DEFERRED_LIVE = "live"
 _DEFERRED_BLURRED = "blurred"
-# _commit_paired_depth_range's outcomes. DONE: the pair was resolved and both
-# records consumed. DEFERRED: a live member's revalidating read was torn, so
-# nothing was written and both records stay for the next stable poll.
-# RETARGETED: that revalidation moved the context underneath the grouping, so
-# the pre-computed target no longer describes where these records belong --
-# nothing is written, nothing is consumed, and the flush regroups from scratch.
+# _commit_paired_depth_range outcomes:
+# DONE: pair resolved; both records consumed.
+# DEFERRED: a live member's revalidation was inconsistent; write nothing and
+# keep both records for the next stable poll.
+# RETARGETED: revalidation changed context, invalidating the grouped target;
+# write/consume nothing and let the flush regroup.
 _COMMIT_DONE = "done"
 _COMMIT_DEFERRED = "deferred"
 _COMMIT_RETARGETED = "retargeted"
@@ -185,10 +162,8 @@ _LINEAGE_KINDS = (
     _LINEAGE_PROJECT_RESTORE,
     _LINEAGE_RETAINED_PAIR_DISCARD,
 )
-# How many times _refresh_panel_context re-reads the panel context when the
-# lineage generation moves underneath it. Bounded so a stamp storm cannot spin;
-# if the final attempt is still torn the refresh CONSUMES NOTHING and the whole
-# tick is a no-op, leaving the delta pending for the next (stable) poll.
+# Bound context-read retries. Exhaustion leaves the entire tick inert,
+# with its lineage delta pending until a later comparable read.
 _CONTEXT_READ_ATTEMPTS = 3
 _DEPTH_MIN = 0.0
 _DEPTH_MAX = 1000.0
@@ -208,14 +183,9 @@ _REF_RATIO_EPS = 1.0e-3
 _OFFSET_PERCENT_MIN = -100.0
 _OFFSET_PERCENT_MAX = 100.0
 _MISSING = object()
-# One family, three frames, and the SAME solid box in all three -- the box is
-# the depth window and it never changes; only what surrounds it does. Off draws
-# a dotted frame around it (everything outside is still there), Dim replaces
-# that frame with a ring of specks, Hide leaves the box alone on the field.
-# The eye / eye-slash pair these two replaced said nothing about the depth
-# window and did not read as a set with the Dim frame between them; the eye
-# icons stay in use everywhere else in the app. Dim is not select-invert.png:
-# the selection toolbar's INVERT button in this same panel is that exact file.
+# All three icons keep the same solid depth-window box: Off adds a dotted
+# frame, Dim a speckled ring, and Hide leaves the box alone. Keep Dim distinct
+# from select-invert.png, which this toolbar already uses for Invert.
 _VIZ_MODE_ICONS = {
     0: "../icon/depth-show.png",
     1: "../icon/depth-dim.png",
@@ -231,12 +201,9 @@ _PANEL_CHIP_LABELS = {
     _PANEL_RIGHT: ("ui.selection_depth_panel_right", "R"),
 }
 _SYNC_ICON_ON = "../icon/layout-columns.png"
-# OFF is not one frame but two. The button is only ever shown in
-# independent-dual split, where the two panels hold separate depth windows and
-# the sliders address exactly one of them -- so the OFF frame says WHICH, by
-# filling the half of the same two-column glyph that stands for the focused
-# panel. ON stays the plain unfilled glyph: with sync on there is no focused
-# half to point at, both panels share one window.
+# Shown only in independent-dual split: sync-off fills the focused half of
+# the two-column glyph, identifying the sliders' target. Sync-on leaves both
+# halves unfilled because the panels share one window.
 _SYNC_ICON_OFF = {
     _PANEL_LEFT: "../icon/layout-columns-left.png",
     _PANEL_RIGHT: "../icon/layout-columns-right.png",
@@ -365,40 +332,28 @@ class SelectionControlsController:
         self._frustum_half_width = _DEFAULT_FRUSTUM_HALF_WIDTH
         self._window_scale = _DEFAULT_WINDOW_SCALE
         self._window_scale_y = _DEFAULT_WINDOW_SCALE
-        # PER-PANEL Size references. Keyed by
-        # the panel string, plus a shared entry used whenever there is only one
-        # window (sync on, or any mode that is not independent-dual). A focus
-        # switch selects a DIFFERENT entry; it never rewrites one, so it can
-        # never read as "a new shape was drawn".
+        # Independent, unsynced panels keep separate Size references; other modes
+        # use shared. Focus selects an entry without rebasing it.
         self._ref_scale_x = {
             _PANEL_SHARED: _DEFAULT_WINDOW_SCALE,
             _PANEL_LEFT: _DEFAULT_WINDOW_SCALE,
             _PANEL_RIGHT: _DEFAULT_WINDOW_SCALE,
         }
         self._ref_scale_y = dict(self._ref_scale_x)
-        # The left/right entries survive a GT excursion only while native has
-        # invalidated nothing since they were retained. Keep this witness apart
-        # from the current record, which advances on every successful refresh.
+        # Keep the retained pair's lineage witness separate from the current record;
+        # any native invalidation ends its reference lifetime.
         self._retained_reference_generation = None
-        # Observing GT without a prior pair cannot recover the user's baselines;
-        # on return, baseline each restored slot from its own current window.
+        # First-observed GT has no prior baselines; recover each restored slot on return.
         self._gt_baseline_pending = False
         self._focused_panel = _PANEL_LEFT
         self._split_mode = "none"
         self._depth_sync = False
-        # The reference-lineage channel, cached as ONE triple read atomically
-        # from the manager (see _depth_window_collapse_record). The generation
-        # counts native writes that invalidate slot-derived state;
-        # comparing its delta against the transition this poll actually observed
-        # is how a cycle that happened entirely between two polls becomes
-        # visible, and the kind is how the recovery is chosen. None means "not
-        # exposed" (an older module or a stub), and every rule below degrades to
-        # the plain source-identity behaviour.
+        # Cache the atomic lineage triple. Delta detects missed invalidations;
+        # kind selects recovery. Older bindings use source-only behavior.
         self._collapse_source = None
         self._collapse_generation = None
         self._collapse_kind = None
-        # True while the last _refresh_panel_context gave up with a torn read
-        # set. The tick consumed nothing, so nothing may be written from it.
+        # An exhausted refresh leaves cached state untouched and forbids writes.
         self._context_read_exhausted = False
         self._offset_x = _DEFAULT_WINDOW_OFFSET
         self._offset_y = _DEFAULT_WINDOW_OFFSET
@@ -415,37 +370,15 @@ class SelectionControlsController:
             "selection_depth_offset_y_str": None,
         }
         self._editing_depth_text = set()
-        # The panel an in-flight text edit is currently TARGETED AT -- the panel
-        # it was started on, then whichever panel a focus change retargets it to
-        # (_cancel_foreign_depth_text_edits). Blur commits the buffer before it
-        # clears the edit state (rml_widgets.bind_committed_text_input), so
-        # cancelling on focus change alone still races that commit; the origin
-        # is what lets the cancel neutralise it.
+        # Track each live edit's current target through focus retargeting. Blur
+        # commits before clearing edit state, so validate the origin and revert stale
+        # text before that commit can write to a different panel.
         self._depth_text_edit_panel = {}
-        # Keys whose commit was DEFERRED because the validating context read came
-        # back exhausted, as key -> RECORD. Two kinds, and the difference is the
-        # whole point of the table being records rather than a bare set:
-        #
-        # * {"kind": "live"} -- the edit is still focused (an Enter-deferred
-        #   commit, no blur yet). The flush reads the BUFFER at flush time, which
-        #   is the right semantics for a live field: whatever the user types
-        #   next, or an Escape, legitimately wins over the pending value. These
-        #   records follow the ordinary retarget/cancel machinery on a panel
-        #   transition, because the field really is still being edited.
-        #
-        # * {"kind": "blurred", "payload": ..., "panel": ...} -- the user
-        #   FINISHED the edit and the blur landed mid-storm. There is no live
-        #   field left to read, so the record FREEZES what the blur carried: the
-        #   buffer as it stood at blur time, and the panel the edit was targeted
-        #   at then. A completed intent cannot be retargeted by anything the
-        #   focus or the mode does afterwards, so the flush writes the frozen
-        #   payload to the frozen panel and the live-edit bookkeeping is retired
-        #   at blur time (which is also what keeps a completed blur from
-        #   masquerading as a live edit to the transition guard).
-        #
-        # A blurred record is superseded -- dropped outright -- when the user
-        # re-begins an edit on the same key: the latest intent wins, and the new
-        # edit gets a clean lifecycle (_begin_depth_text_edit).
+        # Deferred records preserve two different edit lifetimes:
+        # * live: read the current buffer at flush; typing/Escape and retargeting apply.
+        # * blurred: freeze payload and target at blur; clear live edit state so later
+        #   focus/mode changes cannot redirect the completed edit.
+        # Beginning a new edit on the same key supersedes its older blurred record.
         self._deferred_depth_commits = {}
         self._escape_revert = w.EscapeRevertController()
 
@@ -599,16 +532,11 @@ class SelectionControlsController:
             return ",".join(dirty_reasons) if dirty else None
 
         previous_depth = self._depth_window_state()
-        # _refresh_state() refreshes the panel context and reconciles the
-        # references itself, so the entry the rest of this frame reads is
-        # already the right one before the rebase and the state diff. It also
-        # owns the edit-retarget guard on a focus edge, so that every OTHER
-        # caller of the refresh gets it too -- see _refresh_panel_context.
+        # Refresh reconciles references and retargets edits before rebase/state diff,
+        # including callers outside update().
         self._refresh_state()
-        # Any commit the storm deferred is retried here, against the refresh this
-        # poll just did. It runs BEFORE the state diff below so a landed write is
-        # seen by this frame's holdoff arming and dirtying, exactly as an
-        # in-frame commit would be.
+        # Flush before state diff so landed writes arm echo holdoff and dirty fields
+        # in this frame, just like immediate commits.
         self._flush_deferred_depth_commits()
         # RmlUi range inputs echo stale values when attributes update in the same frame.
         # The window size and the two offsets are driven by the same kind of range
@@ -626,9 +554,7 @@ class SelectionControlsController:
                 "depth_window_draw_generation" in changed_before
                 or "depth_window_draw_commit" in changed_before
             ):
-                # Rebase the reference of the panel the SIGNAL names, not
-                # whichever window the toolbar happens to display.
-                # Undoing an R-panel drag while L is focused must leave L alone.
+                # Rebase the signal's panel; undo on Right must not rebase displayed Left.
                 self._rebase_panel_reference(self._rebase_target_panel())
         state_key = self._state_key(state_items)
         if state_key != self._last_state_key:
@@ -677,120 +603,33 @@ class SelectionControlsController:
             return ""
 
     def _refresh_panel_context(self):
-        """Re-read focus / split mode / sync flag and reconcile on any edge.
+        """Refresh panel context, reconcile references, then retarget live edits.
 
-        THE single place the three cached panel-context values are refreshed
-        from the native side. Every channel that can move them -- update()'s
-        poll, the toolbar sync toggle, and toolbar Undo/Redo of a
-        DepthWindowSyncUndoEntry (which restores the flag natively,
-        depth_window_undo_entry.cpp:85) -- goes through here, so an observed
-        sync edge reconciles the references exactly once whatever delivered it.
-        _reconcile_panel_references is itself edge-guarded, so a refresh
-        that moves nothing reconciles nothing and callers cannot double-fire.
-
-        The FOCUS edge is consumed here too, for the same reason. update() used
-        to own the edit-retarget guard, but it is not the only caller that moves
-        the cached focus: the sync toggle refreshes twice and _on_action
-        refreshes after every toolbar action. Any of those consuming the edge
-        silently would leave an active text edit pointing at the panel it
-        started on, and its blur or Enter would then write into the WRONG panel.
-        One code path, one consumer.
-
-        Returns the pre-refresh (panel, sync, mode) triple for callers that
-        need the transition, not just the new state.
+        Polls, sync toggles and toolbar actions (including Undo/Redo) share this path.
+        Edge guards prevent duplicate reconciliation; all callers consume focus changes
+        before a live edit can commit to the wrong panel. Return the previous
+        (panel, sync, mode) triple for callers that need the transition.
         """
         previous_panel = self._focused_panel
         previous_sync = self._depth_sync
         previous_mode = self._split_mode
         previous_generation = self._collapse_generation
-        # GENERATION REVALIDATION. The endpoint (mode / focus / sync) and the
-        # lineage record are FOUR separate native reads, each locked on its own,
-        # and a stamp landing BETWEEN them tears the set: the reconciliation then
-        # runs a fresh record against endpoint state from before the write that
-        # stamped it. That is not eventually consistent. A sync undo restoring
-        # {L=.60, R=.20, sync=false} read with a stale sync=true makes
-        # _fresh_baseline_references take its single-window branch and seed all
-        # three entries from the focused .20; the NEXT poll then observes the
-        # sync-OFF edge and copies that shared .20 into both panel entries, so
-        # Left reports 300% permanently.
+        # Mode, focus, sync and lineage are separate native reads. Bracket endpoint
+        # reads with lineage records and retry the whole set if generations differ.
+        # Sync undo restores before its separate stamp, so equal generations do not
+        # close that interval; a later stamp remains pending for normal delta recovery.
         #
-        # So the record is read FIRST, then the endpoint, then the record AGAIN.
-        # The generation is a monotonic counter bumped once per slot-
-        # invalidating write (writers stamp inside their own critical section,
-        # except sync undo/redo from its call site under a
-        # second lock -- see _depth_window_collapse_record), so a generation
-        # that moved across the two reads is proof that the set is TORN.
+        # Exhaustion consumes no record, endpoint, references or edit targets and
+        # permits no write. For example, reading restored L=.60/R=.20 with stale
+        # sync=true seeds every reference from .20; later sync-off preserves the
+        # mistake and Left displays 300%. A larger delta cannot repair a torn set.
         #
-        # A moved generation retries the whole set, bounded. An UNMOVED
-        # generation is not by itself proof that nothing landed -- the sync
-        # undo/redo restores the slots and stamps under two SEPARATE lock holds
-        # (depth_window_undo_entry.cpp:88 and :100) -- but the retry loop only
-        # has to catch the tear it can see, and a stamp that lands after a
-        # completed re-read stays pending as a delta until the first poll that
-        # gets a COMPARABLE (equal-generation) pair of record reads bracketing
-        # its endpoint reads -- which may not be the next one (see the
-        # convergence note below).
-        #
-        # If the last attempt is still torn the set is NOT usable: the endpoint
-        # can be pre-write while the record is post-write, and consuming that
-        # generation would retire an advance whose endpoint was never observed.
-        # (A large delta is not a safe substitute for a consistent set: a stale
-        # sync=true retained beside a fresh 'project_restore' stamp of
-        # {L=.60, R=.20} sends _fresh_baseline_references down its single-window
-        # branch, seeding every entry from the focused .20, and the next poll's
-        # sync-OFF edge then copies that .20 into both panels for good.)
-        #
-        # So an EXHAUSTED TICK IS A NO-OP. It consumes NOTHING: not the lineage
-        # record, not the endpoint (mode / focus / sync), no reconciliation, no
-        # edit retarget. Every cached field is left exactly as the last stable
-        # tick left it, and the whole delta stays pending for the first poll that
-        # gets a COMPARABLE (equal-generation) pair of record reads bracketing its
-        # endpoint reads -- which may not be the next one, and is not guaranteed
-        # by quiet native state alone (see the convergence note below). That poll
-        # re-reads a stable world and then processes everything in the CORRECT
-        # ORDER -- reconcile the references first, canonicalize the Size text
-        # from them afterwards.
-        #
-        # Caching the endpoint while deferring the lineage is NOT safe, which is
-        # why nothing is cached now. The retarget guard below would fire on the
-        # newly cached focus/mode edge and canonicalize the Size field through
-        # _refresh_depth_state / _cancel_foreign_depth_text_edits -- but those
-        # read self._ref_scale_x, which the skipped reconciliation left seeded
-        # from the OTHER panel. With native scale .20 against a stale shared
-        # reference .90 the field is rewritten to "22%" instead of "100%", and a
-        # commit landing during a second exhausted refresh then writes that 22%
-        # back into native state. Deferring the guard costs one poll; caching the
-        # endpoint corrupts state permanently.
-        #
-        # The next poll's delta is whatever the world actually shows, and the
-        # normal rules process it: usually >= _CONTEXT_READ_ATTEMPTS, but not
-        # necessarily -- a record read that FAILS reports generation None (see
-        # _depth_window_collapse_record), so alternating failed and successful
-        # reads can exhaust the loop on a single real stamp and leave the next
-        # poll a delta of one. That is fine, and it is the actual invariant here:
-        # the deferred consumption is processed by the ordinary delta rules on a
-        # later, stable poll, WHATEVER the delta turns out to be.
-        #
-        # Convergence is NOT guaranteed by quiet native state alone. A record
-        # read that fails reports generation None, and None != None is false only
-        # by luck of pairing: alternating failed and successful reads compare
-        # unequal in every attempt and exhaust the loop with the native
-        # generation never moving at all. So "the first poll after the stamps
-        # stop" is not the criterion -- what is required is a later poll in which
-        # some attempt gets a COMPARABLE (equal-generation) pair of record reads
-        # bracketing its endpoint reads. Until that happens the tick simply
-        # exhausts again.
-        #
-        # The property that holds regardless is the safety one: an exhausted tick
-        # is inert. It consumes nothing, writes nothing and caches nothing, so
-        # repeated exhaustion DELAYS the pending delta without ever corrupting
-        # it, and the ordinary delta rules process it correctly whenever the
-        # first stable read finally lands. A deferral of the guard, the
-        # reconciliation or a commit costs polls, not state.
-        #
-        # This lives here, in the ONE place the cached panel context is
-        # refreshed, so every channel (the poll, the sync toggle, toolbar
-        # undo/redo) inherits it.
+        # Reconcile references before canonicalizing text. Caching only the endpoint
+        # could turn native .20 against stale reference .90 into 22% text that a later
+        # commit writes back. Keep the previous cache and draft until a comparable read.
+        # Quiet native state alone is insufficient: alternating failed/successful
+        # record reads can exhaust without a generation change. The next usable read
+        # processes its actual pending delta; retry count implies no minimum delta.
         exhausted = True
         for _attempt in range(_CONTEXT_READ_ATTEMPTS):
             record = _depth_window_collapse_record()
@@ -799,21 +638,13 @@ class SelectionControlsController:
             depth_sync = _depth_window_sync()
             revalidated = _depth_window_collapse_record()
             stable = revalidated[1] == record[1]
-            # The POST-endpoint read is the one retained, always. It is the only
-            # one of the two that cannot predate an endpoint value, so it is the
-            # right record both when the generation moved and when it did not --
-            # including the None-generation case of a binding that does not
-            # expose the counter, where `None == None` ends the loop without
-            # proving anything about the source: a Right-panel leave landing
-            # between the two reads leaves the FIRST record naming Left while
-            # the endpoint is already post-leave, and the observed-leave rule
-            # would then seed shared from the wrong panel, permanently.
+            # Retain the post-endpoint record, including older bindings with no counter.
+            # A leave between reads can change its source even when both generations are None.
             record = revalidated
             if stable:
                 exhausted = False
                 break
-        # Recorded for the commit path: a write must never be applied against a
-        # torn snapshot (see _commit_depth_text_key).
+        # The commit path must not write after an exhausted context read.
         self._context_read_exhausted = exhausted
         if exhausted:
             return previous_panel, previous_sync, previous_mode
@@ -828,46 +659,31 @@ class SelectionControlsController:
         self._reconcile_panel_references(
             previous_panel, previous_sync, previous_mode, previous_generation
         )
-        # A MODE BOUNDARY retargets an active edit even when the observable
-        # focus did not move. Focus equality is not a safe proxy for "the edit's
-        # context is unchanged": leaving independent-dual resets focus to Left
-        # (split_view_service.cpp:214), so an edit started on Left, with native
-        # focus moving to Right and the mode left before one refresh, sees Left
-        # both before and after -- while the field it was editing is now the
-        # SINGLE global window collapsed from RIGHT. Its buffer is stale-origin
-        # text, and a blur or Enter would write it into that global window.
+        # Mode/lineage can change the edited window without changing observed focus:
+        # a coalesced focus move and mode leave may reset focus to its cached value.
+        # Retarget even same-panel edits so stale text cannot reach the surviving window.
         mode_boundary = self._mode_boundary_edge(previous_mode, previous_generation)
         if self._focused_panel != previous_panel or mode_boundary:
-            # The retarget reverts each field to the canonical text of the panel
-            # NOW on screen, so the cached window values have to be that panel's
-            # before it runs. Re-reading them is a pure re-read of the same
-            # getters update() calls a moment later, so it is idempotent.
+            # Read current window values before producing the retargeted canonical text.
             self._refresh_depth_state()
-            # A focus edge retargets only the edits that came from ANOTHER panel
-            # (the pinned cancel semantics). A mode boundary invalidates the
-            # edit's context whichever panel it names, so it forces the revert.
+            # Focus changes retarget foreign edits; mode/lineage boundaries force
+            # retargeting regardless of the edit's recorded panel.
             self._cancel_foreign_depth_text_edits(force=mode_boundary)
         return previous_panel, previous_sync, previous_mode
 
     def _mode_boundary_edge(self, previous_mode, previous_generation):
-        """Did the context of an in-flight edit change this refresh?
+        """Detect a native mode boundary or lineage advance affecting a live edit.
 
-        Either the split mode crossed a boundary the NATIVE side acts on (a
-        no-op mode change must not cancel a legitimate typed buffer -- see
-        _split_mode_touches_depth_window), or the native side stamped the
-        lineage channel at least once since the last read, including writes this
-        poll could not see as a mode change at all.
+        No-op mode changes preserve typed buffers; hidden writes can still stamp.
         """
         if _split_mode_touches_depth_window(previous_mode, self._split_mode):
             return True
         return self._lineage_delta(previous_generation) not in (None, 0)
 
     def _lineage_delta(self, previous_generation):
-        """How many slot-invalidating native writes happened since the last read.
+        """Return the number of invalidating writes since the previous read.
 
-        None when the channel is not exposed (an older module, or a stub that
-        does not need it), which every rule below degrades on: the plain
-        source-identity behaviour is the correct fallback there.
+        None means an older binding; callers retain source-only recovery.
         """
         if previous_generation is None or self._collapse_generation is None:
             return None
@@ -905,9 +721,8 @@ class SelectionControlsController:
                 self._window_scale_y = _clamp(
                     _parse_float(scale_y, _DEFAULT_WINDOW_SCALE), 0.05, 1.0
                 )
-                # Reference-reset detection runs against the FOCUSED panel's
-                # entry only. The key is resolved fresh here
-                # because _refresh_depth_state also runs from the setter paths.
+                # Check aspect changes against the currently addressed reference.
+                # Resolve its key here because setter paths also refresh depth state.
                 key = self._ref_key()
                 ref_x = self._ref_scale_x.get(key, _DEFAULT_WINDOW_SCALE)
                 ref_y = self._ref_scale_y.get(key, _DEFAULT_WINDOW_SCALE)
@@ -960,12 +775,7 @@ class SelectionControlsController:
         return self._split_mode == _INDEPENDENT_DUAL
 
     def _ref_key(self):
-        """Which reference entry the sliders currently address.
-
-        Independent-dual with sync OFF is the only situation with two windows,
-        so it is the only one that reads a per-panel entry; everything else --
-        single viewport, comparison split, or sync ON -- shares one.
-        """
+        """Return the focused panel only in unsynced independent view; otherwise shared."""
         if self._split_mode == _INDEPENDENT_DUAL and not self._depth_sync:
             return self._focused_panel
         return _PANEL_SHARED
@@ -974,12 +784,9 @@ class SelectionControlsController:
         return table.get(self._ref_key(), _DEFAULT_WINDOW_SCALE)
 
     def _rebase_target_panel(self):
-        """Which panel the current draw-commit signal addresses, or None.
+        """Return the draw signal's panel only when its generation matches.
 
-        None means "whatever entry the sliders are addressing" and covers the
-        case where only the scalar generation moved -- the panel-addressed
-        companion is published with it, so a mismatched generation means the
-        commit dict is stale and carries no usable panel.
+        A missing or stale companion dict returns None, selecting the displayed entry.
         """
         commit = self._draw_commit_value()
         try:
@@ -992,14 +799,10 @@ class SelectionControlsController:
         return self._draw_commit_panel()
 
     def _panel_window_scales(self, panel, fallback=None):
-        """That panel's own scale_x/scale_y, or a fallback if it cannot be read
-        (no panel= support, or not a real panel).
+        """Read a panel's scales, or fall back if invalid or unavailable.
 
-        `fallback` overrides the default "the scales the toolbar is displaying".
-        A fresh-baseline caller must pass the FRESHLY-READ native window: the
-        cached displayed scales are the pre-transition ones there, and seeding a
-        reference from them is exactly the staleness the baseline exists to
-        clear.
+        The default fallback is displayed scales. Fresh-baseline callers must supply
+        fresh native scales because the displayed cache still predates reconciliation.
         """
         getter = getattr(lf.selection, "get_depth_filter_window", None)
         if callable(getter) and panel in (_PANEL_LEFT, _PANEL_RIGHT):
@@ -1016,11 +819,9 @@ class SelectionControlsController:
         return self._window_scale, self._window_scale_y
 
     def _native_window_scales(self):
-        """The window the toolbar is displaying RIGHT NOW, read fresh.
+        """Read current projected scales before the displayed cache is refreshed.
 
-        _reconcile_panel_references runs before this refresh's
-        _refresh_depth_state, so the cached scales are still the pre-transition
-        ones. A resync must not seed from them.
+        Reconciliation must not seed from the previous window's cached scales.
         """
         getter = getattr(lf.selection, "get_depth_filter_window", None)
         if callable(getter):
@@ -1035,16 +836,13 @@ class SelectionControlsController:
         return self._window_scale, self._window_scale_y
 
     def _rebase_panel_reference(self, panel):
-        """Rebase ONE entry to ITS panel's window.
+        """Rebase the addressed panel from its own scales, not the displayed window.
 
-        The scale the entry rebases to must come from the panel the signal
-        names, not from the displayed window -- undoing an R drag while L is
-        focused would otherwise stamp L's size onto R's reference.
+        This keeps undo on an unfocused panel from borrowing the focused panel's size.
         """
         current = self._ref_key()
         if current == _PANEL_SHARED:
-            # One window: the signal's panel is irrelevant, the shared entry is
-            # the only one the sliders can be reading.
+            # Single-window controls use shared regardless of the signal's panel.
             self._ref_scale_x[_PANEL_SHARED] = self._window_scale
             self._ref_scale_y[_PANEL_SHARED] = self._window_scale_y
             return
@@ -1057,42 +855,22 @@ class SelectionControlsController:
         self._ref_scale_y[key] = scale_y
 
     def _seed_all_references(self, scale_x, scale_y):
-        """Put every reference entry on the SAME window.
+        """Seed all entries from the one window surviving a leave or sync copy.
 
-        The recovery for every lineage rule that COLLAPSES to one window: a
-        leave collapse and a sync-ON copy each leave exactly one window worth
-        referencing, and which entry the sliders read next depends on the
-        endpoint (shared while synced or single-window, per-panel otherwise).
-        Seeding all three leaves the right answer in whichever one is consulted,
-        and cannot leave a stale entry behind for a later transition to promote.
-
-        NOT every producer collapses, though: a project restore and a sync
-        undo/redo restore both write two INDEPENDENT absolute windows, so the
-        per-panel endpoint must baseline each entry from its own slot instead --
-        see _fresh_baseline_references.
+        This also prevents a later transition from promoting a stale entry.
+        Restores that can leave separate absolute windows use _fresh_baseline_references.
         """
         for key in (_PANEL_SHARED, _PANEL_LEFT, _PANEL_RIGHT):
             self._ref_scale_x[key] = scale_x
             self._ref_scale_y[key] = scale_y
 
     def _fresh_baseline_references(self, scale_x, scale_y):
-        """Re-baseline every entry from the windows that EXIST right now.
+        """Baseline current windows; scale_x/scale_y are the fresh projection.
 
-        `scale_x`/`scale_y` are the freshly-read projection -- the window the
-        toolbar is about to display.
-
-        When the endpoint is the two-window one (independent-dual, sync off) the
-        slots may legitimately DIFFER after the write that stamped this advance:
-        a project restore or a sync undo/redo restores two absolute windows at
-        once. Seeding all three entries from the focused projection would leave
-        the unfocused panel's reference describing the focused panel's window,
-        so focusing it next would report a bogus Size (undoing a sync of
-        {L=.60, R=.20} with Right focused would show Left as 300%). Each panel
-        entry is therefore baselined from ITS OWN slot, and only the shared
-        entry -- the one the sliders read in every OTHER endpoint -- takes the
-        projection.
-
-        Anywhere else there is only one window, and every entry takes it.
+        In unsynced independent view, restore can leave unequal slots. Read each
+        panel's own scales and use the projection only for shared: L=.60/R=.20 with
+        Right focused would otherwise show Left at 300%. Other endpoints seed every
+        entry from projection.
         """
         if self._split_mode == _INDEPENDENT_DUAL and not self._depth_sync:
             for key in (_PANEL_LEFT, _PANEL_RIGHT):
@@ -1109,20 +887,10 @@ class SelectionControlsController:
     def _reconcile_panel_references(
         self, previous_panel, previous_sync, previous_mode, previous_generation=None
     ):
-        """Seed entries across every transition that invalidates a reference.
+        """Reconcile endpoint changes and every native reference-lineage advance.
 
-        Two of them are visible as ENDPOINT changes -- entering and leaving the
-        two-window world -- and the rest are visible only through the native
-        reference-lineage channel, which is consulted on EVERY refresh whatever
-        endpoint this one ends on.
-
-        A plain focus switch does NOTHING here -- it only selects a different
-        existing entry, which is the whole point of keying them per panel.
-
-        `previous_panel` is the PRE-transition focus. The split service resets
-        focus to Left when leaving independent-dual
-        (split_view_service.cpp:214), so reading the post-transition focus would
-        collapse Left's reference while the manager collapsed Right's window.
+        Focus alone selects an existing reference. On leave, prefer the native source;
+        previous_panel is the cached pre-transition fallback, since focus can reset.
         """
         entering_two = (
             self._split_mode == _INDEPENDENT_DUAL
@@ -1138,20 +906,15 @@ class SelectionControlsController:
             and previous_mode == _INDEPENDENT_DUAL
             and self._split_mode != _INDEPENDENT_DUAL
         )
-        # EVERY lineage advance is reconciled, whatever endpoint this refresh
-        # ends on. The endpoint predicates above see only the two transitions
-        # that change how many references EXIST; a hidden leave -> enter cycle,
-        # a hidden sync ON/OFF cycle and a project restore can all begin and end
-        # in the same endpoint while invalidating every cached reference, and
-        # the channel is the only witness to them.
+        # Check every lineage advance: hidden leave/enter, sync cycles or restores
+        # can invalidate references without changing the observed endpoint.
         delta = self._lineage_delta(previous_generation)
         if delta not in (None, 0) or previous_sync != self._depth_sync:
             self._retained_reference_generation = None
             self._gt_baseline_pending = False
         if self._split_mode == _GT_COMPARISON:
-            # First observed in GT: neither the dormant pair's user baselines
-            # nor a preceding shared reference has been seen by this consumer.
-            # A known shared reference from global-origin GT keeps normal seeding.
+            # First-observed GT lacks prior user baselines. A known shared reference
+            # from global-origin GT instead follows normal seeding.
             if previous_generation is None:
                 self._gt_baseline_pending = True
         elif self._split_mode not in ("none", _INDEPENDENT_DUAL):
@@ -1163,12 +926,11 @@ class SelectionControlsController:
             and delta == 0
         )
         if retained_leave:
-            # A plain Independent -> Disabled leave stamps a collapse. No stamp
-            # means the GT park (possibly its Disabled leg too) was coalesced.
+            # Ordinary Independent -> Disabled leave stamps. No stamp identifies a
+            # coalesced GT park, possibly including its retained Disabled interval.
             self._retained_reference_generation = previous_generation
             if previous_sync:
-                # The parked synced pair shares one baseline. Keep it in the
-                # pair entries while GT/global edits may rebase shared itself.
+                # Save the synced baseline in the pair while GT edits may rebase shared.
                 for key in (_PANEL_LEFT, _PANEL_RIGHT):
                     self._ref_scale_x[key] = self._ref_scale_x[_PANEL_SHARED]
                     self._ref_scale_y[key] = self._ref_scale_y[_PANEL_SHARED]
@@ -1186,12 +948,8 @@ class SelectionControlsController:
         if self._split_mode == _INDEPENDENT_DUAL:
             self._retained_reference_generation = None
             self._gt_baseline_pending = False
-        # The ONE advance an endpoint transition fully explains: the single
-        # leave collapse this refresh actually watched happen. (An unknown kind
-        # is an older module reporting only a count; it keeps the plain
-        # source-identity reading.) Anything else -- a bigger delta, or a
-        # stamp of a kind this endpoint does not account for -- is reconciled
-        # below.
+        # One observed leave explains one collapse stamp. Older records without
+        # kind retain source-only behavior; unexplained advances require recovery.
         explained = (
             observed_leave
             and delta == 1
@@ -1199,11 +957,8 @@ class SelectionControlsController:
         )
         if delta is not None and delta > 0 and not explained:
             if delta == 1 and self._collapse_kind == _LINEAGE_SYNC_COPY:
-                # ONE sync-ON copy, and this refresh did not observe it as a
-                # leave. Native copied the recorded source panel's window over
-                # the other, so that panel's cached reference is the one that
-                # still describes a window that exists -- and it now describes
-                # BOTH slots as well as the shared entry.
+                # One sync copy preserves the recorded source's reference: that window
+                # now occupies both slots and shared.
                 source = (
                     self._collapse_source
                     if self._collapse_source in (_PANEL_LEFT, _PANEL_RIGHT)
@@ -1213,17 +968,9 @@ class SelectionControlsController:
                     self._ref_scale_x[source], self._ref_scale_y[source]
                 )
             else:
-                # Everything else fresh-baselines from the CURRENT native
-                # window: a project restore (both slots seeded from the project,
-                # so no cached entry means anything), a delta larger than the
-                # transitions observed (boundaries went by and last-panel
-                # identity names only the final leg), and any leave collapse
-                # this refresh did not see as a leave -- the re-entry re-seeded
-                # both slots, so the surviving window is the only recoverable
-                # reference. Exactly as if a new shape had just been drawn --
-                # except that a restore can leave the two slots DIFFERING, which
-                # is why the per-panel endpoint baselines each entry from its own
-                # slot rather than from the projection alone.
+                # Restores, larger deltas and unobserved collapses need fresh baselines.
+                # Only current windows are recoverable; unequal restored slots must each
+                # supply their own reference instead of sharing the focused projection.
                 scale_x, scale_y = self._native_window_scales()
                 self._fresh_baseline_references(scale_x, scale_y)
             return
@@ -1236,38 +983,22 @@ class SelectionControlsController:
             self._fresh_baseline_references(*self._native_window_scales())
             return
         if entering_two:
-            # Ordinary shared -> independent entry seeds both slots from
-            # the global window, so its reference belongs to both as well.
+            # Ordinary shared -> independent entry seeds both slots from the global
+            # window, so copy its shared reference to both panel entries too.
             for key in (_PANEL_LEFT, _PANEL_RIGHT):
                 self._ref_scale_x[key] = self._ref_scale_x[_PANEL_SHARED]
                 self._ref_scale_y[key] = self._ref_scale_y[_PANEL_SHARED]
         elif leaving_two:
-            # Collapsing to one window: the reference that wins must come from
-            # the panel whose WINDOW the native side collapsed, and which panel
-            # that is depends on WHICH edge collapsed it.
-            # Anything the lineage channel could not account for was already
-            # reconciled and returned above, so this path is reached only for
-            # the ONE observed leave collapse, for a sync edge, or with the
-            # channel unexposed.
+            # After unexplained lineage has been handled, select the surviving
+            # reference for an observed leave/sync edge or source-only fallback.
             if observed_leave:
-                # Mode leave. The split service resets focus to Left on the way
-                # out (split_view_service.cpp:214), so the post-transition focus
-                # is ALWAYS Left and only the PRE-transition panel is meaningful.
-                # The CACHED pre-transition panel is a poll behind, though: an
-                # external focus change that coalesces with the leave into one
-                # refresh leaves the cache naming the panel focused BEFORE that
-                # change, while the manager collapsed the one focused after it.
-                # The native record of what it actually collapsed is therefore
-                # authoritative; the cache is the fallback when the binding does
-                # not expose it.
+                # Focus may reset on leave, and cached focus can miss an earlier change.
+                # The native collapse source is authoritative; cache is the older-binding fallback.
                 candidate = self._collapse_source or previous_panel
             else:
-                # Sync edge with the mode unchanged. setDepthWindowSync copies
-                # the panel focused AT SET TIME
-                # (rendering_manager.cpp:1270 reads split_view_service_.
-                # focusedPanel()), which is the FRESHLY-READ focus -- the cached
-                # one can be a poll behind when an external focus change and the
-                # sync edge coalesce into a single refresh.
+                # Sync copies the focus at set time. In this fallback, use refreshed focus
+                # rather than the previous poll's value when focus and sync change together.
+                # It cannot recover an unrecorded source if focus moved again after the copy.
                 candidate = self._focused_panel
             source = (
                 candidate
@@ -1303,27 +1034,15 @@ class SelectionControlsController:
     def _sync_toggle_icon(self):
         if self._depth_sync:
             return _SYNC_ICON_ON
-        # Same source of truth as the chip beside it (`_panel_chip_label`), so
-        # the two can never disagree about which panel is focused, and the
-        # same fallback for a token neither name matches.
+        # Use the chip's focused-panel source and Left fallback for the icon too.
         return _SYNC_ICON_OFF.get(self._focused_panel, _SYNC_ICON_OFF[_PANEL_LEFT])
 
     def _toggle_depth_window_sync(self):
-        # Refresh FIRST. `not self._depth_sync` computed from the cache is only
-        # a toggle while the cache agrees with the manager; if the flag moved
-        # externally (undo/redo from elsewhere, MCP, a project restore) since
-        # the last 100ms poll, the click would re-request the value the manager
-        # already holds and nothing would toggle. This refresh also reconciles
-        # that pending external edge exactly once, before the request.
+        # Refresh before inverting sync so an external change is reconciled once
+        # and the request toggles the manager's current flag.
         self._refresh_panel_context()
-        # If that refresh came back EXHAUSTED it consumed nothing, so
-        # `self._depth_sync` is still the deliberately stale pre-refresh cache
-        # and `not self._depth_sync` is not a toggle -- with the cache false and
-        # the manager already true the click would re-request true and the user's
-        # toggle would silently vanish into a no-change write. The click is
-        # dropped instead, exactly as the manager drops one refused mid-drag:
-        # nothing is written, the cache is left untouched, and the button
-        # shows the manager's actual state at the next stable poll.
+        # Exhaustion leaves a stale flag. Drop this click without writing;
+        # the next stable poll restores the button's actual state.
         if self._context_read_exhausted:
             return
         setter = getattr(lf.ui, "set_depth_window_sync", None)
@@ -1335,67 +1054,34 @@ class SelectionControlsController:
                     str(exc).strip()
                     or _ui_label("selection.update_depth_failed", "Could not update selection depth filter.")
                 )
-        # The manager refuses changes during an owned drag or parked GT. An
-        # actual Disabled sync change discards retention and applies normally;
-        # a same-value request preserves it. Re-read the actual flag through
-        # the shared refresh rather than assuming it flipped, so references
-        # reconcile only the true before/after state, including any discard.
+        # Drag ownership and parked GT refuse sync changes. In retained Disabled,
+        # an actual change discards retention and applies; same-value requests preserve it.
+        # Re-read and reconcile the actual result rather than assuming a toggle.
         self._refresh_panel_context()
 
     # ---- text-edit guard ----------------------------------------------
 
     def _cancel_foreign_depth_text_edits(self, force=False):
-        """Retarget any depth text edit that was started on another panel.
+        """Retarget live text edits after focus changes without a pointer click.
 
-        The focus changes this guards are the CLICKLESS ones -- operator, MCP,
-        project restore, mode boundary. A focus change made by clicking cannot
-        reach it with an edit still live: the click blurs the field first
-        (rml_viewport_overlay.cpp) and the blur commits and ends the edit
-        before the focused panel moves, so by the time the poller sees the
-        focus edge there is nothing to retarget.
-
-        `force` retargets EVERY live edit, including one whose recorded panel
-        equals the panel now on screen. A mode boundary is what needs it: the
-        edit's context is the single global window collapsed from a panel the
-        poller never saw focused, so panel equality proves nothing there and the
-        buffer is stale-origin text regardless of the name it carries.
-
-        The field is REVERTED in place: the buffer is replaced with the panel
-        now on screen's canonical text and the key dirtied, so the data-value
-        binding pushes that text back into the retained input (RmlUi 6.2's
-        default data view writes the `value` attribute and the text input
-        applies it with no focused-input exception). Any later commit -- blur
-        or linebreak -- therefore writes the canonical value, which is
-        idempotent, or whatever the user types NEXT, which is legitimate. The
-        field may still be DOM-focused (a focus change delivered by the
-        operator, MCP or a project restore sends no pointer input, so no new
-        focus event ever arrives), which is exactly why the field has to be
-        safe to keep using rather than merely fenced off.
-
-        The edit is RETARGETED, not dropped. A key still in
-        `_editing_depth_text` is by definition one for which no blur has been
-        observed -- `_end_depth_text_edit` is the blur handler and the only
-        thing that clears the key -- so the field is still DOM-focused and the
-        edit is still live. Re-registering it against the panel now on screen
-        is what keeps the in-edit skip in `_sync_depth_text_bufs` protecting
-        continued typing from the 100ms poll
-        (rml_viewport_overlay.hpp:215), and what makes a SECOND focused-panel
-        change run this guard again.
+        Pointer presses commit blur before changing focus. Clickless changes leave
+        the input focused: replace its buffer with current canonical text, dirty it,
+        recapture Escape and keep it registered as live. This protects later typing
+        from polling and allows repeated retargets; later commits use canonical text
+        or whatever the user types next.
+        force also retargets same-panel edits when a mode/lineage boundary changes
+        their window. RmlUi applies the value update even while the input is focused.
         """
         for key in list(self._editing_depth_text):
             if not force and self._depth_text_edit_panel.get(key) == self._focused_panel:
                 continue
             self._depth_text_edit_panel[key] = self._focused_panel
             self._depth_text_bufs[key] = self._canonical_depth_text_value(key)
-            # The escape snapshot still holds the OLD panel's pre-edit text;
-            # re-capture so an Escape after the switch reverts to the panel now
-            # on screen.
+            # Recapture Escape against the newly displayed panel's canonical text.
             self._escape_revert.recapture(key)
             if self._handle:
                 self._handle.dirty(key)
-        # NOT forced: the retargeted keys stay live edits and have just been set
-        # to canonical explicitly above, so forcing here would only risk
-        # overwriting a field that is legitimately being typed into.
+        # Keep live edits protected from ordinary text synchronization; do not force it.
         self._sync_depth_text_bufs()
 
     def _state_items(self):
@@ -1415,15 +1101,12 @@ class SelectionControlsController:
             ("window_scale", round(self._window_scale, 4)),
             ("window_scale_y", round(self._window_scale_y, 4)),
             ("depth_window_draw_generation", RuntimeState.depth_window_draw_generation.value),
-            # Panel-addressed companion. Compared as a tuple so a commit on the
-            # SAME panel at a new generation still registers as a change.
+            # Compare panel and generation so repeated commits on one panel still register.
             ("depth_window_draw_commit", self._draw_commit_items()),
             ("offset_x", round(self._offset_x, 4)),
             ("offset_y", round(self._offset_y, 4)),
             ("viz_mode", int(self._viz_mode)),
-            # Polling fix: the tuple above carries VALUES only, so a
-            # focus change between two identical windows -- the default case
-            # right after entering split view -- would never dirty the chip.
+            # Focus must dirty the chip even when both windows have identical values.
             ("focused_panel", self._focused_panel),
             ("split_mode", self._split_mode),
             ("depth_sync", self._depth_sync),
@@ -1717,12 +1400,8 @@ class SelectionControlsController:
         self._depth_text_bufs[key] = str(value)
 
     def _begin_depth_text_edit(self, key):
-        # Re-focusing a field whose earlier blur is still deferred SUPERSEDES
-        # that pending intent. The stale record carries a frozen payload from an
-        # edit session the user has already moved past; leaving it in place would
-        # have the flush write that old value and then retire the edit the user
-        # is in the middle of, so the very next poll would canonicalize their new
-        # keystrokes away. The latest intent wins and the new edit starts clean.
+        # A new edit supersedes this key's completed blur. Keeping its frozen record
+        # could overwrite the new buffer and retire the new edit during flush.
         record = self._deferred_depth_commits.get(key)
         if record is not None and record.get("kind") == _DEFERRED_BLURRED:
             self._deferred_depth_commits.pop(key, None)
@@ -1730,24 +1409,9 @@ class SelectionControlsController:
         self._depth_text_edit_panel[key] = self._focused_panel
 
     def _end_depth_text_edit(self, key):
-        # A blur whose commit DEFERRED must not lose the user's value. The widget
-        # calls commit then on_blur unconditionally (rml_widgets.bind_committed_
-        # text_input), so simply forgetting the key here would leave the deferred
-        # value -- the typed number, or the text an Escape revert put back -- with
-        # nothing to retry it, while native state keeps whatever the previous
-        # commit wrote.
-        #
-        # The value is preserved by FREEZING it into the deferral record rather
-        # than by holding the edit open. Holding it open instead is wrong: the
-        # key would stay in _editing_depth_text, so a later focus or mode
-        # transition would treat a COMPLETED blur as a live edit and
-        # _cancel_foreign_depth_text_edits would replace both its payload and
-        # its target panel -- the flush would then write the new panel's
-        # canonical value to the new panel and the finished edit would be lost.
-        # A completed blur is not live and is not retargetable, so the
-        # live-edit bookkeeping is retired here exactly as it is for an
-        # undeferred blur, and the record carries the payload and the origin
-        # panel instead.
+        # The widget always calls commit before on_blur. Freeze any deferred value
+        # and target here, including Escape-restored text, then end the live edit.
+        # Keeping it live would let a later focus/mode change redirect a completed blur.
         record = self._deferred_depth_commits.get(key)
         if record is not None:
             record["kind"] = _DEFERRED_BLURRED
@@ -1757,82 +1421,24 @@ class SelectionControlsController:
         self._depth_text_edit_panel.pop(key, None)
 
     def _flush_deferred_depth_commits(self):
-        """Retry commits deferred by an exhausted context read, on a stable tick.
+        """Flush deferred commits after update() has refreshed the context.
 
-        Called from update() with the poll's own refresh already done, so the
-        exhausted flag below is this tick's.
+        Live records revalidate and read the current buffer; blurred records keep
+        their frozen payload and panel. Pending keys remain protected from text sync.
 
-        A LIVE record re-validates through _commit_depth_text_key exactly as the
-        original commit did -- reading the buffer as it stands now, because the
-        user is still in the field. A BLURRED record bypasses that path entirely
-        and writes its frozen payload to its frozen panel: there is no live field
-        to re-read and no transition that may redirect a finished edit.
+        Group by write target. Near/Far clamp against each other, so resolve their
+        latest intended pair before one combined write. Even insertion order fails
+        if re-arming Near moves it behind Far: intended .20/.50 against native Near
+        .90 would clamp Far to .91. A lone endpoint uses its target's current
+        counterpart. Size and offsets have no such cross-field coupling.
+        Recheck records against the current registry because writes or new edits can
+        remove or replace them; snapshots keep removals from disrupting iteration.
 
-        Every key that stays deferred simply stays deferred; the next stable poll
-        tries again. Keys are flushed one at a time, and _sync_depth_text_bufs
-        never canonicalizes a key that still has a record, so a commit landing
-        for one key cannot erase the buffer another key's flush is about to read.
-
-        Near and Far are the one CLAMP-COUPLED pair in this registry: each write
-        clamps against the counterpart as it stands at that moment (the live
-        path's _clamp against self._depth_far / self._depth_near, and the same
-        clamps in _apply_foreign_panel_depth_values). Scale and the two offsets
-        are clamped only against constants and against state each of their
-        setters re-reads fresh, so they carry no such coupling.
-
-        No REPLAY ORDER is safe for that pair. An insertion-order law fixes
-        the plain two-blur case but not a superseded and re-armed one:
-        blur-defer Near .20, blur-defer Far .50, refocus Near (which supersedes
-        and drops its record), re-blur Near .20 (which reinserts it at the tail).
-        The insertion order is now [Far, Near] and chronologically defensible,
-        yet replaying Far first clamps it up against the still-native Near .90 to
-        .91 and the user's .50 is destroyed.
-
-        So order-sensitivity is replaced by PAIRED RESOLUTION. Records are
-        grouped by the window their write will land in (_deferred_write_target --
-        the same target the individual writes use). Per target the FINAL intended
-        (near, far) is resolved BEFORE anything is written: each field takes its
-        latest deferred payload -- a live record still reads its buffer at flush
-        time, unchanged -- and a field with no record takes that target's current
-        native value. The pair is then written as ONE combined update through
-        set_depth_filter_window, which carries both, so the clamp evaluates the
-        user's final intent against itself and never against a stale counterpart.
-        A target with only one of the two keeps the existing single write, whose
-        native counterpart is by definition not stale.
-
-        Supersession stays per-key: the fresh .get(key) below re-checks each key
-        against the CURRENT registry, and the list() snapshot keeps a flush that
-        pops records from mutating the sequence being walked.
-
-        The grouping is computed from the context as it stands when the flush
-        starts, and a LIVE member revalidates that context again from inside the
-        pair (_commit_paired_depth_range). That inner read can MOVE the context
-        -- a focus change the poll had not observed retargets the live edit --
-        and once it has, the target the grouping computed no longer describes
-        where these records belong: a frozen Near still aimed at Left would ride
-        a no-panel write into Right, contaminating the panel the user never
-        touched and consuming a record with a write that was not its own. So the
-        pair reports RETARGETED instead of writing, and the whole grouping is
-        RE-DERIVED from the moved context. The restart is bounded: it re-reads
-        everything once, and if the context moves a second time the affected
-        records are simply left deferred for the next poll rather than spun on.
-
-        UNPAIRED records join that same protocol -- a lone live record
-        revalidates from inside its own commit and can be retargeted by exactly
-        the same read -- so _commit_deferred_depth_record reports the same three
-        outcomes and this loop treats them identically whatever produced them.
-
-        The three outcomes are dispatched EXHAUSTIVELY, with no path that
-        continues writing on an outcome nobody matched:
-
-        * DONE -- resolved; carry on with the group's remaining records and the
-          groups after it.
-        * RETARGETED -- regroup once against the context that actually holds.
-        * DEFERRED -- a revalidating read came back EXHAUSTED. The whole flush
-          STOPS THERE, immediately. An exhausted read is a statement about the
-          world, not about one record: no sibling in this group and no later
-          group may write or be consumed on this tick, and everything still
-          pending waits for the next stable poll.
+        Paired and single live paths can request regrouping after revalidation.
+        Regroup once; a second move leaves pending records for the next poll.
+        Done continues. Deferred or an unknown outcome stops the whole flush without
+        writing/consuming any remaining sibling or group. Earlier writes remain
+        committed; flushing is not transactional across groups.
         """
         if self._context_read_exhausted or not self._deferred_depth_commits:
             return
@@ -1858,39 +1464,27 @@ class SelectionControlsController:
                         outcome = self._commit_deferred_depth_record(key, record)
                         if outcome != _COMMIT_DONE:
                             break
-                # The dispatch below is STRUCTURALLY EXHAUSTIVE: one explicit
-                # branch per outcome constant and a defensive tail that defers.
-                # An outcome that is not recognised must behave like the safest
-                # constant, never fall through into "keep writing".
+                # Handle every outcome; unknown results must stop further writes.
                 if outcome == _COMMIT_DONE:
                     continue
                 elif outcome == _COMMIT_RETARGETED:
                     retargeted = True
                     break
                 elif outcome == _COMMIT_DEFERRED:
-                    # The context read came back EXHAUSTED, so the world this
-                    # flush is writing into does not exist as a consistent
-                    # snapshot. Stop the ENTIRE flush here: no sibling record
-                    # in this group or any later one may write or be consumed
-                    # on this tick, and everything still pending stays
-                    # deferred for the next stable poll to resolve together.
+                    # An exhausted read stops all remaining groups without consuming their records.
                     return
                 else:
-                    # Defensive tail: an unrecognised outcome must behave like
-                    # the safest constant (DEFERRED), never fall through into
-                    # "keep writing".
+                    # Unknown outcomes stop the flush just like deferred ones.
                     return
             if not retargeted or restarted:
                 return
             restarted = True
 
     def _group_deferred_depth_records(self):
-        """The pending records grouped by the window their write will land in.
+        """Return (target, {key: record}) groups in first-seen target order.
 
-        Returns a list of (target, {key: record}) in first-seen target order.
-        Records already consumed by an earlier group's write are gone from the
-        registry, so re-deriving this after a retarget resumes exactly where the
-        flush left off.
+        Regrouping uses the current registry, resuming after earlier writes consumed
+        records.
         """
         targets = []
         grouped = {}
@@ -1906,13 +1500,10 @@ class SelectionControlsController:
         return [(target, grouped[target]) for target in targets]
 
     def _deferred_write_target(self, record):
-        """The window a deferred record's write will land in.
+        """Return the setter target: a frozen off-focus panel, or current context.
 
-        A blurred record carries its frozen origin panel and reaches it through
-        the panel= setter overload only when a no-panel write would MISS it.
-        Otherwise -- and always for a live record, which is still aimed at the
-        context the user is editing in -- the write goes to the current context,
-        which is the target named None here.
+        Only blurred records need panel= when the ordinary setter would miss their
+        origin. Live records use the context they are currently editing (None).
         """
         if record.get("kind") == _DEFERRED_BLURRED:
             panel = record.get("panel")
@@ -1921,18 +1512,10 @@ class SelectionControlsController:
         return None
 
     def _deferred_write_destination(self, record):
-        """The WINDOW a deferred record's write actually lands in.
+        """Resolve a setter target to a window identity for revalidation.
 
-        _deferred_write_target names the OVERLOAD a write needs -- a panel when
-        the ordinary setters would miss the frozen origin, and None when they
-        reach it -- which is the right key to group by but is not an identity.
-        None does not name a window; it names "wherever the context points",
-        so it compares EQUAL to itself across a move that sends the write
-        somewhere else entirely. Resolving None to the window the ordinary
-        setters currently address (_ref_key: the focused panel when two
-        independent windows exist, the single shared window otherwise) gives a
-        value that changes exactly when the destination changes, which is what a
-        comparison across a revalidation has to detect.
+        None selects the ordinary setter, whose destination can change with focus.
+        Resolve it to the current reference key before comparing across a refresh.
         """
         target = self._deferred_write_target(record)
         if target is not None:
@@ -1940,22 +1523,11 @@ class SelectionControlsController:
         return self._ref_key()
 
     def _commit_deferred_depth_record(self, key, record):
-        """Flush ONE deferred record through the path its kind requires.
+        """Flush one record using the same outcomes as paired writes.
 
-        Returns the same _COMMIT_* outcome the paired path returns, because an
-        UNPAIRED record is subject to the identical hazard and joins the
-        identical regroup protocol. A live record revalidates the context from
-        inside its commit, that read is allowed to MOVE the context, and the
-        write that follows would then land in a window this record was never
-        derived for. So the destination and the record's identity in the
-        registry are captured BEFORE the revalidating read and re-checked after
-        it: on a move nothing is written, nothing is consumed, and
-        _COMMIT_RETARGETED sends the flush back to regroup against the context
-        that actually holds -- once. A second move leaves the record deferred
-        for the next poll, exactly as the paired path does.
-
-        A BLURRED record carries its own frozen payload and origin panel and
-        reads no context, so it cannot be retargeted and always reports DONE.
+        A live edit revalidates its destination and registry identity before writing.
+        A change returns retargeted without consuming it; the caller regroups once.
+        A blurred record needs no refresh and completes against its frozen target.
         """
         if record.get("kind") == _DEFERRED_BLURRED:
             self._commit_blurred_depth_record(key, record)
@@ -1964,8 +1536,7 @@ class SelectionControlsController:
             destination = self._deferred_write_destination(record)
             self._refresh_panel_context()
             if self._context_read_exhausted:
-                # Same torn-read law as everywhere else: the record stays
-                # recorded and untouched, and the flush stops on DEFERRED.
+                # Preserve the pending record and stop the flush on exhaustion.
                 if key not in self._deferred_depth_commits:
                     self._deferred_depth_commits[key] = {"kind": _DEFERRED_LIVE}
                 return _COMMIT_DEFERRED
@@ -1973,33 +1544,19 @@ class SelectionControlsController:
                 return _COMMIT_RETARGETED
             if self._deferred_write_destination(record) != destination:
                 return _COMMIT_RETARGETED
-            # The revalidation is done and its verdict is in, so the commit
-            # below must not read the context a second time -- another read
-            # could move it again after this check and write against a target
-            # nothing verified.
+            # Do not refresh again after this check: another refresh could retarget
+            # the edit beyond the destination just validated.
             self._commit_depth_text_key(key, revalidated=True)
             return _COMMIT_DONE
         self._commit_depth_text_key(key)
         return _COMMIT_DONE
 
     def _commit_paired_depth_range(self, panel, near_record, far_record):
-        """Write one target's final intended (near, far) as a single update.
+        """Resolve one target's intended Near/Far pair before a combined write.
 
-        Both records are consumed whatever happens, exactly as the single-field
-        paths consume theirs: this is the retry of commits the user already
-        made, and the ordinary refusals (unparseable text, a hidden panel) are
-        no-ops, not reasons to retry forever. The one exception is a live member
-        whose revalidating context read comes back EXHAUSTED -- that is the same
-        tearing the original commit deferred against, so the whole pair stays
-        deferred and the next stable poll resolves it together.
-
-        A live member's revalidation is also allowed to MOVE the context, which
-        invalidates the grouping that produced `panel`. Every payload is
-        therefore resolved first and the identities and targets re-derived
-        afterwards: if either record has been replaced in the registry, or
-        either one's target no longer equals the one this pair was grouped for,
-        nothing is written, nothing is consumed and _COMMIT_RETARGETED sends the
-        flush back to regroup against the context that actually holds now.
+        Normal refusals, such as invalid text or a hidden panel, consume both records.
+        An exhausted live refresh preserves the pair. After revalidation, a changed
+        record identity or target returns retargeted without writing or consuming it.
         """
         pairing = (
             ("selection_depth_near_str", near_record),
@@ -2030,9 +1587,7 @@ class SelectionControlsController:
         if not values or not self._visible or self._last_state_key is None:
             self._sync_depth_text_bufs(force=True)
             return _COMMIT_DONE
-        # Same arming rationale as every other commit: applying dirties every
-        # slider-bound value and RmlUi replays each slider's pre-commit position
-        # into its setter.
+        # Arm before dirtying sliders so their old positions cannot echo into setters.
         self._depth_echo_holdoff = 2
         if panel is None:
             self._refresh_depth_state()
@@ -2053,35 +1608,29 @@ class SelectionControlsController:
         return _COMMIT_DONE
 
     def _commit_blurred_depth_record(self, key, record):
-        """Write a COMPLETED blur's frozen payload to its frozen origin panel.
+        """Apply a completed blur's frozen payload to its frozen target.
 
-        The record is consumed whatever happens: this is the retry of a commit
-        the user already finished, and the ordinary refusals (unparseable text,
-        a hidden panel) are the same no-ops the live path applies -- they are not
-        reasons to keep retrying forever.
+        Consume the record even for invalid text or a hidden panel, as ordinary
+        commit refusals do not require another retry.
         """
         self._deferred_depth_commits.pop(key, None)
         parsed = self._parse_depth_text_value(key, record.get("payload"))
         if parsed is None or not self._visible or self._last_state_key is None:
             self._sync_depth_text_bufs(force=True)
             return
-        # Same arming rationale as the live commit: applying dirties every
-        # slider-bound value and RmlUi replays each slider's pre-commit position
-        # into its setter.
+        # Arm before dirtying sliders so their old positions cannot echo into setters.
         self._depth_echo_holdoff = 2
         panel = record.get("panel")
         if self._panel_addressed_write_needed(panel):
             self._apply_foreign_panel_depth_values({key: parsed}, panel)
         else:
-            # The frozen panel IS the one a no-panel write reaches now (or there
-            # are no separate panel windows at all), so the ordinary setters
-            # address it and the displayed state follows the write as usual.
+            # The ordinary setter reaches the frozen target here, including shared
+            # mode; displayed state follows the write normally.
             self._dispatch_depth_setter(key, parsed)
         self._sync_depth_text_bufs(force=True)
 
     def _panel_addressed_write_needed(self, panel):
-        """True when the frozen panel is a real panel that a no-panel write would
-        MISS -- i.e. two independent windows exist and the other one is on."""
+        """Return whether an unsynced independent write needs the off-focus panel= route."""
         return (
             panel in (_PANEL_LEFT, _PANEL_RIGHT)
             and self._split_mode == _INDEPENDENT_DUAL
@@ -2090,20 +1639,12 @@ class SelectionControlsController:
         )
 
     def _apply_foreign_panel_depth_values(self, values, panel):
-        """Write one or more fields into a NON-focused panel's own window.
+        """Patch an unfocused panel from its own native window and Size reference.
 
-        The panel= setter overload exists precisely for this (py_selection.cpp,
-        set_depth_filter_window): it writes that panel's slot and leaves the
-        displayed window alone. The rest of the window has to come from that
-        panel's OWN state, not the toolbar's cached values, so it is read back
-        through the panel= getter; the Size reference likewise comes from that
-        panel's reference entry.
-
-        `values` maps field key -> parsed number, and a key that is absent keeps
-        the panel's current native value. Near is applied before Far so that a
-        PAIRED (near, far) update clamps Far against the user's own intended
-        Near rather than the native one it is about to replace; with only one of
-        the two present this is the single write it always was.
+        values maps field keys to parsed numbers; absent fields keep current values.
+        The panel= route leaves the displayed window alone. Apply Near before Far
+        so a paired update clamps Far against the intended Near; lone fields still
+        clamp against the current counterpart.
         """
         getter = getattr(lf.selection, "get_depth_filter_window", None)
         setter = getattr(lf.selection, "set_depth_filter_window", None)
@@ -2153,65 +1694,26 @@ class SelectionControlsController:
     def _restore_depth_text_snapshot(self, key, snapshot):
         # Escape restores the pre-edit text and the host blurs immediately after
         # (cancelFocusedElement in rml_input_utils.hpp), so that blur is what
-        # carries the revert to the native side. Both hosts that own these
-        # fields dispatch escapecancel that way: the sidebar/docked panels
-        # (rml_panel_host.cpp) and the viewport overlay
-        # (rml_viewport_overlay.cpp), which is where the depth Near/Far/Size
-        # inputs live.
+        # carries the revert to native state. Sidebar/dock and viewport hosts both
+        # dispatch this Escape-then-blur sequence; the depth fields use the overlay.
         self._depth_text_bufs[key] = str(snapshot or "")
         if self._handle:
             self._handle.dirty(key)
 
     def _commit_depth_text_key(self, key, revalidated=False):
-        # No commit is ever swallowed. A focused-panel change reverts the field
-        # in place (_cancel_foreign_depth_text_edits), so whatever a later
-        # commit carries is either that canonical value -- an idempotent
-        # no-change write -- or text the user typed since, which is legitimate.
-        # The old pre-cancel text cannot survive the revert: RmlUi 6.2's data
-        # view writes the input's value even while it is focused, and the
-        # plugin's model hook runs before Context::Update() in the same render
-        # (rml_viewport_overlay.cpp:1124).
+        # Validate live edit origins before reading their buffers. Focus, mode or
+        # lineage may have changed before the poll; the shared refresh retargets to
+        # canonical text first. A commit uses that value or subsequent typing.
+        # The overlay's model hook runs before Context::Update(), and RmlUi applies
+        # data-value even to focused inputs. Keys with no live origin keep the buffer
+        # this commit is about to read.
         #
-        # The recorded edit origin is nevertheless validated against a FRESH
-        # context read here, because a commit can arrive before any poll has
-        # observed a focus change (Enter or blur immediately after an operator,
-        # MCP or project-restore focus switch). The shared refresh applies the
-        # retarget rule on a mismatch -- the buffer becomes the new panel's
-        # canonical text -- so the write below lands on the panel the user is
-        # actually editing toward, never a stale-origin write into the wrong
-        # panel. Keys with no live edit have no recorded origin to validate, and
-        # are left alone so nothing rewrites a buffer this commit is about to
-        # read.
-        #
-        # That validation compares the split MODE and the collapse GENERATION as
-        # well as the focus, because the shared refresh does: a commit arriving
-        # after a coalesced focus-change + mode-leave sees equal focus on both
-        # sides of the transition, and only the mode/generation edge exposes
-        # that the field now addresses a different window.
-        #
-        # If that validating refresh comes back EXHAUSTED it observed nothing it
-        # is allowed to consume, so this commit has no validated context to write
-        # against. Writing anyway would apply the user's value to whichever
-        # window the torn snapshot happened to name -- and re-canonicalizing the
-        # buffer would replace their keystrokes with text computed from an
-        # unreconciled reference. So the commit is DEFERRED, not dropped: the
-        # buffer and the live-edit state are both retained untouched, and the
-        # next commit -- or the flush on the first poll whose own revalidation
-        # gets a COMPARABLE (equal-generation) pair of record reads, which is not
-        # necessarily the next poll and not guaranteed by quiet native state
-        # alone -- resolves it against a consistent world. Nothing typed is lost;
-        # only the write is postponed, for as long as the tearing lasts.
-        #
-        # The deferral is RECORDED, not merely returned from: a blur arriving in
-        # the same storm would otherwise leave nothing to retry
-        # (rml_widgets.py calls commit then on_blur unconditionally).
-        # _end_depth_text_edit freezes the record's payload and origin panel;
-        # _flush_deferred_depth_commits retries on a stable tick.
-        #
-        # `revalidated` is set ONLY by the deferred-flush wrapper, which has
-        # just done this read itself and acted on its verdict. Reading again
-        # here would let the context move a second time, after that verdict and
-        # before the write -- the very hazard the wrapper exists to close.
+        # On exhaustion, record a deferred live commit without changing draft or edit
+        # state. Another commit or the first comparable poll retries automatically;
+        # quiet native state alone cannot guarantee that read. Blur freezes the value
+        # and target so the completed edit still has a record to replay.
+        # revalidated is set only after the flush wrapper checks context: refreshing
+        # again here could invalidate its destination check.
         if not revalidated and key in self._editing_depth_text:
             self._refresh_panel_context()
             if self._context_read_exhausted:
@@ -2272,15 +1774,9 @@ class SelectionControlsController:
 
     def _sync_depth_text_bufs(self, force=False):
         for key in self._depth_text_bufs:
-            # A key with a deferral record still OWES its value to native state,
-            # and canonicalizing it here would destroy exactly that: a live
-            # record's buffer is what its flush will read, and a blurred record's
-            # field must not be rewritten before its frozen payload lands. This
-            # skip holds even under force=, because force= is the commit path
-            # canonicalizing the key it has just written -- and that key's record
-            # is popped before this runs, so the key being written is never
-            # skipped, only its still-pending siblings. Without this, flushing
-            # two deferred keys wrote the first and canonicalized the second.
+            # Preserve pending buffers even under force=True: live flush reads them,
+            # and blurred fields wait for their frozen write. A committed key's record
+            # is already removed, so only its still-pending siblings are skipped.
             if key in self._deferred_depth_commits:
                 continue
             if not force and key in self._editing_depth_text:
@@ -2427,8 +1923,7 @@ class SelectionControlsController:
             ),
             "focused_panel": (
                 "selection_panel_chip_label",
-                # The OFF frame of the sync toggle names the focused panel, so
-                # focus moves it exactly as it moves the chip's letter.
+                # Sync-off's filled half follows the focused panel, like the chip.
                 "selection_depth_sync_icon",
                 "selection_depth_scale_str",
                 "selection_depth_scale_value",

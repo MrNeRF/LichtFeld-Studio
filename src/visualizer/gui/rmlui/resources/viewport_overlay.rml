@@ -111,9 +111,7 @@
             </div>
         </div>
 
-        <!-- The per-viewport gizmo group stamps ITS OWN panel into the event: this
-             group lives in #primary-toolbar-root, so its buttons address 'left'
-             regardless of which panel currently has focus. -->
+        <!-- Primary gizmo buttons address Left regardless of focus. -->
         <div id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -369,9 +367,8 @@
             </div>
         </div>
 
-        <!-- The secondary panel's own group: #secondary-toolbar-root, so 'right'.
-             Outside independent-dual split 'right' resolves to the one shared
-             camera, which is the pre-panel-addressing behavior. -->
+        <!-- Secondary gizmo buttons address Right; outside independent-dual,
+             Right resolves to the shared camera. -->
         <div id="secondary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -692,18 +689,10 @@
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
                 <div class="depth-axis-group depth-axis-group-nf">
-                <!-- The chip rides INSIDE the Near/Far group, not beside it.
-                     As a direct child of the wrapping flex row it was a
-                     20dp item followed by a flex-basis:100% group, so below
-                     the wrap breakpoint it was pushed onto a line of its
-                     own -- and the absolutely pinned sync toggle (top:0)
-                     landed on that same otherwise-empty line. Inside the
-                     group it keeps its document position (leftmost, before
-                     Near) at every width, while the top line becomes the
-                     Near/Far row the sync toggle is pinned against. The
-                     chip itself stays a flow item at every width; it rides
-                     with the centred cluster rather than being pinned to
-                     the row's left edge. -->
+                <!-- Keep the chip first in the centered Near/Far group at every width.
+                     As a direct child of the wrapping row, it would take a separate line
+                     before the flex-basis:100% group, with the pinned sync toggle beside it.
+                     Keep the chip in flow, not pinned to the row's left edge. -->
                 <span class="viewport-selection-depth-panel-chip"
                       data-if="selection_panel_chip_visible"
                       data-tooltip="tooltip.selection_depth_panel_chip">{{selection_panel_chip_label}}</span>

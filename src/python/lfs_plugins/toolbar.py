@@ -1296,9 +1296,8 @@ class _UtilityToolbarController:
         if action == "set_camera_navigation_mode":
             lf.set_camera_navigation_mode(value)
             return
-        # panel is the identity the per-viewport gizmo group stamped into the
-        # event. An action raised anywhere else carries none, and then the
-        # call is made exactly as it was before, with no keyword at all.
+        # Gizmo events name their panel; other actions keep the legacy call
+        # without a panel keyword.
         if action == "home":
             if panel:
                 lf.reset_camera(panel=panel)
@@ -1845,9 +1844,7 @@ class _ViewportToolbarController:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
-        # Third argument: the panel identity of the toolbar group that raised the
-        # action. Only the two per-viewport gizmo groups stamp one; every
-        # other toolbar_action call site passes two arguments and leaves this "".
+        # Only the two per-viewport gizmo groups supply the third panel argument.
         panel = str(args[2]) if len(args) > 2 else ""
         if action == "toggle_viewport_export":
             self._gizmo.clear_active_horizontal_tool()

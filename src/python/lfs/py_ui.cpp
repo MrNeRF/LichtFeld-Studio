@@ -5866,9 +5866,7 @@ namespace lfs::python {
 
         m.def(
             "get_focused_split_panel", []() -> const char* {
-                // focused_panel_ is main-thread-owned and unprotected
-                // (split_view_service.hpp:60), so read it on the viewer thread
-                // rather than from whatever thread called into Python.
+                // Read unprotected, main-thread-owned focused_panel_ on the viewer thread.
                 const bool right = invoke_on_viewer(
                     [] {
                         auto* const rm = get_rendering_manager();
@@ -5891,9 +5889,7 @@ namespace lfs::python {
 
         m.def(
             "get_depth_window_collapse_source", []() -> const char* {
-                // Manager-locked (getDepthWindowCollapseSource takes
-                // settings_mutex_), so it reads directly like
-                // get_depth_window_sync rather than marshalling.
+                // The getter holds settings_mutex_, so no viewer-thread marshal is needed.
                 auto* rm = get_rendering_manager();
                 return rm && rm->getDepthWindowCollapseSource() == vis::SplitViewPanelId::Right
                            ? "right"
@@ -5913,9 +5909,7 @@ namespace lfs::python {
 
         m.def(
             "get_depth_window_collapse_record", []() -> nb::tuple {
-                // ONE manager-locked read (getDepthWindowCollapseRecord takes
-                // settings_mutex_ once), so the source and the generation a
-                // caller receives can never come from different instants.
+                // Read source, generation and kind together under the manager's settings lock.
                 auto* rm = get_rendering_manager();
                 if (!rm) {
                     return nb::make_tuple("left", static_cast<uint64_t>(0), "leave_collapse");

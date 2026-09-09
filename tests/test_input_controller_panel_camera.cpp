@@ -1,12 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-// Panel-addressed camera actions. The per-viewport gizmo buttons stamp
-// their own panel into the event, so Home and Eye act on the panel whose toolbar
-// was clicked -- not on whichever panel happens to hold focus, and without
-// moving focus. These tests drive the native entry points the Python bindings
-// call (lf.reset_camera(panel=...) / lf.focus_selection(panel=...)) against a
-// real RenderingManager and real Viewports.
+// Per-viewport Home/Eye actions move their named panel's camera without changing focus.
+// Test the native methods behind lf.reset_camera(panel=...) and
+// lf.focus_selection(panel=...) with a real RenderingManager and Viewports.
 
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
@@ -77,19 +74,14 @@ namespace lfs::vis {
                 .emit();
         }
         // --- shared depth-anchor rig -----------------------------------------
+        // Transform and min/max x/y form one global anchor; panel state stores
+        // near/far/scale/offset. Off-focus Home/Eye must move the addressed camera
+        // without re-anchoring the shared box, skipping syncDepthFilterToCamera only on
+        // that path.
         //
-        // depth_filter_transform and depth_filter_min/max.x/y are ONE global
-        // camera anchor: DepthWindowState holds only near/far/scale/offset. So a
-        // panel-addressed Home/Eye fired at the panel the user is NOT looking
-        // through must move that panel's camera WITHOUT re-anchoring the shared
-        // box under the focused panel. That is implemented by skipping
-        // SelectionTool::syncDepthFilterToCamera on that one path only.
-        //
-        // The fixture installs a REAL, enabled SelectionTool with depth filtering
-        // on, wired exactly as production does (visualizer_impl.cpp:414 ->
-        // setSelectionTool). A fixture with no tool would be blind here: with
-        // selection_tool_ null, publishCameraMove's depth branch never runs and
-        // an anchor regression is invisible to every assertion.
+        // Install a real enabled SelectionTool with depth filtering via production
+        // setSelectionTool wiring. A null tool skips publishCameraMove's depth branch
+        // and leaves the anchor assertions unable to detect regressions.
         struct DepthAnchorRig {
             Viewport primary_viewport{200, 200};
             RenderingManager rendering_manager;
@@ -183,11 +175,9 @@ namespace lfs::vis {
         }
     } // namespace
 
-    // The defect panel addressing fixes: Home on the RIGHT panel's toolbar used
-    // to reset the
-    // primary camera, because the cmd::ResetCamera handler reads viewport_
-    // directly. Addressed at 'right' it must reset the secondary camera and leave
-    // the primary one exactly where it was.
+    // Home addressed to Right must reset the secondary camera and preserve primary. The
+    // old panel-less ResetCamera handler read viewport_ directly and reset primary
+    // instead.
     TEST_F(InputControllerPanelCameraTest, HomeResetsTheAddressedPanelInIndependentDual) {
         Viewport primary_viewport(200, 200);
         InputController controller(nullptr, primary_viewport);
@@ -256,10 +246,8 @@ namespace lfs::vis {
         EXPECT_EQ(primary_viewport.camera.t, glm::vec3(4.0f, 5.0f, 6.0f));
     }
 
-    // The panel-less path is preserved byte-for-byte in behavior: an emitter that
-    // carries no identity (lf.reset_camera() with no panel, the MCP tool) still
-    // resets the primary viewport, even in independent-dual split with the right
-    // panel focused.
+    // Preserve legacy panel-less reset_camera()/MCP routing to primary, even in
+    // independent-dual with Right focused.
     TEST_F(InputControllerPanelCameraTest, PanelLessResetCameraEventStillTargetsThePrimaryViewport) {
         Viewport primary_viewport(200, 200);
         InputController controller(nullptr, primary_viewport);
@@ -338,12 +326,9 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager.getFocusedSplitPanel(), SplitViewPanelId::Right);
     }
 
-    // The 'main' token is an EXPLICIT focused-panel request. module.cpp
-    // resolves it to getFocusedSplitPanel() and then takes the very same
-    // panel-addressed path 'left'/'right' take; this pins that resolution's
-    // downstream half -- with Right focused, the resolved panel acts on Right,
-    // and the unfocused panel does not move. The token->panel half needs the
-    // Python binding and is covered by a Python test instead.
+    // main explicitly resolves to getFocusedSplitPanel(), then uses the same path as
+    // left/right. With Right focused, pin that native downstream result and preserve
+    // the other camera. Python tests cover token-to-panel parsing.
     TEST_F(InputControllerPanelCameraTest, MainResolvesToTheFocusedPanelForBothActions) {
         Viewport primary_viewport(200, 200);
         InputController controller(nullptr, primary_viewport);
@@ -377,10 +362,9 @@ namespace lfs::vis {
     }
 
     // --- shared depth anchor ------------------------------------------------
-    // An off-focus Home moves the addressed panel's camera and leaves the shared
-    // depth anchor exactly where the focused panel put it. ACCEPTED
-    // CONSEQUENCE: the acted panel's box does not follow its camera until
-    // that panel is focused and publishes a camera move of its own.
+    // Off-focus Home moves the addressed camera and preserves the shared anchor. Its
+    // depth box follows that camera only after the panel gains focus and publishes a
+    // camera move.
     TEST_F(InputControllerPanelCameraTest, OffFocusHomeLeftFocusedRightActedLeavesTheSharedDepthAnchor) {
         DepthAnchorRig rig;
         rig.build(SplitViewPanelId::Left);

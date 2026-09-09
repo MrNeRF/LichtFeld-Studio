@@ -255,10 +255,8 @@ namespace lfs::python {
             return state;
         }
 
-        // Panel-addressed draw-commit signal. Mirrors the scalar
-        // depth_window_draw_generation exposure beside it, but carries the panel
-        // the commit belongs to so the toolbar can rebase THAT panel's Size
-        // reference instead of whichever window it happens to display.
+        // Include the committed panel so Size rebases that panel's reference,
+        // regardless of which window the toolbar currently displays.
         nb::dict depth_window_draw_commit_to_dict(const lfs::vis::AppStore::DepthWindowDrawCommit& value) {
             nb::dict state;
             state["generation"] = value.generation;

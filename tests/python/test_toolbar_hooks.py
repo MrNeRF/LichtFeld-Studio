@@ -1338,11 +1338,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "selection_depth_range",
         "selection_depth_near",
         "selection_depth_far",
-        # The depth row's remaining controls. Each carries its own
-        # `data-tooltip`, so each needs its key in every locale -- listed here
-        # rather than left to the completeness audit, which only checks that
-        # the ten files agree with English and would pass on ten files that
-        # all lack the key.
+        # List every depth control's tooltip key in every locale. Completeness alone
+        # only compares files with English and would miss a key absent from all ten.
         "selection_depth_size",
         "selection_depth_offset_x",
         "selection_depth_offset_y",
@@ -1902,20 +1899,11 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
 
 
 def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():
-    """Five sliders, five DIFFERENT tooltips, and the row's own is not one of them.
-
-    `resolveRmlTooltip` walks up from the hovered element and takes the first
-    `data-tooltip` it finds, so the tooltip that belongs to a slider has to sit
-    on that slider's own wrapper -- the axis div, which holds the slider and
-    the number box it is paired with, so the pair reads as one control. If an
-    axis loses its attribute the walk keeps going and the hover silently falls
-    back to the ROW's `tooltip.selection_depth_range`, which is the same text
-    over all five and tells the user nothing about the one under the cursor.
-    Two axes sharing one key fails the same way, less visibly.
-
-    The row's own tooltip is deliberately kept: it is not redundant, because
-    the more specific axis tooltips already win by that walk, and it is the
-    only thing covering the row's gutters and its wrapped-line gap.
+    """Give each of the five axis wrappers its own distinct tooltip, covering its slider
+    and number box. resolveRmlTooltip takes the nearest data-tooltip; a missing axis key
+    falls back to the generic row text, while duplicate keys obscure which control is
+    hovered. Keep the row tooltip for gutters and the wrapped-line gap, where no axis
+    overrides it.
     """
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
@@ -1975,11 +1963,9 @@ def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():
         )
 
 
-# Per locale: the name this file uses for the thing the five sliders move, the
-# older name that must no longer appear on any of the five, and the word that
-# tells the reader the Size value is a percentage. The names are the ones each
-# file already uses for the same object in `tooltip.selection_depth_sync`, so
-# the row does not invent a term of its own.
+# Per locale: the existing selection_depth_sync object name, the retired competing name,
+# and the Size percentage term. All five sliders must share that locale's established
+# noun.
 _DEPTH_WINDOW_TERMS = {
     "en.json": ("depth window", "depth box", "percentage"),
     "de.json": ("Tiefenfenster", "Auswahlbox", "Prozent"),
@@ -1995,20 +1981,11 @@ _DEPTH_WINDOW_TERMS = {
 
 
 def test_the_five_depth_tooltips_name_one_depth_window_and_size_says_percentage():
-    """One object, one name -- and Size admits it is a percentage.
-
-    The five sliders all move a single thing. Before unification the row named
-    it twice: Near/Far called it a depth *box* and Size/X/Y called it a
-    selection *window*, so a reader hovering along the row met two nouns for
-    one object. Every locale now uses the name that file already uses for the
-    same object in `tooltip.selection_depth_sync`.
-
-    Size is additionally the one value whose unit is not obvious from the
-    control: it is a percentage of the reference size (`_set_depth_scale_percent`
-    divides by 100 and multiplies the reference scale), so the text says so.
-    X and Y carry no reference size -- they are the normalized offset times 100
-    -- so only Size gained the percentage clause; the other four changed name
-    and nothing else.
+    """All five sliders move the same object, so each locale must use its existing
+    selection_depth_sync term instead of mixing depth box and selection window. Size
+    additionally names its unit: percent of the reference scale. X/Y are normalized
+    offsets times 100 with no reference size, so only Size gains that clause; the other
+    four change terminology only.
     """
     project_root = Path(__file__).parent.parent.parent
     locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
@@ -2485,10 +2462,9 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
 
 
 def test_each_gizmo_group_stamps_its_own_panel_into_the_toolbar_event():
-    """The two per-viewport gizmo groups are identical markup over the same
-    record list, so the ONLY thing that can tell the click apart is the literal
-    each group puts in the event. Primary stamps 'left', secondary stamps
-    'right', and no other toolbar_action call site stamps anything."""
+    """Both gizmo groups render the same records. Their event literal distinguishes
+    primary left from secondary right; no other toolbar_action call site stamps a panel.
+    """
     project_root = Path(__file__).parent.parent.parent
     resources = project_root / "src/visualizer/gui/rmlui/resources"
     rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
@@ -2579,13 +2555,10 @@ def test_toolbar_action_forwards_the_group_panel_to_the_camera_actions(
 
 
 def _real_lichtfeld():
-    """The compiled extension, not this file's stub.
+    """Import the compiled extension without toolbar_module's namespace stub.
 
-    Every other test here installs a SimpleNamespace stub into
-    sys.modules['lichtfeld'] through the toolbar_module fixture; these two do
-    not request that fixture, so the import below resolves the real .pyd. The
-    suffix check makes that explicit rather than assumed -- if the stub were
-    somehow still installed the test skips loudly instead of passing vacuously.
+    Require a .pyd or .so suffix, skipping other origins so binding tests cannot pass
+    vacuously on a stub.
     """
     lichtfeld = pytest.importorskip("lichtfeld")
     origin = getattr(lichtfeld, "__file__", "") or ""
@@ -2596,11 +2569,9 @@ def _real_lichtfeld():
 
 @pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
 def test_camera_actions_accept_the_main_panel_token(action_name):
-    """The panel vocabulary for these actions is: None is the legacy,
-    panel-less path, 'main' is the EXPLICIT focused-panel request, and
-    'left'/'right' name a panel outright. Rejecting 'main' would be a spec
-    violation, so every token is accepted here, with no visualizer attached --
-    the assertion is about the parser and nothing else.
+    """Accept None for legacy routing, main for explicit focused-panel routing, and
+    left/right for named panels. No visualizer is attached, so this checks parser
+    acceptance only.
     """
     action = getattr(_real_lichtfeld(), action_name)
     for token in ("main", "left", "right"):

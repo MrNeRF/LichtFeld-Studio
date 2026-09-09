@@ -23,9 +23,8 @@ namespace lfs::vis::gui {
         }
         input.mouse_wheel = buf.mouse_wheel;
         input.mouse_wheel_x = buf.mouse_wheel_x;
-        // The canonical stream, copied whole and in order -- coordinates,
-        // DOWN/UP identity, timestamp, click count and the event-time ownership
-        // verdict travel as one record per event and cannot be copied apart.
+        // Copy complete canonical events in order, keeping coordinates, DOWN/UP identity,
+        // timestamp, click count and event-time ownership together.
         input.mouse_button_events = buf.mouse_button_events;
         input.screen_w = buf.window_w;
         input.screen_h = buf.window_h;

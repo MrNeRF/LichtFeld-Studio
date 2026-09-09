@@ -745,9 +745,8 @@ namespace lfs::vis {
                 }
                 if (depth_window_projection_changed) {
                     const auto projection_window = depthWindowFromProjection(settings_);
-                    // Every branch below is a deliberate NON-drag write, so it
-                    // supersedes the pre-drag backup AND the pin of every slot
-                    // it writes (see releaseDepthWindowBackupsLocked).
+                    // These non-drag projection writes supersede backups and ownership for
+                    // every slot written.
                     if (depth_window_sync_) {
                         panel_depth_windows_ = {projection_window, projection_window};
                         releaseDepthWindowBackupsLocked(split_view_service_.focusedPanel(),
@@ -760,13 +759,10 @@ namespace lfs::vis {
                 }
             } else {
                 syncGridPlanesLocked(settings_.grid_plane);
-                // GT DORMANCY: settings_ already carries the NEW mode, so a
-                // single write that BOTH enters GT from independent-dual and
-                // moves the depth projection reaches this non-independent
-                // branch and would homogenize the very pair the transition
-                // below has to park intact. A global depth write arriving with
-                // the GT boundary is an ordinary GT-time write, and GT-time
-                // writes never disturb the dormant windows.
+                // settings_ already has the new mode. A write that enters GT from independent-dual
+                // and changes projection must not copy that projection into both slots before
+                // they are parked below. Treat its depth change as a GT-time global write:
+                // preserve the dormant pair.
                 const bool entering_gt_from_independent_panels =
                     split_mode_changes &&
                     splitViewUsesIndependentPanels(previous_split_mode) &&
@@ -783,17 +779,13 @@ namespace lfs::vis {
                 settings_.depth_filter_max.z != previous_depth_max_z) {
                 ++depth_window_projection_generation_;
             }
-            // The settings are applied; NOW run the same transition the event
-            // sites run (epoch bump, backup fold, seed/collapse), plus the
-            // grid-plane handling they pair with it. Entering an independent
-            // mode syncs the planes the way handleToggleIndependentSplitView /
-            // restoreSplitViewMode do; leaving one is already covered by the
-            // non-independent branch above.
+            // After applying settings, run the event paths' transition logic: epoch bump,
+            // backup restoration and seed/collapse. On independent entry, sync grid planes
+            // as handleToggleIndependentSplitView and restoreSplitViewMode do.
+            // The non-independent branch above already handles grid planes on exit.
             if (split_mode_changes) {
-                // This is the ONE site that can carry a global depth write
-                // across a mode boundary in the same call, so it is the one
-                // site that passes the flag: on a GT park leg that incoming
-                // projection is what settings_ must keep.
+                // Only this call can combine a mode change with a global depth write.
+                // Pass the change flag so GT parking preserves the incoming projection in settings_.
                 applyDepthWindowModeTransitionLocked(
                     previous_split_mode, settings_.split_view_mode, pre_transition_focus,
                     depth_window_projection_changed);
@@ -922,17 +914,14 @@ namespace lfs::vis {
     }
 
     bool RenderingManager::depthWindowDragActiveLocked() const {
-        // The PREVIEW counters, not the ownership counters: "a drag is in
-        // flight" means a latched, previewing drag (the sync gate and the
-        // frame capture both mean exactly that), never a press that has not
-        // crossed the draw threshold.
+        // Preview counters track latched drags that crossed the draw threshold.
+        // Frame capture uses this signal; the sync gate uses ownership instead.
         return depth_window_preview_counts_[0] > 0 || depth_window_preview_counts_[1] > 0;
     }
 
     bool RenderingManager::depthWindowDragOwnedLocked() const {
-        // The OWNERSHIP counters: a drag exists from invoke to destruction,
-        // subthreshold presses included. The sync gate keys on this bracket so
-        // that no drag's before_ capture can straddle a sync change.
+        // Ownership lasts from invoke to destruction, including subthreshold presses.
+        // The sync gate uses this lifetime so before_ capture cannot straddle a sync change.
         return depth_window_drag_counts_[0] > 0 || depth_window_drag_counts_[1] > 0;
     }
 
@@ -940,35 +929,24 @@ namespace lfs::vis {
                                                 uint64_t& out_drag_token) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         const size_t index = splitViewPanelIndex(panel);
-        // This drag's OWNERSHIP token, minted under the same lock as the slots
-        // it claims below. Monotonic and never reused, so no later drag and no
-        // superseded drag can ever present it by accident.
+        // Mint a unique, monotonic token under the same lock as its slot claims.
         const uint64_t token = ++depth_window_last_drag_token_;
         out_drag_token = token;
-        // CLAIM RULE (one question per slot: is the slot OWNED right now?).
-        // OWNED by another drag -> TAKE OVER and RETAIN its recorded backup:
-        // first-wins across an unbroken ownership chain, the registry
-        // replacement handoff's contract. UNOWNED (backup present or not) ->
-        // REFRESH the backup from the live value, which is the pre-THIS-drag
-        // state; an orphan backup left behind by a cancelled chain is thereby
-        // overwritten the moment a new drag starts and can never become this
-        // drag's false undo baseline, while remaining available
-        // to the transition fold for as long as NO drag is live.
+        // CLAIM RULE: retain the original backup when taking over an owned slot.
+        // For an unowned slot, refresh from live state so an old backup cannot
+        // become the new drag's undo baseline. Until the next claim, that old
+        // backup remains available for transition folding.
         if (!depth_window_pin_owners_[index]) {
             depth_window_drag_backups_[index] = panel_depth_windows_[index];
         }
-        // OWN it for this drag's lifetime: while this drag owns the slot, its
-        // backup is not "idle" whatever the per-slot drag count says, and no
-        // other drag may write, restore or release it. A slot already owned is
-        // TAKEN OVER (the recorded backup value stays - first-wins value
-        // semantics are the registry-replacement handoff's contract).
+        // Take ownership while retaining the first backup. Ownership keeps it
+        // non-idle regardless of drag count and excludes other tokens' writes,
+        // restores and per-slot releases until takeover or supersession.
         depth_window_pin_owners_[index] = token;
-        // A drag whose writes FAN OUT (sync ON, or any non-independent mode)
-        // will preview into BOTH slots, so both need a clean pre-drag backup
-        // here - and the shared window has exactly one clean value right now.
-        // Without this, a later cross-panel replacement would record the first
-        // drag's fanned-out PREVIEW as the other panel's backup and resurrect
-        // it at the next transition.
+        // Sync or a non-independent mode makes previews write both slots.
+        // Both need pre-drag backups before the shared value changes; otherwise a
+        // replacement drag on the other panel could save the preview as its backup
+        // and restore it at the next mode transition.
         const bool fans_out =
             !split_view_service_.isIndependentDualActive(settings_) || depth_window_sync_;
         if (fans_out) {
@@ -977,14 +955,13 @@ namespace lfs::vis {
             if (!depth_window_pin_owners_[other_index]) {
                 depth_window_drag_backups_[other_index] = panel_depth_windows_[other_index];
             }
-            // The other slot carries no drag count for this drag, so only
-            // ownership keeps its backup alive against an idle release (a
-            // mid-drag same-epoch history undo/redo is exactly such a release).
+            // The other slot has no count for this drag; ownership preserves its
+            // backup even through a same-epoch history restore.
             depth_window_pin_owners_[other_index] = token;
         }
         ++depth_window_drag_counts_[index];
-        // Reported so the drag knows which slots it OWNS: its teardown
-        // restore must put back every slot its writes may have touched.
+        // Report ownership of the other slot so teardown restores every slot
+        // this drag's writes may have touched.
         return fans_out;
     }
 
@@ -996,27 +973,19 @@ namespace lfs::vis {
             return;
         }
         --depth_window_drag_counts_[index];
-        // IDENTITY GATE, now a single question asked PER SLOT: release exactly
-        // the slots this drag STILL OWNS. A mode transition, a project restore
-        // or any legitimate non-drag write cleared its ownership; a later drag
-        // took it over. In every one of those cases this end is a no-op on that
-        // slot, so a stale drag can never strip a fresh writer's licence, and a
-        // slot this drag still owns is always released even when some OTHER
-        // slot changed hands.
+        // IDENTITY GATE: release only slots this drag still owns.
+        // Mode transitions, project restore and non-drag writes can clear ownership;
+        // later drags can take it over. Per-slot checks protect new owners while
+        // ensuring this drag releases every slot it still owns.
         for (size_t slot = 0; slot < depth_window_pin_owners_.size(); ++slot) {
             if (depth_window_pin_owners_[slot] != drag_token) {
                 continue;
             }
             depth_window_pin_owners_[slot].reset();
-            // The recorded backup deliberately OUTLIVES the bracket: the mode
-            // transition and the project restore both CANCEL an active drag
-            // FIRST and fold the backups SECOND, so a backup destroyed here
-            // would leave the fold nothing to collapse to but the drag's own
-            // preview. It is safe to leave it because a claim now REFRESHES an
-            // unowned slot's backup from the live value (beginDepthWindowDrag),
-            // so an ownerless backup can never become the next drag's false
-            // undo baseline - it survives only while no drag is
-            // live, which is exactly when the fold needs it.
+            // Keep the backup after ownership ends. Mode transitions and project restore
+            // cancel drags before folding backups; clearing it here would leave only the
+            // drag's preview. The next claim refreshes an unowned slot's backup from live
+            // state, preventing a stale undo baseline for the new drag.
         }
     }
 
@@ -1099,15 +1068,11 @@ namespace lfs::vis {
 
     void RenderingManager::releaseDepthWindowBackupsLocked(const SplitViewPanelId panel,
                                                            const bool fan_out) {
-        // Every caller of this helper has just REPLACED the value of the slots
-        // it names with a legitimate, newer value - a commit, or a deliberate
-        // non-drag write (the settings paths, the panel setter, the sync copy).
-        // Newer intent wins outright: the pre-drag backup is stale whatever the
-        // slot's drag count says, and the OWNERSHIP goes with it: the drag that
-        // owned this slot may no longer write it (its next preview write
-        // refuses) and may no longer put the old value back over
-        // the new one at teardown (restorePinnedDepthWindowSlots). The drag
-        // lane's own preview writes never route here.
+        // Callers have replaced these slots with a commit or deliberate non-drag write
+        // (settings, panel setter or sync copy). Clear stale backups and ownership,
+        // regardless of drag counts, so the old drag cannot overwrite the new value
+        // through preview or teardown (restorePinnedDepthWindowSlots).
+        // Drag preview writes never call this helper.
         const auto supersede = [this](const size_t slot) {
             depth_window_drag_backups_[slot].reset();
             depth_window_pin_owners_[slot].reset();
@@ -1135,10 +1100,9 @@ namespace lfs::vis {
         const size_t index = splitViewPanelIndex(panel);
         const size_t other_index = index == 0 ? 1 : 0;
         bool wrote = false;
-        // PER SLOT, under ONE lock: OWNERSHIP is the licence, and it names THIS
-        // drag or nobody. A newer legitimate write cleared the owner and a
-        // later drag took it over - either way that slot keeps the
-        // newer value and this teardown skips it entirely.
+        // Under one lock, restore only slots still owned by this drag.
+        // Skip slots whose ownership was cleared by a newer write or taken by another
+        // drag, preserving their newer values.
         if (depth_window_pin_owners_[index] == drag_token) {
             applyDepthWindowForPanelLocked(panel, clamped_own, /*restore_mode=*/true);
             wrote = true;
@@ -1159,10 +1123,8 @@ namespace lfs::vis {
 
     void RenderingManager::releaseIdleDepthWindowBackupsLocked() {
         for (size_t index = 0; index < depth_window_drag_backups_.size(); ++index) {
-            // OWNED backups are never idle. A live drag's backup can sit on a
-            // slot whose own drag count is zero (the other half of a fan-out
-            // drag); dropping it here would leave that drag's preview with
-            // nothing to fold back to at the next transition.
+            // A drag writing both slots can own a backup where the drag count is zero.
+            // Keep owned backups so the next transition can restore pre-drag state.
             if (depth_window_drag_counts_[index] == 0 &&
                 !depth_window_pin_owners_[index]) {
                 depth_window_drag_backups_[index].reset();
@@ -1174,8 +1136,8 @@ namespace lfs::vis {
                                                           const DepthWindowState& clamped,
                                                           const bool restore_mode) {
         const bool independent_dual = split_view_service_.isIndependentDualActive(settings_);
-        // A restore writes ONE slot whatever the sync flag says: it is safety
-        // machinery undoing this drag's own preview, not a user edit.
+        // Restore one slot regardless of sync: this undoes the drag's preview,
+        // not a user edit.
         const bool fan_out = !restore_mode && (!independent_dual || depth_window_sync_);
         const size_t panel_index = splitViewPanelIndex(panel);
         if (fan_out) {
@@ -1183,8 +1145,8 @@ namespace lfs::vis {
         } else {
             panel_depth_windows_[panel_index] = clamped;
         }
-        // Outside independent-dual the projection IS the window, so a restore
-        // there must still write it even though it touched a single slot.
+        // Outside independent-dual, the projection is the window.
+        // Even a single-slot restore must update it.
         const bool updates_projection = fan_out ||
                                         split_view_service_.focusedPanel() == panel ||
                                         (restore_mode && !independent_dual);
@@ -1200,11 +1162,9 @@ namespace lfs::vis {
         return fan_out;
     }
 
-    // Every depth-window write in this family marks DirtyFlag::ALL, not just
-    // SELECTION: the selection-only fast path re-rasters from cached per-splat
-    // containment, so a window change that marks only SELECTION keeps stale
-    // classifications on screen until an unrelated full render. Upstream's
-    // write path (updateSettings, one-arg) marked ALL for the same reason.
+    // Depth-window writes need DirtyFlag::ALL, as in one-argument updateSettings.
+    // SELECTION re-rasterizes cached per-splat containment, leaving stale
+    // classifications on screen until a full render.
     bool RenderingManager::setDepthWindowForPanel(const SplitViewPanelId panel, const DepthWindowState& state) {
         DepthWindowState clamped = state;
         clampDepthWindowState(clamped);
@@ -1231,11 +1191,9 @@ namespace lfs::vis {
         if (depth_window_mode_epoch_ != expected_epoch) {
             return false;
         }
-        // OWNERSHIP GATE, same contract as the epoch refusal: a drag may write
-        // its panel's slot only while it still owns it. A legitimate non-drag
-        // write (or a replacement drag) cleared or took over that ownership, so
-        // this write is superseded and refuses - it can never overwrite the
-        // newer state.
+        // A drag may write only while it owns its panel's slot. Non-drag writes clear
+        // ownership; replacement drags take it over. Refuse superseded writes without
+        // changing state, just as for a stale epoch.
         if (depth_window_pin_owners_[splitViewPanelIndex(panel)] != drag_token) {
             return false;
         }
@@ -1270,9 +1228,8 @@ namespace lfs::vis {
         if (depth_window_mode_epoch_ != expected_epoch) {
             return false;
         }
-        // A commit is a drag-lane slot write like any other: it needs this
-        // drag's ownership of the panel it commits. A superseded drag's release
-        // therefore leaves NO trace, exactly as a stale-epoch release does.
+        // Like preview writes, commits require this drag to own the panel's slot.
+        // Refuse a superseded drag's release without side effects, as for a stale epoch.
         if (depth_window_pin_owners_[splitViewPanelIndex(panel)] != drag_token) {
             return false;
         }
@@ -1283,12 +1240,11 @@ namespace lfs::vis {
             discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
         }
         const bool fan_out = applyDepthWindowForPanelLocked(panel, clamped);
-        // A COMMIT supersedes the pre-drag backup of the panel it commits: the
-        // state is no longer an uncommitted preview, and a later mode
-        // transition must not roll it back.
+        // The value is now committed. Discard its pre-drag backup so a later mode
+        // transition cannot roll it back as an uncommitted preview.
         releaseDepthWindowBackupsLocked(panel, fan_out);
-        // The snapshot the undo entry is built from is read under the SAME lock
-        // as the epoch check and the write: no transition can slip between them.
+        // Keep the epoch check, write and undo snapshot under one lock so no mode
+        // transition can intervene.
         out_snapshot = depthWindowSnapshotLocked();
         markDirty(DirtyFlag::ALL);
         return true;
@@ -1301,12 +1257,9 @@ namespace lfs::vis {
             if (depth_window_sync_ == sync) {
                 return;
             }
-            // Sync changes are ignored while a depth-window drag OWNS a panel -
-            // from invoke to destruction, subthreshold presses included, not
-            // merely while it previews. The toggle's undo snapshot would
-            // otherwise capture the drag's transient geometry, and a drag whose
-            // before_ was captured under the old flag would commit an undo
-            // baseline that no longer matches the sync state.
+            // Ignore sync changes from drag invoke to destruction, including subthreshold
+            // presses. Otherwise the toggle's undo snapshot could capture preview geometry,
+            // and the drag's before_ baseline could disagree with the new sync state.
             if (depthWindowDragOwnedLocked()) {
                 return;
             }
@@ -1314,9 +1267,9 @@ namespace lfs::vis {
                 // An actual global sync edit ends retention before the GT guard.
                 discardRetainedDepthWindowPairLocked(split_view_service_.focusedPanel());
             }
-            // GT has no live per-panel editing target, and sync undo restores
-            // live slots rather than the parked pair. Refuse instead of restoring
-            // an unequal pair with sync ON. GT without a parked pair is unaffected.
+            // GT has no per-panel edit target. Refuse while it parks a pair: sync undo
+            // restores live slots, not that pair, and could leave unequal windows with
+            // sync on. GT without a parked pair is unaffected.
             if (depth_window_dormant_panels_) {
                 return;
             }
@@ -1328,20 +1281,13 @@ namespace lfs::vis {
                 if (panel_depth_windows_[focused_index] != panel_depth_windows_[other_index]) {
                     const op::DepthWindowModeSnapshot before_snapshot = depthWindowSnapshotLocked();
                     panel_depth_windows_[other_index] = panel_depth_windows_[focused_index];
-                    // A legitimate NON-DRAG write to a slot supersedes that
-                    // slot's stale pre-drag backup, exactly as
-                    // setDepthWindowForPanel does: otherwise a later transition
-                    // would fold the pre-drag window back over this copy.
+                    // Discard stale backups after this sync copy, as setDepthWindowForPanel does,
+                    // so a later transition cannot restore the pre-drag window over the copied value.
                     releaseIdleDepthWindowBackupsLocked();
-                    // A SLOT-INVALIDATING write, exactly like the leave
-                    // collapse: the other panel's window is gone, replaced by
-                    // the focused one. A consumer caching per-panel state
-                    // derived from the slots has to learn that here too, or a
-                    // hidden ON -> OFF -> focus-change -> ON cycle leaves it
-                    // seeding from a window that no longer exists anywhere.
-                    // Stamped inside the same critical section as the copy, and
-                    // ONLY when a copy actually happened - equal slots
-                    // invalidate nothing.
+                    // Like collapse on leaving independent-dual, this copy replaces the other
+                    // panel's window with the focused one. Stamp lineage under the copy's lock
+                    // so cached per-panel state cannot reuse the discarded window after a hidden
+                    // ON -> OFF -> focus-change -> ON cycle. Equal slots need no copy or stamp.
                     stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
                                                   DepthWindowLineageKind::SyncCopy);
                     slots_changed = true;
@@ -1390,15 +1336,11 @@ namespace lfs::vis {
     void RenderingManager::stampDepthWindowLineageLocked(
         const SplitViewPanelId source,
         const DepthWindowLineageKind kind) {
-        // ONE writer, always under settings_mutex_. Every field moves together
-        // or not at all, so a consumer's single locked read can never pair a
-        // source with another instant's generation or kind.
-        // Invalidating writes stamp inside their critical section, except
-        // sync undo/redo, which stamps afterwards under
-        // a second acquisition (depth_window_undo_entry.cpp:100). The record is
-        // still self-consistent, but it is not atomic WITH the slots, so a
-        // consumer reading slots and record separately must revalidate the
-        // generation around its reads.
+        // Sole writer of source, generation and kind; settings_mutex_ keeps them consistent.
+        // Invalidating writes stamp under the same lock as slot changes, except sync
+        // undo/redo, which stamps under a second acquisition (DepthWindowSyncUndoEntry::apply).
+        // The record is self-consistent, but not atomic with the slots. Consumers reading
+        // them separately must revalidate generation around their reads.
         depth_window_collapse_source_ = source;
         depth_window_collapse_kind_ = kind;
         ++depth_window_collapse_generation_;
@@ -1435,37 +1377,28 @@ namespace lfs::vis {
     }
 
     void RenderingManager::restoreDepthWindowStateFromProject() {
-        // A project restore bumps the epoch exactly like a mode transition, so
-        // it is serialized against a drag's release sequence the same way.
-        // Lock order: transition -> settings -> history.
+        // Project restore advances the epoch; serialize it with drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         std::lock_guard<std::mutex> lock(settings_mutex_);
         const auto projection_window = depthWindowFromProjection(settings_);
         restoreDepthWindowStateLocked({projection_window, projection_window}, false, projection_window);
         ++depth_window_projection_generation_;
-        // A project restore is a lifetime discontinuity: any in-flight drag and
-        // any surviving undo entry belong to the previous session's windows, so
-        // they expire through the existing epoch machinery. The pre-drag
-        // backups belong to those windows too - a later mode transition must
-        // not fold a pre-project window back over the restored one.
+        // Project restore advances the epoch, expiring drags and undo entries from
+        // the previous session. Clear their pre-drag backups so later mode transitions
+        // cannot restore old windows over the loaded state.
         depth_window_drag_backups_ = {};
-        // Ownership guarded those backups; with the backups gone it names
-        // nothing. A surviving drag's endDepthWindowDrag releases only what it
-        // still owns, so clearing here simply makes that end a no-op.
+        // Clear ownership with the backups. endDepthWindowDrag releases only slots
+        // it still owns, so surviving drags leave these slots untouched.
         depth_window_pin_owners_ = {};
-        // A parked dormant pair belongs to the previous session's windows for
-        // exactly the same reason as the backups above: leaving GT after this
-        // restore must not fold a pre-project pair back over the restored one.
+        // Like the backups, the parked pair belongs to the previous session.
+        // Discard it so leaving GT cannot overwrite the restored windows.
         depth_window_dormant_panels_.reset();
-        // The third SLOT-INVALIDATING write. A restore seeds BOTH slots from
-        // the restored projection, so nothing a consumer cached about either
-        // panel survives it - and it can begin and end in independent-dual with
-        // sync already off, in which case a poller sees no mode edge, no sync
-        // edge and no focus edge. Without this stamp that whole class of
-        // reference-lifetime discontinuity is invisible. The source field names
-        // the focused panel only so the record is well-formed; a restore takes
-        // its window from the project, not from a panel, so no consumer rule
-        // reads it for this kind.
+        // Restore seeds both slots from the project's projection, invalidating cached
+        // panel references. Stamp this even if independent-dual, sync OFF and focus
+        // stay unchanged, so polling detects the reset. The source names the focused
+        // panel only to complete the record; consumers ignore it for ProjectRestore.
         stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
                                       DepthWindowLineageKind::ProjectRestore);
         ++depth_window_mode_epoch_;
@@ -1479,10 +1412,9 @@ namespace lfs::vis {
         if (depth_window_mode_epoch_ != expected_epoch) {
             return false;
         }
-        // The projection always follows whichever panel is focused NOW - never
-        // the projection captured at snapshot time (focus may have moved since).
-        // restore_sync only decides whether the sync flag comes from the
-        // snapshot (sync entries) or stays as-is (drag entries own slots only).
+        // Focus may have changed: restore projection from the currently focused
+        // panel's snapshot slot. restore_sync restores the saved sync flag for sync
+        // entries; drag entries restore slots only and preserve the current flag.
         const auto& focused_slot =
             snapshot.panels[splitViewPanelIndex(split_view_service_.focusedPanel())];
         restoreDepthWindowStateLocked(snapshot.panels,
@@ -1494,11 +1426,10 @@ namespace lfs::vis {
 
     void RenderingManager::stampDepthWindowSyncRestoreLineage() {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        // kind=ProjectRestore here means "fresh-baseline required", not
-        // literally a project load: a sync undo/redo restores two absolute
-        // window snapshots at once, so nothing a consumer cached is meaningful.
-        // The source field names the focused panel only so the record is
-        // well-formed; no consumer rule reads it for this kind.
+        // ProjectRestore means "fresh baseline required" here: sync undo/redo restores
+        // both absolute window snapshots, invalidating cached panel references.
+        // This is not a project load. The focused source only completes the record;
+        // consumers ignore it for this kind.
         stampDepthWindowLineageLocked(split_view_service_.focusedPanel(),
                                       DepthWindowLineageKind::ProjectRestore);
     }
@@ -1519,10 +1450,8 @@ namespace lfs::vis {
         const DepthWindowState& projection) {
         panel_depth_windows_ = panels;
         depth_window_sync_ = sync;
-        // Another NON-DRAG full-slot writer (undo/redo restore, the explicit
-        // project restore): the slots it writes are legitimate state now, so
-        // any backup guarding a slot no drag owns is stale and released. The
-        // uniform rule across every non-drag writer of panel_depth_windows_.
+        // Undo/redo and project restore replace both slots with valid state.
+        // Discard stale backups only for unowned slots with a zero drag count.
         releaseIdleDepthWindowBackupsLocked();
         const float previous_depth_min_z = settings_.depth_filter_min.z;
         const float previous_depth_max_z = settings_.depth_filter_max.z;
@@ -1560,12 +1489,10 @@ namespace lfs::vis {
         const bool restore_dormant_panels =
             is_independent && depth_window_dormant_panels_.has_value();
 
-        // Drags that raced this transition may already have written previews into
-        // their slots (the registry can check a modal out before the cancel
-        // arrives). Undo EVERY recorded write FIRST so the collapse below folds
-        // clean pre-drag state on BOTH panels, whichever side won the mutex, then
-        // drop the backups: this transition consumed them, and a surviving or
-        // replacement drag must not inherit them across the epoch boundary.
+        // A modal checked out before cancellation can race this transition and write
+        // a preview. Restore all recorded backups first so both panels collapse from
+        // pre-drag state whichever operation won the mutex. Discard the backups so no
+        // surviving or replacement drag inherits them across the epoch boundary.
         const size_t focused_index = splitViewPanelIndex(split_view_service_.focusedPanel());
         for (size_t index = 0; index < depth_window_drag_backups_.size(); ++index) {
             if (!depth_window_drag_backups_[index]) {
@@ -1573,9 +1500,8 @@ namespace lfs::vis {
             }
             const DepthWindowState backup_window = *depth_window_drag_backups_[index];
             panel_depth_windows_[index] = backup_window;
-            // Parking settles projection below from pre-transition focus or an
-            // explicit boundary write. Current focus may already be reset by
-            // the event path; direct updateSettings does not perform that reset.
+            // Parking sets projection below from pre-transition focus or an explicit boundary
+            // write. Events may have reset current focus; direct updateSettings keeps it.
             if (index == focused_index && !park_dormant_panels) {
                 const RenderSettings before_projection = settings_;
                 applyDepthWindowToProjection(settings_, backup_window);
@@ -1585,15 +1511,13 @@ namespace lfs::vis {
             }
             depth_window_drag_backups_[index].reset();
         }
-        // This transition consumed every backup, so it clears every slot's
-        // ownership with them: a surviving drag's end owns nothing and its next
-        // write refuses on ownership as well as on the epoch.
+        // All backups are consumed; clear all slot ownership. Surviving drags have
+        // no slots to release, and further writes fail both ownership and epoch checks.
         depth_window_pin_owners_ = {};
 
         if (park_dormant_panels) {
-            // PRESERVE both windows. The drag fold and the ownership clear
-            // above have already run, so what is parked is clean pre-drag
-            // state. Both references survive, so parking stamps no lineage.
+            // Backups are restored and ownership cleared. Park both pre-drag windows;
+            // their references survive, so no lineage stamp is needed.
             depth_window_dormant_panels_ = panel_depth_windows_;
             // Preserve an explicit GT-boundary projection. Otherwise remove
             // any abandoned preview using the clean pre-transition focused slot.
@@ -1609,11 +1533,10 @@ namespace lfs::vis {
                 }
             }
         } else if (restore_dormant_panels) {
-            // The next independent entry: the exact retained pair comes
-            // back over whatever a global GT-time write fanned into the slots.
-            // The projection follows whichever panel is focused NOW - the
-            // event-driven service transition resets it to Left; direct settings
-            // writes retain their current focus. Neither restores pre-GT focus.
+            // On independent entry, restore the exact retained pair over slot values from
+            // GT-time global writes. Projection follows current focus: event-driven
+            // transitions reset it to Left; direct settings writes keep it.
+            // Neither restores pre-GT focus.
             panel_depth_windows_ = *depth_window_dormant_panels_;
             const auto focused_window =
                 panel_depth_windows_[splitViewPanelIndex(split_view_service_.focusedPanel())];
@@ -1625,22 +1548,18 @@ namespace lfs::vis {
                 ++depth_window_projection_generation_;
             }
         } else if (splitViewUsesGTComparison(previous_mode) && new_mode == SplitViewMode::Disabled) {
-            // Disabled drags take their backups from the live slots. Make both
-            // agree with the authoritative global projection while the separate
-            // retained pair remains available for a later independent entry.
+            // Disabled drags back up live slots, so align both with the global projection.
+            // Keep the retained pair separate for the next independent entry.
             panel_depth_windows_.fill(depthWindowFromProjection(settings_));
         } else if (!was_independent && is_independent) {
             const auto projection_window = depthWindowFromProjection(settings_);
             panel_depth_windows_ = {projection_window, projection_window};
         } else if (was_independent && !is_independent) {
-            // Record WHICH panel this collapse folded, before the split service's
-            // reset-to-Left makes it unrecoverable from the focus getter. The
-            // toolbar's per-panel Size references have to follow the window.
-            // Same write site, same lock: identity alone aliases a
-            // leave -> enter -> leave cycle onto its last leg, so stamp the
-            // COUNT and the KIND beside it. A poller compares the delta against
-            // the transition it observed and learns whether it missed any, and
-            // the kind tells it how to recover from the ones it missed.
+            // Record the source from before the focus reset to Left so toolbar Size references
+            // follow its window. Stamp source, generation and kind under the collapse lock.
+            // Source alone hides intermediate transitions in a leave -> enter -> leave cycle.
+            // Comparing the generation delta with the observed transition reveals missed
+            // transitions; kind tells the poller how to recover.
             stampDepthWindowLineageLocked(pre_transition_focus,
                                           DepthWindowLineageKind::LeaveCollapse);
             const auto collapsed =
@@ -1661,10 +1580,9 @@ namespace lfs::vis {
             depth_window_dormant_panels_.reset();
         }
 
-        // The boundary was established at the top of this helper: a drag that
-        // survives the cancel race has every later write and its commit refused
-        // by the epoch guards, and undo entries from the other side of the
-        // boundary expire.
+        // For the boundary detected above, advance the epoch to reject further writes
+        // and commits from drags that survive cancellation, and expire pre-transition
+        // undo entries.
         ++depth_window_mode_epoch_;
     }
 

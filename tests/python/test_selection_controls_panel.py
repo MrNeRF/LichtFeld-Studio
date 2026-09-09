@@ -54,21 +54,14 @@ def _install_lf_stub(monkeypatch):
         # ignores the toggle while a depth-window drag is in flight.
         sync_write_ignored=False,
         sync_calls=[],
-        # The manager's record of which panel the last independent-dual collapse
-        # folded (rendering_manager.cpp, the collapse branch of
-        # applyDepthWindowModeTransitionLocked). A test that leaves the mode sets
-        # this the way the native transition would, because the split service
-        # resets the observable focus to Left in the same transition and the
-        # plugin has no other way to learn the source panel.
+        # Model the split service's leave: record the native collapse source before
+        # resetting observable focus to Left. The plugin then knows which window
+        # survived (applyDepthWindowModeTransitionLocked).
         depth_window_collapse_source="left",
-        # How many slot-invalidating writes the manager has stamped: ALL FOUR
-        # lineage writes bump it, not only the independent-dual collapses --
-        # the sync-ON copy and the two fresh-baseline restores do too
-        # (rendering_manager.cpp, stampDepthWindowLineageLocked bumps it beside
-        # the source and the kind, under the same lock). A test that models one
-        # of those writes bumps it the way the native side would; leaving it
-        # BEHIND the writes it describes is how a test models a cycle the
-        # poller slept through.
+        # Model stamped lineage writes: leave collapse, sync copy, project/sync restore
+        # and retained-pair discard. Each stamp updates the triple under one lock; sync
+        # undo/redo stamps separately from its slot restore. Keep the consumer's cached
+        # generation behind to model changes between polls.
         depth_window_collapse_generation=0,
         # WHICH native write stamped the lineage record last
         # (rendering_manager.hpp, DepthWindowLineageKind): 'leave_collapse',
@@ -108,12 +101,9 @@ def _install_lf_stub(monkeypatch):
         state.sync_calls.append(bool(sync))
         if state.sync_write_ignored:
             return state.depth_sync
-        # MODEL the production copy (rendering_manager.cpp,
-        # setDepthWindowSync): turning sync ON in independent-dual with
-        # DIFFERING slots copies the focused panel's window over the other and
-        # stamps the lineage record inside the same critical section. Flipping
-        # only the flag would let a test pass while the reference the copy
-        # invalidated was never reconciled.
+        # Model setDepthWindowSync: enabling sync with distinct independent slots copies
+        # the focused window and stamps lineage in the same critical section. A
+        # flag-only stub would miss invalidated-reference regressions.
         if (
             bool(sync)
             and not state.depth_sync
@@ -2230,12 +2220,9 @@ def test_focus_change_cancels_a_depth_text_edit_started_on_the_other_panel(
     before = state.depth_near
     canonical = float(f"{state.depth_near:.2f}")
 
-    # The blur that the host still delivers must not carry L's number.
-    # The cancel reverts the field in place instead of fencing
-    # the commit off, so the blur writes R's own canonical value -- a no-change
-    # write. Assert that the write ACTUALLY HAPPENED and
-    # carried the canonical payload, not merely that the final value is
-    # unchanged -- the weak form passed under the old blanket-swallow code.
+    # Blur must actually write Right's canonical payload after retargeting, never Left's
+    # text. Checking only unchanged final state would also pass the old blanket-swallow
+    # behavior.
     writes_before = len(state.window_calls)
     doc.near.emit("blur")
 
@@ -2269,12 +2256,9 @@ def test_focus_change_keeps_an_edit_started_on_the_panel_now_focused(
 def test_toolbar_sync_on_collapses_the_focused_panels_reference(
     selection_controls_module,
 ):
-    """Regression.
-
-    The toggle path refreshes the cached sync flag itself, so update() can never
-    see the edge; the reconciliation has to run on the toggle path. Sync ON
-    means one window again, collapsed from the FOCUSED panel -- so the shared
-    reference must come from that panel's entry, not stay stale.
+    """The toggle consumes the sync edge before update() can see it, so it must
+    reconcile itself. Sync ON takes the focused panel's reference as shared instead of
+    retaining a stale one.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -2339,22 +2323,10 @@ def test_toolbar_sync_off_seeds_both_panel_references(selection_controls_module)
 def test_toolbar_toggle_reads_the_actual_flag_before_toggling(
     selection_controls_module,
 ):
-    """Regression.
-
-    `not self._depth_sync` computed from the CACHE is only a toggle while the
-    cache agrees with the manager. If the flag moved externally since the last
-    100ms poll, the click re-requests the value the manager already holds and
-    nothing toggles. The toggle path must refresh first.
-
-    That refresh is not merely a read. It consumes a
-    PENDING external sync edge, so the click drives TWO reconciliations, and the
-    test has to pin both by VALUE:
-
-      * the pending ON is reconciled first -- one window again, collapsed from
-        the focused panel, so the shared reference becomes Left's .60 (not the
-        stale .35, and not Right's .20);
-      * the toggle then turns sync OFF, which seeds BOTH panel entries from that
-        shared one, so Right's .20 is replaced by .60 as well.
+    """Refresh before toggling: an external flag change since the 100 ms poll makes an
+    inverted cache a no-op request. Assert both reconciliations by value: pending ON
+    takes focused Left's .60, not stale shared .35 or Right's .20; the click then turns
+    OFF and seeds both panels from shared .60.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -2504,13 +2476,9 @@ def test_reedit_after_a_cancel_still_commits_on_linebreak(selection_controls_mod
 def test_commit_lands_when_focus_changed_without_blur_or_a_new_focus_event(
     selection_controls_module,
 ):
-    """Regression: the real ordering.
-
-    An operator/MCP/project-restore focus change sends no pointer input
-    (depth_window_ops.cpp:430 focuses the panel directly), so the retained
-    input is never blurred AND never re-focused. Continued typing plus Enter
-    must still commit: the cancel reverted the field in place, so there is
-    nothing left to fence off.
+    """Operator/MCP/project-restore focus changes send no pointer blur or refocus. After
+    the retained field is reverted in place, continued typing and Enter must commit
+    without a leftover refusal flag.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -2530,12 +2498,9 @@ def test_commit_lands_when_focus_changed_without_blur_or_a_new_focus_event(
     # The user carries on typing in the same, still-DOM-focused field.
     model.bound_binds["selection_depth_near_str"][1]("4.25")
 
-    # An INTERVENING poll. The overlay updates every
-    # 100ms (rml_viewport_overlay.hpp:215), so a real user's keystroke and
-    # their Enter are always separated by several of these. If the retarget
-    # dropped the key from _editing_depth_text, _sync_depth_text_bufs() would
-    # treat the still-focused field as unedited and overwrite 4.25 with the
-    # canonical text right here.
+    # Poll between typing and Enter, as the overlay does every 100 ms. If retargeting
+    # drops live-edit membership, _sync_depth_text_bufs overwrites 4.25 with canonical
+    # text here.
     panel.update(doc)
     assert panel._depth_text_bufs["selection_depth_near_str"] == "4.25"
 
@@ -2547,12 +2512,8 @@ def test_commit_lands_when_focus_changed_without_blur_or_a_new_focus_event(
 def test_a_second_focus_change_retargets_the_retained_field_again(
     selection_controls_module,
 ):
-    """Regression: the guard must survive to fire twice.
-
-    With the edit-origin entry removed on the first cancel, a SECOND external
-    focus change sees no live edit and runs no guard at all. Retargeting keeps
-    the key registered, so each change reverts the field again and the origin
-    always names the panel on screen.
+    """Keep the retained edit registered after retargeting. A second external focus
+    change must revert it again and update its origin to the displayed panel.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -2611,12 +2572,8 @@ def test_untouched_field_commits_the_canonical_value_after_a_cancel(
 def test_a_toolbar_action_retargets_the_active_edit_whose_edge_it_consumes(
     selection_controls_module,
 ):
-    """Regression: update() is not the only edge consumer.
-
-    `_on_action` refreshes the panel context after every toolbar action. While
-    that refresh was the only place the new focus was adopted and the guard
-    lived in update(), the action swallowed the focus edge and the edit kept its
-    stale Left origin -- so the blur that followed wrote Left's text into Right.
+    """_on_action refreshes context itself. It must also retarget the edit when it
+    consumes a focus edge, or the following blur writes Left's stale text into Right.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -2700,13 +2657,9 @@ def test_the_sync_toggle_retargets_the_active_edit_whose_edge_it_consumes(
 def test_a_commit_before_the_next_poll_retargets_the_active_edit(
     selection_controls_module,
 ):
-    """Regression: the commit path's own validation.
-
-    Enter or blur can arrive before ANY refresh has observed the focus change,
-    so no channel had a chance to retarget. `_commit_depth_text_key` therefore
-    validates the recorded origin against a fresh context read of its own; on a
-    mismatch the retarget rule applies and the canonical value is what gets
-    written, never the stale-origin text.
+    """Enter or blur may precede any poll of a focus change. Validate the edit origin
+    against fresh context at commit time and write canonical text on a mismatch, never
+    the stale-origin buffer.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -2739,12 +2692,8 @@ def test_a_commit_before_the_next_poll_retargets_the_active_edit(
 def test_a_retyped_stale_string_after_a_retarget_still_commits(
     selection_controls_module,
 ):
-    """Regression: the legitimate-retype case.
-
-    The retarget reverts the field, but the user may legitimately want the very
-    number they had typed before it. Retyping the EXACT stale string must land
-    natively: nothing keyed on the text itself survives the revert, so there is
-    no collision left to mis-refuse it.
+    """After retargeting reverts a field, explicitly retyping the same stale string is a
+    legitimate edit. No text-keyed refusal may survive to reject it.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -2771,15 +2720,10 @@ def test_a_retyped_stale_string_after_a_retarget_still_commits(
 def test_coalesced_focus_change_and_mode_leave_uses_the_native_collapse_source(
     selection_controls_module,
 ):
-    """Regression: collapse provenance across a coalesced leave.
-
-    Cached focus Left. Native focus moves to Right and the mode then LEAVES
-    independent-dual, both before one poll. The manager collapsed RIGHT's window
-    (it captures the pre-transition focus), while the split service reset the
-    observable focus to Left in the same transition. The plugin's cached
-    "previous" panel is Left and cannot recover Right, so it reads the manager's
-    record of what it actually collapsed; seeding shared from Left's .60 would
-    put the displayed window and the Size reference on different panels.
+    """With cached Left focus, native focus moves Right and leaves independent-dual
+    before a poll. The manager collapses Right but service focus resets Left; use the
+    native collapse source, since cached Left's .60 describes the wrong surviving
+    window.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -2810,11 +2754,8 @@ def test_coalesced_focus_change_and_mode_leave_uses_the_native_collapse_source(
 def test_focus_then_sync_on_then_mode_leave_uses_the_native_collapse_source(
     selection_controls_module,
 ):
-    """The same provenance loss through the focus -> sync-ON -> leave ordering.
-
-    Three native edges coalesce into one poll. The leave is the last of them and
-    is what fixed the final window, so its recorded source is the one that must
-    win.
+    """Focus, sync ON and mode leave coalesce into one poll. The final leave determines
+    the surviving window, so its recorded source wins.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -2841,18 +2782,10 @@ def test_focus_then_sync_on_then_mode_leave_uses_the_native_collapse_source(
 def test_a_hidden_leave_enter_leave_cycle_resyncs_from_the_native_window(
     selection_controls_module,
 ):
-    """Regression: a cycle that runs entirely between two polls.
-
-    Cached {L=.60, R=.20} with Right focused. Natively: the first leave collapses
-    Right's .20; the re-entry seeds BOTH slots from it and resets focus to Left;
-    the final leave collapses Left -- which is now .20 -- and records source
-    Left. Python sees only independent -> none, so endpoint identity hands it
-    "Left" and its cached Left reference is still the .60 that stopped existing
-    at the first collapse. The collapse GENERATION is what exposes the cycle:
-    two collapses for the one transition observed. Nothing cached can be
-    replayed at that point, so the shared reference is re-seeded from the window
-    that actually survived -- fresh-baseline semantics, as if a new shape had
-    just been drawn.
+    """Start with references L=.60/R=.20 and Right focused. A hidden leave collapses
+    Right; re-entry seeds both slots from .20 and resets focus Left; another leave
+    records Left. Two collapse generations expose the missed cycle. Fresh-baseline from
+    the surviving native .20 instead of cached Left's obsolete .60.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -2885,13 +2818,9 @@ def test_a_hidden_leave_enter_leave_cycle_resyncs_from_the_native_window(
 def test_a_hidden_cycle_resync_trusts_no_cached_entry_at_all(
     selection_controls_module,
 ):
-    """The same rule, with the surviving window matching NEITHER cached entry.
-
-    That cycle happens to end on a value one cached entry also holds, so it
-    cannot tell "re-seeded from Right's cache" from "re-seeded from the native
-    window". Here the native window that survived is .20 while the cached
-    entries are .60 and .45, so only a fresh read of the native state produces
-    the asserted value.
+    """Use surviving native .20 against cached .60/.45, so neither cache entry can
+    accidentally satisfy the hidden-cycle check. Only a fresh native baseline produces
+    the expected reference.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -2919,11 +2848,10 @@ def test_a_hidden_cycle_resync_trusts_no_cached_entry_at_all(
 def test_a_single_observed_leave_still_uses_the_collapse_source(
     selection_controls_module,
 ):
-    """The other half of the rule: an EXACT delta keeps the plain behaviour.
+    """One observed leave and one collapse preserve the named source's reference.
 
-    One observed leave, one recorded collapse. Nothing was missed, so the cached
-    reference of the panel the manager named is still valid and must win --
-    the resync is for missed boundaries only, never for the ordinary path.
+    This ordinary path must not discard a valid cached reference through unnecessary
+    fresh-baseline recovery.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -2953,16 +2881,10 @@ def test_a_single_observed_leave_still_uses_the_collapse_source(
 def test_a_coalesced_focus_change_and_leave_never_commits_stale_origin_text(
     selection_controls_module,
 ):
-    """Regression: the reproduction below.
-
-    Edit Left, native focus moves to Right, then independent-dual is left, all
-    before one poll. The manager collapsed RIGHT's window into the single
-    remaining one and the split service reset the observable focus to Left, so
-    the edit's recorded origin (Left) EQUALS the post-transition focus and the
-    focus-equality guard sees nothing. The mode boundary is what exposes it: the
-    field addresses a different window than the one the text was typed against,
-    so the edit is reverted to the post-transition canonical value and
-    retargeted. The typed 3.75 must never reach the native side.
+    """Edit Left, focus Right and leave independent-dual before a poll. Right's window
+    survives but service focus resets Left, hiding the change from a focus-only guard.
+    The mode boundary must revert and retarget the field; stale 3.75 must never reach
+    native state.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -3030,15 +2952,10 @@ def test_a_coalesced_focus_sync_on_and_leave_never_commits_stale_origin_text(
 def test_a_hidden_leave_then_reenter_reconciles_although_the_endpoint_is_unchanged(
     selection_controls_module,
 ):
-    """Regression: the reopen ordering.
-
-    Cached {L=.60, R=.20} with Right focused. Natively the mode is left (Right's
-    .20 collapses), then re-entered (both slots seeded from .20, focus reset to
-    Left) -- all between two polls, so the poll sees independent-dual before and
-    after and NEITHER endpoint predicate fires. Only the lineage generation
-    witnesses it. Left's cached .60 describes a window that stopped existing at
-    the collapse; leaving it in place makes the Size field read 33% and every
-    later Size edit measure against a shape that is gone.
+    """With L=.60/R=.20 and Right focused, a hidden leave collapses .20; re-entry seeds
+    both slots and resets focus Left. The endpoint remains independent-dual, so only
+    lineage exposes the lost Left reference. Keeping .60 would show 33% and mis-scale
+    later Size edits.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -3071,12 +2988,9 @@ def test_a_hidden_leave_then_reenter_reconciles_although_the_endpoint_is_unchang
 def test_a_hidden_sync_cycle_resyncs_from_the_native_window(
     selection_controls_module,
 ):
-    """Regression: sync-ON is a collapse path too.
-
-    Hidden ON -> OFF -> focus change -> ON. Two native copies happened, so the
-    delta is two while the poll observes a single unsynced -> synced edge. No
-    cached entry survived both copies, so the shared reference fresh-baselines
-    from the window that actually exists.
+    """Hidden ON/OFF/focus/ON performs two copies while the poll sees one
+    unsynced-to-synced edge. No cached reference survives both; fresh-baseline shared
+    from the native window.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -3107,13 +3021,8 @@ def test_a_hidden_sync_cycle_resyncs_from_the_native_window(
 def test_a_single_sync_copy_seeds_from_the_recorded_source_panel(
     selection_controls_module,
 ):
-    """The other half: ONE sync copy is replayable from the recorded source.
-
-    The native side copied the source panel's window over the other, so that
-    panel's cached reference is still the one describing the surviving window --
-    and a fresh-baseline resync here would needlessly discard it. The native
-    window is deliberately a THIRD value, so only the cached source entry can
-    produce the asserted result.
+    """Exactly one sync copy preserves its source panel's cached reference. Give native
+    state a third value so fresh-baselining cannot accidentally pass this control.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -3140,13 +3049,9 @@ def test_a_single_sync_copy_seeds_from_the_recorded_source_panel(
 def test_a_project_restore_while_independent_fresh_baselines_the_references(
     selection_controls_module,
 ):
-    """Regression: a restore is a reference-lifetime discontinuity.
-
-    restoreDepthWindowStateFromProject() seeds BOTH slots from the restored
-    projection. Beginning and ending independent and unsynced, it presents NO
-    mode edge, NO sync edge and NO focus edge -- the lineage stamp is the only
-    witness. Every cached entry describes the previous project's windows, so all
-    of them fresh-baseline from the restored state.
+    """Project restore seeds both slots but can leave mode, focus and sync unchanged.
+    Its lineage stamp must fresh-baseline all references from restored state rather than
+    the previous project.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -3176,14 +3081,10 @@ def test_a_project_restore_while_independent_fresh_baselines_the_references(
 def test_a_hidden_sync_undo_redo_pair_fresh_baselines_the_references(
     selection_controls_module,
 ):
-    """Regression: the sync UNDO/REDO restore is a lineage producer too.
-
-    DepthWindowSyncUndoEntry restores two possibly-differing ABSOLUTE window
-    snapshots, so no cached per-panel reference survives it. Undo and redo BOTH
-    between two polls leaves the sync flag exactly where it started: there is no
-    flag edge, no mode edge and no focus edge, and the generation stamps (kind
-    'project_restore', meaning fresh-baseline required rather than literally a
-    project load) are the only witness the poller gets.
+    """Sync undo/redo restores absolute windows and invalidates cached references. Both
+    can occur between polls with no endpoint edge; project_restore lineage stamps are
+    the only witness. The kind denotes fresh-baseline semantics, not necessarily a
+    project load.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=True)
@@ -3215,19 +3116,11 @@ def test_a_hidden_sync_undo_redo_pair_fresh_baselines_the_references(
 def test_a_sync_undo_restoring_distinct_slots_baselines_each_panel_from_its_own(
     selection_controls_module,
 ):
-    """Regression: a fresh baseline is PER PANEL, not per projection.
+    """A single sync undo stamps project_restore and restores L=.60/R=.20.
 
-    A SINGLE sync undo (delta == 1, kind 'project_restore') restores two
-    DIFFERING absolute windows at once and ends independent-and-unsynced, so
-    there are two live windows and no edge of any kind to observe. Baselining
-    all three entries from the focused projection would leave Left's reference
-    describing RIGHT's window: focusing Left would then report .60 against a
-    .20 reference -- 300% -- and every later Size edit would scale from it.
-
-    Each panel entry must therefore baseline from ITS OWN slot
-    (get_depth_filter_window(panel=...)), leaving both panels reading 100%,
-    while the shared entry -- the one consulted in every other endpoint --
-    takes the focused projection.
+    The endpoint stays independent and unsynced. Baseline each panel from its own slot
+    and shared from the focused projection. Using Right's .20 for Left would show 300%
+    and mis-scale later edits; both panels must show 100%.
     """
     module, state = selection_controls_module
     # The state a sync undo of {L=.60, R=.20} leaves behind, with Right focused.
@@ -3272,18 +3165,10 @@ def test_a_sync_undo_restoring_distinct_slots_baselines_each_panel_from_its_own(
 def test_a_stamp_landing_between_the_endpoint_and_record_reads_is_revalidated(
     selection_controls_module,
 ):
-    """Regression: a torn endpoint/lineage read must not stick.
-
-    The endpoint (mode/focus/sync) and the lineage record are separate native
-    reads. A sync undo landing BETWEEN them -- restoring {L=.60, R=.20,
-    sync=false} and stamping 'project_restore' -- used to be processed against
-    the stale sync=true, so the fresh baseline took its single-window branch
-    and seeded all three entries from the focused .20. The NEXT poll then saw
-    the sync-OFF edge and copied that shared .20 into both panel entries, so
-    Left reported 300% and never healed.
-
-    _refresh_panel_context now reads the record, then the endpoint, then the
-    record AGAIN, and retries the whole set when the generation moved.
+    """A sync undo between endpoint and lineage reads restores L=.60/R=.20, sync=false
+    and project_restore while the cached endpoint still says sync=true. Consuming that
+    mix seeds all references from focused .20 and leaves Left at 300% after the next
+    poll. Read record/endpoint/record and retry the whole set if generation changes.
     """
     module, state = selection_controls_module
     # Cached endpoint: independent-dual and SYNCED, Right focused.
@@ -3343,23 +3228,11 @@ def test_a_stamp_landing_between_the_endpoint_and_record_reads_is_revalidated(
 def test_an_exhausted_revalidation_consumes_nothing_and_heals_next_poll(
     selection_controls_module,
 ):
-    """Regression: an exhausted tick is a NO-OP, not a partial one.
-
-    If the generation moves on EVERY re-read the loop cannot win, and the set
-    it holds is torn: the endpoint can be pre-write while the record is
-    post-write. The real storm is a toolbar Undo -> Redo -> Undo of the sync
-    flag, three restores that each rewrite BOTH absolute windows and stamp
-    'project_restore'. Landed one per attempt, between the endpoint read and
-    the second record read, they leave the last attempt holding an endpoint
-    that says sync=TRUE while the world it describes is already back to
-    sync=false with {L=.60, R=.20}. Consuming that set seeds every entry from
-    the focused .20 and the next poll's sync-OFF edge copies it into both
-    panels, so Left reports 300% forever.
-
-    So the exhausted tick consumes NOTHING -- not the endpoint, not the lineage
-    record, no reconciliation, no retarget -- and the whole delta stays pending
-    for the next poll, which re-reads a stable world and baselines each panel
-    entry from its own slot.
+    """Land sync Undo/Redo/Undo between endpoint and second-record reads, one stamped
+    absolute restore per attempt. The last torn set says sync=true while native state is
+    distinct L=.60/R=.20, sync=false; consuming it would leave Left at 300%. Exhaustion
+    must consume no endpoint, lineage, references or retarget. The next stable poll sees
+    the full delta and baselines each panel from its own slot.
     """
     module, state = selection_controls_module
     # LIVE (and therefore cached) start: independent-dual, sync ON over two
@@ -3415,12 +3288,10 @@ def test_an_exhausted_revalidation_consumes_nothing_and_heals_next_poll(
     # Three legs, so the pending delta is 3 -- SMALLER than the six stamps a
     # read-count-driven implementation would have produced.
     assert state.depth_window_collapse_generation - consumed == 3
-    # Three REAL transitions landed: equal/on -> distinct/off -> equal/on ->
-    # distinct/off. The last attempt's endpoint was read after leg 2, so it says
-    # sync=TRUE over a world that leg 3 had already put back to sync=false with
-    # {L=.60, R=.20} -- the interleaving that used to corrupt. Nothing from that
-    # torn set was consumed: not the endpoint, not the generation, not one
-    # reference entry; every cached field is still the pre-storm one.
+    # Undo/Redo/Undo went equal/on -> distinct/off -> equal/on -> distinct/off. The last
+    # torn endpoint still says sync=true over native L=.60/R=.20, sync=false. No
+    # endpoint, generation or reference may be consumed; the entire cache stays
+    # pre-storm.
     assert state.depth_sync is False
     assert state.panel_scales == {"left": (0.60, 0.60), "right": (0.20, 0.20)}
     assert panel._depth_sync is True, (
@@ -3462,20 +3333,10 @@ def test_an_exhausted_revalidation_consumes_nothing_and_heals_next_poll(
 def test_an_exhausted_leave_neither_canonicalizes_nor_commits_the_size_field(
     selection_controls_module,
 ):
-    """Regression: the active-edit half of the inert-tick rule.
-
-    Caching the endpoint on an exhausted tick while deferring the lineage is
-    NOT a safe halfway house. The mode/focus retarget guard fires on the cached
-    edge and canonicalizes the Size field -- but the reconciliation that would
-    have re-seeded the references was skipped, so the canonical text is
-    computed from a stale reference. With native scale .20 against a stale
-    shared reference of .90 the field reads 22%, and a commit landing during a
-    SECOND exhausted refresh then writes that 22% into native state, which no
-    later poll can undo.
-
-    So the exhausted tick touches nothing: the mode is not cached, the guard
-    does not fire, the buffer the user is typing is left alone, and a commit
-    whose validating refresh comes back exhausted DEFERS rather than writing.
+    """Consuming an endpoint without its lineage can retarget Size against a stale
+    reference: native .20/shared .90 displays 22%, then a second exhausted commit writes
+    it. An exhausted refresh must preserve mode, edit buffer and references, and defer
+    the commit without writing.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -3566,12 +3427,9 @@ def test_an_exhausted_leave_neither_canonicalizes_nor_commits_the_size_field(
     assert panel._canonical_depth_text_value("selection_depth_scale_str") == "100%"
     assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
 
-    # And the deferred commit resolved against that stable world -- the poll
-    # above retried it (_flush_deferred_depth_commits), no second Enter needed.
-    # The stable poll DID observe the mode boundary, so the settled retarget
-    # rule reverted the buffer to that panel's canonical text first: the commit
-    # wrote 100% of the reconciled reference, an idempotent no-change write,
-    # never the 22% the torn snapshot would have produced.
+    # The stable poll retries the deferred commit without another Enter. Its
+    # mode-boundary retarget first restores canonical text, so the write is an
+    # idempotent 100% of the reconciled reference, never the torn snapshot's 22%.
     assert panel._depth_text_bufs["selection_depth_scale_str"] == "100%"
     assert len(state.window_calls) == writes_before + 1
     assert state.depth_scale == pytest.approx(0.20)
@@ -3584,13 +3442,10 @@ def test_an_exhausted_leave_neither_canonicalizes_nor_commits_the_size_field(
 
 
 def _tearing_record(state):
-    """A record getter that exhausts the revalidation loop at a STILL generation.
-
-    Every second read fails, and a failed read reports generation None
-    (_depth_window_collapse_record), so no attempt ever gets a comparable pair
-    -- while the native generation never moves at all. That is the read storm
-    under reproduction, and it keeps the exhaustion free of any phantom
-    lineage delta that would fire the retarget guard for unrelated reasons.
+    """Fail every second record read at a fixed native generation. Each failed read
+    reports None, so retries never obtain comparable generations. This isolates
+    exhaustion from phantom lineage changes that could independently trigger
+    retargeting.
     """
     reads = []
 
@@ -3610,19 +3465,11 @@ def _tearing_record(state):
 def test_an_escape_revert_survives_a_blur_that_lands_during_exhaustion(
     selection_controls_module,
 ):
-    """Regression: exhaustion may delay a revert, never drop it.
-
-    Reproduction: native .25, Enter commits 1.0, Escape restores the
-    buffer to .25, and the blur that cancelFocusedElement fires immediately
-    afterwards -- the blur that CARRIES the revert -- lands mid-storm. Its
-    commit defers, but the widget calls on_blur unconditionally
-    (rml_widgets.bind_committed_text_input), so forgetting the key there would
-    strand the revert: native would stay 1.0 with nothing left to retry.
-
-    The blur is COMPLETE, so the live-edit membership is retired exactly as an
-    undeferred blur retires it; what carries the revert is the deferral record,
-    which freezes the reverted text and the origin panel. The first stable poll
-    retries the write from that frozen record.
+    """Enter changes native .25 to 1.0; Escape restores the .25 buffer, then
+    cancelFocusedElement blurs during exhaustion. The widget ends the edit even though
+    its revert write deferred. Keep a blurred record with reverted text and origin,
+    retire live-edit membership, and apply that frozen revert on the first stable poll
+    so native state cannot remain 1.0.
     """
     module, state = selection_controls_module
     panel, model, doc = _mounted_panel(module, state)
@@ -3720,14 +3567,9 @@ def test_a_plain_blur_commit_deferred_by_exhaustion_lands_on_a_stable_poll(
 
 
 def test_two_deferred_keys_both_land_on_the_same_flush(selection_controls_module):
-    """Regression: one key's commit must not eat another's buffer.
-
-    Reproduction: Near 0.75 and Far 8.25 both deferred by the storm. The
-    flush walks every deferred key, but the first commit to land ends in
-    _sync_depth_text_bufs(force=True), and a forced sync that only skipped LIVE
-    edits canonicalized the still-deferred sibling -- Near finished at its
-    native 0.25 with the record retired. BOTH values are the user's, and both
-    must land.
+    """Defer Near .75 and Far 8.25. Committing either key forces text synchronization,
+    which must preserve the other pending buffer even though it is no longer live. Both
+    intended values must land.
     """
     module, state = selection_controls_module
     panel, model, doc = _mounted_panel(module, state)
@@ -3763,16 +3605,9 @@ def test_two_deferred_keys_both_land_on_the_same_flush(selection_controls_module
 def test_the_flush_replays_two_deferred_blurs_in_the_order_the_user_made_them(
     selection_controls_module,
 ):
-    """Regression: the flush must not reorder the user's edits.
-
-    Reproduction, from native Near 0.90 / Far 1.00: blur-defer Near 0.20,
-    then blur-defer Far 0.50. Near and Far are order-dependent, because each
-    write clamps against the counterpart AS IT STANDS at that moment. Replayed
-    in the user's own order the pair lands (0.20, 0.50). Replayed Far-first --
-    which is what a `sorted()` walk of the record keys does, since
-    "selection_depth_far_str" sorts before "selection_depth_near_str" -- Far is
-    clamped up against the still-native 0.90 to 0.91, and the 0.50 the user
-    typed is destroyed before Near has moved out of its way.
+    """From Near .90/Far 1.00, defer Near .20 then Far .50. Alphabetical Far-first
+    replay would clamp .50 to .91 against the old Near and destroy intent. The result
+    must be the user's .20/.50 pair.
     """
     module, state = selection_controls_module
     state.depth_near = 0.90
@@ -3814,13 +3649,10 @@ def test_the_flush_replays_two_deferred_blurs_in_the_order_the_user_made_them(
 def test_the_flush_orders_a_blurred_deferral_before_a_later_live_one(
     selection_controls_module,
 ):
-    """Regression: the same ordering law across the two record kinds.
+    """Resolve Near .20/Far .50 with blurred Near and Enter-committed, live Far.
 
-    Identical sequence to the blurred/blurred case, except the Far edit is still
-    LIVE (committed with Enter, field still focused) when the flush runs. The
-    two kinds take different write paths -- frozen payload versus a re-read of
-    the live buffer -- and both must be replayed at the position the user's
-    event took, not at the position their key name sorts to.
+    Read frozen Near and Far's current buffer. Both intended values must land; serial
+    replay by field name would clamp Far against the stale native Near.
     """
     module, state = selection_controls_module
     state.depth_near = 0.90
@@ -3859,19 +3691,10 @@ def test_the_flush_orders_a_blurred_deferral_before_a_later_live_one(
 def test_a_superseded_and_re_armed_near_still_lands_with_the_far_between_them(
     selection_controls_module,
 ):
-    """Regression: no replay ORDER is safe for the clamped pair.
-
-    Reproduction, from native Near 0.90 / Far 1.00: blur-defer Near 0.20,
-    blur-defer Far 0.50, then re-focus Near -- which SUPERSEDES and drops its
-    record -- and re-arm it with the same 0.20. The record is reinserted at the
-    registry tail, so the insertion order is now [Far, Near] and is honestly
-    chronological: Near's surviving record really was made last. Replaying that
-    order serially still clamps Far up against the untouched native Near 0.90 to
-    0.91 and destroys the 0.50.
-
-    Paired resolution removes the dependence on order entirely: the target's
-    final intended (Near, Far) is resolved first and written as ONE update, so
-    the clamp sees the user's own Near, whichever record arrived last.
+    """From .90/1.00, blur-defer Near .20 then Far .50; refocus and re-arm Near, moving
+    its surviving record behind Far. Even chronological Far/Near replay clamps .50 to
+    .91. Resolve the target's final Near/Far together and write once, regardless of
+    record order.
     """
     module, state = selection_controls_module
     state.depth_near = 0.90
@@ -3922,15 +3745,9 @@ def test_a_superseded_and_re_armed_near_still_lands_with_the_far_between_them(
 def test_the_flush_resolves_each_write_target_as_its_own_pair(
     selection_controls_module,
 ):
-    """Regression: pairing is PER TARGET, panel path included.
-
-    Both blurs are frozen to Left, and focus has moved to Right by the time the
-    flush runs, so the pair is written through the panel= setter overload rather
-    than the displayed window. That path clamps Far against the panel's OWN
-    native Near, so serial replay destroys the 0.50 there exactly as it does on
-    the focused path -- here the user happens to edit Far first, which is enough
-    on its own. Resolved as a pair, the two fields reach Left in a single
-    panel-addressed write and Right is never touched.
+    """Both blurs belong to Left but focus is Right at flush time. Far-first serial
+    panel writes would clamp against Left's old Near and lose .50. Resolve and write the
+    pair once to Left; Right must remain untouched.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -3981,25 +3798,11 @@ def test_the_flush_resolves_each_write_target_as_its_own_pair(
 def test_a_mid_flush_retarget_regroups_instead_of_writing_the_stale_target(
     selection_controls_module,
 ):
-    """Regression: no write may use a PRE-revalidation target.
-
-    Reproduction, on two independent windows with focus on Left and
-    Left=(0.90,1.00), Right=(2.00,9.00): Near is blurred and frozen to Left at
-    0.20 while Far is still LIVE. The flush groups both under the target None,
-    because a no-panel write reaches Left at that moment and a live record is
-    always aimed at the context the user is editing in. Then the live member's
-    own revalidation -- the first read to observe it -- sees focus move L to R.
-
-    That single read invalidates the grouping twice over. The live Far is
-    retargeted to Right (its buffer becomes Right's canonical text), and the
-    target named None now means Right, so the combined write carried the frozen
-    Left intent into a panel the user never touched: Right became (0.20, 9.00),
-    Left kept (0.90, 1.00), and BOTH records were consumed by a write that was
-    not theirs.
-
-    Re-deriving identity and target after the revalidation splits the pair back
-    apart: the frozen Near is panel-addressed to Left, and the retargeted Far
-    follows its context to Right on its own.
+    """Start focused Left, L=(.90,1.00), R=(2.00,9.00), with blurred Near .20 frozen to
+    Left and Far still live. They initially share the displayed target. If Far's
+    revalidation sees focus move Right, both its canonical buffer and the displayed
+    target change. Regroup after that read: write frozen Near explicitly to Left and
+    retargeted Far to Right, never the combined stale pair to Right.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -4060,14 +3863,9 @@ def test_a_mid_flush_retarget_regroups_instead_of_writing_the_stale_target(
 def test_a_mixed_target_pair_writes_each_field_to_its_own_panel(
     selection_controls_module,
 ):
-    """Regression: genuinely mixed targets, no mid-flush move.
-
-    Near is blurred and frozen to Left while Far is LIVE on the focused panel,
-    Right -- the two records really do belong to different windows, and the
-    context does not move during the flush. Each has to take its own write and
-    clamp against its OWN panel's counterpart: Far's 0.50 is below Right's
-    native Near 2.00 and must ride up to 2.01, which it cannot do if the pair
-    was resolved together against Left's 0.20.
+    """With stable Right focus, blurred Near belongs to Left and live Far to Right.
+    Resolve each against its own counterpart: Right Far .50 clamps above its Near 2.00
+    to 2.01, independently of Left Near .20.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -4119,14 +3917,9 @@ def test_a_mixed_target_pair_writes_each_field_to_its_own_panel(
 def test_a_blurred_deferral_survives_a_focus_move_and_lands_on_its_own_panel(
     selection_controls_module,
 ):
-    """Regression: a COMPLETED blur is not retargetable.
-
-    Reproduction: Left Near 0.75 deferred by the storm, focus then moves
-    to Right. Holding the blurred edit in _editing_depth_text made the focus
-    transition treat it as live, so _cancel_foreign_depth_text_edits replaced
-    both its payload and its target -- the flush wrote Right's canonical value
-    to Right and Left stayed 0.25. The user's finished intent must land on the
-    panel they typed it into, whatever focus did afterwards.
+    """Blur-defer Left Near .75, then focus Right. A completed blur must retain its
+    payload and origin outside live-edit retargeting; otherwise the flush writes Right's
+    canonical value and strands Left at .25. The intended write must reach Left only.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -4163,13 +3956,9 @@ def test_a_blurred_deferral_survives_a_focus_move_and_lands_on_its_own_panel(
 def test_refocusing_a_blurred_deferral_supersedes_it_and_spares_the_new_edit(
     selection_controls_module,
 ):
-    """Regression: the latest intent wins, cleanly.
-
-    Reproduction: defer 0.75 by blurring mid-storm, then re-focus the
-    field and type 0.90. With the stale blurred record still in place the flush
-    committed and then retired the edit the user was in the middle of, so the
-    1.10 they typed next was overwritten back by the following poll. Re-focusing
-    supersedes the pending record instead, and the new edit owns its lifecycle.
+    """After blur-deferring .75, refocus and type .90. Drop the old record without
+    committing or retiring the new edit, so Enter can apply .90 and later polling cannot
+    overwrite newly typed 1.10.
     """
     module, state = selection_controls_module
     panel, model, doc = _mounted_panel(module, state)
@@ -4214,14 +4003,9 @@ def test_refocusing_a_blurred_deferral_supersedes_it_and_spares_the_new_edit(
 def test_a_sync_toggle_during_exhaustion_is_dropped_not_written_from_the_cache(
     selection_controls_module,
 ):
-    """Regression: `not self._depth_sync` is only a toggle when
-    the refresh actually refreshed.
-
-    An exhausted refresh consumes nothing, so the cache stays at its stale
-    pre-refresh value. With the cache false and the manager already true,
-    `not cache` requests TRUE -- a no-change write that loses the user's click
-    while pretending to have served it. The click is dropped instead, exactly
-    as the manager drops one refused mid-drag.
+    """If exhausted refresh leaves cached sync=false while native sync=true, inverting
+    the cache sends a no-op TRUE request. Drop the click without a setter call until a
+    later poll can refresh the actual state.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -4255,15 +4039,10 @@ def test_a_sync_toggle_during_exhaustion_is_dropped_not_written_from_the_cache(
 def test_a_leave_between_the_record_reads_seeds_from_the_post_leave_source(
     selection_controls_module,
 ):
-    """Regression: the generation-None fallback keeps the SECOND read.
-
-    An older binding exposes only the single-value source getter, so both
-    record reads report a generation of None and the revalidation loop ends on
-    its first attempt. It must still retain the POST-endpoint read: if a
-    Right-panel leave lands between the two reads, the endpoint is already
-    post-leave while the first record still names Left, and the observed-leave
-    rule would seed the shared reference from Left's window -- permanently,
-    because the next poll sees neither a generation nor an endpoint edge.
+    """An older source-only binding returns generation=None on both reads and ends retry
+    after one attempt. Keep the post-endpoint source: a Right leave between reads leaves
+    the first source at Left, but no later generation or endpoint edge can repair a
+    baseline seeded from it.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -4316,12 +4095,9 @@ def test_a_leave_between_the_record_reads_seeds_from_the_post_leave_source(
 def test_a_cycle_hidden_by_invisible_controls_reconciles_on_resume(
     selection_controls_module,
 ):
-    """Regression: ordinary panel/tool suspension must not swallow the edge.
-
-    update() returns before refreshing anything while the controls are hidden,
-    so the last-consumed generation only advances when a refresh actually
-    reconciles. The FIRST refresh after the controls come back therefore still
-    sees the whole accumulated delta.
+    """Hidden controls return before refresh. Advance the consumed generation only on
+    reconciliation, so the first visible refresh still sees the entire hidden-cycle
+    delta.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="right", sync=False)
@@ -4360,12 +4136,10 @@ def test_a_cycle_hidden_by_invisible_controls_reconciles_on_resume(
 def test_a_no_op_mode_change_keeps_a_legitimate_typed_buffer(
     selection_controls_module,
 ):
-    """Regression: mirror the NATIVE boundary predicate.
+    """Without a retained pair, Disabled/PLYComparison does not alter depth state.
 
-    applyDepthWindowModeTransitionLocked treats Disabled <-> PLYComparison as a
-    complete depth-window no-op: no collapse, no seed, not even an epoch bump.
-    The field the user is typing into still addresses exactly the same window,
-    so cancelling the edit would destroy a legitimate buffer for nothing.
+    No collapse, seed or epoch bump occurs in this setup. The field addresses the same
+    window, so preserve its legitimate edit buffer.
     """
     module, state = selection_controls_module
     panel, model, doc = _mounted_panel(module, state)
@@ -4392,15 +4166,9 @@ def test_a_no_op_mode_change_keeps_a_legitimate_typed_buffer(
 def test_the_sync_toggle_pre_reads_the_focused_canonical_and_stays_idempotent(
     selection_controls_module,
 ):
-    """Regression: the cross-path test with a MODELLED copy.
-
-    Distinct per-panel ranges, and a sync setter that performs the production
-    copy (focused slot over the other, plus the lineage stamp) rather than
-    merely flipping the flag. The specification is that the
-    focus refresh reverts the edit to RIGHT's canonical (the focused-canonical
-    pre-read, taken before the copy), sync then copies that same Right window to
-    both slots, and the later blur re-emits that value -- idempotent, never the
-    typed text and never Left's canonical.
+    """Model the production sync copy and stamp with distinct panel ranges. Refresh the
+    edit to Right's focused canonical value before copying Right into both slots; later
+    blur must re-emit that same value, never typed text or Left's canonical.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -4441,13 +4209,11 @@ def test_the_sync_toggle_pre_reads_the_focused_canonical_and_stays_idempotent(
 def test_toolbar_undo_of_the_sync_flag_reconciles_the_references(
     selection_controls_module,
 ):
-    """Regression.
+    """Refresh must reconcile native sync changes outside the toggle path.
 
-    DepthWindowSyncUndoEntry restores the sync flag natively
-    (depth_window_undo_entry.cpp:85). The plugin observes that edge only
-    through its own refresh, so the refresh -- not the toggle path -- has to be
-    what reconciles. Example: {L=.60, R=.20}, toggle ON, Undo, and both
-    references must be seeded from the shared .60.
+    This flag-only stub starts L=.60/R=.20, toggles ON, then simulates Undo by clearing
+    sync. Refresh must copy shared .60 to both references. Native absolute restore and
+    lineage recovery are covered by the restore tests.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left", sync=False)
@@ -4663,21 +4429,11 @@ def test_native_draw_commit_store_field_round_trips_its_panel(lf, panel):
 def test_a_deferred_pair_stops_the_whole_flush_instead_of_freeing_its_siblings(
     selection_controls_module,
 ):
-    """Regression: DEFERRED must stop the ENTIRE flush.
-
-    Probe: focus is cached at Left while native focus has already moved
-    to Right, and the read that would reveal it comes back EXHAUSTED. The
-    Near/Far pair correctly reports DEFERRED and is retained -- but the caller
-    only ever branched on RETARGETED, so control fell straight through to the
-    group's remaining records. The frozen Size record was consumed, and because
-    the CACHED focus still said Left its origin panel looked like the focused
-    one, so it took an ordinary no-panel write -- which native routing delivered
-    to RIGHT. A record frozen to Left wrote into the panel the user never
-    touched, on a tick whose only context read had already failed.
-
-    An exhausted read is a statement about the WORLD, not about one record. No
-    record may write or be consumed while it holds. Zero writes, zero
-    consumption, all three records still pending.
+    """Cache Left while native focus moves Right, then exhaust the read that would
+    expose it. If a deferred Near/Far pair fails to stop the whole flush, frozen Left
+    Size can use the stale displayed target and write Right. Require zero writes, zero
+    consumption and all three records retained; no sibling may proceed on the failed
+    context.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -4751,22 +4507,13 @@ def test_a_deferred_pair_stops_the_whole_flush_instead_of_freeing_its_siblings(
 def test_a_second_retarget_on_an_unpaired_record_defers_it_instead_of_writing(
     selection_controls_module,
 ):
-    """Regression: unpaired records join the regroup protocol.
+    """A second retarget must leave the live record pending after one regroup.
 
-    A two-change attack on two independent windows, focus Left,
-    L=(0.90,1.00) / R=(2.00,9.00). Near is blurred and frozen to Left at 0.20,
-    Far is LIVE. Focus moves L to R on the pair's revalidation -- the pair
-    reports RETARGETED and the flush regroups, which splits the two records into
-    two SINGLE-record groups: the frozen Near now needs a panel-addressed write
-    to Left, and the live Far follows the context. Focus then moves back R to L
-    on the Far single's own revalidation.
-
-    A single record used to revalidate and then write with no way to report the
-    move, so that second retarget was consumed: writes landed twice on Left and
-    the registry emptied. The single path now returns the same three outcomes as
-    the pair, the restart budget is already spent, and so the second retarget
-    DEFERS. Only the write whose target still matches its own derivation lands:
-    the panel-addressed Near into Left.
+    Start L=(.90,1.00), R=(2.00,9.00), focused Left, with blurred Near .20 frozen to
+    Left and Far live. Moving Right during pair validation splits them; moving back Left
+    during Far's single-record validation exhausts the regroup budget. Only the explicit
+    Left Near write lands. Far returns RETARGETED and stays pending, rather than writing
+    after that second move.
     """
     module, state = selection_controls_module
     _independent_dual(state, focused="left")
@@ -4826,12 +4573,9 @@ def _read_src(*parts: str) -> str:
 
 
 def _viewport_overlay_key_block() -> str:
-    """The overlay's keyboard-forwarding block, gate line included.
-
-    Substring searches over the whole file cannot tell live code from dead
-    code: the select branch of the Escape handler was present, matched every
-    grep, and was unreachable because the gate above it excluded selects. These
-    tests read the block the branch actually lives in.
+    """Return the keyboard-forwarding block including its gate. Whole-file substring
+    checks passed when the select Escape branch existed but was unreachable behind a
+    text-only gate.
     """
     overlay = _read_src("src", "visualizer", "gui", "rml_viewport_overlay.cpp")
     start = overlay.index("if (auto* focused = rml_context_->GetFocusElement())")
@@ -4840,25 +4584,12 @@ def _viewport_overlay_key_block() -> str:
 
 
 def test_viewport_overlay_escape_branch_is_reachable_for_every_cancel_target():
-    """Escape in a depth text field must reach the plugin's revert path.
-
-    The revert itself is plugin-side (`_restore_depth_text_snapshot`, bound
-    through `rml_widgets.EscapeRevertController` on the custom `escapecancel`
-    event), and it is only reachable if the HOST dispatches that event -- and
-    only if the gate ABOVE the dispatch admits the focused element in the first
-    place. `publishOverlayTextFocus` alone does not: `wantsTextInput` excludes
-    a normal `<select>`, so gating on it exclusively made the select half of
-    the branch dead code. The decision itself is pinned in C++ against real
-    RmlUi elements (`OverlayEscapeContractTest`); this pins that this host
-    still routes through it.
-
-    COVERAGE NOTE -- the two ENDS of this path are behavior-tested, the middle is
-    not. The plugin end is driven for real in this file (`escapecancel` is
-    emitted on live elements and the revert is observed); the shared rule is
-    driven for real in `OverlayEscapeContractTest`. What no headless process can
-    drive is the C++ host between them, so this reads the gate line above the
-    branch -- which is exactly the thing a substring search over the whole file
-    could not see, and exactly what let the select branch sit there dead.
+    """The host must admit the focused target before dispatching escapecancel to
+    EscapeRevertController and _restore_depth_text_snapshot. wantsTextInput excludes
+    ordinary selects, so a text-only gate makes select handling dead code.
+    OverlayEscapeContractTest checks the shared rule on real RmlUi elements; this test
+    checks the host's actual enclosing gate. Python drives the plugin end, but this
+    source check does not execute the intervening C++ GUI frame.
     """
     block = _viewport_overlay_key_block()
 
@@ -5055,12 +4786,9 @@ def _specificity(selector: str) -> tuple[int, int, int]:
 
 
 def _cascade_value(source: str, selectors: list[str], prop: str) -> float:
-    """`prop` for an element matched by ALL of `selectors`, resolved as RmlUi does.
-
-    Reading the first rule that happens to mention a property is what made the
-    old derivation wrong: this file declares `.viewport-selection-depth-axis`
-    generically AND under `#selection-block`, and the ID-qualified rule is the
-    one that applies. Highest specificity wins; a tie goes to the later rule.
+    """Resolve prop across all matching selectors: highest specificity wins, then latest
+    source order. The generic axis rule must not override the ID-qualified
+    selection-block rule.
     """
     best: tuple[tuple[int, int, int, int], float] | None = None
     for selector in selectors:
@@ -5079,11 +4807,9 @@ def _cascade_value(source: str, selectors: list[str], prop: str) -> float:
 
 
 def _media_spans(source: str) -> list[tuple[float, int, int]]:
-    """Every `@media (max-width: Ndp) { ... }` block as (N, body_start, body_end).
-
-    The single brace-matching parser in this file. `_media_blocks` slices bodies
-    out of it; the clearance test needs the OFFSETS instead, so that a rule can
-    be told apart from one that merely reads alike outside a block.
+    """Return max-width media blocks as (N, body_start, body_end). Share brace matching
+    with _media_blocks; offsets distinguish an in-block rule from identical text outside
+    it.
     """
     spans: list[tuple[float, int, int]] = []
     for match in re.finditer(r"@media \(max-width:\s*([0-9.]+)dp\)\s*\{", source):
@@ -5107,17 +4833,9 @@ def _media_blocks(source: str) -> list[tuple[float, str]]:
 
 
 def _depth_breakpoints(source: str) -> dict[str, float]:
-    """The two depth-row breakpoints, found by what each block DOES.
-
-    Keyed by behavior rather than by number so the derivations below cannot go
-    stale against a moved breakpoint -- which is exactly how the 1150dp wrap
-    number survived long after it stopped covering the single row.
-
-    The depth toolbar has EXACTLY THREE width states -- one line, two lines,
-    hidden: a layout that cannot be fitted is hidden outright rather than
-    restacked into more lines. A block that stacks the Size/X/Y group
-    one axis per line is a fourth state and is rejected here, at the one place
-    every depth-row test goes through.
+    """Find breakpoints by behavior so moved values cannot leave stale derivations, as
+    1150dp once did. Require exactly one-line, two-line and hidden states; reject a
+    fourth tier stacking Size/X/Y axes separately.
     """
     found: dict[str, float] = {}
     for width, body in _media_blocks(source):
@@ -5143,21 +4861,11 @@ def _depth_breakpoints(source: str) -> dict[str, float]:
 
 
 def test_depth_row_never_over_constrains_its_widest_line_at_any_width():
-    """No window width may leave the depth row wider than the panel it sits in.
-
-    A reported failure at a width where the row was `nowrap` but the panel was
-    far too narrow for it: the row needs 914dp of content and the
-    old 1150dp wrap breakpoint only guaranteed 705.9dp, so 1151-1470dp rendered
-    a single squeezed line with labels and value boxes overprinting.
-
-    The two breakpoints are NOT keyed on different measures -- RmlUi resolves
-    `max-width` against the context dimensions, and the panel is 65% of that
-    same context in every split mode -- so the fix is arithmetic on one measure.
-    There are exactly three states -- one line, two lines, hidden -- and this
-    walks the two VISIBLE ones, asserting the widest line of
-    each fits at the NARROWEST width where that state is still active, which is
-    the boundary below it (the boundary itself is the conservative worst case).
-    Below the hide breakpoint there is no line to fit.
+    """The old 1150dp wrap threshold guaranteed only 705.9dp for 914dp of content,
+    squeezing the row at 1151-1470dp. RmlUi max-width and the panel's 65% width use the
+    same context measure. For exactly three states, check each visible tier's widest
+    line at its narrowest boundary, conservatively including that boundary. Below the
+    hide threshold no line must fit.
     """
     rcss = _read_src(
         "src", "visualizer", "gui", "rmlui", "resources", "viewport_overlay.rcss"
@@ -5224,12 +4932,9 @@ def test_depth_row_never_over_constrains_its_widest_line_at_any_width():
     group_gap = _rcss_value(
         _rcss_rule(rcss, "#selection-block .depth-axis-group"), "gap"
     )
-    # Two-line tier: the row reserves space for the pinned buttons on BOTH
-    # sides, equally. The right reserve is what the buttons stand in; the left
-    # one is its mirror, and only mirrored paddings leave the row's content box
-    # -- and therefore both centred lines -- concentric with the row itself.
-    # Both sides are read, and their equality asserted, because an asymmetric
-    # reserve is exactly the off-centre row this mirroring removes.
+    # Both wrapped lines must stay centered: pinned buttons occupy the right reserve,
+    # mirrored padding supplies an equal left reserve. Assert both sides to catch an
+    # off-center asymmetric row.
     wrap_fields = _rcss_rule(
         wrap_body, "#selection-block .viewport-selection-depth-fields"
     )
@@ -5242,14 +4947,9 @@ def test_depth_row_never_over_constrains_its_widest_line_at_any_width():
     # Both paddings shrink the content box that the `flex-basis: 100%` lines
     # resolve against, so BOTH are charged to every line.
     reserve = 2.0 * flank
-    # The two buttons are stacked ONE PER LINE, not side by side, so each
-    # flank has to hold a SINGLE button -- which is what halves the reserve
-    # and buys the two-line band back. The split is what makes that legal, so
-    # it is asserted here rather than assumed: the shared rule puts both on
-    # the same right edge with no horizontal offset between them, and each
-    # button then takes its own vertical anchor. If both ever landed on one
-    # line again they would overprint each other, and a one-button flank
-    # would be too narrow for the pair.
+    # One button per line needs only one button-width per flank. Assert their common
+    # right edge and separate vertical anchors; if they shared a line, they would
+    # overlap and the one-button reserve would be insufficient.
     shared_pin = _rcss_rule(
         wrap_body,
         "#selection-block .viewport-selection-depth-fields > "
@@ -5313,13 +5013,9 @@ def test_depth_row_never_over_constrains_its_widest_line_at_any_width():
         f"{breakpoints['wrap']:g}dp wrap breakpoint -- widths just above it "
         "render one over-constrained line"
     )
-    # Tier 2 -- two lines, active down to the hide breakpoint. BOTH lines must
-    # fit there: the Size/X/Y line is the wider at 500dp, and the Near/Far line
-    # is the one the `top: 0` pinned buttons share, so neither may overflow.
-    # This is the assertion the deleted stacked tier used to absorb: with three
-    # states the two-line tier now runs all the way down to the hide number, so
-    # the hide number is what has to be big enough. The chip is a flow item at
-    # the head of the Near/Far line, so it is inside `near_far` already.
+    # At the hide boundary both wrapped lines must fit: the wider 500dp Size/X/Y line
+    # and the Near/Far line beside pinned buttons. With no stacked fourth tier, hide
+    # must accommodate both; near_far already includes the chip flow item.
     widest_two_line = max(near_far, size_x_y)
     assert widest_two_line <= content(breakpoints["hide"]) - reserve, (
         f"the two-line tier's widest line needs {widest_two_line}dp but only "
@@ -5354,19 +5050,11 @@ def test_depth_row_never_over_constrains_its_widest_line_at_any_width():
 
 
 def test_depth_row_hide_breakpoint_clears_the_pinned_toolbar_buttons():
-    """The top line must fit before the depth row is allowed to show.
-
-    Below the wrap breakpoint the Near/Far group is the FIRST flex line and the
-    sync toggle is absolutely pinned to it (the viz-mode button is pinned to
-    the second line). Both lines are laid out in the SAME content box, so the
-    row's mirrored padding is charged to both and either line can collide with
-    the button beside it. Moving the panel chip into the Near/Far group added
-    its width plus a gap to that line, so the breakpoint is arithmetic, not
-    taste: this recomputes it from the file.
-
-    Every value is read through the EFFECTIVE cascade -- the highest-specificity
-    matching rule -- because this file declares the axis twice with different
-    numbers, and reading the first one seen understates the row.
+    """In the wrapped tier, Near/Far shares the first line with pinned sync; viz
+    occupies the second. Both lines pay mirrored padding in the same content box, and
+    the chip adds width plus a gap to Near/Far. Derive its minimum breakpoint from the
+    effective highest-specificity RCSS cascade; reading the first axis rule understates
+    it.
     """
     rcss = _read_src(
         "src", "visualizer", "gui", "rmlui", "resources", "viewport_overlay.rcss"
@@ -5429,12 +5117,9 @@ def test_depth_row_hide_breakpoint_clears_the_pinned_toolbar_buttons():
     )
     panel = _rcss_rule(rcss, "#selection-block .viewport-selection-panel")
     panel_fraction = _rcss_value(panel, "width") / 100.0
-    # RCSS defaults to `box-sizing: content-box`, and neither the panel rule nor
-    # the base `.viewport-transform-panel` rule overrides it -- so `width: 65%`
-    # already IS the content width and the panel's own padding must NOT be
-    # subtracted from it a second time. Subtracting it here would overstate
-    # the requirement by 2 * 6dp. If the panel ever becomes
-    # border-box the derivation changes, so that is asserted rather than assumed.
+    # The panel and base rules retain content-box, so width:65% is already content
+    # width. Subtracting padding/borders again overstates the requirement by 12dp.
+    # Assert box-sizing because border-box changes the derivation.
     for rule in (panel, _rcss_rule(rcss, "\n.viewport-transform-panel")):
         assert "box-sizing" not in rule, (
             "the selection panel is no longer content-box; `width: 65%` is now a "
@@ -5469,15 +5154,10 @@ def test_depth_row_hide_breakpoint_clears_the_pinned_toolbar_buttons():
         f"-- between the two the Near/Far row runs under the pinned sync and "
         f"viz buttons"
     )
-    # No drift guard here any more. Under the three-state rule the hide
-    # breakpoint is NOT set by this line: the two-line tier now runs all the way
-    # down to it, so the binding requirement is the 500dp Size/X/Y line
-    # (944.0dp), not this 324dp top line (673.2dp). The top line is a FLOOR that
-    # the real number must clear, which is what is asserted above; the drift
-    # guard against the binding requirement lives in
-    # test_depth_row_never_over_constrains_its_widest_line_at_any_width. Keeping
-    # a `< 60` guard here would demand a breakpoint that reintroduces the
-    # overflowing Size/X/Y band that rule removed.
+    # This 324dp line sets only a 673.2dp floor. The 500dp Size/X/Y line binds the hide
+    # threshold at 944.0dp; its drift guard lives in
+    # test_depth_row_never_over_constrains_its_widest_line_at_any_width. A <60 guard
+    # here would reintroduce the overflowing two-line band.
 
 
 def _rcss_signed(block: str, prop: str) -> float:
@@ -5493,22 +5173,11 @@ def _rcss_signed(block: str, prop: str) -> float:
 
 
 def test_the_two_pinned_depth_buttons_ride_separate_lines_without_overlapping():
-    """One toolbar button per wrapped line, each clear of the other and of the panel.
-
-    The two-line row is 24 + row gap 10 + 24 = 58dp of content and a button is
-    30dp, so the two buttons need 60dp of vertical room they do not have: with
-    both flush (`top: 0` and `bottom: 0`) they would overlap by 2dp on a shared
-    right edge. Each is therefore centred on its OWN line instead, which is
-    what makes one button per line fit at all -- and one button per line is
-    what halves the row's reserve and hands the two-line band back.
-
-    Neither button is in flow, so this changes no panel height; what it does
-    change is that each button now overhangs its line's outer edge by 3dp, and
-    that overhang has to land inside the panel rather than on its border.
-
-    Known limits, as everywhere in this file: this reads declared RCSS. It does
-    not run RmlUi's layout, so it cannot prove the offsets resolve against the
-    box this derivation assumes.
+    """Two 24dp lines plus a 10dp gap provide 58dp, less than two 30dp buttons. Center
+    one button on each line: flush top/bottom placement would overlap by 2dp. This
+    halves the width reserve without changing panel height, but each button's 3dp outer
+    overhang must stay inside the border. These are declared-RCSS checks, not proof of
+    RmlUi's containing-block resolution.
     """
     rcss = _read_src(
         "src", "visualizer", "gui", "rmlui", "resources", "viewport_overlay.rcss"
@@ -5591,26 +5260,12 @@ def test_the_two_pinned_depth_buttons_ride_separate_lines_without_overlapping():
 
 
 def test_depth_panel_never_covers_the_per_viewport_controls():
-    """The selection panel's box must stop above each viewport's own controls.
-
-    Making the depth row wrap makes the PANEL
-    taller, and the panel is `z-index: 9` with `pointer-events: auto` while
-    every viewport's top-right control group (`.viewport-gizmo-controls`) is
-    `z-index: 8`. Wherever the panel's box reaches down into that group, the
-    panel paints over it AND swallows its clicks. The row's own side reserve
-    protects only the panel's internal pinned buttons; it is no defence here.
-
-    Horizontal separation cannot be relied on: the panel is centred and 65%
-    wide inside a band that spans the whole context, and in independent-dual
-    split the primary viewport's group rides the divider, so at some divider
-    position it is always inside the panel's band. The clearance therefore has
-    to be vertical, and this pins it per tier by the same declared arithmetic
-    the width test uses.
-
-    Known limits, unchanged from the width test: this reads RCSS text. It does
-    not run a live DOM, a media-aware cascade, RmlUi flex layout, z-ordering or
-    hit testing. It asserts that the DECLARED geometry leaves clearance; only
-    a hands-on check confirms RmlUi agrees.
+    """Wrapping enlarges the selection panel, whose z-index 9 and pointer-events auto
+    can cover viewport controls at z-index 8. Internal button reserves do not protect
+    them. A centered 65%-wide panel can overlap the primary controls at some
+    independent-dual divider position, so derive vertical clearance per tier. This
+    checks declared RCSS geometry only, not live DOM/media cascade, flex layout, z-order
+    or hit testing; a hands-on check must confirm RmlUi agrees.
     """
     rcss = _read_src(
         "src", "visualizer", "gui", "rmlui", "resources", "viewport_overlay.rcss"
@@ -5666,13 +5321,9 @@ def test_depth_panel_never_covers_the_per_viewport_controls():
         return chrome + panel_gap + fields
 
     def controls_top(width: float) -> float:
-        """`.viewport-gizmo-controls` top as it resolves AT `width`.
-
-        The blocks are `max-width`, so at a narrow width several of them apply
-        at once and the last one in source order wins -- a tier that declares no
-        override inherits the tier above it, not the stock value. Modelling that
-        is what makes a DELETED override visible as an overlap rather than as a
-        missing declaration.
+        """Resolve controls top at width using every applicable max-width block in
+        source order. A tier without an override inherits the previous tier; this makes
+        deleting an override expose overlap rather than merely a missing declaration.
         """
         applicable = [
             (offset, body)
@@ -5688,13 +5339,10 @@ def test_depth_panel_never_covers_the_per_viewport_controls():
 
     stock = controls_top(breakpoints["wrap"] + 1.0)
     tiers = [
-        # (name, widest width at which the tier is active, fields column height)
-        # ABOVE the wrap breakpoint the sync/viz buttons are still in normal
-        # flow -- only the wrap block pins them with `position: absolute`
-        # (viewport_overlay.rml:781, .rcss:1045). The fields row is a flex row
-        # with `align-items: center`, so its height is its TALLEST child: the
-        # 30dp button, not the 24dp axis. Supplying axis_h here understated the
-        # panel by 6dp and made a real 3dp overlap read as green.
+        # (name, widest active width, fields-column height). Above wrap, buttons remain
+        # in flow; only the media rule pins them. With align-items:center, the tallest
+        # 30dp button sets row height, not the 24dp axis. Using axis_h hid a real 3dp
+        # overlap by understating height by 6dp.
         ("single-line", breakpoints["wrap"] + 1.0, max(axis_h, button_h)),
         ("two-line", breakpoints["wrap"], axis_h + row_gap + axis_h),
         # No stacked tier: hidden is the state below two lines,

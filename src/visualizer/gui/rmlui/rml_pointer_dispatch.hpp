@@ -14,69 +14,34 @@
 
 namespace lfs::vis::gui::rml_input {
 
-    // --------------------------------------------------------------------
-    // Frame-buffered pointer delivery into an RmlUi context.
+    // Frame-buffered pointer delivery into RmlUi.
+    // RmlUi 6.2 takes DOWN's active element from the last mouse move's hover.
+    // UP clears active/drag and clicks only if active == FindFocusElement(hover).
+    // Move to each event's coordinates before its DOWN/UP, in SDL order.
     //
-    // The host buffers a whole SDL frame before it talks to RmlUi, so a press
-    // and the motion queued behind it arrive together. RmlUi 6.2 decides the
-    // pressed element from its LAST ProcessMouseMove -- `hover` is recomputed
-    // as GetElementAtPoint(mouse_position) inside UpdateHoverChain
-    // (Context.cpp:1301), ProcessMouseButtonDown takes `active = hover`
-    // (Context.cpp:617-641), and ProcessMouseButtonUp fires Click only while
-    // `active == FindFocusElement(hover)` (Context.cpp:721-745). So every
-    // transition in the frame must be delivered at ITS OWN point: a move to
-    // that event's coordinates, then that event's DOWN or UP, in the order SDL
-    // recorded them.
+    // Walk the canonical stream once without coalescing, reordering or truncating.
+    // Skip unowned presses without capture and releases with no delivered DOWN.
+    // Keep repeated or different-button presses separate, at their own points;
+    // a misplaced move after DOWN can start a drag the user never began.
     //
-    // THE CANONICAL STREAM IS NEVER COALESCED, REORDERED OR TRUNCATED. This
-    // walks `events` front to back exactly once. A PRESS this host does not
-    // own -- one that landed outside the context, or on nothing of ours, while
-    // no capture is in force -- is SKIPPED, and so is a release with no press
-    // of this host's to end; skipping changes neither the order nor the
-    // identity of the events that are delivered. Two buttons
-    // going down in one frame, or the same button going down twice, therefore
-    // reach RmlUi as two separate presses at two separate points, which is
-    // what stops one press from being delivered at another's coordinates and
-    // what stops a manufactured move after a DOWN from starting a drag the
-    // user never began (Context.cpp:625 arms `drag`, Context.cpp:1277 fires
-    // Dragstart).
+    // down_delivered tracks each button across frames. Deliver an owned UP even
+    // outside the context, or RmlUi can remain pressed after DOWN armed active/drag.
     //
-    // A DOWN THIS HOST DELIVERED OWES RMLUI ITS UP. RmlUi is stateful across
-    // the pair: ProcessMouseButtonDown arms `active` and `drag`
-    // (Context.cpp:617-641) and only ProcessMouseButtonUp disarms them and
-    // fires Click (Context.cpp:721-745). A host that delivers a DOWN and then
-    // withholds the UP because the release happened to land somewhere else
-    // leaves the context pressed for good. So delivery is decided per press
-    // lifecycle, not per hit test: `down_delivered` carries, per button,
-    // whether THIS host delivered that button's DOWN, and it deliberately
-    // OUTLIVES the frame because a button can be held down across many.
-    //
-    // This lives outside RmlViewportOverlay so the replay is executable
-    // against a context the tests own; the host holds the state and supplies
-    // the ownership predicate. The body is the overlay's own loop, moved
-    // rather than rewritten, plus that lifecycle.
-    // --------------------------------------------------------------------
+    // The host owns the state and ownership predicate. This helper lets tests
+    // replay the overlay's delivery loop against their own context.
 
     // Replay `events` into `context`.
-    //
-    //   `down_delivered`  -- the host's per-button press lifecycle, read AND
-    //       written here. The host owns it (one array per context) and clears
-    //       it only when the context itself goes away.
-    //   `viewport_pos` / `viewport_size` -- the context's rectangle in window
-    //       coordinates; event coordinates are window coordinates.
-    //   `capture_active`  -- a drag this host already owns (the VRAM HUD, the
-    //       toolbar) holds the pointer, so its presses are delivered wherever
-    //       they land.
-    //   `owns_element`    -- would this host take an event that landed on this
-    //       element? Called with nullptr for an event outside the rectangle.
-    //   `allow_new_presses` -- false while the underlay is blocked. Still walk
-    //       every event: a refused DOWN revokes that button's prior ownership,
-    //       while an UP with a still-owned DOWN is delivered at its real point.
-    //
-    // Returns whether anything was delivered, which is the host's cue to mark
-    // a pointer-button repaint. (The overlay marked that reason once per
-    // delivered event; the reason is a single bit, so marking it once for the
-    // frame is the same repaint.)
+    // `down_delivered`: host-owned per-button state, read and updated here. Keep one
+    //   array per context; clear the whole array only when the context is destroyed.
+    // `viewport_pos` / `viewport_size`: context rectangle in window coordinates,
+    //   as are event coordinates.
+    // `capture_active`: an owned drag (VRAM HUD or toolbar) accepts presses anywhere
+    //   when `allow_new_presses` is true.
+    // `owns_element`: host hit predicate; receives nullptr outside the rectangle.
+    // `allow_new_presses`: false when the underlay is blocked. Still process every
+    //   event: refused DOWN clears that button's ownership; owned UP uses its real point.
+    // Returns whether any event was delivered. Mark pointer-button repaint once;
+    // its single-bit reason makes repeated marks equivalent.
     template <typename OwnsElementFn>
     [[nodiscard]] inline bool replayButtonEvents(Rml::Context& context,
                                                  bool (&down_delivered)[3],
@@ -99,19 +64,15 @@ namespace lfs::vis::gui::rml_input {
             const auto* const event_element =
                 event_inside ? context.GetElementAtPoint(Rml::Vector2f(event_x, event_y))
                              : nullptr;
-            // A DOWN is judged by the hit test, exactly as the loop this came
-            // from judged every event. An UP is judged by ITS OWN DOWN:
-            // delivered when this host delivered that DOWN -- wherever the
-            // release landed -- and REJECTED when it did not, so an UP can
-            // never take ownership from another button, from an earlier
-            // same-button press, or from a press this host never delivered.
+            // DOWN requires new presses to be allowed and either capture or a hit we own.
+            // UP requires this button's delivered DOWN, regardless of release location.
+            // Per-button state and refused-DOWN clearing prevent borrowing ownership from
+            // another button, an earlier press or a press this host never delivered.
             const bool deliver = event.down ? (allow_new_presses && (capture_active || owns_element(event_element)))
                                             : down_delivered[slot];
             if (!deliver) {
-                // A press this host refused supersedes whatever that button was
-                // doing before: the flag is cleared so a stale DOWN (one whose
-                // UP never reached this consumer) cannot lend its delivery right
-                // to this press's release.
+                // A refused DOWN clears this button's ownership so its UP cannot borrow
+                // delivery rights from an earlier press whose UP never reached this host.
                 if (event.down)
                     down_delivered[slot] = false;
                 continue;

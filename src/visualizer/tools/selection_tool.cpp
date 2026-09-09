@@ -317,9 +317,8 @@ namespace lfs::vis::tools {
     }
 
     void SelectionTool::refreshDepthNearFarFromProjection(const ToolContext& ctx) {
-        // ACCEPTED TRANSIENT: the generation read and the later stamp are separate
-        // locks, so a projection write landing in between is missed for one frame;
-        // it is self-healing because the next reapply refreshes again.
+        // Separate generation-read/stamp locks can miss an intervening projection
+        // write for one frame; the next reapply refreshes it.
         auto* const rm = ctx.getRenderingManager();
         if (!rm) {
             return;

@@ -976,14 +976,10 @@ namespace lfs::python {
                     "that is not available in this process");
             }
         }
-        // A retained Python render-settings object holds a full snapshot that can
-        // go stale as soon as anything else (a focus change, another writer)
-        // mutates the application state. The render-settings callback applies the
-        // whole proxy with DirtyFlag::ALL, so dispatching a stale snapshot would
-        // silently overwrite unrelated settings. Re-read the live settings here,
-        // immediately before applying the requested property, so only that one
-        // logical property (plus its established dependent normalization below)
-        // differs from the current application state.
+        // Re-read live settings immediately before applying the requested property
+        // and its dependent normalization. A retained snapshot may be stale after
+        // a focus change or another write; dispatching it with DirtyFlag::ALL would
+        // overwrite unrelated settings.
         const auto fresh = vis::get_render_settings();
         if (fresh) {
             settings_ = *fresh;
@@ -997,9 +993,8 @@ namespace lfs::python {
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
         if (!fresh) {
-            // No live snapshot available: the retained proxy is potentially stale
-            // and must not be dispatched. Local validation and mutation above are
-            // preserved; nothing is applied.
+            // Without live settings, keep local validation/mutation but do not dispatch
+            // a potentially stale proxy.
             return;
         }
         vis::update_render_settings(

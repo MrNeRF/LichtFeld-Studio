@@ -297,10 +297,9 @@ namespace lfs::vis {
         const auto items = lfs::vis::op::undoHistory().undoItems();
         ASSERT_FALSE(items.empty());
         EXPECT_EQ(items.front().metadata.id, "selection.depth_window_drag");
-        // The label is localized, so this asserts the KEY the expired branch
-        // resolves -- an English literal would only pass in an English build,
-        // and this test process loads no locale at all. Comparing against the
-        // live-branch key as well is what proves the expired branch was taken.
+        // Compare localized keys because no locale is loaded here; English text would
+        // be locale-dependent. Also reject the live key to prove the expired branch
+        // ran.
         EXPECT_EQ(items.front().metadata.label,
                   LOC(lichtfeld::Strings::Selection::HISTORY_DEPTH_WINDOW_EXPIRED));
         EXPECT_NE(items.front().metadata.label,
@@ -315,14 +314,10 @@ namespace lfs::vis {
         EXPECT_EQ(right_before, right_after);
     }
 
-    // DISCRIMINATING TEST for the reported defect "sync ON always conforms the
-    // LEFT panel to the RIGHT one, whichever panel is focused". It exercises the
-    // copy in BOTH focus directions through the real service focus call and the
-    // real manager setter, with distinct windows in every field. If the copy
-    // itself were inverted (other-over-focused) or the panel-id -> slot mapping
-    // were swapped, the RIGHT-focused half would keep Left's window and this
-    // would fail; a PASS proves the setter is focused-wins and puts the reported
-    // bug strictly UPSTREAM of it, in whatever decides focus at toggle time.
+    // Exercise real focus and sync setters in both directions with distinct values in
+    // every field. An other-over-focused copy or swapped slot mapping fails the
+    // Right-focused case. This pins focused-wins copying independently of the upstream
+    // choice of focus at toggle time.
     TEST_F(DepthWindowPanelsInteractionTest, SyncOnCopiesFocusedOverOtherInBothDirections) {
         enterIndependentDual();
 
@@ -596,11 +591,9 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::app_store().depth_window_draw_commit.get(), commit_before_release);
     }
 
-    // REAL registry replacement, CROSS panel. The registry invokes the incoming
-    // modal BEFORE destroying the outgoing one, so A tears down while B is
-    // already live. Ownership is PER PANEL: B taking Right is not a takeover of
-    // Left, so A still restores its own panel instead of leaving an
-    // uncommitted preview baked there, and B goes on to commit normally.
+    // The real registry invokes B before destroying A. B takes Right while A owns Left,
+    // so A must restore Left rather than leave its uncommitted preview; B must then
+    // commit normally.
     TEST_F(DepthWindowPanelsInteractionTest, CrossPanelRegistryReplacementRestoresReplacedPanel) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -616,10 +609,8 @@ namespace lfs::vis {
                   OperatorResult::RUNNING_MODAL);
         ASSERT_NE(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
 
-        // The replacement itself: a second depth drag invoked on the RIGHT
-        // panel, through the registry, which destroys A as it installs B. The
-        // press is well clear of the Right window's handles, so B is a fresh
-        // draw and has not latched yet.
+        // Invoke the replacement on Right through the real registry. Its press is clear
+        // of handles, so B is a fresh draw that has not latched when A is destroyed.
         ASSERT_TRUE(startDepthDrag(210.0, 20.0));
         EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
@@ -636,10 +627,9 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
     }
 
-    // REAL registry replacement, SAME panel. B does take Left over, so A's
-    // teardown correctly refuses to restore (upstream's incoming-baseline
-    // contract). What must survive the handoff is the PANEL'S BACKUP: leaving
-    // independent-dual mid-B folds PRE-DRAG-A state, not A's or B's preview.
+    // On same-panel replacement, B takes Left and A cannot restore under the
+    // incoming-baseline contract. The panel backup must still be pre-A state, so
+    // leaving independent-dual mid-B folds neither preview.
     TEST_F(DepthWindowPanelsInteractionTest, SamePanelRegistryReplacementKeepsPreDragBackup) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -673,10 +663,8 @@ namespace lfs::vis {
         EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
     }
 
-    // The refusal observed through a LIVE modal. A project restore is a
-    // lifetime discontinuity that bumps the epoch WITHOUT being a split-mode
-    // transition, so it does not destroy the drag: the release below reaches a
-    // still-live drag whose epoch has moved, and must leave no trace.
+    // Project restore advances the epoch without a split transition or modal teardown.
+    // Releasing the still-live drag must detect its expired epoch and leave no trace.
     TEST_F(DepthWindowPanelsInteractionTest, ReleaseOnLiveModalAfterEpochBumpPublishesNothing) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -720,12 +708,10 @@ namespace lfs::vis {
                       OperatorResult::RUNNING_MODAL);
             ASSERT_NE(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), left_pre);
 
-            // The second drag's bracket, opened through the same manager API the
-            // operator uses, with its own preview write on the OTHER panel. The
-            // preview goes through the DRAG lane (applyDepthWindowForPanelIfEpoch),
-            // not the public setter: a public-setter write is a legitimate
-            // non-drag write and would supersede the very backup this case is
-            // about.
+            // Open the second drag through the operator's manager API and preview the
+            // other panel via applyDepthWindowForPanelIfEpoch. The public setter would
+            // be a legitimate non-drag write that supersedes the backup this case
+            // needs.
             std::uint64_t right_token = 0;
             rendering_manager_->beginDepthWindowDrag(SplitViewPanelId::Right, right_token);
             ASSERT_TRUE(rendering_manager_->applyDepthWindowForPanelIfEpoch(
@@ -809,10 +795,9 @@ namespace lfs::vis {
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::Disabled);
 
-        // A global -> GT -> global round trip is TWO boundaries, and each leg is
-        // pinned separately: the enter bump against the global epoch, and the
-        // leave bump against the GT epoch (comparing the far side to the near
-        // side alone would pass even if the leave never bumped).
+        // Check both global/GT boundary epochs separately. Comparing only the
+        // round-trip endpoints would pass even if leaving GT failed to advance its
+        // epoch.
         const auto global_epoch = rendering_manager_->depthWindowModeEpoch();
         lfs::core::events::cmd::ToggleGTComparison{}.emit();
         ASSERT_EQ(rendering_manager_->getSettings().split_view_mode, SplitViewMode::GTComparison);
@@ -825,17 +810,10 @@ namespace lfs::vis {
         EXPECT_NE(back_epoch, global_epoch);
     }
 
-    // GT DORMANCY, end to end (PLAN03-R1.md:55, :588, :782): GT comparison
-    // SUSPENDS the depth filter, so the two per-panel windows are DORMANT for
-    // its duration and both must return intact. The shape is what
-    // discriminates: deliberately DIFFERING L/R windows with RIGHT focused, so
-    // a leave-collapse on the way in leaves both slots holding RIGHT's window
-    // and a projection seed on the way back leaves both holding the global
-    // one - either failure makes the two panels EQUAL, and both are caught by
-    // the exact-value assertions after the round trip. The middle section
-    // pins the suspension itself (no filter in either panel's request, no
-    // overlay, no drag) so a "dormancy" that merely stopped drawing could not
-    // pass.
+    // GT suspends filtering and preserves distinct dormant L/R windows. Start focused
+    // Right: collapsing on entry or seeding from global on return would make the slots
+    // equal. Exact restored values catch both failures. Also require no panel filter
+    // requests, overlay or drag during GT; hiding the drawing alone must not pass.
     TEST_F(DepthWindowPanelsInteractionTest, GtComparisonKeepsBothPanelWindowsDormantAndRestoresThem) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -907,14 +885,10 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowCollapseRecord().generation, lineage_pre);
     }
 
-    // GT DORMANCY x DRAG. The conjunction is what discriminates: the dragged
-    // panel is the RIGHT one AND it is the focused one, so its preview is in
-    // the PROJECTION as well as in its slot. The split service resets focus to
-    // Left on the way into GT, so a transition that decides the projection
-    // from the CURRENT focus restores Right's slot and leaves Right's
-    // uncommitted preview standing in the projection - where the next
-    // GT -> Disabled leg promotes it to the single-window state. Both legs are
-    // asserted; the pre-drag Right window is the only correct answer for each.
+    // Drag the focused Right panel so its preview occupies both slot and projection. GT
+    // entry resets focus Left, but must fold Right's pre-drag window into both
+    // locations. Otherwise GT -> Disabled promotes the abandoned preview to global
+    // state. Assert the pre-drag Right window on both legs.
     TEST_F(DepthWindowPanelsInteractionTest, GtEntryWithFocusedRightDragLeavesNoTransientProjection) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -964,14 +938,10 @@ namespace lfs::vis {
         EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
     }
 
-    // GT DORMANCY x SYNC. setDepthWindowSync promises that turning sync ON
-    // with differing panels copies the FOCUSED panel's window to the other as
-    // one undo step. While a dormant pair is parked neither half of that is
-    // available - the per-panel focus was reset by the mode change, and an
-    // undo entry restores the live slots, not the park - so the flag must not
-    // move at all: setting it alone would restore L != R with sync true on the
-    // direct return. The second half pins that this is scoped to a DORMANT
-    // session and is not a blanket GT ban.
+    // Sync ON must copy the focused differing window as one undo step. A parked pair
+    // has neither its original focus nor an undo path into the park, so refuse the
+    // toggle; changing only the flag would restore unequal slots with sync=true. The
+    // global-origin control proves this refusal is limited to a dormant session.
     TEST_F(DepthWindowPanelsInteractionTest, GtTimeSyncMutationIsRefusedWhileAPairIsDormant) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1013,14 +983,10 @@ namespace lfs::vis {
         EXPECT_TRUE(rendering_manager_->getDepthWindowSync());
     }
 
-    // GT DORMANCY x updateSettings. This is the ONLY entry that can move the
-    // split mode and the global depth projection in ONE write, so it is the
-    // only one that exercises the fan-out suppression on the way into GT: the
-    // incoming projection must land in settings_ as an ordinary GT-time global
-    // write, WITHOUT being fanned into the two slots and WITHOUT being
-    // overwritten by the focused drag's pre-drag window on the way past the
-    // backup fold. All three are asserted, and the round trip proves the
-    // parked pair was the pre-drag one.
+    // updateSettings can change mode and global projection together. On GT entry, keep
+    // the incoming projection as a GT-time global write without fanning it into slots
+    // or replacing it during the focused drag's backup fold. Assert all three outcomes
+    // and restoration of the pre-drag parked pair.
     TEST_F(DepthWindowPanelsInteractionTest, UpdateSettingsGtEntryKeepsItsProjectionAndParksBothPanels) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1183,11 +1149,9 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::app_store().depth_window_draw_commit.get(), commit_before_expired_redo);
     }
 
-    // The release/destructor epoch race is closed by construction: every drag
-    // write goes through the epoch-guarded apply, which refuses under a stale
-    // epoch and changes nothing. This pins that guarantee at the manager level;
-    // the cross-thread interleaving itself is not deterministically
-    // constructible without a dedicated concurrency seam.
+    // Every drag write uses epoch-guarded apply, which must refuse a stale epoch
+    // without changes. This checks the manager guarantee; the release/destructor thread
+    // interleaving needs a dedicated concurrency seam to reproduce deterministically.
     TEST_F(DepthWindowPanelsInteractionTest, StaleEpochApplyRefusesAndChangesNothing) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowForPanel(SplitViewPanelId::Left,
@@ -1320,12 +1284,10 @@ namespace lfs::vis {
         EXPECT_EQ(projectionDepthWindow(*rendering_manager_), right_window);
     }
 
-    // Regression, verbatim sequence. Sync ON, shared clean window O: A
-    // previews P on Left, a fresh-draw B is invoked on Right through the REAL
-    // registry (destroying A), and independent-dual is left while B is still
-    // subthreshold. A's teardown restore must write ONLY Left (a restore is
-    // safety machinery, never a fan-out), and B must have inherited O - not
-    // A's fanned-out preview - as Right's backup. Both slots end at O.
+    // With sync ON and clean O, A previews P on Left; real registry replacement starts
+    // B on Right, then leaves independent-dual while B is subthreshold. A's teardown
+    // must restore only Left, without fan-out; B must inherit Right's O backup, not P.
+    // Both slots must end at O.
     TEST_F(DepthWindowPanelsInteractionTest, SyncOnCrossPanelReplacementNeverResurrectsPreview) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(true);
@@ -1353,10 +1315,9 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
     }
 
-    // Regression, verbatim sequence: the unsynced cross-panel scenario
-    // continued through B's commit, then sync ON with Right focused, then focus
-    // Left and leave. The sync copy is a legitimate NON-drag write, so it
-    // releases Left's stale pre-A backup and the collapse folds the COPY.
+    // Continue unsynced cross-panel replacement through B's commit, sync ON focused
+    // Right, then focus Left and leave. The legitimate sync copy must release Left's
+    // stale pre-A backup so collapse keeps the copy.
     TEST_F(DepthWindowPanelsInteractionTest, SyncCopyReleasesStaleBackupBeforeCollapse) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1393,10 +1354,9 @@ namespace lfs::vis {
         EXPECT_EQ(projectionDepthWindow(*rendering_manager_), right_committed);
     }
 
-    // Regression, verbatim sequence: the sync gate keys on the OWNERSHIP
-    // bracket (invoke..destruction), so a sync toggle during a SUBTHRESHOLD
-    // press is ignored too - a drag's before_ capture can never straddle a sync
-    // change, and undo therefore leaves panels and the sync flag consistent.
+    // Sync refusal covers the entire invoke-to-destruction ownership bracket, including
+    // a subthreshold press. The before_ capture must not straddle a sync change; undo
+    // must preserve consistent slots and flag.
     TEST_F(DepthWindowPanelsInteractionTest, SubthresholdPressIgnoresSyncToggleAndUndoStaysConsistent) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1427,11 +1387,9 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), right_pre);
     }
 
-    // Regression, verbatim sequence (sync OFF): A previews on Left, B is
-    // invoked on Right through the REAL registry (destroying A), B commits, undo
-    // B. B's undo baseline is captured at its FIRST SLOT WRITE - by then A's
-    // teardown restore has already put Left back - so undoing B can never
-    // resurrect A's abandoned preview on Left.
+    // Unsynced: A previews Left, real registry replacement invokes B on Right, B
+    // commits, then undo B. Capture B's baseline at its first slot write, after A's
+    // teardown restores Left, so undo cannot resurrect A's abandoned preview.
     TEST_F(DepthWindowPanelsInteractionTest, UndoOfReplacementDragNeverResurrectsReplacedPreviewUnsynced) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1488,22 +1446,17 @@ namespace lfs::vis {
         ASSERT_NE(committed, preview);
 
         EXPECT_TRUE(lfs::vis::op::undoHistory().undo().success);
-        // Residue R, now RESOLVED - by the BASELINE SOURCE, not by A's
-        // teardown. B's begin takes over both slots (A therefore restores
-        // nothing), but the manager's recorded backup for each of them is
-        // still the pre-A value, and B's baseline is composed from the backups
-        // of the slots it owns. So the undo returns both slots to the pre-A
-        // value - A's abandoned preview is gone from the other slot too.
+        // B takes both slots, so A restores neither. B's undo baseline must come from
+        // each owned slot's recorded pre-A backup, not the live preview. Undo then
+        // restores pre-A values in both slots.
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), clean);
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), clean);
     }
 
-    // The CANCEL half, and it is a DIFFERENT question from the undo half.
-    // Same take-over sequence, but B cancels instead of committing: a cancel
-    // puts back what was ON SCREEN when B started - the replaced drag's
-    // abandoned preview included - because the teardown target is sourced from
-    // the LIVE snapshot, not from the manager's backups. This is the upstream
-    // semantics DepthWindowDragLifecycleTest pins.
+    // Cancellation uses the live windows captured at B's first write, including any
+    // inherited A preview, rather than the manager backups used for undo. This
+    // same-panel replacement test pins that distinction alongside
+    // DepthWindowDragLifecycleTest.
     TEST_F(DepthWindowPanelsInteractionTest, CancelOfReplacementDragKeepsInvokeTimeScreenStateSynced) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(true);
@@ -1539,11 +1492,8 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), preview);
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), preview);
 
-        // Regression: B's end released the slots but left the pre-A backup O
-        // behind. C's claim finds them UNOWNED and therefore REFRESHES the
-        // backups from the live value, so C records the VISIBLE pre-C state
-        // (A's abandoned preview P) as its baseline, and undoing C
-        // returns the slots to P - never to the original clean O.
+        // After B releases ownership, C must refresh idle backups from visible pre-C
+        // state P, even if pre-A O remained recorded. Undo C restores P, never O.
         ASSERT_TRUE(startDepthDrag(40.0, 200.0));
         ASSERT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(130.0, 260.0)),
                   OperatorResult::RUNNING_MODAL);
@@ -1559,10 +1509,9 @@ namespace lfs::vis {
         EXPECT_NE(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left), clean);
     }
 
-    // STOP C's resolution, direct: updateSettings itself carries a
-    // split_view_mode FLIP. It must take the transition mutex, run the same
-    // transition the event sites run (epoch bump + backup fold + collapse) and
-    // leave a pre-flip drag's later writes refused by the epoch guard.
+    // A mode-changing updateSettings must take the transition lock and perform the
+    // event path's epoch bump, backup fold and collapse. The old drag's later writes
+    // must fail the epoch guard.
     TEST_F(DepthWindowPanelsInteractionTest, UpdateSettingsModeFlipRunsTheDepthWindowTransition) {
         enterIndependentDual();
         ASSERT_EQ(rendering_manager_->depthWindowModeEpoch(), 1u);
@@ -1597,12 +1546,10 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), left_pre);
     }
 
-    // STOP C's other half: an EQUAL-mode settings write must never touch the
-    // transition mutex. Toggling independent-dual with the depth tool enabled
-    // and a LATCHED drag runs the chain that re-enters updateSettings while
-    // this same thread holds the transition lock (cancel hook -> finishLatch ->
-    // applySelectionFilterSettings -> updateSettings). Reaching the assertions
-    // at all IS the no-deadlock proof; the state below must also be coherent.
+    // An equal-mode updateSettings must avoid the transition lock. Toggling
+    // independent-dual with an enabled tool and latched drag re-enters it via cancel
+    // hook -> finishLatch -> applySelectionFilterSettings while holding that lock.
+    // Reaching the coherent-state assertions proves this sequence did not deadlock.
     TEST_F(DepthWindowPanelsInteractionTest, EqualModeSettingsWriteNeverDeadlocksTheTransitionLock) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1624,12 +1571,10 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), left_pre);
     }
 
-    // Regression, in its constructible form: sync ON, drag A previewing,
-    // a same-epoch depth-window entry atop the history, a mid-modal
-    // history.undo(), A continues, then independent-dual is left with the OTHER
-    // panel focused. A's begin pinned BOTH slots' backups (its writes fan out),
-    // so the mid-drag undo's idle-backup release must not drop the other slot's
-    // backup - otherwise the focused-other collapse publishes A's preview.
+    // With sync ON, A previews while a same-epoch history entry is undone mid-modal; A
+    // continues, then leave independent-dual focused on the other panel. A pinned both
+    // backups for fan-out, so undo's idle-backup release must preserve the other pin.
+    // Otherwise collapse publishes A's preview.
     TEST_F(DepthWindowPanelsInteractionTest, MidDragHistoryUndoKeepsLiveFanOutBackup) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(true);
@@ -1667,10 +1612,9 @@ namespace lfs::vis {
         EXPECT_EQ(projectionDepthWindow(*rendering_manager_), committed);
     }
 
-    // Regression, first half: a split-mode change across a boundary that means
-    // NOTHING to depth windows (Disabled <-> PLYComparison) must be a COMPLETE
-    // no-op for depth-window state. A live drag keeps its backup, its pins and
-    // its epoch, goes on drawing, and cancels back to the pre-drag window O.
+    // With no retained pair, Disabled/PLYComparison leaves depth state unchanged. A
+    // live drag keeps its backup, pins and epoch, continues drawing, then cancels to
+    // pre-drag O.
     TEST_F(DepthWindowPanelsInteractionTest, GlobalModeFlipLeavesLiveDragUndisturbed) {
         auto settings = rendering_manager_->getSettings();
         settings.depth_filter_scale_x = 0.41f;
@@ -1714,11 +1658,9 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), pre_drag);
     }
 
-    // Regression, second half (the identity hole). After the same no-op flip a
-    // same-panel replacement B must record the PRE-DRAG-A window O as the
-    // panel's backup - not A's abandoned preview - and A's end, which runs as
-    // the registry destroys it AFTER B is already live, must not strip the pins
-    // B just took: B's own cancel still restores.
+    // After the no-op mode flip, same-panel replacement B must retain pre-A O as
+    // backup. The registry destroys A after B claims its pins; A's teardown must leave
+    // B's ownership intact so B can still cancel.
     TEST_F(DepthWindowPanelsInteractionTest, SamePanelDragAfterGlobalModeFlipKeepsPreDragBackupAndPins) {
         auto settings = rendering_manager_->getSettings();
         settings.depth_filter_scale_x = 0.41f;
@@ -1763,11 +1705,9 @@ namespace lfs::vis {
         EXPECT_EQ(projectionDepthWindow(*rendering_manager_), pre_drag);
     }
 
-    // Regression: a newer LEGITIMATE non-drag write beats a teardown restore.
-    // Independent-dual, sync ON, A previewing into both slots; a direct
-    // settings write replaces the depth window on both slots and supersedes
-    // A's pre-drag backup and pins. Cancelling A must restore NEITHER slot -
-    // the newest intent stands.
+    // Independent-dual, sync ON: A previews both slots, then a settings write installs
+    // a newer window and supersedes A's backups and pins. Cancelling A must restore
+    // neither slot.
     TEST_F(DepthWindowPanelsInteractionTest, NewerSettingsWriteBeatsCancelTeardownOnBothSlots) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(true);
@@ -1800,11 +1740,9 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
     }
 
-    // Regression, the FULL sequence: the superseded drag must not be able to
-    // keep drawing. Sync ON, A previews; a legitimate settings write installs W
-    // on both slots and takes A's ownership of them away; A's NEXT move is
-    // therefore refused instead of overwriting W with a second preview, and its
-    // cancel restores nothing. W stands on both slots.
+    // With sync ON, a settings write replaces A's preview with W and revokes both
+    // slots. A's next move must be refused, and cancellation must restore nothing. W
+    // must remain in both slots.
     TEST_F(DepthWindowPanelsInteractionTest, SupersededDragCannotWriteAfterNewerSettingsWrite) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(true);
@@ -1827,11 +1765,9 @@ namespace lfs::vis {
         ASSERT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), newest);
         ASSERT_NE(newest, pre_drag);
 
-        // THE POST-WRITE MOVE. The modal is still live and still receives the
-        // event, but the slot write behind it is refused on ownership where the
-        // old {epoch, aggregate pins} gate let P2 through. The refusal ends the
-        // drag on the spot (the operator's existing epoch_lost_ path), and that
-        // cancel restores nothing, so W stands.
+        // The modal still receives this move, but lost ownership must refuse its write.
+        // Unlike the old epoch/aggregate-pin gate, refusal ends the drag through
+        // epoch_lost_ without restoring over W.
         ASSERT_EQ(lfs::vis::op::operators().dispatchModalEvent(mouse_move(150.0, 130.0)),
                   OperatorResult::CANCELLED);
         EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
@@ -1844,12 +1780,10 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
     }
 
-    // Regression: a superseded drag's teardown must not treat a LATER drag's
-    // slot ownership as its own licence to restore. Sync ON, A previews on
-    // Left; a settings write installs W and takes A's ownership; A moves
-    // (refused); the real registry then invokes B on the RIGHT panel, which
-    // takes ownership of both slots and records W as its baseline, and destroys
-    // A. A's teardown must leave both slots - and B's baseline - untouched.
+    // A superseded drag cannot borrow a later drag's ownership for teardown. With sync
+    // ON, install W over A, then replace it with B on Right, owning both slots and
+    // baseline W. A has not moved since losing ownership; its destruction must preserve
+    // the slots and B's baseline.
     TEST_F(DepthWindowPanelsInteractionTest, ReplacedDragTeardownNeverRestoresOverANewerDragsPins) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(true);
@@ -1870,12 +1804,9 @@ namespace lfs::vis {
         rendering_manager_->updateSettings(written, DirtyFlag::SELECTION);
         const auto newest = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Left);
         ASSERT_EQ(rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right), newest);
-        // A is still LIVE here: the sequence deliberately does NOT send the
-        // post-write move, because that move's refusal would end A before the
-        // replacement arrives (see
-        // SupersededDragCannotWriteAfterNewerSettingsWrite). This is the
-        // "refused or not yet" half of the sequence - A reaches its teardown
-        // with its ownership already gone.
+        // Keep A live by omitting its post-write move, whose refusal would end it
+        // (SupersededDragCannotWriteAfterNewerSettingsWrite). This exercises teardown
+        // after ownership loss but before that refusal.
         ASSERT_TRUE(lfs::vis::op::operators().hasModalOperator());
 
         // Cross-panel registry replacement: B is invoked on Right (taking
@@ -1896,12 +1827,10 @@ namespace lfs::vis {
         EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
     }
 
-    // Regression: a legitimate write to the OTHER panel must not strand this
-    // drag's ownership of its own slot. Independent + unsynced, A live on Left;
-    // a focused write lands on Right only. A cancels (Left folds back to
-    // pre-A), and A's end releases Left, so that backup is idle again. A later
-    // sync-ON copy therefore drops it, and leaving independent collapses the
-    // SYNC COPY - never the pre-A Left window.
+    // Independent and unsynced: A owns Left while a legitimate focused write updates
+    // Right. A must still restore and release Left on cancel. The later sync copy must
+    // discard its now-idle pre-A backup, so leaving independent collapses the copy, not
+    // pre-A Left.
     TEST_F(DepthWindowPanelsInteractionTest, FocusedOtherPanelWriteStillLetsTheDragReleaseItsOwnSlot) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -1948,13 +1877,11 @@ namespace lfs::vis {
         EXPECT_EQ(projectionDepthWindow(*rendering_manager_), right_written);
     }
 
-    // The NATIVE producer of the collapse channel, end to end. The Python
-    // toolbar consumes (source, generation) to decide whether its cached
-    // per-panel Size references survived a transition, and a stub-fed Python
-    // test cannot tell a working producer from a removed one. This drives a
-    // REAL leave and pins all three producer properties: the initial value, the
-    // bump on collapse (with the pre-transition focus, not the post-transition
-    // reset-to-Left), and the absence of a bump on anything else.
+    // Drive the native collapse producer; a stub-fed Python test cannot detect its
+    // removal. Pin the initial (source,generation), the collapse increment using
+    // pre-transition focus rather than reset Left, and no increment for the other
+    // operations exercised here. The toolbar uses this record to judge Size-reference
+    // survival.
     TEST_F(DepthWindowPanelsInteractionTest, CollapseRecordStampsSourceAndGenerationOnLeaveOnly) {
         // Before any collapse: default Left, generation 0.
         {
@@ -1985,10 +1912,9 @@ namespace lfs::vis {
             EXPECT_EQ(rendering_manager_->getDepthWindowCollapseRecord().generation, 0u);
         }
 
-        // The real leave: Right is focused, so Right's window is what folds.
-        // (That write above back-routed the projection scale into the focused
-        // slot, which is exactly the documented no-panel routing - so read
-        // Right's window HERE rather than assuming it is still right_pre.)
+        // Leave with Right focused. The preceding no-panel write back-routed projection
+        // scale into Right, so read its current window rather than assuming right_pre
+        // survived.
         const auto right_now = rendering_manager_->getDepthWindowForPanel(SplitViewPanelId::Right);
         ASSERT_NE(right_now, left_pre);
         auto leaving = rendering_manager_->getSettings();
@@ -2024,12 +1950,10 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowCollapseRecord().generation, 2u);
     }
 
-    // The OTHER two producers of the reference-lineage channel, plus the writes
-    // that must NOT stamp it. A Python consumer reconciles on every generation
-    // advance whatever endpoint it observes, so an unstamped sync copy or
-    // project restore leaves it seeding from a window that no longer exists,
-    // and a spurious stamp throws away a perfectly valid Size reference. Only a
-    // native test can tell a working producer from a missing one.
+    // Pin native sync-copy and project-restore lineage producers, plus non-stamping
+    // controls. Missing stamps retain references to replaced windows; spurious stamps
+    // discard valid Size references. Stub-fed consumer tests cannot detect either
+    // producer error.
     TEST_F(DepthWindowPanelsInteractionTest, LineageStampsCoverSyncCopyAndProjectRestore) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -2107,12 +2031,9 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowCollapseRecord().generation, 3u);
     }
 
-    // The FOURTH stamp site: a SYNC undo/redo restore. It writes two absolute
-    // window snapshots at once, so it invalidates every slot-derived reference
-    // exactly like the producers above - and it can run with no mode edge, no
-    // focus edge, and (across an undo+redo pair inside one poll) no sync-flag
-    // edge either, so the stamp is the only witness a poller gets. A DRAG undo
-    // goes through the SAME manager restore and must stamp NOTHING.
+    // Sync undo/redo restores absolute slot snapshots and must stamp lineage, even with
+    // no mode/focus edge or an undo/redo pair hiding the sync edge. Drag undo shares
+    // the manager restore but must stamp nothing.
     TEST_F(DepthWindowPanelsInteractionTest, SyncUndoRedoStampsLineageAndDragUndoDoesNot) {
         enterIndependentDual();
         rendering_manager_->setDepthWindowSync(false);
@@ -2172,10 +2093,9 @@ namespace lfs::vis {
         EXPECT_EQ(rendering_manager_->getDepthWindowCollapseRecord().generation, before_drag);
     }
 
-    // The press rule that decides whether an overlay-consumed press may move the
-    // focused split panel. The press itself needs a window, an RmlUi context and
-    // a GUI frame, none of which exist headlessly, so the DECISION is pinned here
-    // as a truth table over the helper the focus block calls.
+    // Pin overlay-consumed press focus as a truth table over the production helper.
+    // This test exercises the decision, not a press through a window, RmlUi context and
+    // complete GUI frame.
     TEST(DepthWindowOverlayPressFocusTest, ToolbarChromeNeverFocusesAndDismissAlwaysDoes) {
         using lfs::vis::gui::OverlayPressFocusInputs;
         using lfs::vis::gui::overlayPressMayFocusPanel;
@@ -2208,12 +2128,9 @@ namespace lfs::vis {
         dismiss.press_blurred_text_input = true;
         EXPECT_TRUE(overlayPressMayFocusPanel(dismiss));
 
-        // ...but ONLY inside the viewport. The overlay's bounds are stretched
-        // over the left dock so the toolbars can hang above it, so a press on a
-        // dock control also reaches this rule after blurring the field. With no
-        // field focused that press focuses nothing; dismissing a field must not
-        // be what earns it the power to. (Editing Right and clicking a dock
-        // control must not focus Left.)
+        // Text dismissal grants focus only inside the viewport. Overlay bounds include
+        // the left dock, but clicking a dock control while editing Right must not focus
+        // Left; blur cannot give that press new focus permission.
         auto dock_dismiss = dismiss;
         dock_dismiss.press_inside_viewport = false;
         EXPECT_FALSE(overlayPressMayFocusPanel(dock_dismiss));
@@ -2238,12 +2155,9 @@ namespace lfs::vis {
         unclaimed.overlay_wants_input = false;
         EXPECT_FALSE(overlayPressMayFocusPanel(unclaimed));
 
-        // The GUI's own event-time verdict vetoes the press whatever rectangle
-        // it fell in. The left-dock resize strip is the case that forced this:
-        // its hitbox is CENTRED on the dock's right edge, which is exactly where
-        // the viewport begins, so its right half passes containment. With no
-        // field focused that press starts a dock resize (the GUI owns it) and
-        // focuses nothing.
+        // The event-time GUI verdict vetoes focus even inside viewport bounds. Half the
+        // dock resize strip lies beyond the dock edge inside the viewport; containment
+        // must not turn a GUI-owned resize into panel focus.
         auto resize_strip = kViewportPress;
         resize_strip.press_gui_owned = true;
         EXPECT_FALSE(overlayPressMayFocusPanel(resize_strip));
@@ -2266,11 +2180,9 @@ namespace lfs::vis {
         const glm::vec2 pos{320.0f, 40.0f};
         const glm::vec2 size{800.0f, 600.0f};
 
-        // The exact left boundary IS inside the rectangle -- containment is
-        // half-open, and the pixel belongs to the viewport, not the dock. What
-        // it is NOT is proof that a press there may focus a panel: the dock's
-        // resize strip is centred on this very boundary, so containment and
-        // ownership disagree here and OWNERSHIP is the one that decides.
+        // The half-open viewport includes its exact left boundary, but the dock resize
+        // strip is centered there too. Containment alone cannot grant focus; GUI
+        // ownership wins when the two disagree.
         EXPECT_TRUE(pointInsideViewport({320.0f, 40.0f}, pos, size));
         EXPECT_FALSE(lfs::vis::gui::overlayPressMayFocusPanel({
             .left_pressed = true,
@@ -2295,16 +2207,12 @@ namespace lfs::vis {
         EXPECT_FALSE(pointInsideViewport({700.0f, 300.0f}, pos, {0.0f, 600.0f}));
     }
 
-    // Event coalescing: SDL delivers a whole frame's events at once, so the
-    // motion queued BEHIND a press is already applied to mouse_x/mouse_y by the
-    // time the GUI frame classifies that press. Every press decision must come
-    // from the down coordinates instead.
+    // SDL batches events, so motion after a press already appears in frame-end
+    // mouse_x/mouse_y. Classify each DOWN using its own recorded coordinates.
     namespace {
-        // `timestamp` and `clicks` default to 0 -- the value a defaulted
-        // FrameMouseButtonEvent already carries -- so a test that needs to prove
-        // a field SURVIVED capture and copy must pass a distinct non-default
-        // value; an assertion against the default would pass on a field that was
-        // silently dropped.
+        // Use non-default timestamps and click counts to prove capture/copy preserves
+        // them. Zero would also pass if either field were silently dropped to its
+        // default.
         SDL_Event mouseDownEvent(const int sdl_button, const float x, const float y,
                                  const Uint64 timestamp = 0, const int clicks = 0) {
             SDL_Event event{};
@@ -2354,10 +2262,9 @@ namespace lfs::vis {
         const glm::vec2 pos{320.0f, 40.0f};
         const glm::vec2 size{800.0f, 600.0f};
 
-        // The REAL path: synthetic SDL events through FrameInputBuffer's own
-        // intake, then the production copy into PanelInputState. Hand-seeding
-        // PanelInputState instead would leave the capture and the copy -- the
-        // two places this can actually break -- untested.
+        // Use synthetic SDL through FrameInputBuffer intake and the production
+        // PanelInputState copy. Hand-seeding the destination would leave both failure
+        // sites untested.
         lfs::vis::FrameInputBuffer buffer;
         buffer.beginFrame();
         // DOWN on the right half of the viewport...
@@ -2393,12 +2300,10 @@ namespace lfs::vis {
         EXPECT_EQ(glm::vec2(inverse_press->x, inverse_press->y), glm::vec2(100.0f, 500.0f));
         EXPECT_FALSE(pointInsideViewport({inverse_press->x, inverse_press->y}, pos, size));
 
-        // A press and its release can coalesce into one frame, and so can two
-        // whole presses. NEITHER is collapsed: the canonical stream keeps both
-        // DOWNs, at their own coordinates, in arrival order, and the focus rule
-        // is applied to each of them in turn (see
-        // EachPressAppliesItsOwnFocusDecisionInOrder). `lastPress` reads the
-        // last of them without disturbing either.
+        // One frame may contain DOWN/UP or two complete presses. Preserve every DOWN's
+        // point and arrival order, apply focus per press, and let lastPress inspect the
+        // last without changing the stream
+        // (EachPressAppliesItsOwnFocusDecisionInOrder).
         lfs::vis::FrameInputBuffer double_press;
         double_press.beginFrame();
         double_press.processEvent(mouseDownEvent(SDL_BUTTON_LEFT, 700.0f, 300.0f));
@@ -2428,10 +2333,9 @@ namespace lfs::vis {
         EXPECT_EQ(right_input.lastPress(3), nullptr);
     }
 
-    // The other half of the same capture: WHO owned the press, recorded at the
-    // BUTTON_DOWN event rather than re-derived from a rectangle in the GUI
-    // frame -- and recorded for EVERY DOWN, not merely the frame's first for
-    // that button (R10).
+    // Record GUI ownership at every BUTTON_DOWN, including repeated same-button DOWNs.
+    // Do not re-derive it from frame-time rectangles or retain only the first press's
+    // verdict.
     TEST(DepthWindowOverlayPressFocusTest, PressOwnershipIsRecordedAtTheButtonDown) {
         using lfs::vis::gui::buildPanelInputFromSDL;
 
@@ -2533,12 +2437,9 @@ namespace lfs::vis {
             << "ownership leaked from the left press to the right release";
     }
 
-    // Cross-button ordering, retained from the per-button record it replaces:
-    // the canonical vector IS the arrival order, for every transition, and it is
-    // never reordered into button-index order. Replaying a real right-then-left
-    // frame as left-then-right invents cursor motion after the left DOWN and can
-    // manufacture a drag (RmlUi Context.cpp:625 / :1277) -- see
-    // RmlPointerReplayTest for that consequence exercised against a context.
+    // Preserve arrival order across buttons. Reversing right-then-left invents motion
+    // after the left DOWN and can start a drag. RmlPointerReplayTest observes this
+    // consequence on a real RmlUi context.
     TEST(DepthWindowOverlayPressFocusTest, PressArrivalOrderIsRecordedAtTheButtonDown) {
         using lfs::vis::gui::buildPanelInputFromSDL;
 
@@ -2589,18 +2490,11 @@ namespace lfs::vis {
         EXPECT_TRUE(right_first.mouse_button_events.empty());
     }
 
-    // EACH LEFT PRESS APPLIES ITS OWN FOCUS DECISION, IN ARRIVAL ORDER, and a
-    // refusal applies NOTHING -- it never undoes what an earlier press in the
-    // same frame already did. That is the whole difference between the rule
-    // being applied per press and a frame being collapsed to one governing
-    // press: collapse to the LAST press and an eligible viewport press followed
-    // by a press on toolbar chrome moves no focus at all.
-    //
-    // GuiManager's loop (gui_manager.cpp, the overlayPressMayFocusPanel block)
-    // is that fold: it `continue`s on a refusal and re-points focus on an
-    // admission, so the last ADMITTED press wins. A whole GUI frame cannot be
-    // driven in this process, so what is executable here is the fold itself over
-    // the real rule, in both orderings.
+    // Apply focus per left press in arrival order: refusal changes nothing, so the last
+    // admitted press wins. Collapsing to the final press would lose an earlier viewport
+    // focus change when toolbar chrome is clicked afterward. Exercise both orderings
+    // through the real rule; GuiManager implements the same continue/admit fold, but
+    // this test does not run a complete GUI frame.
     TEST(DepthWindowOverlayPressFocusTest, EachPressAppliesItsOwnFocusDecisionInOrder) {
         using lfs::vis::gui::OverlayPressFocusInputs;
         using lfs::vis::gui::overlayPressMayFocusPanel;
@@ -2676,14 +2570,10 @@ namespace lfs::vis {
     }
 
     // ------------------------------------------------------------------
-    // Escape contract, exercised against REAL RmlUi elements.
-    //
-    // The viewport overlay's Escape branch advertised select handling that its
-    // own outer gate could never reach (the gate published text focus, and
-    // wantsTextInput excludes a normal select). A substring test over the source
-    // passes on exactly that kind of dead code, so this pins the decision the
-    // hosts share instead: which focused element Escape cancels, and when an IME
-    // composition takes Escape back.
+    // Escape contract on real RmlUi elements. wantsTextInput excludes ordinary selects,
+    // so a text-only outer gate can make select handling unreachable. Whole-file
+    // searches miss this. Pin the shared cancellation decision and IME composition's
+    // claim on Escape.
     // ------------------------------------------------------------------
     class OverlayEscapeContractTest : public ::testing::Test {
     protected:
@@ -2760,24 +2650,13 @@ namespace lfs::vis {
     }
 
     // ------------------------------------------------------------------
-    // RmlUi pointer DELIVERY, driven against a real headless Rml::Context.
+    // Pointer delivery through production replay and a headless Rml::Context. Exercise
+    // rml_pointer_dispatch.hpp as used by processInput, observing RmlUi dispatches.
+    // This does not execute a complete GUI frame.
     //
-    // The host buffers a whole SDL frame, so a press and the motion queued
-    // behind it arrive together and the ORDER in which they reach RmlUi is a
-    // decision, not an accident. These tests exercise the production replay
-    // (rml_pointer_dispatch.hpp, called by RmlViewportOverlay::processInput --
-    // there is no test-only API on the overlay) and they observe what RmlUi
-    // itself dispatches, not what the host claims it sent.
-    //
-    // What must hold, per R10:
-    //   (1) the canonical stream is never coalesced, reordered or truncated --
-    //       every transition is delivered at ITS OWN point, in arrival order,
-    //       with its own button identity;
-    //   (2) an event the host does not own is SKIPPED, and skipping it changes
-    //       neither the order nor the identity of the events that are
-    //       delivered;
-    //   (3) an ownership verdict never leaks from one press to another -- not
-    //       across buttons, and not from an earlier same-button press.
+    // Keep the canonical stream intact. Delivered transitions retain their own point,
+    // button and arrival order; skip unowned events without disturbing that order.
+    // Ownership must not leak across buttons or repeated presses.
     // ------------------------------------------------------------------
     namespace {
 
@@ -2804,12 +2683,9 @@ namespace lfs::vis {
             void SetScissorRegion(Rml::Rectanglei) override {}
         };
 
-        // Records "<element id>:<event>" in dispatch order, and -- in a parallel
-        // vector -- the RmlUi `button` parameter each event was delivered with
-        // (-1 for the events that carry none, e.g. mousemove/mouseover). Without
-        // the button identity a host that replayed BOTH presses as button 0
-        // would still satisfy every ordering and count assertion below, so the
-        // identity is recorded and asserted, not inferred from the loop index.
+        // Record element:event order and each RmlUi button parameter (-1 when absent,
+        // such as motion/hover). Ordering and counts alone would let a host replay both
+        // buttons as 0; assert identity independently of loop index.
         class PointerEventRecorder final : public Rml::EventListener {
         public:
             void ProcessEvent(Rml::Event& event) override {
@@ -2820,11 +2696,8 @@ namespace lfs::vis {
             }
 
             void listen(Rml::Element* element) {
-                // `dragstart` is here because it is the observable consequence of
-                // replaying two buttons in the wrong order: RmlUi arms `drag` on
-                // the primary DOWN (Context.cpp:625) and fires Dragstart on the
-                // next cursor move (Context.cpp:1277), so a move manufactured
-                // AFTER the left DOWN starts a drag the user never began.
+                // Observe dragstart: primary DOWN arms drag and later movement starts
+                // it. Reversing button order can manufacture that movement and a drag.
                 for (const char* type : {"mouseover", "mouseout", "mousemove", "mousedown",
                                          "mouseup", "click", "dragstart", "drag"})
                     element->AddEventListener(type, this);
@@ -2988,10 +2861,8 @@ namespace lfs::vis {
 
     namespace {
 
-        // The overlay's own ownership predicate, as the production call site
-        // supplies it: "would this host take an event that landed here?" These
-        // boxes stand in for interactive overlay chrome; `nullptr` (an event
-        // outside the context) is never owned.
+        // Use the production admission question at each point. Boxes represent
+        // interactive overlay chrome; nullptr outside the context is never owned.
         auto ownsOverlayBox(std::vector<Rml::Element*> owned) {
             return [owned = std::move(owned)](const Rml::Element* const element) {
                 return element != nullptr &&
@@ -3017,11 +2888,9 @@ namespace lfs::vis {
 
     } // namespace
 
-    // Finding (1), restated for upstream's replay: EACH event is delivered at
-    // ITS OWN point. The frame-end cursor move happens before the replay (the
-    // host's hover pass), so what must be true here is that no event is
-    // delivered at another event's coordinates -- alpha's DOWN lands on alpha
-    // even though the frame ended over beta.
+    // The host hover pass moves to frame-end position before replay. Every transition
+    // must still use its own point: alpha's DOWN must reach alpha even though the frame
+    // ended over beta.
     TEST_F(RmlPointerReplayTest, EachEventIsDeliveredAtItsOwnPoint) {
         // The host's own hover move to the frame-end cursor, as processInput
         // makes it before the replay.
@@ -3046,10 +2915,8 @@ namespace lfs::vis {
         EXPECT_EQ(context_->GetHoverElement(), alpha_) << trace;
     }
 
-    // Finding (2): an event the host does not own is skipped, and the events it
-    // does own keep their order and identity. `dragger` is not in the owned set,
-    // so its press must never reach RmlUi -- and alpha's, which arrived after
-    // it, must still arrive, in that position, as button 0.
+    // Skip unowned dragger while preserving later owned events. Alpha's DOWN must still
+    // arrive in its original position as button 0.
     TEST_F(RmlPointerReplayTest, UnownedEventsAreSkippedWithoutDisturbingTheRest) {
         ReplayState state;
         lfs::vis::FrameInputBuffer buffer;
@@ -3099,11 +2966,8 @@ namespace lfs::vis {
             << recorder_.joined();
     }
 
-    // Cross-button ordering, retained: a real right-then-left frame must be
-    // replayed right-then-left. Replayed the other way round, the move onto
-    // `dragger` would fall AFTER the left DOWN that armed `drag`
-    // (Context.cpp:625) and RmlUi would fire Dragstart (Context.cpp:1277) from a
-    // pointer motion the user never made.
+    // Replay right-then-left in that order. Reversing them moves onto dragger after
+    // primary DOWN arms drag, manufacturing dragstart without user motion.
     TEST_F(RmlPointerReplayTest, RightBeforeLeftStartsNoDragOnTheLeftTarget) {
         ReplayState state;
         lfs::vis::FrameInputBuffer buffer;
@@ -3153,12 +3017,9 @@ namespace lfs::vis {
         EXPECT_EQ(recorder_.buttonAt(right_down), 1) << trace;
     }
 
-    // R10, matching UP: "a matching UP follows the owner of its corresponding
-    // DOWN, including releases outside the original control". The press starts
-    // on alpha, which this host owns, and is released over `dragger`, which it
-    // does not. Judged by the hit test alone the release would be skipped and
-    // RmlUi would stay pressed for good (Context.cpp:721-745 is the only thing
-    // that disarms `active` and `drag`).
+    // A matching UP follows its delivered DOWN's owner, even outside the control. Press
+    // owned alpha and release over unowned dragger: hit-testing UP alone skips the
+    // release needed to clear RmlUi's active/drag state.
     TEST_F(RmlPointerReplayTest, OwnedReleaseSurvivesTheCursorLeavingTheControl) {
         ReplayState state;
         lfs::vis::FrameInputBuffer buffer;
@@ -3179,10 +3040,9 @@ namespace lfs::vis {
             << "the press lifecycle stayed open after its release";
     }
 
-    // ...and the converse: a release this host never opened is REJECTED, so it
-    // cannot borrow delivery from another button or from a press that was
-    // refused. Without this an UP that merely happens to land on our chrome
-    // reaches RmlUi as the end of a press RmlUi never saw begin.
+    // Reject an UP whose DOWN this host never delivered. It cannot borrow another
+    // button's ownership, revive a refused press, or end a press merely because release
+    // lands on chrome.
     TEST_F(RmlPointerReplayTest, ReleaseIsDeliveredOnlyForAMatchingDown) {
         // (a) a bare release, no press behind it at all.
         ReplayState bare_state;
@@ -3229,14 +3089,10 @@ namespace lfs::vis {
         EXPECT_FALSE(stale_state.down_delivered[0]);
     }
 
-    // A press this host does not own, followed by the cursor coming to rest over
-    // chrome it DOES own. The canonical vector is not empty, so nothing may be
-    // delivered: the aggregate button bits would put a press the user made on
-    // `dragger` onto `alpha`, at the frame-end cursor, with neither its own
-    // coordinates nor its own place in the order. R10 lets a consumer skip what
-    // it does not own; it does not let it invent what it does. (The overlay's
-    // aggregate fallback is gated on the vector being EMPTY for this reason --
-    // rml_viewport_overlay.cpp.)
+    // An unowned dragger press followed by frame-end hover over owned alpha must
+    // deliver nothing. A nonempty canonical vector forbids aggregate replay, which
+    // would invent an alpha press at the wrong point and order. The overlay fallback
+    // therefore requires an empty vector.
     TEST_F(RmlPointerReplayTest, UnownedPressThenChromeHoverDeliversNoButtonEvent) {
         ReplayState state;
         lfs::vis::FrameInputBuffer buffer;
@@ -3268,10 +3124,9 @@ namespace lfs::vis {
         EXPECT_FALSE(state.down_delivered[0]);
     }
 
-    // CROSS-BUTTON, MIXED OWNERS -- both directions, because a host that keyed
-    // delivery off "some press this frame was owned" would pass one and fail the
-    // other. The rejected button must take no ownership beside the accepted one,
-    // and the accepted one must arrive whole.
+    // Exercise mixed owners across buttons in both directions. A frame-wide some-owned
+    // flag would pass only one ordering. The rejected button must acquire nothing while
+    // the accepted lifecycle arrives intact.
     TEST_F(RmlPointerReplayTest, RejectedLeftLeavesTheAcceptedRightUntouched) {
         ReplayState state;
         lfs::vis::FrameInputBuffer buffer;
@@ -3362,33 +3217,17 @@ namespace lfs::vis {
     }
 
     // ------------------------------------------------------------------
-    // R10 INTEGRATION: DOWN -> UP -> DOWN -> UP on ONE button, at two distinct
-    // points, ONE of which this host actually owns and one of which it actually
-    // does not -- run in BOTH orderings (owned press first, then unowned first).
+    // Two complete same-button presses at distinct owned/unowned points within one
+    // frame, in both orders. First-DOWN or frame-end coalescing must fail.
     //
-    // This is the case the replaced design could not express. "First DOWN of
-    // the frame wins" recorded one press, one point and one verdict per button,
-    // so the second press was delivered at the first's coordinates and under
-    // the first's owner; and a coalesced same-button double click was collapsed
-    // onto the frame-end cursor.
+    // Derive verdicts from real elements and the replay admission predicate; fixture
+    // assertions reject equivalent points. Production intake, copy and replay must
+    // preserve all four events, their DOWN/UP identities and their distinct,
+    // non-default coordinates, timestamps and click counts.
     //
-    // THE TWO VERDICTS ARE NOT ASSIGNED BY HAND. Each press's `gui_owned` is
-    // taken from the SAME admission question the replay asks of that point --
-    // "would this host take an event that landed here?" -- against the real
-    // element under it. So the two presses differ in ownership because they
-    // landed on genuinely different things, and a change that made the two
-    // points equivalent would fail the fixture assertions rather than quietly
-    // turn the case into two identical presses.
-    //
-    // Asserted here, end to end through the production intake, copy and replay:
-    //   - the COMPLETE canonical stream: four events, in arrival order, each
-    //     with its own DOWN/UP identity and its own x, y, timestamp and click
-    //     count, all distinct and none of them the defaulted value;
-    //   - the COMPLETE GUI-delivery sequence RmlUi observes, compared whole
-    //     rather than filtered, so an extra event cannot hide inside it;
-    //   - NO ownership leakage and NO state leakage: neither press takes the
-    //     other's verdict, each UP takes its own DOWN's, the unowned press is
-    //     delivered NOWHERE, and the host's press lifecycle ends closed.
+    // Compare the full delivery sequence except replay-generated mousemove. Reject
+    // extra events and ownership leakage: each UP follows its own DOWN, unowned presses
+    // are not delivered, and the host lifecycle ends closed.
     // ------------------------------------------------------------------
     namespace {
 
@@ -3405,11 +3244,10 @@ namespace lfs::vis {
             buffer.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, x, y, timestamp + 1, clicks));
         }
 
-        // The delivered sequence, with the host's own cursor moves dropped:
-        // `mousemove` is the replay's "put the pointer where this event
-        // happened" step, not a delivered transition. NOTHING else is removed,
-        // so an extra press, an extra release, a stray click or a manufactured
-        // drag all show up in the comparison.
+        // Remove only replay-generated mousemove from the delivered sequence: it
+        // positions the pointer for each event. Keep every other event so extra
+        // presses, releases, clicks and manufactured drags fail the whole-sequence
+        // comparison.
         std::vector<Rml::String> withoutCursorMoves(const std::vector<Rml::String>& log) {
             std::vector<Rml::String> out;
             for (const auto& entry : log) {
@@ -3454,10 +3292,9 @@ namespace lfs::vis {
         const bool second_owned = guiOwnsPoint(second_x, second_y);
         ASSERT_NE(first_owned, second_owned);
 
-        // Two presses of the SAME button, at two clearly different points,
-        // inside ONE buffered frame -- and their releases, so the frame carries
-        // two complete press lifecycles. Distinct, non-default timestamps and
-        // click counts, so a field that was dropped cannot read as "correct".
+        // Buffer two same-button presses and their releases at distinct points in one
+        // frame. Non-default timestamps and click counts distinguish preserved fields
+        // from silently dropped defaults.
         lfs::vis::FrameInputBuffer buffer;
         buffer.beginFrame();
         clickAt(buffer, first_x, first_y, first_owned, /*timestamp=*/1100, /*clicks=*/1);

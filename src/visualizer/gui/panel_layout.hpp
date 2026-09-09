@@ -64,23 +64,12 @@ namespace lfs::vis::gui {
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
 
-        // The frame's LAST BUTTON_DOWN for `button` in the canonical stream, or
-        // nullptr when this frame carries none.
-        //
-        // A CONVENIENCE READ, NOT A POLICY. The stream is never coalesced to
-        // this one event and no rule is decided from it alone: the press rules
-        // are applied to EVERY press, in arrival order, by the consumers that
-        // walk mouse_button_events themselves (the overlay's classification
-        // pass and GuiManager's focus loop, rml_viewport_overlay.cpp /
-        // gui_manager.cpp). This exists for the places that only need to ask
-        // "did this button go down, and where did the last one land" -- and it
-        // reads, never mutates, reorders or shortens the vector.
-        //
-        // The returned event carries its OWN coordinates (mouse_x/mouse_y are
-        // the frame's LATEST cursor, which motion queued behind the press has
-        // already moved off the pressed target) and its OWN event-time
-        // ownership verdict, so the two can never be taken from different
-        // presses.
+        // Return this frame's last DOWN for `button`, or nullptr if none.
+        // Read-only convenience lookup; do not use it to replace per-press decisions.
+        // The overlay classification and GuiManager focus loops process each press
+        // in arrival order (rml_viewport_overlay.cpp / gui_manager.cpp).
+        // Keep the canonical vector intact. Use the returned event's own coordinates
+        // and ownership together: mouse_x/mouse_y may have moved since the press.
         [[nodiscard]] const FrameMouseButtonEvent* lastPress(const int button) const {
             if (button < 0 || button > 2)
                 return nullptr;
@@ -163,20 +152,14 @@ namespace lfs::vis::gui {
                    left_dock_resizing_ || left_dock_hovering_edge_;
         }
 
-        // The left dock's resize strip, in window coordinates, computed from the
-        // SAME geometry renderLeftDock() hit-tests (panel_layout.cpp). The
-        // strip is centred ON the dock's right edge, so half of it lies inside
-        // the viewport rectangle; isResizingPanel() only reports it once a GUI
-        // frame has latched the hover, which a press arriving in the same event
-        // batch as the motion that reached the strip has not had.
+        // Window-space resize strip from renderLeftDock()'s geometry. Half extends
+        // into the viewport; direct hit-testing works before a GUI frame updates
+        // the isResizingPanel() hover latch.
         [[nodiscard]] bool isPositionOverLeftDockResizeEdge(float x, float y,
                                                             float work_x, float work_y,
                                                             float work_h) const;
 
-        // THE authoritative strip rectangle. Both the press-time predicate above
-        // and renderLeftDock()'s own hover latch go through this one function,
-        // so the two cannot drift apart -- they were duplicated line for line
-        // before, which is exactly the kind of pair that silently diverges.
+        // Shared strip rectangle for the press-time hit test and render-time hover.
         struct LeftDockResizeRect {
             float x0 = 0.0f;
             float x1 = 0.0f;

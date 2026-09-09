@@ -381,10 +381,8 @@ namespace lfs::vis {
         go_to_cam_view_handler_id_ =
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
-        // The panel-less event path stays addressed at the primary viewport, which
-        // is what every emitter without a panel identity has always meant here
-        // (module.cpp lf.reset_camera(), mcp_gui_tools.cpp). Panel-addressed
-        // callers go through resetCameraForPanel instead.
+        // Panel-less reset targets the primary viewport; explicit-panel callers
+        // use resetCameraForPanel.
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
             handleResetCameraHome(viewport_);
         });
@@ -790,15 +788,10 @@ namespace lfs::vis {
             wants_text_input &&
             !over_gui &&
             isInViewport(x, y)) {
-            // The press that dismisses a text field stays swallowed here: no
-            // camera orbit/pan, no drag, no operator gesture, no selection. Its
-            // one un-swallowed consequence -- moving the focused split panel --
-            // is applied by GuiManager instead (see the overlay focus block in
-            // gui_manager.cpp), because only there has the field already been
-            // blurred and its value committed. This handler runs a frame
-            // EARLIER than that blur (WindowManager::pollEvents dispatches here,
-            // and the overlay consumes the buffered click on the next GUI
-            // frame), so focusing from here would move focus before the commit.
+            // Swallow text-dismissal presses for camera, operators and selection.
+            // GuiManager may move panel focus only after the buffered press has blurred
+            // and committed the edit; focusing in this earlier event handler would
+            // commit to the wrong panel.
             text_input_viewport_click_button_ = button;
             return;
         }
@@ -3348,10 +3341,9 @@ namespace lfs::vis {
             .emit();
     }
 
-    // The shared depth anchor is global (DepthWindowState carries no
-    // transform or x/y extents), so re-anchoring it from a panel the user is not
-    // looking through would move the focused panel's box. Guard the side effect
-    // only -- the viewport was already chosen by panelViewport(), focus-free.
+    // The depth transform and x/y extents are global, outside DepthWindowState.
+    // Moving an off-focus panel's camera must not re-anchor the focused panel's
+    // box; panelViewport() already chose the target without changing focus.
     bool InputController::shouldSkipDepthAnchorSync(
         const std::optional<SplitViewPanelId> acted_panel) const {
         if (!acted_panel) {

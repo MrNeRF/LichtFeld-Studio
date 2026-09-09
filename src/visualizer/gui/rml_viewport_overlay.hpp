@@ -51,13 +51,9 @@ namespace lfs::vis::gui {
         }
     };
 
-    // Is `point` (window coordinates) inside the viewport rectangle?
-    //
-    // The overlay's own bounds are DELIBERATELY wider than the viewport -- they
-    // are stretched over the left dock so the toolbars can hang above it
-    // (gui_manager.cpp, setViewportBounds) -- so "the overlay saw this press" is
-    // not the same question as "this press landed on a viewport". Only the
-    // viewport rectangle is the one resolveViewerPanel splits into panels.
+    // Test window-coordinate `point` against the rectangle resolveViewerPanel splits.
+    // The overlay also covers the left dock for toolbars (gui_manager.cpp,
+    // setViewportBounds), so an overlay press need not be a viewport press.
     [[nodiscard]] inline bool pointInsideViewport(const glm::vec2 point,
                                                   const glm::vec2 viewport_pos,
                                                   const glm::vec2 viewport_size) {
@@ -67,56 +63,36 @@ namespace lfs::vis::gui {
                point.y >= viewport_pos.y && point.y < viewport_pos.y + viewport_size.y;
     }
 
-    // What the overlay -- and only the overlay -- can say about ONE left DOWN:
-    // what that press landed on, and whether it dismissed a focused text field.
-    // One entry per left DOWN of the frame the overlay was last given, IN SDL
-    // ARRIVAL ORDER, so the caller pairs entry i with that frame's i-th left
-    // DOWN and reads the press's own coordinates and its own ownership verdict
-    // off the canonical event itself.
+    // Overlay-only facts: whether a left DOWN hit a control or dismissed focused text.
+    // One entry per left DOWN in the last processed frame, in SDL order.
+    // Pair entry i with that frame's i-th canonical left DOWN for its coordinates
+    // and GUI ownership.
     struct OverlayLeftPressClassification {
         bool on_interactive_control = false;
         bool blurred_text_input = false;
     };
 
-    // The inputs of the press rule below, all classified from the SAME press --
-    // its recorded down coordinates, not the frame's latest cursor position.
+    // Classify all inputs from the same DOWN's coordinates, not the latest cursor.
     struct OverlayPressFocusInputs {
         bool left_pressed = false;
         bool overlay_wants_input = false;
         bool pressed_interactive_control = false;
         bool press_blurred_text_input = false;
         bool press_inside_viewport = false;
-        // The GUI's own verdict on this press, taken at BUTTON_DOWN.
+        // Event-time GUI ownership of this DOWN.
         bool press_gui_owned = false;
     };
 
-    // May a left press the viewport overlay saw move the FOCUSED SPLIT PANEL?
-    //
-    //   - A press outside the viewport rectangle may not: the overlay's bounds
-    //     cover the left dock too, and a dock press must not re-point a panel.
-    //     With no field focused such a press focuses nothing, and dismissing a
-    //     field cannot be what earns it the power to.
-    //   - A press on interactive overlay chrome (a button, an input) may not:
-    //     the control is drawn over one panel by layout accident, and the action
-    //     it fires reads the focused panel -- it must never read a focus its own
-    //     press just moved. Toolbar chrome is not a viewport.
-    //   - A press the GUI OWNED when it happened may not, whatever rectangle it
-    //     now falls in. The left-dock resize strip is centred on the dock's
-    //     right edge, so its right half is inside the viewport rectangle: with
-    //     no field focused that press starts a dock resize and focuses nothing,
-    //     and dismissing a field cannot be what earns it the power to re-point a
-    //     panel. Ownership is recorded at BUTTON_DOWN, so it is also immune to
-    //     a layout that moved between the press and this frame.
-    //   - A press that dismissed a focused overlay text field may, and does:
-    //     the blur (and the commit bound to it) already ran, so the committed
-    //     value lands on the panel that owned the edit and only then does focus
-    //     move.
-    //   - Any other press the overlay consumes keeps its previous behavior.
-    //
-    // ONE PRESS AT A TIME. This answers for a single left DOWN; a frame that
-    // carries several has each of them answered, in SDL arrival order, and each
-    // "yes" applies its own focus move. A "no" does nothing at all -- it never
-    // undoes the focus an earlier press in the same frame already moved.
+    // Only a left DOWN inside the viewport, outside interactive controls and not
+    // GUI-owned at press time may change panel focus. The overlay also covers the
+    // dock, and its resize strip overlaps the viewport; dismissing text must not
+    // turn either into a focus target. Ownership captured at BUTTON_DOWN remains
+    // valid after layout changes.
+    // Toolbar actions must use existing focus, regardless of where controls appear.
+    // Otherwise, allow focus when the overlay consumes the press or it blurred text.
+    // Blur and its commit run first, so the edit reaches its original panel.
+    // Process each DOWN in SDL order; each allowed press moves focus, while refusal
+    // leaves any earlier focus change intact.
     [[nodiscard]] inline bool overlayPressMayFocusPanel(const OverlayPressFocusInputs& press) {
         if (!press.left_pressed || !press.press_inside_viewport ||
             press.press_gui_owned || press.pressed_interactive_control)
@@ -198,9 +174,8 @@ namespace lfs::vis::gui {
         LFS_VIS_API void processInput(const PanelInputState& input,
                                       const ViewportOverlayInputBlockers& blockers = {});
         bool wantsInput() const { return wants_input_; }
-        // Every left DOWN of the frame the last processInput() saw, classified
-        // from that press's OWN coordinates, in SDL arrival order. Empty when
-        // that frame carried no left press.
+        // Left DOWNs from the last processInput(), classified at their own points
+        // in arrival order; empty with no left press or an early blocked return.
         [[nodiscard]] const std::vector<OverlayLeftPressClassification>&
         leftPressClassifications() const {
             return left_press_classifications_;
@@ -322,10 +297,9 @@ namespace lfs::vis::gui {
         std::string body_template_rml_;
         bool wants_input_ = false;
         std::vector<OverlayLeftPressClassification> left_press_classifications_;
-        // Per button: did THIS overlay deliver that button's DOWN to its RmlUi
-        // context? It owes the matching UP wherever the release lands, so this
-        // OUTLIVES the frame (rml_pointer_dispatch.hpp) and is cleared only
-        // when the context itself goes away.
+        // Per-button DOWN delivery to this RmlUi context; the matching UP is owed
+        // wherever it lands. Persist across frames; clear the whole array only on
+        // context destruction (rml_pointer_dispatch.hpp).
         bool pointer_down_delivered_[3] = {};
         bool doc_registered_ = false;
         bool render_needed_ = true;

@@ -27,10 +27,8 @@ namespace lfs::vis {
             }
             const bool involves_independent = splitViewUsesIndependentPanels(current_mode) ||
                                               splitViewUsesIndependentPanels(target_mode);
-            // GT comparison suspends the depth filter entirely, so entering or
-            // leaving it is a drag-lifetime boundary too: cancel BEFORE the mode
-            // change, never after it (a post-transition restore would write into
-            // the new epoch's state).
+            // Entering or leaving GT ends the drag lifetime because GT suspends filtering.
+            // Cancel before changing mode so restoration cannot write into the new epoch.
             const bool involves_gt = splitViewUsesGTComparison(current_mode) ||
                                      splitViewUsesGTComparison(target_mode);
             if (!involves_independent && !involves_gt) {
@@ -113,10 +111,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleSplitView() {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         const SplitViewMode current_mode = getSettings().split_view_mode;
         cancelDepthWindowDragBeforeSplitModeChange(
@@ -136,14 +133,12 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleIndependentSplitView(const cmd::ToggleIndependentSplitView& event) {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         const SplitViewMode current_mode = getSettings().split_view_mode;
-        // A refused toggle must cancel nothing: discover the null viewport
-        // BEFORE touching an active drag.
+        // Reject a null viewport before cancelling any active drag.
         if (!event.viewport) {
             return;
         }
@@ -167,10 +162,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleToggleGTComparison() {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         const SplitViewMode current_mode = getSettings().split_view_mode;
         cancelDepthWindowDragBeforeSplitModeChange(
@@ -199,10 +193,9 @@ namespace lfs::vis {
                     input->releaseDepthWindowCursor();
                 }
             }
-            // No hard reset of the drag gate here: the counter and the per-panel
-            // backups are owned by beginDepthWindowDrag/endDepthWindowDrag alone.
-            // The pre-transition cancel above (and the epoch boundary the
-            // transition raised) is what ends a racing drag.
+            // Do not reset the drag counter here; beginDepthWindowDrag/endDepthWindowDrag
+            // own its lifetime. Pre-transition cancellation and the new epoch handle
+            // racing drags; the transition handles their backups.
         }
         if (!splitViewUsesGTComparison(result.current_mode)) {
             invalidateCameraMetricsRequests(true);
@@ -212,10 +205,9 @@ namespace lfs::vis {
     void RenderingManager::restoreSplitViewMode(
         const SplitViewMode mode,
         Viewport& primary_viewport) {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         SplitViewMode current_mode;
         {
@@ -336,10 +328,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneLoaded() {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         const SplitViewMode current_mode = getSettings().split_view_mode;
         const SplitViewMode target_mode =
@@ -373,10 +364,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handleSceneCleared() {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         const SplitViewMode current_mode = getSettings().split_view_mode;
         cancelDepthWindowDragBeforeSplitModeChange(current_mode, SplitViewMode::Disabled);
@@ -409,10 +399,9 @@ namespace lfs::vis {
     }
 
     void RenderingManager::handlePLYRemoved() {
-        // Held across the pre-collapse cancel hook AND the mode change, so a
-        // depth-window drag's release sequence cannot interleave with this
-        // transition. Lock order: transition -> settings -> history; this is
-        // acquired BEFORE any settings_mutex_ scope below.
+        // Hold across cancellation and mode change to exclude drag release sequences.
+        // Acquire transition before settings/history locks; release settings before
+        // pushing history.
         const auto transition_lock = acquireDepthWindowTransitionLock();
         const SplitViewMode current_mode = getSettings().split_view_mode;
         if (splitViewUsesPLYComparison(current_mode)) {

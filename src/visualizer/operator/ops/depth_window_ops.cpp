@@ -180,12 +180,8 @@ namespace lfs::vis::op {
 
         DepthWindowOverlayState g_overlay_state;
         std::uint64_t g_overlay_revision = 0;
-        // Drag ownership is PER PANEL. The counter's original purpose is
-        // unchanged - a drag replaced on ITS OWN panel must not yank the
-        // incoming drag's baseline out from under it during teardown - but a
-        // replacement on the OTHER panel is not a takeover: with per-panel
-        // windows the replaced drag still owns, and must still restore, its own
-        // panel, or its uncommitted preview stays baked there.
+        // Ownership is per panel: same-panel replacement keeps the incoming drag's
+        // baseline, while cross-panel replacement must restore the outgoing panel.
         std::array<std::uint64_t, 2> g_depth_drag_revisions{};
 
         [[nodiscard]] tools::SelectionTool* activeDepthWindowTool() {
@@ -243,10 +239,9 @@ namespace lfs::vis::op {
             }
         }
 
-        // An absolute snapshot: BOTH panel slots, the sync flag and the
-        // projection, all read under one manager lock, plus the panel this drag
-        // owns. Undo therefore never depends on the sync or focus in force when
-        // it runs.
+        // Package the manager's locked snapshot of both slots, sync and projection
+        // with this drag's panel and epoch. Undo uses absolute windows rather than
+        // resolving them from later focus or sync; drag undo preserves the current flag.
         [[nodiscard]] DepthWindowSettingsState captureDepthWindowSettings(
             const DepthWindowModeSnapshot& snapshot,
             const SplitViewPanelId panel) {
@@ -288,10 +283,8 @@ namespace lfs::vis::op {
                     }
                 }
                 finishLatch();
-                // The manager's ownership bracket closes LAST, at the true end
-                // of teardown: the registry invokes a replacement modal before
-                // destroying this one, so the incoming drag's begin has already
-                // run and the panel is never unowned across the handoff.
+                // Close ownership last: replacement invoke precedes outgoing destruction,
+                // so the panel remains owned throughout the handoff.
                 releasePanelBracket();
                 if ((terminated_mid_drag || modal_active_) &&
                     g_overlay_revision == overlay_revision_) {
@@ -331,16 +324,12 @@ namespace lfs::vis::op {
             tools::SelectionTool* selection_tool_ = nullptr;
             DepthWindowPanelMapping panel_{};
             glm::vec4 viewport_bounds_{0.0f};
-            // UNDO BASELINE. What this drag's undo entry restores: composed
-            // from the manager's recorded pre-drag BACKUP for every slot this
-            // drag owns (live value elsewhere), so an undo can never resurrect
-            // a replaced drag's abandoned preview.
+            // Undo restores the manager's pre-drag backups for owned slots and live values
+            // for unowned slots, so it cannot resurrect a replaced drag's abandoned preview.
             DepthWindowSettingsState undo_baseline_{};
-            // CANCEL / TEARDOWN TARGET. What a cancelled drag puts back on
-            // SCREEN: the LIVE state as this drag found it, predecessor's
-            // abandoned preview included - cancelling B returns you to what was
-            // on screen when B started, which is not the same thing as undoing
-            // B. Own slot, then the other slot for the fan-out case.
+            // Cancel/teardown restores the live windows this drag found, including any
+            // predecessor's abandoned preview; undo uses the baseline above.
+            // Own slot first, then the other slot for a drag that writes both.
             DepthWindowState restore_window_{};
             DepthWindowState restore_other_window_{};
             DepthWindowState applied_window_{};
@@ -358,29 +347,23 @@ namespace lfs::vis::op {
             bool constrained_ = false;
             bool draw_started_ = false;
             bool latch_active_ = false;
-            // False until the drag's FIRST slot write captured the baseline.
-            // While it is false this drag has written nothing, so there is
-            // nothing to restore and no undo entry to build.
+            // False until baseline capture at the first slot write; until then,
+            // nothing has been written, so no restore or undo entry is needed.
             bool baseline_captured_ = false;
-            // True when beginDepthWindowDrag also PINNED the other panel's
-            // backup (the fan-out predicate at invoke): this drag's writes may
-            // reach both slots, so its teardown restore must put both back.
+            // True if beginDepthWindowDrag pinned the other backup at invoke because writes
+            // can reach both slots. Teardown must then restore both.
             bool pinned_other_panel_ = false;
             bool panel_bracket_active_ = false;
             bool modal_active_ = false;
             std::uint64_t overlay_revision_ = 0;
             std::uint64_t drag_revision_ = 0;
             std::uint64_t start_epoch_ = 0;
-            // This drag's per-slot OWNERSHIP token, minted by
-            // beginDepthWindowDrag and handed back on every manager call:
-            // preview write, commit, teardown restore and end. A slot whose
-            // owner is no longer this token was superseded by a legitimate
-            // non-drag write or taken over by a later drag, and every one of
-            // those calls refuses on it.
+            // Pass the begin token to preview, commit, restore and end. Superseded slots
+            // reject writes/restores and ignore per-slot release; end still decrements
+            // the drag count.
             std::uint64_t drag_token_ = 0;
-            // Set the moment an epoch-guarded write is refused: the mode
-            // transition already collapsed or re-seeded the slots, so this drag
-            // must vanish WITHOUT restoring anything.
+            // A refused epoch write means the transition owns the state; exit without
+            // restoring the expired drag.
             bool epoch_lost_ = false;
         };
 
@@ -504,10 +487,9 @@ namespace lfs::vis::op {
                 aspect_px_ = 1.0f;
             }
 
-            // The manager bracket opens at INVOKE, not at the latch: the
-            // registry invokes this modal BEFORE destroying the one it
-            // replaces, so opening here is what keeps the pressed panel owned
-            // (and its pre-drag backup alive) across the handoff.
+            // Claim ownership at invoke, before the latch. The registry invokes this modal
+            // before destroying its predecessor, preserving the pressed panel's ownership
+            // and pre-drag backup through replacement.
             pinned_other_panel_ = rendering_manager_->beginDepthWindowDrag(panel_.panel, drag_token_);
             panel_bracket_active_ = true;
 
@@ -625,37 +607,20 @@ namespace lfs::vis::op {
         }
 
         void DepthWindowDragOperator::captureBaselineIfNeeded() {
-            // The undo BASELINE and the restore target are captured at the
-            // FIRST SLOT WRITE, not at invoke. Under registry replacement the
-            // sequence is: incoming invoke, outgoing destroy (which runs the
-            // replaced drag's teardown restore), then the incoming drag's first
-            // event - so an invoke-time capture would bake the OUTGOING drag's
-            // abandoned preview into this drag's baseline, and undoing this
-            // drag would resurrect it.
+            // Capture before the first slot write. Registry replacement runs incoming invoke,
+            // outgoing destruction/restore, then the incoming event; capturing at invoke
+            // could retain the outgoing preview as an undo baseline.
             //
-            // The two roles then diverge, and they are captured from TWO
-            // different sources.
+            // undo_baseline_ uses manager backups for owned slots and live values elsewhere.
+            // Ownership takeover can leave the predecessor's preview live, so use the
+            // first-recorded pre-drag backups retained across takeover.
             //
-            // UNDO BASELINE (undo_baseline_): every slot this drag OWNS comes
-            // from the manager's RECORDED BACKUP, because once a replacement
-            // drag TAKES OVER the slots (per-slot ownership) instead of letting
-            // its predecessor's teardown restore them, the live slots STILL
-            // hold the abandoned preview - and undoing this drag must not
-            // republish it. The backup is the pre-drag value by construction
-            // (first-wins on record, kept across the take-over); slots this
-            // drag does not own keep the live value.
+            // restore_window_ / restore_other_window_ use the live windows, including a
+            // predecessor's preview: cancellation restores what the drag found on screen
+            // (DepthWindowDragLifecycleTest), while undo restores the baseline.
             //
-            // CANCEL / TEARDOWN TARGET (restore_window_ / restore_other_window_)
-            // comes from the LIVE snapshot, because cancelling a drag means
-            // "put back what was on screen when this drag started" - the
-            // predecessor's abandoned preview included. That is the upstream
-            // semantics DepthWindowDragLifecycleTest pins, and it is a
-            // different question from what an UNDO of this drag restores.
-            //
-            // Each snapshot carries BOTH slots (DepthWindowSettingsState::panels)
-            // plus the projection and the sync flag, so the fan-out case - where
-            // this drag's writes land in both slots - is covered without a
-            // second code path.
+            // The undo baseline stores both slots, projection and sync; cancellation stores
+            // both live windows. This covers writes to both slots without a separate path.
             if (baseline_captured_ || !rendering_manager_) {
                 return;
             }
@@ -753,28 +718,20 @@ namespace lfs::vis::op {
         }
 
         void DepthWindowDragOperator::restoreBeforeState() {
-            // Epoch-guarded like every other drag write: a mode transition that
-            // already collapsed or re-seeded the slots owns the state now, and
-            // this drag must leave it alone.
+            // Epoch-guard restoration so this drag cannot overwrite slots already collapsed
+            // or re-seeded by a mode transition.
             if (!rendering_manager_ || epoch_lost_) {
                 return;
             }
-            // Nothing was written, so there is nothing to restore. The baseline
-            // is captured at the first slot write; before that point this drag
-            // holds no claim on the slot, and writing the invoke-time value
-            // back would republish whatever a replaced drag had left there.
+            // No first-write baseline means nothing was written or needs restoring.
+            // Restoring the invoke-time value could revive a replaced drag's preview.
             if (!baseline_captured_) {
                 return;
             }
-            // RESTORE, never a normal apply, and PER SLOT AGAINST THE PINS.
-            // The manager decides under ONE lock, slot by slot, whether this
-            // drag still holds the pin it took at begin: a newer legitimate
-            // non-drag write released that pin, and the newest intent must
-            // stand - the teardown then skips that slot instead of reviving the
-            // pre-drag value over it. Every slot this drag PINNED is offered
-            // (under the fan-out predicate its writes reached both), and each
-            // is still written individually in slot-only RESTORE mode - never a
-            // fan-out, so the fan-out invariant stays intact.
+            // Offer every pinned slot for restoration, including both when writes fan out.
+            // Under one lock, the manager restores only slots this drag still owns; newer
+            // non-drag writes revoke ownership and must survive teardown.
+            // Restore each slot individually, without normal-apply fan-out.
             std::optional<DepthWindowState> other_state;
             if (pinned_other_panel_) {
                 other_state = restore_other_window_;
@@ -787,10 +744,8 @@ namespace lfs::vis::op {
         }
 
         void DepthWindowDragOperator::restoreBeforeStateIfStillOurs() {
-            // Ownership is asked PER PANEL: only a later drag on THIS panel
-            // takes it over. A replacement on the other panel leaves this
-            // drag's claim on its own panel intact, so its teardown restore
-            // still runs (epoch-guarded, as always).
+            // Check this panel's drag revision: replacement on the other panel does not
+            // supersede it. Restoration still checks the epoch and each slot's ownership.
             if (!rendering_manager_ || epoch_lost_ ||
                 g_depth_drag_revisions[splitViewPanelIndex(panel_.panel)] != drag_revision_) {
                 return;
@@ -881,11 +836,9 @@ namespace lfs::vis::op {
                     return OperatorResult::CANCELLED;
                 }
                 rendering_manager_->setFocusedSplitPanel(panel_.panel);
-                // The commit is itself a slot write: a release whose pointer
-                // left the panel reaches here without any earlier write, and
-                // committing the invoke-time value would republish a replaced
-                // drag's abandoned preview. Capturing here makes that commit a
-                // clean-state no-op that pushes no undo entry.
+                // Commit may be the first slot write after an outside-panel release. Capture
+                // now instead of reusing invoke-time state, which may contain a replaced drag's
+                // preview. If the result matches undo_baseline_, no undo entry is needed.
                 captureBaselineIfNeeded();
 
                 // Serialize commit, undo and publication with mode transitions.
@@ -946,21 +899,17 @@ namespace lfs::vis::op {
                      key->action == input::ACTION_RELEASE)) {
                     const bool was_constrained = constrained_;
                     constrained_ = (current_modifiers_ & input::KEYMOD_CTRL) != 0;
-                    // Before the draw has started nothing may be written: a Ctrl
-                    // press is "Ctrl at onset" (a square); a Ctrl release just
-                    // clears the constraint. Neither samples current_rect_ (it
-                    // still holds the OLD window) nor calls updateFromScreen.
+                    // Before drawing starts, Ctrl press selects a square; release clears the constraint.
+                    // Write nothing: current_rect_ still describes the old window. Neither event
+                    // may sample it or call updateFromScreen.
                     if (drag_kind_ == DragKind::Draw && !draw_started_) {
                         if (constrained_) {
                             aspect_px_ = 1.0f;
                         }
                         return OperatorResult::RUNNING_MODAL;
                     }
-                    // On a fresh draw, Ctrl locks the shape being dragged right
-                    // now, not the previous window — re-capture the live rect's
-                    // ratio on every Ctrl press. Resize keeps the drag-start
-                    // ratio (the shape being resized), where the two
-                    // definitions coincide.
+                    // During a new draw, each Ctrl press locks the current rectangle's ratio.
+                    // Resize keeps the drag-start ratio of the window being resized.
                     if (constrained_ && !was_constrained &&
                         drag_kind_ == DragKind::Draw) {
                         const float live_w = current_rect_.max.x - current_rect_.min.x;

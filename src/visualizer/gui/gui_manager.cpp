@@ -6984,9 +6984,8 @@ namespace lfs::vis::gui {
             bottom_dock_pointer_live_capture_ = false;
 
         // ── Left Dock ─────────────────────────────────────────────
-        // Only the dock's own body rectangle needs this; the resize strip below
-        // takes its icon-bar width from PanelLayoutManager (whose constant is
-        // private) via leftDockResizeRect().
+        // The body uses this width; the resize strip gets the private icon-bar
+        // width from PanelLayoutManager::leftDockResizeRect().
         constexpr float ICON_BAR_WIDTH = 40.0f;
         const float icon_bar_w = ICON_BAR_WIDTH * current_ui_scale_;
         const float left_dock_panel_w = std::max(panel_layout_.getLeftDockWidth(), 0.0f);
@@ -6999,12 +6998,8 @@ namespace lfs::vis::gui {
             pointInRect(panel_input.mouse_x, panel_input.mouse_y,
                         glm::vec2{left_dock_x, screen.work_pos.y},
                         glm::vec2{left_dock_panel_w, left_dock_h});
-        // THE authoritative strip -- the same function `renderLeftDock()`'s
-        // hover latch and `isPositionOverLeftDockResizeEdge()` use. This site
-        // used to rebuild the rectangle by hand and had already drifted from it
-        // (it excluded the strip's bottom edge, `<` where the shared rectangle
-        // uses `<=`), so a press one pixel from the bottom of the work area
-        // started a resize the router did not treat as dock-targeted input.
+        // Use the same strip rectangle as the render-time hover and press hit tests,
+        // including its inclusive bottom edge.
         const bool pointer_over_left_dock_edge =
             panel_layout_.isLeftDockVisible() &&
             PanelLayoutManager::leftDockResizeRect(screen.work_pos.x, screen.work_pos.y,
@@ -7352,30 +7347,17 @@ namespace lfs::vis::gui {
                                                                                              reg.isPositionOverFloatingPanel(sdl_input.mouse_x, sdl_input.mouse_y),
                                                                        });
         }
-        // Rules in overlayPressMayFocusPanel (rml_viewport_overlay.hpp). This
-        // runs after processInput() above, so a press that dismissed a text
-        // field has already blurred and committed it before focus moves.
-        //
-        // Everything below is classified from the press's OWN coordinates: the
-        // overlay is stretched over the left dock, and mouse_x/mouse_y are the
-        // frame's latest cursor position, so neither "the overlay wanted this
-        // press" nor "the cursor is here now" answers where the press landed.
-        // ONE event answers every question below -- its coordinates AND its
-        // event-time ownership verdict -- so the two halves of the rule can
-        // never be taken from different presses.
-        //
-        // EVERY LEFT PRESS IN THE FRAME IS JUDGED, IN SDL ARRIVAL ORDER, AND
-        // EACH ELIGIBLE ONE APPLIES ITS OWN DECISION. A frame can carry more
-        // than one left DOWN, landing on different things; a refusal (chrome, a
-        // GUI-owned press, a press outside the viewport) simply does nothing, so
-        // it can never undo the focus an earlier press in the same frame already
-        // moved. When several are eligible the last one naturally wins, which is
-        // the frame's visible outcome; when none is, focus stays where it was.
-        // The overlay's list carries the two facts only it can compute, entry i
-        // beside this frame's i-th left DOWN. Explicit blockers and invalid
-        // bounds report no presses. External capture still classifies earlier
-        // viewport presses before blocking motion, so their text blur can
-        // commit before the corresponding panel focus change.
+        // Apply overlayPressMayFocusPanel (rml_viewport_overlay.hpp) after processInput,
+        // so text blur and its commit handler run before focus moves.
+        // Match overlay entry i to this frame's i-th left DOWN, using that event's
+        // coordinates and GUI ownership together. The overlay spans the dock, and the
+        // latest cursor position or wantsInput alone cannot identify where a press landed.
+        // Process every left DOWN in SDL order. Refused presses (controls, GUI-owned
+        // or outside the viewport) leave focus unchanged; the last eligible press wins.
+        // With no eligible press, keep the existing focus.
+        // Explicit blockers or invalid bounds produce no classifications. External
+        // capture still classifies earlier viewport presses before blocking motion,
+        // allowing their text edits to commit before the corresponding focus changes.
         const auto& overlay_left_presses = rml_viewport_overlay_.leftPressClassifications();
         std::size_t overlay_press_index = 0;
         for (const auto& overlay_event : viewport_overlay_input.mouse_button_events) {
@@ -8401,13 +8383,9 @@ namespace lfs::vis::gui {
         if (hit.blocks_pointer || hit.blocks_mouse_button)
             return hit;
 
-        // The left dock's resize strip is the one GUI-owned edge hitTestPointer
-        // cannot answer geometrically: it reports it only through
-        // isResizingPanel(), which is a hover LATCH written by the previous GUI
-        // frame. A press that arrives in the same SDL batch as the motion which
-        // reached the strip finds that latch still false, so ask the geometry
-        // directly -- the same geometry renderLeftDock() will use a moment
-        // later to start the resize.
+        // The resize hover latch may lag a press in the same SDL batch as motion.
+        // Hit-test the shared strip geometry so its viewport-overlapping half is
+        // GUI-owned even before the next renderLeftDock().
         if (panel_layout_.isPositionOverLeftDockResizeEdge(
                 static_cast<float>(x), static_cast<float>(y),
                 last_ui_layout_work_pos_.x, last_ui_layout_work_pos_.y,

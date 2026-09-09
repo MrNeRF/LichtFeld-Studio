@@ -65,22 +65,15 @@ namespace lfs::vis::gui::rml_input {
         return false;
     }
 
-    // Which focused element does Escape CANCEL (revert + blur via
-    // cancelFocusedElement) instead of being forwarded to RmlUi as an ordinary
-    // key? Exactly the set cancelFocusedElement acts on -- keeping the two in
-    // one place is what stops a host from advertising a branch its own outer
-    // gate can never reach.
-    //
-    // Shared by the sidebar panel host and the viewport overlay ONLY. The modal
-    // and startup hosts still implement their own Escape rules (Escape closes
-    // the modal rather than reverting a field), so this is not, and does not
-    // claim to be, the whole application's Escape policy.
+    // Match cancelFocusedElement's targets so the Escape gate can reach every
+    // supported cancellation (revert/blur) instead of forwarding an ordinary key.
+    // Shared only by sidebar and viewport hosts. Modal/startup hosts keep their
+    // own Escape rules, such as closing a modal instead of reverting a field.
     inline bool isEscapeCancelTarget(Rml::Element* element) {
         return element && (isTextEditableElement(element) || isSelectRelatedElement(element));
     }
 
-    // ...and while an IME composition is in flight Escape belongs to the IME
-    // (it aborts the composition), so no host may steal it for cancellation.
+    // During IME composition, reserve Escape for aborting composition, not field cancellation.
     inline bool shouldCancelOnEscape(Rml::Element* element, const bool composing) {
         return !composing && isEscapeCancelTarget(element);
     }

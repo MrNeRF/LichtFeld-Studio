@@ -804,17 +804,10 @@ namespace {
         return viewer->projectTrainingSessionState();
     }
 
-    // Panel vocabulary for the keyword-only `panel=` argument on the camera
-    // actions the per-viewport toolbar buttons raise. Same shape as
-    // py_selection.cpp's parseDepthWindowPanelArg, and the same vocabulary:
-    // Python `None` means "no panel override" and takes the
-    // pre-panel code path verbatim, so every caller that carries no identity
-    // behaves exactly as before; 'main' is the EXPLICIT focused-panel request;
-    // 'left'/'right' name a panel outright. `None` and 'main' are therefore
-    // synonyms for focus_selection (whose panel-less path is focus-addressed)
-    // and NOT for reset_camera (whose panel-less path is primary-addressed) --
-    // that asymmetry belongs to the panel-less paths, which are the legacy
-    // compatibility surface, not to the 'main' token.
+    // Keyword-only panel= matches depth-window actions: None uses the legacy path;
+    // main explicitly requests focus; left/right name a panel. None and main
+    // coincide for focus_selection. For reset_camera, panel=None targets the
+    // primary viewport; panel='main' targets the focused panel.
     [[nodiscard]] std::optional<lfs::vis::SplitViewPanelId>
     parseGizmoPanelArg(const std::string& panel) {
         if (panel == "left")
@@ -826,11 +819,8 @@ namespace {
         throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
     }
 
-    // 'main' resolution. focused_panel_ is main-thread-owned and unprotected
-    // (split_view_service.hpp:60), so the read is marshalled to the viewer
-    // thread exactly as py_selection.cpp's resolveDepthWindowPanel and
-    // py_ui.cpp's get_focused_split_panel do. Left is the no-manager fallback,
-    // matching get_focused_split_panel.
+    // Resolve main on the viewer thread: focused_panel_ is unprotected and
+    // main-thread-owned. Without a manager, use Left as get_focused_split_panel does.
     [[nodiscard]] lfs::vis::SplitViewPanelId focusedGizmoPanel() {
         const auto read = [] {
             auto* const rm = lfs::python::get_rendering_manager();
@@ -849,8 +839,7 @@ namespace {
             [] { return lfs::vis::SplitViewPanelId::Left; });
     }
 
-    // Throws ValueError for an unknown token BEFORE anything is read, so an
-    // invalid call never half-applies.
+    // Raise ValueError for unknown tokens before state access or partial application.
     [[nodiscard]] lfs::vis::SplitViewPanelId resolveGizmoPanelArg(const std::string& panel) {
         const auto parsed = parseGizmoPanelArg(panel);
         return parsed ? *parsed : focusedGizmoPanel();
