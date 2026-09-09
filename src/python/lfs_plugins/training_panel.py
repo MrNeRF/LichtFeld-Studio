@@ -275,6 +275,7 @@ class TrainingPanel(Panel):
         self._last_panel_label = ""
         self._last_language_generation = -1
         self._last_toolbar_fit_key = None
+        self._last_saving_model = False
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
@@ -682,6 +683,8 @@ class TrainingPanel(Panel):
                 and value in ("idle", "ready", "", None)
             ):
                 return "completed" if session.get("completed") else "paused"
+            if value == "stopping" and lf.trainer_saving_model():
+                return "saving"
             return value
 
         def _iteration():
@@ -730,6 +733,7 @@ class TrainingPanel(Panel):
             "error",
             "stopping",
             "restoring",
+            "saving",
         ]:
             if state_name == "ready":
                 model.bind_func("show_ctrl_ready", _show_ctrl_ready)
@@ -1604,7 +1608,11 @@ class TrainingPanel(Panel):
                 getattr(params, name, None)
                 for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss")
             )
-            if backend_controls != getattr(self, "_last_backend_controls", None):
+            backend_changed = backend_controls != getattr(self, "_last_backend_controls", None)
+            numeric_changed = False
+            for binding in self._pv_bindings:
+                numeric_changed |= binding.sync_text_bufs(publish=False)
+            if backend_changed or numeric_changed:
                 self._last_backend_controls = backend_controls
                 # Native rollback does not go through Python property setters.
                 # Republish on the UI thread when the effective values change.
@@ -1615,6 +1623,19 @@ class TrainingPanel(Panel):
                 self._handle.dirty_all()
                 return True
         return False
+
+    def _sync_saving_status(self):
+        stopping = RuntimeState.trainer_state.value == "stopping"
+        saving = stopping and lf.trainer_saving_model()
+        if stopping:
+            # Saving has no separate runtime signal. Poll only this transient state.
+            self._schedule_deferred_update(0.1)
+        if saving == self._last_saving_model:
+            return False
+        self._last_saving_model = saving
+        for name in ("status_mode", "show_ctrl_stopping", "show_ctrl_saving"):
+            self._handle.dirty(name)
+        return True
 
     def _sync_toolbar_fit(self):
         if not self._doc:
@@ -1632,6 +1653,8 @@ class TrainingPanel(Panel):
                 state = "error"
             elif session.get("available") and state in ("idle", "ready", "", None):
                 state = "completed" if session.get("completed") else "paused"
+        if state == "stopping" and lf.trainer_saving_model():
+            state = "saving"
         fit_key = (state, RuntimeState.iteration.value > 0,
                    RuntimeState.language_generation.value, toolbar.client_width,
                    badge.absolute_width)
@@ -1672,6 +1695,7 @@ class TrainingPanel(Panel):
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()
+        dirty |= self._sync_saving_status()
         dirty |= self._sync_toolbar_fit()
         dirty |= self._refresh_native_backend_controls()
         dirty = self._sync_start_feedback() or dirty

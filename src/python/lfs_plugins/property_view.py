@@ -697,6 +697,7 @@ class SectionBinding:
         )
 
     def sync_text_bufs(self, publish=True):
+        changed = False
         for row in self.rows:
             if row["kind"] != "number":
                 continue
@@ -708,9 +709,12 @@ class SectionBinding:
                 if self._edit_snapshots[prop_id] == canonical:
                     continue
                 self._edit_snapshots[prop_id] = canonical
-            self._text_bufs[self.input_key(prop_id)] = canonical
+            key = self.input_key(prop_id)
+            changed |= self._text_bufs.get(key) != canonical
+            self._text_bufs[key] = canonical
         if publish:
             self._request_publish()
+        return changed
 
     def update_draft(self, prop_id, value):
         prop_id = str(prop_id)

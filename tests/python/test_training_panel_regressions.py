@@ -36,6 +36,7 @@ def _install_lf_stub(monkeypatch):
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
     lf_stub.start_training = lambda: None
+    lf_stub.trainer_saving_model = lambda: False
     lf_stub.training_start_overwrite_conflict = lambda: None
     lf_stub.loss_buffer = lambda: []
     lf_stub.push_loss_to_element = lambda _element, _data: (0.0, 0.0)
@@ -238,7 +239,7 @@ def test_toolbar_status_shares_nonwrapping_row_with_actions_outside_telemetry():
     assert set(badges) == {
         "show_ctrl_ready", "show_ctrl_starting", "show_ctrl_running",
         "show_ctrl_paused", "show_ctrl_completed", "show_ctrl_stopped",
-        "show_ctrl_error", "show_ctrl_stopping", "show_ctrl_restoring",
+        "show_ctrl_error", "show_ctrl_stopping", "show_ctrl_restoring", "show_ctrl_saving",
     }
     assert sum(node.text == "{{status_mode}}" for node in root.iter()) == 0
     for group in toolbar.findall("div"):
@@ -632,7 +633,7 @@ def test_native_backend_rollback_republishes_bound_controls(training_panel_modul
         mip_filter=True, use_depth_loss=False, use_normal_loss=False,
     )
     published, dirty = [], []
-    panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True))]
+    panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True), sync_text_bufs=lambda **_: False)]
     panel._handle = SimpleNamespace(dirty_all=lambda: dirty.append(True))
     monkeypatch.setattr(panel, "_sync_text_bufs", lambda **_kwargs: None)
     monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
@@ -651,7 +652,7 @@ def test_native_rollback_between_publication_and_update_is_not_missed(training_p
         mip_filter=False, use_depth_loss=False, use_normal_loss=False,
     )
     published = []
-    binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter))
+    binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter), sync_text_bufs=lambda **_: False)
     panel._pv_bindings = [binding]
     panel._handle = SimpleNamespace(dirty_all=lambda: None)
     monkeypatch.setattr(panel, "_sync_text_bufs", lambda **_kwargs: None)
@@ -667,13 +668,14 @@ def test_native_rollback_between_publication_and_update_is_not_missed(training_p
     assert published == [False, True, False]
 
 
+@pytest.mark.parametrize("rollback_timing", ["before_refresh", "after_refresh"])
 @pytest.mark.parametrize("prop,initial,draft,is_int", [
     ("max_cap", 5_000_000, "4000000", True),
     ("iterations", 30_000, "20000", True),
     ("means_lr", 0.00016, "0.00012", False),
 ])
 def test_numeric_draft_survives_refresh_and_publication_settles(
-    training_panel_module, monkeypatch, prop, initial, draft, is_int
+    training_panel_module, monkeypatch, prop, initial, draft, is_int, rollback_timing
 ):
     module = training_panel_module
     panel = module.TrainingPanel()
@@ -720,12 +722,50 @@ def test_numeric_draft_survives_refresh_and_publication_settles(
     panel._on_pv_number_input_blur(None, None, [prop, draft])
     assert getattr(params, prop) == pytest.approx(float(draft))
     assert panel._flush_pv_publish()
-    # Rollback after publication, to the previous native backend snapshot.
+    if rollback_timing == "after_refresh":
+        assert panel._refresh_native_backend_controls()
+        assert not panel._refresh_native_backend_controls()
+    # A worker may roll back before OR after the first post-edit refresh.
     setattr(params, prop, initial)
     assert panel._refresh_native_backend_controls()
     assert records[binding.model_key][0]["text"] == binding.canonical_text(prop)
     assert not panel._pv_publish_pending
     assert not panel._refresh_native_backend_controls()
+
+
+def test_saving_badge_tracks_transition_without_restarting_training(training_panel_module, monkeypatch):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    model = _ModelStub()
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", True)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "stopping")
+    saving = {"value": False}
+    monkeypatch.setattr(module.lf, "trainer_saving_model", lambda: saving["value"])
+    dirty, scheduled = [], []
+    panel._handle = SimpleNamespace(dirty=dirty.append)
+    monkeypatch.setattr(panel, "_schedule_deferred_update", scheduled.append)
+    panel._bind_visibility(model, lambda: None, lambda: None)
+    panel._bind_status(model, lambda: None)
+    assert not panel._sync_saving_status()
+    assert scheduled == [0.1]
+    assert model.bindings["show_ctrl_stopping"][0]()
+    assert not model.bindings["show_ctrl_saving"][0]()
+    saving["value"] = True
+    assert panel._sync_saving_status()
+    assert set(dirty) == {"status_mode", "show_ctrl_stopping", "show_ctrl_saving"}
+    assert model.bindings["show_ctrl_saving"][0]()
+    assert not model.bindings["show_ctrl_stopping"][0]()
+    assert "training.status_saving" in model.bindings["status_mode"][0]()
+    dirty.clear()
+    assert not panel._sync_saving_status()
+    assert not dirty
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "completed")
+    scheduled.clear()
+    assert panel._sync_saving_status()
+    assert not scheduled
+    assert not model.bindings["show_ctrl_saving"][0]()
+    assert model.bindings["show_ctrl_completed"][0]()
 
 
 @pytest.mark.parametrize("offer_save", [False, True])

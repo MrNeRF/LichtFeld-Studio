@@ -18,6 +18,9 @@ The existing state visibility, confirmation handlers and Start guard are retaine
 Project restoration shows its own badge. A restore failure remains visible with
 Error actions; once a live trainer exists, its own error takes precedence over
 stored restoration feedback.
+During stopping, the badge distinguishes model saving from stopping. This
+transient state is checked every 100ms because saving has no separate runtime
+signal; that polling ends when the trainer leaves stopping.
 
 | State | Primary action | Other actions |
 |---|---|---|
@@ -27,7 +30,7 @@ stored restoration feedback.
 | Paused | Resume | Reset, Stop, Save Project |
 | Completed / Stopped | Edit Mode | Reset, Clear |
 | Error | None; show error | Reset, Clear |
-| Stopping / Restoring | None; show status | None |
+| Stopping / Saving / Restoring | None; show status | None |
 
 The initial RmlUi panel exposes Training Method (strategy, backend, iterations,
 padlock, capacity and BG Improvements), Camera &
@@ -54,7 +57,8 @@ flag is added to always-applicable settings.
 
 Generated rows retain their property metadata, numeric editing, tooltips and
 runtime edit locks. An unchanged native value does not overwrite a focused draft;
-authoritative changes still replace it. Native refresh synchronizes buffers before
+authoritative changes still replace it, including a numeric rollback arriving
+after the first post-edit refresh. Native refresh synchronizes buffers before
 publishing, without queueing another refresh. Selecting a backend updates the next-run parameters and the
 existing viewer setting. Unsupported capabilities are shown beside the selector
 as `Not available with {backend}: {features}`: the backend label comes from its
@@ -134,6 +138,8 @@ or changing backend/appearance does not toggle it.
   Running/Paused, including the saved confirmation message.
 - Start, pause, resume, stop and restore training. Settings must obey the existing
   edit lock, while project saving and other training actions remain usable.
+  During final model saving, verify SAVING replaces STOPPING and then gives way
+  to the final state; neither badge should offer new training actions.
 
 Run the source Python regressions using the interpreter matching the built
 extension, with pytest, the built module and its runtime libraries available.

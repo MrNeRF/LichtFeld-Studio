@@ -83,6 +83,7 @@
       <span class="training-status-badge is-complete" data-if="show_ctrl_stopped"><span class="training-status-badge-label">@tr:status.stopped</span></span>
       <span class="training-status-badge is-error" data-if="show_ctrl_error"><span class="training-status-badge-label">@tr:status.error</span></span>
       <span class="training-status-badge is-active" data-if="show_ctrl_stopping"><span class="training-status-badge-label">@tr:status.stopping</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_saving"><span class="training-status-badge-label">@tr:training.status_saving</span></span>
       <span class="training-status-badge is-active" data-if="show_ctrl_restoring"><span class="training-status-badge-label">@tr:training.status_restoring</span></span>
     </div></div>
     <div class="training-start-feedback" id="training-error-feedback" data-if="show_ctrl_error">
