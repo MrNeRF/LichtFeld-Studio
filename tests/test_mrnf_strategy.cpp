@@ -2113,7 +2113,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByExplicitAdam) {
         optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
         control_optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
         const auto mask = Tensor::ones({static_cast<size_t>(mask_n)}, Device::CUDA).to(DataType::Bool);
-        optimizer.set_mean_step_far_mask(mask.ptr<bool>(), mask_n);
+        optimizer.set_mean_step_far_mask(mask);
         optimizer.get_grad(ParamType::Means).fill_(0.2f);
         control_optimizer.get_grad(ParamType::Means).fill_(0.2f);
         FarMaskWarningCapture warnings;
@@ -2142,7 +2142,7 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         auto& optimizer = strategy.get_optimizer();
         optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
         const auto mask = Tensor::ones({static_cast<size_t>(mask_n)}, Device::CUDA).to(DataType::Bool);
-        optimizer.set_mean_step_far_mask(mask.ptr<bool>(), mask_n);
+        optimizer.set_mean_step_far_mask(mask);
         FarMaskWarningCapture warnings;
 
         const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
@@ -2159,11 +2159,171 @@ TEST(MRNFStrategyTest, MeanStepFarMaskMismatchIsIgnoredByFusedAdam) {
         EXPECT_EQ(warnings.messages.size(), 1u);
 
         const auto current_mask = Tensor::zeros_bool({2}, Device::CUDA);
-        optimizer.set_mean_step_far_mask(current_mask.ptr<bool>(), 2);
+        optimizer.set_mean_step_far_mask(current_mask);
         const auto republished = optimizer.prepare_fastgs_fused_adam(3, nullptr);
         EXPECT_EQ(republished.mean_step_far_mask, current_mask.ptr<bool>());
         EXPECT_EQ(republished.mean_step_far_mask_n, 2);
         EXPECT_EQ(warnings.messages.size(), 1u);
         EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
+}
+
+TEST(MRNFStrategyTest, MeanStepFarMaskUploadsHostStorageBeforeAdam) {
+    for (const bool pinned : {false, true}) {
+        SCOPED_TRACE(pinned);
+        auto splat = create_mrnf_test_splat_data(2, 0);
+        auto control_splat = create_mrnf_test_splat_data(2, 0);
+        const auto params = vanilla_mrnf_params();
+        MRNF strategy(splat);
+        MRNF control(control_splat);
+        strategy.initialize(params);
+        control.initialize(params);
+        auto& optimizer = strategy.get_optimizer();
+        auto& control_optimizer = control.get_optimizer();
+        optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+        control_optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+        {
+            // A strided CPU view exercises both pageable/pinned upload and packing.
+            auto host = Tensor::empty({2, 2}, Device::CPU, DataType::Bool, pinned);
+            const bool values[] = {true, false, false, true};
+            std::memcpy(host.ptr<bool>(), values, sizeof(values));
+            auto mask = host.slice(1, 0, 1).squeeze(1);
+            ASSERT_FALSE(mask.is_contiguous());
+            optimizer.set_mean_step_far_mask(mask);
+            control_optimizer.set_mean_step_far_mask(mask.cuda().contiguous());
+            EXPECT_NE(optimizer.mean_step_far_mask(), mask.ptr<bool>());
+        }
+        cudaPointerAttributes attributes{};
+        ASSERT_EQ(cudaPointerGetAttributes(&attributes, optimizer.mean_step_far_mask()), cudaSuccess);
+        EXPECT_EQ(attributes.type, cudaMemoryTypeDevice);
+        bool values[2] = {};
+        ASSERT_EQ(cudaMemcpy(values, optimizer.mean_step_far_mask(), sizeof(values),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_TRUE(values[0]);
+        EXPECT_FALSE(values[1]);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask, optimizer.mean_step_far_mask());
+        EXPECT_EQ(fused.mean_step_far_mask_n, 2);
+        optimizer.get_grad(ParamType::Means).fill_(0.2f);
+        control_optimizer.get_grad(ParamType::Means).fill_(0.2f);
+        optimizer.step(1);
+        control_optimizer.step(1);
+        EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        EXPECT_EQ(means_xyz(splat), means_xyz(control_splat));
+    }
+}
+
+TEST(MRNFStrategyTest, MeanStepFarMaskRetainsAllocationUntilBindingIsCleared) {
+    auto splat = create_mrnf_test_splat_data(2, 0);
+    MRNF strategy(splat);
+    strategy.initialize(vanilla_mrnf_params());
+    auto& optimizer = strategy.get_optimizer();
+    optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+    std::weak_ptr<Tensor> allocation;
+    {
+        auto owner = std::make_shared<Tensor>(Tensor::ones_bool({2}, Device::CUDA));
+        allocation = owner;
+        auto mask = Tensor::from_external_owner(
+            owner->ptr<bool>(), TensorShape({2}), Device::CUDA, DataType::Bool, owner);
+        optimizer.set_mean_step_far_mask(mask);
+        EXPECT_EQ(optimizer.mean_step_far_mask(), owner->ptr<bool>());
+    }
+    // This observes ownership directly, independent of allocator address reuse.
+    ASSERT_FALSE(allocation.expired());
+    optimizer.get_grad(ParamType::Means).fill_(0.2f);
+    optimizer.step(1);
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    optimizer.set_per_splat_mean_step(false, 0.0f, 1.0f, 300.0f);
+    EXPECT_TRUE(allocation.expired());
+    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+    EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+
+    // A from_blob view has no allocation owner to retain, so the binding must copy it.
+    for (const bool strided : {false, true}) {
+        SCOPED_TRACE(strided);
+        {
+            auto source = Tensor::ones_bool({2, 2}, Device::CUDA);
+            auto borrowed = strided
+                                ? source.slice(1, 0, 1).squeeze(1)
+                                : Tensor::from_blob(source.ptr<bool>(), TensorShape({2}), Device::CUDA, DataType::Bool);
+            ASSERT_FALSE(borrowed.owns_memory());
+            optimizer.set_mean_step_far_mask(borrowed);
+            EXPECT_NE(optimizer.mean_step_far_mask(), source.ptr<bool>());
+            // Also prove independence while the source is still allocated.
+            source.zero_();
+            EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        }
+        bool values[2] = {};
+        ASSERT_EQ(cudaMemcpy(values, optimizer.mean_step_far_mask(), sizeof(values),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_TRUE(values[0]);
+        EXPECT_TRUE(values[1]);
+    }
+    optimizer.set_mean_step_far_mask({});
+}
+
+TEST(MRNFStrategyTest, MeanStepFarMaskEmptyBindingsClearExplicitAndFusedAdam) {
+    auto splat = create_mrnf_test_splat_data(2, 0);
+    MRNF strategy(splat);
+    strategy.initialize(vanilla_mrnf_params());
+    auto& optimizer = strategy.get_optimizer();
+    optimizer.set_per_splat_mean_step(true, 0.5f, 1.0f, 300.0f);
+    for (const auto device : {Device::CPU, Device::CUDA}) {
+        optimizer.set_mean_step_far_mask(Tensor::ones_bool({2}, Device::CUDA));
+        optimizer.set_mean_step_far_mask(Tensor::empty({0}, device, DataType::Bool));
+        EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+        EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(1, nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask, nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask_n, 0);
+        optimizer.get_grad(ParamType::Means).fill_(0.2f);
+        optimizer.step(1);
+    }
+    // External zero-size views may have non-null host storage. Do not query or upload it.
+    auto owner = std::make_shared<bool>(true);
+    auto empty = Tensor::from_external_owner(
+        owner.get(), TensorShape({0}), Device::CPU, DataType::Bool, owner);
+    ASSERT_NE(empty.data_ptr(), nullptr);
+    optimizer.set_mean_step_far_mask(Tensor::ones_bool({2}, Device::CUDA));
+    optimizer.set_mean_step_far_mask(empty);
+    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+    EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}
+
+TEST(MRNFStrategyTest, BackgroundToggleBuildsAndClearsFarMaskBeforeNextAdamStep) {
+    auto splat = create_mrnf_test_splat_data(4, 0);
+    auto params = vanilla_mrnf_params();
+    params.far_scene_min_fraction = 0.0f;
+    MRNF strategy(splat);
+    strategy.initialize(params);
+    install_test_camera_hull(strategy);
+    auto& optimizer = strategy.get_optimizer();
+    EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+
+    for (int iteration = 1; iteration <= 2; ++iteration) {
+        params.background_improvements = true;
+        strategy.set_optimization_params(params);
+        ASSERT_NE(optimizer.mean_step_far_mask(), nullptr);
+        ASSERT_EQ(optimizer.mean_step_far_mask_n(), 4);
+        bool values[4] = {};
+        ASSERT_EQ(cudaMemcpy(values, optimizer.mean_step_far_mask(), sizeof(values),
+                             cudaMemcpyDeviceToHost),
+                  cudaSuccess);
+        EXPECT_FALSE(values[0]);
+        EXPECT_TRUE(values[3]);
+        const auto fused = optimizer.prepare_fastgs_fused_adam(iteration, nullptr);
+        EXPECT_EQ(fused.mean_step_far_mask, optimizer.mean_step_far_mask());
+        optimizer.get_grad(ParamType::Means).fill_(0.2f);
+        optimizer.step(iteration);
+
+        params.background_improvements = false;
+        strategy.set_optimization_params(params);
+        EXPECT_EQ(optimizer.mean_step_far_mask(), nullptr);
+        EXPECT_EQ(optimizer.mean_step_far_mask_n(), 0);
+        EXPECT_FALSE(optimizer.per_splat_mean_step());
+    }
+    EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
