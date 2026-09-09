@@ -292,8 +292,8 @@ def _basic_runs(*ids):
     return tuple(by_id[name] for name in ids)
 
 
-METHOD_RUNS = _basic_runs("basic_struct", "basic_background") + (_run("basic_exposure_correction", "use_exposure_correction"),)
-CAMERA_RUNS = _basic_runs("basic_undistort", "basic_mip_filter")
+METHOD_RUNS = _basic_runs("basic_struct", "basic_background")
+CAMERA_RUNS = (_run("basic_exposure_correction", "use_exposure_correction"),) + _basic_runs("basic_undistort", "basic_mip_filter")
 MASK_RUNS = _basic_runs("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties")
 BACKGROUND_RUNS = _basic_runs("bg_mode")
 APPEARANCE_RUNS = _basic_runs(
@@ -628,6 +628,7 @@ class SectionBinding:
         self._visibility_predicate = visibility_predicate
         self._handle = None
         self._edit_snapshots = {}
+        self._cancelled_edits = set()
         self.sync_text_bufs(publish=False)
 
     def input_key(self, prop_id):
@@ -699,9 +700,15 @@ class SectionBinding:
         for row in self.rows:
             if row["kind"] != "number":
                 continue
-            self._text_bufs[self.input_key(row["id"])] = self.canonical_text(
-                row["id"]
-            )
+            prop_id = row["id"]
+            canonical = self.canonical_text(prop_id)
+            if prop_id in self._edit_snapshots:
+                # Unrelated refreshes must not replace an uncommitted draft.
+                # A changed authoritative value (including rollback) still wins.
+                if self._edit_snapshots[prop_id] == canonical:
+                    continue
+                self._edit_snapshots[prop_id] = canonical
+            self._text_bufs[self.input_key(prop_id)] = canonical
         if publish:
             self._request_publish()
 
@@ -718,6 +725,7 @@ class SectionBinding:
 
     def begin_edit(self, prop_id):
         prop_id = str(prop_id)
+        self._cancelled_edits.discard(prop_id)
         row = self._rows_by_id.get(prop_id)
         if row is None or row["kind"] != "number":
             return False
@@ -726,6 +734,7 @@ class SectionBinding:
 
     def finish_edit(self, prop_id):
         self._edit_snapshots.pop(str(prop_id), None)
+        self._cancelled_edits.discard(str(prop_id))
 
     def cancel_edit(self, prop_id):
         prop_id = str(prop_id)
@@ -735,6 +744,7 @@ class SectionBinding:
         if snapshot is None:
             snapshot = self.capture(prop_id)
         self.restore(prop_id, snapshot)
+        self._cancelled_edits.add(prop_id)
         return True
 
     def restore(self, prop_id, snapshot):
@@ -746,6 +756,9 @@ class SectionBinding:
 
     def commit(self, prop_id):
         prop_id = str(prop_id)
+        if prop_id in self._cancelled_edits:
+            self.restore(prop_id, self.capture(prop_id))
+            return False
         row = self._rows_by_id.get(prop_id)
         if row is None or row["kind"] != "number":
             return False
@@ -766,6 +779,8 @@ class SectionBinding:
                 pass
 
         self._text_bufs[key] = self.canonical_text(prop_id)
+        if prop_id in self._edit_snapshots:
+            self._edit_snapshots[prop_id] = self._text_bufs[key]
         self._request_publish()
         return updated
 
@@ -795,6 +810,8 @@ class SectionBinding:
             return False
 
         self._text_bufs[self.input_key(prop_id)] = self.canonical_text(prop_id)
+        if prop_id in self._edit_snapshots:
+            self._edit_snapshots[prop_id] = self._text_bufs[self.input_key(prop_id)]
         self._request_publish()
         return True
 
@@ -839,7 +856,8 @@ class SectionBinding:
                 if not bool(self._visibility_predicate(prop_condition)):
                     continue
             label = _localized(row["label_key"], row["name"])
-            if not row_matches_query(row["id"], label, query):
+            search_id = "bg_mode bg_color bg_image" if row["id"] == "bg_mode" else row["id"]
+            if not row_matches_query(search_id, label, query):
                 continue
             record = {
                 "id": row["id"],
@@ -945,6 +963,9 @@ def bind_run(
 
 
 def section_is_visible(bindings, section_id, bespoke_predicate=None):
+    if section_id == "advanced_params":
+        return any(section_is_visible(bindings, section, bespoke_predicate)
+                   for section in ADVANCED_SECTIONS)
     if callable(bespoke_predicate) and bespoke_predicate(section_id):
         return True
     run_ids = set(SEARCH_SECTION_RUN_IDS.get(str(section_id), ()))

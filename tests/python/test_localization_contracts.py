@@ -10,12 +10,25 @@ import subprocess
 import string
 import sys
 import tempfile
+import pytest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCALES = ROOT / "src" / "visualizer" / "gui" / "resources" / "locales"
 RML_DIR = ROOT / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+
+
+def test_locale_loader_rejects_nested_duplicates(tmp_path):
+    spec = importlib.util.spec_from_file_location("locale_checker", ROOT / "tools/check_locale_completeness.py")
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    path = tmp_path / "locale.json"
+    path.write_text('{"training":{"section.masking":"A","section.masking":"B"}}', encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate JSON key 'section.masking'"):
+        checker.load_locale(path)
+    path.write_text('{"training":{"name":"A"},"rendering":{"name":"B"}}', encoding="utf-8")
+    assert checker.load_locale(path) == {"training.name": "A", "rendering.name": "B"}
 
 
 def _flatten(value, prefix=""):

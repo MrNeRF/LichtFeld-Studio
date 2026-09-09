@@ -32,8 +32,16 @@ def flatten_strings(data: dict[str, Any], prefix: str = "") -> dict[str, str]:
 
 
 def load_locale(path: Path) -> dict[str, str]:
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{path.name}: duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
     with path.open(encoding="utf-8") as locale_file:
-        data = json.load(locale_file)
+        data = json.load(locale_file, object_pairs_hook=unique_object)
     if not isinstance(data, dict):
         raise ValueError(f"{path.name} must contain a JSON object")
     return flatten_strings(data)
@@ -114,7 +122,11 @@ audit option below to report or reject them explicitly.""",
 def main() -> int:
     args = parse_args()
     english_path = LOCALES_DIR / "en.json"
-    english = load_locale(english_path)
+    try:
+        english = load_locale(english_path)
+    except ValueError as error:
+        print(f"Locale completeness failed: {error}")
+        return 1
     english_keys = set(english)
     failures: list[str] = []
     identical_reports: list[tuple[str, list[str]]] = []
@@ -126,7 +138,11 @@ def main() -> int:
             failures.extend(f"  {finding}" for finding in layout_findings)
         if locale_path == english_path:
             continue
-        locale = load_locale(locale_path)
+        try:
+            locale = load_locale(locale_path)
+        except ValueError as error:
+            failures.append(str(error))
+            continue
         missing = sorted(english_keys - set(locale))
         extra = sorted(set(locale) - english_keys)
         if missing:

@@ -69,7 +69,7 @@ body {
 .training-action-row {
     display: flex;
     flex-direction: row;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 4dp;
     width: 100%;
@@ -134,7 +134,6 @@ body {
     box-sizing: border-box;
     height: 28dp;
     min-width: 62dp;
-    max-width: 132dp;
     padding: 3dp 7dp;
     margin: 0;
     line-height: 20dp;
@@ -383,54 +382,28 @@ loss-graph {
     margin: 4dp 0 2dp;
 }
 
-/* Each panel has its own context. Reserve space for the visible action count
-   and status instead of applying the four-button breakpoint to every state. */
-@media (max-width: 280dp) {
-    .toolbar-two .training-toolbar-action span {
-        display: none;
-    }
-    .toolbar-two .training-toolbar-action {
-        min-width: 28dp;
-        max-width: 28dp;
-        width: 28dp;
-        padding: 3dp 6dp;
-        gap: 0;
-    }
-    .toolbar-two .training-action-row {
-        flex-wrap: nowrap;
-    }
+/* Measure natural localized button widths with the same styles and dp scale.
+   Hidden probes stay outside the toolbar so compact mode cannot affect them. */
+#training-toolbar-measure {
+    position: absolute;
+    visibility: hidden;
+    pointer-events: none;
+    height: 0;
+    overflow: hidden;
+    white-space: nowrap;
 }
-
-@media (max-width: 350dp) {
-    .toolbar-three .training-toolbar-action span {
-        display: none;
-    }
-    .toolbar-three .training-toolbar-action {
-        min-width: 28dp;
-        max-width: 28dp;
-        width: 28dp;
-        padding: 3dp 6dp;
-        gap: 0;
-    }
-    .toolbar-three .training-action-row {
-        flex-wrap: nowrap;
-    }
+#measure-action-gap { display: inline-block; width: 4dp; }
+#measure-status-gap { display: inline-block; width: 6dp; }
+#training-toolbar-measure .btn { tab-index: none; nav: none; }
+.training-toolbar.is-compact .training-toolbar-action span {
+    display: none;
 }
-
-@media (max-width: 440dp) {
-    .toolbar-four .training-toolbar-action span {
-        display: none;
-    }
-    .toolbar-four .training-toolbar-action {
-        min-width: 28dp;
-        max-width: 28dp;
-        width: 28dp;
-        padding: 3dp 6dp;
-        gap: 0;
-    }
-    .toolbar-four .training-action-row {
-        flex-wrap: nowrap;
-    }
+.training-toolbar.is-compact .training-toolbar-action {
+    min-width: 28dp;
+    max-width: 28dp;
+    width: 28dp;
+    padding: 3dp 6dp;
+    gap: 0;
 }
 
 /* Advanced is a top-level title, not an inset subsection header. */

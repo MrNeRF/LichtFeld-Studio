@@ -274,6 +274,7 @@ class TrainingPanel(Panel):
         self._psnr_tick_min = ""
         self._last_panel_label = ""
         self._last_language_generation = -1
+        self._last_toolbar_fit_key = None
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
@@ -669,6 +670,10 @@ class TrainingPanel(Panel):
         def _state():
             value = RuntimeState.trainer_state.value
             session = _training_session_state()
+            if session.get("restoring"):
+                return "restoring"
+            if session.get("error") and not session.get("hydrated") and not RuntimeState.has_trainer.value:
+                return "error"
             if (
                 not RuntimeState.has_trainer.value
                 and session.get("available")
@@ -724,6 +729,7 @@ class TrainingPanel(Panel):
             "stopped",
             "error",
             "stopping",
+            "restoring",
         ]:
             if state_name == "ready":
                 model.bind_func("show_ctrl_ready", _show_ctrl_ready)
@@ -1175,7 +1181,7 @@ class TrainingPanel(Panel):
         else:
             self._mark_text_buf_dirty(key)
 
-    def _sync_text_bufs(self):
+    def _sync_text_bufs(self, *, publish=True):
         p = lf.optimization_params()
         d = lf.dataset_params()
         if p and p.has_params():
@@ -1193,7 +1199,7 @@ class TrainingPanel(Panel):
         self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
         self._sync_bg_color_text_bufs(p)
         for binding in self._pv_bindings:
-            binding.sync_text_bufs()
+            binding.sync_text_bufs(publish=publish)
 
     def _sync_bg_color_text_bufs(self, params=None):
         if params is None:
@@ -1275,7 +1281,7 @@ class TrainingPanel(Panel):
             session = _training_session_state()
             if session.get("restoring"):
                 return "restoring"
-            if session.get("error"):
+            if session.get("error") and not session.get("hydrated") and not RuntimeState.has_trainer.value:
                 return "error"
             state = RuntimeState.trainer_state.value
             if (
@@ -1331,8 +1337,9 @@ class TrainingPanel(Panel):
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
-            session_error = str(_training_session_state().get("error") or "")
-            if session_error:
+            session = _training_session_state()
+            session_error = str(session.get("error") or "")
+            if session_error and not session.get("hydrated") and not RuntimeState.has_trainer.value:
                 return f"{tr('training_panel.session_restore_failed')}: {session_error}"
             return lf.trainer_error() or ""
 
@@ -1438,6 +1445,7 @@ class TrainingPanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
+        doc.add_event_listener("resize", lambda _event: self._schedule_deferred_update(0.01))
         self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
@@ -1600,12 +1608,62 @@ class TrainingPanel(Panel):
                 self._last_backend_controls = backend_controls
                 # Native rollback does not go through Python property setters.
                 # Republish on the UI thread when the effective values change.
+                # Sync before publishing, without enqueueing another refresh.
+                self._sync_text_bufs(publish=False)
                 for binding in self._pv_bindings:
                     binding.publish()
-                self._sync_text_bufs()
                 self._handle.dirty_all()
                 return True
         return False
+
+    def _sync_toolbar_fit(self):
+        if not self._doc:
+            return False
+        toolbar = self._doc.get_element_by_id("training-toolbar")
+        badge = self._doc.get_element_by_id("training-controls-header")
+        if not toolbar or not badge:
+            return False
+        session = _training_session_state()
+        state = RuntimeState.trainer_state.value
+        if session.get("restoring"):
+            state = "restoring"
+        elif not RuntimeState.has_trainer.value and not session.get("hydrated"):
+            if session.get("error"):
+                state = "error"
+            elif session.get("available") and state in ("idle", "ready", "", None):
+                state = "completed" if session.get("completed") else "paused"
+        fit_key = (state, RuntimeState.iteration.value > 0,
+                   RuntimeState.language_generation.value, toolbar.client_width,
+                   badge.absolute_width)
+        if fit_key != self._last_toolbar_fit_key:
+            self._last_toolbar_fit_key = fit_key
+            # The dirty-driven hook runs before RmlUi lays out new bindings.
+            # Measure once more after that layout, including initially hidden rows.
+            self._schedule_deferred_update(0.01)
+        if toolbar.client_width <= 0:
+            return False
+        actions = {
+            "ready": ("start", "reset", "clear") if RuntimeState.iteration.value > 0 else ("start", "clear"),
+            "starting": ("pause", "stop"),
+            "running": ("pause", "save_project"),
+            "paused": ("resume", "reset", "stop", "save_project"),
+            "completed": ("switch_edit", "reset", "clear"),
+            "stopped": ("switch_edit", "reset", "clear"),
+            "error": ("reset", "clear"),
+        }.get(state, ())
+        probes = [self._doc.get_element_by_id("measure-" + action) for action in actions]
+        gap = self._doc.get_element_by_id("measure-action-gap")
+        status_gap = self._doc.get_element_by_id("measure-status-gap")
+        if not gap or not status_gap or any(not p or p.absolute_width <= 0 for p in probes):
+            return False
+        required = (sum(p.absolute_width for p in probes)
+                    + max(0, len(probes) - 1) * gap.absolute_width
+                    + badge.absolute_width + (status_gap.absolute_width if probes else 0))
+        compact = required > toolbar.client_width
+        if toolbar.is_class_set("is-compact") == compact:
+            return False
+        toolbar.set_class("is-compact", compact)
+        return True
 
     def on_update(self, doc):
         if not self._handle:
@@ -1614,6 +1672,7 @@ class TrainingPanel(Panel):
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()
+        dirty |= self._sync_toolbar_fit()
         dirty |= self._refresh_native_backend_controls()
         dirty = self._sync_start_feedback() or dirty
         language_generation = RuntimeState.language_generation.value
@@ -1646,6 +1705,10 @@ class TrainingPanel(Panel):
             self._handle.dirty("show_ctrl_ready")
             self._handle.dirty("show_ctrl_paused")
             self._handle.dirty("show_ctrl_completed")
+            self._handle.dirty("show_ctrl_restoring")
+            self._handle.dirty("show_ctrl_error")
+            self._handle.dirty("show_project_save")
+            self._handle.dirty("error_message")
             self._handle.dirty("show_training_telemetry")
             dirty = True
         state = RuntimeState.trainer_state.value
@@ -2298,13 +2361,13 @@ class TrainingPanel(Panel):
         "use_exposure_correction": (
             "use_bilateral_grid",
             "ppisp",
-            "ppisp_controller",
-            "ppisp_freeze",
+            "ppisp_use_controller",
+            "ppisp_freeze_from_sidecar",
         ),
         "use_bilateral_grid": ("use_exposure_correction",),
         "ppisp": ("use_exposure_correction",),
-        "ppisp_controller": ("use_exposure_correction",),
-        "ppisp_freeze": ("use_exposure_correction",),
+        "ppisp_use_controller": ("use_exposure_correction",),
+        "ppisp_freeze_from_sidecar": ("use_exposure_correction",),
     }
 
     def _on_pv_value_change(self, _handle, _event, args):

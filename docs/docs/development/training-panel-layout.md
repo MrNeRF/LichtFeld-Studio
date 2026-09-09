@@ -4,9 +4,9 @@ The compact training-action toolbar is part of this same branch and change serie
 not a separate PR D. All actions use the same compact icon-and-text buttons,
 with localized short labels and full tooltips. No button stretches to fill the
 panel. Save .licht is in the same row as Pause/Resume, not a separate full-width
-row. Buttons use RmlUi `inline-flex` sizing. Compact thresholds depend on the
-visible action count: 280dp for two, 350dp for three, 440dp for four. Ready accounts
-for optional Reset and Paused for optional Save. Below the relevant threshold,
+row. Buttons use RmlUi `inline-flex` sizing. Compact mode compares RmlUi's measured
+localized action widths, gaps and status badge against the available toolbar width.
+Measurements follow the current language, UI scale, state and panel size. When the captions do not fit,
 RCSS hides button captions and uses 28dp icon buttons; tooltips and accessible
 names remain. The outer toolbar does not wrap. The state is an
 uppercase colored badge, following the video extractor SDR/HDR badge language,
@@ -15,6 +15,9 @@ secondary styling without changing its confirmation flow. Error
 details wrap in a bounded scrollable area below the toolbar, outside the action
 group, so multiline errors cannot move the badge relative to Reset/Clear.
 The existing state visibility, confirmation handlers and Start guard are retained.
+Project restoration shows its own badge. A restore failure remains visible with
+Error actions; once a live trainer exists, its own error takes precedence over
+stored restoration feedback.
 
 | State | Primary action | Other actions |
 |---|---|---|
@@ -24,11 +27,11 @@ The existing state visibility, confirmation handlers and Start guard are retaine
 | Paused | Resume | Reset, Stop, Save Project |
 | Completed / Stopped | Edit Mode | Reset, Clear |
 | Error | None; show error | Reset, Clear |
-| Stopping | None; show status | None |
+| Stopping / Restoring | None; show status | None |
 
 The initial RmlUi panel exposes Training Method (strategy, backend, iterations,
-padlock, capacity, BG Improvements and Exposure Correction), Camera &
-Rasterization (Undistort/Mip), and Masking & Segmentation. Advanced is a real
+padlock, capacity and BG Improvements), Camera &
+Rasterization (Exposure Correction/Undistort/Mip), and Masking & Segmentation. Advanced is a real
 collapsible container for optional activation and specialist settings. It consumes
 the backend descriptors from the backend
 identity change; only installed, implemented descriptors appear in the selector.
@@ -50,7 +53,9 @@ initialization and save steps also live inside Advanced. No artificial enable
 flag is added to always-applicable settings.
 
 Generated rows retain their property metadata, numeric editing, tooltips and
-runtime edit locks. Selecting a backend updates the next-run parameters and the
+runtime edit locks. An unchanged native value does not overwrite a focused draft;
+authoritative changes still replace it. Native refresh synchronizes buffers before
+publishing, without queueing another refresh. Selecting a backend updates the next-run parameters and the
 existing viewer setting. Unsupported capabilities are shown beside the selector
 as `Not available with {backend}: {features}`: the backend label comes from its
 descriptor and the localized feature list follows the capability states, not a
@@ -97,7 +102,22 @@ or changing backend/appearance does not toggle it.
   chrome restoration retain the lock preference.
 - Search for Strategy, 3DGS, SH Degree, background image, dataset resize and
   save steps. Clear search and check prior section expansion is restored.
-- Check widths around 280/350/440dp and a narrow panel (including Paused with all four
+- With Advanced collapsed, search `means_lr` and `use_normal_loss`: both the
+  ancestor and matching section must open temporarily. Search
+  `use_exposure_correction` and check its Camera activation remains reachable.
+  Search `bg_image` in Color mode: Mode and Browse must remain available.
+- Edit Iterations and press Escape: the draft must be discarded even when the
+  field immediately loses focus. A later edit must still commit normally.
+- In Ready, type Max Gaussians slowly from 5,000,000 to 4,000,000, leaving the
+  field empty briefly. No refresh may restore the old value mid-edit. Check Enter,
+  blur, Escape and +/- separately, then repeat with Iterations and a learning rate.
+  After Enter, make another draft without leaving the field: Escape must return
+  to that last committed value. Actual native rejection must still restore the
+  authoritative value rather than leaving a misleading draft displayed.
+- Reproduce a failed checkpoint trainer restore, then a separate training error:
+  the badge and persistent detail must describe the current failure, not stale
+  restoration feedback.
+- Check narrow and wide panels (including Paused with all four
   actions), keyboard selection, tooltips and the status badge. Also test UI scaling
   and longer translations; native visual verification is still required.
 - Enable Depth and Normal together: verify their parameter groups are separate.

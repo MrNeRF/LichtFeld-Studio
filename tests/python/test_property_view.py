@@ -825,6 +825,64 @@ def test_parse_clamp_and_invalid_commit_behavior():
     binding.update_draft("amount", "0.50")
     assert binding.cancel_edit("amount") is True
     assert buffers[binding.input_key("amount")] == "1.00"
+    # RmlUi blurs immediately after Escape, before deferred records are published.
+    binding.update_draft("amount", "0.50")
+    assert binding.commit("amount") is False
+    binding.finish_edit("amount")
+    assert params["amount"] == pytest.approx(1.0)
+    binding.begin_edit("amount")
+    binding.update_draft("amount", "0.75")
+    assert binding.commit("amount") is True
+    binding.finish_edit("amount")
+    assert params["amount"] == pytest.approx(0.75)
+
+
+def test_focused_numeric_sync_preserves_drafts_but_accepts_authoritative_changes():
+    params = {"amount": 0.25}
+    binding = property_view.SectionBinding("test", [_number_row()], params, {}, lambda _: None)
+    binding.begin_edit("amount")
+    for draft in ("", "0.", "0.50"):
+        binding.update_draft("amount", draft)
+        binding.sync_text_bufs(publish=False)
+        assert binding._records()[0]["text"] == draft
+    assert binding.commit("amount")
+    # Enter commits without ending focus; the next draft must survive refresh.
+    binding.update_draft("amount", "0.75")
+    binding.sync_text_bufs(publish=False)
+    assert binding._records()[0]["text"] == "0.75"
+    binding.cancel_edit("amount")
+    assert binding._records()[0]["text"] == "0.50"
+    binding.finish_edit("amount")
+    binding.begin_edit("amount")
+    binding.update_draft("amount", "0.90")
+    params["amount"] = 0.25
+    binding.sync_text_bufs(publish=False)
+    assert binding._records()[0]["text"] == "0.25"
+    binding.cancel_edit("amount")
+    assert binding._records()[0]["text"] == "0.25"
+
+
+@pytest.mark.parametrize("prop_id,section", [
+    ("means_lr", "optimization"), ("use_normal_loss", "features"),
+    ("use_exposure_correction", "camera"),
+])
+def test_search_ownership_and_advanced_ancestor(prop_id, section):
+    run = next(run for spec in property_view.SECTIONS for run in spec.runs if prop_id in run.prop_ids)
+    binding = property_view.SectionBinding(
+        run.id, [{**_number_row(), "id": prop_id}], {prop_id: 0.25}, {}, lambda _binding: None,
+        search_accessor=lambda: prop_id,
+    )
+    assert property_view.section_is_visible((binding,), section)
+    assert property_view.section_is_visible((binding,), "advanced_params") == (section != "camera")
+    assert not property_view.section_is_visible((binding,), "basic_params")
+
+
+def test_background_image_search_preserves_mode_selector():
+    binding = property_view.SectionBinding(
+        "background", [{**_number_row(), "id": "bg_mode"}], {"bg_mode": 0}, {}, lambda _binding: None,
+        search_accessor=lambda: "bg_image",
+    )
+    assert [row["id"] for row in binding._records()] == ["bg_mode"]
 
 
 class _RecordHandle:
@@ -972,6 +1030,33 @@ def test_search_auto_expand_does_not_mutate_collapse_state(monkeypatch):
 
     panel._on_toggle_section(None, None, ["losses"])
     assert panel._collapsed == {"losses"}
+
+
+@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "features")])
+def test_search_opens_advanced_and_restores_collapsed_sections(monkeypatch, prop_id, section):
+    from lfs_plugins import training_panel
+
+    panel = object.__new__(training_panel.TrainingPanel)
+    panel._pv_search_query = prop_id
+    run = next(run for run in property_view.RUNS if prop_id in run.prop_ids)
+    panel._pv_bindings = (property_view.SectionBinding(
+        run.id, [{**_number_row(), "id": prop_id}], {prop_id: 0.25}, {}, lambda _binding: None,
+        search_accessor=lambda: panel._pv_search_query,
+    ),)
+    collapsed = {"advanced_params"}
+    if section in training_panel.SECTIONS:
+        collapsed.add(section)
+    panel._collapsed = collapsed.copy()
+    panel._get_section_elements = lambda name: (None, None, name)
+    expanded = {}
+    monkeypatch.setattr(training_panel.w, "sync_section_state",
+                        lambda content, visible, *_args: expanded.update({content: visible}))
+    panel._sync_section_states()
+    assert all(expanded[name] for name in collapsed)
+    assert panel._collapsed == collapsed
+    panel._pv_search_query = ""
+    panel._sync_section_states()
+    assert all(not expanded[name] for name in collapsed)
 
 
 def test_option_records_support_multiple_auto_placed_enums():

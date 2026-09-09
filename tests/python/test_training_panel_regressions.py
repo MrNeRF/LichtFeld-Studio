@@ -213,12 +213,12 @@ def test_compact_toolbar_icons_labels_and_tooltips_are_retained():
     assert controls.find(".//*[@data-if='show_ctrl_error']") is not None
 
 
-def test_toolbar_status_shares_wrapping_row_with_actions_outside_telemetry():
+def test_toolbar_status_shares_nonwrapping_row_with_actions_outside_telemetry():
     from xml.etree import ElementTree as ET
     project = Path(__file__).parents[2]
     root = ET.parse(project / "src/visualizer/gui/rmlui/resources/training.rml")
     controls = root.find(".//*[@id='controls']")
-    toolbar = controls[0]
+    toolbar = controls.find("div[@id='training-toolbar']")
     assert toolbar.get("class") == "training-toolbar"
     header = toolbar.find("div[@id='training-controls-header']")
     assert header is not None and header.get("data-if") is None
@@ -238,7 +238,7 @@ def test_toolbar_status_shares_wrapping_row_with_actions_outside_telemetry():
     assert set(badges) == {
         "show_ctrl_ready", "show_ctrl_starting", "show_ctrl_running",
         "show_ctrl_paused", "show_ctrl_completed", "show_ctrl_stopped",
-        "show_ctrl_error", "show_ctrl_stopping",
+        "show_ctrl_error", "show_ctrl_stopping", "show_ctrl_restoring",
     }
     assert sum(node.text == "{{status_mode}}" for node in root.iter()) == 0
     for group in toolbar.findall("div"):
@@ -250,7 +250,7 @@ def test_toolbar_status_shares_wrapping_row_with_actions_outside_telemetry():
         assert "width: 100%;" in block
     row = css.split(".training-action-row {", 1)[1].split("}", 1)[0]
     assert "display: flex;" in row
-    assert "flex-wrap: wrap;" in row
+    assert "flex-wrap: nowrap;" in row
     button = css.split(".training-toolbar-action {", 1)[1].split("}", 1)[0]
     assert "display: inline-flex;" in button
     assert "flex: 0 0 auto;" in button
@@ -281,10 +281,66 @@ def test_toolbar_starting_status_is_not_unknown(training_panel_module, monkeypat
 def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, monkeypatch):
     module = training_panel_module
     monkeypatch.setattr(module, "_training_session_state", lambda: {"error": "bad checkpoint"})
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", False)
     model = _ModelStub()
-    module.TrainingPanel()._bind_status(model, lambda: None)
+    panel = module.TrainingPanel()
+    panel._bind_status(model, lambda: None)
+    panel._bind_visibility(model, lambda: None, lambda: None)
     assert "status.error" in model.bindings["status_mode"][0]()
     assert "bad checkpoint" in model.bindings["error_message"][0]()
+    assert model.bindings["show_ctrl_error"][0]()
+    assert not model.bindings["show_ctrl_paused"][0]()
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", True)
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "error")
+    monkeypatch.setattr(module.lf, "trainer_error", lambda: "new training error", raising=False)
+    assert model.bindings["error_message"][0]() == "new training error"
+    monkeypatch.setattr(module, "_training_session_state", lambda: {"restoring": True})
+    assert model.bindings["show_ctrl_restoring"][0]()
+    assert not model.bindings["show_ctrl_error"][0]()
+
+
+@pytest.mark.parametrize("scale", [1.0, 1.5, 2.0])
+@pytest.mark.parametrize("state,actions", [
+    ("ready", ("start", "clear")),
+    ("completed", ("switch_edit", "reset", "clear")),
+    ("paused", ("resume", "reset", "stop", "save_project")),
+])
+def test_toolbar_fit_uses_measured_width_and_can_restore_captions(training_panel_module, monkeypatch, scale, state, actions):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    scheduled = []
+    monkeypatch.setattr(panel, "_schedule_deferred_update", scheduled.append)
+    monkeypatch.setattr(module, "_training_session_state", lambda: {})
+    monkeypatch.setattr(module.RuntimeState.trainer_state, "value", state)
+    monkeypatch.setattr(module.RuntimeState.has_trainer, "value", True)
+    monkeypatch.setattr(module.RuntimeState.iteration, "value", 0)
+    classes = set()
+    toolbar = SimpleNamespace(
+        client_width=1000 * scale,
+        is_class_set=lambda name: name in classes,
+        set_class=lambda name, enabled: classes.add(name) if enabled else classes.discard(name),
+    )
+    elements = {
+        "training-toolbar": toolbar,
+        "training-controls-header": SimpleNamespace(absolute_width=80 * scale),
+        "measure-action-gap": SimpleNamespace(absolute_width=4 * scale),
+        "measure-status-gap": SimpleNamespace(absolute_width=6 * scale),
+    }
+    elements.update({"measure-" + action: SimpleNamespace(absolute_width=90 * scale) for action in actions})
+    panel._doc = SimpleNamespace(get_element_by_id=elements.get)
+    required = (90 * len(actions) + 4 * (len(actions) - 1) + 80 + 6) * scale
+    toolbar.client_width = required - 1
+    assert panel._sync_toolbar_fit()
+    assert "is-compact" in classes
+    assert scheduled == [0.01]
+    assert not panel._sync_toolbar_fit()
+    assert scheduled == [0.01]
+    toolbar.client_width = required + 1
+    assert panel._sync_toolbar_fit()
+    assert "is-compact" not in classes
+    elements["measure-" + actions[0]].absolute_width += 20 * scale
+    assert panel._sync_toolbar_fit()
+    assert "is-compact" in classes
 
 
 def test_sparsity_is_a_collapsible_advanced_group():
@@ -578,7 +634,7 @@ def test_native_backend_rollback_republishes_bound_controls(training_panel_modul
     published, dirty = [], []
     panel._pv_bindings = [SimpleNamespace(publish=lambda: published.append(True))]
     panel._handle = SimpleNamespace(dirty_all=lambda: dirty.append(True))
-    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda **_kwargs: None)
     monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
     assert panel._refresh_native_backend_controls()
     assert not panel._refresh_native_backend_controls()
@@ -598,7 +654,7 @@ def test_native_rollback_between_publication_and_update_is_not_missed(training_p
     binding = SimpleNamespace(publish=lambda: published.append(params.mip_filter))
     panel._pv_bindings = [binding]
     panel._handle = SimpleNamespace(dirty_all=lambda: None)
-    monkeypatch.setattr(panel, "_sync_text_bufs", lambda: None)
+    monkeypatch.setattr(panel, "_sync_text_bufs", lambda **_kwargs: None)
     monkeypatch.setattr(panel, "_dirty_property_search_models", lambda: None)
     monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
     monkeypatch.setattr(training_panel_module.lf, "optimization_params", lambda: params)
@@ -609,6 +665,67 @@ def test_native_rollback_between_publication_and_update_is_not_missed(training_p
     params.mip_filter = False
     assert panel._refresh_native_backend_controls()
     assert published == [False, True, False]
+
+
+@pytest.mark.parametrize("prop,initial,draft,is_int", [
+    ("max_cap", 5_000_000, "4000000", True),
+    ("iterations", 30_000, "20000", True),
+    ("means_lr", 0.00016, "0.00012", False),
+])
+def test_numeric_draft_survives_refresh_and_publication_settles(
+    training_panel_module, monkeypatch, prop, initial, draft, is_int
+):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    params = SimpleNamespace(
+        has_params=lambda: True, strategy="mrnf", gut=False, mip_filter=False,
+        use_depth_loss=False, use_normal_loss=False, ppisp_controller_activation_step=0,
+        bg_color=(0.0, 0.0, 0.0),
+    )
+    setattr(params, prop, initial)
+    params.set = lambda name, value: setattr(params, name, value)
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "dataset_params", lambda: None)
+    scheduled = []
+    monkeypatch.setattr(module.lf.ui, "schedule_on_ui_thread", scheduled.append, raising=False)
+    monkeypatch.setattr(panel, "_dirty_property_search_models", lambda: None)
+    monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
+    records = {}
+    panel._handle = SimpleNamespace(
+        dirty_all=lambda: None,
+        update_record_list=lambda name, values: records.update({name: values}),
+    )
+    row = dict(id=prop, kind="number", name=prop, label_key="", tooltip_key="",
+               is_int=is_int, precision=0 if is_int else 6, step=1 if is_int else 0.00001,
+               min=0, max=None, items=[])
+    binding = module.property_view.SectionBinding(
+        "basic_struct", [row], lambda: params, panel._text_bufs, panel._queue_pv_publish)
+    binding.attach_handle(panel._handle)
+    panel._pv_bindings = (binding,)
+    panel._pv_binding_by_prop = {prop: binding}
+    assert panel._refresh_native_backend_controls()
+    assert not panel._pv_publish_pending
+    binding.begin_edit(prop)
+    change = SimpleNamespace(get_bool_parameter=lambda *_: False)
+    panel._on_pv_number_input_change(None, change, [prop, draft])
+    # Exercise the real queue -> flush -> native-refresh -> buffer-sync chain.
+    panel._queue_pv_publish(binding)
+    assert panel._flush_pv_publish()
+    assert panel._refresh_native_backend_controls()
+    assert records[binding.model_key][0]["text"] == draft
+    assert getattr(params, prop) == initial
+    assert not panel._pv_publish_pending
+    assert not panel._flush_pv_publish()
+    assert not panel._refresh_native_backend_controls()
+    panel._on_pv_number_input_blur(None, None, [prop, draft])
+    assert getattr(params, prop) == pytest.approx(float(draft))
+    assert panel._flush_pv_publish()
+    # Rollback after publication, to the previous native backend snapshot.
+    setattr(params, prop, initial)
+    assert panel._refresh_native_backend_controls()
+    assert records[binding.model_key][0]["text"] == binding.canonical_text(prop)
+    assert not panel._pv_publish_pending
+    assert not panel._refresh_native_backend_controls()
 
 
 @pytest.mark.parametrize("offer_save", [False, True])
@@ -705,8 +822,10 @@ def test_advanced_enable_flags_are_real_and_preserve_tuning(training_panel_modul
     panel, params = _configuration_panel(training_panel_module, monkeypatch)
     flags = ("use_depth_loss", "use_normal_loss", "enable_sparsity", "random", "enable_eval",
              "use_bilateral_grid", "ppisp", "use_exposure_correction",
-             "ppisp_controller", "ppisp_freeze")
-    aliases = {"ppisp_controller": "ppisp_use_controller", "ppisp_freeze": "ppisp_freeze_from_sidecar"}
+             "ppisp_use_controller", "ppisp_freeze_from_sidecar")
+    declared = {prop for spec in training_panel_module.property_view.SECTIONS for run in spec.runs for prop in run.prop_ids}
+    assert set(flags) <= declared
+    aliases = {}
     def set_flag(prop, value):
         setattr(params, aliases.get(prop, prop), value)
         return True
@@ -719,10 +838,13 @@ def test_advanced_enable_flags_are_real_and_preserve_tuning(training_panel_modul
         assert getattr(params, aliases.get(prop, prop)) is False
     panel._on_pv_value_change(None, None, ["use_bilateral_grid", True])
     panel._on_pv_value_change(None, None, ["ppisp", True])
+    panel._on_pv_value_change(None, None, ["ppisp_use_controller", True])
+    panel._on_pv_value_change(None, None, ["ppisp_freeze_from_sidecar", True])
     assert params.use_bilateral_grid and params.ppisp
     panel._on_pv_value_change(None, None, ["use_exposure_correction", True])
     assert params.use_exposure_correction
     assert not params.ppisp and not params.use_bilateral_grid
+    assert not params.ppisp_use_controller and not params.ppisp_freeze_from_sidecar
     assert params.ppisp_controller_lr == 0.003
     assert params.ppisp_sidecar_path == "saved.ppisp"
     assert "advanced_params" not in panel._collapsed
@@ -775,7 +897,7 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
     assert any(node.attrib.get("data-class-disabled-overlay") == "step_scaling_params_locked"
                for node in document.iter("div"))
     for section, runs in {
-        "camera": ("basic_undistort", "basic_mip_filter"),
+        "camera": ("basic_exposure_correction", "basic_undistort", "basic_mip_filter"),
         "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
         "depth": ("basic_depth_weight",),
         "normal": ("basic_normal_weights",),
@@ -2473,19 +2595,21 @@ def test_compact_toolbar_preserves_icons_tooltips_and_accessible_names():
         assert button.find("img") is not None
         assert button.get("data-tooltip")
         assert button.get("data-attr-aria-label")
+        action = button.get("data-event-click").split("'")[1]
+        probe = document.find(f".//*[@id='measure-{action}']")
+        assert probe.find("span").text == button.find("span").text
+        assert probe.find("img").get("src") == button.find("img").get("src")
+        assert {c for c in probe.get("class").split() if c.startswith("training-toolbar")} == {
+            c for c in button.get("class").split() if c.startswith("training-toolbar")}
     css = (root / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
-    for width, count in ((280, "two"), (350, "three"), (440, "four")):
-        compact = css.split(f"@media (max-width: {width}dp)", 1)[1].split("@media", 1)[0]
-        assert f".toolbar-{count} .training-toolbar-action span" in compact
-        assert "display: none" in compact
-        assert "width: 28dp" in compact
-        assert "training-status-badge" not in compact
+    assert "@media (max-width:" not in css
+    assert ".training-toolbar.is-compact .training-toolbar-action span" in css
+    assert "width: 28dp" in css
+    assert document.find(".//*[@id='training-toolbar-measure']").get("aria-hidden") == "true"
     ready = toolbar.find("div[@data-if=\'show_ctrl_ready\']")
-    assert ready.get("data-class-toolbar-two") == "!show_reset_ready"
-    assert ready.get("data-class-toolbar-three") == "show_reset_ready"
+    assert ready.find(".//button[@data-if='show_reset_ready']") is not None
     paused = toolbar.find("div[@data-if=\'show_ctrl_paused\']")
-    assert paused.get("data-class-toolbar-four") == "show_project_save"
-    assert paused.get("data-class-toolbar-three") == "!show_project_save"
+    assert paused.find(".//button[@data-if='show_project_save']") is not None
     toolbar_css = css.split(".training-toolbar {", 1)[1].split("}", 1)[0]
     assert "flex-wrap: nowrap" in toolbar_css
 
