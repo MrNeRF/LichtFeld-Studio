@@ -296,8 +296,8 @@ namespace lfs::io {
             return m;
         }
 
-        // Pageable levels bound large-scene VRAM. Small exports may additionally
-        // retain CUDA attributes for device row gathers.
+        // Keep partition attributes on the host. Memory-budgeted exports also
+        // retain immutable CUDA attributes for device row gathers.
         struct HostSplats {
             int degree = 0;
             float scale = 1;
@@ -307,12 +307,15 @@ namespace lfs::io {
             explicit HostSplats(const SplatData& s, bool resident = false)
                 : degree(s.get_max_sh_degree()), scale(s.get_scene_scale()), means(s.means().to_pageable_host()), sh0(resident ? Tensor{} : s.sh0().to_pageable_host()), shN(resident ? Tensor{} : s.shN_canonical_cpu()), scaling(s.scaling_raw().to_pageable_host()), rotation(s.rotation_raw().to_pageable_host()), opacity(resident ? Tensor{} : s.opacity_raw().to_pageable_host()) {
                 if (resident) {
-                    device_means = s.means().cuda();
-                    device_sh0 = s.sh0().cuda();
-                    device_shN = s.shN_canonical().cuda();
-                    device_scaling = s.scaling_raw().cuda();
-                    device_rotation = s.rotation_raw().cuda();
-                    device_opacity = s.opacity_raw().cuda();
+                    const auto borrow_cuda = [](const Tensor& t) {
+                        return t.device() == Device::CUDA ? t : t.cuda();
+                    };
+                    device_means = borrow_cuda(s.means());
+                    device_sh0 = borrow_cuda(s.sh0());
+                    device_shN = borrow_cuda(s.shN_canonical());
+                    device_scaling = borrow_cuda(s.scaling_raw());
+                    device_rotation = borrow_cuda(s.rotation_raw());
+                    device_opacity = borrow_cuda(s.opacity_raw());
                 }
             }
             HostSplats() = default;
@@ -320,7 +323,8 @@ namespace lfs::io {
                 const bool resident = device_means.is_valid();
                 const auto indices = Tensor::from_vector(rows, {rows.size()}, resident ? Device::CUDA : Device::CPU);
                 const auto gather = [&](const Tensor& host, const Tensor& device) {
-                    return (resident ? device : host).index_select(0, indices).cuda();
+                    auto selected = (resident ? device : host).index_select(0, indices);
+                    return resident ? selected : selected.cuda();
                 };
                 auto rest = degree ? gather(shN, device_shN) : Tensor::empty({rows.size(), 0, 3}, Device::CUDA);
                 return SplatData(degree, gather(means, device_means), gather(sh0, device_sh0), std::move(rest), gather(scaling, device_scaling), gather(rotation, device_rotation), gather(opacity, device_opacity), scale);
@@ -540,9 +544,9 @@ namespace lfs::io {
             const bool memory_known = cudaMemGetInfo(&free_cuda, &total_cuda) == cudaSuccess;
             const double level_rows = input.size() * (1.0 - std::pow(double(o.lod_ratio), o.lod_levels)) / (1.0 - o.lod_ratio);
             const double resident_bytes = level_rows * (14 + 3 * input.max_sh_coeffs_rest()) * sizeof(float);
-            // Reserve most available VRAM for decimation, original storage, and
-            // bounded encoder workspaces. Large scenes retain pageable level staging.
-            const bool resident = memory_known && resident_bytes < std::min<double>(1024.0 * 1024 * 1024, free_cuda * 0.25);
+            // Leave most free VRAM for decimation and bounded unit workspaces.
+            // Larger resident exports avoid full SH downloads and host gathers.
+            const bool resident = memory_known && resident_bytes < std::min<double>(6.0 * 1024 * 1024 * 1024, free_cuda * 0.45);
             LOG_DEBUG("SSOG level storage: resident={} estimated_bytes={:.0f} free_cuda={}", resident, resident_bytes, free_cuda);
             levels.emplace_back(input, resident);
             if (input.has_deleted_mask())
@@ -722,20 +726,23 @@ namespace lfs::io {
             const auto partitioned = Clock::now();
             double morton_ms = 0, encode_ms = 0;
             auto stamp = o.provenance.value_or(core::make_minimal_provenance_stamp());
-            // Retain the two-workspace bound for pageable large scenes. Small
-            // resident scenes may overlap more units if there is space for their
-            // gathers, swizzled SH, labels and palette scratch in addition to LODs.
+            // Pageable scenes retain two workspaces. Resident scenes may overlap
+            // more units within the budget for gathers, SH, prepared half inputs,
+            // labels and palettes in addition to retained LODs.
             const auto largest_unit = std::max_element(units.begin(), units.end(), [](const auto& a, const auto& b) {
                 return a.rows.size() < b.rows.size();
             });
             const double workspace_bytes = largest_unit->rows.size() *
-                                               (32.0 + 6 * input.max_sh_coeffs_rest()) * sizeof(float) +
+                                               (56.0 + 6 * input.max_sh_coeffs_rest()) * sizeof(float) +
                                            128.0 * 1024 * 1024;
             const size_t resident_workers = resident
                                                 ? std::max<size_t>(1, (free_cuda - resident_bytes) / workspace_bytes)
                                                 : 1;
+            const size_t cpu_workers = units.size() > 6
+                                           ? std::clamp<size_t>(std::thread::hardware_concurrency() / 4, 1, 6)
+                                           : std::clamp<size_t>(std::thread::hardware_concurrency() / 6, 1, 4);
             const size_t workers = std::min(units.size(), resident
-                                                              ? std::min(resident_workers, std::clamp<size_t>(std::thread::hardware_concurrency() / 6, 1, 4))
+                                                              ? std::min(resident_workers, cpu_workers)
                                                               : size_t{2});
             struct UnitTiming {
                 double morton, encode;
