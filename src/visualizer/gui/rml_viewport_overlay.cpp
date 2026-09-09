@@ -551,9 +551,6 @@ namespace lfs::vis::gui {
             }));
         document_sync_subscriptions_.push_back(
             store.language_generation.subscribe(mark_document_dirty));
-        document_sync_subscriptions_.push_back(
-            store.import_overlay_state.subscribe(mark_document_dirty));
-        document_sync_subscriptions_.push_back(store.video_export_overlay_state.subscribe(mark_document_dirty));
     }
 
     void RmlViewportOverlay::refreshGTMetricsOverlayFromStore() {

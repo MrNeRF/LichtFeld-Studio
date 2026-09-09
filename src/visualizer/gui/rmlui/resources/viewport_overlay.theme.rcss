@@ -497,24 +497,6 @@
     background-color: @{primary};
 }
 
-.viewport-status-backdrop {
-    background-color: @{viewport.status_backdrop};
-}
-
-.viewport-status-panel {
-    background-color: @{viewport.panel_bg};
-    border-color: @{viewport.panel_border};
-    border-radius: @{num(size.window_rounding)}dp;
-}
-
-.viewport-status-title {
-    color: @{text};
-}
-
-.viewport-status-path,
-.viewport-status-stage {
-    color: @{text_dim};
-}
 
 .perf-hud-strip {
     background-color: @{viewport.panel_bg};

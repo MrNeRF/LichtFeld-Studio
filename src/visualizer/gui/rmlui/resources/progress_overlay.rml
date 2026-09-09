@@ -1,0 +1,23 @@
+<rml>
+<head>
+    <link type="text/rcss" href="progress_overlay.rcss"/>
+    <link type="text/rcss" href="components.rcss"/>
+</head>
+<body>
+    <div id="progress-backdrop" class="progress-backdrop"></div>
+    <div id="progress-dialog" class="progress-dialog">
+        <span id="progress-title" class="progress-title"></span>
+        <span id="progress-path" class="progress-path"></span>
+        <div id="progress-row" class="progress-row">
+            <progress id="progress-value" max="1" value="0"></progress>
+            <span id="progress-text" class="progress-text">0%</span>
+        </div>
+        <span id="progress-stage" class="progress-stage"></span>
+        <span id="progress-detail" class="progress-detail"></span>
+        <span id="progress-error" class="progress-error"></span>
+        <div id="progress-actions" class="progress-actions">
+            <button id="progress-action" class="btn"></button>
+        </div>
+    </div>
+</body>
+</rml>

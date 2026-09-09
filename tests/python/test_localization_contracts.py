@@ -196,7 +196,6 @@ def test_language_generation_is_part_of_cached_localized_ui_state():
         "src/python/lfs_plugins/selection_controls.py": 'changed in {"active_tool", "language_generation"}',
         "src/python/lfs_plugins/transform_controls.py": "language_generation",
         "src/python/lfs_plugins/gt_compare_controls.py": "language_generation",
-        "src/python/lfs_plugins/overlays/__init__.py": "language_generation",
     }
     for relative, evidence in required.items():
         source = (ROOT / relative).read_text(encoding="utf-8")
