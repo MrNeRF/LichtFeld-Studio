@@ -268,7 +268,7 @@
     "appearance.off": "Off",
     "appearance.managed": "Managed Exposure Correction",
     "appearance.custom": "Custom Stack",
-    "backend_unsupported": "Unsupported by this backend",
+    "backend_unsupported": "Not available with {backend}: {features}",
     "tooltip.backend": "Select the training rasterizer. Unsupported settings must be corrected before Start.",
     "tooltip.appearance_mode": "Managed correction replaces standalone Bilateral Grid and PPISP. Custom Stack lets you enable either or both.",
     "section.dataset": "Dataset",

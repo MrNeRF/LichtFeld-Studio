@@ -4,11 +4,16 @@ The compact training-action toolbar is part of this same branch and change serie
 not a separate PR D. All actions use the same compact icon-and-text buttons,
 with localized short labels and full tooltips. No button stretches to fill the
 panel. Save .licht is in the same row as Pause/Resume, not a separate full-width
-row. Buttons use the proven RmlUi `inline-flex` sizing pattern and explicit
-compact minimum widths; they wrap together only when necessary. The state is an
+row. Buttons use RmlUi `inline-flex` sizing. Compact thresholds depend on the
+visible action count: 280dp for two, 350dp for three, 440dp for four. Ready accounts
+for optional Reset and Paused for optional Save. Below the relevant threshold,
+RCSS hides button captions and uses 28dp icon buttons; tooltips and accessible
+names remain. The outer toolbar does not wrap. The state is an
 uppercase colored badge, following the video extractor SDR/HDR badge language,
-and remains above the actions in Ready, Starting and every other state. Error
-details wrap in a bounded scrollable area.
+and sits to the right of the actions in the same row. Clear uses
+secondary styling without changing its confirmation flow. Error
+details wrap in a bounded scrollable area below the toolbar, outside the action
+group, so multiline errors cannot move the badge relative to Reset/Clear.
 The existing state visibility, confirmation handlers and Start guard are retained.
 
 | State | Primary action | Other actions |
@@ -21,19 +26,35 @@ The existing state visibility, confirmation handlers and Start guard are retaine
 | Error | None; show error | Reset, Clear |
 | Stopping | None; show status | None |
 
-The RmlUi panel separates Training Method, Camera & Rasterization, Masking &
-Segmentation, Supervision, Background, Appearance Correction, Dataset, and
-Advanced Parameters. It consumes the backend descriptors from the backend
+The initial RmlUi panel exposes Training Method (strategy, backend, iterations,
+padlock, capacity, BG Improvements and Exposure Correction), Camera &
+Rasterization (Undistort/Mip), and Masking & Segmentation. Advanced is a real
+collapsible container for optional activation and specialist settings. It consumes
+the backend descriptors from the backend
 identity change; only installed, implemented descriptors appear in the selector.
 
-Sparsity belongs under Advanced Parameters as a collapsible group, alongside
-Initialization and Losses. Its Enable toggle remains inside the group; dependent
-parameters appear only when enabled. The header participates in search and saved
-section expansion state like the other advanced groups.
+Advanced contains one activation checkbox each for Depth, Normal, Bilateral Grid,
+PPISP, Sparsity, Evaluation and Random Initialization. These write the existing
+training parameters through the property bindings; they are not visibility
+preferences and are not duplicated in the detail groups. Enabling a feature opens
+its settings. Loaded parameter values drive detail visibility without a separate
+UI enable flag; saved expansion preferences remain independent.
+Depth, Normal, PPISP, Bilateral Grid, Exposure Correction, Evaluation, Random
+Initialization and Sparsity have independent conditional detail sections. Depth
+and Normal never share a parameter group. Evaluation owns its interval; random
+initialization owns point count and extent. Shared appearance tuning is visible
+under Exposure Correction when managed correction is enabled, otherwise under
+the enabled standalone PPISP/Grid section. These mutually exclusive views use
+the same parameter bindings and do not create additional enable controls. Background modes, dataset settings, SH degree, optimization, losses,
+initialization and save steps also live inside Advanced. No artificial enable
+flag is added to always-applicable settings.
 
 Generated rows retain their property metadata, numeric editing, tooltips and
 runtime edit locks. Selecting a backend updates the next-run parameters and the
-existing viewer setting. Unsupported capabilities are shown beside the selector;
+existing viewer setting. Unsupported capabilities are shown beside the selector
+as `Not available with {backend}: {features}`: the backend label comes from its
+descriptor and the localized feature list follows the capability states, not a
+backend-specific sentence. The notice is muted information, not a Start error.
 Start is disabled when the central parameter check reports an error. The exact
 error and selected unsupported options remain beside Start, outside search and
 collapsible sections. Capability values use the `supported`/`unsupported` contract.
@@ -44,10 +65,11 @@ Direct Start events are checked before overwrite consent and again after consent
 native checks remain authoritative. The panel's next-run Start gate does not
 gate Resume; native resume preflight from PR A still validates effective settings.
 
-Appearance uses Off, Managed Exposure Correction, and Custom Stack. The custom
-stack can enable Bilateral Grid, PPISP, or both. Selecting an empty custom stack
-does not activate a module. Managed mode clears conflicting standalone enable
-flags; numeric tuning and sidecar paths remain available for later use.
+Exposure Correction has one checkbox in the main controls. Bilateral Grid and
+PPISP have their sole enable controls in Advanced and may be combined. Existing
+exclusivity between Exposure Correction and standalone appearance flags is
+retained, as are tuning values and sidecar paths. There is no second appearance
+mode selector. Rejected enable attempts do not modify other feature flags.
 
 ## Automatic settings and the padlock
 
@@ -68,14 +90,23 @@ or changing backend/appearance does not toggle it.
 - Test all five mask modes, threshold, inversion, alpha fallback and penalties.
 - Select each background mode and exercise the color picker, hex input and image
   browse/clear actions. MRNF background reconstruction remains a separate setting.
-- Test Off, Managed, Bilateral-only, PPISP-only and Bilateral+PPISP. Check dependent
+- Test Exposure Correction off/on, Bilateral-only, PPISP-only and Bilateral+PPISP. Check dependent
   controller, sidecar, grid and tuning fields.
 - Toggle the Iterations padlock; change iterations and inspect scaled refinement
   fields. Unlock and edit manually, then relock. Check that search and project
   chrome restoration retain the lock preference.
 - Search for Strategy, 3DGS, SH Degree, background image, dataset resize and
   save steps. Clear search and check prior section expansion is restored.
-- Check a narrow panel, keyboard selection and the localized headings/tooltips.
+- Check widths around 280/350/440dp and a narrow panel (including Paused with all four
+  actions), keyboard selection, tooltips and the status badge. Also test UI scaling
+  and longer translations; native visual verification is still required.
+- Enable Depth and Normal together: verify their parameter groups are separate.
+  Do the same for standalone Bilateral Grid and PPISP, then enable Exposure
+  Correction and check that only its shared tuning view is visible.
+- Enable each Advanced feature, verify the real flag and its settings, then
+  disable it and confirm tuning values remain available after re-enabling.
+  Load a valid configuration with features already active and check their details.
+  Confirm each activation exists exactly once and search can reach it while off.
 - Check toolbar width, text containment and icon contrast with light/dark themes and long
   translations. Hover Reset, Stop and Clear to identify each action, and check
   keyboard focus and activation. Cancel their confirmation dialogs and confirm

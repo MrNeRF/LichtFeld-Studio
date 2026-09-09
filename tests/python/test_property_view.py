@@ -540,7 +540,7 @@ def test_full_migration_inventory_and_schema_are_exact(lf):
     group_info = lf.ui.property_group_info("optimization")
     resolved_runs = property_view.resolve_runs(group_info)
     rendered = tuple(prop for run in resolved_runs for prop in run.prop_ids)
-    assert len(EXPECTED_RENDERED_PROP_IDS) == 83  # Backend and appearance have bespoke selectors.
+    assert len(EXPECTED_RENDERED_PROP_IDS) == 84  # Backend alone has a bespoke selector.
     assert len(rendered) == len(set(rendered)) == len(EXPECTED_RENDERED_PROP_IDS)
     assert set(rendered) == EXPECTED_RENDERED_PROP_IDS
 
@@ -558,7 +558,6 @@ def test_auto_advanced_roster_and_exclusions_follow_declaration_order(lf):
         assert properties[prop_id]["advanced"] is True
     assert set(property_view.BESPOKE_OR_HIDDEN) == {
         "gut",
-        "use_exposure_correction",
         "sh_degree",
         "lambda_dssim",
         "init_opacity",

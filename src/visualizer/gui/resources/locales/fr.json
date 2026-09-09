@@ -268,7 +268,7 @@
     "appearance.off": "Désactivé",
     "appearance.managed": "Correction d’exposition gérée",
     "appearance.custom": "Combinaison personnalisée",
-    "backend_unsupported": "Non pris en charge par ce backend",
+    "backend_unsupported": "Indisponible avec {backend} : {features}",
     "tooltip.backend": "Sélectionnez le rastériseur d’entraînement. Corrigez les réglages incompatibles avant de démarrer.",
     "tooltip.appearance_mode": "La correction gérée remplace Bilateral Grid et PPISP autonomes. La combinaison personnalisée permet d’activer l’un ou les deux.",
     "section.dataset": "Dataset",

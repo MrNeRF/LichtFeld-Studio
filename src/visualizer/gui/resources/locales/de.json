@@ -268,7 +268,7 @@
     "appearance.off": "Aus",
     "appearance.managed": "Verwaltete Belichtungskorrektur",
     "appearance.custom": "Benutzerdefinierte Kombination",
-    "backend_unsupported": "Von diesem Backend nicht unterstützt",
+    "backend_unsupported": "Mit {backend} nicht verfügbar: {features}",
     "tooltip.backend": "Trainingsrasterizer auswählen. Nicht unterstützte Einstellungen vor dem Start korrigieren.",
     "tooltip.appearance_mode": "Die verwaltete Korrektur ersetzt eigenständiges Bilateral Grid und PPISP. Die benutzerdefinierte Kombination erlaubt eines oder beide.",
     "section.dataset": "Datensatz",

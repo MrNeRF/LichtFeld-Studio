@@ -268,7 +268,7 @@
     "appearance.off": "关闭",
     "appearance.managed": "统一曝光校正",
     "appearance.custom": "自定义组合",
-    "backend_unsupported": "此后端不支持",
+    "backend_unsupported": "{backend} 不可用的功能：{features}",
     "tooltip.backend": "选择训练光栅器。开始前请修正不受支持的设置。",
     "tooltip.appearance_mode": "统一校正替代独立的 Bilateral Grid 和 PPISP。自定义组合允许启用其中一个或两者。",
     "section.dataset": "数据集",

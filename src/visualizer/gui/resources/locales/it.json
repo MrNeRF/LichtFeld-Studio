@@ -268,7 +268,7 @@
     "appearance.off": "Disattivata",
     "appearance.managed": "Correzione esposizione gestita",
     "appearance.custom": "Combinazione personalizzata",
-    "backend_unsupported": "Non supportato da questo backend",
+    "backend_unsupported": "Non disponibile con {backend}: {features}",
     "tooltip.backend": "Seleziona il rasterizzatore di training. Correggi le impostazioni non supportate prima di avviare.",
     "tooltip.appearance_mode": "La correzione gestita sostituisce Bilateral Grid e PPISP autonomi. La combinazione personalizzata permette di attivarne uno o entrambi.",
     "section.dataset": "Dataset",

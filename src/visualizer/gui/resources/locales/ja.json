@@ -268,7 +268,7 @@
     "appearance.off": "オフ",
     "appearance.managed": "統合露出補正",
     "appearance.custom": "カスタム構成",
-    "backend_unsupported": "このバックエンドでは非対応",
+    "backend_unsupported": "{backend} では利用できません: {features}",
     "tooltip.backend": "トレーニング用ラスタライザを選択します。開始前に非対応の設定を修正してください。",
     "tooltip.appearance_mode": "統合補正は単独のBilateral GridとPPISPを置き換えます。カスタム構成では片方または両方を有効にできます。",
     "section.dataset": "データセット",

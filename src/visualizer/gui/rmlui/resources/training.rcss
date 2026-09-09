@@ -51,6 +51,21 @@ body {
     box-sizing: border-box;
 }
 
+.training-toolbar {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 6dp;
+    width: 100%;
+    min-width: 0;
+}
+
+.training-toolbar > .training-actions-group {
+    flex: 1 1 auto;
+    width: auto;
+}
+
 .training-action-row {
     display: flex;
     flex-direction: row;
@@ -76,9 +91,11 @@ body {
 #training-controls-header {
     display: flex;
     align-items: center;
-    width: 100%;
+    width: auto;
+    flex: 0 0 auto;
     min-height: 22dp;
-    margin-bottom: 6dp;
+    margin-left: auto;
+    margin-bottom: 0;
 }
 
 .training-status-badge {
@@ -364,4 +381,67 @@ loss-graph {
 .mask-settings-divider {
     height: 1dp;
     margin: 4dp 0 2dp;
+}
+
+/* Each panel has its own context. Reserve space for the visible action count
+   and status instead of applying the four-button breakpoint to every state. */
+@media (max-width: 280dp) {
+    .toolbar-two .training-toolbar-action span {
+        display: none;
+    }
+    .toolbar-two .training-toolbar-action {
+        min-width: 28dp;
+        max-width: 28dp;
+        width: 28dp;
+        padding: 3dp 6dp;
+        gap: 0;
+    }
+    .toolbar-two .training-action-row {
+        flex-wrap: nowrap;
+    }
+}
+
+@media (max-width: 350dp) {
+    .toolbar-three .training-toolbar-action span {
+        display: none;
+    }
+    .toolbar-three .training-toolbar-action {
+        min-width: 28dp;
+        max-width: 28dp;
+        width: 28dp;
+        padding: 3dp 6dp;
+        gap: 0;
+    }
+    .toolbar-three .training-action-row {
+        flex-wrap: nowrap;
+    }
+}
+
+@media (max-width: 440dp) {
+    .toolbar-four .training-toolbar-action span {
+        display: none;
+    }
+    .toolbar-four .training-toolbar-action {
+        min-width: 28dp;
+        max-width: 28dp;
+        width: 28dp;
+        padding: 3dp 6dp;
+        gap: 0;
+    }
+    .toolbar-four .training-action-row {
+        flex-wrap: nowrap;
+    }
+}
+
+/* Advanced is a top-level title, not an inset subsection header. */
+#hdr-advanced-params {
+    box-sizing: border-box;
+    width: 100%;
+    margin: 8dp 0 0;
+    padding: 5dp 6dp;
+    gap: 6dp;
+}
+#hdr-advanced-params > .section-arrow {
+    flex: 0 0 10dp;
+    margin: 0;
 }

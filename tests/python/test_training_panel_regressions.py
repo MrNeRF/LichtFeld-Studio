@@ -30,6 +30,9 @@ def _install_lf_stub(monkeypatch):
         tr=lambda key: key,
     )
     lf_stub.optimization_params = lambda: None
+    lf_stub.training_backends = lambda: [
+        {"id": "3dgs", "label": "3DGS"}, {"id": "3dgut", "label": "3DGUT"},
+    ]
     lf_stub.dataset_params = lambda: None
     lf_stub.get_scene = lambda: None
     lf_stub.start_training = lambda: None
@@ -50,7 +53,7 @@ def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_
     panel = module.TrainingPanel()
     params = SimpleNamespace(
         has_params=lambda: True, validate=lambda: "invalid combination",
-        strategy="igs+", undistort=True, mip_filter=False,
+        raster_backend="3dgut", strategy="igs+", undistort=True, mip_filter=False,
         use_depth_loss=True, use_normal_loss=False,
         backend_capabilities=dict.fromkeys(
             ("igs_plus", "mip_filter", "depth_supervision", "normal_supervision"), "unsupported"),
@@ -63,6 +66,7 @@ def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_
     before = vars(params).copy()
     assert panel._start_error() == "invalid combination"
     notice = panel._backend_notice(selected_only=True)
+    assert notice.startswith("Not available with 3DGUT: ")
     assert "IGS+" in notice and "use_depth_loss" in notice
     assert "undistort" not in notice
     assert "mip_filter" not in notice and "use_normal_loss" not in notice
@@ -75,6 +79,43 @@ def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_
     assert panel._start_error() == ""
     params.backend_capabilities = dict.fromkeys(params.backend_capabilities, "supported")
     assert panel._backend_notice() == ""
+
+
+def test_backend_notice_uses_descriptor_label_and_localized_template(training_panel_module, monkeypatch):
+    module = training_panel_module
+    params = SimpleNamespace(
+        has_params=lambda: True, raster_backend="test_backend",
+        mip_filter=False, backend_capabilities={"mip_filter": "unsupported"},
+    )
+    monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
+    monkeypatch.setattr(module.lf, "training_backends", lambda: [
+        {"id": "test_backend", "label": "Test Renderer"},
+    ])
+    translations = {
+        "training.backend_unsupported": "{backend} unavailable: {features}",
+        "training_params.mip_filter": "Mip Filter:",
+    }
+    monkeypatch.setattr(module.lf.ui, "tr", lambda key: translations.get(key, key))
+    panel = module.TrainingPanel()
+    assert panel._backend_notice() == "Test Renderer unavailable: Mip Filter"
+    assert panel._backend_notice(selected_only=True) == ""
+    params.mip_filter = True
+    assert panel._backend_notice(selected_only=True) == "Test Renderer unavailable: Mip Filter"
+    params.backend_capabilities["mip_filter"] = "supported"
+    assert panel._backend_notice() == ""
+
+
+def test_backend_notice_locale_placeholders():
+    from string import Formatter
+
+    locales = Path(__file__).resolve().parents[2] / "src/visualizer/gui/resources/locales"
+    for path in locales.glob("*.json"):
+        catalog = json.loads(path.read_text(encoding="utf-8"))
+        if "training" not in catalog:
+            continue
+        template = catalog["training"]["backend_unsupported"]
+        fields = {field for _, field, _, _ in Formatter().parse(template) if field is not None}
+        assert fields == {"backend", "features"}, path.name
 
 
 @pytest.mark.parametrize("state", ["paused", "running", "idle", "completed", "error"])
@@ -172,14 +213,17 @@ def test_compact_toolbar_icons_labels_and_tooltips_are_retained():
     assert controls.find(".//*[@data-if='show_ctrl_error']") is not None
 
 
-def test_toolbar_status_is_always_above_actions_and_outside_telemetry():
+def test_toolbar_status_shares_wrapping_row_with_actions_outside_telemetry():
     from xml.etree import ElementTree as ET
     project = Path(__file__).parents[2]
     root = ET.parse(project / "src/visualizer/gui/rmlui/resources/training.rml")
     controls = root.find(".//*[@id='controls']")
-    assert controls[0].get("id") == "training-controls-header"
-    assert controls[0].get("data-if") is None
-    badges = {badge.get("data-if"): badge for badge in controls[0].findall("span")}
+    toolbar = controls[0]
+    assert toolbar.get("class") == "training-toolbar"
+    header = toolbar.find("div[@id='training-controls-header']")
+    assert header is not None and header.get("data-if") is None
+    assert toolbar[-1] is header
+    badges = {badge.get("data-if"): badge for badge in header.findall("span")}
     ready_label = badges["show_ctrl_ready"].find("span[@class='training-status-badge-label']")
     assert ready_label.text == "@tr:status.ready"
     assert all(
@@ -197,7 +241,7 @@ def test_toolbar_status_is_always_above_actions_and_outside_telemetry():
         "show_ctrl_error", "show_ctrl_stopping",
     }
     assert sum(node.text == "{{status_mode}}" for node in root.iter()) == 0
-    for group in controls.findall("div"):
+    for group in toolbar.findall("div"):
         for row in group.findall("div[@class='training-action-row']"):
             assert all(child.tag == "button" for child in row)
     css = (project / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
@@ -246,16 +290,36 @@ def test_restore_failure_keeps_detail_below_error_badge(training_panel_module, m
 def test_sparsity_is_a_collapsible_advanced_group():
     from xml.etree import ElementTree as ET
     root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
-    advanced = root.find(".//div[@class='training-panel-block'][@data-if='pv_section_advanced_params_visible']")
+    advanced = root.find(".//*[@id='sec-advanced-params']")
     header = advanced.find(".//*[@id='hdr-sparsity']")
     assert header.get("data-event-click") == "toggle_section('sparsity')"
     assert header.find(".//*[@id='arrow-sparsity']") is not None
     content = advanced.find(".//*[@id='sec-sparsity']")
     assert "collapsed" in content.get("class")
-    assert content.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']") is not None
+    assert content.find(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']") is None
+    assert advanced.find(".//*[@id='advanced-feature-activations']//*[@data-for='row : pv_basic_sparsity_toggle_rows']") is not None
     assert content.find(".//*[@data-if='dep_sparsity']") is not None
     assert content.find(".//*[@data-for='row : pv_sparsity_rows']") is not None
     assert content.find(".//*[@id='sec-save-steps']") is None
+
+
+def test_advanced_has_single_real_activation_for_each_optional_feature():
+    from xml.etree import ElementTree as ET
+    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
+    activations = root.find(".//*[@id='advanced-feature-activations']")
+    assert activations.get("data-class-disabled-overlay") == "live_disabled"
+    for run in ("basic_depth_toggle", "basic_normal_toggle", "basic_bilateral_toggle",
+                "basic_ppisp_toggle", "basic_sparsity_toggle", "dataset_eval", "feature_random"):
+        rows = root.findall(f".//*[@data-for='row : pv_{run}_rows']")
+        assert len(rows) == 1
+        assert activations.find(f".//*[@data-for='row : pv_{run}_rows']") is rows[0]
+        checkbox = rows[0].find("input")
+        assert checkbox.get("data-checked") == "row.checked"
+        assert checkbox.get("data-event-click") == "pv_value_change(row.id, !row.checked)"
+    advanced = root.find(".//*[@id='sec-advanced-params']")
+    for section in ("depth", "normal", "background", "ppisp", "bilateral", "evaluation", "random-init", "dataset", "sparsity", "optimization"):
+        assert advanced.find(f".//*[@id='sec-{section}']") is not None
+    assert root.find(".//*[@id='hdr-advanced-params']").get("data-event-click") == "toggle_section('advanced_params')"
 
 
 def test_save_project_is_in_the_same_row_as_pause_and_resume():
@@ -263,7 +327,7 @@ def test_save_project_is_in_the_same_row_as_pause_and_resume():
     root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
     for state in ("running", "paused"):
         group = root.find(
-            f".//div[@class='training-actions-group'][@data-if='show_ctrl_{state}']"
+            f".//div[@data-if='show_ctrl_{state}']"
         )
         row = group.find("div[@class='training-action-row']")
         assert row.find("button[@data-if='show_project_save']") is not None
@@ -637,39 +701,50 @@ def test_backend_selector_uses_available_descriptors_and_syncs_viewer(training_p
     assert len(updates) == 2
 
 
-def test_appearance_modes_preserve_custom_combinations_and_tuning(training_panel_module, monkeypatch):
+def test_advanced_enable_flags_are_real_and_preserve_tuning(training_panel_module, monkeypatch):
     panel, params = _configuration_panel(training_panel_module, monkeypatch)
-    assert panel._appearance_mode() == "off"
-    panel._set_appearance_mode("custom")
-    assert panel._appearance_mode() == "custom"
-    assert not params.ppisp and not params.use_bilateral_grid
-    panel._set_bool_prop("use_bilateral_grid", True)
-    panel._set_bool_prop("ppisp", True)
-    params.ppisp_use_controller = True
-    params.ppisp_freeze_from_sidecar = True
-    assert panel._appearance_mode() == "custom"
-    assert params.ppisp and params.use_bilateral_grid
-    panel._set_appearance_mode("managed")
-    assert panel._appearance_mode() == "managed"
+    flags = ("use_depth_loss", "use_normal_loss", "enable_sparsity", "random", "enable_eval",
+             "use_bilateral_grid", "ppisp", "use_exposure_correction",
+             "ppisp_controller", "ppisp_freeze")
+    aliases = {"ppisp_controller": "ppisp_use_controller", "ppisp_freeze": "ppisp_freeze_from_sidecar"}
+    def set_flag(prop, value):
+        setattr(params, aliases.get(prop, prop), value)
+        return True
+    panel._pv_binding_by_prop = {prop: SimpleNamespace(set_value=set_flag) for prop in flags}
+    monkeypatch.setattr(panel, "_sync_section_states", lambda: None)
+    for prop in flags:
+        panel._on_pv_value_change(None, None, [prop, True])
+        assert getattr(params, aliases.get(prop, prop)) is True
+        panel._on_pv_value_change(None, None, [prop, False])
+        assert getattr(params, aliases.get(prop, prop)) is False
+    panel._on_pv_value_change(None, None, ["use_bilateral_grid", True])
+    panel._on_pv_value_change(None, None, ["ppisp", True])
+    assert params.use_bilateral_grid and params.ppisp
+    panel._on_pv_value_change(None, None, ["use_exposure_correction", True])
     assert params.use_exposure_correction
-    assert not any((params.ppisp, params.use_bilateral_grid,
-                    params.ppisp_use_controller, params.ppisp_freeze_from_sidecar))
+    assert not params.ppisp and not params.use_bilateral_grid
     assert params.ppisp_controller_lr == 0.003
     assert params.ppisp_sidecar_path == "saved.ppisp"
-    panel._set_appearance_mode("off")
-    assert panel._appearance_mode() == "off"
-    assert not params.use_exposure_correction
-    monkeypatch.setattr(panel, "_can_edit_configuration", lambda: False)
-    panel._set_appearance_mode("managed")
-    assert panel._appearance_mode() == "off"
+    assert "advanced_params" not in panel._collapsed
+
+
+def test_rejected_enable_does_not_change_other_features(training_panel_module, monkeypatch):
+    panel, params = _configuration_panel(training_panel_module, monkeypatch)
+    params.use_exposure_correction = True
+    panel._pv_binding_by_prop = {
+        "ppisp": SimpleNamespace(set_value=lambda *_: False),
+        "use_exposure_correction": SimpleNamespace(set_value=lambda *_: pytest.fail("Rejected toggle changed another flag")),
+    }
+    panel._on_pv_value_change(None, None, ["ppisp", True])
+    assert params.use_exposure_correction
 
 
 @pytest.mark.parametrize("query,section,field", [
     ("3DGS", "basic_params", "backend"),
     ("strategy", "basic_params", "strategy"),
-    ("SH_degree", "basic_params", "sh_degree"),
+    ("SH_degree", "optimization", "sh_degree"),
     ("bg_image", "background", "background_fields"),
-    ("custom", "appearance", "appearance"),
+    ("ppisp", "ppisp", "appearance"),
     ("resize_factor", "dataset", "dataset_fields"),
     ("save_steps", "save_steps", "save_steps"),
 ])
@@ -693,8 +768,8 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
     assert len(ids) == len(set(ids))
     by_id = {node.attrib["id"]: node for node in document.iter() if "id" in node.attrib}
     assert by_id["training-backend"].attrib["data-value"] == "training_backend"
-    assert by_id["appearance-mode"].attrib["data-value"] == "appearance_mode"
-    assert {node.attrib.get("value") for node in by_id["appearance-mode"]} == {"off", "managed", "custom"}
+    assert "appearance-mode" not in by_id
+    assert by_id["advanced-feature-activations"] is not None
     assert any(node.attrib.get("data-event-click") == "toggle_step_scaling_lock"
                for node in document.iter("button"))
     assert any(node.attrib.get("data-class-disabled-overlay") == "step_scaling_params_locked"
@@ -702,9 +777,12 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
     for section, runs in {
         "camera": ("basic_undistort", "basic_mip_filter"),
         "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
-        "supervision": ("basic_depth_toggle", "basic_depth_weight", "basic_normal_toggle", "basic_normal_weights"),
+        "depth": ("basic_depth_weight",),
+        "normal": ("basic_normal_weights",),
         "background": ("bg_mode",),
-        "appearance": ("basic_bilateral_toggle", "basic_ppisp_toggle", "bilateral", "appearance_tuning"),
+        "ppisp": ("appearance_tuning",),
+        "bilateral": ("bilateral",),
+        "random-init": ("init_random",),
     }.items():
         mounted = {node.attrib.get("data-for") for node in by_id[f"sec-{section}"].iter()}
         assert all(f"row : pv_{run}_rows" in mounted for run in runs)
@@ -866,6 +944,25 @@ class _ModelStub:
 
     def bind_string_list(self, name):
         self.bindings[name] = (None, None)
+
+
+def test_loaded_feature_flags_drive_detail_visibility(training_panel_module):
+    params = SimpleNamespace(has_params=lambda: True, use_depth_loss=True,
+                             use_normal_loss=True, ppisp=True, use_bilateral_grid=True,
+                             use_exposure_correction=False, enable_sparsity=True,
+                             enable_eval=True, random=True)
+    model = _ModelStub()
+    panel = training_panel_module.TrainingPanel()
+    panel._bind_visibility(model, lambda: params, lambda: None)
+    for condition, prop in (("dep_depth_loss", "use_depth_loss"),
+                            ("dep_normal_loss", "use_normal_loss"),
+                            ("dep_ppisp", "ppisp"), ("dep_bilateral", "use_bilateral_grid"),
+                            ("dep_sparsity", "enable_sparsity"), ("dep_eval", "enable_eval"),
+                            ("dep_random", "random")):
+        getter = model.bindings[condition][0]
+        assert getter() is True
+        setattr(params, prop, False)
+        assert getter() is False
 
 
 def test_backend_disabled_conditions_prevent_new_conflicts_but_allow_correction(
@@ -2365,3 +2462,82 @@ def test_show_save_pc_dialog_message_depends_on_project_binding(
         "training.save_pc.btn_start_without",
         "training.conflict.btn_cancel",
     ]
+
+def test_compact_toolbar_preserves_icons_tooltips_and_accessible_names():
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    toolbar = document.find(".//*[@class='training-toolbar']")
+    for button in toolbar.iter("button"):
+        assert button.find("img") is not None
+        assert button.get("data-tooltip")
+        assert button.get("data-attr-aria-label")
+    css = (root / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
+    for width, count in ((280, "two"), (350, "three"), (440, "four")):
+        compact = css.split(f"@media (max-width: {width}dp)", 1)[1].split("@media", 1)[0]
+        assert f".toolbar-{count} .training-toolbar-action span" in compact
+        assert "display: none" in compact
+        assert "width: 28dp" in compact
+        assert "training-status-badge" not in compact
+    ready = toolbar.find("div[@data-if=\'show_ctrl_ready\']")
+    assert ready.get("data-class-toolbar-two") == "!show_reset_ready"
+    assert ready.get("data-class-toolbar-three") == "show_reset_ready"
+    paused = toolbar.find("div[@data-if=\'show_ctrl_paused\']")
+    assert paused.get("data-class-toolbar-four") == "show_project_save"
+    assert paused.get("data-class-toolbar-three") == "!show_project_save"
+    toolbar_css = css.split(".training-toolbar {", 1)[1].split("}", 1)[0]
+    assert "flex-wrap: nowrap" in toolbar_css
+
+
+def test_enabled_features_have_independent_parameter_sections():
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    advanced = document.find(".//*[@id='sec-advanced-params']")
+    sections = {name: advanced.find(f".//*[@id='sec-{name}']") for name in (
+        "depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random-init", "sparsity")}
+    for name, section in sections.items():
+        assert section is not None, name
+        for other in sections:
+            if name != other:
+                assert section.find(f".//*[@id='sec-{other}']") is None
+    assert sections["depth"].find(".//*[@data-for='row : pv_basic_normal_weights_rows']") is None
+    assert sections["normal"].find(".//*[@data-for='row : pv_basic_depth_weight_rows']") is None
+    assert sections["evaluation"].find(".//*[@data-value='test_every_str']") is not None
+    assert sections["random-init"].find(".//*[@data-for='row : pv_init_random_rows']") is not None
+    for name in ("ppisp", "bilateral"):
+        parent = next(node for node in advanced.iter() if sections[name] in list(node))
+        assert "!dep_exposure_correction" in parent.get("data-if")
+    for run in ("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"):
+        assert sections["exposure"].find(f".//*[@data-for='row : pv_{run}_rows']") is not None
+
+def test_error_details_do_not_participate_in_toolbar_layout():
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    controls = document.find(".//*[@id='controls']")
+    toolbar = controls.find("div[@class='training-toolbar']")
+    assert all(node.text != "{{error_message}}" for node in toolbar.iter())
+    feedback = controls.find("div[@id='training-error-feedback']")
+    assert feedback is not None
+    assert feedback.get("data-if") == "show_ctrl_error"
+    assert feedback.get("class") == "training-start-feedback"
+    assert feedback.find("span").text == "{{error_message}}"
+    assert list(controls).index(feedback) > list(controls).index(toolbar)
+    error_actions = toolbar.find("div[@data-if='show_ctrl_error']")
+    assert len(error_actions.findall(".//button")) == 2
+    assert toolbar.find(".//*[@class='training-status-badge is-error']") is not None
+
+
+def test_advanced_title_keeps_arrow_inside_its_box():
+    root = Path(__file__).resolve().parents[2]
+    css = (root / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
+    title = css.split("#hdr-advanced-params {", 1)[1].split("}", 1)[0]
+    assert "margin: 8dp 0 0" in title
+    assert "padding: 5dp 6dp" in title
+    assert "box-sizing: border-box" in title
+    arrow = css.split("#hdr-advanced-params > .section-arrow {", 1)[1].split("}", 1)[0]
+    assert "flex: 0 0 10dp" in arrow

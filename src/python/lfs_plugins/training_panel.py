@@ -175,9 +175,13 @@ SECTIONS = [
     "basic_params",
     "camera",
     "masking",
-    "supervision",
+    "depth",
+    "normal",
     "background",
-    "appearance",
+    "ppisp",
+    "exposure",
+    "evaluation",
+    "random_init",
     "advanced_params",
     "dataset",
     "optimization",
@@ -227,7 +231,6 @@ class TrainingPanel(Panel):
         self._pv_bindings = ()
         self._pv_binding_by_prop = {}
         self._pv_search_query = ""
-        self._appearance_custom_empty = False
         self._pv_publish_pending = []
         self._pv_publish_pending_ids = set()
         self._pv_publish_scheduled = False
@@ -292,7 +295,6 @@ class TrainingPanel(Panel):
     def apply_chrome(self, payload):
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._pv_search_query = ""
-        self._appearance_custom_empty = False
         self._auto_scale_steps_locked = True
         if not isinstance(payload, dict):
             if self._handle:
@@ -515,12 +517,13 @@ class TrainingPanel(Panel):
     _BESPOKE_SEARCH = {
         "strategy": ("basic_params", "strategy mrnf igs+ mcmc", ("training_params.strategy",)),
         "backend": ("basic_params", "raster backend 3dgs 3dgut gut", ("training.backend",)),
-        "sh_degree": ("basic_params", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
-        "depth_loss_mode": ("supervision", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
+        "sh_degree": ("optimization", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
+        "depth_loss_mode": ("depth", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
         "background_fields": ("background", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
-        "appearance": ("appearance", "appearance correction off managed custom exposure bilateral ppisp", ("training.appearance_mode", "training.appearance.managed", "training.appearance.custom")),
-        "appearance_fields": ("appearance", "ppisp sidecar path controller activation step", ("training.tooltip.ppisp_sidecar_path", "training.tooltip.ppisp_activation_step")),
-        "dataset_fields": ("dataset", "dataset path images output resize_factor max_width cpu_cache use_16bit_color test_every evaluation", ("training.tooltip.dataset_path", "training.tooltip.dataset_images", "training.tooltip.resize_factor", "training.tooltip.max_width", "training.tooltip.cpu_cache", "training.tooltip.use_16bit_color", "training.tooltip.test_every", "training.tooltip.dataset_output")),
+        "appearance": ("ppisp", "ppisp", ("training.section.appearance",)),
+        "appearance_fields": ("ppisp", "ppisp sidecar path controller activation step", ("training.tooltip.ppisp_sidecar_path", "training.tooltip.ppisp_activation_step")),
+        "dataset_fields": ("dataset", "dataset path images output resize_factor max_width cpu_cache use_16bit_color", ("training.tooltip.dataset_path", "training.tooltip.dataset_images", "training.tooltip.resize_factor", "training.tooltip.max_width", "training.tooltip.cpu_cache", "training.tooltip.use_16bit_color", "training.tooltip.dataset_output")),
+        "evaluation_fields": ("evaluation", "test_every evaluation", ("training.tooltip.test_every",)),
         "lambda_dssim": ("losses", "lambda_dssim ssim", ("training.tooltip.lambda_dssim",)),
         "init_opacity": ("init", "init_opacity", ("training.tooltip.init_opacity",)),
         "prune_ratio": ("sparsity", "prune_ratio", ("training.tooltip.prune_ratio",)),
@@ -537,7 +540,8 @@ class TrainingPanel(Panel):
         if not self._pv_search_query.strip():
             return True
         if section == "advanced_params":
-            return any(self._bespoke_matches(name) for name in ("lambda_dssim", "init_opacity", "prune_ratio", "save_steps"))
+            return any(owner not in ("basic_params", "camera", "masking") and self._bespoke_matches(name)
+                       for name, (owner, _tokens, _keys) in self._BESPOKE_SEARCH.items())
         return any(
             owner == section and self._bespoke_matches(name)
             for name, (owner, _tokens, _keys) in self._BESPOKE_SEARCH.items()
@@ -551,8 +555,6 @@ class TrainingPanel(Panel):
         model.bind_func("start_fix_hint", lambda: tr("training.start_fix_settings"))
         model.bind_func("start_blocked", lambda: bool(self._start_error()))
         model.bind_func("start_conflicts", lambda: self._backend_notice(selected_only=True))
-        model.bind("appearance_mode", self._appearance_mode, self._set_appearance_mode)
-        model.bind_func("appearance_custom", lambda: self._appearance_mode() == "custom")
 
     @staticmethod
     def _can_edit_configuration():
@@ -618,33 +620,13 @@ class TrainingPanel(Panel):
         unsupported = [label.rstrip(":") for key, label in labels.items()
                        if params.backend_capabilities.get(key) == "unsupported"
                        and (selected is None or selected[key])]
-        return (tr("training.backend_unsupported") + ": " + ", ".join(unsupported)) if unsupported else ""
-
-    def _appearance_mode(self):
-        params = lf.optimization_params()
-        if not params or not params.has_params():
-            return "off"
-        if params.use_exposure_correction:
-            return "managed"
-        if params.use_bilateral_grid or params.ppisp or params.ppisp_use_controller or params.ppisp_freeze_from_sidecar:
-            return "custom"
-        return "custom" if self._appearance_custom_empty else "off"
-
-    def _set_appearance_mode(self, mode):
-        params = lf.optimization_params()
-        if mode not in ("off", "managed", "custom") or not params or not params.has_params():
-            return
-        if not self._can_edit_configuration():
-            return
-        # Selecting an empty custom stack should expose both independent toggles
-        # without activating a module or changing saved tuning parameters.
-        self._appearance_custom_empty = mode == "custom"
-        params.use_exposure_correction = False
-        if mode != "custom":
-            for prop in ("use_bilateral_grid", "ppisp", "ppisp_use_controller", "ppisp_freeze_from_sidecar"):
-                self._set_bool_prop(prop, False)
-        params.use_exposure_correction = mode == "managed"
-        self._refresh_strategy_values()
+        if not unsupported:
+            return ""
+        backend_id = params.raster_backend
+        backend_label = next((item["label"] for item in lf.training_backends()
+                              if item["id"] == backend_id), backend_id)
+        return tr_fallback("training.backend_unsupported", "Not available with {backend}: {features}").format(
+            backend=backend_label, features=", ".join(unsupported))
 
     def _set_property_search_query(self, value):
         query = str(value or "")
@@ -2331,12 +2313,26 @@ class TrainingPanel(Panel):
         prop = str(args[0])
         binding = self._pv_binding_by_prop.get(prop)
         if binding is not None:
-            binding.set_value(prop, args[1])
+            if binding.set_value(prop, args[1]) is False:
+                return
             if bool(args[1]):
                 for other in self._APPEARANCE_EXCLUSIVE.get(prop, ()):
                     other_binding = self._pv_binding_by_prop.get(other)
                     if other_binding is not None:
                         other_binding.set_value(other, False)
+                # The enable flag is authoritative; opening its settings is a UI effect.
+                sections = {
+                    "use_depth_loss": "depth", "use_normal_loss": "normal",
+                    "use_bilateral_grid": "bilateral", "ppisp": "ppisp",
+                    "use_exposure_correction": "exposure", "enable_sparsity": "sparsity",
+                    "random": "random_init", "enable_eval": "evaluation",
+                }
+                section = sections.get(prop)
+                params = lf.optimization_params()
+                if section and params and getattr(params, prop, False):
+                    self._collapsed.discard("advanced_params")
+                    self._collapsed.discard(section)
+                    self._sync_section_states()
 
     def _on_pv_search_clear(self, *_args):
         self._set_property_search_query("")

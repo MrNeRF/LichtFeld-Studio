@@ -268,7 +268,7 @@
     "appearance.off": "끄기",
     "appearance.managed": "통합 노출 보정",
     "appearance.custom": "사용자 지정 조합",
-    "backend_unsupported": "이 백엔드에서 지원하지 않음",
+    "backend_unsupported": "{backend}에서 사용할 수 없음: {features}",
     "tooltip.backend": "학습 래스터라이저를 선택합니다. 시작 전에 지원하지 않는 설정을 수정하세요.",
     "tooltip.appearance_mode": "통합 보정은 독립적인 Bilateral Grid와 PPISP를 대체합니다. 사용자 지정 조합에서는 하나 또는 둘 다 활성화할 수 있습니다.",
     "section.dataset": "데이터셋",
