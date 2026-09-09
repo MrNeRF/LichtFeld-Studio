@@ -62,6 +62,12 @@ namespace lfs::vis::gui {
 
     } // namespace
 
+    bool isSelectionRingCursorCurrent(const SDL_Cursor* const current,
+                                      const SDL_Cursor* const ring,
+                                      const SDL_Cursor* const retiring_ring) {
+        return current && (current == ring || current == retiring_ring);
+    }
+
     bool useHardwareSelectionRing(const bool preview_active,
                                   const SelectionPreviewMode mode,
                                   const int radius_px) {

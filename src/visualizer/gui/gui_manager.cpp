@@ -4257,21 +4257,18 @@ namespace lfs::vis::gui {
         return selection_ring_cursor_cache_.parameters;
     }
 
-    bool GuiManager::selectionRingCursorActive(const float mouse_x, const float mouse_y) const {
-        const SDL_Cursor* const current_cursor = SDL_GetCursor();
-        const bool ring_is_current = current_cursor == selection_ring_cursor_ ||
-                                     current_cursor == selection_ring_cursor_pending_destroy_;
-        const bool ring_was_selected = last_selection_cursor_ == selection_ring_cursor_ ||
-                                       last_selection_cursor_ == selection_ring_cursor_pending_destroy_;
-        return selection_ring_cursor_ && (ring_is_current || ring_was_selected) &&
-               selectionRingCursorParameters(mouse_x, mouse_y).has_value();
+    bool GuiManager::isHardwareSelectionRingActive() const {
+        // Eligibility decides which cursor to install, not whether an installed
+        // ring still suppresses the software fallback (including during replacement).
+        return isSelectionRingCursorCurrent(SDL_GetCursor(), selection_ring_cursor_,
+                                            selection_ring_cursor_pending_destroy_);
     }
 
-    bool GuiManager::isHardwareSelectionRingActive() const {
-        if (!selection_ring_cursor_ || !viewer_ || !viewer_->getWindowManager())
-            return false;
-        const auto& input = viewer_->getWindowManager()->frameInput();
-        return selectionRingCursorParameters(input.mouse_x, input.mouse_y).has_value();
+    bool GuiManager::selectionCursorNeedsRender(const float mouse_x, const float mouse_y) const {
+        // A current ring suppresses overlays, but leaving its eligible region
+        // must still wake the GUI so it can install the appropriate cursor.
+        return !isHardwareSelectionRingActive() ||
+               !selectionRingCursorParameters(mouse_x, mouse_y).has_value();
     }
 
     void GuiManager::prepareSelectionRingCursor(const float mouse_x, const float mouse_y) {
@@ -5340,28 +5337,18 @@ namespace lfs::vis::gui {
             rendering_manager->bindViewportInteropParams(params, frame_slot, export_locked);
         }
 
-        // Sample mouse pos with SDL_GetGlobalMouseState here, after all panel/tool overlay
-        // queueing and just before the GPU command buffer is recorded. Global polling hits
-        // the OS directly, so the cursor ring tracks the hardware pointer without waiting
-        // for another event-pump tick.
+        // Use the same window-relative snapshot as cursor selection and hit tests.
+        // Wayland global coordinates are synthesized, not a late pointer sample.
         if (viewer_ && !ui_hidden_ && !guiFocusState().want_capture_mouse) {
             if (auto* const sel = viewer_->getSelectionTool(); sel && sel->isEnabled()) {
-                SDL_Window* const window = viewer_->getWindow();
-                int win_x = 0;
-                int win_y = 0;
-                if (window) {
-                    SDL_GetWindowPosition(window, &win_x, &win_y);
-                }
-                float gx = 0.0f;
-                float gy = 0.0f;
-                SDL_GetGlobalMouseState(&gx, &gy);
-                const glm::vec2 mp{gx - static_cast<float>(win_x), gy - static_cast<float>(win_y)};
+                const auto& input = viewer_->getWindowManager()->frameInput();
+                const glm::vec2 mp{input.mouse_x, input.mouse_y};
                 if (isPositionInViewport(mp.x, mp.y)) {
                     auto* const rm = viewer_->getRenderingManager();
                     const auto mode = rm ? rm->getSelectionPreviewMode()
                                          : lfs::vis::SelectionPreviewMode::Centers;
                     const bool hardware_selection_ring =
-                        selectionRingCursorActive(mp.x, mp.y);
+                        isHardwareSelectionRingActive();
                     const auto& palette = lfs::vis::theme().palette;
                     const auto& base = (SDL_GetModState() & SDL_KMOD_CTRL) ? palette.error : palette.primary;
                     const glm::vec4 color{base.x * 0.85f, base.y * 0.85f, base.z * 0.85f, 0.85f};
@@ -7217,6 +7204,13 @@ namespace lfs::vis::gui {
         if (!vulkan_gui_)
             renderFloatingPanelDragCursor();
         if (overlay_renderer && needs_screen_overlay_frame) {
+            // Selection labels must observe the final cursor too, otherwise a
+            // label queued before installing a ring can persist on idle frames.
+            if (!ui_hidden_ && !isViewportExportLocked()) {
+                if (auto* const tool = viewer_->getSelectionTool(); tool && tool->isEnabled()) {
+                    tool->renderUI(ctx, nullptr);
+                }
+            }
             LOG_TIMER_THRESHOLD("gui_render.screen_overlay_renderer.endFrame", 0.25);
             overlay_renderer->endFrame();
         }
@@ -7432,10 +7426,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        if (auto* const tool = ctx.viewer->getSelectionTool(); tool && tool->isEnabled() && !ui_hidden_) {
-            tool->renderUI(ctx, nullptr);
-        }
-
         // Node rectangle-drag outline. Uses the same ScreenOverlayRenderer path
         // as the cursor preview / align tool so it stays consistent with the
         // other native viewport overlays.
@@ -7551,7 +7541,11 @@ namespace lfs::vis::gui {
             };
 
             const bool hardware_selection_ring = isHardwareSelectionRingActive();
-            if (rm && rm->isCursorPreviewActive() && !hardware_selection_ring) {
+            // The Centers brush fallback is emitted once by the late shape pass,
+            // after the final SDL cursor is chosen. Queuing it here can leave a
+            // software ring underneath a hardware ring installed later this frame.
+            if (rm && rm->getSelectionPreviewMode() != SelectionPreviewMode::Centers &&
+                rm->isCursorPreviewActive() && !hardware_selection_ring) {
                 const auto& t = theme();
                 float bx, by, br;
                 bool add_mode;
@@ -8183,7 +8177,7 @@ namespace lfs::vis::gui {
 
         if (!guiFocusState().want_capture_mouse && isPositionInViewport(mouse_x, mouse_y)) {
             if (auto* const sel = viewer_ ? viewer_->getSelectionTool() : nullptr; sel && sel->isEnabled()) {
-                return !selectionRingCursorActive(mouse_x, mouse_y);
+                return selectionCursorNeedsRender(mouse_x, mouse_y);
             }
         }
 
