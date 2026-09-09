@@ -6102,6 +6102,8 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.panel_setup.frame_input", 0.25);
             frame_input = buildPanelInputFromSDL(sdl_input);
             startup_overlay_input = frame_input;
+            if (modal_overlay_open || modal_overlay_pending || context_menu_open)
+                startup_overlay_input = maskInputForBlockedUi(std::move(startup_overlay_input));
             if (startup_overlay_blocking)
                 frame_input = maskInputForBlockedUi(std::move(frame_input));
             else if (menu_blocks_underlay_pointer)
