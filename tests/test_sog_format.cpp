@@ -22,14 +22,17 @@
 #include <webp/decode.h>
 #include <webp/encode.h>
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "io/cuda/kmeans.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 #include "io/formats/sogs.hpp"
 #include "io/loader.hpp"
 
 #include <algorithm>
+#include <random>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -685,56 +688,96 @@ TEST_F(SogFormatTest, LoaderRoutesSogThroughSplatAllocator) {
 TEST_F(SogFormatTest, BundleAndDirectoryPayloadsMatch) {
     using namespace lfs::core;
     using namespace lfs::io;
-    ScopedSogDirectory dir;
-    constexpr size_t n = 2048;
-    SplatData splats(1, Tensor::randn({n, 3}, Device::CUDA),
-                     Tensor::randn({n, 1, 3}, Device::CUDA), Tensor::randn({n, 3, 3}, Device::CUDA),
-                     Tensor::full({n, 3}, -3.0f, Device::CUDA), Tensor::randn({n, 4}, Device::CUDA),
-                     Tensor::zeros({n, 1}, Device::CUDA), 1);
-    const auto stamp = make_minimal_provenance_stamp();
-    const auto bundle = dir.path() / "bundle.sog";
-    auto saved = save_sog(splats, {.output_path = bundle, .provenance = stamp});
-    ASSERT_TRUE(saved) << saved.error().format();
-    SogEncodeOptions o;
-    o.output_path = dir.path() / "directory";
-    o.provenance = stamp;
-    auto encoded = encode_sog_directory(splats, o);
-    ASSERT_TRUE(encoded) << encoded.error().format();
-    auto fast = o;
-    fast.output_path = dir.path() / "fast_directory";
-    fast.fast_webp = true;
-    ASSERT_TRUE(encode_sog_directory(splats, fast));
-    std::unique_ptr<archive, decltype(&archive_read_free)> input(archive_read_new(), archive_read_free);
-    ASSERT_EQ(archive_read_support_format_zip(input.get()), ARCHIVE_OK);
+    // Both fixtures bypass stochastic SH palette initialization (n == palette
+    // size). SH3 also exercises every pooled 1D reduction with multiple workers.
+    for (const auto [n, degree] : {std::pair<size_t, int>{2048, 1}, {65536, 3}}) {
+        SCOPED_TRACE(n);
+        ScopedSogDirectory dir;
+        SplatData splats(degree, Tensor::randn({n, 3}, Device::CUDA),
+                         Tensor::randn({n, 1, 3}, Device::CUDA), Tensor::randn({n, size_t((degree + 1) * (degree + 1) - 1), 3}, Device::CUDA),
+                         Tensor::full({n, 3}, -3.0f, Device::CUDA), Tensor::randn({n, 4}, Device::CUDA),
+                         Tensor::zeros({n, 1}, Device::CUDA), 1);
+        const auto stamp = make_minimal_provenance_stamp();
+        const auto bundle = dir.path() / "bundle.sog";
+        auto saved = save_sog(splats, {.output_path = bundle, .provenance = stamp});
+        ASSERT_TRUE(saved) << saved.error().format();
+        SogEncodeOptions o;
+        o.output_path = dir.path() / "directory";
+        o.provenance = stamp;
+        auto encoded = encode_sog_directory(splats, o);
+        ASSERT_TRUE(encoded) << encoded.error().format();
+        auto fast = o;
+        fast.output_path = dir.path() / "fast_directory";
+        fast.fast_webp = true;
+        ASSERT_TRUE(encode_sog_directory(splats, fast));
+        std::unique_ptr<archive, decltype(&archive_read_free)> input(archive_read_new(), archive_read_free);
+        ASSERT_EQ(archive_read_support_format_zip(input.get()), ARCHIVE_OK);
 #ifdef _WIN32
-    ASSERT_EQ(archive_read_open_filename_w(input.get(), bundle.wstring().c_str(), 10240), ARCHIVE_OK);
+        ASSERT_EQ(archive_read_open_filename_w(input.get(), bundle.wstring().c_str(), 10240), ARCHIVE_OK);
 #else
-    ASSERT_EQ(archive_read_open_filename(input.get(), bundle.c_str(), 10240), ARCHIVE_OK);
+        ASSERT_EQ(archive_read_open_filename(input.get(), bundle.c_str(), 10240), ARCHIVE_OK);
 #endif
-    archive_entry* entry = nullptr;
-    std::vector<std::string> names;
-    while (archive_read_next_header(input.get(), &entry) == ARCHIVE_OK) {
-        const std::string name = archive_entry_pathname(entry);
-        names.push_back(name);
-        std::string bytes(static_cast<size_t>(archive_entry_size(entry)), '\0');
-        ASSERT_EQ(archive_read_data(input.get(), bytes.data(), bytes.size()), static_cast<la_ssize_t>(bytes.size()));
-        std::ifstream file(o.output_path / name, std::ios::binary);
-        const std::string other((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        EXPECT_EQ(bytes, other) << name;
-        std::ifstream fast_file(fast.output_path / name, std::ios::binary);
-        const std::string fast_bytes((std::istreambuf_iterator<char>(fast_file)), std::istreambuf_iterator<char>());
-        if (name.ends_with(".webp")) {
-            int w = 0, h = 0, fw = 0, fh = 0;
-            std::unique_ptr<uint8_t, decltype(&WebPFree)> pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), &w, &h), WebPFree);
-            std::unique_ptr<uint8_t, decltype(&WebPFree)> fast_pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(fast_bytes.data()), fast_bytes.size(), &fw, &fh), WebPFree);
-            ASSERT_TRUE(pixels);
-            ASSERT_TRUE(fast_pixels);
-            ASSERT_EQ(w, fw);
-            ASSERT_EQ(h, fh);
-            EXPECT_TRUE(std::equal(pixels.get(), pixels.get() + size_t(w) * h * 4, fast_pixels.get())) << name;
-        } else {
-            EXPECT_EQ(bytes, fast_bytes) << name;
+        archive_entry* entry = nullptr;
+        std::vector<std::string> names;
+        while (archive_read_next_header(input.get(), &entry) == ARCHIVE_OK) {
+            const std::string name = archive_entry_pathname(entry);
+            names.push_back(name);
+            std::string bytes(static_cast<size_t>(archive_entry_size(entry)), '\0');
+            ASSERT_EQ(archive_read_data(input.get(), bytes.data(), bytes.size()), static_cast<la_ssize_t>(bytes.size()));
+            std::ifstream file(o.output_path / name, std::ios::binary);
+            const std::string other((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+            EXPECT_EQ(bytes, other) << name;
+            std::ifstream fast_file(fast.output_path / name, std::ios::binary);
+            const std::string fast_bytes((std::istreambuf_iterator<char>(fast_file)), std::istreambuf_iterator<char>());
+            if (name.ends_with(".webp")) {
+                int w = 0, h = 0, fw = 0, fh = 0;
+                std::unique_ptr<uint8_t, decltype(&WebPFree)> pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), &w, &h), WebPFree);
+                std::unique_ptr<uint8_t, decltype(&WebPFree)> fast_pixels(WebPDecodeRGBA(reinterpret_cast<const uint8_t*>(fast_bytes.data()), fast_bytes.size(), &fw, &fh), WebPFree);
+                ASSERT_TRUE(pixels);
+                ASSERT_TRUE(fast_pixels);
+                ASSERT_EQ(w, fw);
+                ASSERT_EQ(h, fh);
+                EXPECT_TRUE(std::equal(pixels.get(), pixels.get() + size_t(w) * h * 4, fast_pixels.get())) << name;
+            } else {
+                EXPECT_EQ(bytes, fast_bytes) << name;
+            }
+        }
+        EXPECT_EQ(names, (std::vector<std::string>{"means_l.webp", "means_u.webp", "quats.webp", "scales.webp", "sh0.webp", "shN_centroids.webp", "shN_labels.webp", "meta.json"}));
+    }
+}
+
+TEST_F(SogFormatTest, StreamedSh3AssignmentMatchesReferenceTiles) {
+    using namespace lfs::core;
+    using namespace lfs::io;
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> value(-1.0f, 1.0f);
+    for (const size_t n : {1, 127, 128, 129, 4097}) {
+        for (const size_t k : {1, 31, 32, 33, 4097, 65536}) {
+            SCOPED_TRACE(std::format("n={} k={}", n, k));
+            auto points = Tensor::zeros({sh_swizzled_float_count(n, 15)}, Device::CPU);
+            auto centroids = Tensor::empty({k, 45}, Device::CPU);
+            auto norms = Tensor::zeros({k}, Device::CPU);
+            for (size_t i = 0; i < k; ++i) {
+                for (size_t d = 0; d < 45; ++d) {
+                    const float v = i && i % 7 == 0 ? centroids.ptr<float>()[d] : value(rng);
+                    centroids.ptr<float>()[i * 45 + d] = v;
+                    norms.ptr<float>()[i] = std::fma(v, v, norms.ptr<float>()[i]);
+                }
+            }
+            for (size_t i = 0; i < n; ++i)
+                for (size_t d = 0; d < 45; ++d)
+                    points.ptr<float>()[sh_swizzled_index(i, d / 4, 15) * 4 + d % 4] =
+                        i ? value(rng) : centroids.ptr<float>()[d];
+            points = points.cuda();
+            centroids = centroids.cuda();
+            norms = norms.cuda();
+            auto ordinary = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
+            auto streamed = Tensor::zeros({n}, Device::CUDA, DataType::Int32);
+            assign_sh3_labels(points, centroids, norms, ordinary, false);
+            assign_sh3_labels(points, centroids, norms, streamed, true);
+            const auto reference = ordinary.cpu(), actual = streamed.cpu();
+            EXPECT_TRUE(std::equal(reference.ptr<int>(), reference.ptr<int>() + n, actual.ptr<int>()));
+            EXPECT_EQ(actual.ptr<int>()[0], 0);
         }
     }
-    EXPECT_EQ(names, (std::vector<std::string>{"means_l.webp", "means_u.webp", "quats.webp", "scales.webp", "sh0.webp", "shN_centroids.webp", "shN_labels.webp", "meta.json"}));
 }
