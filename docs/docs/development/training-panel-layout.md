@@ -36,9 +36,13 @@ runtime edit locks. Selecting a backend updates the next-run parameters and the
 existing viewer setting. Unsupported capabilities are shown beside the selector;
 Start is disabled when the central parameter check reports an error. The exact
 error and selected unsupported options remain beside Start, outside search and
-collapsible sections. Options remain editable and are never silently erased.
+collapsible sections. Capability values use the `supported`/`unsupported` contract.
+Incompatible unchecked Mip/Depth/Normal controls cannot be enabled with 3DGUT;
+already-selected conflicts remain switchable off. Native rollback republishes
+the effective values. Undistort remains available. No options are silently erased.
 Direct Start events are checked before overwrite consent and again after consent;
-native checks remain authoritative. Resume is not gated by next-run settings.
+native checks remain authoritative. The panel's next-run Start gate does not
+gate Resume; native resume preflight from PR A still validates effective settings.
 
 Appearance uses Off, Managed Exposure Correction, and Custom Stack. The custom
 stack can enable Bilateral Grid, PPISP, or both. Selecting an empty custom stack
@@ -57,7 +61,7 @@ or changing backend/appearance does not toggle it.
 
 - In Ready at iteration zero, check 3DGS and 3DGUT selection, viewer alignment,
   and the capability notice. Check that unknown/unimplemented backends do not
-  appear. Enable multiple unsupported options: Start must be disabled and list
+  appear. Select 3DGUT with multiple unsupported options already enabled: Start must be disabled and list
   selected conflicts even with an unrelated search or collapsed sections. Remove
   conflicts one at a time, or select a compatible backend; Start must recover
   when the configuration is valid. Also check an invalid numeric parameter.
@@ -80,11 +84,12 @@ or changing backend/appearance does not toggle it.
 - Start, pause, resume, stop and restore training. Settings must obey the existing
   edit lock, while project saving and other training actions remain usable.
 
-Run the source Python regressions in the existing LichtFeld environment:
+Run the source Python regressions using the interpreter matching the built
+extension, with pytest, the built module and its runtime libraries available.
+For the standard Windows triplet:
 
 ```powershell
-lfsdev
-lfspytest tests/python/test_training_panel_regressions.py tests/python/test_property_view.py tests/python/test_training_confirm.py -q -p no:cacheprovider
+.\build\vcpkg_installed\x64-windows\tools\python3\python.exe -m pytest tests/python/test_training_panel_regressions.py tests/python/test_property_view.py tests/python/test_training_confirm.py tests/python/test_property_system.py -q -p no:cacheprovider
 ```
 
 These tests cover configuration behavior and RML structure, not native layout

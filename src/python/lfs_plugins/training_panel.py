@@ -616,7 +616,7 @@ class TrainingPanel(Panel):
             "normal_supervision": getattr(params, "use_normal_loss", False),
         } if selected_only else None
         unsupported = [label.rstrip(":") for key, label in labels.items()
-                       if params.backend_capabilities.get(key) is False
+                       if params.backend_capabilities.get(key) == "unsupported"
                        and (selected is None or selected[key])]
         return (tr("training.backend_unsupported") + ": " + ", ".join(unsupported)) if unsupported else ""
 

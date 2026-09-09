@@ -53,16 +53,18 @@ def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_
         strategy="igs+", undistort=True, mip_filter=False,
         use_depth_loss=True, use_normal_loss=False,
         backend_capabilities=dict.fromkeys(
-            ("igs_plus", "undistort", "mip_filter", "depth_supervision", "normal_supervision"), False),
+            ("igs_plus", "mip_filter", "depth_supervision", "normal_supervision"), "unsupported"),
     )
     monkeypatch.setattr(module.lf, "optimization_params", lambda: params)
     monkeypatch.setattr(module.RuntimeState.trainer_state, "value", "ready")
+    params.backend_capabilities["undistort"] = "supported"
     dirty = []
     panel._handle = SimpleNamespace(dirty=dirty.append)
     before = vars(params).copy()
     assert panel._start_error() == "invalid combination"
     notice = panel._backend_notice(selected_only=True)
-    assert "IGS+" in notice and "undistort" in notice and "use_depth_loss" in notice
+    assert "IGS+" in notice and "use_depth_loss" in notice
+    assert "undistort" not in notice
     assert "mip_filter" not in notice and "use_normal_loss" not in notice
     assert panel._sync_start_feedback()
     assert set(dirty) == {"start_error", "start_blocked", "start_conflicts"}
@@ -71,6 +73,8 @@ def test_start_feedback_tracks_actual_conflicts_without_mutating(training_panel_
     params.validate = lambda: ""
     assert panel._sync_start_feedback()
     assert panel._start_error() == ""
+    params.backend_capabilities = dict.fromkeys(params.backend_capabilities, "supported")
+    assert panel._backend_notice() == ""
 
 
 @pytest.mark.parametrize("state", ["paused", "running", "idle", "completed", "error"])
@@ -90,7 +94,7 @@ def test_invalid_start_is_rejected_before_overwrite_consent(training_panel_modul
     monkeypatch.setattr(module.lf, "training_start_overwrite_conflict",
                         lambda: pytest.fail("Must reject before consent"))
     errors = []
-    monkeypatch.setattr(module.lf.ui, "confirm_dialog", lambda *args: errors.append(args), raising=False)
+    monkeypatch.setattr(module.lf.ui, "message_dialog", lambda *args, **kwargs: errors.append(args), raising=False)
     panel._action_start()
     assert errors[0][1] == "invalid numeric parameter"
 
@@ -696,7 +700,7 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
     assert any(node.attrib.get("data-class-disabled-overlay") == "step_scaling_params_locked"
                for node in document.iter("div"))
     for section, runs in {
-        "camera": ("basic_after_gut",),
+        "camera": ("basic_undistort", "basic_mip_filter"),
         "masking": ("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties"),
         "supervision": ("basic_depth_toggle", "basic_depth_weight", "basic_normal_toggle", "basic_normal_weights"),
         "background": ("bg_mode",),
@@ -704,6 +708,16 @@ def test_redesigned_rml_preserves_locks_and_groups_all_controls():
     }.items():
         mounted = {node.attrib.get("data-for") for node in by_id[f"sec-{section}"].iter()}
         assert all(f"row : pv_{run}_rows" in mounted for run in runs)
+
+    for run, condition in {
+        "basic_mip_filter": "gut_mip_filter_disabled",
+        "basic_depth_toggle": "gut_depth_supervision_disabled",
+        "basic_normal_toggle": "gut_normal_supervision_disabled",
+    }.items():
+        rows = [node for node in document.iter("div")
+                if node.attrib.get("data-for") == f"row : pv_{run}_rows"]
+        assert len(rows) == 1
+        assert rows[0].attrib.get("data-class-disabled-overlay") == condition
 
 
 @pytest.mark.parametrize("state,iteration,editable", [
