@@ -313,7 +313,8 @@ namespace lfs::core {
                 (void)::fsync(g_crash_log_fd);
 #endif
         } catch (...) {
-            // Diagnostics must not replace the original failure.
+            // LFS-CENSUS-OK(empty-catch): A diagnostic sink failure must not recurse
+            // into failure reporting or replace the original failure.
         }
     }
 
