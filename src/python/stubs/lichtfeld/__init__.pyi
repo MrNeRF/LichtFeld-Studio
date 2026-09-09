@@ -563,16 +563,19 @@ def free_icon(texture_id: int) -> None:
 
 def reset_camera(*, panel: str | None = None) -> None:
     """
-    Reset camera to default position and orientation.
+    Reset the primary camera by default, even when another panel has focus.
+    Use panel="main" to reset the focused camera. Reset restores the camera's
+    default position and orientation.
 
-    panel (keyword-only) selects which split panel's camera is reset:
-    - None (default): the command path, addressed at the primary viewport
-      exactly as before.
-    - 'main': the panel that currently has focus. This is NOT the same as
-      None here, because the panel-less path is primary-addressed.
-    - 'left' / 'right': that panel's own camera. Outside independent-dual
-      split every token resolves to the primary camera, because there is
-      only one. Addressing a panel never changes which panel has focus.
+    Unlike focus_selection(), omitting panel (or passing None) does not follow focus.
+
+    panel (keyword-only):
+    - None (default): primary camera.
+    - 'main': focused camera.
+    - 'left' / 'right': named panel's camera.
+
+    Outside independent-dual split, all choices target the primary camera.
+    Addressing a panel never changes focus.
     """
 
 def focus_selection(*, panel: str | None = None) -> bool:

@@ -2547,16 +2547,19 @@ NB_MODULE(lichtfeld, m) {
             if (auto* const controller = lfs::vis::InputController::instance())
                 controller->resetCameraForPanel(panel_id);
         },
-        nb::kw_only(), nb::arg("panel") = nb::none(), "Reset camera to default position and orientation.\n"
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Reset the primary camera by default, even when another panel has focus.\n"
+                                                      "Use panel=\"main\" to reset the focused camera. Reset restores the camera's\n"
+                                                      "default position and orientation.\n"
                                                       "\n"
-                                                      "panel (keyword-only) selects which split panel's camera is reset:\n"
-                                                      "- None (default): the command path, addressed at the primary viewport\n"
-                                                      "  exactly as before.\n"
-                                                      "- 'main': the panel that currently has focus. This is NOT the same as\n"
-                                                      "  None here, because the panel-less path is primary-addressed.\n"
-                                                      "- 'left' / 'right': that panel's own camera. Outside independent-dual\n"
-                                                      "  split every token resolves to the primary camera, because there is\n"
-                                                      "  only one. Addressing a panel never changes which panel has focus.");
+                                                      "Unlike focus_selection(), omitting panel (or passing None) does not follow focus.\n"
+                                                      "\n"
+                                                      "panel (keyword-only):\n"
+                                                      "- None (default): primary camera.\n"
+                                                      "- 'main': focused camera.\n"
+                                                      "- 'left' / 'right': named panel's camera.\n"
+                                                      "\n"
+                                                      "Outside independent-dual split, all choices target the primary camera.\n"
+                                                      "Addressing a panel never changes focus.");
     m.def(
         "focus_selection", [](const std::optional<std::string>& panel) -> bool {
             if (!panel.has_value()) {
