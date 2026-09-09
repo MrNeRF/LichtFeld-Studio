@@ -313,6 +313,7 @@ SECTIONS = (
     SectionSpec("basic_params", "training.section.method", METHOD_RUNS),
     SectionSpec("camera", "training.section.camera", CAMERA_RUNS),
     SectionSpec("masking", "training.section.masking", MASK_RUNS),
+    SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
     SectionSpec("features", "training.section.advanced_params", FEATURE_RUNS),
     SectionSpec("depth", "training_params.use_depth_loss", _basic_runs("basic_depth_weight")),
     SectionSpec("normal", "training_params.use_normal_loss", _basic_runs("basic_normal_weights")),
@@ -320,7 +321,6 @@ SECTIONS = (
     SectionSpec("ppisp", "training_params.ppisp", APPEARANCE_RUNS),
     SectionSpec("bilateral", "training.section.bilateral_grid", BILATERAL_RUNS),
     SectionSpec("exposure", "training_params.exposure_correction"),
-    SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
     SectionSpec("evaluation", "training_params.enable_eval"),
     SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
@@ -346,7 +346,7 @@ SEARCH_SECTION_RUN_IDS.update(
     bilateral=tuple(run.id for run in BILATERAL_RUNS),
     exposure=("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"),
 )
-ADVANCED_SECTIONS = ("features", "exposure", "depth", "normal", "background", "ppisp", "bilateral", "evaluation", "random_init", "dataset", "optimization", "losses", "init", "sparsity", "save_steps", "advanced_registry")
+ADVANCED_SECTIONS = ("features", "exposure", "depth", "normal", "background", "ppisp", "bilateral", "evaluation", "random_init", "optimization", "losses", "init", "sparsity", "save_steps", "advanced_registry")
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)

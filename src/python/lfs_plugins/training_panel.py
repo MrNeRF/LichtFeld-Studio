@@ -196,7 +196,6 @@ SECTIONS = [
 INITIALLY_COLLAPSED = {
     "advanced_params",
     "advanced_registry",
-    "dataset",
     "optimization",
     "bilateral",
     "losses",
@@ -542,7 +541,7 @@ class TrainingPanel(Panel):
         if not self._pv_search_query.strip():
             return True
         if section == "advanced_params":
-            return any(owner not in ("basic_params", "camera", "masking") and self._bespoke_matches(name)
+            return any(owner in property_view.ADVANCED_SECTIONS and self._bespoke_matches(name)
                        for name, (owner, _tokens, _keys) in self._BESPOKE_SEARCH.items())
         return any(
             owner == section and self._bespoke_matches(name)

@@ -374,8 +374,9 @@ def test_advanced_has_single_real_activation_for_each_optional_feature():
         assert checkbox.get("data-checked") == "row.checked"
         assert checkbox.get("data-event-click") == "pv_value_change(row.id, !row.checked)"
     advanced = root.find(".//*[@id='sec-advanced-params']")
-    for section in ("depth", "normal", "background", "ppisp", "bilateral", "evaluation", "random-init", "dataset", "sparsity", "optimization"):
+    for section in ("depth", "normal", "background", "ppisp", "bilateral", "evaluation", "random-init", "sparsity", "optimization"):
         assert advanced.find(f".//*[@id='sec-{section}']") is not None
+    assert advanced.find(".//*[@id='sec-dataset']") is None
     assert root.find(".//*[@id='hdr-advanced-params']").get("data-event-click") == "toggle_section('advanced_params')"
 
 
@@ -920,6 +921,58 @@ def test_search_keeps_bespoke_controls_reachable(training_panel_module, query, s
     panel._pv_search_query = "no-such-setting"
     assert not panel._bespoke_matches(field)
     assert not panel._bespoke_section_visible(section)
+
+
+def test_dataset_default_open_preserves_saved_chrome(training_panel_module):
+    panel = training_panel_module.TrainingPanel()
+    assert "dataset" not in panel._collapsed
+    assert "advanced_params" in panel._collapsed
+    panel.apply_chrome({"collapsed": ["dataset", "advanced_params"], "steps_scaling_lock": False})
+    assert "dataset" in panel._collapsed
+    saved = panel.capture_chrome()
+    restored = training_panel_module.TrainingPanel()
+    restored.apply_chrome(saved)
+    assert restored.capture_chrome() == saved
+    panel.apply_chrome({})
+    assert "dataset" not in panel._collapsed
+    assert "advanced_params" in panel._collapsed
+
+
+def test_dataset_is_a_main_section_before_advanced(training_panel_module):
+    from xml.etree import ElementTree as ET
+
+    root = Path(__file__).resolve().parents[2]
+    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
+    parents = {child: parent for parent in document.iter() for child in parent}
+    dataset = document.find(".//*[@data-if='pv_section_dataset_visible']")
+    advanced = document.find(".//*[@id='hdr-advanced-params']")
+    assert parents[dataset] is parents[advanced]
+    siblings = list(parents[advanced])
+    assert siblings.index(dataset) + 1 == siblings.index(advanced)
+    assert dataset.get("class") == "training-panel-block"
+    assert dataset.find(".//*[@id='hdr-dataset']").get("data-event-click") == "toggle_section('dataset')"
+    assert dataset.find(".//*[@id='sec-dataset']") is not None
+    assert "collapsed" not in dataset.find(".//*[@id='sec-dataset']").get("class").split()
+    assert dataset.find(".//*[@id='arrow-dataset']").text == "\u25bc"
+    assert dataset.find(".//*[@data-class-disabled-overlay='dataset_disabled']") is not None
+    assert dataset.find(".//select[@data-value='resize_factor_str']") is not None
+    assert dataset.find(".//input[@data-value='max_width_str']") is not None
+    for name in ("use_cpu_cache", "use_16bit_color"):
+        assert dataset.find(f".//input[@data-checked='{name}']") is not None
+    assert "dataset" not in training_panel_module.property_view.ADVANCED_SECTIONS
+
+
+@pytest.mark.parametrize("query", ["resize_factor", "max_width", "dataset path"])
+def test_dataset_search_does_not_open_advanced(training_panel_module, query):
+    module = training_panel_module
+    panel = module.TrainingPanel()
+    panel._pv_search_query = query
+    panel._collapsed = {"advanced_params", "dataset"}
+    assert panel._bespoke_section_visible("dataset")
+    assert not panel._bespoke_section_visible("advanced_params")
+    assert module.property_view.section_is_visible((), "dataset", panel._bespoke_section_visible)
+    assert not module.property_view.section_is_visible((), "advanced_params", panel._bespoke_section_visible)
+    assert panel._collapsed == {"advanced_params", "dataset"}
 
 
 def test_redesigned_rml_preserves_locks_and_groups_all_controls():

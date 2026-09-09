@@ -34,7 +34,10 @@ signal; that polling ends when the trainer leaves stopping.
 
 The initial RmlUi panel exposes Training Method (strategy, backend, iterations,
 padlock, capacity and BG Improvements), Camera &
-Rasterization (Exposure Correction/Undistort/Mip), and Masking & Segmentation. Advanced is a real
+Rasterization (Exposure Correction/Undistort/Mip), Masking & Segmentation, and Dataset
+immediately before Advanced. Dataset starts expanded; a saved collapse preference
+still takes precedence. It retains its own edit locks;
+searching its fields does not open Advanced. Advanced is a real
 collapsible container for optional activation and specialist settings. It consumes
 the backend descriptors from the backend
 identity change; only installed, implemented descriptors appear in the selector.
@@ -51,7 +54,7 @@ and Normal never share a parameter group. Evaluation owns its interval; random
 initialization owns point count and extent. Shared appearance tuning is visible
 under Exposure Correction when managed correction is enabled, otherwise under
 the enabled standalone PPISP/Grid section. These mutually exclusive views use
-the same parameter bindings and do not create additional enable controls. Background modes, dataset settings, SH degree, optimization, losses,
+the same parameter bindings and do not create additional enable controls. Background modes, SH degree, optimization, losses,
 initialization and save steps also live inside Advanced. No artificial enable
 flag is added to always-applicable settings.
 

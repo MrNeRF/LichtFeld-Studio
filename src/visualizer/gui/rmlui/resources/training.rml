@@ -285,6 +285,55 @@
     </div>
   </div>
 
+<div class="training-panel-block" data-if="pv_section_dataset_visible">
+      <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
+        <span class="section-arrow text-accent" id="arrow-dataset">&#x25BC;</span>
+        <span class="text-accent">{{pv_header_dataset}}</span>
+      </div>
+      <div class="section-content" id="sec-dataset">
+        <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_path" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_dataset_path}}</span>
+            <span class="text-disabled">{{dataset_path_display}}</span>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_images" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_dataset_images}}</span>
+            <span class="text-disabled">{{dataset_images_display}}</span>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.resize_factor" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_resize_factor}}</span>
+            <select data-value="resize_factor_str">
+              <option value="-1" data-tooltip="training.tooltip.opt.resize_factor.auto">{{label_auto}}</option>
+              <option value="1" data-tooltip="training.tooltip.opt.resize_factor.1">1</option>
+              <option value="2" data-tooltip="training.tooltip.opt.resize_factor.2">2</option>
+              <option value="4" data-tooltip="training.tooltip.opt.resize_factor.4">4</option>
+              <option value="8" data-tooltip="training.tooltip.opt.resize_factor.8">8</option>
+            </select>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.max_width" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_max_width}}</span>
+            <input type="text" class="number-input" data-value="max_width_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.cpu_cache" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_cpu_cache}}</span>
+            <input type="checkbox" data-checked="use_cpu_cache" />
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_use_16bit_color}}</span>
+            <input type="checkbox" data-checked="use_16bit_color" />
+          </div>
+
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_output" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_dataset_output}}</span>
+            <span class="text-disabled">{{dataset_output_display}}</span>
+          </div>
+        </div>
+        <span class="status-text status-muted" data-if="show_dataset_no_data &amp;&amp; pv_show_dataset_fields">{{label_no_dataset}}</span>
+      </div>
+    </div>
+
   <!-- ── Advanced Parameters ── -->
   <div class="training-panel-title training-panel-title--secondary section-header" id="hdr-advanced-params" data-event-click="toggle_section('advanced_params')" data-if="pv_section_advanced_params_visible"><span id="arrow-advanced-params" class="section-arrow">&#x25B6;</span>
     <img class="training-panel-title-icon" src="../icon/adjustments.png" />
@@ -554,54 +603,6 @@
               <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
             </div>
 </div></div></div></div>
-<div class="training-subsection" data-if="pv_section_dataset_visible">
-      <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
-        <span class="section-arrow text-accent" id="arrow-dataset">&#x25B6;</span>
-        <span class="text-accent">{{pv_header_dataset}}</span>
-      </div>
-      <div class="section-content collapsed" id="sec-dataset">
-        <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_path" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_dataset_path}}</span>
-            <span class="text-disabled">{{dataset_path_display}}</span>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_images" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_dataset_images}}</span>
-            <span class="text-disabled">{{dataset_images_display}}</span>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.resize_factor" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_resize_factor}}</span>
-            <select data-value="resize_factor_str">
-              <option value="-1" data-tooltip="training.tooltip.opt.resize_factor.auto">{{label_auto}}</option>
-              <option value="1" data-tooltip="training.tooltip.opt.resize_factor.1">1</option>
-              <option value="2" data-tooltip="training.tooltip.opt.resize_factor.2">2</option>
-              <option value="4" data-tooltip="training.tooltip.opt.resize_factor.4">4</option>
-              <option value="8" data-tooltip="training.tooltip.opt.resize_factor.8">8</option>
-            </select>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.max_width" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_max_width}}</span>
-            <input type="text" class="number-input" data-value="max_width_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.cpu_cache" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_cpu_cache}}</span>
-            <input type="checkbox" data-checked="use_cpu_cache" />
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_use_16bit_color}}</span>
-            <input type="checkbox" data-checked="use_16bit_color" />
-          </div>
-
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_output" data-if="pv_show_dataset_fields">
-            <span class="prop-label">{{label_dataset_output}}</span>
-            <span class="text-disabled">{{dataset_output_display}}</span>
-          </div>
-        </div>
-        <span class="status-text status-muted" data-if="show_dataset_no_data &amp;&amp; pv_show_dataset_fields">{{label_no_dataset}}</span>
-      </div>
-    </div>
 
 <div class="training-panel-block" data-if="pv_section_evaluation_visible &amp;&amp; (dep_eval)">
 <div class="section-header text-accent" id="hdr-evaluation" data-event-click="toggle_section('evaluation')"><span class="section-arrow" id="arrow-evaluation">&#x25BC;</span><span>{{pv_header_evaluation}}</span></div>
