@@ -1461,7 +1461,7 @@ TEST(MRNFStrategyTest, FarDecayScaleAppliesOnlyToFarUnfrozenRows) {
     const auto expected_raw = [](const float raw, const float decay, const float train_t) {
         const float opac = 1.0f / (1.0f + std::exp(-raw));
         float next = opac - decay * (1.0f - train_t);
-        next = std::min(std::max(next, 1e-12f), 1.0f - 1e-12f);
+        next = std::min(std::max(next, 1e-12f), std::nextafter(1.0f, 0.0f));
         return std::log(next / (1.0f - next));
     };
     const auto expected_log_s = [](const float log_s, const float decay, const float train_t) {
@@ -2409,4 +2409,67 @@ TEST(MRNFStrategyTest, CheckpointLoadPreservesDatasetFarFieldProtection) {
                          actual_mask.size(), cudaMemcpyDeviceToHost),
               cudaSuccess);
     EXPECT_EQ(actual_mask, expected_mask);
+}
+
+TEST(MRNFDecayTest, ZeroDecayPreservesFiniteLogitsAndStillDecaysScales) {
+    const std::vector<float> original{-80.0f, -20.0f, 0.0f, 16.85f, 20.0f, 80.0f};
+    for (const auto [decay, train_t] : {std::pair{0.0f, 0.5f}, std::pair{0.004f, 1.0f}}) {
+        auto opacity = Tensor::from_vector(original, {original.size()}, Device::CUDA);
+        auto scales = Tensor::zeros({original.size(), 3}, Device::CUDA);
+        for (int step = 0; step < 100; ++step) {
+            mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
+                                             nullptr, 0, nullptr, 0, decay, 0.01f, 1.0f,
+                                             train_t, original.size());
+        }
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto actual = opacity.cpu().to_vector();
+        for (size_t i = 0; i < original.size(); ++i)
+            EXPECT_FLOAT_EQ(actual[i], original[i]) << "row " << i;
+        const auto actual_scales = scales.cpu().to_vector();
+        EXPECT_NEAR(actual_scales[0], 100.0f * std::log(1.0f - 0.01f * (1.0f - train_t)), 1e-5f);
+    }
+}
+
+TEST(MRNFDecayTest, SaturatedAndLegacyInfiniteLogitsStayFinite) {
+    const float inf = std::numeric_limits<float>::infinity();
+    const std::vector<float> original{16.85f, 20.0f, 80.0f, inf, -inf};
+    for (const float decay : {0.0f, 1e-12f, 0.004f}) {
+        auto opacity = Tensor::from_vector(original, {original.size()}, Device::CUDA);
+        auto scales = Tensor::zeros({original.size(), 3}, Device::CUDA);
+        mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
+                                         nullptr, 0, nullptr, 0, decay, 0.0f, 1.0f,
+                                         0.5f, original.size());
+        ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+        const auto actual = opacity.cpu().to_vector();
+        for (size_t i = 0; i < original.size(); ++i) {
+            EXPECT_TRUE(std::isfinite(actual[i])) << "row " << i << ", decay " << decay;
+            if (decay == 1e-12f && i + 1 < original.size()) {
+                const float upper = std::nextafter(1.0f, 0.0f);
+                EXPECT_NEAR(actual[i], std::log(upper / (1.0f - upper)), 1e-5f);
+            }
+            const double expected = i + 1 == original.size() ? 0.0 : 1.0 - decay * 0.5;
+            EXPECT_NEAR(1.0 / (1.0 + std::exp(-double(actual[i]))), expected, 2e-7);
+        }
+    }
+}
+
+TEST(MRNFDecayTest, FrozenRowsAndZeroFarDecayRemainUnchangedWhileNaNsStayVisible) {
+    const float inf = std::numeric_limits<float>::infinity();
+    auto opacity = Tensor::from_vector(std::vector<float>{inf, 20.0f, std::nanf(""), 20.0f}, {4}, Device::CUDA);
+    auto scales = Tensor::zeros({4, 3}, Device::CUDA);
+    const auto frozen = Tensor::from_vector(std::vector<bool>{true, false, false, false}, {4}, Device::CUDA);
+    const auto far = Tensor::from_vector(std::vector<bool>{false, true, false, false}, {4}, Device::CUDA);
+    mrnf_strategy::launch_mrnf_decay(opacity.ptr<float>(), scales.ptr<float>(),
+                                     frozen.ptr<bool>(), 4, far.ptr<bool>(), 4,
+                                     0.004f, 0.01f, 0.0f, 0.5f, 4);
+    ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+    const auto values = opacity.cpu().to_vector();
+    EXPECT_EQ(values[0], inf);
+    EXPECT_FLOAT_EQ(values[1], 20.0f);
+    EXPECT_TRUE(std::isnan(values[2]));
+    EXPECT_NEAR(1.0 / (1.0 + std::exp(-double(values[3]))), 0.998, 2e-7);
+    const auto actual_scales = scales.cpu().to_vector();
+    EXPECT_FLOAT_EQ(actual_scales[0], 0.0f);
+    EXPECT_FLOAT_EQ(actual_scales[3], 0.0f);
+    EXPECT_LT(actual_scales[9], 0.0f);
 }

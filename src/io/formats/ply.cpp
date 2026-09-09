@@ -566,7 +566,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st {};
+            struct stat st{};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
@@ -2484,10 +2484,8 @@ namespace lfs::io {
                 size_t end = 0;
             };
             std::vector<ScanBlock> scan_blocks;
-            size_t total_floats = 0;
             for (size_t target_index = 0; target_index < scan_targets.size(); ++target_index) {
                 const auto& target = scan_targets[target_index];
-                total_floats += target.value_count;
                 for (size_t begin = 0; begin < target.value_count;
                      begin += ply_constants::FINITE_SCAN_BLOCK_SIZE) {
                     scan_blocks.push_back({target_index,
@@ -2605,6 +2603,25 @@ namespace lfs::io {
             return std::nullopt;
         }
 
+        void repair_export_opacity(Tensor& opacity) {
+            if (!opacity.is_valid() || opacity.numel() == 0)
+                return;
+            const float* const data = opacity.ptr<float>();
+            if (std::none_of(data, data + opacity.numel(), [](const float v) { return std::isinf(v); }))
+                return;
+
+            // CPU export tensors may alias the live model. Repair a private
+            // host copy, using the same finite endpoints as PLY import.
+            Tensor repaired = Tensor::empty_pageable_host(opacity.shape(), DataType::Float32);
+            float* const output = repaired.ptr<float>();
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, opacity.numel(), ply_constants::FINITE_SCAN_BLOCK_SIZE),
+                              [&](const tbb::blocked_range<size_t>& range) {
+                                  for (size_t i = range.begin(); i != range.end(); ++i)
+                                      output[i] = repair_infinite_opacity_logit(data[i], nullptr);
+                              });
+            opacity = std::move(repaired);
+        }
+
         Result<void> validate_point_cloud_for_ply_write(PointCloud& pc,
                                                         const std::filesystem::path& output_path) {
             if (!pc.means.is_valid()) {
@@ -2685,6 +2702,8 @@ namespace lfs::io {
                 download(pc.rotation);
                 download(pc.colors);
             }
+
+            repair_export_opacity(pc.opacity);
 
             std::vector<FloatValidationTarget> finite_targets;
             finite_targets.reserve(7);
