@@ -1322,12 +1322,13 @@ namespace lfs::training {
         assert(log_scales.shape()[0] == n && log_scales.shape()[1] == 3);
         assert(means.shape()[0] == n && means.shape()[1] == 3);
 
-        auto scale_min = log_scales.min(1);
         auto scale_max = log_scales.max(1);
 
+        // Normal regularization intentionally flattens one axis. A thin
+        // surface still has useful extent; prune only if every axis collapses.
         auto prune_mask = (raw_opacities < MRNF_RAW_OPACITY_PRUNE_THRESHOLD) |
                           compute_near_zero_rotation_mask(_splat_data->rotation_raw()) |
-                          (scale_min < MRNF_LOG_MIN_SCALE_THRESHOLD);
+                          (scale_max < MRNF_LOG_MIN_SCALE_THRESHOLD);
 
         // Bounds-dependent pruning is unsafe for one-point or colocated models:
         // log(0) would classify every finite scale as oversized. Keep the
