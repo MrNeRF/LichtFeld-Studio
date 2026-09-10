@@ -776,7 +776,7 @@ class GallerySync:
                 else:
                     owned(stage["path"], root / "imports", stage["id"])
         elif job.get("ownedExport"):
-            if Path(job["path"]).suffix not in (".ply", ".lfsg"):
+            if Path(job["path"]).suffix not in (".ply", ".sog", ".ssog", ".lfsg"):
                 raise ValueError("The saved export is not a Studio snapshot. Keep it for recovery.")
             owned(job["path"], root)
             if job.get("preparation"):

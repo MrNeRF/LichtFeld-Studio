@@ -668,3 +668,23 @@ def test_reviewed_create_conflict_uses_new_request_before_any_parts(tmp_path, mo
     finish(service)
     assert len(calls) == 2
     assert service.snapshot()["jobs"][0]["status"] == "completed"
+
+
+@pytest.mark.parametrize('suffix', ['sog', 'ssog'])
+def test_compressed_studio_snapshot_uploads_and_retires_only_its_owned_file(tmp_path, monkeypatch, suffix):
+    import uuid
+    service = connected(tmp_path, monkeypatch)
+    path = tmp_path / f'{uuid.uuid4()}.{suffix}'
+    path.write_bytes(b'compressed-snapshot')
+    calls = []
+    def upload(self, source, metadata, **kwargs):
+        from pathlib import Path
+        calls.append(Path(source).read_bytes())
+        return {'scene':{'id':'compressed', 'revision':'r', 'sourceFormat':suffix}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    identifier = service.queue_upload(path, {'title':'Compressed'}, 'project', owned_export=True)
+    finish(service)
+    assert calls == [b'compressed-snapshot']
+    assert service.snapshot()['jobs'][-1]['status'] == 'completed'
+    assert not path.exists()
+    assert service.snapshot()['links']['project']['sceneId'] == 'compressed'
