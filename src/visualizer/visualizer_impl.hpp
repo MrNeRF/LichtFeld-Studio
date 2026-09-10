@@ -397,6 +397,7 @@ namespace lfs::vis {
         friend class VisualizerImplResetTest_TrainingCheckpointReopenRestoresPausedResumableState_Test;
         friend class VisualizerImplResetTest_ErrorFinishedCheckpointProjectReopensPausedAndResumable_Test;
         friend class VisualizerImplResetTest_CompletedCheckpointProjectStillReopensFinished_Test;
+        friend class VisualizerImplResetTest_StoredTrainingBackendComesFromCheckpointBeforeTrainerRestore_Test;
         friend class VisualizerImplResetTest_EditModeSaveRetainsUnboundCheckpointHistory_Test;
         friend class VisualizerImplResetTest_ReopenedTwoSplatProjectBuildsExternalCombinedModel_Test;
         friend class VisualizerImplResetTest_ForceExitDiscardDeletesAutosaveSidecarOnTeardown_Test;

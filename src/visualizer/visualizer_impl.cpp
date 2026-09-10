@@ -3780,6 +3780,7 @@ namespace lfs::vis {
         state.iteration = session.iteration;
         state.max_iterations = session.max_iterations;
         state.strategy = session.strategy;
+        state.raster_backend = session.raster_backend;
         state.completed = session.completed;
         state.hydrated = session.hydrated;
         state.restoring = session.restoring;

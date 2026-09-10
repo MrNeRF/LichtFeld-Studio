@@ -1954,6 +1954,9 @@ class BackgroundMode(enum.Enum):
 
     RANDOM = 3
 
+def training_backends() -> list:
+    """Available training backends and their viewer mapping"""
+
 class OptimizationParams:
     def __init__(self) -> None: ...
 
@@ -2209,6 +2212,17 @@ class OptimizationParams:
 
     def auto_scale_steps(self, image_count: int) -> None:
         """Auto-scale steps for all strategies based on image count"""
+
+    @property
+    def raster_backend(self) -> str:
+        """Training raster backend: 3dgs or 3dgut; shares storage with legacy gut"""
+
+    @raster_backend.setter
+    def raster_backend(self, arg: str, /) -> None: ...
+
+    @property
+    def backend_capabilities(self) -> dict:
+        """Verified capabilities for the selected training backend"""
 
     @property
     def gut(self) -> bool:

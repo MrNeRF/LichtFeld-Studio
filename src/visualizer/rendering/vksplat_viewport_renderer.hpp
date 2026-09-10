@@ -135,8 +135,8 @@ namespace lfs::vis {
             OutputSlot output_slot = OutputSlot::Main;
         };
 
-        VksplatViewportRenderer();
-        ~VksplatViewportRenderer();
+        LFS_VIS_API VksplatViewportRenderer();
+        LFS_VIS_API ~VksplatViewportRenderer();
 
         VksplatViewportRenderer(const VksplatViewportRenderer&) = delete;
         VksplatViewportRenderer& operator=(const VksplatViewportRenderer&) = delete;
@@ -471,7 +471,7 @@ namespace lfs::vis {
                                       std::size_t sort_capacity,
                                       std::size_t image_width,
                                       std::size_t image_height);
-        void releasePrivateScratchBuffers();
+        LFS_VIS_API void releasePrivateScratchBuffers();
         void releaseGpuLodTreeStorage();
         void detachSharedScratchBuffers();
         void releaseSharedScratchImportOnly();

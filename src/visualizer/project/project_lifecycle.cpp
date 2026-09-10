@@ -955,6 +955,7 @@ namespace lfs::vis::project {
         stored_dataset_output_path_.clear();
         stored_max_iterations_ = 0;
         stored_strategy_.clear();
+        stored_raster_backend_.clear();
         stored_completed_ = false;
         training_session_hydrated_.store(
             false, std::memory_order_release);
@@ -1002,6 +1003,7 @@ namespace lfs::vis::project {
             state.error = training_session_error_;
             state.max_iterations = stored_max_iterations_;
             state.strategy = stored_strategy_;
+            state.raster_backend = stored_raster_backend_;
             state.completed = stored_completed_;
         }
         if (stored_training_kind_ ==
@@ -1024,6 +1026,7 @@ namespace lfs::vis::project {
         stored_dataset_output_path_.clear();
         stored_max_iterations_ = 0;
         stored_strategy_.clear();
+        stored_raster_backend_.clear();
         stored_completed_ = false;
         training_session_hydrated_.store(
             false, std::memory_order_release);
@@ -1050,6 +1053,16 @@ namespace lfs::vis::project {
             std::lock_guard lock(training_session_mutex_);
             stored_max_iterations_ = max_iterations;
             stored_strategy_ = std::move(strategy);
+            // A checkpoint's backend belongs to the saved run, not the next-run preset.
+            if (report.checkpoint_params) {
+                stored_raster_backend_ = lfs::core::param::training_backend_descriptor(
+                                            report.checkpoint_params->optimization.raster_backend())
+                                            .wire_name;
+            } else if (!report.trainer_state_pending) {
+                stored_raster_backend_ = lfs::core::param::training_backend_descriptor(
+                                            params.raster_backend())
+                                            .wire_name;
+            }
             stored_completed_ = completed;
         };
         struct PresentationGuard {

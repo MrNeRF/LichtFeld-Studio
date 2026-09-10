@@ -414,6 +414,40 @@ namespace {
                   lfs::ErrorCode::DataLoss);
     }
 
+    TEST(ProjectChapterTest, TrainingBackendIdentityRoundTripAndCompatibility) {
+        ParametersChapter chapter;
+        auto snapshot = parameter_snapshot();
+        snapshot.mrnf_current.set_raster_backend(lfs::core::param::RasterBackendId::ThreeDGUT);
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed);
+        const auto persisted = lfs::io::JsonChapterDom::Json::parse(reparsed->dom().dump());
+        EXPECT_EQ(persisted["presets"]["mrnf"]["current"]["raster_backend"], "3dgut");
+        EXPECT_EQ(persisted["presets"]["mrnf"]["current"]["gut"], true);
+        EXPECT_EQ(persisted["presets"]["mrnf"]["session"]["raster_backend"], "3dgs");
+        EXPECT_EQ(persisted["presets"]["mrnf"]["session"]["gut"], false);
+        auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored);
+        EXPECT_TRUE(restored->mrnf_current.gut);
+        EXPECT_FALSE(restored->mrnf_session.gut);
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.raster_backend", "unknown"));
+        EXPECT_FALSE(chapter.snapshot());
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.raster_backend", "3dgs"));
+        EXPECT_FALSE(chapter.snapshot());
+
+        auto legacy_json = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        for (const auto* strategy : {"mcmc", "mrnf", "igs+"}) {
+            for (const auto* role : {"session", "current"})
+                legacy_json["presets"][strategy][role].erase("raster_backend");
+        }
+        auto legacy_chapter = ParametersChapter::parse(legacy_json.dump());
+        ASSERT_TRUE(legacy_chapter) << lfs::format_for_developer(legacy_chapter.error());
+        auto legacy_snapshot = legacy_chapter->snapshot();
+        ASSERT_TRUE(legacy_snapshot);
+        EXPECT_TRUE(legacy_snapshot->mrnf_current.gut);
+        EXPECT_FALSE(legacy_snapshot->mrnf_session.gut);
+    }
+
     TEST(ProjectChapterTest, ParametersMutationRetainsUnknownNestedObjects) {
         ParametersChapter chapter;
         auto snapshot = parameter_snapshot();
