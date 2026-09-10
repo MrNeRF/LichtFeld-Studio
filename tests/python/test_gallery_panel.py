@@ -706,6 +706,8 @@ def test_transfer_popup_tracks_processing_pause_completion_and_account_boundary(
     assert progress['progress'] == 40 and progress['can_pause']
     assert progress['message'] == 'Upload received · Checking scene'
     job.update(status='paused', message='Stopped waiting')
+    # The gallery may be hidden with its last rendered running snapshot.
+    panel._state = dict(state, jobs=[dict(job, status='running')])
     progress = transfer_state(panel)
     assert progress['can_resume'] and not progress['can_pause']
     job.update(status='completed', serverProcessing=False)

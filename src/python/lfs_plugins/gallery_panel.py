@@ -112,7 +112,7 @@ class GalleryPanel(Panel):
             if (self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._native_use) and name not in ("pause", "account", "cancel_action", "transfer_progress"):
                 raise ValueError("Wait for the operation to finish or pause the transfer.")
             getattr(self, "_action_"+name)(*args)
-            if name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local") and self._can_pause():
+            if name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local") and (self.service.busy or self._can_pause()):
                 self._action_transfer_progress()
         except Exception as exc:
             self._message = friendly_error(exc)
@@ -120,6 +120,7 @@ class GalleryPanel(Panel):
         self._refresh_model()
 
     def _action_transfer_progress(self):
+        lf.ui.set_panel_enabled("lfs.gallery", False)
         lf.ui.set_panel_enabled("lfs.gallery_transfer", True)
 
     def _can_pause(self):

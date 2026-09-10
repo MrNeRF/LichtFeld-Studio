@@ -39,7 +39,7 @@ def transfer_state(owner):
     result.update(title=job["metadata"]["title"], message=message,
                   progress=100 if status == "completed" else min(100, 100 * done / total),
                   detail=f"{min(100, 100 * done / total):.0f}% · {done / 1048576:.1f} / {job['total'] / 1048576:.1f} MB" + (" checked" if processing else ""),
-                  can_pause=owner._can_pause(), pause_label="Stop waiting" if processing else "Pause transfer",
+                  can_pause=status == "running", pause_label="Stop waiting" if processing else "Pause transfer",
                   can_resume=not state["busy"] and status in ("paused", "error", "queued"), resume_id=job["id"])
     return result
 
