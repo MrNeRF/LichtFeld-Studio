@@ -174,20 +174,21 @@ RENDER_SYNC = {
 SECTIONS = [
     "basic_params",
     "camera",
+    "background",
+    "appearance",
     "masking",
+    "dataset",
+    "advanced_params",
     "depth",
     "normal",
-    "background",
     "ppisp",
+    "bilateral",
     "exposure",
     "evaluation",
-    "random_init",
-    "advanced_params",
-    "dataset",
     "optimization",
-    "bilateral",
     "losses",
     "init",
+    "random_init",
     "sparsity",
     "save_steps",
     "advanced_registry",
@@ -1640,8 +1641,7 @@ class TrainingPanel(Panel):
         if not self._doc:
             return False
         toolbar = self._doc.get_element_by_id("training-toolbar")
-        badge = self._doc.get_element_by_id("training-controls-header")
-        if not toolbar or not badge:
+        if not toolbar:
             return False
         session = _training_session_state()
         state = RuntimeState.trainer_state.value
@@ -1655,8 +1655,7 @@ class TrainingPanel(Panel):
         if state == "stopping" and lf.trainer_saving_model():
             state = "saving"
         fit_key = (state, RuntimeState.iteration.value > 0,
-                   RuntimeState.language_generation.value, toolbar.client_width,
-                   badge.absolute_width)
+                    RuntimeState.language_generation.value, toolbar.client_width)
         if fit_key != self._last_toolbar_fit_key:
             self._last_toolbar_fit_key = fit_key
             # The dirty-driven hook runs before RmlUi lays out new bindings.
@@ -1668,20 +1667,23 @@ class TrainingPanel(Panel):
             "ready": ("start", "reset", "clear") if RuntimeState.iteration.value > 0 else ("start", "clear"),
             "starting": ("pause", "stop"),
             "running": ("pause", "save_project"),
-            "paused": ("resume", "reset", "stop", "save_project"),
+            "paused": ("resume", "save_project", "reset", "stop"),
             "completed": ("switch_edit", "reset", "clear"),
             "stopped": ("switch_edit", "reset", "clear"),
             "error": ("reset", "clear"),
         }.get(state, ())
         probes = [self._doc.get_element_by_id("measure-" + action) for action in actions]
         gap = self._doc.get_element_by_id("measure-action-gap")
-        status_gap = self._doc.get_element_by_id("measure-status-gap")
-        if not gap or not status_gap or any(not p or p.absolute_width <= 0 for p in probes):
+        max_width_probe = self._doc.get_element_by_id("measure-action-max")
+        if (not gap or not max_width_probe or max_width_probe.absolute_width <= 0
+                or any(not p or p.absolute_width <= 0 for p in probes)):
             return False
-        required = (sum(p.absolute_width for p in probes)
-                    + max(0, len(probes) - 1) * gap.absolute_width
-                    + badge.absolute_width + (status_gap.absolute_width if probes else 0))
-        compact = required > toolbar.client_width
+        # Visible actions share the widest localized caption width. This keeps
+        # each state visually balanced without stretching actions across the row.
+        widest = max((p.absolute_width for p in probes), default=0)
+        required = (widest * len(probes)
+                    + max(0, len(probes) - 1) * gap.absolute_width)
+        compact = widest > max_width_probe.absolute_width or required > toolbar.client_width
         if toolbar.is_class_set("is-compact") == compact:
             return False
         toolbar.set_class("is-compact", compact)

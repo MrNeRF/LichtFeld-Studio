@@ -292,10 +292,11 @@ def _basic_runs(*ids):
     return tuple(by_id[name] for name in ids)
 
 
-METHOD_RUNS = _basic_runs("basic_struct", "basic_background")
-CAMERA_RUNS = (_run("basic_exposure_correction", "use_exposure_correction"),) + _basic_runs("basic_undistort", "basic_mip_filter")
+METHOD_RUNS = _basic_runs("basic_struct")
+CAMERA_RUNS = _basic_runs("basic_undistort", "basic_mip_filter")
 MASK_RUNS = _basic_runs("basic_live_start", "mask_invert", "mask_threshold", "mask_alpha", "mask_penalties")
-BACKGROUND_RUNS = _basic_runs("bg_mode")
+BACKGROUND_RUNS = _basic_runs("basic_background", "bg_mode")
+EXPOSURE_ACTIVATION_RUNS = (_run("basic_exposure_correction", "use_exposure_correction"),)
 APPEARANCE_RUNS = _basic_runs(
     "ppisp_exif", "ppisp_freeze",
     "ppisp_controller", "ppisp_controller_tail",
@@ -303,33 +304,30 @@ APPEARANCE_RUNS = _basic_runs(
     _run("appearance_tuning", "ppisp_lr", "ppisp_reg_weight", "ppisp_warmup_steps",
          visibility_condition_id="dep_ppisp_params"),
 )
-FEATURE_RUNS = _basic_runs(
-    "basic_depth_toggle", "basic_normal_toggle", "basic_bilateral_toggle",
-    "basic_ppisp_toggle", "basic_sparsity_toggle",
-) + (next(run for run in DATASET_RUNS if run.id == "dataset_eval"), _run("feature_random", "random"))
+EVALUATION_RUNS = (next(run for run in DATASET_RUNS if run.id == "dataset_eval"),)
 DATASET_RUNS = tuple(run for run in DATASET_RUNS if run.id != "dataset_eval")
 
 SECTIONS = (
     SectionSpec("basic_params", "training.section.method", METHOD_RUNS),
     SectionSpec("camera", "training.section.camera", CAMERA_RUNS),
+    SectionSpec("background", "training.section.background", BACKGROUND_RUNS),
+    SectionSpec("appearance", "training.section.exposure_appearance", EXPOSURE_ACTIVATION_RUNS),
     SectionSpec("masking", "training.section.masking", MASK_RUNS),
     SectionSpec("dataset", "training.section.dataset", DATASET_RUNS),
-    SectionSpec("features", "training.section.advanced_params", FEATURE_RUNS),
-    SectionSpec("depth", "training_params.use_depth_loss", _basic_runs("basic_depth_weight")),
-    SectionSpec("normal", "training_params.use_normal_loss", _basic_runs("basic_normal_weights")),
-    SectionSpec("background", "training.section.background", BACKGROUND_RUNS),
-    SectionSpec("ppisp", "training_params.ppisp", APPEARANCE_RUNS),
-    SectionSpec("bilateral", "training.section.bilateral_grid", BILATERAL_RUNS),
+    SectionSpec("depth", "training_params.use_depth_loss", _basic_runs("basic_depth_toggle", "basic_depth_weight")),
+    SectionSpec("normal", "training_params.use_normal_loss", _basic_runs("basic_normal_toggle", "basic_normal_weights")),
+    SectionSpec("ppisp", "training_params.ppisp", _basic_runs("basic_ppisp_toggle") + APPEARANCE_RUNS),
+    SectionSpec("bilateral", "training.section.bilateral_grid", _basic_runs("basic_bilateral_toggle") + BILATERAL_RUNS),
     SectionSpec("exposure", "training_params.exposure_correction"),
-    SectionSpec("evaluation", "training_params.enable_eval"),
+    SectionSpec("evaluation", "training_params.enable_eval", EVALUATION_RUNS),
     SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
     SectionSpec("refinement", "training.section.refinement"),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
     SectionSpec("init", "training.section.initialization", INIT_RUNS[:1]),
-    SectionSpec("random_init", "training_params.random_init", INIT_RUNS[1:]),
-    SectionSpec("sparsity", "training_panel.sparsity", SPARSITY_RUNS),
+    SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + INIT_RUNS[1:]),
+    SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
     SectionSpec("advanced_registry", "training.section.advanced_registry", (_run(AUTO_ADVANCED_RUN_ID),)),
 )
@@ -346,7 +344,7 @@ SEARCH_SECTION_RUN_IDS.update(
     bilateral=tuple(run.id for run in BILATERAL_RUNS),
     exposure=("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"),
 )
-ADVANCED_SECTIONS = ("features", "exposure", "depth", "normal", "background", "ppisp", "bilateral", "evaluation", "random_init", "optimization", "losses", "init", "sparsity", "save_steps", "advanced_registry")
+ADVANCED_SECTIONS = ("exposure", "depth", "normal", "ppisp", "bilateral", "evaluation", "random_init", "optimization", "losses", "init", "sparsity", "save_steps", "advanced_registry")
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)

@@ -6,33 +6,23 @@
 
 .training-status-badge {
     color: @{text_dim};
-    background-color: @{surface_bright};
-    border-color: @{border};
 }
 
 .training-status-badge.is-ready {
-    color: @{text};
-    background-color: @{blend(surface,primary,button.tint_normal)};
-    border-color: @{primary};
+    color: @{primary};
 }
 
 .training-status-badge.is-active,
 .training-status-badge.is-complete {
     color: @{success};
-    background-color: @{blend(surface,success,button.tint_normal)};
-    border-color: @{success};
 }
 
 .training-status-badge.is-paused {
     color: @{warning};
-    background-color: @{blend(surface,warning,button.tint_normal)};
-    border-color: @{warning};
 }
 
 .training-status-badge.is-error {
     color: @{error};
-    background-color: @{blend(surface,error,button.tint_normal)};
-    border-color: @{error};
 }
 
 .training-panel-block > .section-header {

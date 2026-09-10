@@ -91,25 +91,23 @@ body {
 #training-controls-header {
     display: flex;
     align-items: center;
-    width: auto;
-    flex: 0 0 auto;
-    min-height: 22dp;
-    margin-left: auto;
-    margin-bottom: 0;
+    width: 100%;
+    min-height: 16dp;
+    margin-top: 3dp;
+    margin-bottom: 1dp;
 }
 
 .training-status-badge {
     display: inline-flex;
     align-items: center;
     flex-shrink: 0;
-    height: 18dp;
-    padding: 2dp 8dp;
-    border-width: 1dp;
-    border-radius: 4dp;
+    height: auto;
+    padding: 0;
+    border-width: 0;
     font-size: 10dp;
     font-weight: 700;
     letter-spacing: 0.3dp;
-    line-height: 18dp;
+    line-height: 14dp;
     text-transform: uppercase;
     white-space: nowrap;
 }
@@ -127,25 +125,18 @@ body {
 
 .training-toolbar-action {
     display: inline-flex;
-    flex: 0 0 auto;
+    flex: 1 1 0;
     align-items: center;
     justify-content: center;
     gap: 4dp;
     box-sizing: border-box;
     height: 28dp;
-    min-width: 62dp;
+    min-width: 74dp;
+    max-width: 96dp;
     padding: 3dp 7dp;
     margin: 0;
     line-height: 20dp;
     white-space: nowrap;
-}
-
-.training-toolbar-action--primary {
-    min-width: 74dp;
-}
-
-.training-toolbar-action--save {
-    min-width: 92dp;
 }
 
 .training-toolbar-action img {
@@ -393,12 +384,18 @@ loss-graph {
     white-space: nowrap;
 }
 #measure-action-gap { display: inline-block; width: 4dp; }
-#measure-status-gap { display: inline-block; width: 6dp; }
-#training-toolbar-measure .btn { tab-index: none; nav: none; }
+#measure-action-max { display: inline-block; width: 96dp; }
+#training-toolbar-measure .btn {
+    flex: 0 0 auto;
+    max-width: none;
+    tab-index: none;
+    nav: none;
+}
 .training-toolbar.is-compact .training-toolbar-action span {
     display: none;
 }
 .training-toolbar.is-compact .training-toolbar-action {
+    flex: 0 0 28dp;
     min-width: 28dp;
     max-width: 28dp;
     width: 28dp;

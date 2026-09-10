@@ -863,8 +863,8 @@ def test_focused_numeric_sync_preserves_drafts_but_accepts_authoritative_changes
 
 
 @pytest.mark.parametrize("prop_id,section", [
-    ("means_lr", "optimization"), ("use_normal_loss", "features"),
-    ("use_exposure_correction", "camera"),
+    ("means_lr", "optimization"), ("use_normal_loss", "normal"),
+    ("use_exposure_correction", "appearance"),
 ])
 def test_search_ownership_and_advanced_ancestor(prop_id, section):
     run = next(run for spec in property_view.SECTIONS for run in spec.runs if prop_id in run.prop_ids)
@@ -873,7 +873,7 @@ def test_search_ownership_and_advanced_ancestor(prop_id, section):
         search_accessor=lambda: prop_id,
     )
     assert property_view.section_is_visible((binding,), section)
-    assert property_view.section_is_visible((binding,), "advanced_params") == (section != "camera")
+    assert property_view.section_is_visible((binding,), "advanced_params") == (section not in {"camera", "appearance"})
     assert not property_view.section_is_visible((binding,), "basic_params")
 
 
@@ -1032,7 +1032,7 @@ def test_search_auto_expand_does_not_mutate_collapse_state(monkeypatch):
     assert panel._collapsed == {"losses"}
 
 
-@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "features")])
+@pytest.mark.parametrize("prop_id,section", [("means_lr", "optimization"), ("use_normal_loss", "normal")])
 def test_search_opens_advanced_and_restores_collapsed_sections(monkeypatch, prop_id, section):
     from lfs_plugins import training_panel
 
