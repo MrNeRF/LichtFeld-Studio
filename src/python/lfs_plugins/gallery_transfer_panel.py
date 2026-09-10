@@ -27,6 +27,9 @@ def transfer_state(owner):
     job = next((j for j in reversed(jobs) if j["status"] == "running"), jobs[-1] if jobs else None)
     if job is None:
         return result
+    if job.get("retired"):
+        result.update(title=job["metadata"]["title"], message=job["message"])
+        return result
     total, done = max(1, job["total"]), job["completed"]
     processing = bool(job.get("serverProcessing"))
     status = job["status"]

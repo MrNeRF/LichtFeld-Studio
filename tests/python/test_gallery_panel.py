@@ -712,10 +712,50 @@ def test_transfer_popup_tracks_processing_pause_completion_and_account_boundary(
     assert progress['can_resume'] and not progress['can_pause']
     job.update(status='completed', serverProcessing=False)
     assert transfer_state(panel)['progress'] == 100
+    job.update(retired=True, total=0, completed=0, message='Transfer cleared. Recovery copy kept.')
+    progress = transfer_state(panel)
+    assert progress['message'] == job['message'] and not progress['detail']
+    assert not progress['can_resume'] and not progress['can_pause']
     state['identity'] = ('another', 'account')
     progress = transfer_state(panel)
     assert 'Private garden' not in str(progress)
     assert not progress['can_resume'] and not progress['can_pause']
+
+
+def test_background_metadata_confirmation_does_not_open_transfer_popup(gallery, monkeypatch):
+    panel, state, _ = gallery
+    module = import_module('lfs_plugins.gallery_panel')
+    shown = []
+    monkeypatch.setattr(module.lf.ui, 'set_panel_enabled', lambda *args: shown.append(args), raising=False)
+    panel._confirm = ('Clear history?', lambda: setattr(panel.service, 'busy', True), 'Clear')
+    panel._dispatch('confirm_action', [])
+    assert not shown
+    panel.service.busy = False
+    panel._maybe_show_transfer_progress()
+    assert not panel._progress_pending
+
+
+def test_transfer_popup_opens_after_worker_leaves_queued_state(gallery, monkeypatch):
+    panel, state, _ = gallery
+    module = import_module('lfs_plugins.gallery_panel')
+    shown = []
+    monkeypatch.setattr(module.lf.ui, 'set_panel_enabled', lambda *args: shown.append(args), raising=False)
+    job = dict(id='download', kind='download', metadata={'title':'Garden'}, status='queued',
+               completed=0, total=100, message='Ready to download')
+
+    def begin():
+        state['jobs'] = [job]
+        panel.service.busy = True
+
+    monkeypatch.setattr(panel, '_action_download', begin)
+    panel._dispatch('download', [])
+    assert not shown and panel._progress_pending
+    job['status'] = 'running'
+    panel._refresh_model()
+    panel._maybe_show_transfer_progress()
+    assert shown == [('lfs.gallery', False), ('lfs.gallery_transfer', True)]
+    panel._maybe_show_transfer_progress()
+    assert len(shown) == 2
 
 
 @pytest.mark.parametrize('format_name', ['studio', 'sog', 'ssog'])

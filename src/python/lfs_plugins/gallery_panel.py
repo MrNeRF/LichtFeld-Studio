@@ -53,6 +53,7 @@ class GalleryPanel(Panel):
         self._reset_account_ui = False
         self._history_limit = 30
         self._native_use = None
+        self._progress_pending = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("gallery_sync")
@@ -104,6 +105,7 @@ class GalleryPanel(Panel):
         self._handle = model.get_handle()
 
     def _dispatch(self, name, args):
+        self._progress_pending = False
         try:
             if self._check_identity() and name not in ("account", "refresh"):
                 raise ValueError("The account changed. Review your gallery before continuing.")
@@ -112,12 +114,21 @@ class GalleryPanel(Panel):
             if (self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._native_use) and name not in ("pause", "account", "cancel_action", "transfer_progress"):
                 raise ValueError("Wait for the operation to finish or pause the transfer.")
             getattr(self, "_action_"+name)(*args)
-            if name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local") and (self.service.busy or self._can_pause()):
-                self._action_transfer_progress()
+            self._progress_pending = name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local")
         except Exception as exc:
             self._message = friendly_error(exc)
         self._release_native_use()
         self._refresh_model()
+        self._maybe_show_transfer_progress()
+
+    def _maybe_show_transfer_progress(self):
+        if not self._progress_pending:
+            return
+        if self._can_pause():
+            self._progress_pending = False
+            self._action_transfer_progress()
+        elif not self.service.busy:
+            self._progress_pending = False
 
     def _action_transfer_progress(self):
         lf.ui.set_panel_enabled("lfs.gallery", False)
@@ -146,6 +157,7 @@ class GalleryPanel(Panel):
         self._requested_project = None
         self._focus_project = False
         self._reset_account_ui = True
+        self._progress_pending = False
         if self._export_pending:
             self._cancel_own_export()
             self._export_cancelled = True
@@ -286,6 +298,7 @@ class GalleryPanel(Panel):
                 self._scene = self._confirm = None
             self._version = key
             self._refresh_model()
+            self._maybe_show_transfer_progress()
             return True
         return reset_ui
 
