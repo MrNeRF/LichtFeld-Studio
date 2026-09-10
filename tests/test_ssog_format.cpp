@@ -555,6 +555,130 @@ TEST(SsogFormat, RejectsInvalidBundle) {
     EXPECT_FALSE(validate_ssog(bundle));
 }
 
+TEST(SsogFormat, GalleryWrapperAndBundledUnitsPreserveDecodedSplats) {
+    ScopedSsogDirectory dir;
+    const auto source = dir.path / "source";
+    ASSERT_TRUE(save_ssog(synthetic(256, 0), options(source)));
+    auto expected = load_ssog(source);
+    ASSERT_TRUE(expected) << expected.error().format();
+    for (const bool bundled_units : {false, true}) {
+        auto manifest = read(source / "lod-meta.json");
+        const auto output = dir.path / (bundled_units ? "bundled.ssog" : "wrapped.ssog");
+        auto outer = make_sog_archive(output);
+        ASSERT_TRUE(outer->open());
+        if (bundled_units) {
+            for (size_t i = 0; i < manifest["filenames"].size(); ++i) {
+                const fs::path relative = manifest["filenames"][i].get<std::string>();
+                const auto unit_path = dir.path / std::format("unit{}.sog", i);
+                auto unit = make_sog_archive(unit_path);
+                ASSERT_TRUE(unit->open());
+                for (const auto& entry : fs::directory_iterator(source / relative.parent_path())) {
+                    if (!entry.is_regular_file())
+                        continue;
+                    std::ifstream file(entry.path(), std::ios::binary);
+                    const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+                    ASSERT_TRUE(unit->add_file(entry.path().filename().generic_string(), bytes.data(), bytes.size()));
+                }
+                ASSERT_TRUE(unit->close());
+                std::ifstream file(unit_path, std::ios::binary);
+                const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+                const auto name = unit_path.filename().generic_string();
+                ASSERT_TRUE(outer->add_file("scene/" + name, bytes.data(), bytes.size()));
+                manifest["filenames"][i] = name;
+            }
+        } else {
+            for (const auto& entry : fs::recursive_directory_iterator(source)) {
+                if (!entry.is_regular_file() || entry.path().filename() == "lod-meta.json")
+                    continue;
+                std::ifstream file(entry.path(), std::ios::binary);
+                const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+                ASSERT_TRUE(outer->add_file("scene/" + entry.path().lexically_relative(source).generic_string(), bytes.data(), bytes.size()));
+            }
+        }
+        const auto metadata = manifest.dump();
+        ASSERT_TRUE(outer->add_file("scene/lod-meta.json", metadata.data(), metadata.size()));
+        ASSERT_TRUE(outer->close());
+        ASSERT_TRUE(validate_ssog(output));
+        auto loaded = load_ssog(output);
+        ASSERT_TRUE(loaded) << loaded.error().format();
+        EXPECT_EQ(loaded->size(), expected->size());
+        EXPECT_EQ(loaded->means().cpu().to_vector(), expected->means().cpu().to_vector());
+        EXPECT_EQ(loaded->scaling_raw().cpu().to_vector(), expected->scaling_raw().cpu().to_vector());
+        EXPECT_EQ(loaded->sh0().cpu().to_vector(), expected->sh0().cpu().to_vector());
+    }
+}
+
+TEST(SsogFormat, GalleryBundlesRejectAmbiguousRootsAndUnsafeNestedEntries) {
+    ScopedSsogDirectory dir;
+    const std::string metadata = R"({"version":1,"lodLevels":1,"filenames":["unit.sog"]})";
+    {
+        const auto path = dir.path / "ambiguous.ssog";
+        auto outer = make_sog_archive(path);
+        ASSERT_TRUE(outer->open());
+        for (const auto* name : {"lod-meta.json", "other/lod-meta.json"})
+            ASSERT_TRUE(outer->add_file(name, metadata.data(), metadata.size()));
+        ASSERT_TRUE(outer->close());
+        auto valid = validate_ssog(path);
+        ASSERT_FALSE(valid);
+        EXPECT_NE(valid.error().message.find("exactly one"), std::string::npos);
+    }
+    for (const bool bomb : {false, true}) {
+        const auto unit_path = dir.path / "unit.sog";
+        auto unit = make_sog_archive(unit_path);
+        ASSERT_TRUE(unit->open());
+        const std::string meta = R"({"count":1})";
+        ASSERT_TRUE(unit->add_file("meta.json", meta.data(), meta.size()));
+        const std::string data(bomb ? 17 * 1024 * 1024 : 8, 'x');
+        ASSERT_TRUE(unit->add_file(bomb ? "payload.bin" : "../escape.json", data.data(), data.size()));
+        ASSERT_TRUE(unit->close());
+        std::ifstream file(unit_path, std::ios::binary);
+        const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+        const auto path = dir.path / (bomb ? "bomb.ssog" : "traversal.ssog");
+        auto outer = make_sog_archive(path);
+        ASSERT_TRUE(outer->open());
+        ASSERT_TRUE(outer->add_file("lod-meta.json", metadata.data(), metadata.size()));
+        ASSERT_TRUE(outer->add_file("unit.sog", bytes.data(), bytes.size()));
+        ASSERT_TRUE(outer->close());
+        auto valid = validate_ssog(path);
+        ASSERT_FALSE(valid);
+        EXPECT_NE(valid.error().message.find(bomb ? "size limit" : "escapes archive root"), std::string::npos)
+            << valid.error().format();
+        EXPECT_FALSE(fs::exists(dir.path / "escape.json"));
+    }
+}
+
+TEST(SsogFormat, NestedChunksCannotMultiplyOuterExpansionAllowance) {
+    ScopedSsogDirectory dir;
+    const auto unit_path = dir.path / "unit.sog";
+    auto unit = make_sog_archive(unit_path);
+    ASSERT_TRUE(unit->open());
+    const std::string meta = R"({"count":1})";
+    ASSERT_TRUE(unit->add_file("meta.json", meta.data(), meta.size()));
+    // Repeated independently compressed entries compress again in the outer ZIP.
+    // Each layer alone has a modest ratio, but together they exceed its allowance.
+    std::mt19937 random(42);
+    std::string payload(8192, '\0');
+    for (size_t i = 0; i < 4096; ++i)
+        payload[i] = static_cast<char>(random() & 255);
+    for (int i = 0; i < 2300; ++i)
+        ASSERT_TRUE(unit->add_file(std::format("extra{}.bin", i), payload.data(), payload.size()));
+    ASSERT_TRUE(unit->close());
+    std::ifstream file(unit_path, std::ios::binary);
+    const std::string bytes(std::istreambuf_iterator<char>{file}, {});
+    ASSERT_LT(bytes.size(), 16 * 1024 * 1024);
+    const auto path = dir.path / "nested.ssog";
+    auto outer = make_sog_archive(path);
+    ASSERT_TRUE(outer->open());
+    const std::string manifest = R"({"version":1,"lodLevels":1,"filenames":["unit.sog"]})";
+    ASSERT_TRUE(outer->add_file("lod-meta.json", manifest.data(), manifest.size()));
+    ASSERT_TRUE(outer->add_file("unit.sog", bytes.data(), bytes.size()));
+    ASSERT_TRUE(outer->close());
+    ASSERT_LT(fs::file_size(path) * 20, 16 * 1024 * 1024);
+    auto valid = validate_ssog(path);
+    ASSERT_FALSE(valid);
+    EXPECT_NE(valid.error().message.find("size limit"), std::string::npos) << valid.error().format();
+}
+
 TEST(SsogFormat, ConvertBundleDirectoryDefaultAndBack) {
     ScopedSsogDirectory dir;
     const auto input = dir.path / "input.ply";

@@ -11,6 +11,7 @@
 #include <archive_entry.h>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <charconv>
 #include <chrono>
 #include <climits>
@@ -67,10 +68,12 @@ namespace lfs::io {
             fs::path base_;
             std::map<std::string, std::vector<uint8_t>> entries_;
             bool bundled_;
+            std::string root_prefix_;
+            uint64_t expansion_limit_ = MAX_ARCHIVE_BYTES;
 
             static std::string safe_name(const std::string& name) {
                 const auto p = core::utf8_to_path(name);
-                if (p.empty() || p.is_absolute() || p.has_root_name() || name.find('\\') != std::string::npos || name.find(':') != std::string::npos)
+                if (p.empty() || p.is_absolute() || p.has_root_name() || name.find('\\') != std::string::npos || name.find(':') != std::string::npos || name.find('\0') != std::string::npos)
                     throw std::runtime_error("Invalid SSOG entry path");
                 for (const auto& part : p)
                     if (part == "..")
@@ -78,8 +81,15 @@ namespace lfs::io {
                 return p.lexically_normal().generic_string();
             }
 
+            static std::string extension_of(const fs::path& path) {
+                auto extension = path.extension().string();
+                std::transform(extension.begin(), extension.end(), extension.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return extension;
+            }
+
         public:
-            explicit EntryProvider(const fs::path& path) : bundled_(core::path_to_utf8(path.extension()) == ".ssog" && !fs::is_directory(path)) {
+            explicit EntryProvider(const fs::path& path) : bundled_(extension_of(path) == ".ssog" && !fs::is_directory(path)) {
                 if (!bundled_) {
                     base_ = fs::absolute(manifest_path(path)).parent_path();
                     return;
@@ -91,6 +101,18 @@ namespace lfs::io {
                 std::vector<uint8_t> bytes(static_cast<size_t>(size));
                 if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)))
                     throw std::runtime_error("Cannot read complete SSOG archive");
+                read_archive(bytes, "lod-meta.json");
+            }
+
+            EntryProvider(const std::vector<uint8_t>& bytes, const std::string& manifest, uint64_t expansion_limit)
+                : bundled_(true), expansion_limit_(expansion_limit) {
+                read_archive(bytes, manifest);
+            }
+
+        private:
+            void read_archive(const std::vector<uint8_t>& bytes, const std::string& manifest) {
+                if (bytes.size() < 4 || bytes.size() > MAX_ARCHIVE_BYTES)
+                    throw std::runtime_error("Invalid SOG/SSOG archive size");
                 if (bytes[0] != 'P' || bytes[1] != 'K' || bytes[2] != 3 || bytes[3] != 4)
                     throw std::runtime_error("Invalid SSOG ZIP magic");
                 std::unique_ptr<archive, decltype(&archive_read_free)> reader(archive_read_new(), archive_read_free);
@@ -99,6 +121,10 @@ namespace lfs::io {
                     throw std::runtime_error("Cannot open SSOG ZIP archive");
                 archive_entry* entry = nullptr;
                 uint64_t total = 0;
+                // Inner SOG chunks inherit the outer allowance; nested ZIP
+                // compression must not multiply the original expansion limit.
+                expansion_limit_ = std::min<uint64_t>(expansion_limit_,
+                                                      std::max<uint64_t>(MAX_METADATA_BYTES, uint64_t(bytes.size()) * 20));
                 size_t count = 0;
                 int status;
                 while ((status = archive_read_next_header(reader.get(), &entry)) == ARCHIVE_OK) {
@@ -113,11 +139,16 @@ namespace lfs::io {
                             throw std::runtime_error("Invalid SSOG directory entry");
                         continue;
                     }
-                    if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_symlink(entry) || archive_entry_hardlink(entry))
+                    if (archive_entry_filetype(entry) != AE_IFREG || archive_entry_symlink(entry) || archive_entry_hardlink(entry) || archive_entry_is_encrypted(entry))
                         throw std::runtime_error("SSOG archive entries must be regular files");
                     const auto n = archive_entry_size(entry);
-                    const uint64_t limit = fs::path(name).extension() == ".json" ? MAX_METADATA_BYTES : MAX_ENCODED_IMAGE_BYTES;
-                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > MAX_ARCHIVE_BYTES - total)
+                    const auto extension = extension_of(fs::path(name));
+                    // A bundled unit contains several textures and uses the
+                    // archive allowance, rather than a single image's limit.
+                    const uint64_t limit = extension == ".json"  ? MAX_METADATA_BYTES
+                                           : extension == ".sog" ? MAX_ARCHIVE_BYTES
+                                                                 : MAX_ENCODED_IMAGE_BYTES;
+                    if (!archive_entry_size_is_set(entry) || n <= 0 || uint64_t(n) > limit || uint64_t(n) > expansion_limit_ - total)
                         throw std::runtime_error("SSOG archive entry exceeds size limit");
                     total += uint64_t(n);
                     auto [it, inserted] = entries_.try_emplace(name);
@@ -135,12 +166,25 @@ namespace lfs::io {
                 }
                 if (status != ARCHIVE_EOF)
                     throw std::runtime_error("Invalid SSOG archive headers");
+                size_t manifests = 0;
+                for (const auto& [name, unused] : entries_) {
+                    if (fs::path(name).filename() == manifest) {
+                        ++manifests;
+                        root_prefix_ = fs::path(name).parent_path().generic_string();
+                    }
+                }
+                if (manifests != 1)
+                    throw std::runtime_error("Archive must contain exactly one " + manifest);
+                if (!root_prefix_.empty())
+                    root_prefix_ += '/';
             }
+
+        public:
             Result<std::vector<uint8_t>> read(const std::string& raw_name, size_t limit) const {
                 try {
                     const auto name = safe_name(raw_name);
                     if (bundled_) {
-                        const auto it = entries_.find(name);
+                        const auto it = entries_.find(root_prefix_ + name);
                         if (it == entries_.end())
                             return make_error(ErrorCode::MISSING_REQUIRED_FILES, "Missing SSOG entry: " + name);
                         if (it->second.size() > limit)
@@ -164,7 +208,21 @@ namespace lfs::io {
                     throw std::runtime_error(bytes.error().message);
                 return Json::parse(bytes->begin(), bytes->end());
             }
+            Json unit_metadata(const std::string& manifest) const {
+                if (extension_of(fs::path(manifest)) != ".sog")
+                    return json(manifest);
+                auto bytes = read(manifest, MAX_ARCHIVE_BYTES);
+                if (!bytes)
+                    throw std::runtime_error(bytes.error().message);
+                return EntryProvider(*bytes, "meta.json", expansion_limit_).json("meta.json");
+            }
             Result<SogDirectoryReconstruct> prepare(const std::string& manifest) const {
+                if (extension_of(fs::path(manifest)) == ".sog") {
+                    auto bytes = read(manifest, MAX_ARCHIVE_BYTES);
+                    if (!bytes)
+                        return std::unexpected(bytes.error());
+                    return EntryProvider(*bytes, "meta.json", expansion_limit_).prepare("meta.json");
+                }
                 auto prefix = fs::path(manifest).parent_path().generic_string();
                 if (!prefix.empty())
                     prefix += '/';
@@ -210,7 +268,7 @@ namespace lfs::io {
                 const auto unit = core::utf8_to_path(name.get<std::string>()).lexically_normal();
                 if (!unique.insert(unit).second)
                     throw std::runtime_error("Duplicate SOG unit filename");
-                unit_counts.push_back(integer(m.entries->json(unit.generic_string()).at("count"), "unit count"));
+                unit_counts.push_back(integer(m.entries->unit_metadata(unit.generic_string()).at("count"), "unit count"));
             }
             m.files.resize(levels);
             std::vector<size_t> counts(levels);
