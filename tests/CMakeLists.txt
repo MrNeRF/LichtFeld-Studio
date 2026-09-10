@@ -360,6 +360,7 @@ set(TEST_FILES
     test_geometry_payload.cpp
     test_selection_chapter.cpp
     test_project_document.cpp
+    test_gallery_scene_publication.cpp
     test_project_lifecycle.cpp
     test_p8_compatibility.cpp
     test_job_registry.cpp

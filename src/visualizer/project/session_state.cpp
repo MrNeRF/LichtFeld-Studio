@@ -894,6 +894,11 @@ namespace lfs::vis::project {
     capturePanelCameraProjectState(
         const Viewport& viewport) {
         const auto& camera = viewport.camera;
+        std::optional<float> extent;
+        if (viewport.ortho_scale_override && std::isfinite(*viewport.ortho_scale_override) &&
+            *viewport.ortho_scale_override > 0.0f && viewport.windowSize.y > 0) {
+            extent = static_cast<float>(viewport.windowSize.y) / *viewport.ortho_scale_override;
+        }
         return {
             .rotation = matrix_array(camera.R),
             .translation = vector_array(camera.t),
@@ -917,6 +922,7 @@ namespace lfs::vis::project {
             .max_wasd_speed = camera.maxWasdSpeed,
             .ortho_scale =
                 viewport.ortho_scale_override,
+            .ortho_extent_world = extent,
         };
     }
 
@@ -948,6 +954,8 @@ namespace lfs::vis::project {
             state.max_wasd_speed;
         viewport.ortho_scale_override =
             state.ortho_scale;
+        if (state.ortho_extent_world && viewport.windowSize.y > 0)
+            viewport.ortho_scale_override = static_cast<float>(viewport.windowSize.y) / *state.ortho_extent_world;
         camera.clearTransientMotion();
     }
 
@@ -956,6 +964,8 @@ namespace lfs::vis::project {
         const PanelCameraProjectState& state) {
         Json result{{"panel", panel}};
         append_fields(result, state, panel_camera_fields());
+        if (state.ortho_extent_world)
+            result["ortho_extent_world"] = *state.ortho_extent_world;
         return result;
     }
 
@@ -977,6 +987,13 @@ namespace lfs::vis::project {
                 panel_camera_fields());
             !status) {
             return std::move(status).error();
+        }
+
+        if (const auto extent = json.find("ortho_extent_world"); extent != json.end() && !extent->is_null()) {
+            if (!extent->is_number() || !std::isfinite(extent->get<float>()) || extent->get<float>() <= 0.0f)
+                return fail<PanelCameraProjectState>(lfs::ErrorCode::DataLoss,
+                                                     "Orthographic view extent must be positive and finite", "VIEW.panel_cameras.ortho_extent_world");
+            state.ortho_extent_world = extent->get<float>();
         }
 
         constexpr std::array positive_speeds = {
@@ -1190,6 +1207,13 @@ namespace lfs::vis::project {
 
         lfs::Result<void> validate_view_runtime(
             const Json& root) {
+            if (const auto fov = root.find("long_axis_fov_degrees"); fov != root.end() && !fov->is_null()) {
+                if (!fov->is_number() || !std::isfinite(fov->get<float>()) ||
+                    fov->get<float>() < 1.0f || fov->get<float>() > 179.0f)
+                    return fail<void>(lfs::ErrorCode::DataLoss,
+                                      "Long-axis field of view must be between 1 and 179 degrees",
+                                      "VIEW.long_axis_fov_degrees");
+            }
             const auto settings_it =
                 find_required_object(
                     root, "render_settings");
@@ -2268,6 +2292,9 @@ namespace lfs::vis::project {
         }
         const Json view_known{
             {"version", 1},
+            // Opening a browser-authored camera resolves its long-axis FOV
+            // against this viewport. Later saves keep the native vertical FOV.
+            {"long_axis_fov_degrees", nullptr},
             {"render_settings",
              std::move(project_render_settings)},
             {"panel_cameras",
@@ -3174,6 +3201,13 @@ namespace lfs::vis::project {
                     rendering->getSettings());
             if (!restored)
                 return;
+            if (const auto fov = scalar<float>(root, "long_axis_fov_degrees")) {
+                const auto& viewport = viewer.getViewport();
+                const auto aspect = std::max(1.0f, static_cast<float>(viewport.windowSize.x) /
+                                                       std::max(1.0f, static_cast<float>(viewport.windowSize.y)));
+                const float vertical = glm::degrees(2.0f * std::atan(std::tan(glm::radians(*fov) / 2.0f) / aspect));
+                restored->focal_length_mm = lfs::rendering::vFovToFocalLength(vertical);
+            }
             if (environment_map_path &&
                 !environment_map_path->empty()) {
                 restored->environment_map_path =

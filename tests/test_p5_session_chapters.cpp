@@ -785,13 +785,39 @@ namespace {
         EXPECT_TRUE(restored->gut);
 
         Viewport viewport;
-        const auto expected = rolled_panel_camera(7.0f);
+        auto expected = rolled_panel_camera(7.0f);
+        expected.ortho_extent_world = static_cast<float>(viewport.windowSize.y) / *expected.ortho_scale;
         applyPanelCameraProjectState(
             viewport, expected);
         EXPECT_EQ(
             capturePanelCameraProjectState(
                 viewport),
             expected);
+    }
+
+    TEST(P5SessionChapterTest, GalleryOrthographicExtentSurvivesViewportSizes) {
+        auto state = rolled_panel_camera(7.0f);
+        state.ortho_extent_world = 6.25f;
+        auto json = panelCameraProjectStateToJson("primary", state);
+        auto restored = panelCameraProjectStateFromJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_EQ(restored->ortho_extent_world, state.ortho_extent_world);
+        for (const int height : {480, 1080}) {
+            Viewport viewport(1280, height);
+            applyPanelCameraProjectState(viewport, *restored);
+            ASSERT_TRUE(viewport.ortho_scale_override);
+            EXPECT_FLOAT_EQ(height / *viewport.ortho_scale_override, 6.25f);
+            const auto saved = capturePanelCameraProjectState(viewport);
+            ASSERT_TRUE(saved.ortho_extent_world);
+            EXPECT_FLOAT_EQ(*saved.ortho_extent_world, 6.25f);
+            Viewport reopened(1280, height * 2);
+            applyPanelCameraProjectState(reopened, saved);
+            EXPECT_FLOAT_EQ(reopened.windowSize.y / *reopened.ortho_scale_override, 6.25f);
+        }
+        json["ortho_extent_world"] = -1;
+        EXPECT_FALSE(panelCameraProjectStateFromJson(json));
+        json.erase("ortho_extent_world");
+        EXPECT_TRUE(panelCameraProjectStateFromJson(json));
     }
 
     TEST(P5SessionChapterTest,

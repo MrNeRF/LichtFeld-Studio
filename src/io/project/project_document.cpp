@@ -610,6 +610,23 @@ namespace lfs::io::project {
             snapshot_uuid);
     }
 
+    lfs::Result<LazyChunkValue> LazyChunkValue::share() const {
+        if (!impl_ || (!impl_->owned && !(impl_->reader && impl_->source))) {
+            return fail<LazyChunkValue>(
+                lfs::ErrorCode::FailedPrecondition,
+                "The lazy chapter has no byte source.",
+                "Neither clean file range nor owned storage is available",
+                "lazy_chunk.source");
+        }
+        auto clone = std::make_unique<Impl>();
+        clone->reader = impl_->reader;
+        clone->source = impl_->source;
+        clone->proof = impl_->proof;
+        clone->owned = impl_->owned;
+        clone->snapshot_uuid = impl_->snapshot_uuid;
+        return LazyChunkValue(std::move(clone));
+    }
+
     std::uint64_t LazyChunkValue::size() const noexcept {
         return impl_->size();
     }

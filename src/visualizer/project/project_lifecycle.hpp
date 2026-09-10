@@ -223,6 +223,10 @@ namespace lfs::vis::project {
                 ProjectSwitchDisposition::RequireClean);
         [[nodiscard]] bool isDirty();
         [[nodiscard]] bool hasSourcePath() const;
+        [[nodiscard]] std::shared_ptr<lfs::io::project::ProjectDocument>
+        boundDocument() const noexcept {
+            return document_;
+        }
         [[nodiscard]] bool isScratchBoundSession() const;
         [[nodiscard]] bool isBlankProject() const;
         [[nodiscard]] bool isBlankUntitledSession() const;

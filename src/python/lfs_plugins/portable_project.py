@@ -92,7 +92,7 @@ def read_project(source):
         _check(number(head, 16) == 1 and number(head, 24) == 1, 'Publish a fresh project without history.')
         _check(head[32:48] == project_id and head[48:64] == file_id)
         _check(number(head, 88) == 256 and number(head, 96) == size_total)
-        _check(not any(head[108:4092]), 'Project contains unexpected preview or session bytes.')
+        _check(not any(head[108:112]) and not any(head[128:4092]), 'Project contains unexpected session bytes.')
         heads.append(head)
     _check(len(heads) == 1, 'Publish a fresh project without history.')
     head = heads[0]
@@ -107,19 +107,20 @@ def read_project(source):
     _check(number(commit, 252, 'I') == number(head, 104, 'I'))
     _check(number(commit, 168, 'I') == 0 and number(commit, 172, 'I') == 0, 'Unsupported project index compression.')
     index_offset, size, decoded_size = struct.unpack_from('<QQQ', commit, 136)
-    _check(size == decoded_size and 64 <= size <= 64 + (len(CHAPTERS) + codec.MAX_NODES + 1) * 96)
+    _check(size == decoded_size and 64 <= size <= 64 + (len(CHAPTERS) + codec.MAX_NODES + 2) * 96)
     index = region(index_offset, size)
     _check(_crc(index) == number(commit, 160, 'I') == number(commit, 164, 'I'))
     _check(index[:8] == b'LFSINDEX' and struct.unpack_from('<HHHH', index, 8) == (1, 64, 96, 1))
     count = number(index, 16)
-    _check(len(CHAPTERS) < count <= len(CHAPTERS) + codec.MAX_NODES + 1 and size == 64 + count * 96)
+    _check(len(CHAPTERS) < count <= len(CHAPTERS) + codec.MAX_NODES + 2 and size == 64 + count * 96)
     _check(number(index, 24) == 1 and index[32:48] == commit[48:64])
     _check(number(index, 48, 'I') <= 3 and not any(index[52:64]))
     chapters, assets = {}, {}
+    preview_record = None
     for i in range(count):
         row = index[64 + i * 96:160 + i * 96]
         kind = row[:4]
-        _check((kind in CHAPTERS and kind not in chapters) or kind == b'DSRC', 'Checkpoints and unknown project chapters cannot be published.')
+        _check((kind in CHAPTERS | {b'THMB'} and kind not in chapters) or kind == b'DSRC', 'Checkpoints and unknown project chapters cannot be published.')
         flags = number(row, 8, 'I')
         _check(struct.unpack_from('<HBB', row, 4) == (1, 0, 0) and flags in (0, 2))
         _check(flags == 0 or kind == b'DSRC')
@@ -153,12 +154,20 @@ def read_project(source):
             _check(identity not in assets)
             _check(number(row, 72, 'I') == number(header, 56, 'I') and number(row, 76, 'I') == number(header, 60, 'I'))
             assets[identity] = {'offset': payload_offset, 'size': stored, 'crc32c': number(row, 72, 'I')}
+            if flags == 2:
+                assets[identity]['blocks'] = list(struct.unpack('<' + 'I' * (len(entries) // 4), entries))
             region(payload_offset, stored, read=False)
             continue
         payload = region(payload_offset, stored)
         _check(_crc(payload) == number(row, 72, 'I') == number(header, 56, 'I'))
         _check(number(row, 76, 'I') == number(header, 60, 'I'))
-        if kind in (b'SELM', b'METR'):
+        if kind == b'THMB':
+            _check(33 <= len(payload) <= 2 * 1024**2 and payload[:8] == b'\x89PNG\r\n\x1a\n'
+                   and payload[12:16] == b'IHDR' and all(0 < n <= 2048 for n in struct.unpack_from('>II', payload, 16)),
+                   'Project thumbnail must be a bounded PNG image.')
+            preview_record = (payload_offset, stored, 1)
+            chapters[kind] = payload
+        elif kind in (b'SELM', b'METR'):
             chapters[kind] = payload
         else:
             try:
@@ -174,7 +183,8 @@ def read_project(source):
             _check(gap and not any(gap), 'Project contains unreferenced data or history.')
             cursor += len(gap)
         cursor = end
-    _check(cursor == size_total and chapters.keys() == CHAPTERS)
+    _check(cursor == size_total and chapters.keys() - {b'THMB'} == CHAPTERS)
+    _check(struct.unpack_from('<QII', head, 112) == (preview_record or (0, 0, 0)), 'Project preview locator does not match its thumbnail.')
     project = chapters[b'PROJ']
     _check(project.get('dataset_reference_uuid') is None and project.get('project_lineage') == []
            and all(project.get(key) == [] for key in ('embed_decisions', 'provenance', 'embedded_payloads')),
@@ -244,7 +254,8 @@ class ProjectFile:
                 actual, stored_degree = codec._ply_header(stream, asset['size'])
                 _check(actual == count and stored_degree >= degree)
             else:
-                validate_compressed(stream, extension, count)
+                _check(degree <= validate_compressed(stream, extension, count),
+                       'Published lighting detail exceeds the encoded splat data.')
             total += count
             _check(total <= codec.MAX_SPLATS)
             self._nodes.append(asset)
@@ -341,11 +352,22 @@ def validate_compressed(stream, extension, count):
         metadata_files = [manifest_name] if extension == 'sog' else data['filenames']
         _check(isinstance(metadata_files, list) and 1 <= len(metadata_files) <= len(entries))
         used = {manifest_name}
+        degree = 0
         for filename in metadata_files:
             _check(isinstance(filename, str))
             used.add(filename)
             _check(filename in names and filename.endswith('meta.json') and archive.getinfo(filename).file_size <= codec.MAX_MANIFEST_BYTES)
             meta = json.loads(archive.read(filename), object_pairs_hook=codec._object, parse_constant=codec._constant)
+            _check(isinstance(meta, dict))
+            if 'shN' in meta:
+                sh = meta['shN']
+                _check(isinstance(sh, dict))
+                bands, coeffs = sh.get('bands', 0), sh.get('coeffs', 0)
+                _check(type(bands) is int and type(coeffs) is int)
+                bands = bands or {3: 1, 8: 2, 15: 3}.get(coeffs, 0)
+                _check(1 <= bands <= 3 and coeffs in (0, (bands + 1)**2 - 1),
+                       'Compressed lighting detail is invalid.')
+                degree = max(degree, bands)
             prefix = filename[:-len('meta.json')]
             for key in ('means', 'quats', 'scales', 'sh0', 'shN'):
                 for texture in meta.get(key, {}).get('files', []):
@@ -354,3 +376,4 @@ def validate_compressed(stream, extension, count):
 
                     used.add(prefix + texture)
         _check(used == names, 'Unreferenced files cannot be published inside compressed splats.')
+        return degree

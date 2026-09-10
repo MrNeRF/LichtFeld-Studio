@@ -914,7 +914,7 @@ namespace lfs::vis {
             info.height = viewport_.windowSize.y;
             info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
             info.orthographic = settings.orthographic;
-            info.ortho_scale = settings.ortho_scale;
+            info.ortho_scale = viewport_.ortho_scale_override.value_or(settings.ortho_scale);
             return info;
         });
         callback_cleanup_.add([] { vis::set_view_callback(nullptr); });
@@ -949,7 +949,7 @@ namespace lfs::vis {
             info.height = viewport_.windowSize.y;
             info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
             info.orthographic = settings.orthographic;
-            info.ortho_scale = settings.ortho_scale;
+            info.ortho_scale = vp.ortho_scale_override.value_or(settings.ortho_scale);
             return info;
         });
         callback_cleanup_.add([] { vis::set_view_for_panel_callback(nullptr); });

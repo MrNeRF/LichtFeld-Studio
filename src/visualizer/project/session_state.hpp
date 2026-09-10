@@ -53,6 +53,7 @@ namespace lfs::vis {
             float wasd_speed = 8.0f;
             float max_wasd_speed = 100.0f;
             std::optional<float> ortho_scale;
+            std::optional<float> ortho_extent_world;
 
             friend bool operator==(
                 const PanelCameraProjectState&,
