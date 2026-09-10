@@ -564,3 +564,131 @@ TEST_F(SceneConsolidationExtractTest, ReturnsNullWhenNotConsolidatedOrUnknown) {
     EXPECT_EQ(built.scene.extractConsolidatedNodeModel(built.scene.getNodeUuid(group)),
               nullptr);
 }
+
+TEST(SceneActiveShTest, SourceRetentionPreservesEditableModelsAndResetsForNewScene) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+        GTEST_SKIP() << "CUDA device unavailable";
+    auto model = SplatData(1,
+                           Tensor::zeros({2, 3}, Device::CUDA),
+                           Tensor::zeros({2, 1, 3}, Device::CUDA),
+                           Tensor::ones({2, 3, 3}, Device::CUDA),
+                           Tensor::zeros({2, 3}, Device::CUDA),
+                           Tensor::from_vector(std::vector<float>{1, 0, 0, 0, 1, 0, 0, 0}, {2, 4}, Device::CUDA),
+                           Tensor::zeros({2, 1}, Device::CUDA), 1.0f);
+    Scene scene;
+    scene.preserveSourceModels();
+    for (int i = 0; i < 2; ++i)
+        scene.addSplat(std::to_string(i), std::make_unique<SplatData>(model.clone()));
+    EXPECT_EQ(scene.consolidateNodeModels(), 0u);
+    for (const auto* node : scene.getNodes()) {
+        ASSERT_NE(node->model, nullptr);
+        expect_exact(node->model->shN_canonical().to_vector(), model.shN_canonical().to_vector(), "source SH");
+    }
+    scene.clear();
+    for (int i = 0; i < 2; ++i)
+        scene.addSplat(std::to_string(i), std::make_unique<SplatData>(model.clone()));
+    EXPECT_EQ(scene.consolidateNodeModels(), 2u);
+}
+
+TEST(SceneActiveShTest, PreservesInactiveDataAndNodeLimitsThroughConsolidationAndCompaction) {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
+        GTEST_SKIP() << "CUDA device unavailable";
+    }
+    Scene scene;
+    std::vector<Uuid> uuids;
+    std::vector<CpuAttrs> attributes;
+    const std::vector<int> degrees{3, 0, 1};
+    for (size_t slot = 0; slot < degrees.size(); ++slot) {
+        const size_t count = 5 + slot * 2;
+        std::vector<float> coefficients(count * 45);
+        for (size_t i = 0; i < coefficients.size(); ++i)
+            coefficients[i] = 0.2f * std::sin(static_cast<float>(i) + slot);
+        std::vector<float> rotation(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i)
+            rotation[i * 4] = 1.0f;
+        auto model = std::make_unique<SplatData>(
+            3,
+            Tensor::zeros({count, 3}, Device::CUDA),
+            Tensor::zeros({count, 1, 3}, Device::CUDA),
+            Tensor::from_vector(coefficients, {count, 15, 3}, Device::CUDA),
+            Tensor::zeros({count, 3}, Device::CUDA),
+            Tensor::from_vector(rotation, {count, 4}, Device::CUDA),
+            Tensor::zeros({count, 1}, Device::CUDA),
+            1.0f);
+        model->set_active_sh_degree(degrees[slot]);
+        attributes.push_back(snapshot_cpu(*model));
+        uuids.push_back(scene.getNodeUuid(scene.addSplat(std::to_string(slot), std::move(model))));
+    }
+    EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), degrees);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 3u);
+    scene.setNodeVisibility(scene.getNodeIdByUuid(uuids[0]), false);
+    EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), (std::vector<int>{0, 1}));
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 2u);
+    scene.setNodeVisibility(scene.getNodeIdByUuid(uuids[0]), true);
+    EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), degrees);
+    EXPECT_EQ(scene.getVisibleNodeTransforms().size(), 3u);
+    auto original_snapshot = scene.snapshotVisibleSplats();
+    ASSERT_EQ(original_snapshot.size(), 3u);
+    for (size_t i = 0; i < original_snapshot.size(); ++i) {
+        auto model = original_snapshot[i].materialize();
+        expect_attrs_match(*model, attributes[i]);
+        EXPECT_EQ(model->get_active_sh_degree(), degrees[i]);
+        EXPECT_NE(model->means_raw().data_ptr(), scene.getNodeByUuid(uuids[i])->model->means_raw().data_ptr());
+    }
+    ASSERT_EQ(scene.consolidateNodeModels(), 3u);
+    EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), degrees);
+    const auto check_models = [&] {
+        for (size_t slot = 0; slot < degrees.size(); ++slot) {
+            if (!scene.getNodeByUuid(uuids[slot]))
+                continue;
+            auto model = scene.extractConsolidatedNodeModel(uuids[slot]);
+            ASSERT_NE(model, nullptr);
+            EXPECT_EQ(model->get_active_sh_degree(), degrees[slot]);
+            // Inactive coefficients must remain available for later edits/export.
+            expect_attrs_match(*model, attributes[slot]);
+        }
+    };
+    check_models();
+    auto consolidated_snapshot = scene.snapshotVisibleSplats();
+    ASSERT_EQ(consolidated_snapshot.size(), 3u);
+    EXPECT_EQ(consolidated_snapshot[0].data, consolidated_snapshot[1].data);
+    EXPECT_EQ(consolidated_snapshot[1].data, consolidated_snapshot[2].data);
+    scene.removeNodeById(scene.getNodeIdByUuid(uuids[0]));
+    EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), degrees); // Transform slot retained until compaction.
+    EXPECT_EQ(scene.extractConsolidatedNodeModel(uuids[0]), nullptr);
+    // A removed first node leaves a storage hole. Hidden nodes still occupy
+    // ranges, but neither removed nor hidden geometry may enter the snapshot.
+    auto surviving_snapshot = scene.snapshotVisibleSplats();
+    ASSERT_EQ(surviving_snapshot.size(), 2u);
+    for (size_t i = 0; i < surviving_snapshot.size(); ++i)
+        expect_attrs_match(*surviving_snapshot[i].materialize(), attributes[i + 1]);
+    scene.setNodeVisibility(scene.getNodeIdByUuid(uuids[1]), false);
+    auto visible_snapshot = scene.snapshotVisibleSplats();
+    ASSERT_EQ(visible_snapshot.size(), 1u);
+    expect_attrs_match(*visible_snapshot[0].materialize(), attributes[2]);
+    scene.setNodeVisibility(scene.getNodeIdByUuid(uuids[1]), true);
+    check_models();
+    const auto snapshot = scene.captureConsolidatedCompaction();
+    ASSERT_TRUE(snapshot.has_value());
+    std::vector<Scene::ConsolidatedNodeSlot> slots;
+    const auto compacted = Scene::compactConsolidatedSnapshot(*snapshot, slots);
+    ASSERT_NE(compacted, nullptr);
+    ASSERT_EQ(slots.size(), 2u);
+    for (size_t slot = 0; slot < slots.size(); ++slot)
+        EXPECT_EQ(slots[slot].active_sh_degree, degrees[slot + 1]);
+    ASSERT_TRUE(scene.installConsolidatedCompaction(compacted, slots, snapshot->generation));
+    EXPECT_EQ(scene.getVisibleNodeActiveShDegrees(), (std::vector<int>{0, 1}));
+    check_models();
+    scene.clear();
+    // Snapshots retain their original ordering and data after later live-scene
+    // deletion, compaction and destruction, including all inactive SH bands.
+    for (const auto* snapshots : {&original_snapshot, &consolidated_snapshot}) {
+        for (size_t i = 0; i < snapshots->size(); ++i) {
+            auto model = (*snapshots)[i].materialize();
+            expect_attrs_match(*model, attributes[i]);
+            EXPECT_EQ(model->get_active_sh_degree(), degrees[i]);
+        }
+    }
+}

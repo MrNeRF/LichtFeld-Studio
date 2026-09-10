@@ -76,15 +76,19 @@ namespace lfs::vis::cap {
 
         [[nodiscard]] bool has_significant_rotation(const glm::mat4& transform) {
             glm::mat3 rotation(transform);
-            glm::vec3 scale;
-            if (!normalize_rotation_basis(rotation[0], rotation[1], rotation[2], scale))
-                return true;
-
-            const glm::quat q = glm::quat_cast(rotation);
-            return std::abs(std::abs(q.w) - 1.0f) > kTransformEpsilon ||
-                   std::abs(q.x) > kTransformEpsilon ||
-                   std::abs(q.y) > kTransformEpsilon ||
-                   std::abs(q.z) > kTransformEpsilon;
+            for (int column = 0; column < 3; ++column) {
+                const float scale = glm::length(rotation[column]);
+                if (scale <= 1e-8f)
+                    return false; // Native SH skips a degenerate basis.
+                rotation[column] /= scale;
+            }
+            // SH directions retain shear and reflection. The decomposition
+            // helper removes reflection signs and cannot decide this branch.
+            for (int column = 0; column < 3; ++column)
+                for (int row = 0; row < 3; ++row)
+                    if (std::abs(rotation[column][row] - (column == row ? 1.0f : 0.0f)) > kTransformEpsilon)
+                        return true;
+            return false;
         }
 
         [[nodiscard]] std::string crop_volume_shape_label(const CropVolumeShape shape) {
@@ -655,6 +659,10 @@ namespace lfs::vis::cap {
                 return result;
             if (auto result = copy_tensor_preserving_storage(model.rotation_raw(), transformed.rotation_raw(), "rotation"); !result)
                 return result;
+            if (rotates_sh) {
+                if (auto result = copy_tensor_preserving_storage(model.sh0_raw(), transformed.sh0_raw(), "sh0"); !result)
+                    return result;
+            }
             if (sh_f16_storage && rotates_sh) {
                 lfs::training::LiveModelMutationGuard mutation_scope("transform.bake");
                 const bool expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(model);

@@ -447,6 +447,8 @@ namespace lfs::core {
         void setCombinedModelAllocator(SplatTensorAllocator allocator);
 
         size_t consolidateNodeModels();
+        // Gallery imports retain source precision independently of the render cache.
+        void preserveSourceModels() { preserve_source_models_ = true; }
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
         // Copy one SPLAT node's combined-model range (walks NULL_NODE slots).
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData>
@@ -456,6 +458,7 @@ namespace lfs::core {
         struct ConsolidatedNodeSlot {
             NodeId id = NULL_NODE;
             size_t gaussian_count = 0;
+            int active_sh_degree = -1; // Legacy snapshots fall back to the combined degree.
         };
 
         struct ConsolidatedCompactionSnapshot {
@@ -479,6 +482,19 @@ namespace lfs::core {
         };
         [[nodiscard]] std::vector<VisibleSplatNodeSlot> getVisibleSplatNodeSlots() const;
 
+        struct SplatSnapshot {
+            std::shared_ptr<lfs::core::SplatData> data;
+            glm::mat4 world_transform{1.0f};
+            size_t row_offset = 0;
+            size_t row_count = 0;
+            int active_sh_degree = 0;
+            // Worker-side extraction; never touches the live Scene.
+            [[nodiscard]] std::shared_ptr<lfs::core::SplatData> materialize() const;
+        };
+        // Call at a scene/UI safe point. Owns all copied storage, including
+        // inactive SH and deletion masks; safe for subsequent worker-side IO.
+        [[nodiscard]] std::vector<SplatSnapshot> snapshotVisibleSplats() const;
+
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionIndices() const;
         [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleSelectionMask() const;
         [[nodiscard]] uint64_t renderGeneration() const noexcept {
@@ -493,7 +509,9 @@ namespace lfs::core {
 
         [[nodiscard]] static std::unique_ptr<lfs::core::SplatData> mergeSplatsWithTransforms(
             const std::vector<std::pair<const lfs::core::SplatData*, glm::mat4>>& splats,
-            MergeStorageMode storage_mode = MergeStorageMode::Clone);
+            MergeStorageMode storage_mode = MergeStorageMode::Clone,
+            // Limit private pieces before affine SH mixing; -1 retains all bands.
+            int sh_degree_limit = -1);
 
         struct VisibleMesh {
             const lfs::core::MeshData* mesh;
@@ -504,6 +522,7 @@ namespace lfs::core {
         [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
 
         std::vector<glm::mat4> getVisibleNodeTransforms() const;
+        [[nodiscard]] std::vector<int> getVisibleNodeActiveShDegrees() const;
         std::shared_ptr<lfs::core::Tensor> getTransformIndices() const;
         [[nodiscard]] int getVisibleNodeIndex(const std::string& name) const;
         [[nodiscard]] int getVisibleNodeIndex(NodeId node_id) const;
@@ -746,6 +765,7 @@ namespace lfs::core {
         mutable bool consolidated_ = false;
         mutable std::vector<ConsolidatedNodeSlot> consolidated_node_slots_;
         mutable uint64_t consolidated_generation_ = 0;
+        bool preserve_source_models_ = false;
         mutable std::atomic<uint64_t> render_generation_{0};
         mutable uint64_t selection_generation_ = 0;
 

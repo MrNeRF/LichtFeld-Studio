@@ -5,6 +5,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda/splat_transform.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "core/sh_value_quant.hpp"
@@ -29,7 +30,6 @@ namespace lfs::core {
 
         constexpr double SH_C1 = 0.48860251190291987;
         constexpr double SH_C2_0 = 1.0925484305920792;
-        constexpr double SH_C2_1 = 0.94617469575755997;
         constexpr double SH_C2_2 = 0.31539156525251999;
         constexpr double SH_C2_3 = 0.54627421529603959;
 
@@ -80,22 +80,24 @@ namespace lfs::core {
             const double zz = z * z;
 
             switch (band) {
+            case 0:
+                return {0.28209479177387814};
             case 1:
                 return {-SH_C1 * y, SH_C1 * z, -SH_C1 * x};
             case 2:
                 return {
                     SH_C2_0 * x * y,
                     -SH_C2_0 * y * z,
-                    SH_C2_1 * zz - SH_C2_2,
+                    SH_C2_2 * (2.0 * zz - xx - yy),
                     -SH_C2_0 * x * z,
                     SH_C2_3 * (xx - yy)};
             case 3:
                 return {
                     SH_C3_0 * y * (-3.0 * xx + yy),
                     SH_C3_1 * x * y * z,
-                    SH_C3_2 * y * (1.0 - 5.0 * zz),
-                    SH_C3_3 * z * (5.0 * zz - 3.0),
-                    SH_C3_2 * x * (1.0 - 5.0 * zz),
+                    SH_C3_2 * y * (xx + yy - 4.0 * zz),
+                    SH_C3_3 * z * (2.0 * zz - 3.0 * xx - 3.0 * yy),
+                    SH_C3_2 * x * (xx + yy - 4.0 * zz),
                     SH_C3_4 * z * (xx - yy),
                     SH_C3_0 * x * (-xx + 3.0 * yy)};
             default:
@@ -156,24 +158,36 @@ namespace lfs::core {
 
         [[nodiscard]] std::optional<std::vector<float>> compute_sh_coeff_rotation_matrix(
             const glm::mat3& rotation_local_to_world,
-            const int band) {
+            const int band,
+            const bool mix_bands = false) {
             if (band < 1 || band > 3) {
                 return std::nullopt;
             }
 
-            const int basis_count = 2 * band + 1;
+            const int basis_count = mix_bands ? (band + 1) * (band + 1) : 2 * band + 1;
             const auto sample_dirs = fibonacci_sphere_dirs(SH_FIT_SAMPLE_COUNT);
 
             const glm::dmat3 rot(rotation_local_to_world);
-            const glm::dmat3 rot_inv = glm::inverse(rot);
+            const glm::dmat3 direction_pull = mix_bands ? glm::transpose(rot) : glm::inverse(rot);
+            const auto evaluate_basis = [band, mix_bands](const glm::dvec3& dir) {
+                if (!mix_bands)
+                    return eval_sh_band_basis(band, dir);
+                std::vector<double> result;
+                for (int degree = 0; degree <= band; ++degree) {
+                    const auto part = eval_sh_band_basis(degree, dir);
+                    result.insert(result.end(), part.begin(), part.end());
+                }
+                return result;
+            };
 
             std::vector<double> wtw(static_cast<size_t>(basis_count * basis_count), 0.0);
             std::vector<double> wtl(static_cast<size_t>(basis_count * basis_count), 0.0);
 
             for (const auto& world_dir : sample_dirs) {
-                const glm::dvec3 local_dir = glm::normalize(rot_inv * world_dir);
-                const std::vector<double> basis_world = eval_sh_band_basis(band, world_dir);
-                const std::vector<double> basis_local = eval_sh_band_basis(band, local_dir);
+                const glm::dvec3 pulled = direction_pull * world_dir;
+                const glm::dvec3 local_dir = mix_bands ? pulled : glm::normalize(pulled);
+                const std::vector<double> basis_world = evaluate_basis(world_dir);
+                const std::vector<double> basis_local = evaluate_basis(local_dir);
 
                 for (int r = 0; r < basis_count; ++r) {
                     for (int c = 0; c < basis_count; ++c) {
@@ -217,6 +231,25 @@ namespace lfs::core {
 
             const int max_band = std::min(3, splat_data.get_max_sh_degree());
             const auto device = shN_canon.device();
+
+            const bool orthogonal = std::abs(glm::dot(rotation_local_to_world[0], rotation_local_to_world[1])) <= 1e-6f &&
+                                    std::abs(glm::dot(rotation_local_to_world[0], rotation_local_to_world[2])) <= 1e-6f &&
+                                    std::abs(glm::dot(rotation_local_to_world[1], rotation_local_to_world[2])) <= 1e-6f;
+            if (!orthogonal) {
+                // Native rendering does not normalize the pulled direction.
+                // Its polynomial remains in bands 0..degree, but shear mixes
+                // those bands, including DC. A per-band rotation cannot match.
+                const auto matrix = compute_sh_coeff_rotation_matrix(rotation_local_to_world, max_band, true);
+                if (!matrix)
+                    return false;
+                const size_t count = (max_band + 1) * (max_band + 1);
+                const auto coefficients = Tensor::cat({splat_data.sh0_raw(), shN_canon}, 1);
+                const auto operator_tensor = Tensor::from_vector(*matrix, {count, count}, device);
+                const auto transformed = coefficients.permute({2, 0, 1}).matmul(operator_tensor).permute({1, 2, 0});
+                splat_data.sh0_raw() = transformed.slice(1, 0, 1).contiguous();
+                splat_data.shN_set_from_canonical(transformed.slice(1, 1, count).contiguous(), splat_data.means().capacity());
+                return true;
+            }
 
             for (int band = 1; band <= max_band; ++band) {
                 const int coeff_count = 2 * band + 1;
@@ -290,47 +323,93 @@ namespace lfs::core {
         glm::quat rotation_quat = glm::quat_cast(rot_mat);
 
         const bool has_rotation = has_significant_rotation(rotation_quat);
+        const float largest_scale = std::max({scale.x, scale.y, scale.z});
+        const bool similarity = largest_scale > 0.0f && glm::determinant(rot_mat) > 0.0f &&
+                                std::abs(scale.x - scale.y) <= 1e-6f * largest_scale &&
+                                std::abs(scale.x - scale.z) <= 1e-6f * largest_scale &&
+                                std::abs(glm::dot(rot_mat[0], rot_mat[1])) <= 1e-6f &&
+                                std::abs(glm::dot(rot_mat[0], rot_mat[2])) <= 1e-6f &&
+                                std::abs(glm::dot(rot_mat[1], rot_mat[2])) <= 1e-6f;
+
+        if (!similarity) {
+            // Preserve the full affine covariance instead of averaging node
+            // scale. Work from the original quaternion and log scales.
+            splat_transform::LinearTransform linear;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    linear.rows[3 * i + j] = transform_matrix[j][i];
+            auto scales = splat_data._scaling.contiguous();
+            auto rotations = splat_data._rotation.contiguous();
+            auto out_scales = Tensor::empty(scales.shape(), device, DataType::Float32);
+            auto out_rotations = Tensor::empty(rotations.shape(), device, DataType::Float32);
+            if (device == Device::CUDA) {
+                const auto stream = scales.stream();
+                scales.sync_to_stream(stream);
+                rotations.sync_to_stream(stream);
+                out_scales.set_stream(stream);
+                out_rotations.set_stream(stream);
+                cuda::transform_splat_geometry(linear, scales.ptr<float>(), rotations.ptr<float>(),
+                                               out_scales.ptr<float>(), out_rotations.ptr<float>(), num_points, stream);
+                out_scales.record_stream(stream);
+                out_rotations.record_stream(stream);
+            } else {
+                for (int i = 0; i < num_points; ++i)
+                    splat_transform::affine_geometry(linear, scales.ptr<float>() + 3 * i, rotations.ptr<float>() + 4 * i,
+                                                     out_scales.ptr<float>() + 3 * i, out_rotations.ptr<float>() + 4 * i);
+            }
+            splat_data._scaling = std::move(out_scales);
+            splat_data._rotation = std::move(out_rotations);
+        }
 
         // 3. Transform rotations (quaternions) and SH orientation if there's rotation
         if (has_rotation) {
-            std::vector<float> rot_data = {rotation_quat.w, rotation_quat.x, rotation_quat.y, rotation_quat.z};
-            auto rot_tensor = Tensor::from_vector(rot_data, TensorShape({4}), device);
+            if (similarity) {
+                std::vector<float> rot_data = {rotation_quat.w, rotation_quat.x, rotation_quat.y, rotation_quat.z};
+                auto rot_tensor = Tensor::from_vector(rot_data, TensorShape({4}), device);
 
-            auto q = splat_data._rotation;
-            std::vector<int> expand_shape = {num_points, 4};
-            auto q_rot = rot_tensor.unsqueeze(0).expand(std::span<const int>(expand_shape));
+                auto q = splat_data._rotation;
+                std::vector<int> expand_shape = {num_points, 4};
+                auto q_rot = rot_tensor.unsqueeze(0).expand(std::span<const int>(expand_shape));
 
-            auto w1 = q_rot.slice(1, 0, 1).squeeze(1);
-            auto x1 = q_rot.slice(1, 1, 2).squeeze(1);
-            auto y1 = q_rot.slice(1, 2, 3).squeeze(1);
-            auto z1 = q_rot.slice(1, 3, 4).squeeze(1);
+                auto w1 = q_rot.slice(1, 0, 1).squeeze(1);
+                auto x1 = q_rot.slice(1, 1, 2).squeeze(1);
+                auto y1 = q_rot.slice(1, 2, 3).squeeze(1);
+                auto z1 = q_rot.slice(1, 3, 4).squeeze(1);
 
-            auto w2 = q.slice(1, 0, 1).squeeze(1);
-            auto x2 = q.slice(1, 1, 2).squeeze(1);
-            auto y2 = q.slice(1, 2, 3).squeeze(1);
-            auto z2 = q.slice(1, 3, 4).squeeze(1);
+                auto w2 = q.slice(1, 0, 1).squeeze(1);
+                auto x2 = q.slice(1, 1, 2).squeeze(1);
+                auto y2 = q.slice(1, 2, 3).squeeze(1);
+                auto z2 = q.slice(1, 3, 4).squeeze(1);
 
-            auto w_new = w1.mul(w2).sub(x1.mul(x2)).sub(y1.mul(y2)).sub(z1.mul(z2));
-            auto x_new = w1.mul(x2).add(x1.mul(w2)).add(y1.mul(z2)).sub(z1.mul(y2));
-            auto y_new = w1.mul(y2).sub(x1.mul(z2)).add(y1.mul(w2)).add(z1.mul(x2));
-            auto z_new = w1.mul(z2).add(x1.mul(y2)).sub(y1.mul(x2)).add(z1.mul(w2));
+                auto w_new = w1.mul(w2).sub(x1.mul(x2)).sub(y1.mul(y2)).sub(z1.mul(z2));
+                auto x_new = w1.mul(x2).add(x1.mul(w2)).add(y1.mul(z2)).sub(z1.mul(y2));
+                auto y_new = w1.mul(y2).sub(x1.mul(z2)).add(y1.mul(w2)).add(z1.mul(x2));
+                auto z_new = w1.mul(z2).add(x1.mul(y2)).sub(y1.mul(x2)).add(z1.mul(w2));
 
-            std::vector<Tensor> components = {
-                w_new.unsqueeze(1),
-                x_new.unsqueeze(1),
-                y_new.unsqueeze(1),
-                z_new.unsqueeze(1)};
-            splat_data._rotation = Tensor::cat(components, 1);
-
-            if (!rotate_sh_coefficients(splat_data, rot_mat)) {
-                throw std::runtime_error("SH rotation during transform is only supported up to degree 3.");
+                std::vector<Tensor> components = {
+                    w_new.unsqueeze(1),
+                    x_new.unsqueeze(1),
+                    y_new.unsqueeze(1),
+                    z_new.unsqueeze(1)};
+                splat_data._rotation = Tensor::cat(components, 1);
             }
         }
 
+        // Match extract_rotation_rows: a degenerate node axis skips the SH
+        // direction pull. Compare the matrix itself, not quat_cast(shear).
+        bool changes_sh = false;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                changes_sh |= std::abs(rot_mat[i][j] - (i == j ? 1.0f : 0.0f)) > ROTATION_EPS;
+        if (changes_sh && scale.x > 1e-8f && scale.y > 1e-8f && scale.z > 1e-8f &&
+            !rotate_sh_coefficients(splat_data, rot_mat)) {
+            throw std::runtime_error("SH transformation is only supported up to degree 3.");
+        }
+
         // 4. Transform scaling
-        if (std::abs(scale.x - 1.0f) > 1e-6f ||
-            std::abs(scale.y - 1.0f) > 1e-6f ||
-            std::abs(scale.z - 1.0f) > 1e-6f) {
+        if (similarity && (std::abs(scale.x - 1.0f) > 1e-6f ||
+                           std::abs(scale.y - 1.0f) > 1e-6f ||
+                           std::abs(scale.z - 1.0f) > 1e-6f)) {
 
             float avg_scale = (scale.x + scale.y + scale.z) / 3.0f;
             splat_data._scaling = splat_data._scaling.add(std::log(avg_scale));
