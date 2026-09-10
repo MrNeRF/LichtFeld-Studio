@@ -221,6 +221,7 @@ def test_device_flow_state_machine_polls_and_caches_profile(tmp_path, monkeypatc
         "client_name": "LichtFeld Studio",
         "client_version": "1.2.3",
         "platform": "TestOS",
+        "scope": "desktop.basic gallery.sync",
     }
     assert request_json(stub.requests[1]) == {"device_code": "device-secret"}
     stored = json.loads(service.credentials_file.read_text(encoding="utf-8"))

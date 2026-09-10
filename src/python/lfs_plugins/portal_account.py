@@ -513,6 +513,7 @@ class PortalAccountService:
                     "client_name": self._client_name,
                     "client_version": self._client_version,
                     "platform": self._platform,
+                    "scope": "desktop.basic gallery.sync",
                 },
             )
             device_code = self._required_text(start, "device_code")

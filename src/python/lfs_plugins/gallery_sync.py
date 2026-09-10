@@ -97,6 +97,8 @@ def _validate_journal(data):
 
 def friendly_error(exc):
     if isinstance(exc, PortalHTTPError):
+        if exc.error == "gallery_relink_required":
+            return "Sign out and reconnect your Studio account to approve gallery access. Your local work is safe."
         return {
             401: "Sign in again, then resume the transfer.",
             403: "Gallery access is unavailable for this account. Check your account on the portal.",
