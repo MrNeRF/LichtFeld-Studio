@@ -693,3 +693,42 @@ def test_partial_local_update_reopens_the_unchanged_saved_project(gallery, monke
     with pytest.raises(ValueError, match="saved local project is being reopened"):
         panel._finish_local_update(job)
     assert module.lf._test_state.opened == [("/project.licht", True, False, False)]
+
+
+def test_transfer_popup_tracks_processing_pause_completion_and_account_boundary(gallery):
+    panel, state, _ = gallery
+    from lfs_plugins.gallery_transfer_panel import transfer_state
+    job = dict(id='transfer', kind='upload', metadata={'title':'Private garden'},
+               status='running', serverProcessing=True, completed=40, total=100, message='Checking scene')
+    state['jobs'] = [job]
+    panel._state = state
+    progress = transfer_state(panel)
+    assert progress['progress'] == 40 and progress['can_pause']
+    assert progress['message'] == 'Upload received · Checking scene'
+    job.update(status='paused', message='Stopped waiting')
+    progress = transfer_state(panel)
+    assert progress['can_resume'] and not progress['can_pause']
+    job.update(status='completed', serverProcessing=False)
+    assert transfer_state(panel)['progress'] == 100
+    state['identity'] = ('another', 'account')
+    progress = transfer_state(panel)
+    assert 'Private garden' not in str(progress)
+    assert not progress['can_resume'] and not progress['can_pause']
+
+
+@pytest.mark.parametrize('format_name', ['studio', 'sog', 'ssog'])
+def test_upload_format_is_fixed_at_confirmation_and_only_full_scenes_keep_hdr(gallery, monkeypatch, format_name):
+    panel, _, calls = gallery
+    module = import_module('lfs_plugins.gallery_panel')
+    monkeypatch.setattr(panel, '_project_identity', lambda: ('project', '/project.licht'))
+    monkeypatch.setattr(module, 'capture_view', lambda _: {'environment':{'exposure':0,'rotation':0}, 'renderMode':'3dgut'})
+    monkeypatch.setattr(module.lf, 'get_render_settings', lambda: SimpleNamespace(environment_map_path='/background.hdr'), raising=False)
+    monkeypatch.setattr(panel, '_publish', lambda metadata, **kwargs: calls.append((metadata,kwargs)))
+    panel._title, panel._visibility, panel._upload_format = 'Garden', 'public', format_name
+    panel._action_publish()
+    panel._upload_format = 'changed-after-review'
+    panel._action_confirm_action()
+    metadata, options = calls[-1]
+    assert options['upload_format'] == format_name
+    assert ('environment' in metadata['viewerSettings']) == (format_name == 'studio')
+    assert metadata['viewerSettings']['renderMode'] == '3dgut'

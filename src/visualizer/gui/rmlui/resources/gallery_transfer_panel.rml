@@ -1,0 +1,15 @@
+<rml>
+<head><link type="text/template" href="floating_window.rml"/><link type="text/rcss" href="gallery_transfer_panel.rcss"/></head>
+<body template="floating-window" data-model="gallery_transfer">
+  <div class="gallery-transfer-content"><span class="gallery-heading">{{title}}</span>
+  <p>{{message}}</p>
+  <progress class="gallery-preparation-progress" max="100" data-attr-value="progress"/>
+  <p class="gallery-muted">{{detail}}</p>
+  <div class="gallery-actions">
+    <button class="btn btn--secondary" data-if="can_pause" data-event-click="pause">{{pause_label}}</button>
+    <button class="btn btn--primary" data-if="can_resume" data-event-click="resume">Resume transfer</button>
+    <button class="btn btn--secondary" data-event-click="gallery">Open gallery</button>
+  </div>
+  <p class="gallery-muted">You can close this window and keep working. Transfers continue in the background.</p>
+</div></body>
+</rml>

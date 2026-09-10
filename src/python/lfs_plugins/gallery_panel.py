@@ -35,6 +35,7 @@ class GalleryPanel(Panel):
         self._title = ""
         self._description = ""
         self._visibility = "private"
+        self._upload_format = "studio"
         self._message = ""
         self._import_pending = None
         self._save_pending = None
@@ -57,7 +58,7 @@ class GalleryPanel(Panel):
         model = ctx.create_data_model("gallery_sync")
         if model is None:
             return
-        for field in ("title", "description", "visibility"):
+        for field in ("title", "description", "visibility", "upload_format"):
             model.bind(field, lambda f=field: getattr(self, "_"+f),
                 lambda value, f=field: setattr(self, "_"+f, str(value)))
         model.bind_func("panel_label", lambda: "Gallery")
@@ -98,7 +99,7 @@ class GalleryPanel(Panel):
         model.bind_record_list("scenes")
         model.bind_record_list("jobs")
         for name in ("refresh", "account", "select", "new", "publish", "edit", "remove", "unlink",
-                     "resume", "discard", "pause", "confirm_action", "cancel_action", "open", "download", "import", "resolve", "linked", "open_project", "use_current", "update_local", "show_backup", "show_recovery_folder", "clear_finished", "more_history"):
+                     "resume", "discard", "pause", "confirm_action", "cancel_action", "open", "download", "import", "resolve", "linked", "open_project", "use_current", "update_local", "show_backup", "show_recovery_folder", "clear_finished", "more_history", "transfer_progress"):
             model.bind_event(name, lambda _handle, _event, args, h=name: self._dispatch(h, args))
         self._handle = model.get_handle()
 
@@ -108,13 +109,18 @@ class GalleryPanel(Panel):
                 raise ValueError("The account changed. Review your gallery before continuing.")
             self._message = ""
             self._release_native_use()
-            if (self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._native_use) and name not in ("pause", "account", "cancel_action"):
+            if (self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._native_use) and name not in ("pause", "account", "cancel_action", "transfer_progress"):
                 raise ValueError("Wait for the operation to finish or pause the transfer.")
             getattr(self, "_action_"+name)(*args)
+            if name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local") and self._can_pause():
+                self._action_transfer_progress()
         except Exception as exc:
             self._message = friendly_error(exc)
         self._release_native_use()
         self._refresh_model()
+
+    def _action_transfer_progress(self):
+        lf.ui.set_panel_enabled("lfs.gallery_transfer", True)
 
     def _can_pause(self):
         if self._export_pending or self._save_pending:
@@ -456,7 +462,12 @@ class GalleryPanel(Panel):
             raise ValueError("Open the selected Asset Manager project first, or choose Use current project.")
         project = self._project_identity()
         metadata = self._details()
+        upload_format = self._upload_format
+        if upload_format not in ("studio", "sog", "ssog"):
+            raise ValueError("Choose a supported upload format.")
         metadata["viewerSettings"] = capture_view(lf)
+        if upload_format != "studio":
+            metadata["viewerSettings"].pop("environment", None)
         environment_source = str(lf.get_render_settings().environment_map_path) if metadata["viewerSettings"].get("environment") else None
         scene = dict(self._scene) if self._scene else None
         if scene:
@@ -467,11 +478,11 @@ class GalleryPanel(Panel):
                 f'Publish the current visible splats as “{title}”?')
             if metadata["visibility"] == "public":
                 message += " Anyone can view it, and it may appear in Explore."
-            self._confirm = (message, lambda: self._publish(metadata, expected_project=project, environment_source=environment_source), "Replace splat" if scene else "Publish splat")
+            self._confirm = (message, lambda: self._publish(metadata, expected_project=project, environment_source=environment_source, upload_format=upload_format), "Replace splat" if scene else "Publish splat")
         else:
-            self._publish(metadata, expected_project=project, environment_source=environment_source)
+            self._publish(metadata, expected_project=project, environment_source=environment_source, upload_format=upload_format)
 
-    def _publish(self, metadata, *, expected_project=None, environment_source=None):
+    def _publish(self, metadata, *, expected_project=None, environment_source=None, upload_format="studio"):
         identity = self.service.identity()
         project_id, path = self._project_identity()
         if expected_project is not None and (project_id, path) != expected_project:
@@ -485,15 +496,17 @@ class GalleryPanel(Panel):
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
             raise ValueError("There are no visible splats to upload.")
-        self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity, environment_source))
+        self._save_current_project(lambda: self._publish_saved(metadata, project_id, path, identity, environment_source, upload_format))
 
-    def _publish_saved(self, metadata, project_id, path, identity, environment_source=None):
+    def _publish_saved(self, metadata, project_id, path, identity, environment_source=None, upload_format="studio"):
         if self.service.identity() != identity or self._project_identity() != (project_id, path):
             raise ValueError("The account or current project changed while saving. Review it before uploading.")
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
             raise ValueError("There are no visible splats to upload.")
-        bundle = "lfsg" in self.service.snapshot().get("source_formats", [])
+        if upload_format not in ("studio", "sog", "ssog"):
+            raise ValueError("Choose a supported upload format.")
+        bundle = upload_format == "studio" and "lfsg" in self.service.snapshot().get("source_formats", [])
         environment = metadata.get("viewerSettings", {}).get("environment")
         if environment:
             if not bundle:
@@ -503,7 +516,7 @@ class GalleryPanel(Panel):
                     or float(settings.environment_exposure) != environment["exposure"]
                     or float(settings.environment_rotation_degrees) != environment["rotation"]):
                 raise ValueError("The HDR background changed. Review the current view and try uploading again.")
-        export = self.service.root / (str(uuid.uuid4()) + (".scene" if bundle else ".ply"))
+        export = self.service.root / (str(uuid.uuid4()) + (".scene" if bundle else ".ply" if upload_format == "studio" else "." + upload_format))
         self._message = "Preparing the current scene for upload…"
         self._refresh_model()
         if lf.ui.get_export_state().get("active"):
@@ -514,7 +527,8 @@ class GalleryPanel(Panel):
         if bundle:
             lf.prepare_gallery_scene(str(export))
         else:
-            lf.export_scene(0, str(export), nodes, int(lf.get_render_settings().sh_degree), include_provenance=False)
+            lf.export_scene({"studio": 0, "sog": 1, "ssog": 8}[upload_format], str(export), nodes,
+                            int(lf.get_render_settings().sh_degree), include_provenance=False)
         if self.service.identity() != identity:
             self._export_cancelled = True
         self._export_pending = (export, metadata, project_id, time.monotonic())

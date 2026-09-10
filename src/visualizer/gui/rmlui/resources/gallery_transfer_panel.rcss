@@ -1,0 +1,6 @@
+.gallery-heading { display: block; font-size: 14dp; font-weight: bold; margin-bottom: 10dp; }
+p { display: block; margin: 8dp 0; line-height: 18dp; }
+.gallery-muted { font-size: 12dp; }
+.gallery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8dp; margin: 12dp 0; }
+.btn { height: 28dp; padding: 0 10dp; border-radius: 4dp; font-size: 12dp; line-height: 16dp; }
+.gallery-preparation-progress { display: block; width: 100%; height: 8dp; margin: 12dp 0; }

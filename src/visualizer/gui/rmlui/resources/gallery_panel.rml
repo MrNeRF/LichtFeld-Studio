@@ -88,7 +88,7 @@
     </div>
     <div class="gallery-section gallery-transfers" data-if="has_jobs">
       <div class="gallery-section-header">
-        <span class="gallery-heading">Transfers</span>
+        <span class="gallery-heading">Transfers</span><button class="btn btn--secondary" data-event-click="transfer_progress">Show progress</button>
         <button class="btn btn--secondary" data-event-click="clear_finished" data-if="can_clear_finished" data-attrif-disabled="busy">Clear finished</button>
       </div>
       <div class="gallery-transfer" data-for="job : jobs">
@@ -111,6 +111,11 @@
       <button class="btn btn--secondary" data-event-click="linked" data-attrif-disabled="busy">Select linked splat</button>
     </div>
     <p class="gallery-muted">Upload visible splats with the initial view, camera path and supported render settings.</p>
+    <label for="gallery-upload-format">Upload format</label>
+    <select id="gallery-upload-format" data-value="upload_format" data-attrif-disabled="busy">
+      <option value="studio">Full Studio scene</option><option value="sog">Compact SOG</option><option value="ssog">Streamed SSOG</option>
+    </select>
+    <p class="gallery-muted">Full scenes keep separate objects and HDR backgrounds. SOG and SSOG combine visible objects into a smaller file.</p>
     <button class="btn btn--primary" data-event-click="publish" data-attrif-disabled="busy">{{publish_label}}</button>
   </div>
 </body>
