@@ -1056,12 +1056,12 @@ namespace lfs::vis::project {
             // A checkpoint's backend belongs to the saved run, not the next-run preset.
             if (report.checkpoint_params) {
                 stored_raster_backend_ = lfs::core::param::training_backend_descriptor(
-                                            report.checkpoint_params->optimization.raster_backend())
-                                            .wire_name;
+                                             report.checkpoint_params->optimization.raster_backend())
+                                             .wire_name;
             } else if (!report.trainer_state_pending) {
                 stored_raster_backend_ = lfs::core::param::training_backend_descriptor(
-                                            params.raster_backend())
-                                            .wire_name;
+                                             params.raster_backend())
+                                             .wire_name;
             }
             stored_completed_ = completed;
         };

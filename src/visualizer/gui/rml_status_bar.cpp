@@ -23,8 +23,8 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
-#include "training/training_manager.hpp"
 #include "training/trainer.hpp"
+#include "training/training_manager.hpp"
 #include "visualizer/app_store.hpp"
 #include "visualizer_impl.hpp"
 
