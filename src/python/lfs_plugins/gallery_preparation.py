@@ -33,10 +33,10 @@ def staging_files(root, value):
         return []
     files = []
     for entry in path.iterdir():
-        if len(files) >= gallery_bundle.MAX_NODES + 3:
+        if len(files) >= gallery_bundle.MAX_NODES + 5:
             raise ValueError("Scene preparation contains too many files.")
-        if (entry.name not in ("manifest.json", "manifest.json.tmp", "environment.lfsenv")
-                and not re.fullmatch(r"(?:0|[1-9][0-9]{0,3})\.ply", entry.name)):
+        if (entry.name not in ("manifest.json", "manifest.json.tmp", "environment.lfsenv", "project.licht", "project.licht.lock")
+                and not re.fullmatch(r"(?:0|[1-9][0-9]{0,3})\.(?:ply|sog|ssog)", entry.name)):
             raise ValueError("Scene preparation contains an unexpected file. Keep it for recovery.")
         if not stat.S_ISREG(entry.lstat().st_mode) or getattr(entry, "is_junction", lambda: False)():
             raise ValueError("Scene preparation contains a redirected file. Keep it for recovery.")
@@ -59,7 +59,7 @@ def read_staging(root, value):
     nodes, total = [], 0
     for number, node in enumerate(data["nodes"]):
         if (not isinstance(node, dict) or node.keys() != {"path", "transform", "shDegree"}
-                or node["path"] != f"{number}.ply"):
+                or node["path"] not in (f"{number}.ply", f"{number}.sog", f"{number}.ssog")):
             raise ValueError("Scene preparation has an invalid node path.")
         source = path / node["path"]
         total += source.stat().st_size
@@ -75,6 +75,8 @@ def read_staging(root, value):
         total += size
     elif background.exists():
         raise ValueError("Scene preparation has an unreferenced HDR background.")
+    if (path / "project.licht").exists():
+        total += (path / "project.licht").stat().st_size
     return nodes, total
 
 
@@ -137,4 +139,39 @@ def unpack_bundle(root, source, destination, *, progress=None):
             path.unlink(missing_ok=True)
         if created:
             destination.rmdir()
+        raise
+
+
+def unpack_project(root, source, destination, *, progress=None):
+    """Prepare embedded splats for merging; keep the .licht source authoritative."""
+    from .portable_project import ProjectFile
+    destination = staging_path(root, destination)
+    destination.mkdir(mode=0o700)
+    outputs = []
+    try:
+        with Path(source).open('rb') as stream:
+            project = ProjectFile(stream)
+            total = sum(asset['size'] for asset in project.assets.values())
+            completed, nodes = 0, []
+            for index, node in enumerate(project.manifest['nodes']):
+                path = destination / (str(index) + Path(node['file']).suffix)
+                outputs.append(path)
+                with path.open('xb') as output:
+                    completed += project.copy_node(index, output, progress=(lambda value: progress(completed + value, total)) if progress else None)
+                nodes.append({'path': path.name, 'transform': node['transform'], 'shDegree': node['shDegree']})
+            metadata = {'version': 1, 'nodes': nodes}
+            if 'environment' in project.manifest:
+                path = destination / 'environment.lfsenv'
+                outputs.append(path)
+                with path.open('xb') as output:
+                    completed += project.copy_environment(output, progress=(lambda value: progress(completed + value, total)) if progress else None)
+                metadata['environment'] = path.name
+            marker = destination / 'manifest.json'
+            outputs.append(marker)
+            with marker.open('x') as output:
+                json.dump(metadata, output, allow_nan=False)
+            if progress: progress(completed, total)
+    except Exception:
+        for path in outputs: path.unlink(missing_ok=True)
+        destination.rmdir()
         raise

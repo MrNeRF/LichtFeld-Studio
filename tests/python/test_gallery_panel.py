@@ -367,18 +367,18 @@ def test_preparation_progress_tracks_own_export(gallery, tmp_path, monkeypatch):
 def test_publish_uses_native_scene_capture_when_portal_advertises_bundles(gallery, tmp_path, monkeypatch):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_panel")
-    state["source_formats"] = ["ply", "lfsg"]
+    state["source_formats"] = ["ply", "licht"]
     panel.service.root = tmp_path
     monkeypatch.setattr(panel, "_project_identity", lambda: ("project", "/project.licht"))
     monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
     monkeypatch.setattr(panel, "_schedule_phase_poll", lambda: None)
     monkeypatch.setattr(module.lf, "get_scene", lambda: SimpleNamespace(get_nodes=lambda: [SimpleNamespace(id=1, name="scene", type=module.lf.scene.NodeType.SPLAT)], is_node_effectively_visible=lambda node_id: True), raising=False)
     monkeypatch.setattr(module.lf.ui, "get_export_state", lambda: {"active": False}, raising=False)
-    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda path: actions.append(path), raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda path, payload_format: actions.append((path, payload_format)), raising=False)
     monkeypatch.setattr(module.lf, "export_scene", lambda *args, **kwargs: pytest.fail("Must preserve local multi-object geometry"), raising=False)
     panel._publish({"title": "Scene"})
     assert panel._export_pending[0].suffix == ".scene"
-    assert actions == [str(panel._export_pending[0])]
+    assert actions == [(str(panel._export_pending[0]), "ply")]
 
 
 def test_completed_native_scene_hands_off_to_background_packaging(gallery, tmp_path, monkeypatch):
@@ -759,7 +759,7 @@ def test_transfer_popup_opens_after_worker_leaves_queued_state(gallery, monkeypa
 
 
 @pytest.mark.parametrize('format_name', ['studio', 'sog', 'ssog'])
-def test_upload_format_is_fixed_at_confirmation_and_only_full_scenes_keep_hdr(gallery, monkeypatch, format_name):
+def test_upload_format_is_fixed_at_confirmation_and_all_payload_formats_keep_hdr(gallery, monkeypatch, format_name):
     panel, _, calls = gallery
     module = import_module('lfs_plugins.gallery_panel')
     monkeypatch.setattr(panel, '_project_identity', lambda: ('project', '/project.licht'))
@@ -772,5 +772,5 @@ def test_upload_format_is_fixed_at_confirmation_and_only_full_scenes_keep_hdr(ga
     panel._action_confirm_action()
     metadata, options = calls[-1]
     assert options['upload_format'] == format_name
-    assert ('environment' in metadata['viewerSettings']) == (format_name == 'studio')
+    assert 'environment' in metadata['viewerSettings']
     assert metadata['viewerSettings']['renderMode'] == '3dgut'

@@ -166,13 +166,13 @@ class PortalGalleryClient:
 
         check_canceled()
         size = path.stat().st_size
-        if size <= 0 or path.suffix.lower() not in (".ply", ".sog", ".ssog", ".lfsg"):
-            raise ValueError("Choose a nonempty PLY, SOG, SSOG or Studio scene export")
+        if size <= 0 or path.suffix.lower() not in (".ply", ".sog", ".ssog", ".lfsg", ".licht"):
+            raise ValueError("Choose a nonempty PLY, SOG, SSOG or .licht export")
         fingerprint = _fingerprint(path, cancel)
         capabilities = self._request("GET", "/me")
         if capabilities.get("gallerySyncVersion") != 1:
             raise PortalProtocolError("This portal needs an update before Studio gallery sync is available.")
-        if path.suffix.lower() == ".lfsg" and "lfsg" not in capabilities.get("sourceFormats", []):
+        if path.suffix.lower() in (".lfsg", ".licht") and path.suffix.lower()[1:] not in capabilities.get("sourceFormats", []):
             raise PortalProtocolError("This portal does not support Studio scene uploads yet.")
         if metadata.get("viewerSettings", {}).get("environment") and not capabilities.get("hdrBackgrounds"):
             raise PortalProtocolError("This portal needs an update before it can display HDR backgrounds.")

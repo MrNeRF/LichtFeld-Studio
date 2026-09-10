@@ -480,8 +480,6 @@ class GalleryPanel(Panel):
         if upload_format not in ("studio", "sog", "ssog"):
             raise ValueError("Choose a supported upload format.")
         metadata["viewerSettings"] = capture_view(lf)
-        if upload_format != "studio":
-            metadata["viewerSettings"].pop("environment", None)
         environment_source = str(lf.get_render_settings().environment_map_path) if metadata["viewerSettings"].get("environment") else None
         scene = dict(self._scene) if self._scene else None
         if scene:
@@ -520,7 +518,9 @@ class GalleryPanel(Panel):
             raise ValueError("There are no visible splats to upload.")
         if upload_format not in ("studio", "sog", "ssog"):
             raise ValueError("Choose a supported upload format.")
-        bundle = upload_format == "studio" and "lfsg" in self.service.snapshot().get("source_formats", [])
+        bundle = "licht" in self.service.snapshot().get("source_formats", [])
+        if not bundle:
+            raise ValueError("Update the portal connection before publishing .licht files.")
         environment = metadata.get("viewerSettings", {}).get("environment")
         if environment:
             if not bundle:
@@ -539,7 +539,7 @@ class GalleryPanel(Panel):
         self._export_identity = identity
         self._export_progress = 0
         if bundle:
-            lf.prepare_gallery_scene(str(export))
+            lf.prepare_gallery_scene(str(export), "ply" if upload_format == "studio" else upload_format)
         else:
             lf.export_scene({"studio": 0, "sog": 1, "ssog": 8}[upload_format], str(export), nodes,
                             int(lf.get_render_settings().sh_degree), include_provenance=False)
@@ -689,7 +689,7 @@ class GalleryPanel(Panel):
         if lf.is_training_active() or lf.ui.get_import_state().get("active"):
             raise ValueError("Finish training or the current import before opening the download.")
         self._acquire_native_use(job["id"])
-        if Path(job["path"]).suffix == ".lfsg":
+        if Path(job["path"]).suffix in (".lfsg", ".licht"):
             stage_id = self.service.stage_download(job["id"])
             self._import_pending = dict(job, _accountIdentity=identity,
                 _bundle={"phase": "staging", "stage_id": stage_id, "scene": lf.get_scene()})
@@ -714,6 +714,30 @@ class GalleryPanel(Panel):
         job = self._import_pending
         if job.get("_accountIdentity") is not None and self.service.identity() != job["_accountIdentity"]:
             self._import_detached = True
+        if job.get("_native_project"):
+            expected = job["_native_project"]
+            if self._import_detached:
+                self._import_pending = None
+                self._message = "Account changed. The downloaded project is kept locally."
+                return
+            current_path = lf.project_poll_write().get("path")
+            if (not current_path or Path(current_path).resolve() != Path(expected["path"]).resolve()
+                    or lf.get_scene().total_gaussian_count != expected["count"]):
+                if time.monotonic() - self._import_started > 180:
+                    self._import_pending = None
+                    self._message = "Project loading did not finish. The downloaded .licht file is kept."
+                return
+            from .asset_index import AssetIndex
+            index = AssetIndex()
+            if not index.load(): raise ValueError("Could not open the Asset Manager catalog.")
+            project, _ = index.register_licht_asset(expected["path"], name=job["result"]["title"])
+            if project is None: raise ValueError("The project opened but could not be added to Asset Manager.")
+            restore_view(lf, job["result"].get("viewerSettings", {}), environment_path=self.service.environment_path(job))
+            operation = self.service.link_download(job["id"], str(lf.io.inspect_project(expected["path"]).project_uuid))
+            job.pop("_native_project")
+            job["_link"] = operation
+            self._message = "Project opened. Saving its gallery link…"
+            return
         if job.get("_update"):
             self._finish_local_update(job)
             return
@@ -734,6 +758,17 @@ class GalleryPanel(Panel):
             stage = current.get("stagedImport", {})
             if stage.get("id") != bundle["stage_id"] or stage.get("state") != "ready":
                 raise ValueError(stage.get("message") or "The downloaded scene could not be prepared.")
+            if Path(job["path"]).suffix == ".licht":
+                from .portable_project import ProjectFile
+                with open(stage["projectPath"], "rb") as source:
+                    prepared = ProjectFile(source)
+                    count = sum(node["count"] for node in prepared.manifest["nodes"])
+                lf.project_open(stage["projectPath"])
+                job["_native_project"] = {"path": stage["projectPath"], "count": count}
+                bundle["phase"] = "opened"
+                self._import_started = time.monotonic()
+                self._message = "Opening .licht project…"
+                return
             nodes = self._bundle_nodes(stage["path"])
             lf.new_project()
             if lf.get_scene().get_nodes():

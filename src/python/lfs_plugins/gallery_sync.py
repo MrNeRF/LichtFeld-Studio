@@ -74,7 +74,7 @@ def _validate_journal(data):
                 require(key not in job or type(job[key]) is bool)
             if "preparation" in job:
                 require(isinstance(job["preparation"], str) and job.get("kind", "upload") == "upload"
-                        and job.get("ownedExport") is True and Path(job["path"]).suffix == ".lfsg")
+                        and job.get("ownedExport") is True and Path(job["path"]).suffix in (".lfsg", ".licht"))
             require(all(type(job.get(key)) is int and 0 <= job[key] <= 2**63-1 for key in ("completed", "total")))
             require(isinstance(job.get("metadata"), dict) and isinstance(job["metadata"].get("title"), str))
             optional_text(job["metadata"], ("description", "visibility", "replaceSceneId", "baseRevision"))
@@ -309,7 +309,7 @@ class GallerySync:
 
     def queue_prepared_upload(self, staging, metadata, project_id):
         staging = gallery_preparation.staging_path(self.root, staging)
-        return self.queue_upload(staging.with_suffix(".lfsg"), metadata, project_id,
+        return self.queue_upload(staging.with_suffix(".licht" if (staging / "project.licht").exists() else ".lfsg"), metadata, project_id,
                                  owned_export=True, preparation=str(staging))
 
     def queue_upload(self, export_path, metadata, project_id, *, owned_export=False, preparation=None):
@@ -317,8 +317,8 @@ class GallerySync:
             self._client()
             if self.busy:
                 raise ValueError("Wait for the current operation or pause it first.")
-            if preparation is not None and "lfsg" not in self._source_formats:
-                raise ValueError("This portal cannot receive Studio scene bundles yet. Refresh after it is updated.")
+            if preparation is not None and Path(export_path).suffix[1:] not in self._source_formats:
+                raise ValueError("This portal cannot receive .licht files yet. Refresh after it is updated.")
             linked = self._bucket()["links"].get(project_id)
             if linked and metadata.get("replaceSceneId") != linked["sceneId"]:
                 raise ValueError("This project is linked to another gallery item. Select its linked item or unlink the project first.")
@@ -365,7 +365,7 @@ class GallerySync:
         self._client()
         if self.busy:
             raise ValueError("Wait for the current transfer or pause it first.")
-        if scene["sourceFormat"] not in ("ply", "sog", "ssog", "lfsg"):
+        if scene["sourceFormat"] not in ("ply", "sog", "ssog", "lfsg", "licht"):
             raise ValueError("This scene format cannot be opened in Studio.")
         identifier = str(uuid.uuid4())
         path = self.root / "downloads" / (identifier + "." + scene["sourceFormat"])
@@ -417,7 +417,7 @@ class GallerySync:
                     self._client()
                     staging = gallery_preparation.staging_path(self.root, job["preparation"])
                     destination = Path(job["path"]).absolute()
-                    if destination != staging.with_suffix(".lfsg") or destination.is_symlink():
+                    if destination not in (staging.with_suffix(".lfsg"), staging.with_suffix(".licht")) or destination.is_symlink():
                         raise ValueError("Scene preparation no longer matches its transfer. Keep it for recovery.")
                     nodes, total = gallery_preparation.read_staging(self.root, job["preparation"])
                     with self._lock:
@@ -436,7 +436,28 @@ class GallerySync:
                     if background.exists() != bool(job["metadata"].get("viewerSettings", {}).get("environment")):
                         raise ValueError("The HDR background changed. Prepare the scene again before uploading.")
                     options = {"environment": background} if background.exists() else {}
-                    gallery_bundle.write_bundle(job["path"], nodes, progress=packaging_progress, **options)
+                    if Path(job["path"]).suffix == ".licht":
+                        from .portable_project import ProjectFile
+                        source_path = staging / "project.licht"
+                        total = source_path.stat().st_size
+                        Path(job["path"]).unlink(missing_ok=True)
+                        with source_path.open("rb") as source:
+                            ProjectFile(source)  # Admit only the fresh native publishing subset.
+                            stamp = gallery_bundle._stamp(source)
+                            source.seek(0)
+                            with Path(job["path"]).open("xb") as output:
+                                copied = 0
+                                while chunk := source.read(gallery_bundle.CHUNK_BYTES):
+                                    output.write(chunk)
+                                    copied += len(chunk)
+                                    if copied > stamp[2]: raise ValueError("The prepared project changed.")
+                                    packaging_progress(copied)
+                                output.flush()
+                                os.fsync(output.fileno())
+                            if copied != stamp[2] or gallery_bundle._stamp(source) != stamp:
+                                raise ValueError("The prepared project changed. Prepare it again.")
+                    else:
+                        gallery_bundle.write_bundle(job["path"], nodes, progress=packaging_progress, **options)
                     packaging_progress(total)
                     with self._lock:
                         job.update(packaged=True, completed=0, total=Path(job["path"]).stat().st_size, message="Uploading")
@@ -582,7 +603,7 @@ class GallerySync:
         record = {"id": identifier, "state": "preparing"}
 
         def action():
-            bundle = Path(job["path"]).suffix == ".lfsg"
+            bundle = Path(job["path"]).suffix in (".lfsg", ".licht")
             target = self.root / "imports" / (identifier + (".scene" if bundle else Path(job["path"]).suffix))
             # Retire the previous preview while its ownership record still exists.
             # Repeated updates must not orphan a directory on every attempt.
@@ -600,6 +621,7 @@ class GallerySync:
             with self._lock:
                 job["stagedImport"] = record
             retained_asset = None
+            retained_project = None
             try:
                 target.parent.mkdir(mode=0o700, exist_ok=True)
                 with self._lock:
@@ -616,7 +638,26 @@ class GallerySync:
                             record.update(completed=done, total=total)
                             self.message = f"Checking downloaded scene… {int(100 * done / max(1, total))}%"
                             self.version += 1
-                    gallery_preparation.unpack_bundle(target.parent, job["path"], target, progress=progress)
+                    unpack = gallery_preparation.unpack_project if Path(job["path"]).suffix == ".licht" else gallery_preparation.unpack_bundle
+                    unpack(target.parent, job["path"], target, progress=progress)
+                    if Path(job["path"]).suffix == ".licht":
+                        from .asset_index import resolve_default_asset_directory
+                        assets = resolve_default_asset_directory()
+                        assets.mkdir(parents=True, exist_ok=True)
+                        project_path = assets / ("Gallery-" + identifier + ".licht")
+                        try:
+                            os.link(job["path"], project_path)
+                            retained_project = project_path
+                        except OSError:
+                            with open(job["path"], "rb") as source, project_path.open("xb") as output:
+                                retained_project = project_path
+                                while chunk := source.read(gallery_bundle.CHUNK_BYTES):
+                                    if self._cancel.is_set(): raise GalleryTransferCanceled()
+                                    output.write(chunk)
+                                output.flush()
+                                os.fsync(output.fileno())
+                        with self._lock:
+                            record["projectPath"] = str(project_path)
                     background = target / "environment.lfsenv"
                     if background.exists():
                         # Keep a private asset independently of disposable import
@@ -658,6 +699,8 @@ class GallerySync:
                 with self._lock:
                     record.update(state="ready", path=str(target))
             except Exception as exc:
+                if retained_project is not None:
+                    retained_project.unlink(missing_ok=True)
                 if retained_asset is not None:
                     retained_asset.unlink(missing_ok=True)
                 if bundle:
@@ -752,7 +795,7 @@ class GallerySync:
 
         def owned(value, directory, identifier=None):
             path = Path(value).absolute()
-            if path.parent != directory or path.suffix not in (".ply", ".sog", ".ssog", ".lfsg"):
+            if path.parent != directory or path.suffix not in (".ply", ".sog", ".ssog", ".lfsg", ".licht"):
                 raise ValueError("A transfer file is outside its saved temporary folder. Keep it for recovery.")
             try:
                 uuid.UUID(path.stem)
@@ -776,12 +819,12 @@ class GallerySync:
                 else:
                     owned(stage["path"], root / "imports", stage["id"])
         elif job.get("ownedExport"):
-            if Path(job["path"]).suffix not in (".ply", ".sog", ".ssog", ".lfsg"):
-                raise ValueError("The saved export is not a Studio snapshot. Keep it for recovery.")
+            if Path(job["path"]).suffix not in (".ply", ".sog", ".ssog", ".lfsg", ".licht"):
+                raise ValueError("The saved export is not a prepared gallery upload. Keep it for recovery.")
             owned(job["path"], root)
             if job.get("preparation"):
                 directory = gallery_preparation.staging_path(root, job["preparation"])
-                if directory.with_suffix(".lfsg") != Path(job["path"]).absolute():
+                if Path(job["path"]).absolute() not in (directory.with_suffix(".lfsg"), directory.with_suffix(".licht")):
                     raise ValueError("Scene preparation no longer matches its transfer. Keep it for recovery.")
                 paths.extend(gallery_preparation.staging_files(root, directory))
         for path in paths:
