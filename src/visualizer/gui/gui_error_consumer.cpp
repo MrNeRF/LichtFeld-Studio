@@ -87,7 +87,8 @@ namespace lfs::vis::gui {
                     return Keys::SAVE_FAILED;
                 }
                 if (op == error_op::kExport) {
-                    return Keys::EXPORT_FAILED;
+                    return error.severity() == lfs::Severity::Warning ? Keys::EXPORT_WARNING
+                                                                      : Keys::EXPORT_FAILED;
                 }
                 if (op == error_op::kNewProject || op == error_op::kProjectSettings) {
                     return Keys::GENERIC;

@@ -420,6 +420,8 @@ namespace lfs::python {
         std::string stage;
         std::string outcome{"idle"};
         std::string format;
+        std::string path;
+        std::string error;
     };
 
     struct OverlayImportState {
@@ -476,6 +478,11 @@ namespace lfs::python {
     using LoadCameraPathCallback = bool (*)(const std::string&);
     using ClearKeyframesCallback = void (*)();
     using SetPlaybackSpeedCallback = void (*)(float);
+    using GetCameraPathDataCallback = std::string (*)();
+    using SetCameraPathDataCallback = bool (*)(const std::string&);
+    LFS_PYTHON_RUNTIME_API void set_camera_path_data_callbacks(GetCameraPathDataCallback get_cb, SetCameraPathDataCallback set_cb);
+    LFS_PYTHON_RUNTIME_API std::string get_camera_path_data();
+    LFS_PYTHON_RUNTIME_API bool set_camera_path_data(const std::string& value);
 
     LFS_PYTHON_RUNTIME_API void set_sequencer_timeline_callbacks(
         HasKeyframesCallback has_keyframes_cb,

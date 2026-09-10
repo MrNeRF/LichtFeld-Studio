@@ -73,6 +73,8 @@ namespace lfs::python {
         // Sequencer timeline callbacks
         HasKeyframesCallback g_has_keyframes_cb = nullptr;
         SaveCameraPathCallback g_save_camera_path_cb = nullptr;
+        GetCameraPathDataCallback g_get_camera_path_data_cb = nullptr;
+        SetCameraPathDataCallback g_set_camera_path_data_cb = nullptr;
         LoadCameraPathCallback g_load_camera_path_cb = nullptr;
         ClearKeyframesCallback g_clear_keyframes_cb = nullptr;
         SetPlaybackSpeedCallback g_set_playback_speed_cb = nullptr;
@@ -550,6 +552,19 @@ namespace lfs::python {
 
     bool save_camera_path(const std::string& path) {
         return g_save_camera_path_cb ? g_save_camera_path_cb(path) : false;
+    }
+
+    void set_camera_path_data_callbacks(GetCameraPathDataCallback get_cb, SetCameraPathDataCallback set_cb) {
+        g_get_camera_path_data_cb = get_cb;
+        g_set_camera_path_data_cb = set_cb;
+    }
+
+    std::string get_camera_path_data() {
+        return g_get_camera_path_data_cb ? g_get_camera_path_data_cb() : "null";
+    }
+
+    bool set_camera_path_data(const std::string& value) {
+        return g_set_camera_path_data_cb ? g_set_camera_path_data_cb(value) : false;
     }
 
     bool load_camera_path(const std::string& path) {

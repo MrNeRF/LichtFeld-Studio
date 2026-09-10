@@ -31,7 +31,8 @@ namespace lfs::core {
                               NUREC_USDZ = 5,
                               RAD = 6,
                               COLMAP = 7,
-                              SSOG = 8 };
+                              SSOG = 8,
+                              GALLERY_SCENE = 9 }; // Internal local-node staging for gallery bundles.
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \
@@ -61,6 +62,7 @@ namespace lfs::core {
             EVENT(StopTraining, );
             EVENT(ResetTraining, );
             EVENT(LoadFile, std::filesystem::path path; bool is_dataset; std::filesystem::path output_path = {}; std::filesystem::path init_path = {}; std::string centralize_dataset = {}; std::optional<int> max_width = {}; std::optional<int> min_track_length = {}; bool apply_auto_crop = false; bool stop_training = false; bool discard_changes = false; bool replace = false;);
+            EVENT(LoadGalleryScene, std::vector<std::filesystem::path> paths; std::vector<glm::mat4> transforms; std::vector<int> sh_degrees; std::string group_name; bool hidden = false;);
             EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(ImportColmapCameras, std::filesystem::path sparse_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);

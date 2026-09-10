@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
@@ -768,6 +769,33 @@ namespace lfs::core {
     void free_image_float(float* img) { std::free(img); }
 
     std::tuple<float*, int, int, int> load_image_float(const std::filesystem::path& p) {
+        if (p.extension() == ".lfsenv") {
+            // Canonical gallery background: magic, little-endian width/height,
+            // then top-to-bottom RGB float32. No filenames or image metadata.
+            static_assert(std::endian::native == std::endian::little);
+            std::ifstream input(p, std::ios::binary | std::ios::ate);
+            const auto size = input.tellg();
+            input.seekg(0);
+            std::array<char, 8> magic{};
+            uint32_t width = 0, height = 0;
+            input.read(magic.data(), magic.size());
+            input.read(reinterpret_cast<char*>(&width), sizeof(width));
+            input.read(reinterpret_cast<char*>(&height), sizeof(height));
+            const uint64_t pixels = uint64_t(width) * height;
+            if (!input || std::memcmp(magic.data(), "LFSENV1\0", 8) != 0 ||
+                width == 0 || height == 0 || width > 8192 || height > 8192 ||
+                pixels > 8'388'608 || size != static_cast<std::streamoff>(16 + pixels * 12))
+                return {nullptr, 0, 0, 0};
+            auto* data = static_cast<float*>(std::malloc(pixels * 12));
+            if (!data)
+                throw std::bad_alloc();
+            input.read(reinterpret_cast<char*>(data), pixels * 12);
+            if (!input || !std::all_of(data, data + pixels * 3, [](float x) { return std::isfinite(x); })) {
+                std::free(data);
+                return {nullptr, 0, 0, 0};
+            }
+            return {data, static_cast<int>(width), static_cast<int>(height), 3};
+        }
         if (p.extension() == ".hdr") {
             image_codecs::DecodeTarget target{3, image_codecs::SampleType::Float32,
                                               nullptr, allocate_image_buffer, nullptr};

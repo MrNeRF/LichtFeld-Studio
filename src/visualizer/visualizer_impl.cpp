@@ -553,17 +553,20 @@ namespace lfs::vis {
                 state.progress = tasks.getExportProgress();
                 state.stage = tasks.getExportStage();
                 state.outcome = tasks.getExportOutcome();
+                state.path = core::path_to_utf8(tasks.getExportPath());
+                state.error = tasks.getExportError();
                 const auto fmt = tasks.getExportFormat();
-                state.format = fmt == core::ExportFormat::PLY           ? "PLY"
-                               : fmt == core::ExportFormat::SSOG        ? "SSOG"
-                               : fmt == core::ExportFormat::SOG         ? "SOG"
-                               : fmt == core::ExportFormat::SPZ         ? "SPZ"
-                               : fmt == core::ExportFormat::HTML_VIEWER ? "HTML"
-                               : fmt == core::ExportFormat::USD         ? "USD"
-                               : fmt == core::ExportFormat::NUREC_USDZ  ? "USDZ"
-                               : fmt == core::ExportFormat::RAD         ? "RAD"
-                               : fmt == core::ExportFormat::COLMAP      ? "COLMAP"
-                                                                        : "file";
+                state.format = fmt == core::ExportFormat::PLY             ? "PLY"
+                               : fmt == core::ExportFormat::GALLERY_SCENE ? "Gallery"
+                               : fmt == core::ExportFormat::SSOG          ? "SSOG"
+                               : fmt == core::ExportFormat::SOG           ? "SOG"
+                               : fmt == core::ExportFormat::SPZ           ? "SPZ"
+                               : fmt == core::ExportFormat::HTML_VIEWER   ? "HTML"
+                               : fmt == core::ExportFormat::USD           ? "USD"
+                               : fmt == core::ExportFormat::NUREC_USDZ    ? "USDZ"
+                               : fmt == core::ExportFormat::RAD           ? "RAD"
+                               : fmt == core::ExportFormat::COLMAP        ? "COLMAP"
+                                                                          : "file";
                 return state;
             },
             []() {
@@ -709,6 +712,49 @@ namespace lfs::vis {
                 }
             });
         callback_cleanup_.add([] { python::set_sequencer_timeline_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
+
+        python::set_camera_path_data_callbacks(
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
+                if (!gm || gm->sequencer().timeline().realKeyframeCount() == 0)
+                    return "null";
+                const auto& controller = gm->sequencer();
+                const auto saved = controller.saveToJson();
+                const auto mode = controller.loopMode();
+                return nlohmann::json{{"version", 1}, {"keyframes", saved.at("keyframes")}, {"duration", controller.timeline().clipDuration()}, {"loopMode", mode == LoopMode::LOOP ? "loop" : mode == LoopMode::PING_PONG ? "ping_pong"
+                                                                                                                                                                                                                           : "once"},
+                                      {"playbackSpeed", controller.playbackSpeed()}}
+                    .dump();
+            },
+            [](const std::string& value) -> bool {
+                auto* gm = python::get_gui_manager();
+                if (!gm)
+                    return false;
+                try {
+                    const auto saved = nlohmann::json::parse(value);
+                    if (saved.at("version") != 1)
+                        return false;
+                    const std::string mode = saved.at("loopMode");
+                    if (mode != "once" && mode != "loop" && mode != "ping_pong")
+                        return false;
+                    const float speed = saved.at("playbackSpeed");
+                    if (!std::isfinite(speed) || speed < MIN_PLAYBACK_SPEED || speed > MAX_PLAYBACK_SPEED)
+                        return false;
+                    const nlohmann::json timeline{{"version", 4}, {"clip_duration", saved.at("duration")}, {"keyframes", saved.at("keyframes")}};
+                    if (!gm->sequencer().loadFromJson(timeline))
+                        return false;
+                    gm->sequencer().setLoopMode(mode == "loop" ? LoopMode::LOOP : mode == "ping_pong" ? LoopMode::PING_PONG
+                                                                                                      : LoopMode::ONCE);
+                    gm->sequencer().setPlaybackSpeed(speed);
+                    gm->getSequencerUIState().playback_speed = speed;
+                    lfs::core::events::state::KeyframeListChanged{.count = gm->sequencer().timeline().realKeyframeCount()}.emit();
+                    return true;
+                } catch (const std::exception& e) {
+                    LOG_WARN("Cannot restore camera path: {}", e.what());
+                    return false;
+                }
+            });
+        callback_cleanup_.add([] { python::set_camera_path_data_callbacks(nullptr, nullptr); });
 
         sequencer_ui_state_ = std::make_unique<python::SequencerUIStateData>();
         python::set_sequencer_ui_state_callback([this]() -> python::SequencerUIStateData* {

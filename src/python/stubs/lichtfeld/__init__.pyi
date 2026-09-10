@@ -397,6 +397,18 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
+def load_gallery_scene(nodes: list[dict], name: str, hidden: bool = False) -> None:
+    """Load verified gallery nodes on the managed import worker, then attach a
+    complete group. Each node supplies path, affine transform and shDegree.
+    A failed or canceled batch adds no group. Uses ui.get_import_state().
+    """
+
+def prepare_gallery_scene(path: str) -> None:
+    """Capture visible splats at a scene/UI safe point, then write local PLY nodes
+    and manifest.json into a new private directory using the managed export job.
+    Poll ui.get_export_state() and cancel with ui.cancel_export().
+    """
+
 def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
     """
     Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
@@ -642,8 +654,8 @@ def get_depth_view_mode() -> str:
 def set_depth_view_mode(mode: str) -> None:
     """Set depth-map visualization mode"""
 
-def set_orthographic(ortho: bool) -> None:
-    """Enable or disable orthographic projection"""
+def set_orthographic(ortho: bool, extent_world: float | None = None) -> None:
+    """Enable or disable orthographic projection, optionally setting its vertical world extent."""
 
 def on_training_start(callback: Callable) -> Callable:
     """Decorator for training start handler"""

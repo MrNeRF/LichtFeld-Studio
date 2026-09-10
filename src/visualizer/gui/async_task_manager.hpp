@@ -132,12 +132,15 @@ namespace lfs::vis {
             }
             void dismissImport();
             void cancelImport();
+            [[nodiscard]] bool canCancelGalleryImport() const { return splat_load_state_.gallery.has_value() && isImporting(); }
+            bool requestGalleryImportCancel();
 
             [[nodiscard]] bool startSplatLoad(
                 std::vector<std::filesystem::path> paths,
                 bool replace_first,
                 std::vector<std::string> name_hints = {},
-                std::vector<bool> visibility = {});
+                std::vector<bool> visibility = {},
+                std::optional<core::events::cmd::LoadGalleryScene> gallery = std::nullopt);
 
             // Video export
             [[nodiscard]] bool isExportingVideo() const {
@@ -224,6 +227,7 @@ namespace lfs::vis {
                                   lfs::core::ProvenanceStamp provenance,
                                   int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
             void startColmapExport(const std::filesystem::path& path);
+            void startGallerySceneExport(const std::filesystem::path& path);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
             struct SplatLoadRequest {
@@ -231,6 +235,8 @@ namespace lfs::vis {
                 std::string name_hint;
                 bool is_visible = true;
                 bool replace_scene = false;
+                glm::mat4 transform{1.0f};
+                int active_sh_degree = -1;
             };
             struct SplatLoadCompletion {
                 SplatLoadRequest request;
@@ -241,6 +247,9 @@ namespace lfs::vis {
             struct SplatLoadState {
                 JobHandle job;
                 bool replace_first = false;
+                std::optional<core::events::cmd::LoadGalleryScene> gallery;
+                uint64_t scene_generation = 0;
+                std::optional<core::Uuid> gallery_group_uuid;
                 std::atomic<bool> worker_complete{false};
                 mutable std::mutex mutex;
                 std::deque<SplatLoadCompletion> completions;
@@ -251,6 +260,7 @@ namespace lfs::vis {
                 std::optional<std::jthread> thread;
             };
             SplatLoadState splat_load_state_;
+            uint64_t gallery_scene_epoch_ = 0;
             void checkAsyncSplatLoadCompletion();
             void checkAsyncImportCompletion();
             void applyLoadedDataToScene();

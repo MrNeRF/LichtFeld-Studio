@@ -334,7 +334,7 @@ namespace {
         if (auto posted = lfs::vis::post_guarded_and_wait<void>(
                 viewer, context,
                 [emit = std::forward<EmitFn>(emit_fn)]() mutable
-                -> lfs::Result<void> {
+                    -> lfs::Result<void> {
                     emit();
                     return {};
                 },
@@ -1835,10 +1835,62 @@ NB_MODULE(lichtfeld, m) {
         "Explicitly discard unsaved changes and exit.");
 
     m.def(
+        "load_gallery_scene",
+        [](const nb::list& nodes, const std::string& name, const bool hidden) {
+            if (nodes.size() == 0 || nodes.size() > 4096 || name.empty() || name.size() > 200)
+                throw std::invalid_argument("Invalid gallery scene import.");
+            lfs::core::events::cmd::LoadGalleryScene command;
+            command.group_name = name;
+            command.hidden = hidden;
+            for (const auto item : nodes) {
+                const auto node = nb::cast<nb::dict>(item);
+                const auto rows = nb::cast<std::vector<std::vector<float>>>(node["transform"]);
+                if (rows.size() != 4 || std::any_of(rows.begin(), rows.end(), [](const auto& row) { return row.size() != 4; }))
+                    throw std::invalid_argument("Invalid gallery node transform.");
+                glm::mat4 matrix{1.0f};
+                for (int row = 0; row < 4; ++row)
+                    for (int column = 0; column < 4; ++column) {
+                        if (!std::isfinite(rows[row][column]))
+                            throw std::invalid_argument("Invalid gallery node transform.");
+                        matrix[column][row] = rows[row][column];
+                    }
+                if (rows[3] != std::vector<float>{0, 0, 0, 1})
+                    throw std::invalid_argument("Gallery node transform must be affine.");
+                const int degree = nb::cast<int>(node["shDegree"]);
+                if (degree < 0 || degree > 3)
+                    throw std::invalid_argument("Invalid gallery SH degree.");
+                command.paths.push_back(python_utf8_path(nb::cast<std::string>(node["path"])));
+                command.transforms.push_back(matrix);
+                command.sh_degrees.push_back(degree);
+            }
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.load_gallery_scene", [command = std::move(command)] { command.emit(); });
+        },
+        nb::arg("nodes"), nb::arg("name"), nb::arg("hidden") = false,
+        "Load verified gallery nodes on the managed import worker, then attach a complete group. "
+        "Nodes contain path, affine transform and shDegree. A failed or canceled batch adds no group.");
+
+    m.def(
+        "prepare_gallery_scene",
+        [](const std::string& path) {
+            nb::gil_scoped_release release;
+            emit_project_cmd_marshaled("python.prepare_gallery_scene", [path] {
+                lfs::python::invoke_export(static_cast<int>(lfs::core::ExportFormat::GALLERY_SCENE),
+                                           path, {}, 3, false, true, 4, false);
+            });
+        },
+        nb::arg("path"),
+        "Capture visible splats and prepare local PLY nodes in a new private directory. "
+        "Capture runs at a scene/UI safe point. Progress and cancellation use the export job. "
+        "The completed manifest.json contains relative paths, world transforms and active SH limits.");
+
+    m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
+            if (format == static_cast<int>(lfs::core::ExportFormat::GALLERY_SCENE))
+                throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
                                        spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
@@ -2735,7 +2787,9 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("mode"), "Set depth-map visualization mode");
 
     m.def(
-        "set_orthographic", [](bool ortho) {
+        "set_orthographic", [](bool ortho, std::optional<double> extent_world) {
+            if (extent_world && (!ortho || !std::isfinite(*extent_world) || *extent_world <= 0.0))
+                throw nb::value_error("Orthographic extent must be positive and finite, with orthographic projection enabled");
             auto* rm = lfs::python::get_rendering_manager();
             if (!rm)
                 return;
@@ -2749,9 +2803,19 @@ NB_MODULE(lichtfeld, m) {
                 distance_to_pivot = glm::length(pivot - eye);
             }
 
-            rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+            if (extent_world) {
+                const float scale = static_cast<float>(viewport_height / *extent_world);
+                if (!std::isfinite(scale) || scale <= 0.0f)
+                    throw nb::value_error("Open a viewport with a representable orthographic extent");
+                auto settings = rm->getSettings();
+                settings.orthographic = true;
+                settings.ortho_scale = scale;
+                rm->updateSettings(settings, lfs::vis::DirtyFlag::ALL);
+            } else {
+                rm->setOrthographic(ortho, viewport_height, distance_to_pivot);
+            }
         },
-        nb::arg("ortho"), "Enable or disable orthographic projection");
+        nb::arg("ortho"), nb::arg("extent_world") = nb::none(), "Enable or disable orthographic projection, optionally setting its vertical world extent");
 
     // Hook registration functions (decorator-style)
     m.def(

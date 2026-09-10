@@ -840,6 +840,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OUT_OF_GPU_MEMORY = "error_modal.out_of_gpu_memory";
         inline constexpr const char* DATASET_LOAD_FAILED = "error_modal.dataset_load_failed";
         inline constexpr const char* EXPORT_FAILED = "error_modal.export_failed";
+        inline constexpr const char* EXPORT_WARNING = "error_modal.export_warning";
         inline constexpr const char* VIDEO_EXPORT_FAILED = "error_modal.video_export_failed";
         inline constexpr const char* MESH2SPLAT_FAILED = "error_modal.mesh2splat_failed";
         inline constexpr const char* CONFIG_INVALID = "error_modal.config_invalid";

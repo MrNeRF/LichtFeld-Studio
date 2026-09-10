@@ -830,14 +830,16 @@ namespace lfs::vis {
     std::expected<lfs::io::LoadResult, std::string> SceneManager::stageSplatFile(
         const std::filesystem::path& path,
         lfs::io::ProgressCallback progress,
-        lfs::io::CancelCallback cancel_requested) {
+        lfs::io::CancelCallback cancel_requested, const bool preserve_raw) {
         LOG_TIMER("SceneManager::stageSplatFile");
 
         try {
             LOG_INFO("Loading splat file: {}", lfs::core::path_to_utf8(path));
             LOG_DEBUG("Creating loader for splat file");
             auto loader = lfs::io::Loader::create();
-            auto splat_allocator = makeExternalSplatAllocator();
+            // Import gallery coefficients directly into float-capable renderer
+            // storage; otherwise loader migration encodes the pooled SH to q16.
+            auto splat_allocator = makeViewerSplatTensorAllocator(preserve_raw);
             lfs::io::LoadOptions options{
                 .resize_factor = -1,
                 .max_width = 0,
@@ -846,7 +848,7 @@ namespace lfs::vis {
                 .progress = std::move(progress),
                 .cancel_requested = std::move(cancel_requested),
                 .splat_tensor_allocator = splat_allocator,
-                .shN_q16 = lfs::core::sh_value_quant::enabled()};
+                .shN_q16 = !preserve_raw && lfs::core::sh_value_quant::enabled()};
 
             LOG_TRACE("Loading splat file with loader");
             auto load_result = loader->load(path, options);
@@ -1131,7 +1133,8 @@ namespace lfs::vis {
     std::string SceneManager::attachLoadedSplatNode(const std::filesystem::path& path,
                                                     const std::string& name_hint,
                                                     const bool is_visible,
-                                                    lfs::io::LoadResult load_result) {
+                                                    lfs::io::LoadResult load_result,
+                                                    const bool preserve_raw, const core::NodeId parent) {
         LOG_TIMER_TRACE("SceneManager::attachLoadedSplatNode");
 
         try {
@@ -1145,7 +1148,8 @@ namespace lfs::vis {
                     throw std::runtime_error(migrated.error().format());
                 }
             }
-            quantizeViewerLoadedPlyShN(path, load_result);
+            if (!preserve_raw)
+                quantizeViewerLoadedPlyShN(path, load_result);
 
             const std::string base_name = name_hint.empty() ? lfs::io::splat_import_name(path) : name_hint;
             std::string name = base_name;
@@ -1196,7 +1200,7 @@ namespace lfs::vis {
             const size_t gaussian_count = (*splat_data)->size();
             const core::NodeId node_id = scene_.addSplat(
                 name,
-                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+                std::make_unique<lfs::core::SplatData>(std::move(**splat_data)), parent);
             if (node_id == core::NULL_NODE) {
                 throw std::runtime_error("Failed to add splat node '" + name + "'");
             }
@@ -1244,7 +1248,7 @@ namespace lfs::vis {
             if (is_visible)
                 selectNode(node_id);
 
-            auto ppisp_path = lfs::training::find_ppisp_companion(path);
+            auto ppisp_path = preserve_raw ? std::filesystem::path{} : lfs::training::find_ppisp_companion(path);
             if (!ppisp_path.empty()) {
                 LOG_INFO("Found PPISP companion file: {}", lfs::core::path_to_utf8(ppisp_path));
                 loadPPISPCompanion(ppisp_path);
@@ -3469,6 +3473,9 @@ namespace lfs::vis {
         // notification. Keep the small node scan, but do not reuse a state that owns a merged
         // point cloud unless those tensors acquire an explicit generation in the future.
         const auto visible_point_cloud_nodes = collectVisiblePointCloudNodes(scene_);
+        const auto node_active_sh_degrees = content_type_ == ContentType::SplatFiles
+                                                ? scene_.getVisibleNodeActiveShDegrees()
+                                                : std::vector<int>{};
         const bool point_cloud_fallback = !hasRenderableGaussians(current_model) &&
                                           !visible_point_cloud_nodes.empty();
         if (!point_cloud_fallback && cached_render_state_ &&
@@ -3477,10 +3484,12 @@ namespace lfs::vis {
             cached_render_gaussian_selection_generation_ == gaussian_selection_generation &&
             cached_render_scene_generation_local_ == local_scene_generation &&
             cached_render_model_ == current_model &&
-            cached_render_content_type_ == content_type_)
+            cached_render_content_type_ == content_type_ &&
+            cached_render_state_->node_active_sh_degrees == node_active_sh_degrees)
             return *cached_render_state_;
 
         SceneRenderState state;
+        state.node_active_sh_degrees = node_active_sh_degrees;
 
         // Get combined model or point cloud
         bool hidden_dataset_training_model = false;

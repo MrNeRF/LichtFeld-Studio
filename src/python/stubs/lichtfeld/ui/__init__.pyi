@@ -2367,13 +2367,19 @@ def is_scene_empty() -> bool:
     """Check if no scene is loaded"""
 
 def get_export_state() -> dict:
-    """Get current export progress state"""
+    """Get export active/progress/stage/outcome/format plus its output path and error.
+    Compare path with the requested destination before consuming an export result.
+    """
 
 def cancel_export() -> None:
     """Cancel an ongoing export operation"""
 
 def get_import_state() -> dict:
     """Get current import progress state"""
+
+def cancel_gallery_import() -> bool:
+    """Request gallery import cancellation without waiting for its worker."""
+    ...
 
 def dismiss_import() -> None:
     """Dismiss the import completion overlay"""
@@ -2456,6 +2462,14 @@ def get_sequencer_state() -> SequencerUIState:
 
 def has_keyframes() -> bool:
     """Check if sequencer has any keyframes"""
+
+def get_camera_path() -> object:
+    """
+    Get the native camera path with clip duration, loop mode and playback speed
+    """
+
+def set_camera_path(value: dict) -> bool:
+    """Restore a native camera path including loop mode and playback speed"""
 
 def save_camera_path(path: str) -> bool:
     """Save camera path to JSON file"""

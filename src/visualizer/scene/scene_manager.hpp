@@ -106,7 +106,7 @@ namespace lfs::vis {
         [[nodiscard]] std::expected<lfs::io::LoadResult, std::string> stageSplatFile(
             const std::filesystem::path& path,
             lfs::io::ProgressCallback progress = {},
-            lfs::io::CancelCallback cancel_requested = {});
+            lfs::io::CancelCallback cancel_requested = {}, bool preserve_raw = false);
         [[nodiscard]] std::string attachLoadedSplatFile(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
@@ -115,7 +115,9 @@ namespace lfs::vis {
         [[nodiscard]] std::string attachLoadedSplatNode(const std::filesystem::path& path,
                                                         const std::string& name_hint,
                                                         bool is_visible,
-                                                        lfs::io::LoadResult load_result);
+                                                        lfs::io::LoadResult load_result,
+                                                        bool preserve_raw = false,
+                                                        core::NodeId parent = core::NULL_NODE);
         std::string addSplatFile(const std::filesystem::path& path, const std::string& name = "", bool is_visible = true);
         std::string addGeneratedSplatNode(std::unique_ptr<core::SplatData> model,
                                           const std::string& source_name,

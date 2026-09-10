@@ -453,6 +453,16 @@ class NodeCollection:
     def __iter__(self) -> NodeCollectionIterator:
         """Return an iterator over all nodes"""
 
+class SceneSplatSnapshot:
+    """Owned geometry and node metadata, independent of later scene edits."""
+    @property
+    def transform(self) -> tuple[tuple[float, ...], ...]: ...
+    @property
+    def sh_degree(self) -> int: ...
+    def splat_data(self) -> SplatData:
+        """Materialize local node geometry on an export worker."""
+        ...
+
 class Scene:
     def is_valid(self) -> bool:
         """Check if scene reference is still valid (thread-safe)"""
@@ -551,6 +561,9 @@ class Scene:
 
     def get_visible_nodes(self) -> list[SceneNode]:
         """Get all visible nodes in the scene"""
+
+    def snapshot_visible_splats(self) -> list[SceneSplatSnapshot]:
+        """Copy visible splats at a UI safe point for subsequent worker IO."""
 
     def is_node_effectively_visible(self, id: int) -> bool:
         """Check if a node is visible considering parent visibility"""

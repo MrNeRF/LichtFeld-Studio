@@ -397,6 +397,15 @@ namespace lfs::python {
     };
 
     // Main scene wrapper
+    class PySceneSplatSnapshot {
+    public:
+        explicit PySceneSplatSnapshot(core::Scene::SplatSnapshot snapshot) : snapshot_(std::move(snapshot)) {}
+        [[nodiscard]] const core::Scene::SplatSnapshot& snapshot() const { return snapshot_; }
+
+    private:
+        core::Scene::SplatSnapshot snapshot_;
+    };
+
     class PyScene {
     public:
         explicit PyScene(core::Scene* scene);
@@ -453,6 +462,7 @@ namespace lfs::python {
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();
+        std::vector<PySceneSplatSnapshot> snapshot_visible_splats();
         bool is_node_effectively_visible(int32_t id) const {
             return scene_->isNodeEffectivelyVisible(id);
         }

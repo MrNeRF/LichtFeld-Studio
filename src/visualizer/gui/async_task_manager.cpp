@@ -25,6 +25,7 @@
 #include "io/formats/colmap.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
+#include "rendering/environment_image.hpp"
 #include "rendering/mesh2splat.hpp"
 #include "rendering/mesh_offscreen_renderer.hpp"
 #include "rendering/passes/vulkan_mesh_pass.hpp"
@@ -42,13 +43,17 @@
 #include "window/vulkan_context.hpp"
 #include "window/window_manager.hpp"
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <condition_variable>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <future>
+#include <nlohmann/json.hpp>
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
@@ -117,6 +122,7 @@ namespace lfs::vis::gui {
         case ExportFormat::NUREC_USDZ: return "USDZ";
         case ExportFormat::RAD: return "RAD";
         case ExportFormat::COLMAP: return "COLMAP";
+        case ExportFormat::GALLERY_SCENE: return "Gallery";
         default: return "file";
         }
     }
@@ -457,6 +463,7 @@ namespace lfs::vis::gui {
         SceneRenderState state;
         state.combined_model = snapshot.combined_model.get();
         state.model_transforms = snapshot.model_transforms;
+        state.node_active_sh_degrees = snapshot.node_active_sh_degrees;
         state.transform_indices = snapshot.transform_indices;
         state.selection_mask = snapshot.selection_mask;
         state.selected_node_mask = snapshot.selected_node_mask;
@@ -913,7 +920,8 @@ namespace lfs::vis::gui {
     bool AsyncTaskManager::startSplatLoad(std::vector<std::filesystem::path> paths,
                                           const bool replace_first,
                                           std::vector<std::string> name_hints,
-                                          std::vector<bool> visibility) {
+                                          std::vector<bool> visibility,
+                                          std::optional<core::events::cmd::LoadGalleryScene> gallery) {
         if (paths.empty()) {
             LOG_WARN("Splat load requested without paths");
             return false;
@@ -927,6 +935,13 @@ namespace lfs::vis::gui {
             LOG_WARN("Import already in progress; rejecting splat load");
             return false;
         }
+        if (gallery) {
+            auto* manager = viewer_->getSceneManager();
+            if (!manager || !manager->canClearScene() || gallery->group_name.empty() ||
+                manager->getScene().getNode(gallery->group_name) || gallery->transforms.size() != paths.size() ||
+                gallery->sh_degrees.size() != paths.size() || paths.size() > 4096)
+                throw std::invalid_argument("The scene changed or the gallery import is invalid.");
+        }
         if (splat_load_state_.job) {
             jobs_.free(splat_load_state_.job);
             splat_load_state_.job = {};
@@ -939,6 +954,9 @@ namespace lfs::vis::gui {
 
         splat_load_state_.job = *created;
         splat_load_state_.replace_first = replace_first;
+        splat_load_state_.gallery = std::move(gallery);
+        splat_load_state_.gallery_group_uuid.reset();
+        splat_load_state_.scene_generation = gallery_scene_epoch_;
         splat_load_state_.worker_complete.store(false, std::memory_order_release);
         {
             const std::lock_guard lock(splat_load_state_.mutex);
@@ -952,7 +970,9 @@ namespace lfs::vis::gui {
                     .path = std::move(paths[index]),
                     .name_hint = index < name_hints.size() ? std::move(name_hints[index]) : std::string{},
                     .is_visible = index >= visibility.size() || visibility[index],
-                    .replace_scene = replace_first && index == 0});
+                    .replace_scene = replace_first && index == 0,
+                    .transform = splat_load_state_.gallery ? splat_load_state_.gallery->transforms[index] : glm::mat4{1.0f},
+                    .active_sh_degree = splat_load_state_.gallery ? splat_load_state_.gallery->sh_degrees[index] : -1});
             }
         }
 
@@ -1002,7 +1022,8 @@ namespace lfs::vis::gui {
                         },
                         [this, job, &stop_token]() {
                             return stop_token.stop_requested() || jobs_.cancelRequested(job);
-                        });
+                        },
+                        request.active_sh_degree >= 0);
 
                     SplatLoadCompletion completion{
                         .request = request,
@@ -1029,6 +1050,15 @@ namespace lfs::vis::gui {
     }
 
     void AsyncTaskManager::checkAsyncSplatLoadCompletion() {
+        if (splat_load_state_.gallery && jobs_.cancelRequested(splat_load_state_.job) &&
+            splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
+            cancelImport(); // The worker has finished; joining cannot wait on IO.
+            return;
+        }
+        if (splat_load_state_.gallery && !splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
+            publishImportOverlayState();
+            return; // Verified gallery batches never expose a partially loaded scene.
+        }
         std::deque<SplatLoadCompletion> completions;
         {
             const std::lock_guard lock(splat_load_state_.mutex);
@@ -1036,6 +1066,36 @@ namespace lfs::vis::gui {
         }
 
         auto* const scene_manager = viewer_->getSceneManager();
+        core::NodeId gallery_group = core::NULL_NODE;
+        std::unique_ptr<core::Scene::Transaction> gallery_transaction;
+        if (splat_load_state_.gallery && !completions.empty()) {
+            const auto job_state = jobs_.update(splat_load_state_.job);
+            const auto& gallery = *splat_load_state_.gallery;
+            bool valid = scene_manager && gallery_scene_epoch_ == splat_load_state_.scene_generation &&
+                         scene_manager->canClearScene() && !scene_manager->getScene().getNode(gallery.group_name) &&
+                         job_state && !job_state->worker_canceled && !jobs_.cancelRequested(splat_load_state_.job) &&
+                         completions.size() == splat_load_state_.requests.size();
+            for (const auto& completion : completions) {
+                const auto* data = completion.result ? std::get_if<std::shared_ptr<core::SplatData>>(&completion.result->data) : nullptr;
+                valid = valid && completion.error.empty() && data && *data &&
+                        completion.request.active_sh_degree >= 0 && completion.request.active_sh_degree <= 3 &&
+                        completion.request.active_sh_degree <= (data && *data ? (*data)->get_max_sh_degree() : -1);
+            }
+            if (!valid) {
+                ++splat_load_state_.failed_count;
+                completions.clear();
+            } else {
+                gallery_transaction = std::make_unique<core::Scene::Transaction>(scene_manager->getScene());
+                gallery_group = scene_manager->getScene().addGroup(gallery.group_name);
+                if (gallery_group == core::NULL_NODE) {
+                    ++splat_load_state_.failed_count;
+                    completions.clear();
+                } else {
+                    scene_manager->getScene().setNodeVisibility(gallery_group, false);
+                    splat_load_state_.gallery_group_uuid = scene_manager->getScene().getNodeById(gallery_group)->uuid;
+                }
+            }
+        }
         for (auto& completion : completions) {
             if (!completion.error.empty()) {
                 ++splat_load_state_.failed_count;
@@ -1066,11 +1126,17 @@ namespace lfs::vis::gui {
                         completion.request.is_visible,
                         std::move(*completion.result), true);
                 } else {
+                    if (splat_load_state_.gallery)
+                        std::get<std::shared_ptr<core::SplatData>>(completion.result->data)->set_active_sh_degree(completion.request.active_sh_degree);
                     node_name = scene_manager->attachLoadedSplatNode(
                         completion.request.path,
                         completion.request.name_hint,
-                        completion.request.is_visible,
-                        std::move(*completion.result));
+                        splat_load_state_.gallery ? false : completion.request.is_visible,
+                        std::move(*completion.result), splat_load_state_.gallery.has_value(), gallery_group);
+                    if (splat_load_state_.gallery) {
+                        scene_manager->getScene().setNodeTransform(node_name, completion.request.transform);
+                        scene_manager->getScene().setNodeVisibility(node_name, true);
+                    }
                 }
                 const auto attach_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - attach_started_at);
@@ -1089,6 +1155,20 @@ namespace lfs::vis::gui {
                     .emit();
             }
         }
+
+        if (gallery_group != core::NULL_NODE) {
+            if (splat_load_state_.failed_count) {
+                scene_manager->getScene().removeNodeById(gallery_group);
+                splat_load_state_.gallery_group_uuid.reset();
+                splat_load_state_.loaded_count = 0;
+            } else {
+                scene_manager->getScene().preserveSourceModels();
+                if (scene_manager->getContentType() == SceneManager::ContentType::Empty)
+                    scene_manager->changeContentType(SceneManager::ContentType::SplatFiles);
+                scene_manager->getScene().setNodeVisibility(gallery_group, !splat_load_state_.gallery->hidden);
+            }
+        }
+        gallery_transaction.reset();
 
         if (!splat_load_state_.worker_complete.load(std::memory_order_acquire)) {
             publishImportOverlayState();
@@ -1128,7 +1208,10 @@ namespace lfs::vis::gui {
                 publishImportOverlayState();
                 return;
             }
-            scene_manager->consolidateNodeModels();
+            // Preserve the original float coefficients for editing and re-export.
+            // The renderer cache may quantize its own combined copy.
+            if (!splat_load_state_.gallery)
+                scene_manager->consolidateNodeModels();
             splat_load_state_.consolidation_pending = false;
         }
         const bool success = splat_load_state_.loaded_count > 0;
@@ -1155,6 +1238,16 @@ namespace lfs::vis::gui {
 
     void AsyncTaskManager::setupEvents() {
         using namespace lfs::core::events;
+
+        state::SceneCleared::when([this](const auto&) { ++gallery_scene_epoch_; });
+
+        cmd::LoadGalleryScene::when([this](const auto& command) {
+            std::vector<std::string> names;
+            for (size_t i = 0; i < command.paths.size(); ++i)
+                names.push_back(std::format("Object {}", i + 1));
+            if (!startSplatLoad(command.paths, false, std::move(names), {}, command))
+                throw std::runtime_error("Another import is active. Try the gallery import again when it finishes.");
+        });
 
         cmd::LoadFile::when([this](const auto& cmd) {
             if (!cmd.is_dataset)
@@ -1330,8 +1423,16 @@ namespace lfs::vis::gui {
                                          int spz_version,
                                          bool include_provenance,
                                          int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
-        if (isExporting())
+        if (isExporting()) {
+            if (format == ExportFormat::GALLERY_SCENE)
+                throw std::runtime_error("Wait for the current export to finish before uploading.");
             return;
+        }
+
+        if (format == ExportFormat::GALLERY_SCENE) {
+            startGallerySceneExport(path);
+            return;
+        }
 
         if (viewer_) {
             if (viewer_->projectContainsEmbeddedSecrets()) {
@@ -1534,6 +1635,156 @@ namespace lfs::vis::gui {
             });
     }
 
+    void AsyncTaskManager::startGallerySceneExport(const std::filesystem::path& path) {
+        constexpr auto format = ExportFormat::GALLERY_SCENE;
+        auto* manager = viewer_ ? viewer_->getSceneManager() : nullptr;
+        if (!manager) {
+            publishExportFailureState(format, path, "No scene is available to upload.");
+            return;
+        }
+        std::vector<core::Scene::SplatSnapshot> snapshots;
+        std::filesystem::path environment_source;
+        try {
+            if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
+                throw std::runtime_error("The gallery preparation directory already exists.");
+            snapshots = manager->getScene().snapshotVisibleSplats();
+            if (snapshots.empty())
+                throw std::runtime_error("There are no visible splats to upload.");
+            if (auto* rendering = viewer_->getRenderingManager()) {
+                const auto settings = rendering->getSettings();
+                if (environmentBackgroundEnabled(settings))
+                    environment_source = core::utf8_to_path(settings.environment_map_path);
+            }
+        } catch (const std::exception& e) {
+            publishExportFailureState(format, path, e.what());
+            return;
+        }
+        if (!beginJob(export_state_.job, JobType::Export, "Preparing scene for upload"))
+            return;
+        {
+            const std::lock_guard lock(export_state_.mutex);
+            export_state_.format = format;
+            export_state_.path = path;
+        }
+        publishExportState();
+        const auto job = export_state_.job;
+        try {
+            export_state_.thread.emplace([this, job, path, environment_source, snapshots = std::move(snapshots)](std::stop_token stop) mutable {
+                jobs_.work(job);
+                const auto canceled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
+                bool owns_directory = false;
+                bool cancelled = false;
+                std::string error;
+                auto report = [&](float progress, const std::string& stage) {
+                    if (canceled())
+                        return false;
+                    jobs_.report(job, progress, stage);
+                    publishExportState();
+                    wakeMainThreadForAsyncWork();
+                    return true;
+                };
+                try {
+                    if (canceled())
+                        throw std::runtime_error("Scene preparation canceled.");
+                    if (!std::filesystem::create_directory(path))
+                        throw std::runtime_error("The gallery preparation directory already exists.");
+                    owns_directory = true;
+                    std::filesystem::permissions(path, std::filesystem::perms::owner_all,
+                                                 std::filesystem::perm_options::replace);
+                    auto nodes = nlohmann::json::array();
+                    for (size_t i = 0; i < snapshots.size(); ++i) {
+                        if (!report(static_cast<float>(i) / snapshots.size() * (environment_source.empty() ? 1.0f : 0.9f), "Preparing scene for upload"))
+                            throw std::runtime_error("Scene preparation canceled.");
+                        auto data = snapshots[i].materialize();
+                        if (data->visible_count() == 0)
+                            continue;
+                        const auto filename = std::to_string(nodes.size()) + ".ply";
+                        const io::PlySaveOptions options{
+                            .output_path = path / filename,
+                            .progress_callback = [&](float progress, const std::string&) {
+                                return report((static_cast<float>(i) + progress) / snapshots.size() * (environment_source.empty() ? 1.0f : 0.9f), "Preparing scene for upload");
+                            },
+                            .provenance = core::make_minimal_provenance_stamp()};
+                        if (const auto result = io::save_ply(*data, options); !result)
+                            throw std::runtime_error(result.error().message);
+                        auto transform = nlohmann::json::array();
+                        for (int row = 0; row < 4; ++row) {
+                            auto values = nlohmann::json::array();
+                            for (int column = 0; column < 4; ++column)
+                                values.push_back(snapshots[i].world_transform[column][row]);
+                            transform.push_back(values);
+                        }
+                        nodes.push_back({{"path", filename}, {"transform", transform}, {"shDegree", snapshots[i].active_sh_degree}});
+                    }
+                    if (nodes.empty())
+                        throw std::runtime_error("There are no visible splats to upload.");
+                    if (canceled())
+                        throw std::runtime_error("Scene preparation canceled.");
+                    auto metadata = nlohmann::json{{"version", 1}, {"nodes", nodes}};
+                    if (!environment_source.empty()) {
+                        if (!report(0.95f, "Preparing HDR background"))
+                            throw std::runtime_error("Scene preparation canceled.");
+                        const auto loaded = rendering::loadEnvironmentImageShared(environment_source);
+                        if (!loaded)
+                            throw std::runtime_error("The HDR background could not be read. Choose another background and retry.");
+                        const auto& image = **loaded;
+                        if (!image.valid() || image.width > 8192 || image.height > 8192 ||
+                            uint64_t(image.width) * image.height > 8'388'608)
+                            throw std::runtime_error("Choose an HDR background with at most 8 million pixels for gallery upload.");
+                        static_assert(std::endian::native == std::endian::little);
+                        std::ofstream background(path / "environment.lfsenv", std::ios::binary);
+                        background.exceptions(std::ios::badbit | std::ios::failbit);
+                        background.write("LFSENV1\0", 8);
+                        const uint32_t width = image.width, height = image.height;
+                        background.write(reinterpret_cast<const char*>(&width), 4);
+                        background.write(reinterpret_cast<const char*>(&height), 4);
+                        for (int row = 0; row < image.height; ++row) {
+                            if (canceled())
+                                throw std::runtime_error("Scene preparation canceled.");
+                            const auto* pixels = image.pixels.data() + size_t(row) * width * 3;
+                            if (!std::all_of(pixels, pixels + width * 3, [](float x) { return std::isfinite(x); }))
+                                throw std::runtime_error("The HDR background contains invalid pixel values.");
+                            background.write(reinterpret_cast<const char*>(pixels), size_t(width) * 12);
+                        }
+                        background.close();
+                        metadata["environment"] = "environment.lfsenv";
+                    }
+                    // Publish only after geometry and the private background are written.
+                    std::ofstream manifest(path / "manifest.json.tmp", std::ios::binary | std::ios::trunc);
+                    manifest.exceptions(std::ios::badbit | std::ios::failbit);
+                    manifest << metadata.dump();
+                    manifest.close();
+                    std::filesystem::rename(path / "manifest.json.tmp", path / "manifest.json");
+                } catch (const std::exception& e) {
+                    error = e.what();
+                } catch (...) {
+                    error = "Scene preparation failed.";
+                }
+                // Settle extraction kernels before releasing owned GPU storage,
+                // including cancellation and partial-allocation failures.
+                if (const auto status = cudaDeviceSynchronize(); status != cudaSuccess && error.empty())
+                    error = "Could not finish preparing the scene on the graphics device.";
+                snapshots.clear();
+                cancelled = canceled();
+                if (cancelled || !error.empty()) {
+                    if (owns_directory) {
+                        std::error_code ignored;
+                        std::filesystem::remove_all(path, ignored);
+                    }
+                    jobs_.report(job, std::nullopt, cancelled ? "Scene preparation canceled" : "Scene preparation failed", error);
+                } else {
+                    jobs_.report(job, 1.0F, "Scene ready for upload");
+                }
+                jobs_.finishWork(job, cancelled, error);
+                publishExportState();
+                wakeMainThreadForAsyncWork();
+            });
+        } catch (const std::exception& e) {
+            jobs_.failed(job, e.what(), "Scene preparation failed");
+            publishExportState();
+        }
+    }
+
     void AsyncTaskManager::startAsyncExport(ExportFormat format,
                                             const std::filesystem::path& path,
                                             std::vector<ExportSplatSource> splats,
@@ -1639,11 +1890,9 @@ namespace lfs::vis::gui {
                         const auto storage_mode = borrow_single_identity
                                                       ? core::Scene::MergeStorageMode::BorrowSingleIdentity
                                                       : core::Scene::MergeStorageMode::Clone;
-                        splat_data = core::Scene::mergeSplatsWithTransforms(merge_inputs, storage_mode);
+                        splat_data = core::Scene::mergeSplatsWithTransforms(merge_inputs, storage_mode, sh_degree);
                         if (!splat_data) {
                             error_msg = LOC(lichtfeld::Strings::Runtime::NO_SPLAT_DATA);
-                        } else if (sh_degree < splat_data->get_max_sh_degree()) {
-                            truncateSHDegree(*splat_data, sh_degree);
                         }
                         model_lock.reset();
                     }
@@ -1789,6 +2038,9 @@ namespace lfs::vis::gui {
                         }
                         case ExportFormat::COLMAP:
                             error_msg = LOC(lichtfeld::Strings::Runtime::COLMAP_WRITE_BACK_PATH);
+                            break;
+                        case ExportFormat::GALLERY_SCENE:
+                            error_msg = "Gallery preparation requires an owned scene snapshot.";
                             break;
                         }
                     }
@@ -2035,9 +2287,20 @@ namespace lfs::vis::gui {
         publishImportOverlayState();
     }
 
+    bool AsyncTaskManager::requestGalleryImportCancel() {
+        if (!canCancelGalleryImport())
+            return false;
+        jobs_.requestCancel(splat_load_state_.job, LOC(lichtfeld::Strings::Runtime::TASK_CANCELLING));
+        if (splat_load_state_.thread)
+            splat_load_state_.thread->request_stop();
+        wakeMainThreadForAsyncWork();
+        return true;
+    }
+
     void AsyncTaskManager::cancelImport() {
         const auto splat_job = splat_load_state_.job;
         const auto import_job = import_state_.job;
+        const bool cancel_gallery = isImporting() && splat_load_state_.gallery_group_uuid.has_value();
         const bool had_activity = isImporting() ||
                                   import_state_.show_completion.load() ||
                                   import_state_.thread.has_value() ||
@@ -2064,6 +2327,13 @@ namespace lfs::vis::gui {
             if (splat_load_state_.thread->joinable())
                 splat_load_state_.thread->join();
             splat_load_state_.thread.reset();
+        }
+        if (cancel_gallery && gallery_scene_epoch_ == splat_load_state_.scene_generation) {
+            if (auto* manager = viewer_->getSceneManager()) {
+                if (const auto* node = manager->getScene().getNodeByUuid(*splat_load_state_.gallery_group_uuid))
+                    manager->getScene().removeNodeById(node->id);
+            }
+            splat_load_state_.gallery_group_uuid.reset();
         }
 
         const auto cancel_if_running = [this](const JobHandle handle) {
