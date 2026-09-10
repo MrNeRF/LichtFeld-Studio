@@ -1649,14 +1649,21 @@ namespace lfs::vis::gui {
         std::filesystem::path environment_source;
         project::SessionJson published_render, published_camera, published_timeline;
         std::vector<std::string> published_names;
+        std::string published_loop_mode = "once";
+        float published_playback_speed = 1.0f;
         try {
             if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
             snapshots = manager->getScene().snapshotVisibleSplats();
             for (const auto& slot : manager->getScene().getVisibleSplatNodeSlots())
                 published_names.push_back(slot.node->name);
-            if (auto* gui = viewer_->getGuiManager())
+            if (auto* gui = viewer_->getGuiManager()) {
                 published_timeline = gui->sequencer().saveToJson();
+                const auto mode = gui->sequencer().loopMode();
+                published_loop_mode = mode == LoopMode::LOOP ? "loop" : mode == LoopMode::PING_PONG ? "ping_pong"
+                                                                                                    : "once";
+                published_playback_speed = gui->sequencer().playbackSpeed();
+            }
             published_camera = project::panelCameraProjectStateToJson("primary", project::capturePanelCameraProjectState(viewer_->getViewport()));
             if (snapshots.empty())
                 throw std::runtime_error("There are no visible splats to upload.");
@@ -1680,7 +1687,7 @@ namespace lfs::vis::gui {
         publishExportState();
         const auto job = export_state_.job;
         try {
-            export_state_.thread.emplace([this, job, path, format, environment_source, published_render, published_camera, published_timeline, published_names, snapshots = std::move(snapshots)](std::stop_token stop) mutable {
+            export_state_.thread.emplace([this, job, path, format, environment_source, published_render, published_camera, published_timeline, published_names, published_loop_mode, published_playback_speed, snapshots = std::move(snapshots)](std::stop_token stop) mutable {
                 jobs_.work(job);
                 const auto canceled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
                 bool owns_directory = false;
@@ -1718,6 +1725,8 @@ namespace lfs::vis::gui {
                     };
                     if (!published_timeline.is_null())
                         checked(document.edit_sequencer().dom().set_json("timeline", published_timeline));
+                    checked(document.edit_sequencer().dom().set_json("loop_mode", published_loop_mode));
+                    checked(document.edit_sequencer().dom().set_json("playback_speed", published_playback_speed));
                     auto render = published_render;
                     render["environment_reference_uuid"] = nullptr;
                     checked(document.edit_view().dom().set_json("render_settings", render));

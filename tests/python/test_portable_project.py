@@ -55,6 +55,16 @@ class PortableProjectTests(unittest.TestCase):
                 self.assertEqual(project.chapters[b'EDTR']['open_files'],[])
                 self.assertIsNone(project.chapters[b'PROJ']['dataset_reference_uuid'])
 
+    def test_native_camera_path_and_multiple_objects(self):
+        project = codec.ProjectFile(io.BytesIO(self.fixture('multi')))
+        self.assertEqual(len(project.manifest['nodes']), 2)
+        self.assertIn('environment', project.manifest)
+        sequencer = project.chapters[b'SEQR']
+        self.assertEqual(len(sequencer['timeline']['keyframes']), 2)
+        self.assertEqual(sequencer['loop_mode'], 'ping_pong')
+        self.assertEqual(sequencer['playback_speed'], 1.5)
+        self.assertEqual(sequencer['ply_sequences'], [])
+
     def test_tampered_embedded_bytes_fail_integrity(self):
         stream=io.BytesIO(self.fixture())
         project=codec.ProjectFile(stream)

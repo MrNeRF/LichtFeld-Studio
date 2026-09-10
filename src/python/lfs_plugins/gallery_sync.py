@@ -309,7 +309,9 @@ class GallerySync:
 
     def queue_prepared_upload(self, staging, metadata, project_id):
         staging = gallery_preparation.staging_path(self.root, staging)
-        return self.queue_upload(staging.with_suffix(".licht" if (staging / "project.licht").exists() else ".lfsg"), metadata, project_id,
+        if not (staging / "project.licht").is_file():
+            raise ValueError("Prepare a fresh .licht file in Studio before uploading.")
+        return self.queue_upload(staging.with_suffix(".licht"), metadata, project_id,
                                  owned_export=True, preparation=str(staging))
 
     def queue_upload(self, export_path, metadata, project_id, *, owned_export=False, preparation=None):

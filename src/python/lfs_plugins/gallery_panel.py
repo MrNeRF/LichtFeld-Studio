@@ -518,19 +518,16 @@ class GalleryPanel(Panel):
             raise ValueError("There are no visible splats to upload.")
         if upload_format not in ("studio", "sog", "ssog"):
             raise ValueError("Choose a supported upload format.")
-        bundle = "licht" in self.service.snapshot().get("source_formats", [])
-        if not bundle:
+        if "licht" not in self.service.snapshot().get("source_formats", []):
             raise ValueError("Update the portal connection before publishing .licht files.")
         environment = metadata.get("viewerSettings", {}).get("environment")
         if environment:
-            if not bundle:
-                raise ValueError("This portal needs an update before it can receive HDR backgrounds.")
             settings = lf.get_render_settings()
             if (settings.environment_mode != "EQUIRECTANGULAR" or str(settings.environment_map_path) != environment_source
                     or float(settings.environment_exposure) != environment["exposure"]
                     or float(settings.environment_rotation_degrees) != environment["rotation"]):
                 raise ValueError("The HDR background changed. Review the current view and try uploading again.")
-        export = self.service.root / (str(uuid.uuid4()) + (".scene" if bundle else ".ply" if upload_format == "studio" else "." + upload_format))
+        export = self.service.root / (str(uuid.uuid4()) + ".scene")
         self._message = "Preparing the current scene for upload…"
         self._refresh_model()
         if lf.ui.get_export_state().get("active"):
@@ -538,11 +535,7 @@ class GalleryPanel(Panel):
         self._export_cancelled = False
         self._export_identity = identity
         self._export_progress = 0
-        if bundle:
-            lf.prepare_gallery_scene(str(export), "ply" if upload_format == "studio" else upload_format)
-        else:
-            lf.export_scene({"studio": 0, "sog": 1, "ssog": 8}[upload_format], str(export), nodes,
-                            int(lf.get_render_settings().sh_degree), include_provenance=False)
+        lf.prepare_gallery_scene(str(export), "ply" if upload_format == "studio" else upload_format)
         if self.service.identity() != identity:
             self._export_cancelled = True
         self._export_pending = (export, metadata, project_id, time.monotonic())
@@ -591,10 +584,7 @@ class GalleryPanel(Panel):
         elif outcome == "completed" and export.exists():
             self._export_pending = None
             try:
-                if export.suffix == ".scene":
-                    self.service.queue_prepared_upload(export, metadata, project_id)
-                else:
-                    self.service.queue_upload(export, metadata, project_id, owned_export=True)
+                self.service.queue_prepared_upload(export, metadata, project_id)
                 self._message = ""
             except Exception as exc:
                 try:

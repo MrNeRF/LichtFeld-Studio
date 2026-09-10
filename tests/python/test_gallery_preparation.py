@@ -14,6 +14,13 @@ from test_gallery_bundle import IDENTITY, SHEAR, ply
 from test_gallery_sync import Client, connected, finish
 
 
+def queue_legacy_staging(service, directory, metadata, project_id):
+    # Existing journals from earlier versions still recover their saved LFSG
+    # staging, but the current publishing entrypoint requires a fresh .licht.
+    return service.queue_upload(directory.with_suffix(".lfsg"), metadata, project_id,
+                                owned_export=True, preparation=str(directory))
+
+
 def download_bundle(root):
     directory = staging(root)
     nodes, _ = gallery_preparation.read_staging(root, directory)
@@ -139,7 +146,7 @@ def test_packages_native_nodes_off_ui_thread_and_retires_only_owned_files(tmp_pa
         return uploaded()
 
     monkeypatch.setattr(Client, "upload", upload, raising=False)
-    service.queue_prepared_upload(directory, {"title": "Scene", "viewerSettings": {"shDegree": 1}}, "project")
+    queue_legacy_staging(service, directory, {"title": "Scene", "viewerSettings": {"shDegree": 1}}, "project")
     finish(service)
     job = service.snapshot()["jobs"][0]
     assert job["status"] == "completed", job["message"]
@@ -161,7 +168,7 @@ def test_packaging_pause_survives_restart_and_reuses_saved_scene(tmp_path, monke
 
     monkeypatch.setattr(gallery_bundle, "write_bundle", paused)
     monkeypatch.setattr(Client, "upload", lambda *args, **kwargs: pytest.fail("Paused preparation must not upload"), raising=False)
-    identifier = service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    identifier = queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     job = service.snapshot()["jobs"][0]
     assert job["status"] == "paused" and "Preparation paused" in job["message"]
@@ -182,7 +189,7 @@ def test_transfer_resume_does_not_repackage_and_discard_cleans_staging(tmp_path,
     service = bundle_service(tmp_path, monkeypatch)
     directory = staging(tmp_path)
     monkeypatch.setattr(Client, "upload", lambda *args, **kwargs: (_ for _ in ()).throw(GalleryTransferCanceled()), raising=False)
-    identifier = service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    identifier = queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     job = service.snapshot()["jobs"][0]
     assert job["packaged"] and directory.exists()
@@ -216,7 +223,7 @@ def test_untrusted_preparation_never_uploads_or_removes_unrelated_files(tmp_path
     elif damage == "destination":
         directory.with_suffix(".lfsg").symlink_to(private)
     monkeypatch.setattr(Client, "upload", lambda *args, **kwargs: pytest.fail("Invalid staging must not upload"), raising=False)
-    service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     assert service.snapshot()["jobs"][0]["status"] == "error"
     assert private.read_bytes() == b"keep private"
@@ -236,7 +243,7 @@ def test_account_switch_during_packaging_never_uploads_to_new_account(tmp_path, 
 
     monkeypatch.setattr(gallery_bundle, "write_bundle", switched)
     monkeypatch.setattr(Client, "upload", lambda *args, **kwargs: pytest.fail("Account switch must stop upload"), raising=False)
-    service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     assert not service.snapshot()["jobs"]
     assert directory.exists() and not directory.with_suffix(".lfsg").exists()
@@ -245,14 +252,14 @@ def test_account_switch_during_packaging_never_uploads_to_new_account(tmp_path, 
 def test_bundle_preparation_requires_advertised_capability(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     with pytest.raises(ValueError, match="cannot receive"):
-        service.queue_prepared_upload(staging(tmp_path), {"title": "Scene"}, "project")
+        queue_legacy_staging(service, staging(tmp_path), {"title": "Scene"}, "project")
 
 
 def test_queue_is_durable_before_worker_start_and_recovers_start_failure(tmp_path, monkeypatch):
     service = bundle_service(tmp_path, monkeypatch)
     directory = staging(tmp_path)
     monkeypatch.setattr(service, "resume", lambda _: (_ for _ in ()).throw(RuntimeError("thread unavailable")))
-    identifier = service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    identifier = queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     saved = json.loads((tmp_path / "sync.json").read_text())
     jobs = [j for bucket in saved["accounts"].values() for j in bucket["jobs"]]
     assert len(jobs) == 1 and jobs[0]["id"] == identifier and jobs[0]["status"] == "queued"
@@ -272,7 +279,7 @@ def test_changed_journal_refuses_handoff_before_accepting_the_snapshot(tmp_path,
     journal = tmp_path / "sync.json"
     journal.write_text(journal.read_text() + "\n")
     with pytest.raises(ValueError, match="Another Studio window updated"):
-        service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+        queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     assert not any(bucket["jobs"] for bucket in service._data["accounts"].values())
     assert directory.exists()  # Caller retains ownership when queueing raises.
 
@@ -282,7 +289,7 @@ def test_resumed_packaged_upload_revalidates_ownership_before_reading(tmp_path, 
     service = bundle_service(tmp_path, monkeypatch)
     directory = staging(tmp_path)
     monkeypatch.setattr(Client, "upload", lambda *args, **kwargs: (_ for _ in ()).throw(GalleryTransferCanceled()), raising=False)
-    identifier = service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    identifier = queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     private = tmp_path / "private.lfsg"
     private.write_bytes(b"never upload")
@@ -310,7 +317,7 @@ def test_discard_reports_files_kept_when_staging_contains_unrecognized_data(tmp_
     directory = staging(tmp_path)
     kept = directory / "unrecognized.txt"
     kept.write_text("keep for review")
-    identifier = service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    identifier = queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     service.discard(identifier)
     finish(service)
@@ -325,7 +332,7 @@ def test_cleanup_failure_cannot_turn_published_upload_into_retry(tmp_path, monke
     directory = staging(tmp_path)
     monkeypatch.setattr(Client, "upload", lambda *args, **kwargs: uploaded(), raising=False)
     monkeypatch.setattr(service, "_retire_export", lambda job: (_ for _ in ()).throw(RuntimeError("cleanup interrupted")))
-    service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     finish(service)
     job = service.snapshot()["jobs"][0]
     assert job["status"] == "completed" and job["cleanupPending"]
@@ -356,3 +363,31 @@ def test_hdr_import_asset_survives_transfer_cleanup(tmp_path, monkeypatch):
     assert retained.read_bytes() == pixels and retained.stat().st_mode & 0o777 == 0o600
     service.clear_finished([job['id']]); finish(service)
     assert not destination.exists() and retained.read_bytes() == pixels
+
+
+def test_current_publishing_requires_a_fresh_native_project(tmp_path, monkeypatch):
+    service = bundle_service(tmp_path, monkeypatch)
+    directory = staging(tmp_path)
+    with pytest.raises(ValueError, match="fresh .licht"):
+        service.queue_prepared_upload(directory, {"title": "Scene"}, "project")
+    assert service.snapshot()["jobs"] == []
+
+
+def test_current_publishing_uploads_only_the_fresh_licht(tmp_path, monkeypatch):
+    service = bundle_service(tmp_path, monkeypatch)
+    service._source_formats = ['licht']
+    fixture = Path(__file__).parents[1] / 'data' / 'portable-sog.licht'
+    directory = tmp_path / (str(uuid.uuid4()) + '.scene')
+    gallery_preparation.unpack_project(tmp_path, fixture, directory)
+    original = fixture.read_bytes()
+    (directory / 'project.licht').write_bytes(original)
+    def upload(self, path, metadata, **kwargs):
+        assert Path(path).suffix == '.licht'
+        assert Path(path).read_bytes() == original
+        return {'scene': {'id': 'remote-scene', 'revision': 'new', 'title': 'Scene', 'sourceFormat': 'licht'}}
+    monkeypatch.setattr(Client, 'upload', upload, raising=False)
+    service.queue_prepared_upload(directory, {'title': 'Scene', 'viewerSettings': {'environment': {'exposure': -1.25, 'rotation': 123}}}, 'project')
+    finish(service)
+    job = service.snapshot()['jobs'][0]
+    assert job['status'] == 'completed', job['message']
+    assert not directory.exists() and not Path(job['path']).exists()
