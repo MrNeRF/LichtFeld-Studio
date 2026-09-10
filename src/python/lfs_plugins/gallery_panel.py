@@ -239,9 +239,9 @@ class GalleryPanel(Panel):
         if self._handle:
             self._handle.update_record_list("scenes", [dict(s, selected=bool(self._scene and self._scene["id"] == s["id"]))
                 for s in self._visible_scenes()])
-            self._handle.update_record_list("jobs", [dict(j, title=j["metadata"]["title"], progress="Kept" if j.get("retired") else f'{100*j["completed"]/max(1,j["total"]):.0f}%',
+            self._handle.update_record_list("jobs", [dict(j, title=j["metadata"]["title"], progress="Kept" if j.get("retired") else "100%" if j["status"] == "completed" else f'{100*j["completed"]/max(1,j["total"]):.0f}%',
                 recovery_only=bool(j.get("retired")),
-                progress_value=min(100, 100*j["completed"]/max(1,j["total"])),
+                progress_value=100 if j["status"] == "completed" else min(100, 100*j["completed"]/max(1,j["total"])),
                 importable=j.get("kind") == "download" and j["status"] == "completed" and not (j.get("retired") or j.get("cleanupPending")),
                 updatable=bool(j.get("kind") == "download" and j["status"] == "completed" and not (j.get("retired") or j.get("cleanupPending")) and self._project_link and self._project_link["sceneId"] == j.get("result", {}).get("id")),
                 has_backup=bool(j.get("localUpdate", {}).get("backupPath")),
