@@ -62,6 +62,7 @@
 #include "training/kernels/camera_loss_heatmap.cuh"
 #include "training/kernels/depth_loss.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include "training/kernels/mask_preprocess.hpp"
 #include "training/kernels/mrnf_kernels.hpp"
 #include "training/kernels/normal_consistency_loss.hpp"
 #include "training/kernels/normal_loss.hpp"
@@ -7487,7 +7488,15 @@ namespace lfs::training {
 
                             if (use_mask &&
                                 params_.optimization.mask_mode == lfs::core::param::MaskMode::SegmentAndIgnore) {
-                                const auto mask_for_error = mask_tile.gt(250).to(lfs::core::DataType::Float32);
+                                // The pipelined loader returns normalized Float32 masks;
+                                // Camera masks retain their raw UInt8 band levels.
+                                const float keep_min =
+                                    (mask_tile.dtype() == lfs::core::DataType::UInt8 ||
+                                     mask_tile.dtype() == lfs::core::DataType::Bool)
+                                        ? 250.0f
+                                        : lfs::training::kernels::kMaskKeepMin;
+                                const auto mask_for_error =
+                                    mask_tile.gt(keep_min).to(lfs::core::DataType::Float32);
                                 tile_error_map.mul_(mask_for_error);
                             }
 
