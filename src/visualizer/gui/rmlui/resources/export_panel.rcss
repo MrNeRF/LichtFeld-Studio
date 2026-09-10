@@ -98,6 +98,10 @@
     margin-bottom: 4dp;
 }
 
+.ep-error.hidden {
+    display: none;
+}
+
 .ep-buttons {
     display: flex;
     gap: 6dp;
