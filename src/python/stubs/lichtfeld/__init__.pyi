@@ -403,9 +403,10 @@ def load_gallery_scene(nodes: list[dict], name: str, hidden: bool = False) -> No
     A failed or canceled batch adds no group. Uses ui.get_import_state().
     """
 
-def prepare_gallery_scene(path: str) -> None:
-    """Capture visible splats at a scene/UI safe point, then write local PLY nodes
-    and manifest.json into a new private directory using the managed export job.
+def prepare_gallery_scene(path: str, payload_format: str = "ply") -> None:
+    """Capture visible splats, view settings and HDR into a fresh native .licht
+    file in a private staging directory. Payload format: ply, sog or ssog.
+    Excludes training checkpoints, dataset images and editor buffers.
     Poll ui.get_export_state() and cancel with ui.cancel_export().
     """
 

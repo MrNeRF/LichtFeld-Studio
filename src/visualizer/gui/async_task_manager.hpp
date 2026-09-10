@@ -227,7 +227,7 @@ namespace lfs::vis {
                                   lfs::core::ProvenanceStamp provenance,
                                   int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
             void startColmapExport(const std::filesystem::path& path);
-            void startGallerySceneExport(const std::filesystem::path& path);
+            void startGallerySceneExport(const std::filesystem::path& path, core::ExportFormat format);
             void startAsyncImport(const std::filesystem::path& path,
                                   const lfs::core::param::TrainingParameters& params);
             struct SplatLoadRequest {

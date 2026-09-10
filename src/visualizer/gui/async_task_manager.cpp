@@ -23,6 +23,8 @@
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/project_document.hpp"
+#include "project/session_state.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/environment_image.hpp"
@@ -122,7 +124,9 @@ namespace lfs::vis::gui {
         case ExportFormat::NUREC_USDZ: return "USDZ";
         case ExportFormat::RAD: return "RAD";
         case ExportFormat::COLMAP: return "COLMAP";
-        case ExportFormat::GALLERY_SCENE: return "Gallery";
+        case ExportFormat::GALLERY_SCENE:
+        case ExportFormat::GALLERY_SOG:
+        case ExportFormat::GALLERY_SSOG: return ".licht";
         default: return "file";
         }
     }
@@ -1424,13 +1428,13 @@ namespace lfs::vis::gui {
                                          bool include_provenance,
                                          int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (isExporting()) {
-            if (format == ExportFormat::GALLERY_SCENE)
+            if (format == ExportFormat::GALLERY_SCENE || format == ExportFormat::GALLERY_SOG || format == ExportFormat::GALLERY_SSOG)
                 throw std::runtime_error("Wait for the current export to finish before uploading.");
             return;
         }
 
-        if (format == ExportFormat::GALLERY_SCENE) {
-            startGallerySceneExport(path);
+        if (format == ExportFormat::GALLERY_SCENE || format == ExportFormat::GALLERY_SOG || format == ExportFormat::GALLERY_SSOG) {
+            startGallerySceneExport(path, format);
             return;
         }
 
@@ -1635,8 +1639,7 @@ namespace lfs::vis::gui {
             });
     }
 
-    void AsyncTaskManager::startGallerySceneExport(const std::filesystem::path& path) {
-        constexpr auto format = ExportFormat::GALLERY_SCENE;
+    void AsyncTaskManager::startGallerySceneExport(const std::filesystem::path& path, const ExportFormat format) {
         auto* manager = viewer_ ? viewer_->getSceneManager() : nullptr;
         if (!manager) {
             publishExportFailureState(format, path, "No scene is available to upload.");
@@ -1644,14 +1647,22 @@ namespace lfs::vis::gui {
         }
         std::vector<core::Scene::SplatSnapshot> snapshots;
         std::filesystem::path environment_source;
+        project::SessionJson published_render, published_camera, published_timeline;
+        std::vector<std::string> published_names;
         try {
             if (std::filesystem::exists(path) || std::filesystem::is_symlink(path))
                 throw std::runtime_error("The gallery preparation directory already exists.");
             snapshots = manager->getScene().snapshotVisibleSplats();
+            for (const auto& slot : manager->getScene().getVisibleSplatNodeSlots())
+                published_names.push_back(slot.node->name);
+            if (auto* gui = viewer_->getGuiManager())
+                published_timeline = gui->sequencer().saveToJson();
+            published_camera = project::panelCameraProjectStateToJson("primary", project::capturePanelCameraProjectState(viewer_->getViewport()));
             if (snapshots.empty())
                 throw std::runtime_error("There are no visible splats to upload.");
             if (auto* rendering = viewer_->getRenderingManager()) {
                 const auto settings = rendering->getSettings();
+                published_render = project::renderSettingsToProjectJson(settings);
                 if (environmentBackgroundEnabled(settings))
                     environment_source = core::utf8_to_path(settings.environment_map_path);
             }
@@ -1669,7 +1680,7 @@ namespace lfs::vis::gui {
         publishExportState();
         const auto job = export_state_.job;
         try {
-            export_state_.thread.emplace([this, job, path, environment_source, snapshots = std::move(snapshots)](std::stop_token stop) mutable {
+            export_state_.thread.emplace([this, job, path, format, environment_source, published_render, published_camera, published_timeline, published_names, snapshots = std::move(snapshots)](std::stop_token stop) mutable {
                 jobs_.work(job);
                 const auto canceled = [&] { return stop.stop_requested() || jobs_.cancelRequested(job); };
                 bool owns_directory = false;
@@ -1692,20 +1703,59 @@ namespace lfs::vis::gui {
                     std::filesystem::permissions(path, std::filesystem::perms::owner_all,
                                                  std::filesystem::perm_options::replace);
                     auto nodes = nlohmann::json::array();
+                    const std::string extension = format == ExportFormat::GALLERY_SOG ? "sog" : format == ExportFormat::GALLERY_SSOG ? "ssog"
+                                                                                                                                     : "ply";
+                    std::vector<std::pair<core::Uuid, std::filesystem::path>> embedded_files;
+                    namespace pj = io::project;
+                    const auto project_id = core::generate_uuid_v4();
+                    auto document_result = pj::ProjectDocument::create(project_id);
+                    if (!document_result)
+                        throw std::runtime_error(std::string(document_result.error().user_message()));
+                    auto document = std::move(*document_result);
+                    const auto checked = [](auto result) {
+                        if (!result)
+                            throw std::runtime_error(std::string(result.error().user_message()));
+                    };
+                    if (!published_timeline.is_null())
+                        checked(document.edit_sequencer().dom().set_json("timeline", published_timeline));
+                    auto render = published_render;
+                    render["environment_reference_uuid"] = nullptr;
+                    checked(document.edit_view().dom().set_json("render_settings", render));
+                    auto right_camera = published_camera;
+                    right_camera["panel"] = "secondary";
+                    checked(document.edit_view().dom().set_json("panel_cameras", project::SessionJson::array({published_camera, right_camera})));
+                    const auto add_reference = [&](const std::string& file, const std::string& kind) {
+                        const auto id = core::generate_uuid_v4();
+                        auto fingerprint = pj::fingerprint_path(path / file, true);
+                        if (!fingerprint)
+                            throw std::runtime_error(std::string(fingerprint.error().user_message()));
+                        checked(document.edit_references().upsert(pj::ReferenceRecord{
+                            .uuid = id,
+                            .key = file,
+                            .kind = kind,
+                            .locator = {.preferred = id.to_string() + ".lfsenv", .base = pj::LocatorBase::Project},
+                            .fingerprint = *fingerprint}));
+                        return id;
+                    };
                     for (size_t i = 0; i < snapshots.size(); ++i) {
                         if (!report(static_cast<float>(i) / snapshots.size() * (environment_source.empty() ? 1.0f : 0.9f), "Preparing scene for upload"))
                             throw std::runtime_error("Scene preparation canceled.");
                         auto data = snapshots[i].materialize();
                         if (data->visible_count() == 0)
                             continue;
-                        const auto filename = std::to_string(nodes.size()) + ".ply";
+                        const auto filename = std::to_string(nodes.size()) + "." + extension;
                         const io::PlySaveOptions options{
                             .output_path = path / filename,
                             .progress_callback = [&](float progress, const std::string&) {
                                 return report((static_cast<float>(i) + progress) / snapshots.size() * (environment_source.empty() ? 1.0f : 0.9f), "Preparing scene for upload");
                             },
                             .provenance = core::make_minimal_provenance_stamp()};
-                        if (const auto result = io::save_ply(*data, options); !result)
+                        const auto result = extension == "sog"
+                                                ? io::save_sog(*data, {.output_path = options.output_path, .progress_callback = options.progress_callback, .provenance = options.provenance})
+                                            : extension == "ssog"
+                                                ? io::save_ssog(*data, {.output_path = options.output_path, .progress_callback = options.progress_callback, .provenance = options.provenance})
+                                                : io::save_ply(*data, options);
+                        if (!result)
                             throw std::runtime_error(result.error().message);
                         auto transform = nlohmann::json::array();
                         for (int row = 0; row < 4; ++row) {
@@ -1714,6 +1764,19 @@ namespace lfs::vis::gui {
                                 values.push_back(snapshots[i].world_transform[column][row]);
                             transform.push_back(values);
                         }
+                        const auto reference_id = core::generate_uuid_v4();
+                        embedded_files.emplace_back(reference_id, path / filename);
+                        pj::SceneNodeRecord record{
+                            .uuid = reference_id,
+                            .type = "splat",
+                            .name = published_names.at(i),
+                            .child_order = static_cast<uint32_t>(nodes.size()),
+                            .training_enabled = false,
+                            .payload = pj::PayloadBinding{.fourcc = "DSRC", .instance_uuid = reference_id, .source_kind = extension}};
+                        std::copy_n(&snapshots[i].world_transform[0][0], 16, record.local_transform.begin());
+                        checked(document.edit_scene_graph().upsert_node(record));
+                        auto published_node = document.edit_scene_graph().dom().array_find("nodes", record.uuid.to_string());
+                        checked(published_node->set_json("publication", project::SessionJson{{"count", data->visible_count()}, {"sh_degree", snapshots[i].active_sh_degree}}));
                         nodes.push_back({{"path", filename}, {"transform", transform}, {"shDegree", snapshots[i].active_sh_degree}});
                     }
                     if (nodes.empty())
@@ -1748,7 +1811,70 @@ namespace lfs::vis::gui {
                         }
                         background.close();
                         metadata["environment"] = "environment.lfsenv";
+                        const auto environment_id = add_reference("environment.lfsenv", "environment_map");
+                        embedded_files.emplace_back(environment_id, path / "environment.lfsenv");
+                        checked(document.edit_view().dom().set_json("render_settings.environment_reference_uuid", environment_id.to_string()));
                     }
+                    // A fresh native project contains only the published scene and default empty
+                    // session chapters. Never copy the user's project or its history.
+                    auto writer = pj::ProjectWriter::create(path / "project.licht", {.project_uuid = project_id, .file_uuid = core::generate_uuid_v4(), .index_compression = pj::IndexCompression::StoredForDeterministicTests});
+                    if (!writer)
+                        throw std::runtime_error(std::string(writer.error().user_message()));
+                    pj::CommitOptions commit_options;
+                    commit_options.extra_reader_capabilities.set(pj::ENCODED_SCENE_ASSETS);
+                    commit_options.extra_writer_capabilities.set(pj::ENCODED_SCENE_ASSETS);
+                    checked(writer->plan_commit(commit_options));
+                    uint64_t planned_bytes = 4 * 1024 * 1024;
+                    for (const auto& [id, file] : embedded_files)
+                        planned_bytes += std::filesystem::file_size(file);
+                    checked(writer->preflight(planned_bytes));
+                    const auto chapter = [&](pj::Fourcc type, const auto& value) {
+                        const auto bytes = value.to_bytes();
+                        if constexpr (std::is_same_v<std::decay_t<decltype(bytes)>, std::vector<std::byte>>)
+                            checked(writer->write_chunk({type, project_id}, bytes));
+                        else {
+                            if (!bytes)
+                                throw std::runtime_error(std::string(bytes.error().user_message()));
+                            checked(writer->write_chunk({type, project_id}, *bytes));
+                        }
+                    };
+                    chapter(pj::FOURCC_PROJ, document.project());
+                    chapter(pj::FOURCC_REFS, document.references());
+                    chapter(pj::FOURCC_SCNG, document.scene_graph());
+                    chapter(pj::FOURCC_PRMS, document.parameters());
+                    const auto selection = pj::encode_selection_chapter(document.selection());
+                    if (!selection)
+                        throw std::runtime_error(std::string(selection.error().user_message()));
+                    checked(writer->write_chunk({pj::FOURCC_SELM, project_id}, *selection));
+                    chapter(pj::FOURCC_GUIL, document.gui_layout());
+                    chapter(pj::FOURCC_VIEW, document.view());
+                    chapter(pj::FOURCC_EDTR, document.editor());
+                    chapter(pj::FOURCC_SEQR, document.sequencer());
+                    chapter(pj::FOURCC_METR, document.metrics());
+                    for (const auto& [id, file] : embedded_files) {
+                        const auto bytes = std::filesystem::file_size(file);
+                        auto target = writer->begin_chunk({pj::FOURCC_DSRC, id}, {.expected_stream_bytes = bytes});
+                        if (!target)
+                            throw std::runtime_error(std::string(target.error().user_message()));
+                        std::ifstream input(file, std::ios::binary);
+                        input.exceptions(std::ios::badbit);
+                        std::array<char, 1024 * 1024> buffer;
+                        uint64_t copied = 0;
+                        while (input) {
+                            if (canceled())
+                                throw std::runtime_error("Project preparation canceled.");
+                            input.read(buffer.data(), buffer.size());
+                            (*target)->write(buffer.data(), input.gcount());
+                            copied += input.gcount();
+                        }
+                        if (copied != bytes)
+                            throw std::runtime_error("Project asset changed during preparation.");
+                        checked(writer->end_chunk());
+                    }
+                    checked(writer->commit());
+                    auto verified_project = pj::ProjectDocument::open(path / "project.licht");
+                    if (!verified_project)
+                        throw std::runtime_error(std::string(verified_project.error().user_message()));
                     // Publish only after geometry and the private background are written.
                     std::ofstream manifest(path / "manifest.json.tmp", std::ios::binary | std::ios::trunc);
                     manifest.exceptions(std::ios::badbit | std::ios::failbit);
@@ -2040,6 +2166,8 @@ namespace lfs::vis::gui {
                             error_msg = LOC(lichtfeld::Strings::Runtime::COLMAP_WRITE_BACK_PATH);
                             break;
                         case ExportFormat::GALLERY_SCENE:
+                        case ExportFormat::GALLERY_SOG:
+                        case ExportFormat::GALLERY_SSOG:
                             error_msg = "Gallery preparation requires an owned scene snapshot.";
                             break;
                         }

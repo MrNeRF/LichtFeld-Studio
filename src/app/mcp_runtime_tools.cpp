@@ -228,7 +228,9 @@ namespace lfs::app {
             case core::ExportFormat::COLMAP:
                 return "colmap";
             case core::ExportFormat::GALLERY_SCENE:
-                return "gallery";
+            case core::ExportFormat::GALLERY_SOG:
+            case core::ExportFormat::GALLERY_SSOG:
+                return "licht";
             }
             return "unknown";
         }

@@ -32,7 +32,9 @@ namespace lfs::core {
                               RAD = 6,
                               COLMAP = 7,
                               SSOG = 8,
-                              GALLERY_SCENE = 9 }; // Internal local-node staging for gallery bundles.
+                              GALLERY_SCENE = 9,
+                              GALLERY_SOG = 10,
+                              GALLERY_SSOG = 11 }; // Internal local-node staging for gallery bundles.
 
 // Event macro using shared event bridge (solves singleton duplication between exe and Python module)
 #define EVENT(Name, ...)                                   \
