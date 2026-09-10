@@ -256,7 +256,7 @@ def _retry_after_seconds(headers: object) -> Optional[float]:
 
 
 @contextmanager
-def _locked_sidecar(path: Path) -> Iterator[None]:
+def _locked_sidecar(path: Path, *, blocking: bool = True) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -266,11 +266,11 @@ def _locked_sidecar(path: Path) -> Iterator[None]:
             if os.fstat(fd).st_size == 0:
                 os.write(fd, b"\0")
             os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+            msvcrt.locking(fd, msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
 
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
 
         try:
             yield
@@ -369,9 +369,11 @@ class PortalAccountService:
         path: str,
         body: Optional[Mapping[str, object]] = None,
         timeout: float = 30,
+        *,
+        expected_session: Optional[tuple[str, str]] = None,
     ) -> dict[str, object]:
         """Make one bearer request with the shared single-refresh ladder."""
-        return self._authenticated_request(method, path, body, timeout=timeout)
+        return self._authenticated_request(method, path, body, timeout=timeout, expected_session=expected_session)
 
     def _redaction_tokens(self) -> tuple[str, ...]:
         credentials = self._current_credentials()
@@ -674,10 +676,13 @@ class PortalAccountService:
         body: Optional[Mapping[str, object]] = None,
         *,
         timeout: Optional[float] = None,
+        expected_session: Optional[tuple[str, str]] = None,
     ) -> dict[str, object]:
         credentials = self._current_credentials()
         if credentials is None:
             raise PortalHTTPError(401, "invalid_token")
+        if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
+            raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
 
         failed_access_token = credentials.access_token
         try:
@@ -708,6 +713,8 @@ class PortalAccountService:
         if credentials is None:
             self._set_signed_out("invalid_token")
             raise PortalHTTPError(401, "invalid_token")
+        if expected_session is not None and (credentials.email, credentials.connected_since) != expected_session:
+            raise PortalProtocolError("The signed-in account changed. Refresh the gallery before continuing.")
         try:
             return self._request_with_bearer(
                 method,
@@ -772,6 +779,7 @@ class PortalAccountService:
             with urlopen(
                 request,
                 timeout=self._timeout if timeout is None else timeout,
+                no_redirect=True,
             ) as response:
                 response_status = getattr(response, "status", None)
                 if response_status is None:

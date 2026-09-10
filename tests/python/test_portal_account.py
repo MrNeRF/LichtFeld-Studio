@@ -73,6 +73,36 @@ def token_pair(access="access-new", refresh="refresh-new"):
     }
 
 
+def test_gallery_request_rejects_different_session_before_network(tmp_path, monkeypatch):
+    path = tmp_path / "credentials.json"
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    network = StubUrlopen()
+    monkeypatch.setattr(portal_account, "urlopen", network)
+    with pytest.raises(portal_account.PortalProtocolError, match="account changed"):
+        account.request_json_authenticated("POST", "/api/gallery/v1/splats/uploads", {},
+            expected_session=("different@example.com", "session"))
+    assert network.requests == []
+
+
+def test_gallery_request_does_not_retry_under_account_changed_during_refresh(tmp_path, monkeypatch):
+    from dataclasses import replace
+    path = tmp_path / "credentials.json"
+    write_credentials(path)
+    account = portal_account.PortalAccountService(credentials_path=path)
+    old = account._current_credentials()
+    network = StubUrlopen((401, {"error": "invalid_token"}))
+    monkeypatch.setattr(portal_account, "urlopen", network)
+    def refresh(*args, **kwargs):
+        account._set_current_credentials(replace(old, email="different@example.com", access_token="other-account"))
+        return "ok"
+    monkeypatch.setattr(account, "_refresh_tokens", refresh)
+    with pytest.raises(portal_account.PortalProtocolError, match="account changed"):
+        account.request_json_authenticated("POST", "/api/gallery/v1/splats/uploads", {},
+            expected_session=(old.email, old.connected_since))
+    assert len(network.requests) == 1
+
+
 def profile(name="Ada Lovelace", tier="Professional"):
     return {
         "display_name": name,
