@@ -28,6 +28,8 @@
 .gallery-publish { flex-shrink: 0; border-top: 1dp; padding-top: 10dp; margin-top: 6dp; }
 .gallery-linked { display: flex; align-items: center; gap: 8dp; margin-bottom: 8dp; }
 .gallery-publish p { margin: 0 0 8dp; }
+.gallery-publish label { display: block; font-size: 12dp; margin-bottom: 4dp; }
+.gallery-publish select { display: block; width: 100%; box-sizing: border-box; margin-bottom: 8dp; }
 .gallery-secondary-actions { margin-bottom: 0; }
 .gallery-confirm { border: 1dp; border-radius: 6dp; padding: 12dp; margin-bottom: 12dp; }
 .gallery-confirm p { margin: 8dp 0; line-height: 18dp; }

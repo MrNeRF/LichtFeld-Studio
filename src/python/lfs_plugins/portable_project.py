@@ -287,7 +287,7 @@ class ProjectFile:
             crc = None
         digest, completed, fallback, ieee = hashlib.sha256(), 0, 0xffffffff, 0
         stream = SliceReader(self.source, asset['offset'], asset['size'])
-        while chunk := stream.read(codec.CHUNK_BYTES):
+        while chunk := stream.read(codec.MAX_READ_BYTES):
             if environment:
                 codec._environment_values(chunk[16:] if completed == 0 else chunk)
             if crc:
