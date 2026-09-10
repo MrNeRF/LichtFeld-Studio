@@ -259,9 +259,14 @@ namespace lfs::io::project {
                 }
                 return {};
             }
+            if (node.type == lfs::core::NodeType::SPLAT && binding.fourcc == "DSRC" &&
+                (binding.source_kind == "ply" || binding.source_kind == "sog" || binding.source_kind == "ssog") &&
+                binding.instance_uuid == node.uuid && !binding.reference_uuid) {
+                return {};
+            }
             if (node.type == lfs::core::NodeType::SPLAT &&
                 (binding.source_kind == "ply" || binding.source_kind == "spz" ||
-                 binding.source_kind == "sog" ||
+                 binding.source_kind == "sog" || binding.source_kind == "ssog" ||
                  binding.source_kind == "generated" ||
                  binding.source_kind == "baked_rad") &&
                 (binding.fourcc != "SPLT" ||

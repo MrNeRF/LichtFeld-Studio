@@ -946,6 +946,31 @@ namespace {
                 static_cast<float>(expected)));
     }
 
+    TEST(SceneChapterAdapterTest, EncodedSplatBindingsCaptureAndRejectWrongOwners) {
+        Scene scene;
+        const auto id = scene.addSplat("Encoded", make_splat(2));
+        const auto uuid = scene.getNodeUuid(id);
+        for (const auto* format : {"ply", "sog", "ssog"}) {
+            ScenePayloadBindings bindings{{uuid, PayloadBinding{
+                                                     .fourcc = "DSRC",
+                                                     .instance_uuid = uuid,
+                                                     .reference_uuid = std::nullopt,
+                                                     .source_kind = format}}};
+            auto captured = capture_scene_graph(scene, bindings);
+            ASSERT_TRUE(captured) << lfs::format_for_developer(captured.error());
+            auto nodes = captured->nodes();
+            ASSERT_TRUE(nodes);
+            ASSERT_EQ(nodes->size(), 1u);
+            EXPECT_EQ(nodes->front().payload->fourcc, "DSRC");
+            EXPECT_EQ(nodes->front().payload->source_kind, format);
+            bindings.at(uuid).instance_uuid = fixed_uuid(9876);
+            EXPECT_FALSE(capture_scene_graph(scene, bindings));
+            bindings.at(uuid).instance_uuid = uuid;
+            bindings.at(uuid).reference_uuid = fixed_uuid(9876);
+            EXPECT_FALSE(capture_scene_graph(scene, bindings));
+        }
+    }
+
     TEST(SceneChapterAdapterTest,
          DuplicateNamesHydrateWithDistinctStableUuids) {
         SceneGraphChapter chapter;
