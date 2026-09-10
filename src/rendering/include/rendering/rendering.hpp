@@ -81,6 +81,7 @@ namespace lfs::rendering {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
         std::vector<bool> node_visibility_mask;
+        std::vector<int> node_active_sh_degrees; // Empty uses the model-wide limit (e.g. live training).
     };
 
     struct GaussianScopedBoxFilter {
@@ -195,6 +196,11 @@ namespace lfs::rendering {
 
     struct ViewportRenderRequest {
         FrameView frame_view;
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        float color_exposure = 1.0f;
+        int color_tonemapping = 0;
+        int splat_render_profile = 0; // 0: Studio, 1: standard portal
+
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;

@@ -202,7 +202,8 @@ Splat_3D_GUT_AlphaBlend load_transformed_splat_gut_alphablend(
     Uniforms uniforms)
 {
     Splat_3D_GUT_AlphaBlend g =
-        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scaling_raw, opacity_raw, rgb);
+        load_splat_gut_alphablend(g_idx, xyz_ws, rotations, scaling_raw, opacity_raw, rgb,
+                                  (uniforms.lod_enabled & 4u) == 0u ? uniforms.splat_render_profile : 0u);
 
     if (uniforms.step == 0u)
         return g;
@@ -417,7 +418,12 @@ void main(
               #endif
               #if LFS_3DGUT_RASTERIZE
                     Splat_3D_GUT_AlphaBlend g = collected_gut_splats[j];
-                    gauss_rgba = evaluate_gut_splat(g, ray_origin, ray_direction);
+                    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path && !portal_gut_quad_contains(
+                            center_pix_coord, xy_vs[splat_id], inv_cov_vs_opacity[splat_id].xyz,
+                            g.opacity, cam))
+                        continue;
+                    gauss_rgba = evaluate_gut_splat_for_profile(g, ray_origin, ray_direction,
+                                                               spark_rad_opacity_path ? 0u : uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = load_splat_alphablend(splat_id, xy_vs, inv_cov_vs_opacity, rgb);
                   #endif
@@ -425,7 +431,7 @@ void main(
                     Splat_2D_AlphaBlend g = collected_splats[j];
                     gauss_rgba = spark_rad_opacity_path
                                       ? evaluate_splat_spark_rad(g, center_pix_coord)
-                                      : evaluate_splat(g, center_pix_coord);
+                                      : evaluate_splat_for_profile(g, center_pix_coord, uniforms.splat_render_profile);
                   #if LFS_RASTER_OVERLAYS
                     overlay_splat = g;
                   #endif
@@ -446,7 +452,7 @@ void main(
 
                 float alpha = spark_rad_opacity_path
                                   ? evaluate_splat_alpha_spark_rad(g_xy, g_opacity, g_inv_cov, center_pix_coord)
-                                  : evaluate_splat_alpha(g_xy, g_opacity, g_inv_cov, center_pix_coord);
+                                  : evaluate_splat_alpha_for_profile(g_xy, g_opacity, g_inv_cov, center_pix_coord, uniforms.splat_render_profile);
                 if (alpha < ALPHA_THRESHOLD)
                     continue;
 

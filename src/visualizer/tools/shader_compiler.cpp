@@ -96,6 +96,27 @@ namespace {
         return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     }
 
+    class LocalShaderIncluder final : public glslang::TShader::Includer {
+    public:
+        IncludeResult* includeLocal(const char* header, const char* includer, size_t depth) override {
+            if (depth > 32)
+                return nullptr;
+            const auto path = std::filesystem::path(includer).parent_path() / header;
+            auto text = readTextFile(path);
+            if (!text)
+                return nullptr;
+            auto* owned = new std::string(std::move(*text));
+            return new IncludeResult(lfs::core::path_to_utf8(path), owned->data(), owned->size(), owned);
+        }
+        IncludeResult* includeSystem(const char*, const char*, size_t) override { return nullptr; }
+        void releaseInclude(IncludeResult* result) override {
+            if (result) {
+                delete static_cast<std::string*>(result->userData);
+                delete result;
+            }
+        }
+    };
+
     [[nodiscard]] std::optional<std::vector<std::uint32_t>> compileGlsl(
         const std::filesystem::path& input,
         const std::string& source,
@@ -111,7 +132,8 @@ namespace {
         shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_0);
 
         constexpr auto messages = static_cast<EShMessages>(EShMsgSpvRules | EShMsgVulkanRules);
-        if (!shader.parse(GetDefaultResources(), 450, false, messages)) {
+        LocalShaderIncluder includer;
+        if (!shader.parse(GetDefaultResources(), 450, false, messages, includer)) {
             std::cerr << "Failed to compile " << input << ":\n"
                       << shader.getInfoLog() << '\n'
                       << shader.getInfoDebugLog() << '\n';

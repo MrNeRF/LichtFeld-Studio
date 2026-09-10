@@ -84,6 +84,10 @@ namespace lfs::vis {
         bool hide_outside_depth_box = false;
         bool crop_filter_for_selection = false;
         std::array<float, 3> background_color{0.0f, 0.0f, 0.0f};
+        // Display color: tone IDs match none, linear, filmic, hejl, aces, aces2, neutral.
+        float color_exposure = 1.0f;
+        int color_tonemapping = 0;
+        int splat_render_profile = 0; // 0: Studio, 1: standard portal
         int environment_mode = 0;
         std::string environment_map_path{
             std::string(kDefaultEnvironmentMapPath)};

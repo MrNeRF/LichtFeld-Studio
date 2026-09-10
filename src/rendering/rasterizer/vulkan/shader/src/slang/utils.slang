@@ -15,6 +15,12 @@
 #include "config.slang"
 #include "overlay_flags.inc"
 
+#define LFS_PORTAL_INLINE
+#define LFS_PORTAL_VEC3 float3
+#define LFS_PORTAL_VEC4 float4
+#include "portal_compact.inc"
+
+
 static const float eps = 1e-7;
 
 struct rectangle {
@@ -632,6 +638,82 @@ float4 covariance_3d_to_2d(
 }
 
 
+// Standard PlayCanvas projects with an unclamped pinhole Jacobian. Its
+// covariance is in 4x native pixel-squared units, so +0.3 becomes +0.075 here.
+// Keep this forward-only path separate from the native training derivatives.
+[ForceInline]
+float4 covariance_3d_to_2d_portal(Camera cam, float3 xyz_ws, float3x3 cov_ws, bool mip_filter) {
+    float3 t = geom_transform_points(xyz_ws, cam.world_view_transform);
+    float3x3 J = cam.model == int(CameraModel::ORTHO)
+        ? compute_jacobian_ortho(xyz_ws, cam)
+        : float3x3(cam.fx / t.z, 0.0f, -(cam.fx * t.x) / (t.z * t.z),
+                   0.0f, cam.fy / t.z, -(cam.fy * t.y) / (t.z * t.z),
+                   0.0f, 0.0f, 0.0f);
+    float3x3 R = (float3x3)cam.world_view_transform;
+    float3x3 cov = mul(J, mul(R, mul(cov_ws, mul(transpose(R), transpose(J)))));
+    float3 raw = float3(cov[0][0], cov[0][1], cov[1][1]);
+    float3 blurred = raw + float3(0.075f, 0.0f, 0.075f);
+    float compensation = mip_filter ? sqrt(max(0.0f, compute_det(raw) / compute_det(blurred))) : 1.0f;
+    return float4(blurred, compensation);
+}
+
+// The legacy billboard caps each eigen-axis to min(1024, width, height)
+// pixels at its full support. Preserve its minor-axis floor as well.
+[ForceInline]
+float3 clamp_covariance_2d_portal(float3 cov, uint width, uint height) {
+    // Match the WebGPU projector's uniform covariance cap before its
+    // billboard eigen-axis cap. WebGL uses this same standard profile rule.
+    float limit = min(1024.0f, min(float(width), float(height)));
+    float cap = max(1.0f, sqrt(8.0f * max(cov.x, cov.z)) / limit);
+    cov /= cap * cap;
+    float mid = 0.5f * (cov.x + cov.z);
+    float radius = length(float2(0.5f * (cov.x - cov.z), cov.y));
+    float first = mid + radius;
+    float second = max(mid - radius, 0.025f);
+    float max_variance = limit * limit / 8.0f;
+    float a = min(first, max_variance);
+    float b = min(second, max_variance);
+    float2 axis = abs(cov.y) > 1e-6f ? normalize(float2(cov.y, first - cov.x))
+        : (cov.x >= cov.z ? float2(1.0f, 0.0f) : float2(0.0f, 1.0f));
+    float2 other = float2(axis.y, -axis.x);
+    return float3(a * axis.x * axis.x + b * other.x * other.x,
+                  a * axis.x * axis.y + b * other.x * other.y,
+                  a * axis.y * axis.y + b * other.y * other.y);
+}
+
+[ForceInline]
+float3 clamp_covariance_2d_portal(float3 cov, Camera cam) {
+    return clamp_covariance_2d_portal(cov, cam.W, cam.H);
+}
+
+[ForceInline]
+float3 portal_gut_bin_inverse(float3 raw_inv_cov, uint width, uint height) {
+    // Count and emit tiles from the same stored representation, including its
+    // rounding, so both passes agree even close to tile boundaries.
+    return compute_inverse(2.0f * clamp_covariance_2d_portal(
+        compute_inverse(raw_inv_cov), width, height));
+}
+
+
+// The portal's GUT fragment shader evaluates a ray only inside its projected
+// billboard. Binning can be conservative, but shading must retain that bound.
+[ForceInline]
+bool portal_gut_quad_contains(float2 pixel, float2 xy, float3 inv_cov, float opacity, Camera cam) {
+    if (opacity <= (1.0f / 255.0f)) return false;
+    float3 cov = clamp_covariance_2d_portal(compute_inverse(inv_cov), cam);
+    float mid = 0.5f * (cov.x + cov.z);
+    float radius = length(float2(0.5f * (cov.x - cov.z), cov.y));
+    float first = mid + radius;
+    float second = max(mid - radius, 0.025f);
+    float2 axis = abs(cov.y) > 1e-6f ? normalize(float2(cov.y, first - cov.x))
+        : (cov.x >= cov.z ? float2(1.0f, 0.0f) : float2(0.0f, 1.0f));
+    float clip = min(1.0f, 0.5f * sqrt(max(0.0f, log(opacity * 255.0f))));
+    float2 extent = sqrt(8.0f * float2(first, second)) * clip;
+    float2 d = pixel - xy;
+    return abs(dot(d, axis)) <= extent.x && abs(dot(d, float2(axis.y, -axis.x))) <= extent.y;
+}
+
+
 struct Splat_2D_Vertex : IDifferentiable
 {
     float3 xyz_vs;
@@ -700,13 +782,19 @@ Splat_3D_GUT_AlphaBlend load_splat_gut_alphablend(
     StructuredBuffer<float4> rotations,
     StructuredBuffer<float> scaling_raw,
     StructuredBuffer<float> opacity_raw,
-    StructuredBuffer<float> rgb
+    StructuredBuffer<float> rgb,
+    uint splat_render_profile
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
     float4 g_rotation = rotations[g_idx];
     float3 g_scale = exp(read_t3_float3(g_idx, scaling_raw));
     float g_opacity = sigmoid_activation(opacity_raw[g_idx]);
     float3 g_rgb = read_t3_float3(g_idx, rgb);
+    if (splat_render_profile == 1u) {
+        g_rotation = lfsPortalCompactRotation(g_rotation);
+        g_scale = lfsPortalCompactScales(g_scale);
+        g_opacity = lfsPortalCompactOpacity(g_opacity);
+    }
     float3x3 rotation = quat_to_rotmat(normalize(g_rotation));
     float3 safe_scale = max(g_scale, float3(1e-8f));
     float3x3 inv_scale = float3x3(
@@ -850,6 +938,42 @@ float evaluate_splat_alpha_spark_rad(
         : exp(-sigma_over_2);
 
     return float(spark_rad_alpha_from_value(g_opacity, val));
+}
+
+
+// Portal standard 3DGS uses a compact, normalized Gaussian. A pure exp()
+// leaves more opacity in its tails and visibly changes overlapping splats.
+[ForceInline]
+float portal_normalized_falloff(float value) {
+    const float edge = 0.01831563888873418f; // exp(-4)
+    return max(0.0f, (value - edge) / (1.0f - edge));
+}
+
+[ForceInline]
+float evaluate_splat_alpha_for_profile(float2 xy, float opacity, float3 inv_cov, float2 pixel, uint profile) {
+    if (profile != 1u)
+        return evaluate_splat_alpha(xy, opacity, inv_cov, pixel);
+    if (opacity <= (1.0f / 255.0f)) return 0.0f;
+    float2 d = pixel - xy;
+    float power = 0.5f * (inv_cov.x * d.x * d.x + inv_cov.z * d.y * d.y) + inv_cov.y * d.x * d.y;
+    float value = power < 0.0f || power > 4.0f ? 0.0f : exp(-power);
+    float alpha = clipOpacity(opacity * portal_normalized_falloff(value));
+    return alpha >= (1.0f / 255.0f) ? alpha : 0.0f;
+}
+
+[ForceInline]
+float4 evaluate_splat_for_profile(Splat_2D_AlphaBlend g, float2 pixel, uint profile) {
+    if (profile != 1u)
+        return evaluate_splat(g, pixel);
+    float alpha = evaluate_splat_alpha_for_profile(g.xy_vs, g.inv_cov_vs_opacity.w,
+                                                  g.inv_cov_vs_opacity.xyz, pixel, profile);
+    return float4(clamp(g.rgb, float3(0.0f), float3(MAX_BLEND_COLOR)) * alpha, alpha);
+}
+
+[ForceInline]
+float4 evaluate_gut_splat_for_profile(Splat_3D_GUT_AlphaBlend g, float3 origin, float3 direction, uint profile) {
+    float4 rgba = evaluate_gut_splat(g, origin, direction);
+    return profile == 1u && rgba.a < (1.0f / 255.0f) ? float4(0.0f) : rgba;
 }
 
 [Differentiable]
@@ -1044,12 +1168,16 @@ struct Uniforms {
     // 0 = median depth; > 0 = alpha-weighted (expected) depth, far bound = value.
     float expected_far;
     // Explicit padding to keep dist_coeffs 16-byte aligned; mirrors the C++
-    // struct exactly (192 bytes total). shN_address occupies the former
+    // struct exactly (208 bytes total). shN_address occupies the former
     // uniforms_pad1/pad2 (offset 104, 8-byte aligned).
     uint depth_wave;
     uint64_t shN_address;
     float4 dist_coeffs;
     float4x4 world_view_transform;
+    float color_exposure;
+    uint color_tonemapping;
+    uint splat_render_profile;
+    uint color_padding;
 }
 
 // HiGS macro-tile grid (64x32 px macro tiles), derived from the legacy

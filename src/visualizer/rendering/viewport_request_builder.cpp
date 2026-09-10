@@ -301,6 +301,9 @@ namespace lfs::vis {
 
         lfs::rendering::ViewportRenderRequest request{
             .frame_view = frame_view,
+            .color_exposure = ctx.settings.color_exposure,
+            .color_tonemapping = ctx.settings.color_tonemapping,
+            .splat_render_profile = ctx.settings.splat_render_profile,
             .scaling_modifier = ctx.settings.scaling_modifier,
             .antialiasing = ctx.settings.antialiasing,
             .mip_filter = ctx.settings.mip_filter,
@@ -312,7 +315,8 @@ namespace lfs::vis {
             .scene =
                 {.model_transforms = &ctx.scene_state.model_transforms,
                  .transform_indices = ctx.scene_state.transform_indices,
-                 .node_visibility_mask = ctx.scene_state.node_visibility_mask},
+                 .node_visibility_mask = ctx.scene_state.node_visibility_mask,
+                 .node_active_sh_degrees = ctx.scene_state.node_active_sh_degrees},
             .filters = {},
             .overlay =
                 {.markers =

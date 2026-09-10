@@ -85,7 +85,7 @@ BOOL_PROPS = [
 
 SLIDER_PROPS = [
     "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
-    "focal_length_mm", "render_scale", "environment_exposure", "environment_rotation_degrees",
+    "focal_length_mm", "render_scale", "color_exposure", "environment_exposure", "environment_rotation_degrees",
     "mesh_wireframe_width", "mesh_light_intensity", "mesh_ambient",
     "ppisp_exposure", "ppisp_vignette_strength", "ppisp_gamma_multiplier",
     "ppisp_gamma_red", "ppisp_gamma_green", "ppisp_gamma_blue",
@@ -101,6 +101,7 @@ SCRUB_FIELD_DEFS = {
     "voxel_size": ScrubFieldSpec(0.001, 0.1, 0.001, "%.3f"),
     "focal_length_mm": ScrubFieldSpec(10.0, 200.0, 0.1, "%.1f"),
     "render_scale": ScrubFieldSpec(0.25, 1.0, 0.01, "%.2f"),
+    "color_exposure": ScrubFieldSpec(0.1, 8.0, 0.01, "%.2f"),
     "environment_exposure": ScrubFieldSpec(-6.0, 6.0, 0.01, "%.2f"),
     "environment_rotation_degrees": ScrubFieldSpec(-180.0, 180.0, 0.1, "%.1f"),
     "mesh_wireframe_width": ScrubFieldSpec(0.5, 5.0, 0.01, "%.2f"),
@@ -137,7 +138,7 @@ SCRUB_FIELD_DEFS = {
 }
 
 SELECT_PROPS = [
-    "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution",
+    "grid_plane", "sh_degree", "raster_backend", "camera_metrics_mode", "mesh_shadow_resolution", "color_tonemapping",
 ]
 RASTER_BACKENDS = {"3dgs", "3dgut"}
 
@@ -193,6 +194,8 @@ LOCALE_KEY = {
     "render_scale": "main_panel.render_scale",
     "environment_mode": "main_panel.environment",
     "environment_map_path": "main_panel.environment_map_path",
+    "color_exposure": "main_panel.color_exposure",
+    "color_tonemapping": "main_panel.color_tonemapping",
     "environment_exposure": "main_panel.environment_exposure",
     "environment_rotation_degrees": "main_panel.environment_rotation",
     "camera_metrics_mode": "main_panel.camera_metrics",

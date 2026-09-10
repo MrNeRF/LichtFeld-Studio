@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "vksplat_viewport_renderer.hpp"
+#include "rendering/rasterizer/vulkan/src/display_color.h"
 
 #include "lod_page_dequant_cuda.hpp"
 
@@ -646,10 +647,12 @@ namespace lfs::vis {
 
         [[nodiscard]] int effectiveRenderShDegree(
             const lfs::core::SplatData& splat_data,
-            const int requested_sh_degree) {
+            const int requested_sh_degree,
+            const std::vector<int>& node_degrees) {
             const int max_model_degree = std::min(3, splat_data.get_max_sh_degree());
             const int active_model_degree = std::clamp(
-                splat_data.get_active_sh_degree(),
+                node_degrees.empty() ? splat_data.get_active_sh_degree()
+                                     : *std::max_element(node_degrees.begin(), node_degrees.end()),
                 0,
                 max_model_degree);
             return std::clamp(requested_sh_degree, 0, active_model_degree);
@@ -1414,15 +1417,25 @@ namespace lfs::vis {
         // CPU-only build of the model-transform upload payload. H2D is paid
         // only when the bytes differ from the cached copy.
         [[nodiscard]] std::expected<std::vector<float>, std::string> buildModelTransformsCpuFloats(
-            const std::vector<glm::mat4>* const transforms) {
+            const std::vector<glm::mat4>* const transforms,
+            const std::vector<int>* const node_degrees = nullptr) {
             try {
                 const std::size_t count = modelTransformCount(transforms);
+                if (node_degrees && !node_degrees->empty() && node_degrees->size() != count) {
+                    return std::unexpected("VkSplat node SH limits do not match transform slots");
+                }
                 std::vector<float> cpu(count * 16u, 0.0f);
                 for (std::size_t i = 0; i < count; ++i) {
                     const glm::mat4 transform =
                         transforms && i < transforms->size() ? (*transforms)[i] : glm::mat4(1.0f);
                     const auto rows = rowMajorMat4(transform);
                     std::memcpy(cpu.data() + i * 16u, rows.data(), rows.size() * sizeof(float));
+                    // GPU model transforms use only three affine rows. Reserve
+                    // row3.x for degree+1; zero means the model-wide limit.
+                    // Keep CPU transforms intact for camera/culling/exports.
+                    cpu[i * 16u + 12u] = node_degrees && !node_degrees->empty()
+                                             ? static_cast<float>(std::clamp((*node_degrees)[i], 0, 3) + 1)
+                                             : 0.0f;
                 }
                 return cpu;
             } catch (const std::exception& e) {
@@ -1875,6 +1888,10 @@ namespace lfs::vis {
             float depth_max = 1.0f;
             std::uint32_t depth_visualization_mode = 0;
             float pad2 = 0.0f;
+            float color_exposure = 1.0f;
+            std::uint32_t color_tonemapping = 0;
+            std::uint32_t splat_render_profile = 0;
+            std::uint32_t color_padding = 0;
         };
 
     } // namespace
@@ -4574,7 +4591,8 @@ namespace lfs::vis {
                 // Same output-bytes fingerprint pattern as overlay_params.
                 LOG_TIMER("uploadOverlayBindings.prepare_sources.model_transforms");
                 auto model_transforms_cpu =
-                    buildModelTransformsCpuFloats(request.scene.model_transforms);
+                    buildModelTransformsCpuFloats(request.scene.model_transforms,
+                                                  &request.scene.node_active_sh_degrees);
                 if (!model_transforms_cpu) {
                     return std::unexpected(model_transforms_cpu.error());
                 }
@@ -6066,9 +6084,12 @@ namespace lfs::vis {
             transitionToProducer(output.depth_image.image,
                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                                  transfer_write);
+            const auto clear_background = !depth_view && uniforms.splat_render_profile == 0u
+                                              ? lfs::rendering::lfsDisplayTone(glm::max(background, glm::vec3(0)), uniforms.color_tonemapping, uniforms.color_exposure)
+                                              : background;
             VkClearColorValue clear = transparent_background
                                           ? VkClearColorValue{{0.0f, 0.0f, 0.0f, 0.0f}}
-                                          : VkClearColorValue{{background.r, background.g, background.b, 1.0f}};
+                                          : VkClearColorValue{{clear_background.r, clear_background.g, clear_background.b, 1.0f}};
             VkClearColorValue depth_clear{{1.0e10f, 0.0f, 0.0f, 0.0f}};
             VkImageSubresourceRange range{};
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -6202,6 +6223,9 @@ namespace lfs::vis {
             .depth_min = depth_min,
             .depth_max = depth_max,
             .depth_visualization_mode = static_cast<std::uint32_t>(depth_visualization_mode),
+            .color_exposure = uniforms.color_exposure,
+            .color_tonemapping = uniforms.color_tonemapping,
+            .splat_render_profile = uniforms.splat_render_profile,
         };
         vkCmdPushConstants(cmd,
                            compose_->pipeline_layout,
@@ -8244,7 +8268,7 @@ namespace lfs::vis {
         VulkanGSRendererUniforms uniforms{};
         {
             LOG_TIMER("vksplat.selection_overlay.populateUniforms");
-            const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
+            const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree, request.scene.node_active_sh_degrees);
             const int resident_sh_degree =
                 current_input_sh_degree_ >= 0
                     ? std::min(active_sh_degree, current_input_sh_degree_)
@@ -8258,6 +8282,9 @@ namespace lfs::vis {
                                           request.equirectangular,
                                           request.gut,
                                           request.mip_filter);
+            uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
+            uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
+            uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.sort_capacity = HIGS_DEPTH_WAVE_INSTANCES;
         }
@@ -8426,7 +8453,7 @@ namespace lfs::vis {
             ~RetirementReconcile() { self->clampOrphanedInputRetirements(); }
         } retirement_reconcile{this};
 
-        const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree);
+        const int active_sh_degree = effectiveRenderShDegree(splat_data, request.sh_degree, request.scene.node_active_sh_degrees);
         if (auto ok = ensureInitialized(context); !ok) {
             return std::unexpected(ok.error());
         }
@@ -8926,6 +8953,9 @@ namespace lfs::vis {
                                           request.equirectangular,
                                           request.gut,
                                           request.mip_filter);
+            uniforms.color_exposure = std::isfinite(request.color_exposure) ? std::clamp(request.color_exposure, 0.1f, 8.0f) : 1.0f;
+            uniforms.color_tonemapping = static_cast<std::uint32_t>(std::clamp(request.color_tonemapping, 0, 6));
+            uniforms.splat_render_profile = request.splat_render_profile == 1 ? 1u : 0u;
             uniforms.step = static_cast<std::uint32_t>(modelTransformCount(request.scene.model_transforms));
             uniforms.lod_enabled = (lod_indices_present || gpu_lod_render_active) ? 1u : 0u;
             if (lod_logical_indices_present || gpu_lod_render_active) {

@@ -332,7 +332,8 @@ compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/mesh_wireframe.
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/environment.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/environment.frag.spv.h" kEnvironmentFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/depth_blit.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/depth_blit.frag.spv.h" kDepthBlitFragSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/split_view.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/split_view.frag.spv.h" kSplitViewFragSpv)
-compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv)
+compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/vksplat_compose.comp" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/vksplat_compose.comp.spv.h" kVkSplatComposeCompSpv
+    "${CMAKE_SOURCE_DIR}/src/rendering/rasterizer/vulkan/shader/src/slang/display_color.inc")
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.vert" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.vert.spv.h" kPointCloudVertSpv)
 compile_shader(lfs_visualizer "${LFS_VIEWPORT_SHADER_SOURCE_DIR}/point_cloud.frag" "${LFS_VIEWPORT_SHADER_BINARY_DIR}/point_cloud.frag.spv.h" kPointCloudFragSpv)
 

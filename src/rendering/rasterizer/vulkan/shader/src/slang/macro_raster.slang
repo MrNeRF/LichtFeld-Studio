@@ -164,6 +164,9 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     const uint splats_to_process = range_end - range_start;
     const uint num_mini_batches = (splats_to_process + SUBGROUP_SIZE - 1u) / SUBGROUP_SIZE;
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
+    // RAD has its own alpha representation. Keep its projection and replay
+    // consistent even when opened in a project imported from the gallery.
+    const bool standard_portal = uniforms.splat_render_profile == 1u && !spark_rad_opacity_path;
 
   #if LFS_RASTER_OVERLAYS
     // Hoist uniform overlay scalars once per thread before the batch blend.
@@ -324,12 +327,14 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                                           : power_threshold_for_opacity(g_rgbo.w);
                     if (sigma_over_2 < 0.0f || sigma_over_2 > thr)
                         continue;
-                    const float val = exp(-sigma_over_2);
+                    const float raw_val = exp(-sigma_over_2);
+                    const float val = standard_portal
+                        ? portal_normalized_falloff(raw_val) : raw_val;
 
                     const float alpha = spark_rad_opacity_path
                                             ? spark_rad_alpha_from_value(g_rgbo.w, val)
                                             : float(clipOpacity(g_rgbo.w * val));
-                    if (alpha < ALPHA_THRESHOLD)
+                    if (alpha < (standard_portal ? (1.0f / 255.0f) : ALPHA_THRESHOLD))
                         continue;
                     float4 gauss_rgba = float4(g_rgbo.rgb * alpha, alpha);
 
@@ -434,7 +439,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         }
 
         const half2 eps2 = half2(half(0.0001f), half(0.0001f));
-        const half2 alpha_min2 = half2(half(ALPHA_THRESHOLD), half(ALPHA_THRESHOLD));
+        const half alpha_min = half(standard_portal ? (1.0f / 255.0f) : ALPHA_THRESHOLD);
+        const half2 alpha_min2 = half2(alpha_min, alpha_min);
         const half2 alpha_cap2 = half2(half(ALPHA_BLEND_MAX_OPACITY), half(ALPHA_BLEND_MAX_OPACITY));
         const half2 zero2 = half2(0.0h, 0.0h);
         const half2 one2 = half2(1.0h, 1.0h);
@@ -500,7 +506,12 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                         const half2 u2 = u_dx2 + g_chol.y * dy2;
                         const half2 v2 = g_chol.z * dy2;
                         const half2 q2 = u2 * u2 + v2 * v2;
-                        half2 alpha2 = min(g_rgbo.w * exp2(-q2), alpha_cap2);
+                        half2 val2 = exp2(-q2);
+                        if (standard_portal) {
+                            const half2 edge2 = half2(half(0.01831563888873418f));
+                            val2 = max(zero2, (val2 - edge2) / (half2(half(1.0f)) - edge2));
+                        }
+                        half2 alpha2 = min(g_rgbo.w * val2, alpha_cap2);
                         alpha2 = select(q2 <= thr2, alpha2, zero2);
                         alpha2 = select(alpha2 >= alpha_min2, alpha2, zero2);
 

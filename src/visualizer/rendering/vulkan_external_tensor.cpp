@@ -486,19 +486,19 @@ namespace lfs::vis {
         };
     }
 
-    lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator() {
+    lfs::core::SplatTensorAllocator makeViewerSplatTensorAllocator(const bool preserve_float_shN) {
         auto* const window_manager = services().windowOrNull();
         auto* const context = window_manager ? window_manager->getVulkanContext() : nullptr;
         if (!context || !context->externalMemoryInteropEnabled()) {
             return {};
         }
 
-        return [context](lfs::core::TensorShape shape,
-                         const size_t capacity,
-                         const lfs::core::DataType dtype,
-                         const std::string_view name) -> lfs::core::Tensor {
+        return [context, preserve_float_shN](lfs::core::TensorShape shape,
+                                             const size_t capacity,
+                                             const lfs::core::DataType dtype,
+                                             const std::string_view name) -> lfs::core::Tensor {
             const std::string debug_name{name};
-            if (keepFloatShNInPooledCuda(debug_name, dtype)) {
+            if (!preserve_float_shN && keepFloatShNInPooledCuda(debug_name, dtype)) {
                 auto pooled = lfs::core::Tensor::zeros_direct(
                     std::move(shape), capacity, lfs::core::Device::CUDA, dtype);
                 pooled.set_name(debug_name);

@@ -53,6 +53,7 @@ namespace lfs::vis::gui {
         glm::mat4 point_cloud_transform{1.0f};
         std::vector<VideoExportMeshSnapshot> meshes;
         std::vector<glm::mat4> model_transforms;
+        std::vector<int> node_active_sh_degrees;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
         std::shared_ptr<lfs::core::Tensor> selection_mask;
         std::vector<bool> selected_node_mask;

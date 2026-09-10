@@ -795,6 +795,31 @@ namespace {
     }
 
     TEST(P5SessionChapterTest,
+         GalleryColorSettingsPersistAndOldProjectsKeepTheirAppearance) {
+        lfs::vis::RenderSettings settings;
+        settings.color_exposure = 2.5f;
+        settings.color_tonemapping = 5;
+        settings.splat_render_profile = 1;
+        auto json = renderSettingsToProjectJson(settings);
+        const auto restored = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(restored);
+        EXPECT_FLOAT_EQ(restored->color_exposure, 2.5f);
+        EXPECT_EQ(restored->color_tonemapping, 5);
+        EXPECT_EQ(restored->splat_render_profile, 1);
+
+        // Projects written before gallery color controls have no such fields.
+        // Loading them must preserve the existing untone-mapped display.
+        json.erase("color_exposure");
+        json.erase("color_tonemapping");
+        json.erase("splat_render_profile");
+        const auto legacy = renderSettingsFromProjectJson(json);
+        ASSERT_TRUE(legacy);
+        EXPECT_FLOAT_EQ(legacy->color_exposure, 1.0f);
+        EXPECT_EQ(legacy->color_tonemapping, 0);
+        EXPECT_EQ(legacy->splat_render_profile, 0);
+    }
+
+    TEST(P5SessionChapterTest,
          RestoreCoordinatorRequiresBothEventGates) {
         auto session = make_populated_session_chapters();
         GuiSessionRestoreCoordinator coordinator;

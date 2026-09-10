@@ -3,6 +3,13 @@
 import utils;
 import spherical_harmonics;
 
+#define LFS_COLOR_INLINE
+#define LFS_COLOR_VEC3 float3
+#define LFS_COLOR_UINT uint
+#define LFS_COLOR_MIX lerp
+#include "display_color.inc"
+
+
 #ifndef LFS_3DGUT_PROJECTION
 #define LFS_3DGUT_PROJECTION 0
 #endif
@@ -431,7 +438,8 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     uint model_transform_base,
     bool model_transform_enabled,
     bool mip_filter,
-    bool spark_rad_opacity_path) {
+    bool spark_rad_opacity_path,
+    bool standard_portal) {
     float3 xyz_vs = project_point(mean_ws, cam);
     // Reject behind-camera, non-finite, and far off-screen means. The EWA
     // projection Jacobian degenerates as the mean moves outside the frustum
@@ -439,7 +447,7 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     // CUDA reference uses clip_xy=1.4 (20% margin).
     if (xyz_vs.z <= NEAR_CLIP ||
         !isfinite(dot(xyz_vs, xyz_vs)) ||
-        !image_point_in_image_bounds_margin(xyz_vs.xy, cam, 0.2f)) {
+        (!standard_portal && !image_point_in_image_bounds_margin(xyz_vs.xy, cam, 0.2f))) {
         return { float3(0.0), float3(0.0), float3(0.0), float4(0.0), 0.0 };
     }
     xyz_vs.xy -= 0.5;  // pixel offset
@@ -459,9 +467,12 @@ Splat_2D_Vertex project_gaussian_to_camera_model(
     if (model_transform_enabled) {
         cov_ws = transform_covariance_rows(model_transform_rows, model_transform_base, cov_ws);
     }
-    float4 cov_vs = covariance_3d_to_2d(cam, mean_ws, cov_ws, mip_filter, spark_rad_opacity_path);
+    float4 cov_vs = standard_portal
+        ? covariance_3d_to_2d_portal(cam, mean_ws, cov_ws, mip_filter)
+        : covariance_3d_to_2d(cam, mean_ws, cov_ws, mip_filter, spark_rad_opacity_path);
     float opac = g.opacities * cov_vs.w;
-    float3 cov_projected = clamp_covariance_2d_extent(cov_vs.xyz, opac);
+    float3 cov_projected = standard_portal ? clamp_covariance_2d_portal(cov_vs.xyz, cam)
+                                         : clamp_covariance_2d_extent(cov_vs.xyz, opac);
     float det = compute_det(cov_projected);
     float3 inv_cov_vs = compute_inverse(cov_projected);
 
@@ -793,7 +804,7 @@ void main(
     uint3 dispatchThreadID : SV_DispatchThreadID,
     uniform Uniforms uniforms
 ) {
-    const uint active_sh = uniforms.active_sh;
+    uint active_sh = uniforms.active_sh;
     const uint model_transform_count = uniforms.step;
     const uint image_height = uniforms.image_height;
     const uint image_width = uniforms.image_width;
@@ -934,6 +945,14 @@ void main(
     uint overlay_flags = active_state.overlay_flags;
     uint model_transform_base = active_state.model_transform_base;
     bool model_transform_enabled = active_state.model_transform_enabled;
+    // Coefficients retain their full storage layout. The fourth transform row
+    // carries a per-node evaluation cap, avoiding loss of inactive source SH.
+    if (model_transform_enabled) {
+        float node_sh_code = model_transforms[model_transform_base + 3u].x;
+        if (node_sh_code >= 1.0f && node_sh_code <= 4.0f) {
+            active_sh = min(active_sh, uint(node_sh_code) - 1u);
+        }
+    }
     float3 mean_ws = active_state.mean_ws;
 
     if (!active_state.active) {
@@ -948,6 +967,14 @@ void main(
 
     const bool spark_rad_opacity_path = (uniforms.lod_enabled & 4u) != 0u;
 
+#if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path) {
+        gauss.rotations = lfsPortalCompactRotation(gauss.rotations);
+        gauss.scales = lfsPortalCompactScales(gauss.scales);
+        gauss.opacities = lfsPortalCompactOpacity(gauss.opacities);
+    }
+#endif
+
     // projection (differentiable)
   #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     // forward
@@ -960,7 +987,9 @@ void main(
         model_transforms,
         model_transform_base,
         model_transform_enabled,
-        (uniforms.mip_filter & 1u) != 0u);
+        // Portal GUT keeps its 0.3 dilation and raw opacity when AA is enabled.
+        (uniforms.mip_filter & 1u) != 0u &&
+            (uniforms.splat_render_profile != 1u || spark_rad_opacity_path));
   #else
     Splat_2D_Vertex splat = project_gaussian_to_camera_model(
         gauss,
@@ -971,7 +1000,8 @@ void main(
         model_transform_base,
         model_transform_enabled,
         (uniforms.mip_filter & 1u) != 0u,
-        spark_rad_opacity_path);
+        spark_rad_opacity_path,
+        uniforms.splat_render_profile == 1u && !spark_rad_opacity_path);
   #endif
   #else
     // backward
@@ -998,8 +1028,13 @@ void main(
 #if EXPORT_MODE != EXPORT_MODE_VULKAN_BACKWARD
     splat.xyz_vs.xy -= float2(uniforms.render_origin_x, uniforms.render_origin_y);
 
+    float opacity_threshold = ALPHA_THRESHOLD;
+#if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path)
+        opacity_threshold = 1.0f / 255.0f;
+#endif
     if (splat.xyz_vs.z <= NEAR_CLIP ||
-        splat.inv_cov_vs_opac.w <= ALPHA_THRESHOLD ||
+        splat.inv_cov_vs_opac.w <= opacity_threshold ||
         splat.det <= 0.0
     ) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
@@ -1009,6 +1044,15 @@ void main(
     }
 
     Splat_2D_Vertex splat_dist = splat;
+#if LFS_3DGUT_PROJECTION && EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
+    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path) {
+        // An ellipse with twice the billboard covariance contains its four
+        // corners. Keep the raw covariance for the exact fragment bound.
+        splat_dist.inv_cov_vs_opac.xyz = portal_gut_bin_inverse(splat.inv_cov_vs_opac.xyz, cam.W, cam.H);
+        splat_dist.cov_vs = compute_inverse(splat_dist.inv_cov_vs_opac.xyz);
+        splat_dist.det = compute_det(splat_dist.cov_vs);
+    }
+#endif
 
     float radius = splat_radius(splat_dist.cov_vs.xyz, splat_dist.det);
     bool equirectangular_camera = is_equirectangular_camera(cam);
@@ -1118,6 +1162,12 @@ void main(
     out_xy_vs[out_idx] = splat.xyz_vs.xy;
     out_depths[out_idx] = splat.xyz_vs.z;
     out_inv_cov_vs[out_idx] = splat.inv_cov_vs_opac;
+    if (uniforms.splat_render_profile == 1u && !spark_rad_opacity_path) {
+        splat.rgb = lfsPortalCompactColor(splat.rgb);
+    }
+    if (uniforms.splat_render_profile == 1u && uniforms.color_tonemapping != 0u) {
+        splat.rgb = lfsDisplaySplat(splat.rgb, uniforms.color_tonemapping, uniforms.color_exposure);
+    }
     write_t3_float3(splat.rgb, out_idx, out_rgb);
     write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, uniforms.lod_enabled);
 

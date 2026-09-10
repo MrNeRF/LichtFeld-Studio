@@ -59,6 +59,7 @@ void replay_batch(uint range_start,
                   uint range_end,
                   uint2 tile_origin,
                   float2 center_pix_coord,
+                  uint splat_render_profile,
                   bool spark_rad_opacity_path,
 #if LFS_RASTER_OVERLAYS
                   OverlayUniformState overlay_state,
@@ -76,7 +77,7 @@ void replay_batch(uint range_start,
 
         float4 gauss_rgba = spark_rad_opacity_path
                                 ? evaluate_splat_spark_rad(g, center_pix_coord)
-                                : evaluate_splat(g, center_pix_coord);
+                                : evaluate_splat_for_profile(g, center_pix_coord, splat_render_profile);
         if (gauss_rgba.a < ALPHA_THRESHOLD)
             continue;
         const float splat_depth = read_t1_float(slot, depths);
@@ -227,6 +228,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                              range_end,
                              tile_origin,
                              center_pix_coord,
+                             uniforms.splat_render_profile,
                              spark_rad_opacity_path,
                           #if LFS_RASTER_OVERLAYS
                              overlay_state,

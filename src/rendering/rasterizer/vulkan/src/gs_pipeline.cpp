@@ -1,4 +1,5 @@
 #include "gs_pipeline.h"
+#include "gs_renderer.h"
 #include "perf_timer.h"
 
 #include "core/error.hpp"
@@ -24,7 +25,7 @@
 #undef min
 #endif
 
-static const size_t MAX_UNIFORM_SIZE = 192;
+static constexpr size_t MAX_UNIFORM_SIZE = sizeof(VulkanGSRendererUniforms);
 
 // The pre-wave renderer fits in the legacy 96-query budget. Each armed depth
 // wave adds one independently accumulated cumsum interval (begin + end), and
