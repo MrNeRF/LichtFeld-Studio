@@ -22,6 +22,7 @@
           </div>
 
           <button class="asset-button asset-button--text asset-button--primary asset-import-button" data-event-click="on_import_project"><span class="asset-button-text">{{import_project_label}}</span></button>
+          <button class="asset-button asset-button--text" data-event-click="open_gallery"><span class="asset-button-text">Gallery</span></button>
           <button class="asset-button asset-button--icon asset-panel-close" type="button" data-event-click="close_panel" data-tooltip="common.close"><span class="asset-button-glyph">&#215;</span></button>
         </div>
 

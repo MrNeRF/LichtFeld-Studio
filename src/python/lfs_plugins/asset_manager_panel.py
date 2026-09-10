@@ -378,6 +378,7 @@ class AssetManagerPanel(Panel):
         model.bind_record_list("folders")
         model.bind_record_list("assets")
         for event, handler in (
+            ("open_gallery", self.on_open_gallery),
             ("toggle_folders_collapsed", self.toggle_folders_collapsed),
             ("add_asset_folder", self.add_asset_folder),
             ("on_import_project", self.on_import_project),
@@ -1055,6 +1056,21 @@ class AssetManagerPanel(Panel):
 
     def on_load_asset(self, _handle, _ev, args):
         self._load_asset(self._resolve_event_value(args, _ev, "data-asset-id"))
+
+    def on_open_gallery(self, _handle=None, _event=None, _args=None):
+        path = None
+        asset_id = self.get_selected_asset_id()
+        if asset_id and self._asset_index:
+            project = self._asset_index.verify_asset(asset_id)
+            asset = project.to_dict() if project is not None else None
+            if not asset or not self._project_available(asset):
+                self.refresh_catalog(scan_folders=False)
+                return
+            path = str(asset["path"])
+        lf.ui.set_panel_enabled("lfs.gallery", True)
+        panel = lf.ui.get_panel_object("lfs.gallery")
+        if panel is not None:
+            panel.focus_project(path)
 
     def _load_asset(self, asset_id: str) -> None:
         if not asset_id or not self._asset_index:

@@ -1,0 +1,117 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="gallery_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="gallery_sync">
+  <span class="panel-title">Your gallery</span>
+  <div class="gallery-account">
+    <div class="gallery-account-details">
+      <span class="gallery-heading">{{account_name}}</span>
+      <span class="gallery-muted" data-if="signed_in">{{account_email}}</span>
+      <span class="gallery-muted" data-if="!signed_in">Bring your projects to your LichtFeld gallery.</span>
+    </div>
+    <button class="btn btn--secondary" data-event-click="account">{{account_action}}</button>
+  </div>
+  <div class="gallery-status-row">
+    <span class="gallery-status">{{message}}</span>
+    <button class="btn btn--secondary" data-event-click="show_backup(recovery_job)" data-if="recovery_job != ''" data-attrif-disabled="busy">Show recovery copy</button>
+    <button class="btn btn--secondary" data-event-click="pause" data-if="can_pause">{{pause_label}}</button>
+  </div>
+  <progress class="gallery-preparation-progress" max="100" data-attr-value="preparation_progress" data-if="preparing"/>
+  <div class="gallery-section" data-if="needs_project">
+    <span class="gallery-heading">Selected project: {{requested_project_name}}</span>
+    <p class="gallery-muted">Open this project to upload its splats and camera settings.</p>
+    <div class="gallery-actions">
+      <button class="btn btn--primary" data-event-click="open_project" data-attrif-disabled="busy">Open selected project</button>
+      <button class="btn btn--secondary" data-event-click="use_current" data-attrif-disabled="busy">Use current project</button>
+    </div>
+  </div>
+    <div class="gallery-confirm" data-if="confirm">
+      <span class="gallery-heading">Review this change</span>
+      <p>{{confirm_text}}</p>
+      <div class="gallery-actions"><button class="btn btn--primary" data-event-click="confirm_action" data-attrif-disabled="busy">{{confirm_label}}</button><button class="btn btn--secondary" data-event-click="cancel_action">Cancel</button></div>
+    </div>
+  <div class="gallery-welcome" data-if="storage_issue">
+    <span class="gallery-heading">Gallery recovery needed</span>
+    <p class="gallery-muted">Studio couldn't read its saved links and transfer history. Keep the recovery folder when asking for help. Your local projects and gallery items are unchanged.</p>
+    <div class="gallery-actions">
+      <button class="btn btn--secondary" data-event-click="show_recovery_folder" data-attrif-disabled="busy">Open recovery folder</button>
+      <button id="gallery-recovery-retry" class="btn btn--primary" data-event-click="refresh" data-if="signed_in" data-attrif-disabled="busy">Retry</button>
+    </div>
+  </div>
+  <div class="gallery-welcome" data-if="!connected && !storage_issue">
+    <span class="gallery-heading">Your projects, ready to share</span>
+    <p class="gallery-muted">Upload a scene, update an existing splat, or bring a gallery item back into Studio.</p>
+    <p class="gallery-muted">New uploads start private. Manage public visibility here and share links on the portal.</p>
+    <button class="btn btn--primary" data-event-click="account" data-if="!signed_in">Sign in to get started</button>
+    <button id="gallery-connect" class="btn btn--primary" data-event-click="refresh" data-if="signed_in" data-attrif-disabled="busy">Connect my gallery</button>
+  </div>
+  <div class="gallery-content" data-if="connected">
+    <div class="gallery-section">
+      <div class="gallery-section-header">
+        <span class="gallery-heading">My splats <span class="gallery-muted">({{gallery_count}})</span></span>
+        <div class="gallery-actions">
+          <button class="btn btn--secondary" data-event-click="refresh" data-attrif-disabled="busy">Refresh</button>
+          <button class="btn btn--secondary" data-event-click="new" data-attrif-disabled="busy">New upload</button>
+        </div>
+      </div>
+      <label class="gallery-search-label" for="gallery-search">Search your gallery</label>
+      <input id="gallery-search" class="gallery-search" type="text" data-value="search"/>
+      <div class="gallery-empty" data-if="empty_gallery">Your gallery is empty. Publish your first scene below.</div>
+      <div class="gallery-empty" data-if="no_matches">No splats match your search.</div>
+      <div class="gallery-list">
+        <button class="gallery-item" data-for="scene : scenes" data-class-is-selected="scene.selected" data-event-click="select(scene.id)" data-attrif-disabled="busy">
+          <span class="gallery-item-title">{{scene.title}}</span>
+          <span class="gallery-badge">{{scene.visibility}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="gallery-section gallery-editor">
+      <span class="gallery-heading">{{editor_heading}}</span>
+      <label for="gallery-title">Title</label>
+      <input id="gallery-title" type="text" data-value="title" maxlength="120" data-attrif-disabled="busy"/>
+      <label for="gallery-description">Description</label>
+      <textarea id="gallery-description" data-value="description" maxlength="5000" rows="3" data-attrif-disabled="busy"/>
+      <label for="gallery-visibility">Who can view this splat?</label>
+      <select id="gallery-visibility" data-value="visibility" data-attrif-disabled="busy"><option value="private">Private</option><option value="public">Anyone · Public</option></select>
+      <span class="gallery-muted">{{visibility_hint}}</span>
+      <div class="gallery-actions" data-if="selected">
+        <button class="btn btn--primary" data-event-click="edit" data-attrif-disabled="busy">Save details</button>
+        <button class="btn btn--secondary" data-event-click="open" data-attrif-disabled="busy">View on portal</button>
+        <button class="btn btn--secondary" data-event-click="download" data-attrif-disabled="busy">Download to Studio</button>
+      </div>
+      <div class="gallery-actions gallery-secondary-actions">
+        <button class="btn btn--secondary" data-event-click="unlink" data-if="linked" data-attrif-disabled="busy">Unlink current project</button>
+        <button class="btn btn--secondary gallery-remove" data-event-click="remove" data-if="selected" data-attrif-disabled="busy">Remove from gallery</button>
+      </div>
+    </div>
+    <div class="gallery-section gallery-transfers" data-if="has_jobs">
+      <div class="gallery-section-header">
+        <span class="gallery-heading">Transfers</span>
+        <button class="btn btn--secondary" data-event-click="clear_finished" data-if="can_clear_finished" data-attrif-disabled="busy">Clear finished</button>
+      </div>
+      <div class="gallery-transfer" data-for="job : jobs">
+        <div class="gallery-section-header"><span class="gallery-item-title">{{job.title}}</span><span class="gallery-muted">{{job.direction}} · {{job.progress}}</span></div>
+        <progress max="100" data-attr-value="job.progress_value" data-if="!job.recovery_only"/>
+        <p class="gallery-muted">{{job.message}}</p>
+        <button class="btn btn--secondary" data-if="job.importable" data-event-click="import(job.id)" data-attrif-disabled="busy">Open as new project</button>
+        <button class="btn btn--primary" data-if="job.updatable" data-event-click="update_local(job.id)" data-attrif-disabled="busy">Update linked project</button>
+        <button class="btn btn--secondary" data-if="job.has_backup" data-event-click="show_backup(job.id)" data-attrif-disabled="busy">Show recovery copy</button>
+        <button class="btn btn--secondary" data-if="job.conflicted" data-event-click="resolve(job.id)" data-attrif-disabled="busy">Keep gallery details and resume</button>
+        <div class="gallery-actions"><button class="btn btn--secondary" data-if="job.resumable" data-event-click="resume(job.id)" data-attrif-disabled="busy">{{job.resume_label}}</button><button class="btn btn--secondary" data-if="job.discardable" data-event-click="discard(job.id)" data-attrif-disabled="busy">{{job.discard_label}}</button></div>
+      </div>
+      <button class="btn btn--secondary" data-event-click="more_history" data-if="more_history">Show older transfers</button>
+    </div>
+  </div>
+  <div class="gallery-publish" data-if="connected && !needs_project">
+    <span class="gallery-heading">Upload from: {{current_project_name}}</span>
+    <div class="gallery-linked" data-if="linked">
+      <span class="gallery-muted gallery-item-title">Current project: linked to “{{linked_title}}”</span>
+      <button class="btn btn--secondary" data-event-click="linked" data-attrif-disabled="busy">Select linked splat</button>
+    </div>
+    <p class="gallery-muted">Upload visible splats with the initial view, camera path and supported render settings.</p>
+    <button class="btn btn--primary" data-event-click="publish" data-attrif-disabled="busy">{{publish_label}}</button>
+  </div>
+</body>
+</rml>

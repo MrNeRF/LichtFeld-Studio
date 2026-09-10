@@ -1,0 +1,10 @@
+/* Gallery uses the active Studio theme, including custom and light themes. */
+.gallery-account, .gallery-section, .gallery-welcome { background-color: @{alpha(surface_bright,0.50)}; border-color: @{border}; }
+.gallery-muted, .gallery-status, .gallery-empty { color: @{text_dim}; }
+.gallery-item { color: @{text}; background-color: @{surface_bright}; border-color: @{border}; }
+.gallery-item:hover { border-color: @{primary}; }
+.gallery-item.is-selected { border-color: @{primary}; background-color: @{alpha(primary,0.12)}; }
+.gallery-badge { color: @{text_dim}; background-color: @{alpha(background,0.30)}; }
+.gallery-publish, .gallery-transfer { border-top-color: @{border}; }
+.gallery-confirm { border-color: @{primary}; background-color: @{alpha(primary,0.08)}; }
+.gallery-remove:hover { color: @{error}; border-color: @{error}; }

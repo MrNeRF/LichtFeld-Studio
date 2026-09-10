@@ -662,6 +662,21 @@ def test_open_project_verifies_then_uses_project_lifecycle(panel_module):
     assert panel.get_selected_asset_id() == asset["id"]
 
 
+def test_gallery_receives_verified_selected_project_without_opening_it(panel_module, monkeypatch):
+    panel = panel_module.AssetManagerPanel()
+    asset = _project()
+    panel._selected_asset_ids = {asset["id"]}
+    panel._asset_index = _index(assets={asset["id"]: asset},
+        verify_asset=lambda _: SimpleNamespace(to_dict=lambda: asset))
+    focused = []
+    monkeypatch.setattr(panel_module.lf.ui, "get_panel_object",
+        lambda _: SimpleNamespace(focus_project=focused.append), raising=False)
+    panel.on_open_gallery()
+    assert focused == [asset["path"]]
+    assert panel_module.lf._test_state.opened == []
+    assert ("lfs.gallery", True) in panel_module.lf._test_state.enabled
+
+
 def test_open_project_confirms_before_discarding_unsaved_changes(panel_module):
     panel = panel_module.AssetManagerPanel()
     asset = _project()
