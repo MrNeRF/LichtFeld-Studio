@@ -230,6 +230,14 @@ namespace lfs::vis::project {
         [[nodiscard]] std::filesystem::path
         projectRootFor(
             const ProjectDocument& document) {
+            if (auto refs = document.references().records(); refs) {
+                for (const auto& ref : *refs) {
+                    if (document.find_dataset_source(ref.uuid)) {
+                        if (auto directory = document.embedded_asset_directory(); directory)
+                            return *directory;
+                    }
+                }
+            }
             if (const auto source =
                     document.source_path();
                 source && !source->empty()) {

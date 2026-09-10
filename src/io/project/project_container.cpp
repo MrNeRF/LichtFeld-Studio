@@ -2734,7 +2734,7 @@ namespace lfs::io::project {
     CapabilitySet supported_reader_capabilities() {
         CapabilitySet result;
         for (std::uint8_t bit = INDEX_ZSTD_V1;
-             bit <= CHUNK_BYTESHUFFLE_ZSTD_V1; ++bit) {
+             bit <= ENCODED_SCENE_ASSETS; ++bit) {
             result.set(bit);
         }
         return result;

@@ -146,6 +146,7 @@ namespace lfs::io::project {
         // Byte-plane (f32-word) prefilter + zstd. Distinct wire encoding from
         // plain CHUNK_ZSTD_V1; readers without this bit refuse the generation.
         CHUNK_BYTESHUFFLE_ZSTD_V1 = 8,
+        ENCODED_SCENE_ASSETS = 9,
     };
 
     [[nodiscard]] LFS_IO_API CapabilitySet supported_reader_capabilities();
