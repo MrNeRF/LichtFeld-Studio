@@ -173,7 +173,7 @@ class PortalGalleryClient:
         if capabilities.get("gallerySyncVersion") != 1:
             raise PortalProtocolError("This portal needs an update before Studio gallery sync is available.")
         if path.suffix.lower() in (".lfsg", ".licht") and path.suffix.lower()[1:] not in capabilities.get("sourceFormats", []):
-            raise PortalProtocolError("This portal does not support Studio scene uploads yet.")
+            raise PortalProtocolError("This portal needs an update before it can accept this .licht upload.")
         if metadata.get("viewerSettings", {}).get("environment") and not capabilities.get("hdrBackgrounds"):
             raise PortalProtocolError("This portal needs an update before it can display HDR backgrounds.")
         identity = capabilities["id"]
