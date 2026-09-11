@@ -5,6 +5,8 @@
 #include "preprocessing/preprocess.hpp"
 
 #include "core/cuda_error.hpp"
+#include "core/environment.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/nn/models/moge2.hpp"
 #include "core/path_utils.hpp"
@@ -16,9 +18,6 @@
 #include <cuda_runtime.h>
 
 #include "indicators.hpp"
-#include <OpenImageIO/imagebuf.h>
-#include <OpenImageIO/imagebufalgo.h>
-#include <OpenImageIO/imageio.h>
 #include <curl/curl.h>
 #include <openssl/evp.h>
 
@@ -98,6 +97,11 @@ namespace {
         kSam2ModelSha256,
         kSam2ModelDownloadMessage,
     };
+    constexpr std::string_view kLpipsModelFile = "lpips-vgg16-v0.1.lfw";
+    constexpr std::string_view kLpipsModelUrl =
+        "https://github.com/MrNeRF/LichtFeld-Studio/releases/download/model-lpips-v1/lpips-vgg16-v0.1.lfw";
+    constexpr std::string_view kLpipsModelSha256 =
+        "ea2f01796fbcf9950f9454f19b42e45568f166d879ec141ec100b9897a8cc769";
 
     void remove_file_if_exists(const fs::path& path);
     void replace_file(const fs::path& source, const fs::path& destination);
@@ -177,15 +181,15 @@ namespace {
 
     fs::path home_directory() {
 #ifdef _WIN32
-        if (const char* profile = std::getenv("USERPROFILE"); profile && profile[0])
-            return fs::path(profile);
-        const char* drive = std::getenv("HOMEDRIVE");
-        const char* homepath = std::getenv("HOMEPATH");
-        if (drive && drive[0] && homepath && homepath[0])
-            return fs::path(std::string(drive) + homepath);
+        if (const auto profile = lfs::core::environment::value("USERPROFILE"))
+            return lfs::core::utf8_to_path(*profile);
+        const auto drive = lfs::core::environment::value("HOMEDRIVE");
+        const auto homepath = lfs::core::environment::value("HOMEPATH");
+        if (drive && homepath)
+            return lfs::core::utf8_to_path(*drive + *homepath);
 #else
-        if (const char* home = std::getenv("HOME"); home && home[0])
-            return fs::path(home);
+        if (const auto home = lfs::core::environment::value("HOME"))
+            return lfs::core::utf8_to_path(*home);
 #endif
         return fs::temp_directory_path();
     }
@@ -209,8 +213,8 @@ namespace {
     }
 
     fs::path find_nn_export_script() {
-        if (const char* env = std::getenv("LFS_NN_EXPORT"); env && env[0])
-            return fs::path(env);
+        if (const auto env = lfs::core::environment::value("LFS_NN_EXPORT"))
+            return lfs::core::utf8_to_path(*env);
         std::error_code ec;
         std::vector<fs::path> roots;
 #ifdef __linux__
@@ -234,8 +238,8 @@ namespace {
     }
 
     fs::path find_python_for_export(const fs::path& script) {
-        if (const char* env = std::getenv("LFS_PYTHON"); env && env[0])
-            return fs::path(env);
+        if (const auto env = lfs::core::environment::value("LFS_PYTHON"))
+            return lfs::core::utf8_to_path(*env);
         if (!script.empty()) {
             const auto vcpkg = script.parent_path().parent_path().parent_path() / "build" /
                                "vcpkg_installed" / "x64-linux" / "tools" / "python3" / "python3";
@@ -256,12 +260,18 @@ namespace {
                 " --fp16 --moge2");
         }
         const auto python = find_python_for_export(script);
-        const fs::path tmp = lfw_path.string() + ".tmp";
-        const std::string cmd = path_to_string(python) + " " + path_to_string(script) +
-                                " --onnx " + path_to_string(onnx_path) + " --out " +
-                                path_to_string(tmp) + " --fp16 --moge2";
+        fs::path tmp = lfw_path;
+        tmp += ".tmp";
+        const std::string cmd =
+            path_to_string(python) + " " + path_to_string(script) +
+            " --onnx " + path_to_string(onnx_path) + " --out " +
+            path_to_string(tmp) + " --fp16 --moge2";
         std::cout << "Converting ONNX weights to " << path_to_string(lfw_path) << "\n";
+#ifdef _WIN32
+        const int rc = _wsystem(lfs::core::utf8_to_wstring(cmd).c_str());
+#else
         const int rc = std::system(cmd.c_str());
+#endif
         if (rc != 0 || !fs::is_regular_file(tmp)) {
             remove_file_if_exists(tmp);
             throw std::runtime_error(
@@ -274,17 +284,17 @@ namespace {
     fs::path legacy_model_path() {
         fs::path root;
 #ifdef _WIN32
-        if (const char* local = std::getenv("LOCALAPPDATA"); local && local[0])
-            root = fs::path(local) / "LichtFeld";
-        else if (const char* temp = std::getenv("TEMP"); temp && temp[0])
-            root = fs::path(temp) / "LichtFeld";
+        if (const auto local = lfs::core::environment::value("LOCALAPPDATA"))
+            root = lfs::core::utf8_to_path(*local) / "LichtFeld";
+        else if (const auto temp = lfs::core::environment::value("TEMP"))
+            root = lfs::core::utf8_to_path(*temp) / "LichtFeld";
         else
             root = fs::temp_directory_path() / "LichtFeld";
 #else
-        if (const char* xdg = std::getenv("XDG_CACHE_HOME"); xdg && xdg[0])
-            root = fs::path(xdg) / "lichtfeld";
-        else if (const char* home = std::getenv("HOME"); home && home[0])
-            root = fs::path(home) / ".cache" / "lichtfeld";
+        if (const auto xdg = lfs::core::environment::value("XDG_CACHE_HOME"))
+            root = lfs::core::utf8_to_path(*xdg) / "lichtfeld";
+        else if (const auto home = lfs::core::environment::value("HOME"))
+            root = lfs::core::utf8_to_path(*home) / ".cache" / "lichtfeld";
         else
             root = fs::temp_directory_path() / "lichtfeld";
 #endif
@@ -407,11 +417,14 @@ namespace {
 
     void download_verified_file(std::string_view url,
                                 const fs::path& destination,
-                                std::string_view expected_hash) {
+                                std::string_view expected_hash,
+                                std::string_view label) {
         fs::create_directories(destination.parent_path());
-        const fs::path tmp_path = destination.string() + ".tmp";
+        fs::path tmp_path = destination;
+        tmp_path += ".tmp";
 
-        std::ofstream output(tmp_path, std::ios::binary | std::ios::trunc);
+        std::ofstream output;
+        lfs::core::open_file_for_write(tmp_path, std::ios::binary | std::ios::trunc, output);
         if (!output)
             throw std::runtime_error("Could not open " + path_to_string(tmp_path) + " for writing");
 
@@ -428,6 +441,9 @@ namespace {
         curl_easy_setopt(curl, CURLOPT_URL, url_string.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
         curl_easy_setopt(curl, CURLOPT_USERAGENT, "LichtFeld-Studio/preprocess");
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &output);
@@ -462,13 +478,59 @@ namespace {
         }
 
         try {
-            require_sha256(tmp_path, expected_hash, "Downloaded model");
+            require_sha256(tmp_path, expected_hash, label);
         } catch (...) {
             remove_file_if_exists(tmp_path);
             throw;
         }
 
         replace_file(tmp_path, destination);
+    }
+
+    fs::path cached_model_path(const std::string_view filename) {
+        return home_directory() / ".lichtfeld" / "onnx" / std::string(filename);
+    }
+
+    lfs::Result<fs::path> ensure_cached_model(const std::string_view filename,
+                                              const std::string_view url,
+                                              const std::string_view expected_hash,
+                                              const bool allow_download,
+                                              const std::string_view label) {
+        try {
+            const fs::path path = cached_model_path(filename);
+            if (fs::is_regular_file(path)) {
+                try {
+                    require_sha256(path, expected_hash, std::string("Cached ") + std::string(label));
+                    return path;
+                } catch (const DownloadIntegrityError& e) {
+                    if (!allow_download)
+                        throw;
+                    std::cerr << e.what() << "\n";
+                    remove_file_if_exists(path);
+                    std::cerr << "Removed untrusted cached " << label << "; re-downloading "
+                              << path_to_string(path) << "\n";
+                }
+            }
+            if (!allow_download)
+                throw std::runtime_error(std::string(label) + " is not cached: " + path_to_string(path));
+
+            std::cout << "Downloading " << label << " weights to " << path_to_string(path) << "\n";
+            download_verified_file(url, path, expected_hash,
+                                   std::string("Downloaded ") + std::string(label));
+            require_sha256(path, expected_hash, std::string("Cached ") + std::string(label));
+            std::cout << "Verified " << label << " SHA-256: " << expected_hash << "\n";
+            return path;
+        } catch (const std::exception& e) {
+            // LFS-CENSUS-OK(empty-catch): converts the exception text to a returned Result error.
+            return lfs::Result<fs::path>(lfs::make_legacy_error(
+                e.what(),
+                lfs::LegacyErrorContext{
+                    .code = lfs::ErrorCode::Unavailable,
+                    .domain = lfs::ErrorDomain::Preprocess,
+                    .operation = "ensure_cached_model",
+                    .source = LFS_SOURCE_SITE_CURRENT(),
+                }));
+        }
     }
 
     fs::path ensure_cached_weights(const CachedWeightSpec& spec, bool no_download) {
@@ -491,7 +553,7 @@ namespace {
         }
 
         std::cout << spec.download_message << " to " << path_to_string(path) << "\n";
-        download_verified_file(spec.url, path, spec.sha256);
+        download_verified_file(spec.url, path, spec.sha256, "Downloaded model");
         require_sha256(path, spec.sha256, "Cached model");
         return path;
     }
@@ -522,83 +584,27 @@ namespace {
     }
 
     Image load_image_rgb(const fs::path& path) {
-        auto input = OIIO::ImageInput::open(path_to_string(path));
-        if (!input)
-            throw std::runtime_error("Failed to open image: " + path_to_string(path) + ": " + OIIO::geterror());
-
-        const OIIO::ImageSpec spec = input->spec();
-        if (spec.width <= 0 || spec.height <= 0 || spec.nchannels <= 0)
-            throw std::runtime_error("Invalid image shape for " + path_to_string(path));
-
+        auto [pixels, width, height, channels] = lfs::core::load_image_float(path);
+        if (!pixels || width <= 0 || height <= 0 || channels <= 0)
+            throw std::runtime_error("Failed to load image: " + path_to_string(path));
         Image out;
-        out.width = spec.width;
-        out.height = spec.height;
+        out.width = width;
+        out.height = height;
         out.rgb_hwc.resize(static_cast<std::size_t>(out.width) * out.height * 3);
-
-        auto fill_rgb = [&](const auto& raw, float scale) {
-            for (int y = 0; y < out.height; ++y) {
-                for (int x = 0; x < out.width; ++x) {
-                    const std::size_t src = (static_cast<std::size_t>(y) * out.width + x) * spec.nchannels;
-                    const std::size_t dst = (static_cast<std::size_t>(y) * out.width + x) * 3;
-                    out.rgb_hwc[dst + 0] = static_cast<float>(raw[src + 0]) * scale;
-                    out.rgb_hwc[dst + 1] = static_cast<float>(spec.nchannels > 1 ? raw[src + 1] : raw[src + 0]) * scale;
-                    out.rgb_hwc[dst + 2] = static_cast<float>(spec.nchannels > 2 ? raw[src + 2] : raw[src + 0]) * scale;
-                }
-            }
-        };
-
-        const std::size_t raw_values = static_cast<std::size_t>(spec.width) * spec.height * spec.nchannels;
-        if (spec.format == OIIO::TypeDesc::UINT8) {
-            std::vector<std::uint8_t> raw(raw_values);
-            if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::UINT8, raw.data())) {
-                const auto error = input->geterror();
-                input->close();
-                throw std::runtime_error("Failed to read image: " + path_to_string(path) + ": " + error);
-            }
-            input->close();
-            fill_rgb(raw, 1.0f / 255.0f);
-            return out;
+        for (size_t pixel = 0, count = static_cast<size_t>(width) * height; pixel < count; ++pixel) {
+            const size_t source = pixel * channels;
+            const size_t destination = pixel * 3;
+            out.rgb_hwc[destination + 0] = pixels[source];
+            out.rgb_hwc[destination + 1] = channels > 1 ? pixels[source + 1] : pixels[source];
+            out.rgb_hwc[destination + 2] = channels > 2 ? pixels[source + 2] : pixels[source];
         }
-
-        if (spec.format == OIIO::TypeDesc::UINT16) {
-            std::vector<std::uint16_t> raw(raw_values);
-            if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::UINT16, raw.data())) {
-                const auto error = input->geterror();
-                input->close();
-                throw std::runtime_error("Failed to read image: " + path_to_string(path) + ": " + error);
-            }
-            input->close();
-            fill_rgb(raw, 1.0f / 65535.0f);
-            return out;
-        }
-
-        std::vector<float> raw(raw_values);
-        if (!input->read_image(0, 0, 0, spec.nchannels, OIIO::TypeDesc::FLOAT, raw.data())) {
-            const auto error = input->geterror();
-            input->close();
-            throw std::runtime_error("Failed to read image: " + path_to_string(path) + ": " + error);
-        }
-        input->close();
-
-        float max_channel = 0.0f;
-        for (int y = 0; y < out.height; ++y) {
-            for (int x = 0; x < out.width; ++x) {
-                const std::size_t src = (static_cast<std::size_t>(y) * out.width + x) * spec.nchannels;
-                const std::size_t dst = (static_cast<std::size_t>(y) * out.width + x) * 3;
-                out.rgb_hwc[dst + 0] = raw[src + 0];
-                out.rgb_hwc[dst + 1] = spec.nchannels > 1 ? raw[src + 1] : raw[src + 0];
-                out.rgb_hwc[dst + 2] = spec.nchannels > 2 ? raw[src + 2] : raw[src + 0];
-                max_channel = std::max({max_channel, out.rgb_hwc[dst + 0], out.rgb_hwc[dst + 1], out.rgb_hwc[dst + 2]});
-            }
-        }
-
-        const float scale = max_channel > 255.5f ? (1.0f / 65535.0f)
-                            : max_channel > 1.5f ? (1.0f / 255.0f)
+        const float max_channel = *std::max_element(out.rgb_hwc.begin(), out.rgb_hwc.end());
+        const float scale = max_channel > 255.5f ? 1.0f / 65535.0f
+                            : max_channel > 1.5f ? 1.0f / 255.0f
                                                  : 1.0f;
-        if (scale != 1.0f) {
-            for (float& channel : out.rgb_hwc)
-                channel = std::clamp(channel * scale, 0.0f, 1.0f);
-        }
+        for (float& channel : out.rgb_hwc)
+            channel = std::clamp(channel * scale, 0.0f, 1.0f);
+        lfs::core::free_image_float(pixels);
         return out;
     }
 
@@ -638,13 +644,8 @@ namespace {
         resized.height = new_height;
         resized.rgb_hwc.resize(static_cast<std::size_t>(new_width) * new_height * 3);
 
-        OIIO::ImageBuf src(OIIO::ImageSpec(image.width, image.height, 3, OIIO::TypeDesc::FLOAT),
-                           const_cast<float*>(image.rgb_hwc.data()));
-        OIIO::ImageBuf dst(OIIO::ImageSpec(new_width, new_height, 3, OIIO::TypeDesc::FLOAT),
-                           resized.rgb_hwc.data());
-        OIIO::ROI roi(0, new_width, 0, new_height, 0, 1, 0, 3);
-        if (!OIIO::ImageBufAlgo::resample(dst, src, true, roi, 0))
-            throw std::runtime_error("Image resize failed: " + dst.geterror());
+        lfs::core::resample_bilinear_f32(image.rgb_hwc.data(), image.width, image.height, 3,
+                                         resized.rgb_hwc.data(), new_width, new_height);
         return resized;
     }
 
@@ -695,8 +696,9 @@ namespace {
                              const fs::path& image_path,
                              const fs::path& images_dir) {
         fs::path rel = image_path.lexically_relative(images_dir);
-        const auto generic = rel.generic_string();
-        if (rel.empty() || generic == "." || generic == ".." || generic.starts_with("../")) {
+        const auto first = rel.begin();
+        if (rel.empty() || rel == "." || rel == ".." ||
+            (first != rel.end() && *first == fs::path(".."))) {
             rel = image_path.filename();
         }
         rel.replace_extension(".png");
@@ -711,37 +713,16 @@ namespace {
                    const std::vector<PixelT>& data,
                    int png_compression) {
         static_assert(std::is_same_v<PixelT, uint8_t> || std::is_same_v<PixelT, uint16_t>);
-        constexpr auto kFormat = std::is_same_v<PixelT, uint16_t> ? OIIO::TypeDesc::UINT16
-                                                                  : OIIO::TypeDesc::UINT8;
         if (channels < 1 || channels > 4)
             throw std::runtime_error("Internal error: invalid image channel count");
         if (data.size() != static_cast<std::size_t>(width) * height * channels)
             throw std::runtime_error("Internal error: image buffer has wrong size");
 
         fs::create_directories(path.parent_path());
-        auto output = OIIO::ImageOutput::create(path_to_string(path));
-        if (!output)
-            throw std::runtime_error("Failed to create image output: " + path_to_string(path));
-
-        OIIO::ImageSpec spec(width, height, channels, kFormat);
         const int compression = std::clamp(png_compression, 0, 9);
-        spec.attribute("png:compressionLevel", compression);
-        if (compression == 0) {
-            spec.attribute("compression", "none");
-        } else if (compression == 1) {
-            spec.attribute("compression", "pngfast");
-        }
-        if (!output->open(path_to_string(path), spec)) {
-            const auto error = output->geterror();
-            output->close();
-            throw std::runtime_error("Failed to open image output: " + path_to_string(path) + ": " + error);
-        }
-        if (!output->write_image(kFormat, data.data())) {
-            const auto error = output->geterror();
-            output->close();
-            throw std::runtime_error("Failed to write image output: " + path_to_string(path) + ": " + error);
-        }
-        output->close();
+        const int bit_depth = std::is_same_v<PixelT, uint16_t> ? 16 : 8;
+        if (!lfs::core::save_png(path, data.data(), width, height, channels, bit_depth, compression))
+            throw std::runtime_error("Failed to write image output: " + path_to_string(path));
     }
 
     VectorMap tensor_to_vector3(const lfs::core::Tensor& tensor, int fallback_width,
@@ -802,6 +783,13 @@ namespace {
                                          path_to_string(lfw_path) + ": " +
                                          std::string(loaded.error().detail()));
             model_ = std::move(*loaded);
+            int device = 0;
+            cudaDeviceProp properties{};
+            if (cudaGetDevice(&device) != cudaSuccess ||
+                cudaGetDeviceProperties(&properties, device) != cudaSuccess) {
+                throw std::runtime_error("Failed to query native MoGe CUDA device");
+            }
+            LOG_INFO("Normal estimation: native engine on CUDA device {} ({})", device, properties.name);
         }
 
         HeadMaps run(const Image& image, int64_t num_tokens) {
@@ -1294,12 +1282,20 @@ namespace {
 
 namespace lfs::preprocessing {
 
+    lfs::Result<std::filesystem::path> ensure_lpips_weights(const bool allow_download) {
+        return ensure_cached_model(kLpipsModelFile, kLpipsModelUrl, kLpipsModelSha256,
+                                   allow_download, "LPIPS");
+    }
+
     PreprocessRunResult run_preprocess_ex(const lfs::core::param::PreprocessParameters& params,
                                           const PreprocessProgressCallback& progress) {
         return execute_preprocess(params, progress);
     }
 
     int run_preprocess(const lfs::core::param::PreprocessParameters& params) {
+        // The standalone CLI bypasses training's logger setup.
+        if (!lfs::core::Logger::get().is_ready())
+            lfs::core::Logger::get().init();
         const auto result = run_preprocess_ex(params, {});
         if (!result.ok) {
             std::cerr << "preprocess: " << result.error << "\n";

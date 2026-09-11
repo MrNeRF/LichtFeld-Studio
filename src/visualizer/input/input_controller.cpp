@@ -19,10 +19,12 @@
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
+#include "io/splat_path.hpp"
 #include "io/video/video_extensions.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/ops/depth_window_ops.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -50,7 +52,28 @@ namespace lfs::vis {
         constexpr float kWasdShiftSpeedBonus = 20.0f;
         constexpr double kCameraContextMenuDragThreshold = 4.0;
         constexpr double kCameraFrustumClickThreshold = 5.0;
+        constexpr int kDepthWindowModifiers = input::KEYMOD_SHIFT | input::KEYMOD_ALT;
         namespace string_keys = lichtfeld::Strings;
+
+        [[nodiscard]] SDL_Cursor* depthWindowSdlCursor(const op::DepthWindowCursor cursor) {
+            static SDL_Cursor* const nwse = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NWSE_RESIZE);
+            static SDL_Cursor* const nesw = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NESW_RESIZE);
+            static SDL_Cursor* const ew = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+            static SDL_Cursor* const ns = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_NS_RESIZE);
+            static SDL_Cursor* const move = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_MOVE);
+            static SDL_Cursor* const crosshair =
+                SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_CROSSHAIR);
+            switch (cursor) {
+            case op::DepthWindowCursor::ResizeNwse: return nwse;
+            case op::DepthWindowCursor::ResizeNesw: return nesw;
+            case op::DepthWindowCursor::ResizeEw: return ew;
+            case op::DepthWindowCursor::ResizeNs: return ns;
+            case op::DepthWindowCursor::Move: return move;
+            case op::DepthWindowCursor::Crosshair: return crosshair;
+            case op::DepthWindowCursor::Default:
+            default: return SDL_GetDefaultCursor();
+            }
+        }
 
         // Expand [world_min, world_max] by a node's local AABB transformed to world
         // space. With use_percentile, the splat/point-cloud box is the trimmed
@@ -474,9 +497,41 @@ namespace lfs::vis {
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
     }
 
+    void InputController::releaseDepthWindowCursor() {
+        if (current_cursor_ == CursorType::DepthWindow) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
+        }
+    }
+
+    bool InputController::applyDepthWindowHoverCursor(const double x, const double y,
+                                                      const bool modifiers_held) {
+        const auto depth_cursor = op::updateDepthWindowHover(
+            glm::vec2(x, y),
+            {viewport_bounds_.x, viewport_bounds_.y,
+             viewport_bounds_.width, viewport_bounds_.height},
+            modifiers_held);
+        if (!op::depthWindowOverlayState().visible) {
+            if (current_cursor_ == CursorType::DepthWindow) {
+                SDL_SetCursor(SDL_GetDefaultCursor());
+                current_cursor_ = CursorType::Default;
+            }
+            return false;
+        }
+        SDL_SetCursor(depthWindowSdlCursor(depth_cursor));
+        depth_window_cursor_ = static_cast<int>(depth_cursor);
+        current_cursor_ = depth_cursor == op::DepthWindowCursor::Default
+                              ? CursorType::Default
+                              : CursorType::DepthWindow;
+        return true;
+    }
+
     void InputController::applySplitterCursorOverride() const {
         if (current_cursor_ == CursorType::Resize && resize_cursor_) {
             SDL_SetCursor(resize_cursor_);
+        } else if (current_cursor_ == CursorType::DepthWindow) {
+            SDL_SetCursor(depthWindowSdlCursor(
+                static_cast<op::DepthWindowCursor>(depth_window_cursor_)));
         }
     }
 
@@ -551,12 +606,28 @@ namespace lfs::vis {
         }
     }
 
+    void InputController::applyNavigationSpeedPreferences(const float zoom_speed,
+                                                          const float navigation_speed) {
+        viewport_.camera.setZoomSpeed(zoom_speed);
+        viewport_.camera.setWasdSpeed(navigation_speed);
+        if (viewer_) {
+            if (auto* const rendering = viewer_->getRenderingManager()) {
+                auto& secondary = rendering->projectSecondaryViewport();
+                secondary.camera.setZoomSpeed(zoom_speed);
+                secondary.camera.setWasdSpeed(navigation_speed);
+            }
+        }
+    }
+
     void InputController::onWindowFocusLost() {
+        op::operators().cancelModalOperator();
+        op::clearDepthWindowHover();
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
         held_keys_.clear();
+        selection_drag_op_.reset();
         pending_click_drag_ = {};
         forced_mouse_press_action_ = input::Action::NONE;
         text_input_viewport_click_button_ = -1;
@@ -602,6 +673,27 @@ namespace lfs::vis {
         return mods;
     }
 
+    bool InputController::hasViewportCursorOverride() const {
+        return current_cursor_ == CursorType::Resize;
+    }
+
+    std::optional<input::SelectionOp> InputController::selectionDragOperation() const {
+        if (!selection_drag_op_ || !op::operators().hasModalOperator())
+            return std::nullopt;
+        return selection_drag_op_;
+    }
+
+    void InputController::refreshSplitDividerCache() const {
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering) {
+            cached_split_divider_screen_x_.reset();
+            return;
+        }
+        cached_split_divider_screen_x_ = rendering->getSplitDividerScreenX(
+            {viewport_bounds_.x, viewport_bounds_.y},
+            {viewport_bounds_.width, viewport_bounds_.height});
+    }
+
     bool InputController::isNearSplitter(double x, double y) const {
         auto* const rendering = services().renderingOrNull();
         if (!rendering) {
@@ -616,10 +708,10 @@ namespace lfs::vis {
             return false;
         }
 
-        const auto split_x = rendering->getSplitDividerScreenX(
-            {viewport_bounds_.x, viewport_bounds_.y},
-            {viewport_bounds_.width, viewport_bounds_.height});
-        if (!split_x) {
+        if (!cached_split_divider_screen_x_) {
+            refreshSplitDividerCache();
+        }
+        if (!cached_split_divider_screen_x_) {
             return false;
         }
 
@@ -630,7 +722,7 @@ namespace lfs::vis {
                x < content_left + content_bounds.width &&
                y >= content_top &&
                y < content_top + content_bounds.height &&
-               std::abs(x - *split_x) < SPLITTER_HIT_HALF_WIDTH;
+               std::abs(x - *cached_split_divider_screen_x_) < SPLITTER_HIT_HALF_WIDTH;
     }
 
     // Core handlers
@@ -715,7 +807,22 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
+        const bool depth_drag_was_active =
+            op::operators().activeModalId() ==
+            op::to_string(op::BuiltinOp::DepthWindowDrag);
         if (dispatchMouseButtonToModals(button, action, mods, x, y, over_gui_hover)) {
+            const bool depth_drag_ended =
+                depth_drag_was_active &&
+                op::operators().activeModalId() !=
+                    op::to_string(op::BuiltinOp::DepthWindowDrag);
+            if (action == input::ACTION_RELEASE && depth_drag_ended &&
+                current_cursor_ == CursorType::DepthWindow) {
+                if (isNearSplitter(x, y) ||
+                    !applyDepthWindowHoverCursor(
+                        x, y, (mods & kDepthWindowModifiers) == kDepthWindowModifiers)) {
+                    releaseDepthWindowCursor();
+                }
+            }
             return;
         }
 
@@ -1008,6 +1115,23 @@ namespace lfs::vis {
                 break;
             }
 
+            case input::Action::DEPTH_WINDOW_DRAG:
+                if (!over_gui && !over_gizmo && !over_transform_gizmo &&
+                    selection_tool_ && selection_tool_->isEnabled() &&
+                    selection_tool_->isDepthFilterEnabled()) {
+                    op::OperatorProperties props;
+                    props.set("x", x);
+                    props.set("y", y);
+                    props.set("button", button);
+                    props.set("modifiers", mods);
+                    props.set("viewport_x", viewport_bounds_.x);
+                    props.set("viewport_y", viewport_bounds_.y);
+                    props.set("viewport_width", viewport_bounds_.width);
+                    props.set("viewport_height", viewport_bounds_.height);
+                    (void)op::operators().invoke(op::BuiltinOp::DepthWindowDrag, &props);
+                }
+                break;
+
             case input::Action::SELECTION_REPLACE:
             case input::Action::SELECTION_ADD:
             case input::Action::SELECTION_REMOVE:
@@ -1038,7 +1162,22 @@ namespace lfs::vis {
                         props.set("use_depth_filter", selection_tool_->isDepthFilterEnabled());
 
                         const auto result = op::operators().invoke(op::BuiltinOp::SelectionStroke, &props);
-                        if (result.status == op::OperatorResult::RUNNING_MODAL) {
+                        if (result.status == op::OperatorResult::RUNNING_MODAL ||
+                            op::operators().hasModalOperator()) {
+                            switch (bound_action) {
+                            case input::Action::SELECTION_ADD:
+                                selection_drag_op_ = input::SelectionOp::Add;
+                                break;
+                            case input::Action::SELECTION_REMOVE:
+                                selection_drag_op_ = input::SelectionOp::Remove;
+                                break;
+                            case input::Action::SELECTION_INTERSECT:
+                                selection_drag_op_ = input::SelectionOp::Intersect;
+                                break;
+                            default:
+                                selection_drag_op_.reset();
+                                break;
+                            }
                             // Operator is now modal, don't set drag mode - modal dispatch handles it
                         }
                     } else if (align_tool_ && align_tool_->isEnabled()) {
@@ -1277,6 +1416,7 @@ namespace lfs::vis {
         auto* gui = services().guiOrNull();
 
         if (gui && gui->isCapturingInput()) {
+            releaseDepthWindowCursor();
             gui->captureMouseMove(x, y);
             last_mouse_pos_ = {x, y};
             return;
@@ -1284,6 +1424,7 @@ namespace lfs::vis {
 
         // Forward to pie menu if open — consume event to prevent viewport interaction
         if (gui && gui->gizmo().isPieMenuOpen()) {
+            releaseDepthWindowCursor();
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
             last_mouse_pos_ = {x, y};
             return;
@@ -1316,6 +1457,17 @@ namespace lfs::vis {
             drag_mode_ == DragMode::None &&
             isInViewport(x, y) &&
             isNearSplitter(x, y);
+
+        const int hover_modifiers = getModifierKeys();
+        const bool depth_window_modifiers =
+            (hover_modifiers & kDepthWindowModifiers) == kDepthWindowModifiers;
+        const bool no_mouse_buttons = SDL_GetMouseState(nullptr, nullptr) == 0;
+        if (no_mouse_buttons && !isNearSplitter(x, y) &&
+            applyDepthWindowHoverCursor(x, y, depth_window_modifiers)) {
+            hovered_camera_id_ = -1;
+            last_mouse_pos_ = current_pos;
+            return;
+        }
 
         if (pending_click_drag_.active) {
             if (!isMouseButtonPressed(pending_click_drag_.button)) {
@@ -1425,7 +1577,8 @@ namespace lfs::vis {
         if (over_splitter) {
             SDL_SetCursor(resize_cursor_);
             current_cursor_ = CursorType::Resize;
-        } else if (current_cursor_ == CursorType::Resize) {
+        } else if (current_cursor_ == CursorType::Resize ||
+                   current_cursor_ == CursorType::DepthWindow) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
@@ -1607,7 +1760,7 @@ namespace lfs::vis {
     }
 
     void InputController::handleKey(const int physical_key, const int logical_key,
-                                    const int scancode, int action, [[maybe_unused]] int mods) {
+                                    const int scancode, int action, int mods) {
         // Track modifier keys (always, even if GUI has focus)
         if (physical_key == input::KEY_LEFT_CONTROL || physical_key == input::KEY_RIGHT_CONTROL) {
             key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
@@ -1642,6 +1795,14 @@ namespace lfs::vis {
             bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
         }
 
+        const bool gui_keyboard_focus = input_router_
+                                            ? input_router_->keyboardFocus() == input::InputTarget::Gui
+                                            : gui::guiFocusState().want_capture_keyboard;
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
+            gui_keyboard_focus) {
+            return;
+        }
+
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
@@ -1654,6 +1815,24 @@ namespace lfs::vis {
         SDL_GetMouseState(&mx_f, &my_f);
         double mx = mx_f, my = my_f;
         const bool over_gui_hover = isPointerOverUiHover(mx, my);
+        if (op::operators().activeModalId() !=
+                op::to_string(op::BuiltinOp::DepthWindowDrag) &&
+            SDL_GetMouseState(nullptr, nullptr) == 0 &&
+            !isNearSplitter(mx, my) &&
+            !applyDepthWindowHoverCursor(
+                mx, my, (mods & kDepthWindowModifiers) == kDepthWindowModifiers)) {
+            if (current_cursor_ == CursorType::Resize ||
+                current_cursor_ == CursorType::DepthWindow) {
+                SDL_SetCursor(SDL_GetDefaultCursor());
+                current_cursor_ = CursorType::Default;
+            }
+        }
+        if (op::operators().activeModalId() ==
+                op::to_string(op::BuiltinOp::DepthWindowDrag) &&
+            (mods & kDepthWindowModifiers) != kDepthWindowModifiers) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
+        }
         if (action == input::ACTION_PRESS &&
             dispatchSelectionActionToModal(bound_action, mods, mx, my)) {
             return;
@@ -1686,7 +1865,6 @@ namespace lfs::vis {
         const bool modal_open = input_router_
                                     ? input_router_->isModalOpen()
                                     : (gui && gui->isModalWindowOpen());
-
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
 
@@ -1737,8 +1915,7 @@ namespace lfs::vis {
                 return;
 
             case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:
-                cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-                focusSplitPanel(SplitViewPanelId::Left);
+                toggleIndependentSplitView();
                 return;
 
             case input::Action::TOGGLE_GT_COMPARISON:
@@ -1763,6 +1940,16 @@ namespace lfs::vis {
             case input::Action::TOGGLE_SCENE_SELECTION_TRAINING:
                 if (gui)
                     (void)gui->toggleSceneSelectionTrainingIfFocused();
+                return;
+
+            case input::Action::GROUP_SELECTED_SCENE_NODES:
+                if (gui)
+                    (void)gui->groupSelectedSceneNodesIfFocused();
+                return;
+
+            case input::Action::UNGROUP_SELECTED_SCENE_NODE:
+                if (gui)
+                    (void)gui->ungroupSelectedSceneNodeIfFocused();
                 return;
 
             case input::Action::TOGGLE_MCP_SERVER:
@@ -1909,6 +2096,17 @@ namespace lfs::vis {
                 return;
 
             case input::Action::DELETE_SELECTED:
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager();
+                        sm && !sm->getScene().hasSelection()) {
+                        const auto selected = sm->getSelectedNodeNames();
+                        if (!selected.empty()) {
+                            for (const auto& name : selected)
+                                cmd::RemovePLY{.name = name, .keep_children = false}.emit();
+                            return;
+                        }
+                    }
+                }
                 cmd::DeleteSelected{}.emit();
                 return;
 
@@ -2052,6 +2250,9 @@ namespace lfs::vis {
     }
 
     void InputController::update(float delta_time) {
+        // Refresh once per input frame; mouse-move events can then query the
+        // divider without taking RenderingManager's settings mutex repeatedly.
+        refreshSplitDividerCache();
         maybeInitializeDepthViewRange();
 
         if (input_router_) {
@@ -2362,6 +2563,8 @@ namespace lfs::vis {
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 continue;
+            } else if (lfs::io::is_ssog_path(filepath)) {
+                splat_files.push_back(filepath);
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
                     dataset_path = filepath;
@@ -2376,7 +2579,7 @@ namespace lfs::vis {
                 } else {
                     LOG_DEBUG("Ignoring additional dropped environment map: {}", lfs::core::path_to_utf8(filepath));
                 }
-            } else if (ext == ".ply" || ext == ".sog" || ext == ".spz" || ext == ".rad" ||
+            } else if (ext == ".ply" || ext == ".sog" || ext == ".ssog" || ext == ".spz" || ext == ".rad" ||
                        ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
                 splat_files.push_back(filepath);
             } else if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb" ||
@@ -2447,8 +2650,8 @@ namespace lfs::vis {
         }
 
         if (dataset_path) {
-            LOG_INFO("Showing dataset load popup for: {}", lfs::core::path_to_utf8(*dataset_path));
-            cmd::ShowDatasetLoadPopup{.dataset_path = *dataset_path}.emit();
+            LOG_INFO("Showing New Project dialog for: {}", lfs::core::path_to_utf8(*dataset_path));
+            cmd::ShowNewProjectDialog{.source_path = *dataset_path}.emit();
         }
 
         if (environment_map_path) {
@@ -2457,7 +2660,7 @@ namespace lfs::vis {
 
         if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path && !environment_map_path) {
             const std::string supported_formats = std::format(
-                "Supported formats: .licht, .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
+                "Supported formats: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
                 lfs::io::video::supported_video_extensions_display());
             LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
             state::FileDropFailed{.files = unrecognized_files, .error = supported_formats}.emit();
@@ -2771,6 +2974,18 @@ namespace lfs::vis {
     bool InputController::isIndependentSplitViewActive() const {
         auto* const rendering = services().renderingOrNull();
         return rendering && rendering->isIndependentSplitViewActive();
+    }
+
+    void InputController::toggleIndependentSplitView() {
+        if (!isIndependentSplitViewActive()) {
+            const auto* const scene_manager = services().sceneOrNull();
+            if (!scene_manager || scene_manager->isEmpty()) {
+                return;
+            }
+        }
+
+        cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
+        focusSplitPanel(SplitViewPanelId::Left);
     }
 
     SplitViewPanelId InputController::splitPanelForScreenX(const double x) const {

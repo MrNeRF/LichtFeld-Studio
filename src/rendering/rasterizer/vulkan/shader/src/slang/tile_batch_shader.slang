@@ -107,7 +107,7 @@ layout(binding=6) RWStructuredBuffer<int32_t> tile_batch_n_contributors;
 layout(binding=7) ByteAddressBuffer selection_mask;
 layout(binding=8) ByteAddressBuffer preview_mask;
 layout(binding=9) StructuredBuffer<float4> selection_colors;
-layout(binding=10) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=10) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=11) StructuredBuffer<float4> overlay_params;
 #endif
 
@@ -266,7 +266,7 @@ layout(binding=11) RWStructuredBuffer<int32_t> final_n_contributors;
 layout(binding=12) ByteAddressBuffer selection_mask;
 layout(binding=13) ByteAddressBuffer preview_mask;
 layout(binding=14) StructuredBuffer<float4> selection_colors;
-layout(binding=15) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=15) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
 #endif
 

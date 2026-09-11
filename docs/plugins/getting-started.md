@@ -1445,11 +1445,57 @@ def on_unload():
 
 ---
 
+## Plugin localization
+
+Plugins can own translations without modifying LichtFeld's core locale files. Add `locales/en.json` next to `pyproject.toml`, plus any optional lowercase language catalogs:
+
+```text
+my_plugin/
+├── pyproject.toml
+├── __init__.py
+└── locales/
+    ├── en.json
+    └── it.json
+```
+
+Write relative keys as nested JSON or dot-separated paths:
+
+```json
+{
+  "panel": {
+    "title": "My plugin",
+    "progress": "Processed {count} items"
+  }
+}
+```
+
+LichtFeld canonicalizes `project.name` to the owner namespace. For `my_plugin`, use:
+
+```python
+label = lf.ui.tr("plugins.my-plugin.panel.title")
+```
+
+The host loads these catalogs before plugin import and removes them automatically on unload, reload, or failed load. Resolution tries the active language, then English, then returns the key. Non-English files may omit keys to get English fallback, but they cannot define keys missing from `en.json`; format placeholders must also match English.
+
+Validate locally before loading or publishing:
+
+```bash
+LichtFeld-Studio plugin check my_plugin
+```
+
+The checker rejects invalid UTF-8/JSON, unsupported host language filenames, duplicate or colliding keys, blank/non-string values, NUL characters, lone Unicode surrogates, mismatched placeholders, mixed automatic/manual positional numbering, and oversized catalogs. Use host language codes such as `en`, `it`, and `de` (`zh` for Chinese). Catalog directories and files must resolve inside the plugin directory; internal symlinks are allowed.
+
+Project names must normalize to distinct owners: `my_plugin` and `my.plugin` cannot both load catalogs under `plugins.my-plugin`. Discovery reports collisions, and the checker checks adjacent plugin manifests without importing plugin code. Choose a distinct project name to resolve the conflict. This restriction does not prevent loading existing plugins without catalogs.
+
+Catalog files use relative keys; do not write the `plugins.` prefix in JSON and do not use the legacy global `lf.ui.loc_set()` override to install translations.
+
+---
+
 ## Hot Reload & Debugging
 
 ### File watcher
 
-When `hot_reload = true` in `pyproject.toml`, LichtFeld watches your plugin directory for changes. On any `.py` file save, the plugin is automatically unloaded and reloaded.
+When `hot_reload = true` in `pyproject.toml`, LichtFeld watches your plugin directory for changes. Saving a `.py` file or an immediate `locales/*.json` catalog automatically unloads and reloads the plugin.
 
 ### Logging
 

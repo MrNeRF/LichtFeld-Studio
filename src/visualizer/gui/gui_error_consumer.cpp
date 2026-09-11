@@ -8,6 +8,7 @@
 #include "core/error_reporter.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "gui/error_event_bridge.hpp"
+#include "gui/error_surface_types.hpp"
 #include "gui/string_keys.hpp"
 
 #include <format>
@@ -41,7 +42,8 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isOutOfMemory(const lfs::Error& error) noexcept {
             const lfs::ErrorDomain domain = error.domain();
             return error.code() == lfs::ErrorCode::ResourceExhausted &&
-                   domain == lfs::ErrorDomain::Training;
+                   domain == lfs::ErrorDomain::Training &&
+                   !isHostMemoryExhaustion(error);
         }
 
         [[nodiscard]] const char* titleKeyFor(const lfs::Error& error) {

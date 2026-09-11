@@ -5,6 +5,10 @@ body,
     color: @{text};
 }
 
+#status-row {
+    @{chrome.status_decor};
+}
+
 .safe-mode #status-row {
     background-color: @{blend(surface,warning,0.20)};
 }
@@ -77,7 +81,7 @@ body,
 }
 
 #progress-fill {
-    background-color: @{primary};
+    @{statusbar.progress_fill_decor};
 }
 
 .progress-marker {

@@ -12,6 +12,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <ctime>
@@ -22,6 +23,73 @@
 #include <string>
 
 namespace lfs::training {
+
+    fast_lfs::rasterization::FusedAdamSettings make_fastgs_fused_adam_settings(
+        const FastGSFusedAdamState& optimizer_fused,
+        const FastGSFusedExtraGradients& fused_extra_gradients) {
+        fast_lfs::rasterization::FusedAdamSettings fused_adam;
+        auto convert_param = [](const FastGSFusedAdamParam& src) {
+            fast_lfs::rasterization::FusedAdamParam dst;
+            dst.param = src.param;
+            dst.joint_packed = src.joint_packed;
+            dst.joint_bounds = src.joint_bounds;
+            dst.joint_bits = src.joint_bits;
+            dst.sh_value_bounds = src.sh_value_bounds;
+            dst.sh_value_bits = src.sh_value_bits;
+            dst.sh_value_n_cells = src.sh_value_n_cells;
+            dst.n_primitives = src.n_primitives;
+            dst.frozen_mask = src.frozen_mask;
+            dst.frozen_mask_size = src.frozen_mask_size;
+            dst.frozen_lr_scale = src.frozen_lr_scale;
+            dst.crop_damping_mask = src.crop_damping_mask;
+            dst.crop_damping_mask_size = src.crop_damping_mask_size;
+            dst.cropbox_lr_scale = src.cropbox_lr_scale;
+            dst.n_elements = src.n_elements;
+            dst.n_attributes = src.n_attributes;
+            dst.step_size = src.step_size;
+            dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
+            dst.enabled = src.enabled;
+            dst.screen_share_max = src.screen_share_max;
+            dst.screen_share_n = src.screen_share_n;
+            dst.screen_share_limit = src.screen_share_limit;
+            dst.screen_share_penalty = src.screen_share_penalty;
+            return dst;
+        };
+        fused_adam.enabled = optimizer_fused.enabled;
+        fused_adam.beta1 = optimizer_fused.beta1;
+        fused_adam.beta2 = optimizer_fused.beta2;
+        fused_adam.eps = optimizer_fused.eps;
+        fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
+        fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
+        fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
+        fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
+        fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
+        fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
+        fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
+        fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
+        fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
+        fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
+        fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
+        fused_adam.means = convert_param(optimizer_fused.means);
+        fused_adam.scaling = convert_param(optimizer_fused.scaling);
+        fused_adam.rotation = convert_param(optimizer_fused.rotation);
+        fused_adam.opacity = convert_param(optimizer_fused.opacity);
+        fused_adam.sh0 = convert_param(optimizer_fused.sh0);
+        fused_adam.shN = convert_param(optimizer_fused.shN);
+        fused_adam.per_splat_mean_step = optimizer_fused.per_splat_mean_step;
+        fused_adam.mean_step_median_extent = optimizer_fused.mean_step_median_extent;
+        fused_adam.mean_step_r_min = optimizer_fused.mean_step_r_min;
+        fused_adam.mean_step_r_max = optimizer_fused.mean_step_r_max;
+        // The kernel compares an unsigned row index with this count. Reject
+        // nonpositive counts and limit the mask to live mean rows.
+        if (optimizer_fused.mean_step_far_mask != nullptr &&
+            optimizer_fused.mean_step_far_mask_n > 0 && optimizer_fused.means.n_primitives > 0) {
+            fused_adam.mean_step_far_mask = optimizer_fused.mean_step_far_mask;
+            fused_adam.mean_step_far_mask_n = std::min(
+                optimizer_fused.mean_step_far_mask_n, optimizer_fused.means.n_primitives);
+        }
+        return fused_adam;
+    }
 
     namespace {
         struct FastRasterizerThreadLocalCaches {
@@ -527,8 +595,8 @@ namespace lfs::training {
             }));
         }
 
-        // Take ownership before any post-forward tensor work so exceptions cannot leak
-        // the retained sorted-index buffer or leave the arena frame active.
+        // Take ownership before any post-forward tensor work so exceptions cannot leave
+        // the arena frame active.
         FastRasterizeContext ctx;
         ctx.set_forward_context(forward_ctx);
 
@@ -729,56 +797,8 @@ namespace lfs::training {
         // loss path); do not allocate a separate pre-blend cache.
         auto raw_image = ctx.image;
 
-        fast_lfs::rasterization::FusedAdamSettings fused_adam;
-        const auto optimizer_fused = optimizer.prepare_fastgs_fused_adam(iteration, stream);
-        auto convert_param = [](const FastGSFusedAdamParam& src) {
-            fast_lfs::rasterization::FusedAdamParam dst;
-            dst.param = src.param;
-            dst.joint_packed = src.joint_packed;
-            dst.joint_bounds = src.joint_bounds;
-            dst.joint_bits = src.joint_bits;
-            dst.sh_value_bounds = src.sh_value_bounds;
-            dst.sh_value_bits = src.sh_value_bits;
-            dst.sh_value_n_cells = src.sh_value_n_cells;
-            dst.n_primitives = src.n_primitives;
-            dst.frozen_mask = src.frozen_mask;
-            dst.frozen_mask_size = src.frozen_mask_size;
-            dst.frozen_lr_scale = src.frozen_lr_scale;
-            dst.crop_damping_mask = src.crop_damping_mask;
-            dst.crop_damping_mask_size = src.crop_damping_mask_size;
-            dst.cropbox_lr_scale = src.cropbox_lr_scale;
-            dst.n_elements = src.n_elements;
-            dst.n_attributes = src.n_attributes;
-            dst.step_size = src.step_size;
-            dst.bias_correction2_sqrt_rcp = src.bias_correction2_sqrt_rcp;
-            dst.enabled = src.enabled;
-            dst.screen_share_max = src.screen_share_max;
-            dst.screen_share_n = src.screen_share_n;
-            dst.screen_share_limit = src.screen_share_limit;
-            dst.screen_share_penalty = src.screen_share_penalty;
-            return dst;
-        };
-        fused_adam.enabled = optimizer_fused.enabled;
-        fused_adam.beta1 = optimizer_fused.beta1;
-        fused_adam.beta2 = optimizer_fused.beta2;
-        fused_adam.eps = optimizer_fused.eps;
-        fused_adam.scale_reg_weight = fused_extra_gradients.scale_reg_weight;
-        fused_adam.flatten_reg_weight = fused_extra_gradients.flatten_reg_weight;
-        fused_adam.opacity_reg_weight = fused_extra_gradients.opacity_reg_weight;
-        fused_adam.scale_reg_loss_out = fused_extra_gradients.scale_reg_loss_out;
-        fused_adam.opacity_reg_loss_out = fused_extra_gradients.opacity_reg_loss_out;
-        fused_adam.sparsity_opa_sigmoid = fused_extra_gradients.sparsity_opa_sigmoid;
-        fused_adam.sparsity_z = fused_extra_gradients.sparsity_z;
-        fused_adam.sparsity_u = fused_extra_gradients.sparsity_u;
-        fused_adam.sparsity_n = fused_extra_gradients.sparsity_n;
-        fused_adam.sparsity_rho = fused_extra_gradients.sparsity_rho;
-        fused_adam.sparsity_grad_loss = fused_extra_gradients.sparsity_grad_loss;
-        fused_adam.means = convert_param(optimizer_fused.means);
-        fused_adam.scaling = convert_param(optimizer_fused.scaling);
-        fused_adam.rotation = convert_param(optimizer_fused.rotation);
-        fused_adam.opacity = convert_param(optimizer_fused.opacity);
-        fused_adam.sh0 = convert_param(optimizer_fused.sh0);
-        fused_adam.shN = convert_param(optimizer_fused.shN);
+        const auto fused_adam = make_fastgs_fused_adam_settings(
+            optimizer.prepare_fastgs_fused_adam(iteration, stream), fused_extra_gradients);
         if (!fused_adam.enabled) {
             throw std::runtime_error("FastGS fused Adam state is not available");
         }
@@ -828,6 +848,7 @@ namespace lfs::training {
             ctx.forward_ctx,
             nullptr,
             n_primitives,
+            ctx.forward_ctx.n_visible,
             ctx.active_sh_bases,
             ctx.forward_ctx.sh_layout_bases,
             ctx.width,
@@ -843,7 +864,9 @@ namespace lfs::training {
             bwd_shN_n_cells,
             bwd_shN_bits,
             fused_adam.mean_step_far_mask,
-            fused_adam.mean_step_far_mask_n);
+            fused_adam.mean_step_far_mask_n,
+            fused_extra_gradients.edge_weight_map,
+            fused_extra_gradients.edge_score_out);
 
         ctx.mark_forward_context_released();
 
@@ -873,17 +896,15 @@ namespace lfs::training {
     }
 
     void release_fastgs_sort_workspace_buffers() noexcept {
+        // Kept for source compatibility; FastGS sort storage is arena-owned.
         fast_lfs::rasterization::release_sort_workspace_buffers();
     }
 
     namespace {
-        // training-thread release is not enough for the test binary
-        // process exit path — main-thread TLS FastGS sort + rasterizer caches
-        // survive until after CudaMemoryPool shutdown. Register the same
-        // release sequence as a process pre-shutdown hook.
+        // Register the main-thread rasterizer cache release sequence as a
+        // process pre-shutdown hook.
         void release_main_thread_fastgs_cuda_caches() noexcept {
             (void)release_fast_rasterizer_thread_local_caches();
-            release_fastgs_sort_workspace_buffers();
         }
 
         const bool g_fastgs_tls_release_hook_registered = [] {

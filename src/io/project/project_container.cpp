@@ -2996,8 +2996,11 @@ namespace lfs::io::project {
         // in verify_chunk does not increment this counter).
         lfs::Result<void> verify_stored_payload_crc32c(const ReaderState& state,
                                                        const ChunkInfo& row) {
+            const auto verify_started = std::chrono::steady_clock::now();
             if (row.stored_bytes == 0) {
-                if (0u != row.payload_crc32c) {
+                if (0u != row.payload_crc32c ||
+                    (row.block_crc_table.has_value() &&
+                     !row.block_crc_table->entries.empty())) {
                     return status_failure(format_error(
                         state.path, row.payload_offset,
                         std::format("payload[{}].crc32c", row.key_string()),
@@ -3026,21 +3029,30 @@ namespace lfs::io::project {
 
             const auto max_workers =
                 std::max(1u, std::thread::hardware_concurrency());
+            const std::uint64_t block_count =
+                (row.stored_bytes + BLOCK_CRC_BYTES - 1) / BLOCK_CRC_BYTES;
+            if (row.block_crc_table.has_value() &&
+                row.block_crc_table->entries.size() != block_count) {
+                return status_failure(format_error(
+                    state.path, row.block_crc_table->offset + 40,
+                    std::format("payload[{}].block_count", row.key_string()),
+                    std::to_string(block_count),
+                    std::to_string(row.block_crc_table->entries.size())));
+            }
             const std::uint64_t range_count = std::min<std::uint64_t>(
-                max_workers,
-                std::max<std::uint64_t>(
-                    1, (row.stored_bytes + BLOCK_CRC_BYTES - 1) /
-                           BLOCK_CRC_BYTES));
+                max_workers, block_count);
             struct Range {
                 std::uint64_t offset = 0;
                 std::uint64_t size = 0;
             };
             std::vector<Range> ranges(static_cast<std::size_t>(range_count));
-            const std::uint64_t base = row.stored_bytes / range_count;
-            const std::uint64_t extra = row.stored_bytes % range_count;
+            const std::uint64_t base = block_count / range_count;
+            const std::uint64_t extra = block_count % range_count;
             std::uint64_t cursor = 0;
             for (std::uint64_t i = 0; i < range_count; ++i) {
-                const std::uint64_t size = base + (i < extra ? 1 : 0);
+                const std::uint64_t blocks = base + (i < extra ? 1 : 0);
+                const std::uint64_t size = std::min<std::uint64_t>(
+                    row.stored_bytes - cursor, blocks * BLOCK_CRC_BYTES);
                 ranges[static_cast<std::size_t>(i)] = Range{
                     .offset = cursor,
                     .size = size,
@@ -3059,7 +3071,8 @@ namespace lfs::io::project {
                 const std::size_t buffer_size = static_cast<std::size_t>(
                     std::min<std::uint64_t>(BLOCK_CRC_BYTES, range.size));
                 std::vector<std::byte> buffer(buffer_size);
-                std::uint32_t crc = 0;
+                std::uint32_t range_crc = 0;
+                std::uint32_t block_crc = 0;
                 std::uint64_t remaining = range.size;
                 std::uint64_t relative = 0;
                 while (remaining > 0) {
@@ -3080,11 +3093,33 @@ namespace lfs::io::project {
                         }
                         return;
                     }
-                    crc = crc32c(crc, dest.data(), dest.size());
+                    range_crc = crc32c(range_crc, dest.data(), dest.size());
+                    if (row.block_crc_table.has_value()) {
+                        block_crc = crc32c(block_crc, dest.data(), dest.size());
+                        const auto block_index = static_cast<std::size_t>(
+                            (range.offset + relative) / BLOCK_CRC_BYTES);
+                        if (block_index >=
+                                row.block_crc_table->entries.size() ||
+                            block_crc != row.block_crc_table->entries[block_index]) {
+                            std::scoped_lock lock(mutex);
+                            if (!error) {
+                                error = format_error(
+                                    state.path,
+                                    row.payload_offset + range.offset + relative,
+                                    std::format("payload[{}].block[{}].crc32c",
+                                                row.key_string(), block_index),
+                                    std::format("0x{:08x}",
+                                                row.block_crc_table->entries[block_index]),
+                                    std::format("0x{:08x}", block_crc));
+                            }
+                            return;
+                        }
+                        block_crc = 0;
+                    }
                     relative += count;
                     remaining -= count;
                 }
-                partial[index] = crc;
+                partial[index] = range_crc;
             };
 
             if (ranges.size() == 1) {
@@ -3172,6 +3207,12 @@ namespace lfs::io::project {
                     std::format("0x{:08x}", row.payload_crc32c),
                     std::format("0x{:08x}", running_crc)));
             }
+            LOG_DEBUG(
+                "Project payload verify stages: chunk={} stored_bytes={} ranges={} parallel_crc={:.3f} ms",
+                row.key_string(), row.stored_bytes, ranges.size(),
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - verify_started)
+                    .count());
             return {};
         }
 
@@ -3697,61 +3738,9 @@ namespace lfs::io::project {
             return status_failure(std::move(resolved).error());
         }
         const ChunkInfo& row = **resolved;
-        std::uint32_t running_crc = 0;
-        std::uint64_t relative = 0;
-        std::size_t block_index = 0;
-        while (relative < row.stored_bytes) {
-            const std::uint64_t count =
-                std::min<std::uint64_t>(BLOCK_CRC_BYTES,
-                                        row.stored_bytes - relative);
-            if (impl_->state->options
-                    .payload_bytes_read) {
-                impl_->state->options
-                    .payload_bytes_read
-                    ->fetch_add(
-                        count,
-                        std::memory_order_relaxed);
-            }
-            auto bytes = read_vector(*impl_->state->file,
-                                     row.payload_offset + relative, count,
-                                     impl_->state->physical_size,
-                                     commit().committed_file_end, "payload.verify",
-                                     BLOCK_CRC_BYTES);
-            if (!bytes) {
-                return status_failure(std::move(bytes).error());
-            }
-            const std::uint32_t block_crc =
-                crc32c(0, bytes->data(), bytes->size());
-            if (row.block_crc_table.has_value()) {
-                const auto& entries = row.block_crc_table->entries;
-                assert(block_index < entries.size());
-                if (block_crc != entries[block_index]) {
-                    return status_failure(format_error(
-                        path(), row.payload_offset + relative,
-                        std::format("payload[{}].block[{}].crc32c",
-                                    row.key_string(), block_index),
-                        std::format("0x{:08x}", entries[block_index]),
-                        std::format("0x{:08x}", block_crc)));
-                }
-            }
-            running_crc = crc32c(running_crc, bytes->data(), bytes->size());
-            relative += count;
-            ++block_index;
-        }
-        if (running_crc != row.payload_crc32c) {
-            return status_failure(format_error(
-                path(), row.payload_offset,
-                std::format("payload[{}].crc32c", row.key_string()),
-                std::format("0x{:08x}", row.payload_crc32c),
-                std::format("0x{:08x}", running_crc)));
-        }
-        if (row.block_crc_table.has_value() &&
-            block_index != row.block_crc_table->entries.size()) {
-            return status_failure(format_error(
-                path(), row.block_crc_table->offset + 40,
-                std::format("payload[{}].block_count", row.key_string()),
-                std::to_string(row.block_crc_table->entries.size()),
-                std::to_string(block_index)));
+        if (auto verified = verify_stored_payload_crc32c(*impl_->state, row);
+            !verified) {
+            return verified;
         }
         if (row.compression == Compression::ZstdFramed ||
             row.compression == Compression::ByteShuffleZstdFramed) {

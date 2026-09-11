@@ -3,6 +3,8 @@
 
 #include "internal/viewport.hpp"
 #include "rendering/rendering.hpp"
+#include "visualizer/rendering/rendering_types.hpp"
+#include "visualizer/rendering/viewport_request_builder.hpp"
 
 #include <gtest/gtest.h>
 
@@ -71,6 +73,72 @@ TEST(ViewportTest, DefaultCameraStartsAboveWorldYAxis) {
     Viewport viewport(100, 100);
 
     EXPECT_GT(viewport.camera.t.y, 0.0f);
+}
+
+TEST(ViewportTest, PlyComparisonPanelLayoutKeepsMarginWithinCachedRects) {
+    constexpr int width = 1000;
+    constexpr float cached_split = 0.5f;
+    const auto layouts = lfs::vis::makePlyComparisonPanelLayouts(width, cached_split);
+
+    EXPECT_EQ(layouts[0].panel.x, 0);
+    EXPECT_EQ(layouts[0].panel.width, 625);
+    EXPECT_EQ(layouts[1].panel.x, 375);
+    EXPECT_EQ(layouts[1].panel.width, 625);
+    EXPECT_NEAR(layouts[0].texcoord_scale.x, 1.6f, 1e-6f);
+    EXPECT_NEAR(layouts[1].texcoord_scale.x, 1.6f, 1e-6f);
+    EXPECT_NEAR(layouts[1].texcoord_offset.x, -0.6f, 1e-6f);
+    EXPECT_NEAR(0.5f * layouts[0].texcoord_scale.x + layouts[0].texcoord_offset.x, 0.8f, 1e-6f);
+    EXPECT_NEAR(0.5f * layouts[1].texcoord_scale.x + layouts[1].texcoord_offset.x, 0.2f, 1e-6f);
+
+    EXPECT_TRUE(lfs::vis::plyComparisonSplitterWithinMargin(width, cached_split, 0.6f));
+    EXPECT_TRUE(lfs::vis::plyComparisonSplitterWithinMargin(width, cached_split, 0.4f));
+    EXPECT_FALSE(lfs::vis::plyComparisonSplitterWithinMargin(width, cached_split, 0.7f));
+    EXPECT_EQ(layouts[0].panel.width, 625);
+    EXPECT_EQ(layouts[1].panel.width, 625);
+}
+
+TEST(ViewportTest, PlyComparisonClippedRequestKeepsFullViewportCamera) {
+    constexpr glm::ivec2 full_size{1000, 600};
+    constexpr float split_position = 0.5f;
+    Viewport viewport(full_size.x, full_size.y);
+    lfs::vis::RenderSettings settings;
+    settings.focal_length_mm = 52.0f;
+    const lfs::vis::FrameContext ctx{
+        .viewport = viewport,
+        .settings = settings,
+        .render_size = full_size,
+    };
+
+    const auto full_request = lfs::vis::buildViewportRenderRequest(ctx, full_size);
+    const auto layouts = lfs::vis::makePlyComparisonPanelLayouts(full_size.x, split_position);
+    const auto& left_layout = layouts[0].panel;
+    const auto clipped_request = lfs::vis::buildViewportRenderRequest(
+        ctx,
+        {left_layout.width, full_size.y},
+        &viewport,
+        lfs::vis::SplitViewPanelId::Left,
+        {left_layout.x, 0},
+        full_size);
+
+    EXPECT_EQ(clipped_request.frame_view.size, glm::ivec2(left_layout.width, full_size.y));
+    EXPECT_EQ(clipped_request.frame_view.subregion_origin, glm::ivec2(left_layout.x, 0));
+    EXPECT_EQ(clipped_request.frame_view.subregion_full_size, full_size);
+    EXPECT_EQ(clipped_request.frame_view.cameraSize(), full_request.frame_view.cameraSize());
+
+    const auto full_intrinsics = full_request.frame_view.getCameraIntrinsics();
+    const auto clipped_intrinsics = clipped_request.frame_view.getCameraIntrinsics();
+    EXPECT_FLOAT_EQ(clipped_intrinsics.focal_x, full_intrinsics.focal_x);
+    EXPECT_FLOAT_EQ(clipped_intrinsics.focal_y, full_intrinsics.focal_y);
+    EXPECT_FLOAT_EQ(clipped_intrinsics.center_x, full_intrinsics.center_x);
+    EXPECT_FLOAT_EQ(clipped_intrinsics.center_y, full_intrinsics.center_y);
+
+    const auto full_projection = full_request.frame_view.getProjectionMatrix();
+    const auto clipped_projection = clipped_request.frame_view.getProjectionMatrix();
+    for (int column = 0; column < 4; ++column) {
+        for (int row = 0; row < 4; ++row) {
+            EXPECT_FLOAT_EQ(clipped_projection[column][row], full_projection[column][row]);
+        }
+    }
 }
 
 TEST(ViewportTest, UnprojectPixelDependsOnScreenPixel) {

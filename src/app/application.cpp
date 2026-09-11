@@ -26,6 +26,7 @@
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/embedded_dataset.hpp"
 #include "io/project_document.hpp"
 #include "io/project_recovery.hpp"
 #include "tcp/include/tcp_publisher.hpp"
@@ -36,11 +37,13 @@
 #include "visualizer/visualizer.hpp"
 
 #include "app/mcp_gui_tools.hpp"
+#include "gui/gpu_memory_query.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
 #include "io/video/video_encoder.hpp"
 #include "mcp/mcp_http_server.hpp"
 #include "mcp/mcp_tools.hpp"
+#include "preprocessing/preprocess.hpp"
 #include "python/runner.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "sequencer/timeline.hpp"
@@ -54,6 +57,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cuda_runtime.h>
+#include <curand.h>
 #include <format>
 #include <future>
 #include <mutex>
@@ -158,6 +162,29 @@ namespace lfs::app {
                 const HeadlessPluginSignalGuard&) = delete;
         };
 
+        // Headless runs train into the project they were started from unless
+        // -o redirects the result to a fresh project.licht.
+        [[nodiscard]] std::filesystem::path headless_project_save_destination(
+            const core::param::TrainingParameters& cli_params,
+            const std::filesystem::path& source) {
+            if (!cli_params.dataset.output_path_explicit)
+                return source;
+
+            const auto destination = cli_params.dataset.output_path / "project.licht";
+            LOG_INFO("Headless project destination: {}",
+                     core::path_to_utf8(destination));
+            return destination;
+        }
+
+        // Empty for a plain dataset-folder run, which keeps the default
+        // output_path/project.licht destination.
+        [[nodiscard]] std::filesystem::path headless_dataset_project_destination(
+            const core::param::TrainingParameters& params) {
+            if (!params.dataset_project)
+                return {};
+            return headless_project_save_destination(params, *params.dataset_project);
+        }
+
         [[nodiscard]] lfs::Error training_project_error(
             const lfs::ErrorCode code,
             std::string detail,
@@ -170,6 +197,120 @@ namespace lfs::app {
                 .detail = std::move(detail),
                 .detection = source,
             });
+        }
+
+        std::optional<std::filesystem::path> prepare_lpips_weights(const bool allow_download) {
+            if (const auto path = core::environment::value("LFS_LPIPS_WEIGHTS"))
+                return core::utf8_to_path(*path);
+            auto result = lfs::preprocessing::ensure_lpips_weights(allow_download);
+            if (result)
+                return std::move(*result);
+            LOG_WARN("LPIPS unavailable: {}", result.error().detail());
+            return std::nullopt;
+        }
+
+        // --data-path may name an untrained .licht. Resolve its dataset, the
+        // external folder recorded in REFS or else the embedded copy extracted
+        // to the per-user cache, and continue as a dataset-folder run that
+        // trains into the project unless -o redirects the result.
+        [[nodiscard]] lfs::Result<void> adoptDatasetProject(
+            core::param::TrainingParameters& params) {
+            const auto path = *params.dataset_project;
+            auto document = io::project::ProjectDocument::open(
+                path,
+                io::project::ProjectDocumentOpenOptions{
+                    .reader = {},
+                    .geometry = {},
+                    .defer_geometry_payloads = true,
+                });
+            if (!document) {
+                return lfs::Status::failure(
+                    std::move(document).error().with_context(
+                        "open training project",
+                        LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            auto checkpoint_uuid = document->bound_checkpoint_uuid();
+            if (!checkpoint_uuid) {
+                return lfs::Status::failure(
+                    std::move(checkpoint_uuid).error());
+            }
+            // Check whether there's a checkpoint, hence being trained before.
+            if (*checkpoint_uuid) {
+                return lfs::Status::failure(training_project_error(
+                    lfs::ErrorCode::FailedPrecondition,
+                    "The project already has a training checkpoint; pass it "
+                    "to --resume to continue training",
+                    LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            auto snapshot = document->parameters().snapshot();
+            if (!snapshot) {
+                return lfs::Status::failure(
+                    std::move(snapshot).error().with_context(
+                        "read training project parameters",
+                        LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            // Prefer the original dataset folder recorded in REFS when it is
+            // still reachable, so nothing has to be unpacked.
+            std::optional<std::filesystem::path> dataset_root;
+            std::string images_folder = snapshot->dataset.images;
+            if (const auto dataset_ref =
+                    document->project().dataset_reference();
+                dataset_ref && *dataset_ref) {
+                auto external = io::project::resolve_path_reference(
+                    document->references(), path.parent_path(),
+                    **dataset_ref);
+                if (external && std::filesystem::is_directory(*external)) {
+                    dataset_root = std::move(*external);
+                }
+            }
+            // Otherwise unpack the embedded DSRC chunks into the per-user cache.
+            // Files already present with a matching hash are reused.
+            if (!dataset_root) {
+                auto cache_dir =
+                    io::project::embedded_dataset_cache_dir(*document);
+                if (!cache_dir) {
+                    return lfs::Status::failure(
+                        std::move(cache_dir).error());
+                }
+                auto extracted = io::project::extract_embedded_dataset(
+                    *document, *cache_dir);
+                if (!extracted) {
+                    return lfs::Status::failure(
+                        std::move(extracted).error());
+                }
+                if (*extracted) {
+                    dataset_root = std::move(**extracted);
+                    // The manifest records which images folder was embedded.
+                    if (const auto manifest =
+                            document->parameters().embedded_dataset();
+                        manifest && *manifest) {
+                        images_folder = (*manifest)->images_folder;
+                    }
+                }
+            }
+            if (!dataset_root) {
+                return lfs::Status::failure(training_project_error(
+                    lfs::ErrorCode::NotFound,
+                    "The project's dataset is neither reachable nor embedded",
+                    LFS_SOURCE_SITE_CURRENT()));
+            }
+
+            // Without -o, exports land beside the project.
+            if (!params.dataset.output_path_explicit)
+                params.dataset.output_path = path.parent_path();
+            io::project::adopt_project_training_parameters(
+                params, std::move(*snapshot), std::move(*dataset_root),
+                std::move(images_folder));
+            // dataset_project stays set: it is the save destination unless
+            // -o redirects the result, exactly like --resume.
+            LOG_INFO(
+                "Training from project {}; dataset resolved to {}",
+                core::path_to_utf8(path),
+                core::path_to_utf8(params.dataset.data_path));
+            return {};
         }
 
         std::expected<core::param::TrainingParameters, std::string> loadCheckpointParams(const core::param::TrainingParameters& params, core::Scene& scene) {
@@ -194,6 +335,7 @@ namespace lfs::app {
             checkpoint_params.optimization.perf_bench = params.optimization.perf_bench;
             checkpoint_params.optimization.perf_bench_warmup = params.optimization.perf_bench_warmup;
             checkpoint_params.cli_iterations_set = params.cli_iterations_set;
+            checkpoint_params.no_download = params.no_download;
             checkpoint_params.cli_bg_color_set = params.cli_bg_color_set;
             if (params.cli_iterations_set)
                 checkpoint_params.optimization.iterations = params.optimization.iterations;
@@ -246,6 +388,7 @@ namespace lfs::app {
             core::param::TrainingParameters params;
             core::Uuid checkpoint_uuid;
             int iteration = 0;
+            std::optional<std::filesystem::path> snapshot_source_path;
         };
 
         lfs::Result<LoadedTrainingProject>
@@ -339,23 +482,22 @@ namespace lfs::app {
                 recovery_document(
                     std::move(*document),
                     std::move(recovery_session));
-            const auto checkpoint_uuids =
-                recovery_document.document()
-                    .checkpoint_uuids();
-            if (checkpoint_uuids.size() != 1) {
+            auto checkpoint_uuid =
+                recovery_document.document().bound_checkpoint_uuid();
+            if (!checkpoint_uuid) {
+                return std::move(checkpoint_uuid).error();
+            }
+            if (!*checkpoint_uuid) {
                 return training_project_error(
-                    lfs::ErrorCode::DataLoss,
-                    std::format(
-                        "Training project must contain exactly one CKPT "
-                        "instance (found {})",
-                        checkpoint_uuids.size()),
+                    lfs::ErrorCode::FailedPrecondition,
+                    "Training project has no checkpoint to resume; pass an "
+                    "untrained project to --data-path instead",
                     LFS_SOURCE_SITE_CURRENT());
             }
-            const auto checkpoint_uuid =
-                checkpoint_uuids.front();
+            const auto bound_checkpoint_uuid = **checkpoint_uuid;
             const auto* checkpoint =
                 recovery_document.document()
-                    .find_checkpoint(checkpoint_uuid);
+                    .find_checkpoint(bound_checkpoint_uuid);
             if (!checkpoint) {
                 return training_project_error(
                     lfs::ErrorCode::ContractViolation,
@@ -397,6 +539,16 @@ namespace lfs::app {
             auto checkpoint_params =
                 std::move(**parsed_params);
 
+            // Only retain the source dataset when the effective training root
+            // still denotes the checkpoint's dataset (including path aliases).
+            std::error_code dataset_error;
+            const bool same_dataset = cli_params.dataset.data_path.empty() ||
+                                      std::filesystem::equivalent(
+                                          cli_params.dataset.data_path,
+                                          checkpoint_params.dataset.data_path, dataset_error);
+            const auto snapshot_source_path = same_dataset
+                                                  ? recovery_document.document().source_path()
+                                                  : std::nullopt;
             if (!cli_params.dataset.data_path.empty()) {
                 checkpoint_params.dataset.data_path =
                     cli_params.dataset.data_path;
@@ -421,6 +573,7 @@ namespace lfs::app {
                 cli_params.optimization.no_splash;
             checkpoint_params.server =
                 cli_params.server;
+            checkpoint_params.no_download = cli_params.no_download;
             checkpoint_params.python_scripts =
                 cli_params.python_scripts;
             checkpoint_params.resume_checkpoint.reset();
@@ -450,7 +603,7 @@ namespace lfs::app {
             if (!hydration->trainer_state_pending ||
                 !hydration->checkpoint_uuid ||
                 *hydration->checkpoint_uuid !=
-                    checkpoint_uuid ||
+                    bound_checkpoint_uuid ||
                 !hydration->checkpoint_header) {
                 return training_project_error(
                     lfs::ErrorCode::ContractViolation,
@@ -471,11 +624,12 @@ namespace lfs::app {
                 .params =
                     std::move(checkpoint_params),
                 .checkpoint_uuid =
-                    checkpoint_uuid,
+                    bound_checkpoint_uuid,
                 .iteration =
                     hydration
                         ->checkpoint_header
                         ->iteration,
+                .snapshot_source_path = snapshot_source_path,
             };
         }
 
@@ -534,6 +688,8 @@ namespace lfs::app {
                 }
 
                 auto manager = std::make_shared<vis::TrainerManager>();
+                manager->set_evaluation_weights_preparer(
+                    prepare_lpips_weights);
                 {
                     const auto& effective_params =
                         checkpoint_params
@@ -579,7 +735,9 @@ namespace lfs::app {
                         training::grant_headless_project_saves(
                             *installed->trainer,
                             effective_params,
-                            *params->resume_project);
+                            headless_project_save_destination(
+                                *params, *params->resume_project),
+                            training_project->snapshot_source_path);
                         manager->setTrainer(
                             std::move(installed->trainer));
                     } else {
@@ -593,9 +751,15 @@ namespace lfs::app {
                                 effective_params
                                     .python_scripts);
                         }
-                        trainer->setParams(effective_params);
+                        if (auto updated = trainer->setParams(effective_params); !updated) {
+                            LOG_ERROR("Failed to apply training parameters: {}",
+                                      lfs::format_for_developer(updated.error()));
+                            return 1;
+                        }
                         training::grant_headless_project_saves(
-                            *trainer, effective_params);
+                            *trainer, effective_params,
+                            headless_dataset_project_destination(effective_params),
+                            effective_params.dataset_project);
                         manager->setTrainer(std::move(trainer));
                     }
                 }
@@ -690,7 +854,7 @@ namespace lfs::app {
                     return 1;
                 }
 
-                if (training_project) {
+                if (training_project && !params->dataset.output_path_explicit) {
                     if (auto rebound =
                             training_project->document
                                 .rebind_after_durable_merge();
@@ -793,9 +957,13 @@ namespace lfs::app {
                     }
                     auto trainer =
                         std::move(installed->trainer);
+                    if (project->params.optimization.enable_eval)
+                        trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
                     training::grant_headless_project_saves(
                         *trainer, project->params,
-                        *params->resume_project);
+                        headless_project_save_destination(
+                            *params, *params->resume_project),
+                        project->snapshot_source_path);
                     LOG_INFO(
                         "Project display hydration complete; full "
                         "trainer state restored at iteration {}",
@@ -813,9 +981,9 @@ namespace lfs::app {
                                 result.error()));
                         return 1;
                     }
-                    if (auto rebound =
-                            project->document
-                                .rebind_after_durable_merge();
+                    if (auto rebound = params->dataset.output_path_explicit
+                                           ? lfs::Result<void>{}
+                                           : project->document.rebind_after_durable_merge();
                         !rebound) {
                         LOG_ERROR(
                             "Headless recovery merge could not rebind the live project document: {}",
@@ -853,12 +1021,10 @@ namespace lfs::app {
                     training::grant_headless_project_saves(
                         *trainer, *ckpt_params_result);
 
-                    const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
-                    if (!ckpt_result) {
-                        LOG_ERROR("Failed to restore checkpoint state: {}", ckpt_result.error());
-                        return 1;
-                    }
-                    LOG_INFO("Resumed from iteration {}", *ckpt_result);
+                    // initialize() already loads resume_checkpoint and propagates errors.
+                    LOG_INFO("Resumed from iteration {}", trainer->get_current_iteration());
+                    if (ckpt_params_result->optimization.enable_eval)
+                        trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
 
                     core::Tensor::trim_memory_pool();
 
@@ -903,8 +1069,12 @@ namespace lfs::app {
                         LOG_ERROR("Failed to initialize trainer: {}", result.error());
                         return 1;
                     }
+                    if (params->optimization.enable_eval)
+                        trainer->set_lpips_weights_path(prepare_lpips_weights(!params->no_download));
                     training::grant_headless_project_saves(
-                        *trainer, *params);
+                        *trainer, *params,
+                        headless_dataset_project_destination(*params),
+                        params->dataset_project);
 
                     core::Tensor::trim_memory_pool();
 
@@ -1010,10 +1180,10 @@ namespace lfs::app {
                 const float t = std::min(static_cast<float>(frame) / static_cast<float>(cfg.fps), duration);
                 const auto cam_state = timeline.evaluate(t);
 
-                // CameraState is camera-to-world; Camera's R/T are world-to-camera, so invert.
-                const glm::mat3 r_c2w = glm::mat3_cast(cam_state.rotation);
-                const glm::mat3 r_w2c = glm::transpose(r_c2w);
-                const glm::vec3 t_w2c = -(r_w2c * cam_state.position);
+                const glm::mat4 data_view = rendering::dataWorldToCameraFromVisualizerPose(
+                    glm::mat3_cast(cam_state.rotation), cam_state.position);
+                const glm::mat3 r_w2c(data_view);
+                const glm::vec3 t_w2c(data_view[3]);
 
                 std::vector<float> r_flat(9);
                 for (int row = 0; row < 3; ++row) {
@@ -1158,8 +1328,33 @@ namespace lfs::app {
         void warmupCudaAsync() {
             LOG_INFO("Initializing CUDA (async)...");
             cudaWarmupFuture() = std::async(std::launch::async, [] {
+                auto& profiler = lfs::diagnostics::VramProfiler::instance();
+                // NVML is intentionally first touched here, after the window
+                // has been made visible. The primary context already exists
+                // from the small preflight probe, so this current reading is
+                // also the useful late baseline for the ledger.
+                const auto process_used_now = [] {
+                    return lfs::vis::gui::queryGpuMemory().process_used;
+                };
+                const std::size_t before_context = process_used_now();
+                const std::size_t after_context = process_used_now();
+                profiler.recordCudaPhaseBytes(
+                    "primary_context",
+                    after_context > before_context ? after_context - before_context : 0);
+
+                const std::size_t before_curand = process_used_now();
+                curandGenerator_t generator = nullptr;
+                if (curandCreateGenerator(&generator, CURAND_RNG_PSEUDO_DEFAULT) ==
+                    CURAND_STATUS_SUCCESS) {
+                    curandDestroyGenerator(generator);
+                }
+                const std::size_t after_curand = process_used_now();
+                profiler.recordCudaPhaseBytes(
+                    "curand_load",
+                    after_curand > before_curand ? after_curand - before_curand : 0);
+                profiler.setCudaContextBaselineBytes(process_used_now());
                 fast_lfs::rasterization::warmup_kernels();
-                lfs::diagnostics::VramProfiler::instance().captureCudaWarmupDelta();
+                profiler.captureCudaWarmupDelta();
             });
         }
 
@@ -1305,6 +1500,8 @@ namespace lfs::app {
             });
 
             viewer->setParameters(*params);
+            viewer->set_evaluation_weights_preparer(
+                prepare_lpips_weights);
 
             for (const auto& vp : params->view_paths) {
                 if (!std::filesystem::exists(vp)) {
@@ -1335,10 +1532,14 @@ namespace lfs::app {
                 }
             }
 
-            mcp::register_core_tools();
-            mcp::register_core_resources();
-            register_gui_scene_tools(viewer.get());
-            register_gui_scene_resources(viewer.get());
+            mcp::ToolRegistry::instance().set_lazy_initializer([viewer_ptr = viewer.get()] {
+                mcp::register_core_tools();
+                register_gui_scene_tools(viewer_ptr);
+            });
+            mcp::ResourceRegistry::instance().set_lazy_initializer([viewer_ptr = viewer.get()] {
+                mcp::register_core_resources();
+                register_gui_scene_resources(viewer_ptr);
+            });
 
             mcp::setActiveMcpHttpServer(&mcp_http);
             vis::setRuntimeServiceControls({
@@ -1455,6 +1656,18 @@ namespace lfs::app {
                 core::teardown_gpu_before_exit();
             }
             return result;
+        }
+
+        if (params->dataset_project) {
+            if (!params->optimization.headless) {
+                LOG_ERROR("--data-path project.licht requires --headless; use -v to open a project");
+                return 1;
+            }
+            if (const auto adopted = adoptDatasetProject(*params); !adopted) {
+                LOG_ERROR("Failed to load training project: {}",
+                          lfs::format_for_developer(adopted.error()));
+                return 1;
+            }
         }
 
         if (params->optimization.headless && params->server.tcp_connection) {

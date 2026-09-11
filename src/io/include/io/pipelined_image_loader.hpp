@@ -73,6 +73,10 @@ namespace lfs::io {
         size_t jpeg_batch_size = config::DEFAULT_BATCH_SIZE;
         size_t prefetch_count = config::DEFAULT_PREFETCH_COUNT;
         size_t output_queue_size = config::DEFAULT_OUTPUT_QUEUE_SIZE;
+        // Maximum number of reusable decoded RGB frame slots. Zero keeps the
+        // historical 14-slot limit; training normally narrows this to the
+        // tuned prefetch target plus two safety slots.
+        size_t decode_frame_ring_capacity = DECODE_FRAME_RING_CAPACITY;
         size_t decoder_pool_size = config::DEFAULT_BATCH_SIZE;
         size_t io_threads = config::DEFAULT_IO_THREADS;
         size_t cold_process_threads = config::DEFAULT_COLD_THREADS;
@@ -181,6 +185,7 @@ namespace lfs::io {
             double cold_process_time_ms = 0;
             size_t total_bytes_read = 0;
             size_t total_decode_calls = 0;
+            size_t cpu_decode_calls = 0;
             // Mask loading stats
             size_t masks_loaded = 0;
             size_t mask_cache_hits = 0;
@@ -496,7 +501,8 @@ namespace lfs::io {
         // Non-blocking stream for the hot GPU decode path, so image decode and
         // H2D work overlap training instead of serializing on the legacy stream.
         // Images are still stream-synced before handoff (materialized on arrival).
-        cudaStream_t decode_stream_ = nullptr;
+        mutable std::mutex decode_stream_mutex_;
+        mutable cudaStream_t decode_stream_ = nullptr;
         std::vector<cudaStream_t> sidecar_streams_;
 
         ThreadSafeQueue<ImageRequest> prefetch_queue_;
@@ -532,13 +538,14 @@ namespace lfs::io {
         std::atomic<bool> jpeg2k_cache_available_{true};
 
         mutable std::mutex stats_mutex_;
-        CacheStats stats_;
+        mutable CacheStats stats_;
         mutable std::mutex adaptive_mutex_;
         double decode_latency_ema_ms_ = 0.0;
         double train_latency_ema_ms_ = 0.0;
         double adaptive_wait_sum_ms_ = 0.0;
         size_t adaptive_wait_samples_ = 0;
         size_t adaptive_target_ = config::DEFAULT_PREFETCH_COUNT;
+        size_t adaptive_max_target_ = 12;
         size_t adaptive_low_recommendation_windows_ = 0;
         size_t adaptive_growth_cooldown_windows_ = 0;
         size_t adaptive_occupancy_ = 0;

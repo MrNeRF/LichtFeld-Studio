@@ -48,7 +48,7 @@
                 <span class="section-arrow" data-class-is-expanded="!folders_collapsed">&#x25B6;</span>
                 <span>{{folders_title}}</span>
               </div>
-              <button class="asset-button asset-button--small-icon asset-folder-menu" data-event-click="add_asset_folder"><svg width="10" height="10" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 1V11M1 6H11" stroke="#d8d0c3" stroke-width="2" stroke-linecap="round"/></svg></button>
+              <button class="asset-button asset-button--small-icon asset-folder-menu" data-event-click="add_asset_folder"><span class="asset-add-folder-glyph">+</span></button>
             </div>
             <div class="section-content collapsed" data-class-collapsed="!folders_expanded">
               <div data-for="folder : folders">

@@ -13,6 +13,7 @@ from . import bug_report
 from .account_panel import _localized_error_message
 from .portal_account import get_portal_account_service
 from .types import Panel
+from .panels import panel_class
 from .ui.store import (
     PanelStateBinding,
     RuntimeState,
@@ -59,17 +60,9 @@ def request_bug_report_open() -> None:
     _open_cycle_generation += 1
 
 
+@panel_class("bug_report")
 class BugReportPanel(Panel):
     """Collect, review, and submit a portal bug report."""
-
-    id = "lfs.bug_report"
-    label = "Report a bug"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 96
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/bug_report_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (520, 0)
 
     def __init__(self):
         super().__init__()

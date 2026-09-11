@@ -143,7 +143,7 @@ namespace lfs::core {
             throw std::runtime_error(
                 "Alternate tensor encoding requires a serialization sink");
         }
-        const Tensor host = tensor.device() == Device::CUDA ? tensor.cpu() : tensor;
+        const Tensor host = tensor.device() == Device::CUDA ? tensor.to_pageable_host() : tensor;
         const Tensor src = host.is_contiguous() ? host : host.contiguous();
         if (src.dtype() != descriptor.dtype ||
             src.shape() != descriptor.serialized_shape) {

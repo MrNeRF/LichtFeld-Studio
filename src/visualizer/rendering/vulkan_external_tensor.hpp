@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
@@ -92,7 +93,7 @@ namespace lfs::vis {
     // returned allocator holds shared_ptrs to both the CUDA-side ExportableBlock
     // and the Vulkan-side parent storage; tensors keep them alive via the
     // standard shared_ptr<void> data_owner_ chain.
-    [[nodiscard]] std::expected<lfs::core::SplatTensorAllocator, std::string>
+    [[nodiscard]] lfs::Result<lfs::core::SplatTensorAllocator>
     makeSplatExportableInteropAllocator(
         VulkanContext& context,
         const lfs::core::SplatExportableStorage& storage,

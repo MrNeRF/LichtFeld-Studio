@@ -90,13 +90,64 @@ namespace {
         settings.depth_filter_min = {-0.5f, -0.5f, -8.875f};
         settings.depth_filter_max = {0.5f, 0.5f, -8.0f};
         // Full-viewport window so only depth can decide.
-        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_scale_x = 1.0f;
+        settings.depth_filter_scale_y = 1.0f;
         settings.depth_filter_offset_x = 0.0f;
         settings.depth_filter_offset_y = 0.0f;
         rendering_manager.updateSettings(settings);
     }
 
 } // namespace
+
+TEST(SelectionMaskNormalizationTest, MatchesReferenceForSoftDeletedGroupedMillionRowScene) {
+    constexpr size_t kRows = 1'000'000;
+    lfs::core::Scene scene;
+    auto model = make_test_splat(std::vector<float>(kRows * 3, 0.0f));
+    ASSERT_NE(scene.addSplat("synthetic", std::move(model)), lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addSelectionGroup("Group 2", glm::vec3(0.0f)), 0);
+
+    auto mask_cpu = Tensor::zeros({kRows}, Device::CPU, DataType::UInt8);
+    auto deleted_cpu = Tensor::zeros({kRows}, Device::CPU, DataType::Bool);
+    auto* const mask_data = mask_cpu.ptr<uint8_t>();
+    auto* const deleted_data = deleted_cpu.ptr<bool>();
+    for (size_t i = 0; i < kRows; ++i) {
+        mask_data[i] = (i % 3 == 0) ? 1 : ((i % 3 == 1) ? 2 : 0);
+        deleted_data[i] = (i % 7 == 0);
+    }
+
+    auto* const node = scene.getNode("synthetic");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    ASSERT_TRUE(node->model->soft_delete(deleted_cpu.cuda()).is_valid());
+
+    const auto input = mask_cpu.cuda();
+    const auto live = node->model->deleted().logical_not().to(Device::CUDA).to(DataType::UInt8);
+    const auto expected = input.where(
+        live.ne(0), Tensor::zeros({kRows}, Device::CUDA, DataType::UInt8));
+    const auto expected_count = expected.count_nonzero();
+
+    scene.setSelectionMask(std::make_shared<Tensor>(input));
+    const auto actual = scene.getSelectionMask();
+    ASSERT_NE(actual, nullptr);
+    EXPECT_EQ(actual->cpu().to_vector_uint8(), expected.cpu().to_vector_uint8());
+    EXPECT_EQ(scene.selectedCount(), expected_count);
+
+    scene.updateSelectionGroupCounts();
+    size_t expected_group_one = 0;
+    size_t expected_group_two = 0;
+    for (size_t i = 0; i < kRows; ++i) {
+        if (deleted_data[i]) {
+            continue;
+        }
+        if (mask_data[i] == 1) {
+            ++expected_group_one;
+        } else if (mask_data[i] == 2) {
+            ++expected_group_two;
+        }
+    }
+    EXPECT_EQ(scene.getSelectionGroup(1)->count, expected_group_one);
+    EXPECT_EQ(scene.getSelectionGroup(2)->count, expected_group_two);
+}
 
 class SelectionServiceInteractionsTest : public ::testing::Test {
 protected:
@@ -577,7 +628,8 @@ namespace {
         settings.depth_filter_min = {-0.5f, -0.5f, -10.5f};
         settings.depth_filter_max = {0.5f, 0.5f, -9.5f};
         // Full-viewport window so only depth can decide.
-        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_scale_x = 1.0f;
+        settings.depth_filter_scale_y = 1.0f;
         settings.depth_filter_offset_x = 0.0f;
         settings.depth_filter_offset_y = 0.0f;
         rendering_manager.updateSettings(settings);
@@ -601,7 +653,8 @@ namespace {
         settings.depth_filter_enabled = true;
         settings.depth_filter_min = {-0.5f, -0.5f, -10.5f};
         settings.depth_filter_max = {0.5f, 0.5f, -9.5f};
-        settings.depth_filter_scale = 0.3f;
+        settings.depth_filter_scale_x = 0.3f;
+        settings.depth_filter_scale_y = 0.3f;
         settings.depth_filter_offset_x = 1.0f;
         settings.depth_filter_offset_y = 0.0f;
         rendering_manager.updateSettings(settings);
@@ -625,7 +678,8 @@ namespace {
         settings.depth_filter_enabled = true;
         settings.depth_filter_min = {-0.5f, -0.5f, -10.5f};
         settings.depth_filter_max = {0.5f, 0.5f, -9.5f};
-        settings.depth_filter_scale = 0.35f;
+        settings.depth_filter_scale_x = 0.35f;
+        settings.depth_filter_scale_y = 0.35f;
         settings.depth_filter_offset_x = 0.35f;
         settings.depth_filter_offset_y = 0.0f;
         rendering_manager.updateSettings(settings);
@@ -728,7 +782,8 @@ namespace {
         settings.depth_filter_enabled = true;
         settings.depth_filter_min = {-0.5f, -0.5f, -100.0f};
         settings.depth_filter_max = {0.5f, 0.5f, 0.0f};
-        settings.depth_filter_scale = 1.0f;
+        settings.depth_filter_scale_x = 1.0f;
+        settings.depth_filter_scale_y = 1.0f;
         settings.depth_filter_offset_x = 0.0f;
         settings.depth_filter_offset_y = 0.0f;
         rendering_manager.updateSettings(settings);
@@ -912,7 +967,8 @@ TEST_F(SelectionServiceInteractionsTest, ExplicitCameraAsymmetricFocalsFilterThr
     settings.depth_filter_enabled = true;
     settings.depth_filter_min = {-0.5f, -0.5f, -11.5f};
     settings.depth_filter_max = {0.5f, 0.5f, -10.5f};
-    settings.depth_filter_scale = 0.35f;
+    settings.depth_filter_scale_x = 0.35f;
+    settings.depth_filter_scale_y = 0.35f;
     settings.depth_filter_offset_x = 0.35f;
     settings.depth_filter_offset_y = 0.0f;
     rendering_manager_->updateSettings(settings);
@@ -1024,4 +1080,86 @@ TEST_F(SelectionServiceInteractionsTest, FilteredSelectAllAndInvertRequireProjec
     EXPECT_FALSE(invert_fail.success);
     EXPECT_EQ(invert_fail.error, "Invalid projection context");
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 0, 0, 1}));
+}
+
+TEST_F(SelectionServiceInteractionsTest, DepthWindowChangeInvalidatesInteractiveBrushFilterCache) {
+    scene_manager_->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+    scene_manager_->getScene().removeNode("test");
+    scene_manager_->getScene().addSplat(
+        "brush_depth_window",
+        make_test_splat({
+            0.0f,
+            5.0f,
+            0.0f,
+            0.0f,
+            -5.0f,
+            0.0f,
+        }));
+
+    const auto cameras_group = scene_manager_->getScene().addGroup("Cameras");
+    scene_manager_->getScene().addCamera("dataset.png", cameras_group, make_x_axis_dataset_camera());
+    arm_dataset_camera_depth_band(*rendering_manager_);
+
+    service_->setTestingScreenPositions(make_screen_positions({
+        100.0f,
+        50.0f,
+        0.0f,
+        50.0f,
+    }));
+
+    lfs::vis::SelectionFilterState filters;
+    filters.depth_filter = true;
+
+    auto arm_left_depth_window = [&](lfs::vis::RenderingManager& rendering_manager) {
+        auto settings = rendering_manager.getSettings();
+        settings.depth_filter_enabled = true;
+        settings.depth_filter_min = {-0.5f, -0.5f, -10.5f};
+        settings.depth_filter_max = {0.5f, 0.5f, -9.5f};
+        settings.depth_filter_scale_x = 0.3f;
+        settings.depth_filter_scale_y = 0.3f;
+        settings.depth_filter_offset_x = -1.0f;
+        settings.depth_filter_offset_y = 0.0f;
+        rendering_manager.updateSettings(settings);
+    };
+
+    set_initial_selection({0, 0});
+    arm_left_depth_window(*rendering_manager_);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Brush,
+        lfs::vis::SelectionMode::Replace,
+        {50.0f, 50.0f},
+        80.0f,
+        filters));
+    service_->updateInteractiveSelection({50.0f, 50.0f});
+    service_->refreshInteractivePreview();
+    const auto fresh_left = service_->finishInteractiveSelection();
+    ASSERT_TRUE(fresh_left.success) << fresh_left.error;
+    const auto fresh_left_values = selection_values(*scene_manager_);
+
+    set_initial_selection({0, 0});
+    arm_off_centre_depth_window(*rendering_manager_);
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Brush,
+        lfs::vis::SelectionMode::Replace,
+        {50.0f, 50.0f},
+        80.0f,
+        filters));
+    service_->updateInteractiveSelection({50.0f, 50.0f});
+    service_->refreshInteractivePreview();
+
+    // Mechanism regression: the brush point count is UNCHANGED, so without the
+    // invalidation the incremental rebuild early-returns and the preview stays
+    // filtered by the old window. The invalidation must zero the folded-point
+    // cache and the next refresh must rebuild from point zero.
+    const auto stale_count = service_->interactiveBrushPreviewPointCountForTest();
+    ASSERT_GT(stale_count, 0u);
+    arm_left_depth_window(*rendering_manager_);
+    service_->invalidateInteractiveBrushFilterCache();
+    EXPECT_EQ(service_->interactiveBrushPreviewPointCountForTest(), 0u);
+    service_->refreshInteractivePreview();
+    EXPECT_EQ(service_->interactiveBrushPreviewPointCountForTest(), stale_count);
+
+    const auto brush_result = service_->finishInteractiveSelection();
+    ASSERT_TRUE(brush_result.success) << brush_result.error;
+    EXPECT_EQ(selection_values(*scene_manager_), fresh_left_values);
 }

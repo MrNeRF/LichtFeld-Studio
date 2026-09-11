@@ -5,11 +5,13 @@
 import json
 import logging
 import os
+import stat
+import sys
 import threading
 import time
 import uuid
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 from lfs_plugins.asset_index import AssetIndex
 from lfs_plugins import asset_watch
@@ -35,6 +37,36 @@ def _inspection(project_uuid: str):
         open_state=SimpleNamespace(name="OPEN"),
         has_preview=False,
     )
+
+
+class _FakeDirEntry:
+    def __init__(self, path, *, is_dir=False, is_file=False):
+        self.path = str(path)
+        self.name = Path(path).name
+        self._is_dir = is_dir
+        self._is_file = is_file
+
+    def is_dir(self, follow_symlinks=False):
+        del follow_symlinks
+        return self._is_dir
+
+    def is_file(self, follow_symlinks=False):
+        del follow_symlinks
+        return self._is_file
+
+
+class _FakeScandir:
+    def __init__(self, entries):
+        self._entries = entries
+
+    def __enter__(self):
+        return self
+
+    def __iter__(self):
+        return iter(self._entries)
+
+    def __exit__(self, *_args):
+        return False
 
 
 def test_discovery_recurses_and_returns_only_licht_files(tmp_path: Path):
@@ -243,6 +275,28 @@ def test_discovery_prunes_dataset_directories(tmp_path: Path):
     assert discover_licht_projects(str(tmp_path)) == [str(visible.resolve())]
 
 
+def test_discovery_prunes_user_root_tmp_and_recovery_by_exact_path(monkeypatch, tmp_path: Path):
+    user_root = tmp_path / "user"
+    projects = user_root / "projects"
+    projects.mkdir(parents=True)
+    for name in ("tmp", "recovery"):
+        directory = user_root / name
+        directory.mkdir()
+        (directory / "scratch.licht").write_bytes(b"scratch")
+    similarly_named = tmp_path / "selected" / "tmp"
+    similarly_named.mkdir(parents=True)
+    (similarly_named / "kept.licht").write_bytes(b"kept")
+
+    lf_stub = ModuleType("lichtfeld")
+    lf_stub.ui = SimpleNamespace(
+        get_default_project_location=lambda: str(projects),
+    )
+    monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
+
+    assert discover_licht_projects(str(user_root)) == []
+    assert discover_licht_projects(str(similarly_named)) == [str((similarly_named / "kept.licht").resolve())]
+
+
 def test_scan_skips_inspection_for_unchanged_cataloged_path(tmp_path: Path):
     project = tmp_path / "project.licht"
     project.write_bytes(b"container")
@@ -305,11 +359,26 @@ def test_cancelled_scan_rolls_back_discovered_projects(tmp_path: Path):
 def test_discovery_warns_once_when_folder_has_more_than_10000_directories(
     monkeypatch, tmp_path: Path, caplog
 ):
-    def fake_walk(_root, topdown=True, onerror=None, followlinks=False):
-        for index in range(10001):
-            yield str(tmp_path / f"dir-{index}"), [], []
+    scanned = []
 
-    monkeypatch.setattr(os, "walk", fake_walk)
+    def fake_scandir(current):
+        index = len(scanned)
+        scanned.append(current)
+        if index >= 10000:
+            return _FakeScandir([])
+        return _FakeScandir(
+            [_FakeDirEntry(Path(current) / f"dir-{index}", is_dir=True)]
+        )
+
+    monkeypatch.setattr(asset_watch.os, "scandir", fake_scandir)
+    monkeypatch.setattr(
+        asset_watch.Path,
+        "stat",
+        lambda _path, *args, **kwargs: SimpleNamespace(
+            st_mtime_ns=1,
+            st_mode=stat.S_IFDIR,
+        ),
+    )
 
     with caplog.at_level(logging.WARNING, logger="lfs_plugins.asset_watch"):
         discovered = discover_licht_projects(str(tmp_path))
@@ -357,16 +426,18 @@ def test_scan_streams_first_batch_before_walk_finishes(monkeypatch, tmp_path: Pa
     walk_finished = threading.Event()
     past_first_batch = threading.Event()
 
-    def fake_walk(_root, topdown=True, onerror=None, followlinks=False):
-        names = [path.name for path in paths]
-        for index, name in enumerate(names):
-            yield str(tmp_path), [], [name]
-            if index == 1:
-                past_first_batch.set()
-            time.sleep(0.03)
-        walk_finished.set()
+    def fake_scandir(_root):
+        def entries():
+            for index, path in enumerate(paths):
+                yield _FakeDirEntry(path, is_file=True)
+                if index == 1:
+                    past_first_batch.set()
+                time.sleep(0.03)
+            walk_finished.set()
 
-    monkeypatch.setattr(os, "walk", fake_walk)
+        return _FakeScandir(entries())
+
+    monkeypatch.setattr(asset_watch.os, "scandir", fake_scandir)
     index = AssetIndex(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path,
@@ -402,14 +473,16 @@ def test_cancelled_scan_keeps_committed_batches(monkeypatch, tmp_path: Path):
     )
     cancel_event = threading.Event()
 
-    def fake_walk(_root, topdown=True, onerror=None, followlinks=False):
-        names = [path.name for path in paths]
-        for index, name in enumerate(names):
-            yield str(tmp_path), [], [name]
-            if index == 3:
-                cancel_event.wait(timeout=2.0)
+    def fake_scandir(_root):
+        def entries():
+            for index, path in enumerate(paths):
+                yield _FakeDirEntry(path, is_file=True)
+                if index == 3:
+                    cancel_event.wait(timeout=2.0)
 
-    monkeypatch.setattr(os, "walk", fake_walk)
+        return _FakeScandir(entries())
+
+    monkeypatch.setattr(asset_watch.os, "scandir", fake_scandir)
     index = AssetIndex(
         library_path=tmp_path / "library.json",
         default_folder_path=tmp_path,
@@ -522,3 +595,20 @@ def test_verify_catalog_projects_runs_in_batches(monkeypatch, tmp_path: Path):
     assert verified == 5
     assert batch_sizes == [2, 2, 1]
     assert {project.status for project in index.list_projects()} == {"AVAILABLE"}
+
+
+def test_verify_catalog_projects_prioritizes_visible_window():
+    order = []
+
+    class Index:
+        def list_projects(self):
+            return [SimpleNamespace(id=str(i)) for i in range(5)]
+
+        def verify_projects_batch(self, ids):
+            order.extend(ids)
+            return len(ids)
+
+    assert verify_catalog_projects(
+        Index(), visible_asset_ids=["3", "1"], batch_size=1, interval_s=0
+    ) == 5
+    assert order == ["3", "1", "0", "2", "4"]

@@ -9,6 +9,7 @@
 #include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -73,6 +74,32 @@ namespace lfs::io {
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
+    struct SsogSaveOptions {
+        std::filesystem::path output_path;
+        int lod_levels = 4;
+        float lod_ratio = 0.5f;
+        int chunk_count_k = 512;
+        float chunk_extent = 16.0f;
+        int chunk_min_k = 8;
+        int kmeans_iterations = 10;
+        bool use_gpu = true;
+        ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{};
+
+        [[nodiscard]] bool validate() const {
+            return lod_levels >= 1 && lod_levels <= 8 &&
+                   std::isfinite(lod_ratio) && lod_ratio > 0 && lod_ratio < 1 &&
+                   chunk_count_k > 0 && chunk_min_k >= 0 &&
+                   std::isfinite(chunk_extent) && chunk_extent > 0 && kmeans_iterations >= 1;
+        }
+    };
+
+    [[nodiscard]] LFS_IO_API Result<void> save_ssog(const SplatData&, const SsogSaveOptions&);
+
+    struct SsogLoadOptions {
+        int lod_level = 0; // Negative levels count from the coarsest (-1).
+    };
+
     /**
      * @brief Save SplatData to SOG (SuperSplat) format
      * @return Result<void> - success or Error with details (disk space, encoding, archive errors)
@@ -100,9 +127,12 @@ namespace lfs::io {
     // SPZ Export (Niantic compressed format)
     // ============================================================================
 
+    inline constexpr int kSpzExportZstdLevel = 9;
+
     struct SpzSaveOptions {
         std::filesystem::path output_path;
-        int version = 4; // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
+        int version = 4;                             // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
+        int compression_level = kSpzExportZstdLevel; // zstd compression level for SPZ v4
         ExportProgressCallback progress_callback = nullptr;
         std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };

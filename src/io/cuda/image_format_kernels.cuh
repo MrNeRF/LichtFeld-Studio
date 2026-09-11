@@ -8,6 +8,23 @@
 
 namespace lfs::io::cuda {
 
+    // Fill a byte buffer with a deterministic, seed-specific high-entropy pattern.
+    // Used to prove that an asynchronous decoder actually overwrote its destination.
+    void launch_fill_u8_sentinel(
+        uint8_t* output,
+        size_t byte_count,
+        uint32_t seed,
+        cudaStream_t stream = nullptr);
+
+    // Set *unchanged to zero if any destination byte differs from the sentinel
+    // pattern. The caller initializes *unchanged to a nonzero value before launch.
+    void launch_flag_u8_sentinel_unchanged(
+        const uint8_t* input,
+        size_t byte_count,
+        uint32_t seed,
+        uint32_t* unchanged,
+        cudaStream_t stream = nullptr);
+
     // Fused kernel: uint8 HWC -> float32 CHW normalized [0,1]
     void launch_uint8_hwc_to_float32_chw(
         const uint8_t* input,
@@ -15,6 +32,13 @@ namespace lfs::io::cuda {
         size_t height,
         size_t width,
         size_t channels,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: uint8 CHW -> float32 CHW normalized [0,1]
+    void launch_uint8_chw_to_float32_chw(
+        const uint8_t* input,
+        float* output,
+        size_t elements,
         cudaStream_t stream = nullptr);
 
     // Fused kernel: uint16 HWC -> float32 CHW normalized [0,1]

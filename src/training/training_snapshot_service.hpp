@@ -31,7 +31,7 @@ namespace lfs::training {
 
     struct TrainingSnapshotServiceConfig {
         std::size_t ring_slots = 4;
-        std::size_t band_bytes = 128ull * 1024 * 1024;
+        std::size_t band_bytes = 64ull * 1024 * 1024;
         std::size_t calibration_bytes = 32ull * 1024 * 1024;
         int calibration_iterations = 4;
     };
@@ -146,6 +146,9 @@ namespace lfs::training {
         // inter-step work can overlap rendering, never optimizer mutation.
         // A nil UUID asks the service to generate one during prepare().
         lfs::core::Uuid snapshot_uuid;
+        // Explicit saves may use the smaller headroom-only host-memory
+        // reserve; autosave captures retain the full safety reserve.
+        bool relaxed_host_memory_gate = false;
         // Optional origin for the one optimizer-pause clock. The caller sets
         // this immediately before draining model readers/locks so those waits
         // are included with the service-side stream synchronizations.

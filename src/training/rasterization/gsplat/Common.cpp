@@ -31,7 +31,7 @@ namespace gsplat_lfs {
 
     namespace {
         // Thread-local grow-only CUB workspace for scan/sort in the gsplat path.
-        // Replaces per-call StreamOrderedDeviceBuffer alloc/free (CudaCubWorkspace).
+        // Replaces per-call StreamOrderedDeviceBuffer allocation and release.
         struct GsplatCubWorkspaceCache {
             StreamOrderedDeviceBuffer buffer;
             size_t capacity_bytes = 0;

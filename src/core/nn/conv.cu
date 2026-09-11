@@ -3,16 +3,21 @@
 
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
+#include "core/logger.hpp"
 #include "nn_device.cuh"
 #include "nn_kernels.hpp"
 #include "nn_nvtx.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <float.h>
 #include <mma.h>
+#include <mutex>
 
 namespace lfs::core::nn::kernels {
     namespace {
@@ -215,6 +220,138 @@ namespace lfs::core::nn::kernels {
             return X[((static_cast<long long>(ni) * cin + ic) * h + ih) * w + iw];
         }
 
+        __device__ __forceinline__ float load_im2col_nchw_f32(
+            const float* X, int ni, int cin, int h, int w, int m_idx, int k_idx,
+            int out_w, int pad_h, int pad_w, int pad_mode, int spatial, int kdim) {
+            if (m_idx >= spatial || k_idx >= kdim) {
+                return 0.0f;
+            }
+            const int ow = m_idx % out_w;
+            const int oh = m_idx / out_w;
+            const int kw = k_idx % 3;
+            const int kh = (k_idx / 3) % 3;
+            const int ic = k_idx / 9;
+            int ih = oh - pad_h + kh;
+            int iw = ow - pad_w + kw;
+            if (pad_mode == 1) {
+                ih = ih < 0 ? 0 : (ih >= h ? h - 1 : ih);
+                iw = iw < 0 ? 0 : (iw >= w ? w - 1 : iw);
+            }
+            if (static_cast<unsigned>(ih) >= static_cast<unsigned>(h) ||
+                static_cast<unsigned>(iw) >= static_cast<unsigned>(w) ||
+                static_cast<unsigned>(ic) >= static_cast<unsigned>(cin)) {
+                return 0.0f;
+            }
+            return X[((static_cast<long long>(ni) * cin + ic) * h + ih) * w + iw];
+        }
+
+        template <bool kHalf>
+        __device__ __forceinline__ float load_simt_3x3(const void* X, int ni, int cin, int h,
+                                                       int w, int m_idx, int k_idx, int out_w,
+                                                       int pad_h, int pad_w, int pad_mode,
+                                                       int spatial, int kdim) {
+            if constexpr (kHalf) {
+                return __half2float(load_im2col_nchw(
+                    static_cast<const __half*>(X), ni, cin, h, w, m_idx, k_idx, out_w,
+                    pad_h, pad_w, pad_mode, spatial, kdim));
+            } else {
+                return load_im2col_nchw_f32(
+                    static_cast<const float*>(X), ni, cin, h, w, m_idx, k_idx, out_w,
+                    pad_h, pad_w, pad_mode, spatial, kdim);
+            }
+        }
+
+        template <bool kHalf>
+        __device__ __forceinline__ float load_simt_weight(const void* W, long long index) {
+            if constexpr (kHalf) {
+                return __half2float(static_cast<const __half*>(W)[index]);
+            } else {
+                return static_cast<const float*>(W)[index];
+            }
+        }
+
+        template <bool kHalf>
+        __device__ __forceinline__ void store_simt_output(void* Y, long long index, float value) {
+            if constexpr (kHalf) {
+                static_cast<__half*>(Y)[index] = __float2half_rn(value);
+            } else {
+                static_cast<float*>(Y)[index] = value;
+            }
+        }
+
+        // SIMT implicit GEMM for 3x3 NCHW convolution. Each 256-thread block
+        // computes a 64x64 output tile with a 4x4 register tile per thread.
+        // The A operand is gathered directly from NCHW and no im2col workspace is used.
+        template <bool kHalf>
+        __global__ __launch_bounds__(256) void conv2d_implicit_simt_kernel(
+            const void* __restrict__ X, const void* __restrict__ W,
+            const void* __restrict__ bias, void* __restrict__ Y,
+            int n, int cin, int h, int w, int cout, int out_h, int out_w,
+            int pad_h, int pad_w, int pad_mode, int activation) {
+            constexpr int BM = 64;
+            constexpr int BN = 64;
+            constexpr int BK = 8;
+            const int tid = static_cast<int>(threadIdx.x);
+            const int ni = static_cast<int>(blockIdx.z);
+            const int block_row = static_cast<int>(blockIdx.y) * BM;
+            const int block_col = static_cast<int>(blockIdx.x) * BN;
+            const int row0 = (tid / 16) * 4;
+            const int col0 = (tid % 16) * 4;
+            const int spatial = out_h * out_w;
+            const int kdim = cin * 9;
+            __shared__ float As[BM][BK];
+            __shared__ float Bs[BK][BN];
+            float acc[4][4] = {};
+
+            for (int k0 = 0; k0 < kdim; k0 += BK) {
+                for (int index = tid; index < BM * BK; index += 256) {
+                    const int r = index / BK;
+                    const int k = index % BK;
+                    As[r][k] = load_simt_3x3<kHalf>(
+                        X, ni, cin, h, w, block_row + r, k0 + k, out_w,
+                        pad_h, pad_w, pad_mode, spatial, kdim);
+                }
+                for (int index = tid; index < BK * BN; index += 256) {
+                    const int k = index / BN;
+                    const int c = index % BN;
+                    const int gc = block_col + c;
+                    Bs[k][c] = gc < cout && k0 + k < kdim
+                                   ? load_simt_weight<kHalf>(W, static_cast<long long>(gc) * kdim + k0 + k)
+                                   : 0.0f;
+                }
+                __syncthreads();
+#pragma unroll
+                for (int k = 0; k < BK; ++k) {
+#pragma unroll
+                    for (int r = 0; r < 4; ++r) {
+#pragma unroll
+                        for (int c = 0; c < 4; ++c) {
+                            acc[r][c] += As[row0 + r][k] * Bs[k][col0 + c];
+                        }
+                    }
+                }
+                __syncthreads();
+            }
+
+#pragma unroll
+            for (int r = 0; r < 4; ++r) {
+#pragma unroll
+                for (int c = 0; c < 4; ++c) {
+                    const int gr = block_row + row0 + r;
+                    const int gc = block_col + col0 + c;
+                    if (ni < n && gr < spatial && gc < cout) {
+                        float value = acc[r][c];
+                        if (bias)
+                            value += load_simt_weight<kHalf>(bias, gc);
+                        value = device::apply_activation(value, activation);
+                        store_simt_output<kHalf>(
+                            Y, static_cast<long long>(ni) * cout * spatial + static_cast<long long>(gc) * spatial + gr,
+                            value);
+                    }
+                }
+            }
+        }
+
         // 128xBN implicit 3x3. Contiguous row tiles keep a 3x130x32 halo in smem
         // so each IC chunk is loaded once and reused across the 9 spatial offsets.
         // BN=128 halves halo refetches on wide (Cout>=128) layers.
@@ -223,7 +360,8 @@ namespace lfs::core::nn::kernels {
             hgemm_implicit_3x3_halo_kernel(const __half* __restrict__ X, const __half* __restrict__ W,
                                            __half* __restrict__ Y, const __half* __restrict__ bias,
                                            int n, int cin, int h, int w, int cout, int out_h,
-                                           int out_w, int pad_h, int pad_w, int pad_mode) {
+                                           int out_w, int pad_h, int pad_w, int pad_mode,
+                                           int activation) {
             constexpr int BM = 128;
             constexpr int BK = 32;
             constexpr int kNFrags = BN / 16;
@@ -374,6 +512,7 @@ namespace lfs::core::nn::kernels {
                             if (bias) {
                                 v += __half2float(bias[gc]);
                             }
+                            v = device::apply_activation(v, activation);
                             Y[static_cast<long long>(gc) * spatial + gr] = __float2half_rn(v);
                         }
                     }
@@ -389,6 +528,7 @@ namespace lfs::core::nn::kernels {
             (void)pad_mode;
             (void)spatial;
             (void)kNFrags;
+            (void)activation;
 #endif
         }
 
@@ -398,7 +538,7 @@ namespace lfs::core::nn::kernels {
             hgemm_implicit_3x3_kernel(const __half* __restrict__ X, const __half* __restrict__ W,
                                       __half* __restrict__ Y, const __half* __restrict__ bias,
                                       int n, int cin, int h, int w, int cout, int out_h, int out_w,
-                                      int pad_h, int pad_w, int pad_mode) {
+                                      int pad_h, int pad_w, int pad_mode, int activation) {
             const int ni = static_cast<int>(blockIdx.z);
             if (ni >= n) {
                 return;
@@ -490,6 +630,7 @@ namespace lfs::core::nn::kernels {
                     if (bias) {
                         v += __half2float(bias[gc]);
                     }
+                    v = device::apply_activation(v, activation);
                     Y[static_cast<long long>(gc) * spatial + gr] = __float2half_rn(v);
                 }
             }
@@ -512,6 +653,7 @@ namespace lfs::core::nn::kernels {
                 if (bias) {
                     acc += __half2float(bias[gc]);
                 }
+                acc = device::apply_activation(acc, activation);
                 Y[static_cast<long long>(gc) * spatial + gr] = __float2half_rn(acc);
             }
 #endif
@@ -562,10 +704,19 @@ namespace lfs::core::nn::kernels {
         LFS_CUDA_LAUNCH_CHECK(stream, "nn.pool.max2d");
     }
 
-    void conv2d_implicit(const void* input, const void* weight, const void* bias, void* output,
-                         int n, int cin, int h, int w, int cout, int kh, int kw, int out_h,
-                         int out_w, int stride_h, int stride_w, int pad_h, int pad_w, int dil_h,
-                         int dil_w, int pad_mode, DataType dtype, cudaStream_t stream) {
+    std::size_t conv2d_weight_scratch_bytes(const int cout, const int cin, const DataType dtype) {
+        if (dtype != DataType::Float16 || cin % 8 != 0 || !conv3x3_mma_available()) {
+            return 0;
+        }
+        return static_cast<std::size_t>(9) * static_cast<std::size_t>(cout) *
+               static_cast<std::size_t>(cin) * sizeof(__half);
+    }
+
+    void conv2d_implicit(const void* input, const void* weight, const void* weight_taps,
+                         const void* bias, void* output, void* weight_scratch, int n, int cin,
+                         int h, int w, int cout, int kh, int kw, int out_h, int out_w,
+                         int stride_h, int stride_w, int pad_h, int pad_w, int dil_h, int dil_w,
+                         int pad_mode, int activation, DataType dtype, cudaStream_t stream) {
         NvtxRange nvtx("nn.op/conv_implicit");
         (void)stride_h;
         (void)stride_w;
@@ -574,40 +725,119 @@ namespace lfs::core::nn::kernels {
         if (n <= 0 || cout <= 0 || out_h <= 0 || out_w <= 0) {
             return;
         }
-        LFS_ASSERT_MSG(dtype == DataType::Float16, "implicit conv requires float16");
+        LFS_ASSERT_MSG(dtype == DataType::Float16 || dtype == DataType::Float32,
+                       "implicit conv requires float16 or float32");
         LFS_ASSERT_MSG(kh == 3 && kw == 3, "implicit conv requires a 3x3 kernel");
         const int spatial = out_h * out_w;
         const int kdim = cin * 9;
+        if (dtype == DataType::Float32) {
+            dim3 block(256);
+            dim3 grid((cout + 63) / 64, (spatial + 63) / 64, n);
+            conv2d_implicit_simt_kernel<false><<<grid, block, 0, stream>>>(
+                input, weight, bias, output, n, cin, h, w, cout, out_h, out_w,
+                pad_h, pad_w, pad_mode, activation);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_f32");
+            return;
+        }
         auto* x = static_cast<const __half*>(input);
         auto* wt = static_cast<const __half*>(weight);
         auto* y = static_cast<__half*>(output);
         auto* b = static_cast<const __half*>(bias);
-        const bool large = spatial >= 96 && kdim >= 32;
-        if (large) {
-            constexpr int BM = 128;
+        const char* const forced_path = std::getenv("LFS_LPIPS_CONV");
+        const bool force_simt = forced_path && std::strcmp(forced_path, "simt") == 0;
+        const bool force_wmma = forced_path && std::strcmp(forced_path, "wmma") == 0;
+        const bool force_mma = forced_path && std::strcmp(forced_path, "mma") == 0;
+        auto launch_simt = [&]() {
             dim3 block(256);
-            const int n_tw = (out_w + BM - 1) / BM;
-            if (cout >= 128) {
-                constexpr int BN = 128;
-                dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
-                hgemm_implicit_3x3_halo_kernel<BN><<<grid, block, 0, stream>>>(
-                    x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
-                LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo128");
+            dim3 grid((cout + 63) / 64, (spatial + 63) / 64, n);
+            conv2d_implicit_simt_kernel<true><<<grid, block, 0, stream>>>(
+                x, wt, b, y, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode, activation);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_simt_f16");
+        };
+        auto launch_wmma = [&]() {
+            const bool large = spatial >= 96 && kdim >= 32;
+            if (large) {
+                constexpr int BM = 128;
+                dim3 block(256);
+                const int n_tw = (out_w + BM - 1) / BM;
+                if (cout >= 128) {
+                    constexpr int BN = 128;
+                    dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
+                    hgemm_implicit_3x3_halo_kernel<BN><<<grid, block, 0, stream>>>(
+                        x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode,
+                        activation);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo128");
+                } else {
+                    constexpr int BN = 64;
+                    dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
+                    hgemm_implicit_3x3_halo_kernel<BN><<<grid, block, 0, stream>>>(
+                        x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode,
+                        activation);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo");
+                }
+                return;
+            }
+            constexpr int BM = 64, BN = 64;
+            dim3 block(128);
+            dim3 grid((cout + BN - 1) / BN, (spatial + BM - 1) / BM, n);
+            hgemm_implicit_3x3_kernel<BM, BN, 128><<<grid, block, 0, stream>>>(
+                x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode, activation);
+            LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_64x64");
+        };
+        if (force_simt) {
+            launch_simt();
+            return;
+        }
+        const bool auto75 = forced_path && std::strcmp(forced_path, "auto75") == 0;
+        int device = 0;
+        int major = 0;
+        LFS_CUDA_CHECK(cudaGetDevice(&device));
+        LFS_CUDA_CHECK(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
+        static std::once_flag auto_once[16];
+        static std::atomic<int> auto_choice[16] = {};
+        if (!force_wmma && !force_mma && (auto75 || major < 8) && device >= 0 && device < 16) {
+            std::call_once(auto_once[device], [&] {
+                cudaEvent_t begin = nullptr;
+                cudaEvent_t wmma_done = nullptr;
+                cudaEvent_t simt_done = nullptr;
+                LFS_CUDA_CHECK(cudaEventCreate(&begin));
+                LFS_CUDA_CHECK(cudaEventCreate(&wmma_done));
+                LFS_CUDA_CHECK(cudaEventCreate(&simt_done));
+                LFS_CUDA_CHECK(cudaEventRecord(begin, stream));
+                launch_wmma();
+                LFS_CUDA_CHECK(cudaEventRecord(wmma_done, stream));
+                launch_simt();
+                LFS_CUDA_CHECK(cudaEventRecord(simt_done, stream));
+                LFS_CUDA_CHECK(cudaEventSynchronize(simt_done));
+                float wmma_ms = 0.0f;
+                float simt_ms = 0.0f;
+                LFS_CUDA_CHECK(cudaEventElapsedTime(&wmma_ms, begin, wmma_done));
+                LFS_CUDA_CHECK(cudaEventElapsedTime(&simt_ms, wmma_done, simt_done));
+                auto_choice[device].store(wmma_ms <= simt_ms ? 1 : 2, std::memory_order_relaxed);
+                LOG_DEBUG("NN FP16 conv dispatch device={}: {} (WMMA {:.3f} ms, SIMT {:.3f} ms)",
+                          device, auto_choice[device].load(std::memory_order_relaxed) == 1 ? "wmma" : "simt", wmma_ms, simt_ms);
+                LFS_CUDA_CHECK(cudaEventDestroy(begin));
+                LFS_CUDA_CHECK(cudaEventDestroy(wmma_done));
+                LFS_CUDA_CHECK(cudaEventDestroy(simt_done));
+            });
+            if (auto_choice[device].load(std::memory_order_relaxed) == 2) {
+                launch_simt();
             } else {
-                constexpr int BN = 64;
-                dim3 grid((cout + BN - 1) / BN, n_tw * out_h, n);
-                hgemm_implicit_3x3_halo_kernel<BN><<<grid, block, 0, stream>>>(
-                    x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
-                LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_halo");
+                launch_wmma();
             }
             return;
         }
-        constexpr int BM = 64, BN = 64;
-        dim3 block(128);
-        dim3 grid((cout + BN - 1) / BN, (spatial + BM - 1) / BM, n);
-        hgemm_implicit_3x3_kernel<BM, BN, 128><<<grid, block, 0, stream>>>(
-            x, wt, y, b, n, cin, h, w, cout, out_h, out_w, pad_h, pad_w, pad_mode);
-        LFS_CUDA_LAUNCH_CHECK(stream, "nn.conv.implicit_3x3_64x64");
+        if (!force_wmma && (force_mma || weight_taps != nullptr || weight_scratch != nullptr) &&
+            conv2d_weight_scratch_bytes(cout, cin, dtype) > 0) {
+            if (weight_taps == nullptr) {
+                conv3x3_weight_taps(wt, weight_scratch, cout, cin, stream);
+                weight_taps = weight_scratch;
+            }
+            conv2d_implicit_3x3_mma(x, weight_taps, b, y, n, cin, h, w, cout, out_h, out_w,
+                                    pad_mode, activation, stream);
+            return;
+        }
+        launch_wmma();
     }
 
     void avg_pool2d(const void* input, void* output, int n, int c, int in_h, int in_w,

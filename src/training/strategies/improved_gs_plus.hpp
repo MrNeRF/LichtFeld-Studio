@@ -6,6 +6,7 @@
 
 #include "istrategy.hpp"
 
+#include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
 #include "strategy_utils.hpp"
@@ -13,6 +14,10 @@
 
 #include <cassert>
 #include <vector>
+
+namespace lfs::training::sh_value {
+    class ShNMutationBatch;
+}
 
 class CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
 
@@ -73,9 +78,8 @@ namespace lfs::training {
             _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
         }
 
-        void set_training_dataset(std::shared_ptr<CameraDataset> views) override { _views = std::move(views); }
-
-        void set_image_loader(lfs::io::PipelinedImageLoader* loader) override { _image_loader = loader; }
+        lfs::core::Tensor edge_score_scratch(int iter) override;
+        void on_edge_score_accumulated(int iter) override;
 
         // Get count of active (non-free) Gaussians
         size_t active_count() const;
@@ -96,12 +100,8 @@ namespace lfs::training {
 
         // Helper Functions
         inline const int64_t get_current_budget() const noexcept { return _budget_schedule[_current_step + 1]; }
-        inline const unsigned global_seed() const noexcept { return _current_step; } // for camera sampling
-        std::vector<int> random_cam_indices(const int N = 10) const;                 // N minimum
-
         std::vector<int64_t> get_count_array();
 
-        const lfs::core::Tensor compute_gaussian_score();
         void ensure_error_score_shape();
         [[nodiscard]] lfs::core::Tensor damp_densification_scores(
             const lfs::core::Tensor& scores) const;
@@ -120,7 +120,8 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
-            int64_t count);
+            int64_t count,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
 
         struct PendingFailureSnapshot {
             bool valid = false;
@@ -149,10 +150,6 @@ namespace lfs::training {
 
         std::vector<int64_t> _budget_schedule;
 
-        // Pointers to external data
-        std::shared_ptr<CameraDataset> _views;
-        lfs::io::PipelinedImageLoader* _image_loader = nullptr;
-
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;
         std::unique_ptr<ExponentialLR> _scheduler;
@@ -161,6 +158,10 @@ namespace lfs::training {
 
         // Pre-computed edge scores for non-blocking densification
         lfs::core::Tensor _precomputed_scores;
+        lfs::core::Tensor _edge_score_sum;
+        lfs::core::Tensor _edge_view_scores;
+        int _edge_sample_count = 0;
+        PositiveMedianScratch _edge_median_scratch;
         lfs::core::Tensor _error_score_max;
         bool _precompute_valid = false;
 

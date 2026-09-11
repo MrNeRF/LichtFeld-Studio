@@ -34,12 +34,14 @@ namespace lfs::training::losses {
 
     /// Fuse SegmentAndIgnore photometric band remap (or BinaryGt0) + optional ROI
     /// into `ws.photometric_weight`. Returns a view of that buffer.
+    /// `require_float` also materializes binary byte masks for normal kernels.
     /// When `user_mask` is invalid, returns `roi_weight` (or empty) without writes.
     [[nodiscard]] lfs::core::Tensor fuse_photometric_mask_weight(
         MaskPreprocessWorkspace& ws,
         const lfs::core::Tensor& user_mask,
         const lfs::core::Tensor& roi_weight,
-        bool segment_and_ignore);
+        bool segment_and_ignore,
+        bool require_float = false);
 
     /// Fuse Segment / SegmentAndIgnore opacity-penalty band + pow + mean/grad.
     [[nodiscard]] MaskOpacityPenalty fuse_mask_opacity_penalty(

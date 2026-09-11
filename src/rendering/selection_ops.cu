@@ -738,7 +738,8 @@ namespace lfs::rendering {
             const float ortho_scale,
             const float near_depth,
             const float far_depth,
-            const float scale,
+            const float scale_x,
+            const float scale_y,
             const float offset_x,
             const float offset_y,
             const float* __restrict__ model_transforms,
@@ -818,8 +819,8 @@ namespace lfs::rendering {
             // view_y and view_z up front so it can add, mirroring the slang
             // formula verbatim. The equirect branch in that kernel applies the
             // same vis→vk negation used here so px/py match.
-            const float half_w = 0.5f * scale * image_width;
-            const float half_h = 0.5f * scale * image_height;
+            const float half_w = 0.5f * scale_x * image_width;
+            const float half_h = 0.5f * scale_y * image_height;
             const float cx = 0.5f * image_width + offset_x * (0.5f * image_width - half_w);
             const float cy = 0.5f * image_height + offset_y * (0.5f * image_height - half_h);
             const bool inside_rect = fabsf(px - cx) <= half_w && fabsf(py - cy) <= half_h;
@@ -1045,10 +1046,10 @@ namespace lfs::rendering {
             visibility_ptr,
             visibility_count);
         LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.project_screen");
-        if (const cudaError_t status = cudaStreamSynchronize(stream); status != cudaSuccess) {
-            throw std::runtime_error(std::string("projectScreenPositionsKernel: ") + cudaGetErrorString(status));
-        }
-
+        // Selection consumers enqueue their test on the same stream. The
+        // previous fence made projection a synchronous 3.3M-row round trip;
+        // stream ordering is sufficient here and lets commit/readback remain
+        // independently asynchronous.
         return output;
     }
 
@@ -1288,6 +1289,41 @@ namespace lfs::rendering {
         LFS_CUDA_LAUNCH_CHECK(stream, "render.selection.apply_group_indexed_mask");
     }
 
+    void count_selection_groups_async(const Tensor& selection_mask,
+                                      Tensor& counts_scratch) {
+        if (!selection_mask.is_valid() || selection_mask.numel() == 0) {
+            return;
+        }
+        if (selection_mask.device() != lfs::core::Device::CUDA) {
+            throw std::runtime_error("count_selection_groups_async requires a CUDA mask");
+        }
+
+        prepareSelectionGroupCountsScratch(counts_scratch);
+
+        const int n = checkedToInt(selection_mask.numel(), "selection mask size exceeds int range");
+        const int grid_size = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
+        countSelectionGroupsKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&counts_scratch)>>>(
+            selection_mask.ptr<uint8_t>(),
+            n,
+            counts_scratch.ptr<int>());
+        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&counts_scratch), "render.selection.count_groups");
+    }
+
+    void enqueue_selection_group_count_read(const Tensor& counts_scratch,
+                                            int* const pinned_host_counts,
+                                            const cudaEvent_t ready_event) {
+        if (!counts_scratch.is_valid() || pinned_host_counts == nullptr || ready_event == nullptr) {
+            throw std::runtime_error("invalid asynchronous selection-count destination");
+        }
+        const cudaStream_t stream = currentSelectionStream(&counts_scratch);
+        LFS_CUDA_CHECK(cudaMemcpyAsync(pinned_host_counts,
+                                       counts_scratch.ptr<int>(),
+                                       (kSelectionGroupScratchWords) * sizeof(int),
+                                       cudaMemcpyDeviceToHost,
+                                       stream));
+        LFS_CUDA_CHECK(cudaEventRecord(ready_event, stream));
+    }
+
     std::array<size_t, 256> count_selection_groups(
         const Tensor& selection_mask,
         Tensor& counts_scratch) {
@@ -1308,15 +1344,7 @@ namespace lfs::rendering {
             return result;
         }
 
-        prepareSelectionGroupCountsScratch(counts_scratch);
-
-        const int n = checkedToInt(selection_mask.numel(), "selection mask size exceeds int range");
-        const int grid_size = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
-        countSelectionGroupsKernel<<<grid_size, kBlockSize, 0, currentSelectionStream(&counts_scratch)>>>(
-            selection_mask.ptr<uint8_t>(),
-            n,
-            counts_scratch.ptr<int>());
-        LFS_CUDA_LAUNCH_CHECK(currentSelectionStream(&counts_scratch), "render.selection.count_groups");
+        count_selection_groups_async(selection_mask, counts_scratch);
 
         return read_selection_group_counts(counts_scratch);
     }
@@ -1498,7 +1526,8 @@ namespace lfs::rendering {
         const float ortho_scale,
         const float near_depth,
         const float far_depth,
-        const float scale,
+        const float scale_x,
+        const float scale_y,
         const float offset_x,
         const float offset_y,
         const Tensor* const model_transforms,
@@ -1561,7 +1590,8 @@ namespace lfs::rendering {
             sanitized_ortho_scale,
             near_depth,
             far_depth,
-            scale,
+            scale_x,
+            scale_y,
             offset_x,
             offset_y,
             prepared_transforms.ptr,

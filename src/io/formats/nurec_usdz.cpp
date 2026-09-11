@@ -14,13 +14,13 @@
 #include "core/path_utils.hpp"
 #include "core/provenance.hpp"
 #include "core/tensor.hpp"
+#include "formats/usd_flat/half.hpp"
 #include "io/atomic_output.hpp"
 #include "io/error.hpp"
 #include "io/exporter.hpp"
 #include <archive.h>
 #include <archive_entry.h>
 #include <nlohmann/json.hpp>
-#include <pxr/base/gf/half.h>
 #include <zlib.h>
 
 #include <algorithm>
@@ -188,8 +188,7 @@ namespace lfs::io {
             Json::binary_t bytes;
             bytes.resize(cpu.numel() * sizeof(uint16_t));
             for (size_t index = 0; index < cpu.numel(); ++index) {
-                const pxr::GfHalf half(values[index]);
-                const uint16_t bits = half.bits();
+                const uint16_t bits = usd_flat::float_to_half(values[index]);
                 bytes[index * 2 + 0] = static_cast<std::uint8_t>(bits & 0xFFu);
                 bytes[index * 2 + 1] = static_cast<std::uint8_t>((bits >> 8u) & 0xFFu);
             }
@@ -660,9 +659,7 @@ namespace lfs::io {
             for (size_t index = 0; index < element_count; ++index) {
                 const uint16_t bits = static_cast<uint16_t>(binary[index * 2 + 0]) |
                                       (static_cast<uint16_t>(binary[index * 2 + 1]) << 8u);
-                pxr::GfHalf half_value;
-                half_value.setBits(bits);
-                output[index] = static_cast<float>(half_value);
+                output[index] = usd_flat::half_to_float(bits);
             }
             return output;
         }

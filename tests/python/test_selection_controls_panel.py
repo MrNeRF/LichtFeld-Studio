@@ -25,6 +25,7 @@ def _install_lf_stub(monkeypatch):
         # Screen-space window state. The defaults match the controller's own so
         # the first refresh does not look like an external change.
         depth_scale=0.35,
+        depth_scale_y=0.35,
         depth_offset_x=0.0,
         depth_offset_y=0.0,
         window_calls=[],
@@ -84,17 +85,19 @@ def _install_lf_stub(monkeypatch):
             state.depth_near,
             state.depth_far,
             state.depth_scale,
+            state.depth_scale_y,
             state.depth_offset_x,
             state.depth_offset_y,
         )
 
-    def _set_depth_filter_window(enabled, near, far, scale, offset_x, offset_y):
+    def _set_depth_filter_window(enabled, near, far, scale, offset_x, offset_y, scale_y=None):
         if state.window_write_error:
             raise RuntimeError("depth window write rejected")
         state.depth_enabled = bool(enabled)
         state.depth_near = float(near)
         state.depth_far = float(far)
         state.depth_scale = float(scale)
+        state.depth_scale_y = float(scale if scale_y is None else scale_y)
         state.depth_offset_x = float(offset_x)
         state.depth_offset_y = float(offset_y)
         state.window_calls.append(
@@ -105,6 +108,7 @@ def _install_lf_stub(monkeypatch):
                 state.depth_scale,
                 state.depth_offset_x,
                 state.depth_offset_y,
+                state.depth_scale_y,
             )
         )
         # The controller prefers this setter over set_depth_filter_range when the
@@ -233,6 +237,11 @@ class _DocumentStub:
         self.scale = _ElementStub()
         self.offset_x = _ElementStub()
         self.offset_y = _ElementStub()
+        self.near_slider = _ElementStub()
+        self.far_slider = _ElementStub()
+        self.scale_slider = _ElementStub()
+        self.offset_x_slider = _ElementStub()
+        self.offset_y_slider = _ElementStub()
         self._by_id = {
             "selection-block": self.wrap,
             "selection-depth-near": self.near,
@@ -240,6 +249,11 @@ class _DocumentStub:
             "selection-depth-scale": self.scale,
             "selection-depth-offset-x": self.offset_x,
             "selection-depth-offset-y": self.offset_y,
+            "selection-depth-near-slider": self.near_slider,
+            "selection-depth-far-slider": self.far_slider,
+            "selection-depth-scale-slider": self.scale_slider,
+            "selection-depth-offset-x-slider": self.offset_x_slider,
+            "selection-depth-offset-y-slider": self.offset_y_slider,
         }
 
     def get_element_by_id(self, element_id):
@@ -257,6 +271,8 @@ def selection_controls_module(monkeypatch):
     sys.modules.pop("lfs_plugins", None)
     state = _install_lf_stub(monkeypatch)
     module = import_module("lfs_plugins.selection_controls")
+    module.RuntimeState.depth_window_draw_generation._fallback = 0
+    module.RuntimeState.depth_window_draw_generation.value = 0
     return module, state
 
 
@@ -357,6 +373,155 @@ def test_selection_depth_window_sliders_ignore_rmlui_echo(selection_controls_mod
     assert state.window_calls == []
     assert state.depth_scale == pytest.approx(0.5)
     assert state.depth_offset_x == pytest.approx(0.2)
+
+
+def test_depth_window_scale_y_only_change_arms_echo_holdoff(selection_controls_module):
+    """A native scale_y-only change must arm the echo holdoff (A8).
+
+    Same mounted end-to-end pattern as the stale-write test above: an external
+    scale_y change arms the holdoff, and a replayed size-slider position must not
+    overwrite the anisotropic state.
+    """
+    module, state = selection_controls_module
+    panel = module.SelectionControlsController()
+    model = _DataModelStub()
+    doc = _DocumentStub()
+
+    state.depth_enabled = True
+    panel.bind_model(model)
+    panel.mount(doc)
+    for _ in range(4):
+        panel.update(doc)  # let the holdoff from the initial refresh decay
+    state.window_calls.clear()
+
+    state.depth_scale_y = 0.5
+    panel.update(doc)
+    assert panel._window_scale_y == pytest.approx(0.5)
+    assert panel._depth_echo_holdoff > 0
+
+    model.bound_binds["selection_depth_scale_value"][1]("35")
+    model.bound_binds["selection_depth_offset_x_value"][1]("0")
+    model.bound_binds["selection_depth_offset_y_value"][1]("0")
+
+    assert state.window_calls == []
+    assert state.depth_scale == pytest.approx(0.35)
+    assert state.depth_scale_y == pytest.approx(0.5)
+
+
+def test_d9_same_ratio_fresh_draw_reads_100_percent(selection_controls_module):
+    """A same-ratio committed draw re-bases the Size readout to 100% (TR-2 / D9)."""
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_panel(module, state)
+
+    assert panel._window_scale == pytest.approx(0.35)
+    assert panel._window_scale_y == pytest.approx(0.35)
+
+    state.depth_scale = 0.70
+    state.depth_scale_y = 0.70
+    module.RuntimeState.depth_window_draw_generation.value += 1
+    panel.update(doc)
+
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+    assert panel._ref_scale_x == pytest.approx(0.70)
+    assert panel._ref_scale_y == pytest.approx(0.70)
+
+
+def test_d9_pure_scaling_tracks_200_percent_after_release(selection_controls_module):
+    """Pure scaling tracks the reference without re-basing (D9).
+
+    Continues after the same-ratio draw re-base in (a): once the reference is
+    established, doubling through the size slider must not re-base again. Use
+    0.50 scales so 200% still fits under the 1.0 clamp with ref=0.50.
+    """
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_panel(module, state)
+
+    state.depth_scale = 0.50
+    state.depth_scale_y = 0.50
+    module.RuntimeState.depth_window_draw_generation.value += 1
+    panel.update(doc)
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+    for _ in range(2):
+        panel.update(doc)  # decay the holdoff armed by the external draw sync
+    assert panel._depth_echo_holdoff == 0
+    ref_x = panel._ref_scale_x
+    ref_y = panel._ref_scale_y
+
+    model.bound_binds["selection_depth_scale_value"][1]("200")
+
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "200"
+    assert panel._ref_scale_x == pytest.approx(ref_x)
+    assert panel._ref_scale_y == pytest.approx(ref_y)
+    assert state.depth_scale == pytest.approx(1.0)
+    assert state.depth_scale_y == pytest.approx(1.0)
+
+
+def test_d9_ratio_change_rebases_to_100_percent(selection_controls_module):
+    """An aspect-ratio change re-bases the Size readout to 100% (D9)."""
+    module, state = selection_controls_module
+    panel, model, doc = _mounted_panel(module, state)
+
+    state.depth_scale = 0.70
+    state.depth_scale_y = 0.35
+    panel.update(doc)
+
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "100"
+    assert panel._ref_scale_x == pytest.approx(0.70)
+    assert panel._ref_scale_y == pytest.approx(0.35)
+
+
+
+def test_selection_depth_user_edit_mark_expires(selection_controls_module, monkeypatch):
+    module, state = selection_controls_module
+    panel = module.SelectionControlsController()
+    model = _DataModelStub()
+
+    panel.bind_model(model)
+    panel.update(_DocumentStub())
+    panel._depth_echo_holdoff = 1
+    panel._mark_depth_user_edit("near")
+    marked_at = module.time.monotonic()
+    monkeypatch.setattr(
+        module.time,
+        "monotonic",
+        lambda: marked_at + module._DEPTH_USER_EDIT_MARK_TTL + 0.01,
+    )
+
+    model.bound_binds["selection_depth_near_value"][1]("1.5")
+
+    assert state.depth_calls == []
+    assert "near" not in panel._depth_user_edit_pending
+
+
+def test_selection_depth_slider_press_passes_through_echo_holdoff(selection_controls_module):
+    """A pressed slider applies during the echo holdoff; an unmarked replay does not.
+
+    The user-edit mark (#1927) and the per-slider entry points (#1932) meet
+    here: an external change arms the holdoff, the replayed position is dropped,
+    and the position from a slider the user pressed goes through.
+    """
+    module, state = selection_controls_module
+    panel = module.SelectionControlsController()
+    model = _DataModelStub()
+    doc = _DocumentStub()
+
+    state.depth_enabled = True
+    panel.bind_model(model)
+    panel.mount(doc)
+    for _ in range(4):
+        panel.update(doc)
+    state.depth_calls.clear()
+
+    state.depth_near = 1.0
+    panel.update(doc)
+    assert panel._depth_echo_holdoff > 0
+
+    model.bound_binds["selection_depth_near_value"][1]("0.5")
+    assert state.depth_calls == []
+
+    doc.near_slider.emit("mousedown")
+    model.bound_binds["selection_depth_near_value"][1]("1.5")
+    assert state.depth_calls[-1][1] == pytest.approx(1.5)
 
 
 def test_selection_depth_text_fields_commit_like_panel_inputs(selection_controls_module):
@@ -486,7 +651,7 @@ _DEPTH_TEXT_FIELDS = (
     ("selection_depth_far_str", "far", "selection_depth_far_value",
      "9", lambda s: s.depth_far, 9.0),
     ("selection_depth_scale_str", "scale", "selection_depth_scale_value",
-     "50", lambda s: s.depth_scale, 0.5),
+     "50", lambda s: s.depth_scale, 0.175),
     ("selection_depth_offset_x_str", "offset_x", "selection_depth_offset_x_value",
      "25", lambda s: s.depth_offset_x, 0.25),
     ("selection_depth_offset_y_str", "offset_y", "selection_depth_offset_y_value",
@@ -810,7 +975,9 @@ def test_depth_text_commit_same_string_in_a_later_session(
     elif str_key == "selection_depth_far_str":
         state.depth_far = expected + 1.0
     elif str_key == "selection_depth_scale_str":
-        state.depth_scale = min(expected + 0.1, 1.0)
+        bumped = min(expected + 0.1, 1.0)
+        state.depth_scale = bumped
+        state.depth_scale_y = bumped
     elif str_key == "selection_depth_offset_x_str":
         state.depth_offset_x = expected + 0.1
     else:
@@ -834,7 +1001,7 @@ def test_depth_text_commit_same_string_in_a_later_session(
 _DEPTH_COLLIDING_FIELDS = (
     ("selection_depth_near_str", "near", "0.254", lambda s: s.depth_near, 0.25, 0.254),
     ("selection_depth_far_str", "far", "7.504", lambda s: s.depth_far, 7.5, 7.504),
-    ("selection_depth_scale_str", "scale", "35.4", lambda s: s.depth_scale, 0.35, 0.354),
+    ("selection_depth_scale_str", "scale", "100.4", lambda s: s.depth_scale, 0.35, 0.3514),
     ("selection_depth_offset_x_str", "offset_x", "0.4", lambda s: s.depth_offset_x, 0.0, 0.004),
     ("selection_depth_offset_y_str", "offset_y", "0.4", lambda s: s.depth_offset_y, 0.0, 0.004),
 )

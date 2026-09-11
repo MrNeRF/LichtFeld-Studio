@@ -11,7 +11,9 @@ namespace lfs::vis {
 
     bool TrainingStateMachine::isActive() const {
         const auto s = getState();
-        return s == TrainingState::Running || s == TrainingState::Paused;
+        return s == TrainingState::Starting ||
+               s == TrainingState::Running ||
+               s == TrainingState::Paused;
     }
 
     FinishReason TrainingStateMachine::getFinishReason() const {
@@ -37,7 +39,8 @@ namespace lfs::vis {
         switch (action) {
         case TrainingAction::LoadDataset:
         case TrainingAction::LoadCheckpoint:
-            if (state == TrainingState::Running)
+            if (state == TrainingState::Starting ||
+                state == TrainingState::Running)
                 return "Cannot load while training is running. Pause or stop first.";
             if (state == TrainingState::Stopping)
                 return "Cannot load while training is stopping. Wait for completion.";
@@ -48,6 +51,8 @@ namespace lfs::vis {
                 return "No dataset loaded. Load a dataset first.";
             if (state == TrainingState::Running)
                 return "Training is already running.";
+            if (state == TrainingState::Starting)
+                return "Training is starting.";
             if (state == TrainingState::Paused)
                 return "Training is paused. Use resume instead.";
             if (state == TrainingState::Finished)
@@ -55,7 +60,7 @@ namespace lfs::vis {
             break;
 
         case TrainingAction::Pause:
-            if (state != TrainingState::Running)
+            if (state != TrainingState::Starting && state != TrainingState::Running)
                 return "Can only pause while training is running.";
             break;
 
@@ -70,7 +75,8 @@ namespace lfs::vis {
             break;
 
         case TrainingAction::Reset:
-            if (state == TrainingState::Running)
+            if (state == TrainingState::Starting ||
+                state == TrainingState::Running)
                 return "Cannot reset while training is running. Stop first.";
             if (state == TrainingState::Idle)
                 return "Nothing to reset.";
@@ -78,7 +84,8 @@ namespace lfs::vis {
 
         case TrainingAction::ClearScene:
         case TrainingAction::DeleteTrainingNode:
-            if (state == TrainingState::Running)
+            if (state == TrainingState::Starting ||
+                state == TrainingState::Running)
                 return "Cannot modify scene while training is running.";
             if (state == TrainingState::Stopping)
                 return "Cannot modify scene while training is stopping.";
@@ -177,6 +184,7 @@ namespace lfs::vis {
         switch (state) {
         case TrainingState::Idle: return "Idle";
         case TrainingState::Ready: return "Ready";
+        case TrainingState::Starting: return "Starting";
         case TrainingState::Running: return "Running";
         case TrainingState::Paused: return "Paused";
         case TrainingState::Stopping: return "Stopping";

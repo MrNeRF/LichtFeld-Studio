@@ -40,6 +40,13 @@ namespace lfs::io::project {
         std::vector<std::string> diagnostics;
     };
 
+    struct RecoveryInspectionOptions {
+        // Detection only needs the container index and small metadata chapters.
+        // Payload CRC/decode validation remains available for callers that need
+        // a fully validated recovery candidate.
+        bool verify_payloads = true;
+    };
+
     struct ProjectStorageStats {
         std::uint64_t physical_bytes = 0;
         std::uint64_t estimated_live_bytes = 0;
@@ -172,7 +179,8 @@ namespace lfs::io::project {
     // (no scene nodes and no payload chapters) are removed. Valid unlocked
     // files with recoverable content are left for `scan_scratch_autosaves`.
     LFS_IO_API void sweep_stale_scratch_autosaves(
-        const std::filesystem::path& recovery_directory);
+        const std::filesystem::path& recovery_directory,
+        const RecoveryInspectionOptions& options = {});
 
     // Best-effort delete of one scratch autosave and its `.lock` sibling.
     // No-ops when the path is empty. Fails with Unavailable when the file
@@ -189,7 +197,8 @@ namespace lfs::io::project {
         lfs::Result<RecoveryInspection>
         inspect_autosave_recovery(
             const std::filesystem::path& master_path,
-            const ReaderOptions& master_reader_options = {});
+            const ReaderOptions& master_reader_options = {},
+            const RecoveryInspectionOptions& options = {});
 
     // Lock-probes `scratch_path`. Unavailable means a live session still
     // holds it. A complete master with recoverable content becomes Offer
@@ -198,7 +207,8 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API
         lfs::Result<RecoveryInspection>
         inspect_scratch_autosave(
-            const std::filesystem::path& scratch_path);
+            const std::filesystem::path& scratch_path,
+            const RecoveryInspectionOptions& options = {});
 
     // Directory scan used at startup: MRU does not know these files.
     // Live (locked) files are omitted. Invalid or empty unlocked files
@@ -206,7 +216,8 @@ namespace lfs::io::project {
     [[nodiscard]] LFS_IO_API
         std::vector<RecoveryInspection>
         scan_scratch_autosaves(
-            const std::filesystem::path& recovery_directory);
+            const std::filesystem::path& recovery_directory,
+            const RecoveryInspectionOptions& options = {});
 
     // Acquires and retains the original master's OS writer lock, then
     // revalidates the selected complete bound sidecar under that lock.

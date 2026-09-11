@@ -410,6 +410,7 @@ button.disabled {
 #python-splitter {
     height: 6dp;
     flex-shrink: 0;
+    cursor: ns-resize;
     background-color: rgb(40, 40, 40);
     border-top-width: 1dp;
     border-top-color: rgb(54, 54, 54);
@@ -418,7 +419,7 @@ button.disabled {
 }
 
 #python-splitter:hover {
-    background-color: rgb(58, 70, 82);
+    border-top-color: rgb(84, 126, 170);
 }
 
 #bottom-panel {
@@ -431,8 +432,10 @@ button.disabled {
 
 #tabbar {
     display: flex;
-    align-items: flex-end;
-    height: 28dp;
+    align-items: center;
+    height: 30dp;
+    padding: 0 4dp;
+    gap: 2dp;
     border-bottom-width: 1dp;
     border-bottom-color: rgb(54, 54, 54);
     background-color: rgb(31, 31, 31);
@@ -440,15 +443,17 @@ button.disabled {
 }
 
 #tabbar button {
-    height: 27dp;
+    height: 24dp;
     min-width: 88dp;
     margin: 0;
-    border-radius: 0;
-    border-width: 0;
-    border-right-width: 1dp;
-    border-right-color: rgb(54, 54, 54);
+    padding: 0 10dp;
+    border-radius: 4dp;
+    border-width: 1dp;
+    border-color: rgb(54, 54, 54);
     background-color: rgb(36, 36, 36);
     color: rgb(170, 170, 170);
+    line-height: 24dp;
+    text-align: center;
 }
 
 #tabbar button:hover {

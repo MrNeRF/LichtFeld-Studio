@@ -89,6 +89,34 @@ reading order. A tooltip can explain an icon-only action, but it does not
 replace a meaningful accessible label. Localize visible text and tooltip keys;
 do not use an icon or color as the only explanation of state.
 
+### Theme depth and adaptive contrast
+
+Gradients are an optional theme capability, not a requirement for every
+family. A theme that defines only palette roles must remain complete and
+legible. When a family supplies gradient roles, shared theme tokens apply them
+consistently to windows, hosted panels, section headers, progress, scrubbers,
+histograms, and application chrome; a panel must not special-case a family id.
+
+`panel_body` opts a family into the enhanced panel treatment. This includes the
+more compact right-sidebar tabs and the glass-like viewport toolbars, contextual
+tool strips, and buttons below the orientation gizmo. A global Appearance
+preference chooses solid, translucent, or frosted presentation. All three modes
+retain theme-derived primary/secondary tint, edge, shadow, and contrast. Frosted
+mode adds a low-resolution Vulkan backdrop blur and slight sample inset below
+the cached RmlUi chrome; unsupported swapchain paths keep the translucent
+surface as a safe fallback.
+
+Text and icon colors on translucent or gradient controls are selected from
+theme roles according to the resulting surface luminance. Selected controls use
+the progress/accent treatment; disabled icons retain enough contrast to remain
+recognizable and communicate disabled state through reduced emphasis rather
+than disappearance. The viewport's vertical tool groups float inside the canvas
+with breathing room above and below instead of touching the application bars.
+
+Section headers with gradient backgrounds use the normal readable text role,
+not an accent color that competes with the gradient. Preserve the same rule for
+hover and expanded states.
+
 ## Window taxonomy
 
 Choose one of these surfaces before deciding on markup. A panel may move between

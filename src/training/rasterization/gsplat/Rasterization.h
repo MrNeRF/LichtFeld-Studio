@@ -100,6 +100,8 @@ namespace gsplat_lfs {
         float* v_opacities,                   // [C, N]
         float* densification_info,            // [2, N] flattened or nullptr
         const float* densification_error_map, // [H, W] or nullptr
+        const float* edge_weight_map,         // [H, W] or nullptr
+        float* edge_score_out,                // [N] or nullptr
         cudaStream_t stream = nullptr);
 
     /////////////////////////////////////////////////

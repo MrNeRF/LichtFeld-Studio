@@ -5,11 +5,13 @@
 #pragma once
 
 #include "core/reactive/store.hpp"
+#include "core/training_backend.hpp"
 #include "gui/error_surface_types.hpp"
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/status_bar_mining.hpp"
+#include "visualizer/rendering/rendering_types.hpp"
 #include "visualizer/visualizer.hpp"
 #include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
@@ -20,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Rml {
@@ -33,6 +36,10 @@ namespace lfs::vis {
     struct Theme;
 }
 namespace lfs::vis::gui {
+
+    [[nodiscard]] LFS_VIS_API std::string trainingBackendStatusLabel(
+        std::optional<lfs::core::param::RasterBackendId> active_backend,
+        std::string_view stored_backend);
 
     class RmlStatusBarTestAccess;
 
@@ -190,7 +197,7 @@ namespace lfs::vis::gui {
         MiningSceneState mining_scene_;
         std::string mining_wall_rml_;
         std::string mining_debris_rml_;
-        bool progress_minecraft_pref_ = false;
+        bool progress_miner_pref_ = false;
         std::chrono::steady_clock::time_point progress_style_checked_at_{};
 
         struct ModelState {
@@ -199,7 +206,7 @@ namespace lfs::vis::gui {
             std::string mode_text;
             std::string mode_color;
             bool show_training = false;
-            bool progress_minecraft = false;
+            bool progress_miner = false;
             bool miner_raised = false;
             bool miner_step_a = false;
             bool miner_strike = false;
@@ -274,6 +281,8 @@ namespace lfs::vis::gui {
         };
 
         ModelState model_;
+        SplitViewInfo split_info_cache_;
+        std::uint64_t split_info_generation_ = 0;
         std::function<RuntimeServiceStatus()> mcp_status_provider_;
         StatusMessageState status_message_;
         GpuMemoryInfo cached_gpu_mem_;
@@ -281,6 +290,8 @@ namespace lfs::vis::gui {
         std::chrono::steady_clock::time_point next_refresh_at_{};
         std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
         bool model_dirty_ = true;
+        bool model_animation_active_ = false;
+        bool rml_animation_active_ = false;
         bool animation_active_ = false;
         bool reactive_fps_available_ = false;
         float reactive_fps_value_ = 0.0f;

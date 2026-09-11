@@ -1060,8 +1060,18 @@ namespace lfs::core {
                 const TensorShape shp = shape_;
                 // Stamp stream hint like TensorExpr::operator Tensor so deferred
                 // large binaries keep cross-stream ordering (D4 / stream tests).
-                const cudaStream_t stream_hint =
-                    (dev == Device::CUDA) ? getCurrentCUDAStream() : nullptr;
+                const cudaStream_t stream_hint = [&] {
+                    if (dev != Device::CUDA) {
+                        return static_cast<cudaStream_t>(nullptr);
+                    }
+                    if (const cudaStream_t current = getCurrentCUDAStream()) {
+                        return current;
+                    }
+                    if (const cudaStream_t lhs_stream = lhs_source.stream()) {
+                        return lhs_stream;
+                    }
+                    return rhs_operand.stream();
+                }();
                 Tensor result = make_deferred_expr_tensor(
                     shp, dev, DataType::Float32,
                     [lhs_source, rhs_operand, op, shp, dev, stream_hint]() mutable {
@@ -1527,6 +1537,10 @@ namespace lfs::core {
         // ============= FACTORY METHODS =============
         static Tensor empty(TensorShape shape, Device device = Device::CUDA,
                             DataType dtype = DataType::Float32, bool use_pinned = true);
+        // Allocate ordinary pageable host storage. Unlike the default CPU path,
+        // this never consults PinnedMemoryAllocator or cudaHostAlloc.
+        static Tensor empty_pageable_host(TensorShape shape,
+                                          DataType dtype = DataType::Float32);
         static Tensor empty_unpinned(TensorShape shape, DataType dtype = DataType::Float32);
         static Tensor zeros(TensorShape shape, Device device = Device::CUDA,
                             DataType dtype = DataType::Float32);
@@ -1687,6 +1701,7 @@ namespace lfs::core {
         }
 
         static void trim_memory_pool();
+        static void trim_memory_pool_if_reserved_unused_exceeds(size_t threshold_bytes);
         // CUDA device pool only; leaves the pinned host cache intact.
         static void trim_device_memory_pool();
         static void shutdown_memory_pool();
@@ -1718,6 +1733,7 @@ namespace lfs::core {
                     ((std::is_same_v<Value, int> || std::is_same_v<Value, int32_t> ||
                       std::is_same_v<Value, uint32_t>) &&
                      dtype_ == DataType::Int32) ||
+                    (std::is_same_v<Value, uint32_t> && dtype_ == DataType::UInt32) ||
                     (std::is_same_v<Value, int64_t> && dtype_ == DataType::Int64) ||
                     ((std::is_same_v<Value, bool> || std::is_same_v<Value, unsigned char> ||
                       std::is_same_v<Value, uint8_t>) &&
@@ -1929,6 +1945,8 @@ namespace lfs::core {
         Tensor clone() const;      // Deep copy
         Tensor contiguous() const; // Materialize to contiguous if strided
         Tensor to(Device device, cudaStream_t stream = nullptr) const;
+        // Synchronous export-oriented copy to ordinary pageable host memory.
+        Tensor to_pageable_host(cudaStream_t stream = nullptr) const;
         Tensor to(DataType dtype) const;
         bool is_contiguous() const { return is_contiguous_; }
 
@@ -2426,6 +2444,11 @@ namespace lfs::core {
                            "logical_xor requires Bool tensors");
             return comparison_op_with_promotion(other, ops::logical_xor_op{});
         }
+
+        // Keep non-zero values in this mask (selection groups) while clearing
+        // entries whose corresponding live-mask value is zero. This is an
+        // in-place CUDA operation and deliberately does not allocate a result.
+        Tensor& and_live_(const Tensor& live_mask);
 
         // ============= REDUCE OPERATIONS =============
         Tensor sum() const {
@@ -3225,6 +3248,8 @@ namespace lfs::core {
                     return copy_and_convert.template operator()<float>();
                 case DataType::Int32:
                     return copy_and_convert.template operator()<int32_t>();
+                case DataType::UInt32:
+                    return copy_and_convert.template operator()<uint32_t>();
                 case DataType::Int64:
                     return copy_and_convert.template operator()<int64_t>();
                 case DataType::UInt8:
@@ -3239,6 +3264,8 @@ namespace lfs::core {
                     return static_cast<T>(tensor_->ptr<float>()[linear_index]);
                 } else if (tensor_->dtype() == DataType::Int32) {
                     return static_cast<T>(tensor_->ptr<int32_t>()[linear_index]);
+                } else if (tensor_->dtype() == DataType::UInt32) {
+                    return static_cast<T>(tensor_->ptr<uint32_t>()[linear_index]);
                 } else if (tensor_->dtype() == DataType::Int64) {
                     return static_cast<T>(tensor_->ptr<int64_t>()[linear_index]);
                 } else if (tensor_->dtype() == DataType::Bool ||
@@ -3381,6 +3408,11 @@ namespace lfs::core {
             device_,
             dtype_);
     }
+
+    // Parallel first-touch for a large ordinary (pageable) host allocation.
+    // The caller must have allocated the storage with empty_pageable_host() or
+    // another pageable allocator.
+    LFS_CORE_API void prefault_pageable_host_memory(void* data, size_t bytes);
 
 } // namespace lfs::core
 

@@ -193,6 +193,8 @@ namespace lfs::app {
                 return "idle";
             case vis::TrainingState::Ready:
                 return "ready";
+            case vis::TrainingState::Starting:
+                return "starting";
             case vis::TrainingState::Running:
                 return "running";
             case vis::TrainingState::Paused:
@@ -211,6 +213,8 @@ namespace lfs::app {
                 return "ply";
             case core::ExportFormat::SOG:
                 return "sog";
+            case core::ExportFormat::SSOG:
+                return "ssog";
             case core::ExportFormat::SPZ:
                 return "spz";
             case core::ExportFormat::HTML_VIEWER:
@@ -842,6 +846,10 @@ namespace lfs::app {
                     });
             }
 
+            ~RuntimeEventJournal() {
+                handlers_ = event::ScopedHandler{};
+            }
+
             void publish(const std::string& type, json payload) {
                 const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                               std::chrono::system_clock::now().time_since_epoch())
@@ -968,7 +976,9 @@ namespace lfs::app {
                     if (!trainer->canResume()) {
                         return std::unexpected("Training cannot be resumed in the current state");
                     }
-                    trainer->resumeTraining();
+                    if (auto resumed = trainer->resumeTraining(); !resumed) {
+                        return std::unexpected(std::string(resumed.error().user_message()));
+                    }
                     return {};
                 }
                 if (action == "cancel") {

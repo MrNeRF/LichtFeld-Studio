@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include <core/error.hpp>
 #include <core/export.hpp>
+#include <core/resource_messages.hpp>
 
 #include <cstdint>
 #include <string>
@@ -31,5 +33,17 @@ namespace lfs::vis::gui {
     // error text cannot corrupt the document. Shared by the modal consumer and
     // the toast overlay.
     [[nodiscard]] LFS_VIS_API std::string escapeRmlText(std::string_view text);
+
+    // Host-RAM exhaustion (e.g. a refused project save) shares
+    // ResourceExhausted/Training with GPU OOM; the snapshot service prefixes
+    // its user message with HOST_MEMORY_SAVE_ERROR_PREFIX so the surfaces can
+    // keep the GPU-OOM presentation for actual GPU failures.
+    [[nodiscard]] inline bool isHostMemorySaveMessage(const std::string_view message) noexcept {
+        return message.find(lfs::core::HOST_MEMORY_SAVE_ERROR_PREFIX) != std::string_view::npos;
+    }
+
+    [[nodiscard]] inline bool isHostMemoryExhaustion(const lfs::Error& error) noexcept {
+        return isHostMemorySaveMessage(error.user_message());
+    }
 
 } // namespace lfs::vis::gui

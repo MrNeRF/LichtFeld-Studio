@@ -11,6 +11,7 @@ import lichtfeld as lf
 from . import rml_widgets
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState, native_value as _native_store_value
 
 __lfs_panel_classes__ = ["Mesh2SplatPanel"]
@@ -23,18 +24,9 @@ SCRUB_FIELD_DEFS = {
 }
 
 
+@panel_class("mesh2splat")
 class Mesh2SplatPanel(Panel):
     """Floating retained panel for mesh-to-splat conversion."""
-
-    id = "native.mesh2splat"
-    label = "Mesh to Splat"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 12
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/mesh2splat_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (420, 0)
-    update_policy = "dirty"
 
     _RESOLUTION_OPTIONS = (128, 256, 512, 1024, 2048, 4096)
     _MIN_RESOLUTION = 16

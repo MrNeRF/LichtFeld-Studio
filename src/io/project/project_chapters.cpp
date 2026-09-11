@@ -22,6 +22,7 @@
 #include <ranges>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <system_error>
 #include <type_traits>
 #include <unordered_set>
@@ -677,7 +678,7 @@ namespace lfs::io::project {
                         "REFS", "fingerprint");
                 }
                 Entry entry{
-                    .path = lfs::core::path_to_utf8(relative.generic_string()),
+                    .path = lfs::core::path_to_generic_utf8(relative),
                     .size = 0,
                     .kind = std::filesystem::is_directory(status)
                                 ? 'd'
@@ -1346,6 +1347,61 @@ namespace lfs::io::project {
         return dom_.set_json("georeference", std::move(merged));
     }
 
+    lfs::Result<std::optional<ProjectLicense>> ProjectChapter::license() const {
+        const auto value = dom_.get_json("license");
+        if (!value || value->is_null()) {
+            return std::optional<ProjectLicense>{};
+        }
+        if (auto valid = require_object(*value, "PROJ", "license"); !valid) {
+            return std::move(valid).error();
+        }
+        auto identifier = required<std::string>(*value, "identifier", "PROJ", "license");
+        auto notice = optional<std::string>(*value, "notice", "PROJ", "license");
+        if (!identifier) {
+            return std::move(identifier).error();
+        }
+        if (!notice) {
+            return std::move(notice).error();
+        }
+        if (identifier->empty()) {
+            return fail<std::optional<ProjectLicense>>(
+                lfs::ErrorCode::DataLoss,
+                "The project license identifier is empty.",
+                "PROJ.license.identifier must be non-empty", "PROJ",
+                "license.identifier");
+        }
+        return std::optional<ProjectLicense>(ProjectLicense{
+            .identifier = std::move(*identifier),
+            .notice = notice->value_or(std::string{}),
+        });
+    }
+
+    lfs::Result<void> ProjectChapter::set_license(const ProjectLicense& value) {
+        if (value.identifier.empty()) {
+            return fail<void>(
+                lfs::ErrorCode::InvalidArgument,
+                "The project license identifier cannot be empty.",
+                "PROJ.license.identifier must be non-empty", "PROJ",
+                "license.identifier");
+        }
+        Json known{{"identifier", value.identifier}};
+        if (!value.notice.empty()) {
+            known["notice"] = value.notice;
+        }
+        Json merged = merge_known(
+            dom_.get_json("license").value_or(Json::object()), known);
+        if (value.notice.empty()) {
+            merged.erase("notice");
+        }
+        return dom_.set_json("license", std::move(merged));
+    }
+
+    lfs::Result<void> ProjectChapter::clear_license() {
+        auto removed = dom_.remove("license");
+        return removed ? lfs::Result<void>{}
+                       : lfs::Result<void>::failure(std::move(removed).error());
+    }
+
     lfs::Result<std::vector<EmbedDecision>> ProjectChapter::embed_decisions() const {
         auto items = dom_.array_items("embed_decisions");
         if (!items) {
@@ -1826,8 +1882,8 @@ namespace lfs::io::project {
             if (relative.empty() || relative == ".") {
                 return true;
             }
-            const auto text = relative.generic_string();
-            return !text.starts_with("..");
+            const auto first = relative.begin();
+            return first == relative.end() || *first != std::filesystem::path("..");
         }
 
         bool fingerprint_content_matches(
@@ -1922,10 +1978,10 @@ namespace lfs::io::project {
             const auto root = absolute_lexically(project_root);
             if (path_is_under(root, absolute)) {
                 const auto relative = absolute.lexically_relative(root);
+                const auto first = relative.begin();
                 if (!relative.empty() && relative != "." &&
-                    !relative.generic_string().starts_with("..")) {
-                    locator.preferred =
-                        lfs::core::path_to_utf8(relative.generic_string());
+                    (first == relative.end() || *first != std::filesystem::path(".."))) {
+                    locator.preferred = lfs::core::path_to_generic_utf8(relative);
                     locator.base = LocatorBase::Project;
                 }
             }
@@ -3274,6 +3330,142 @@ namespace lfs::io::project {
         return merge_at("dataset", dataset_json(value.dataset));
     }
 
+    lfs::Result<std::optional<EmbeddedDatasetManifest>>
+    ParametersChapter::embedded_dataset() const {
+        const auto dataset = dom_.get_json("dataset");
+        if (!dataset || !dataset->is_object()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The pending dataset parameters are invalid.",
+                "PRMS.dataset must be an object", "PRMS", "dataset");
+        }
+        const auto embedded = dataset->find("embedded_dataset");
+        if (embedded == dataset->end() || embedded->is_null()) {
+            return std::optional<EmbeddedDatasetManifest>{};
+        }
+        if (!embedded->is_object()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The embedded dataset manifest is invalid.",
+                "PRMS.dataset.embedded_dataset must be an object", "PRMS",
+                "dataset.embedded_dataset");
+        }
+        const auto schema = embedded->find("schema_version");
+        const auto images_folder = embedded->find("images_folder");
+        const auto complete = embedded->find("complete");
+        const auto entries = embedded->find("entries");
+        if (schema == embedded->end() || !schema->is_number_unsigned() ||
+            images_folder == embedded->end() || !images_folder->is_string() ||
+            complete == embedded->end() || !complete->is_boolean() ||
+            entries == embedded->end() || !entries->is_array()) {
+            return fail<std::optional<EmbeddedDatasetManifest>>(
+                lfs::ErrorCode::DataLoss,
+                "The embedded dataset manifest is incomplete.",
+                "schema_version, images_folder, complete, and entries are required",
+                "PRMS", "dataset.embedded_dataset");
+        }
+        EmbeddedDatasetManifest result{
+            .schema_version = schema->get<std::uint32_t>(),
+            .images_folder = images_folder->get<std::string>(),
+            .complete = complete->get<bool>(),
+            .entries = {},
+        };
+        std::unordered_set<std::string> paths;
+        std::unordered_set<lfs::core::Uuid> uuids;
+        for (const auto& item : *entries) {
+            if (!item.is_object()) {
+                return fail<std::optional<EmbeddedDatasetManifest>>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    "entries must contain objects", "PRMS",
+                    "dataset.embedded_dataset.entries");
+            }
+            try {
+                const auto rel_path = item.at("rel_path").get<std::string>();
+                const auto kind = item.at("kind").get<std::string>();
+                const auto uuid = lfs::core::Uuid::from_string(
+                    item.at("chunk_uuid").get<std::string>());
+                const auto hash = Hash128::from_hex(
+                    item.at("xxh3_128").get<std::string>());
+                const bool valid_kind = kind == "image" || kind == "mask" ||
+                                        kind == "depth" || kind == "normal" ||
+                                        kind == "sparse" || kind == "meta";
+                const auto relative = lfs::core::utf8_to_path(rel_path);
+                if (rel_path.empty() || kind.empty() || !uuid || uuid->is_nil() ||
+                    !hash || !valid_kind || relative.is_absolute() ||
+                    relative.lexically_normal() != relative ||
+                    !paths.insert(rel_path).second ||
+                    !uuids.insert(*uuid).second) {
+                    throw std::invalid_argument("entry identity or hash is invalid");
+                }
+                result.entries.push_back({
+                    .rel_path = rel_path,
+                    .kind = kind,
+                    .chunk_uuid = *uuid,
+                    .bytes = item.at("bytes").get<std::uint64_t>(),
+                    .xxh3_128 = *hash,
+                });
+            } catch (const std::exception& error) {
+                // LFS-CENSUS-OK(empty-catch): JSON entry parsing is converted to a typed chapter error.
+                return fail<std::optional<EmbeddedDatasetManifest>>(
+                    lfs::ErrorCode::DataLoss,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    std::format("PRMS.dataset.embedded_dataset.entries: {}", error.what()),
+                    "PRMS", "dataset.embedded_dataset.entries");
+            }
+        }
+        return std::optional<EmbeddedDatasetManifest>{std::move(result)};
+    }
+
+    lfs::Result<void> ParametersChapter::set_embedded_dataset(
+        const EmbeddedDatasetManifest& value) {
+        if (value.schema_version == 0) {
+            return fail<void>(lfs::ErrorCode::InvalidArgument,
+                              "The embedded dataset schema version is invalid.",
+                              "schema_version must be positive", "PRMS",
+                              "dataset.embedded_dataset.schema_version");
+        }
+        Json entries = Json::array();
+        std::unordered_set<std::string> paths;
+        std::unordered_set<lfs::core::Uuid> uuids;
+        for (const auto& entry : value.entries) {
+            const bool valid_kind = entry.kind == "image" || entry.kind == "mask" ||
+                                    entry.kind == "depth" || entry.kind == "normal" ||
+                                    entry.kind == "sparse" || entry.kind == "meta";
+            const auto relative = lfs::core::utf8_to_path(entry.rel_path);
+            if (entry.rel_path.empty() || entry.chunk_uuid.is_nil() ||
+                !valid_kind || relative.is_absolute() ||
+                relative.lexically_normal() != relative ||
+                !paths.insert(entry.rel_path).second ||
+                !uuids.insert(entry.chunk_uuid).second) {
+                return fail<void>(
+                    lfs::ErrorCode::InvalidArgument,
+                    "The embedded dataset manifest contains an invalid entry.",
+                    "rel_path, kind, and chunk_uuid are required", "PRMS",
+                    "dataset.embedded_dataset.entries");
+            }
+            entries.push_back({
+                {"rel_path", entry.rel_path},
+                {"kind", entry.kind},
+                {"chunk_uuid", entry.chunk_uuid.to_string()},
+                {"bytes", entry.bytes},
+                {"xxh3_128", entry.xxh3_128.to_hex()},
+            });
+        }
+        return dom_.set_json(
+            "dataset.embedded_dataset",
+            Json{
+                {"schema_version", value.schema_version},
+                {"images_folder", value.images_folder},
+                {"complete", value.complete},
+                {"entries", std::move(entries)},
+            });
+    }
+
+    void ParametersChapter::clear_embedded_dataset() {
+        (void)dom_.remove("dataset.embedded_dataset");
+    }
+
     lfs::Result<ReverseReferenceIndex> build_reverse_reference_index(
         const ReferencesChapter& references, const ProjectChapter& project,
         const SceneGraphChapter& scene,
@@ -3508,6 +3700,33 @@ namespace lfs::io::project {
         }
         return apply_parameter_snapshot_to_index(
             std::move(*result), parameters);
+    }
+
+    void adopt_project_training_parameters(
+        lfs::core::param::TrainingParameters& params,
+        ParameterManagerSnapshot snapshot,
+        std::filesystem::path dataset_root,
+        std::string images_folder) {
+
+        // Take the stored options and supply the resolved and command-line locations.
+        auto dataset = std::move(snapshot.dataset);
+        dataset.data_path = std::move(dataset_root);
+        dataset.images = std::move(images_folder);
+        dataset.output_path = params.dataset.output_path;
+        dataset.output_path_explicit = params.dataset.output_path_explicit;
+        dataset.output_name = params.dataset.output_name;
+        params.dataset = std::move(dataset);
+
+        // The pending block of the active strategy is what the GUI would
+        // train with next. The three process flags describe this launch,
+        // not the project, so they always come from the command line.
+        auto optimization = snapshot.active_optimization();
+        optimization.headless = params.optimization.headless;
+        optimization.auto_train = params.optimization.auto_train;
+        optimization.no_splash = params.optimization.no_splash;
+        params.optimization = std::move(optimization);
+
+        lfs::core::param::apply_explicit_training_overrides(params, params.overrides);
     }
 
 } // namespace lfs::io::project

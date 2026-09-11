@@ -346,7 +346,7 @@ body {
     max-width: 420dp;
     border-width: 1dp;
     border-radius: 4dp;
-    overflow: hidden;
+    overflow: visible;
     z-index: 3;
     pointer-events: auto;
 }

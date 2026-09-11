@@ -37,6 +37,7 @@ namespace lfs::vis::gui {
 
     class RmlSystemInterface;
     class RmlTextInputHandler;
+    class SceneGraphElement;
     enum class RmlCursorRequest : uint8_t;
 
     struct CachedVulkanContextRender {
@@ -169,6 +170,9 @@ namespace lfs::vis::gui {
         LFS_VIS_API bool endDragPayload(std::uint64_t token);
         LFS_VIS_API bool cancelDragPayload(std::uint64_t token);
         LFS_VIS_API void cancelDragPayload();
+        void setActiveSceneGraphElement(SceneGraphElement* element) {
+            active_scene_graph_element_ = element;
+        }
         [[nodiscard]] LFS_VIS_API std::optional<RmlDragPayload> dragPayload() const;
         LFS_VIS_API std::optional<RmlDragPayload> takeReleasedDragPayload();
 
@@ -236,6 +240,7 @@ namespace lfs::vis::gui {
         mutable std::mutex drag_payload_mutex_;
         std::optional<RmlDragPayload> drag_payload_;
         std::uint64_t next_drag_payload_token_ = 1;
+        SceneGraphElement* active_scene_graph_element_ = nullptr;
     };
 
 } // namespace lfs::vis::gui

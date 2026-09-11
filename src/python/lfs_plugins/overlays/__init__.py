@@ -36,9 +36,13 @@ _GAP_LENGTH = 8.0
 _BORDER_THICKNESS = 2.0
 _ICON_SIZE = 48.0
 _ANIM_SPEED = 30.0
-_EMPTY_STATE_REDRAW_INTERVAL = 1.0 / 15.0  # marching-ants pacing; ~2px/frame at _ANIM_SPEED=30
+_EMPTY_STATE_REDRAW_INTERVAL = 1.0 / 60.0
+_EMPTY_STATE_ANIMATION_IDLE_TIMEOUT = 3.0
 _MIN_VIEWPORT_SIZE = 200.0
 _AUTO_DISMISS_DELAY = 3.0
+
+_empty_state_animation_until = 0.0
+_empty_state_last_mouse_pos = None
 
 _OVERLAY_FLAGS = (
     lf.ui.UILayout.WindowFlags.NoTitleBar
@@ -328,10 +332,16 @@ class _OverlayDocumentController:
 
 
 def _draw_empty_state_overlay(layout):
+    global _empty_state_animation_until, _empty_state_last_mouse_pos
+
     if not lf.ui.is_scene_empty() or lf.ui.is_drag_hovering() or lf.ui.is_startup_visible():
+        _empty_state_animation_until = 0.0
+        _empty_state_last_mouse_pos = None
         return
     import_state = _get_import_state()
     if import_state.get("active", False) or import_state.get("show_completion", False):
+        _empty_state_animation_until = 0.0
+        _empty_state_last_mouse_pos = None
         return
 
     vp_x, vp_y = layout.get_viewport_pos()
@@ -360,7 +370,15 @@ def _draw_empty_state_overlay(layout):
     zone_max_x = vp_x + vp_w - _ZONE_PADDING
     zone_max_y = vp_y + vp_h - _viewport_bottom_inset(layout, _ZONE_PADDING)
 
-    dash_offset = (lf.ui.get_time() * _ANIM_SPEED) % (_DASH_LENGTH + _GAP_LENGTH)
+    now = lf.ui.get_time()
+    mouse_pos = lf.ui.get_mouse_screen_pos()
+    if (_empty_state_last_mouse_pos is not None and
+            (abs(mouse_pos[0] - _empty_state_last_mouse_pos[0]) > 0.5 or
+             abs(mouse_pos[1] - _empty_state_last_mouse_pos[1]) > 0.5)):
+        _empty_state_animation_until = now + _EMPTY_STATE_ANIMATION_IDLE_TIMEOUT
+    _empty_state_last_mouse_pos = mouse_pos
+    animating = now < _empty_state_animation_until
+    dash_offset = (now * _ANIM_SPEED) % (_DASH_LENGTH + _GAP_LENGTH) if animating else 0.0
 
     def draw_dashed_line(start_x, start_y, end_x, end_y):
         dx = end_x - start_x
@@ -436,7 +454,8 @@ def _draw_empty_state_overlay(layout):
     layout.draw_window_text(center_x - hint_w * 0.5, center_y + 70.0, hint, hint_color)
 
     layout.end_window()
-    lf.ui.request_redraw(delay=_EMPTY_STATE_REDRAW_INTERVAL)
+    if animating:
+        lf.ui.request_redraw(delay=_EMPTY_STATE_REDRAW_INTERVAL)
 
 
 def _draw_drag_drop_overlay(layout):

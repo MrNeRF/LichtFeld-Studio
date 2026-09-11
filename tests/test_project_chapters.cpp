@@ -23,6 +23,41 @@ namespace {
     using namespace lfs::io::project;
     using namespace lfs::test::licht;
 
+    TEST(ProjectChapterTest, LicenseRoundTripsAndOmitsEmptyNotice) {
+        ProjectChapter chapter;
+        ASSERT_TRUE(chapter.set_license(ProjectLicense{
+            .identifier = "CC BY-NC",
+            .notice = "Copyright 2026",
+        }));
+
+        auto license = chapter.license();
+        ASSERT_TRUE(license);
+        ASSERT_TRUE(license->has_value());
+        EXPECT_EQ(*license, (ProjectLicense{
+                                .identifier = "CC BY-NC",
+                                .notice = "Copyright 2026",
+                            }));
+
+        ASSERT_TRUE(chapter.set_license(ProjectLicense{
+            .identifier = "CC BY-NC",
+        }));
+        license = chapter.license();
+        ASSERT_TRUE(license);
+        ASSERT_TRUE(license->has_value());
+        EXPECT_TRUE((*license)->notice.empty());
+        EXPECT_FALSE(chapter.dom().get_json("license.notice"));
+
+        ASSERT_TRUE(chapter.clear_license());
+        license = chapter.license();
+        ASSERT_TRUE(license);
+        EXPECT_FALSE(license->has_value());
+        EXPECT_FALSE(chapter.dom().get_json("license"));
+
+        const auto rejected = chapter.set_license(ProjectLicense{});
+        ASSERT_FALSE(rejected);
+        EXPECT_EQ(rejected.error().code(), lfs::ErrorCode::InvalidArgument);
+    }
+
     ParameterManagerSnapshot parameter_snapshot() {
         ParameterManagerSnapshot result;
         result.active_strategy = "mrnf";
@@ -377,6 +412,40 @@ namespace {
         ASSERT_FALSE(duplicate_result);
         EXPECT_EQ(duplicate_result.error().code(),
                   lfs::ErrorCode::DataLoss);
+    }
+
+    TEST(ProjectChapterTest, TrainingBackendIdentityRoundTripAndCompatibility) {
+        ParametersChapter chapter;
+        auto snapshot = parameter_snapshot();
+        snapshot.mrnf_current.set_raster_backend(lfs::core::param::RasterBackendId::ThreeDGUT);
+        ASSERT_TRUE(chapter.set_snapshot(snapshot));
+        auto reparsed = ParametersChapter::from_bytes(chapter.to_bytes());
+        ASSERT_TRUE(reparsed);
+        const auto persisted = lfs::io::JsonChapterDom::Json::parse(reparsed->dom().dump());
+        EXPECT_EQ(persisted["presets"]["mrnf"]["current"]["raster_backend"], "3dgut");
+        EXPECT_EQ(persisted["presets"]["mrnf"]["current"]["gut"], true);
+        EXPECT_EQ(persisted["presets"]["mrnf"]["session"]["raster_backend"], "3dgs");
+        EXPECT_EQ(persisted["presets"]["mrnf"]["session"]["gut"], false);
+        auto restored = reparsed->snapshot();
+        ASSERT_TRUE(restored);
+        EXPECT_TRUE(restored->mrnf_current.gut);
+        EXPECT_FALSE(restored->mrnf_session.gut);
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.raster_backend", "unknown"));
+        EXPECT_FALSE(chapter.snapshot());
+        ASSERT_TRUE(chapter.dom().set_json("presets.mrnf.current.raster_backend", "3dgs"));
+        EXPECT_FALSE(chapter.snapshot());
+
+        auto legacy_json = lfs::io::JsonChapterDom::Json::parse(chapter.dom().dump());
+        for (const auto* strategy : {"mcmc", "mrnf", "igs+"}) {
+            for (const auto* role : {"session", "current"})
+                legacy_json["presets"][strategy][role].erase("raster_backend");
+        }
+        auto legacy_chapter = ParametersChapter::parse(legacy_json.dump());
+        ASSERT_TRUE(legacy_chapter) << lfs::format_for_developer(legacy_chapter.error());
+        auto legacy_snapshot = legacy_chapter->snapshot();
+        ASSERT_TRUE(legacy_snapshot);
+        EXPECT_TRUE(legacy_snapshot->mrnf_current.gut);
+        EXPECT_FALSE(legacy_snapshot->mrnf_session.gut);
     }
 
     TEST(ProjectChapterTest, ParametersMutationRetainsUnknownNestedObjects) {
@@ -742,6 +811,48 @@ namespace {
         EXPECT_FALSE((*found)->training_enabled);
         ASSERT_TRUE((*found)->camera);
         EXPECT_TRUE((*found)->camera->has_image);
+    }
+
+    // Headless training from an untrained .licht has no checkpoint to restore
+    // from, so the run is assembled from the PRMS snapshot and the command
+    // line. This pins the three merge rules: stored values (active strategy,
+    // its iterations, loading settings) replace the CLI defaults; the process
+    // flags describe this launch and stay with the CLI; and flags the user
+    // typed explicitly, recorded as overrides, beat the stored values. The
+    // resolved dataset location and the CLI output location must survive
+    // because PRMS never stores paths.
+    TEST(ProjectChapterTest, AdoptProjectTrainingParametersMergesSnapshotAndCliFlags) {
+        using lfs::core::param::OptimizationParameters;
+        ParameterManagerSnapshot snapshot;
+        snapshot.active_strategy = "mcmc";
+        snapshot.mcmc_current = OptimizationParameters::mcmc_defaults();
+        snapshot.mcmc_current.iterations = 1234;
+        snapshot.dataset.images = "images_4";
+        snapshot.dataset.test_every = 8;
+        snapshot.dataset.loading_params.use_cpu_memory = false;
+
+        // As parsed from: --headless -o out --images images --test-every 4
+        lfs::core::param::TrainingParameters params;
+        params.optimization.headless = true;
+        params.dataset.output_path = "out";
+        params.dataset.output_path_explicit = true;
+        params.overrides.dataset_json = R"({"images":"images","test_every":4})";
+
+        adopt_project_training_parameters(params, snapshot, "/data/scene", "images_4");
+
+        // Stored strategy, iterations and loading settings win over CLI defaults.
+        EXPECT_EQ(params.optimization.strategy, "mcmc");
+        EXPECT_EQ(params.optimization.iterations, 1234u);
+        EXPECT_FALSE(params.dataset.loading_params.use_cpu_memory);
+        // Process flags stay with the command line.
+        EXPECT_TRUE(params.optimization.headless);
+        // Explicit CLI dataset flags win over stored values.
+        EXPECT_EQ(params.dataset.images, "images");
+        EXPECT_EQ(params.dataset.test_every, 4);
+        // Resolved dataset location and CLI output location are kept.
+        EXPECT_EQ(params.dataset.data_path, std::filesystem::path("/data/scene"));
+        EXPECT_EQ(params.dataset.output_path, std::filesystem::path("out"));
+        EXPECT_TRUE(params.dataset.output_path_explicit);
     }
 
 } // namespace

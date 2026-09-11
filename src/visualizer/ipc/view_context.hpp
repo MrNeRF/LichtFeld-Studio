@@ -142,7 +142,8 @@ namespace lfs::vis {
         std::array<float, 3> depth_filter_max{50.0f, 10000.0f, 100.0f};
         std::array<float, 4> depth_filter_rotation{1.0f, 0.0f, 0.0f, 0.0f};
         std::array<float, 3> depth_filter_translation{0.0f, 0.0f, 0.0f};
-        float depth_filter_scale = 0.35f;
+        float depth_filter_scale_x = 0.35f;
+        float depth_filter_scale_y = 0.35f;
         float depth_filter_offset_x = 0.0f;
         float depth_filter_offset_y = 0.0f;
         int depth_filter_viz_mode = 1;

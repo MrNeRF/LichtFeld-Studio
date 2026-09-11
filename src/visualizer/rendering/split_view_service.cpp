@@ -145,7 +145,11 @@ namespace lfs::vis {
         gt_forced_camera_frustums_off_ = false;
         focused_panel_ = SplitViewPanelId::Left;
         std::lock_guard<std::mutex> lock(info_mutex_);
-        current_info_ = {};
+        const SplitViewInfo empty_info{};
+        if (current_info_ != empty_info) {
+            current_info_ = empty_info;
+            ++info_generation_;
+        }
     }
 
     void SplitViewService::clearGTContext() {
@@ -235,7 +239,11 @@ namespace lfs::vis {
             GTExitBehavior::PreserveCurrent);
         {
             std::lock_guard<std::mutex> lock(info_mutex_);
-            current_info_ = {};
+            const SplitViewInfo empty_info{};
+            if (current_info_ != empty_info) {
+                current_info_ = empty_info;
+                ++info_generation_;
+            }
         }
         clearGTContext();
         return result;
@@ -283,9 +291,22 @@ namespace lfs::vis {
         return current_info_;
     }
 
+    std::optional<SplitViewInfo> SplitViewService::getInfoIfChanged(std::uint64_t& generation) const {
+        std::lock_guard<std::mutex> lock(info_mutex_);
+        if (generation == info_generation_) {
+            return std::nullopt;
+        }
+        generation = info_generation_;
+        return current_info_;
+    }
+
     void SplitViewService::updateInfo(const FrameResources& resources) {
         std::lock_guard<std::mutex> lock(info_mutex_);
-        current_info_ = resources.split_view_executed ? resources.split_info : SplitViewInfo{};
+        const SplitViewInfo next_info = resources.split_view_executed ? resources.split_info : SplitViewInfo{};
+        if (current_info_ != next_info) {
+            current_info_ = next_info;
+            ++info_generation_;
+        }
     }
 
 } // namespace lfs::vis

@@ -2,16 +2,37 @@
 
 /* ── Window ────────────────────────────────────────────── */
 
+#asset-floating-title {
+    color: @{text};
+}
+
 #asset-popup {
-    background-color: @{surface};
+    @{panel.body_decor};
     color: @{text};
     border-color: @{border};
 }
 
 /* ── Toolbar ─────────────────────────────────────────────── */
 
+.asset-button {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
+}
+
+.asset-button:hover {
+    background-color: @{lighten(surface_bright,0.06)};
+    border-color: @{primary};
+    color: @{text};
+}
+
+.asset-button:active {
+    background-color: @{alpha(primary,0.24)};
+    border-color: @{primary};
+}
+
 #asset-popup-toolbar {
-    background-color: @{blend(surface,background,0.5)};
+    background-color: @{alpha(surface,0.72)};
     border-bottom-color: @{border};
 }
 
@@ -41,6 +62,43 @@
 
 .asset-search-box input[type="text"] {
     color: @{text};
+}
+
+.asset-icon-grid > span,
+.asset-icon-list > span {
+    background-color: @{text};
+}
+
+.asset-refresh-button img,
+.asset-folder-menu img,
+.asset-card-menu img {
+    image-color: @{alpha(text,0.90)};
+}
+
+.asset-refresh-button:hover img,
+.asset-folder-menu:hover img,
+.asset-card-menu:hover img {
+    image-color: @{text};
+}
+
+.asset-add-folder-glyph {
+    color: @{text};
+}
+
+.asset-import-button {
+    background-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{blend(surface,primary,button.tint_normal)};
+    color: @{text};
+}
+
+.asset-import-button:hover {
+    background-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{blend(surface,primary,button.tint_hover)};
+}
+
+.asset-import-button:active {
+    background-color: @{blend(surface,primary,button.tint_active)};
+    border-color: @{blend(surface,primary,button.tint_active)};
 }
 
 .asset-sort-button {
@@ -83,8 +141,8 @@
 /* ── Sidebar ─────────────────────────────────────────────── */
 
 #asset-sidebar {
-    background-color: @{blend(surface,background,0.35)};
-    border-right-color: @{border};
+    background-color: @{alpha(background,0.32)};
+    border-bottom-color: @{border};
 }
 
 #sidebar-resize-handle {
@@ -97,8 +155,26 @@
     background-color: @{alpha(primary,0.30)};
 }
 
-.asset-sidebar-title {
+#sidebar-resize-handle.dragging {
+    background-color: @{alpha(primary,0.46)};
+}
+
+.asset-sidebar-global {
+    border-bottom-color: @{border};
+}
+
+.asset-sidebar-title,
+.asset-info-section-title {
     color: @{text_dim};
+}
+
+.asset-sidebar-title .section-arrow {
+    color: @{alpha(text_dim,0.72)};
+}
+
+.asset-sidebar-title:hover .section-arrow,
+.asset-sidebar-title .section-arrow.is-expanded {
+    color: @{text};
 }
 
 .asset-filter-row:hover {
@@ -121,10 +197,19 @@
     color: @{text_dim};
 }
 
+.asset-folder-menu {
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.asset-folder-menu:hover {
+    background-color: @{alpha(surface_bright,0.94)};
+}
+
 /* ── Gallery ─────────────────────────────────────────────── */
 
 #asset-gallery {
-    background-color: @{surface};
+    background-color: @{alpha(surface,0.58)};
 }
 
 .asset-gallery-header {
@@ -147,6 +232,18 @@
     color: @{text_dim};
 }
 
+.asset-gallery-scroll::-webkit-scrollbar-track {
+    background: @{blend(surface,background,0.35)};
+}
+
+.asset-gallery-scroll::-webkit-scrollbar-thumb {
+    background: @{border};
+}
+
+.asset-gallery-scroll::-webkit-scrollbar-thumb:hover {
+    background: @{lighten(border,0.12)};
+}
+
 /* ── Asset Cards ─────────────────────────────────────────── */
 
 .asset-card {
@@ -154,12 +251,22 @@
     border-color: @{border};
 }
 
-.asset-card:hover {
+.asset-card:hover,
+.asset-list-row:hover {
     border-color: @{primary};
 }
 
-.asset-card.is-selected {
+.asset-card.is-selected,
+.asset-card.is-multi-selected,
+.asset-list-row.is-selected,
+.asset-list-row.is-multi-selected {
     border-color: @{primary};
+    background-color: @{alpha(primary,0.12)};
+}
+
+.asset-card.is-missing,
+.asset-list-row.is-missing {
+    border-color: @{error};
 }
 
 .asset-card-thumb {
@@ -170,7 +277,12 @@
     color: @{text_dim};
 }
 
-.asset-card-title {
+.asset-thumb-project {
+    background-color: @{alpha(info,0.14)};
+}
+
+.asset-card-title,
+.asset-info-name {
     color: @{text};
 }
 
@@ -189,11 +301,36 @@
     border-color: @{primary};
 }
 
+.asset-card-menu {
+    background-color: @{alpha(surface_bright,0.88)};
+    border-color: transparent;
+}
+
+.asset-card-menu:hover {
+    background-color: @{surface_bright};
+}
+
+.asset-list-header {
+    background-color: @{blend(surface_bright,background,0.18)};
+    border-color: @{border};
+    color: @{text_dim};
+}
+
+.asset-list-row {
+    background-color: @{surface_bright};
+    border-color: @{border};
+    color: @{text};
+}
+
+.asset-list-primary {
+    color: @{text};
+}
+
 /* ── Info Panel ──────────────────────────────────────────── */
 
 #asset-info-panel {
-    background-color: @{blend(surface,background,0.35)};
-    border-left-color: @{border};
+    background-color: @{alpha(background,0.32)};
+    border-top-color: @{border};
 }
 
 #bottom-panel-resize-handle {
@@ -204,6 +341,10 @@
 
 #bottom-panel-resize-handle:hover {
     background-color: @{alpha(primary,0.30)};
+}
+
+#bottom-panel-resize-handle.dragging {
+    background-color: @{alpha(primary,0.46)};
 }
 
 .asset-info-tabs {
@@ -242,4 +383,18 @@
 
 .parameter-value {
     color: @{text};
+}
+
+.asset-info-header {
+    border-bottom-color: @{border};
+}
+
+.asset-info-warning {
+    background-color: @{alpha(error,0.10)};
+    border-color: @{error};
+}
+
+.asset-artifact-type,
+.asset-info-empty-text {
+    color: @{text_dim};
 }

@@ -23,8 +23,8 @@ namespace lfs::vis::input {
 
         std::atomic<bool> g_persistence_enabled{true};
 
-        constexpr int PROFILE_VERSION = 26; // Version 26 adds DEPTH_ADJUST_SIZE (window scale scroll).
-        constexpr Action LAST_ACTION = Action::DEPTH_ADJUST_SIZE;
+        constexpr int PROFILE_VERSION = 28; // Version 28 combines depth-window and scene-graph actions.
+        constexpr Action LAST_ACTION = Action::UNGROUP_SELECTED_SCENE_NODE;
         constexpr int REMOVED_TOOL_MODE_2 = 2;
         constexpr int REMOVED_ACTION_39 = 39;
         constexpr int REMOVED_ACTION_66 = 66;
@@ -192,6 +192,7 @@ namespace lfs::vis::input {
                 case Action::TOGGLE_SELECTION_CROP_FILTER:
                 case Action::DEPTH_ADJUST_FAR:
                 case Action::DEPTH_ADJUST_SIZE:
+                case Action::DEPTH_WINDOW_DRAG:
                     added += mirrorLegacyBindingToModes(bindings, binding, binding.action, std::array<ToolMode, 1>{ToolMode::SELECTION});
                     break;
                 default:
@@ -511,6 +512,15 @@ namespace lfs::vis::input {
                 def.action == Action::APPLY_CROP_BOX &&
                 key_trigger &&
                 key_trigger->key == KEY_KP_ENTER;
+            const auto* drag_trigger = std::get_if<MouseDragTrigger>(&def.trigger);
+            const bool depth_window_drag_shift_alt =
+                def.action == Action::DEPTH_WINDOW_DRAG &&
+                drag_trigger &&
+                drag_trigger->modifiers == (MODIFIER_SHIFT | MODIFIER_ALT);
+            const bool depth_window_drag_ctrl_shift_alt =
+                def.action == Action::DEPTH_WINDOW_DRAG &&
+                drag_trigger &&
+                drag_trigger->modifiers == (MODIFIER_CTRL | MODIFIER_SHIFT | MODIFIER_ALT);
             const bool selection_volume_shortcut =
                 def.action == Action::SELECT_MODE_BOX ||
                 def.action == Action::SELECT_MODE_SPHERE;
@@ -536,11 +546,16 @@ namespace lfs::vis::input {
                  (def.action == Action::SELECT_ALL_SCENE_NODES ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_VISIBILITY ||
                   def.action == Action::TOGGLE_SCENE_SELECTION_TRAINING)) ||
-                (version < 26 && def.action == Action::DEPTH_ADJUST_SIZE);
+                (version < 28 &&
+                 (def.action == Action::DEPTH_ADJUST_SIZE ||
+                  def.action == Action::DEPTH_WINDOW_DRAG ||
+                  def.action == Action::GROUP_SELECTED_SCENE_NODES ||
+                  def.action == Action::UNGROUP_SELECTED_SCENE_NODE));
             if (!should_add) {
                 continue;
             }
-            if (!brush_resize_shift_scroll && !crop_apply_num_enter) {
+            if (!brush_resize_shift_scroll && !crop_apply_num_enter &&
+                !depth_window_drag_shift_alt && !depth_window_drag_ctrl_shift_alt) {
                 const bool action_already_bound = std::ranges::any_of(
                     bindings_, [&](const Binding& current) {
                         return current.mode == def.mode && current.action == def.action;
@@ -1051,6 +1066,10 @@ namespace lfs::vis::input {
              getActionName(Action::TOGGLE_SCENE_SELECTION_VISIBILITY)},
             {KeyTrigger{KEY_T, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_SCENE_SELECTION_TRAINING,
              getActionName(Action::TOGGLE_SCENE_SELECTION_TRAINING)},
+            {KeyTrigger{KEY_G, MODIFIER_CTRL}, Action::GROUP_SELECTED_SCENE_NODES,
+             getActionName(Action::GROUP_SELECTED_SCENE_NODES)},
+            {KeyTrigger{KEY_G, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::UNGROUP_SELECTED_SCENE_NODE,
+             getActionName(Action::UNGROUP_SELECTED_SCENE_NODE)},
             {KeyTrigger{KEY_M, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_SERVER,
              getActionName(Action::TOGGLE_MCP_SERVER)},
             {KeyTrigger{KEY_N, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::TOGGLE_MCP_BINDING,
@@ -1104,6 +1123,14 @@ namespace lfs::vis::input {
                                     MouseScrollTrigger{MODIFIER_SHIFT | MODIFIER_ALT},
                                     Action::DEPTH_ADJUST_SIZE,
                                     "Window size"});
+        profile.bindings.push_back({ToolMode::SELECTION,
+                                    MouseDragTrigger{MouseButton::LEFT, MODIFIER_SHIFT | MODIFIER_ALT},
+                                    Action::DEPTH_WINDOW_DRAG,
+                                    "Window drag"});
+        profile.bindings.push_back({ToolMode::SELECTION,
+                                    MouseDragTrigger{MouseButton::LEFT, MODIFIER_CTRL | MODIFIER_SHIFT | MODIFIER_ALT},
+                                    Action::DEPTH_WINDOW_DRAG,
+                                    "Window drag"});
         profile.bindings.push_back({ToolMode::SELECTION,
                                     MouseScrollTrigger{MODIFIER_CTRL},
                                     Action::BRUSH_RESIZE,
@@ -1184,6 +1211,7 @@ namespace lfs::vis::input {
         case Action::DEPTH_ADJUST_FAR: return "Adjust Depth Box";
         case Action::DEPTH_ADJUST_SIDE: return "Adjust Depth Box";
         case Action::DEPTH_ADJUST_SIZE: return "Adjust Window Size";
+        case Action::DEPTH_WINDOW_DRAG: return "Drag Depth Window";
         case Action::TOGGLE_SELECTION_DEPTH_FILTER: return "Toggle Depth Box";
         case Action::TOGGLE_SELECTION_CROP_FILTER: return "Toggle Selection Crop Filter";
         case Action::BRUSH_RESIZE: return "Resize Brush";
@@ -1228,6 +1256,8 @@ namespace lfs::vis::input {
         case Action::SELECT_ALL_SCENE_NODES: return "Select All Scene Nodes";
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "Toggle Scene Selection Visibility";
         case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "Toggle Scene Selection Training";
+        case Action::GROUP_SELECTED_SCENE_NODES: return "Group Selected Scene Nodes";
+        case Action::UNGROUP_SELECTED_SCENE_NODE: return "Ungroup Selected Scene Node";
         default: return "Unknown";
         }
     }
@@ -1274,6 +1304,7 @@ namespace lfs::vis::input {
         case Action::DEPTH_ADJUST_FAR: return "depth_adjust_far";
         case Action::DEPTH_ADJUST_SIDE: return "depth_adjust_side";
         case Action::DEPTH_ADJUST_SIZE: return "depth_adjust_size";
+        case Action::DEPTH_WINDOW_DRAG: return "depth_window_drag";
         case Action::TOGGLE_SELECTION_DEPTH_FILTER: return "toggle_selection_depth_filter";
         case Action::TOGGLE_SELECTION_CROP_FILTER: return "toggle_selection_crop_filter";
         case Action::BRUSH_RESIZE: return "brush_resize";
@@ -1318,6 +1349,8 @@ namespace lfs::vis::input {
         case Action::SELECT_ALL_SCENE_NODES: return "select_all_scene_nodes";
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY: return "toggle_scene_selection_visibility";
         case Action::TOGGLE_SCENE_SELECTION_TRAINING: return "toggle_scene_selection_training";
+        case Action::GROUP_SELECTED_SCENE_NODES: return "group_selected_scene_nodes";
+        case Action::UNGROUP_SELECTED_SCENE_NODE: return "ungroup_selected_scene_node";
         default: return {};
         }
     }
@@ -1539,6 +1572,19 @@ namespace lfs::vis::input {
             result += "Super";
         }
         return result;
+    }
+
+    std::optional<SelectionOp> selectionOpForModifiers(
+        const InputBindings& bindings,
+        const ToolMode mode,
+        const int modifiers,
+        const std::vector<int>& held_keys) {
+        switch (bindings.getActionForDrag(mode, MouseButton::LEFT, modifiers, held_keys)) {
+        case Action::SELECTION_ADD: return SelectionOp::Add;
+        case Action::SELECTION_REMOVE: return SelectionOp::Remove;
+        case Action::SELECTION_INTERSECT: return SelectionOp::Intersect;
+        default: return std::nullopt;
+        }
     }
 
     void InputBindings::startCapture(ToolMode mode, Action action) {
@@ -1816,6 +1862,10 @@ namespace lfs::vis::input {
             .allowed_kinds = K::TRIGGER_KIND_MOUSE_SCROLL,
             .ui_section = ActionSection::Depth,
         };
+        static constexpr ActionDescriptor d_depth_drag{
+            .allowed_kinds = K::TRIGGER_KIND_MOUSE_DRAG | K::TRIGGER_KIND_MOUSE_BUTTON,
+            .ui_section = ActionSection::Depth,
+        };
         static constexpr ActionDescriptor d_depth_key{
             .allowed_kinds = K::TRIGGER_KIND_KEY,
             .ui_section = ActionSection::Depth,
@@ -1963,6 +2013,8 @@ namespace lfs::vis::input {
         case Action::DEPTH_ADJUST_SIDE:
         case Action::DEPTH_ADJUST_SIZE:
             return d_depth_scroll;
+        case Action::DEPTH_WINDOW_DRAG:
+            return d_depth_drag;
 
         case Action::BRUSH_RESIZE:
             return d_brush_scroll;
@@ -2006,6 +2058,8 @@ namespace lfs::vis::input {
         case Action::SELECT_ALL_SCENE_NODES:
         case Action::TOGGLE_SCENE_SELECTION_VISIBILITY:
         case Action::TOGGLE_SCENE_SELECTION_TRAINING:
+        case Action::GROUP_SELECTED_SCENE_NODES:
+        case Action::UNGROUP_SELECTED_SCENE_NODE:
             return d_ui_key;
         case Action::HISTOGRAM_ZOOM_MARKED:
             return d_ui_scroll;

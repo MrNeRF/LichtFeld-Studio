@@ -333,6 +333,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ETA = "status.eta";
         inline constexpr const char* PSNR = "status.psnr";
         inline constexpr const char* SSIM = "status.ssim";
+        inline constexpr const char* LPIPS = "status.lpips";
         inline constexpr const char* UNKNOWN = "status.unknown";
     } // namespace Status
 
@@ -508,17 +509,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* UNSAVED_WARNING = "exit_popup.unsaved_warning";
         inline constexpr const char* DISCARD = "exit_popup.discard";
     } // namespace ExitPopup
-
-    namespace LoadDatasetPopup {
-        inline constexpr const char* TITLE = "load_dataset_popup.title";
-        inline constexpr const char* CONFIGURE_PATHS = "load_dataset_popup.configure_paths";
-        inline constexpr const char* IMAGES_DIR = "load_dataset_popup.images_dir";
-        inline constexpr const char* SPARSE_DIR = "load_dataset_popup.sparse_dir";
-        inline constexpr const char* MASKS_DIR = "load_dataset_popup.masks_dir";
-        inline constexpr const char* OUTPUT_DIR = "load_dataset_popup.output_dir";
-        inline constexpr const char* INIT_FILE = "load_dataset_popup.init_file";
-        inline constexpr const char* HELP_TEXT = "load_dataset_popup.help_text";
-    } // namespace LoadDatasetPopup
 
     namespace Notification {
         inline constexpr const char* DROPPED_NOT_RECOGNIZED = "notification.dropped_not_recognized";
@@ -918,6 +908,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_GUI_MANAGER_UNAVAILABLE = "runtime.video_gui_manager_unavailable";
         inline constexpr const char* VIDEO_NO_KEYFRAMES = "runtime.video_no_keyframes";
         inline constexpr const char* VIDEO_RENDERING_ENGINE_UNAVAILABLE = "runtime.video_rendering_engine_unavailable";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_SELECTION_UNAVAILABLE = "runtime.video_reconstruction_selection_unavailable";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_NATIVE_FALLBACK = "runtime.video_reconstruction_native_fallback";
+        inline constexpr const char* VIDEO_RECONSTRUCTION_VERSION_UNSUPPORTED = "runtime.video_reconstruction_version_unsupported";
         inline constexpr const char* VIDEO_SPLAT_PREPARATION_FAILED = "runtime.video_splat_preparation_failed";
         inline constexpr const char* VIDEO_NO_RENDERABLE_CONTENT = "runtime.video_no_renderable_content";
         inline constexpr const char* RENDERED_POINT_CLOUD_INVALID = "runtime.rendered_point_cloud_invalid";

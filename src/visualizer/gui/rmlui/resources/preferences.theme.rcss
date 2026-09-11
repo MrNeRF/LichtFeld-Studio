@@ -37,6 +37,12 @@
     font-weight: bold;
 }
 
+.preferences-theme-variant.active {
+    color: @{text};
+    background-color: @{blend(surface,primary,button.tint_active)};
+    border-color: @{primary};
+}
+
 .preferences-warning {
     color: @{warning};
 }

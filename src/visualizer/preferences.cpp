@@ -42,10 +42,29 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
-            return style == "classic" || style == "minecraft";
+            return style == "classic" || style == "miner";
         }
 
-        [[nodiscard]] lfs::Error workingDirectoryError(
+        [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {
+            return style == "solid" || style == "translucent" || style == "frosted";
+        }
+
+        [[nodiscard]] bool knownViewportToolbarPosition(std::string_view position) {
+            return position == "top" || position == "centered" || position == "free";
+        }
+
+        constexpr float kDefaultZoomSpeed = 11.0f;
+        constexpr float kDefaultNavigationSpeed = 8.0f;
+        constexpr float kMinNavigationSpeed = 1.0f;
+        constexpr float kMaxNavigationSpeed = 100.0f;
+
+        [[nodiscard]] float clampNavigationSpeed(const float value, const float fallback) {
+            return std::isfinite(value)
+                       ? std::clamp(value, kMinNavigationSpeed, kMaxNavigationSpeed)
+                       : fallback;
+        }
+
+        [[nodiscard]] lfs::Error preferencePathError(
             const lfs::ErrorCode code,
             std::string user_message,
             std::string detail,
@@ -100,14 +119,14 @@ namespace lfs::vis {
             const std::string& display_name,
             const std::string& probe_prefix) {
             if (candidate.empty()) {
-                return workingDirectoryError(
+                return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path is empty.",
                     preference_key + " is empty");
             }
             const auto expanded = expandLeadingTilde(candidate);
             if (!expanded.is_absolute()) {
-                return workingDirectoryError(
+                return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path must be absolute.",
                     preference_key + " is not an absolute path",
@@ -116,7 +135,7 @@ namespace lfs::vis {
             std::error_code error;
             auto absolute = std::filesystem::absolute(expanded, error);
             if (error || absolute.empty()) {
-                return workingDirectoryError(
+                return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path could not be resolved to an absolute path.",
                     error ? error.message() : "absolute() returned an empty path",
@@ -125,14 +144,14 @@ namespace lfs::vis {
             absolute = absolute.lexically_normal();
             std::filesystem::create_directories(absolute, error);
             if (error) {
-                return workingDirectoryError(
+                return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
                     display_name + " could not be created.",
                     error.message(),
                     absolute);
             }
             if (!std::filesystem::is_directory(absolute, error) || error) {
-                return workingDirectoryError(
+                return preferencePathError(
                     lfs::ErrorCode::InvalidArgument,
                     display_name + " path is not a directory.",
                     error ? error.message() : "path exists but is not a directory",
@@ -151,7 +170,7 @@ namespace lfs::vis {
             {
                 std::ofstream output(probe, std::ios::binary | std::ios::trunc);
                 if (!output) {
-                    return workingDirectoryError(
+                    return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
                         display_name + " is not writable.",
                         "write probe could not be created",
@@ -162,7 +181,7 @@ namespace lfs::vis {
                 if (!output) {
                     std::error_code ignored;
                     std::filesystem::remove(probe, ignored);
-                    return workingDirectoryError(
+                    return preferencePathError(
                         lfs::ErrorCode::PermissionDenied,
                         display_name + " is not writable.",
                         "write probe could not be written",
@@ -171,7 +190,7 @@ namespace lfs::vis {
             }
             std::filesystem::remove(probe, error);
             if (error) {
-                return workingDirectoryError(
+                return preferencePathError(
                     lfs::ErrorCode::PermissionDenied,
                     display_name + " is not writable.",
                     error.message(),
@@ -180,36 +199,42 @@ namespace lfs::vis {
             return absolute;
         }
 
-        [[nodiscard]] lfs::Result<std::filesystem::path> validateWritableWorkingDirectory(
-            const std::filesystem::path& candidate) {
-            return validateWritableDirectory(
-                candidate,
-                "working_directory",
-                "The working folder",
-                ".lfs-write-probe-");
-        }
-
-        [[nodiscard]] lfs::Result<std::filesystem::path> validateWritableAssetManagerDirectory(
-            const std::filesystem::path& candidate) {
-            return validateWritableDirectory(
-                candidate,
-                "asset_manager_directory",
-                "The Asset Manager folder",
-                ".lfs-asset-write-probe-");
-        }
-
-        [[nodiscard]] std::filesystem::path defaultWorkingDirectoryPath() {
+        [[nodiscard]] std::filesystem::path defaultProjectLocationPath() {
             const auto resolved = lfs::core::UserPaths::resolve();
             if (!resolved)
                 return {};
-            return resolved->rootDir();
+            return resolved->rootDir() / "projects";
         }
 
-        [[nodiscard]] std::filesystem::path defaultAssetManagerDirectoryPath() {
-            const auto resolved = lfs::core::UserPaths::resolve();
-            if (!resolved)
-                return {};
-            return resolved->rootDir() / "assets";
+        [[nodiscard]] bool containsLichtProject(const std::filesystem::path& directory) {
+            std::error_code error;
+            if (!std::filesystem::is_directory(directory, error) || error)
+                return false;
+
+            constexpr int max_depth = 4;
+            std::filesystem::recursive_directory_iterator iterator(
+                directory,
+                std::filesystem::directory_options::skip_permission_denied,
+                error);
+            const std::filesystem::recursive_directory_iterator end;
+            while (iterator != end) {
+                if (error) {
+                    error.clear();
+                    iterator.increment(error);
+                    continue;
+                }
+                const auto name = iterator->path().filename().string();
+                if (iterator->is_directory(error)) {
+                    if (name.starts_with('.') || iterator.depth() >= max_depth)
+                        iterator.disable_recursion_pending();
+                } else if (!error && iterator->is_regular_file(error) &&
+                           iterator->path().extension() == ".licht") {
+                    return true;
+                }
+                error.clear();
+                iterator.increment(error);
+            }
+            return false;
         }
     } // namespace
 
@@ -221,6 +246,54 @@ namespace lfs::vis {
         bool loaded = false;
         bool writable = true;
         bool warned = false;
+
+        void saveValuesLocked() {
+            if (!paths || !writable)
+                return;
+            values["schema_version"] = 1;
+            if (const auto result = paths->writePreferencesAtomically(values.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save user preferences: {}",
+                         lfs::format_for_developer(result.error()));
+        }
+
+        void migrateProjectLocationLocked() {
+            if (!paths || !writable)
+                return;
+
+            const auto working = values.find("working_directory");
+            if (working != values.end() && working->is_string() &&
+                !working->get<std::string>().empty() &&
+                values.find("legacy_working_directory") == values.end()) {
+                values["legacy_working_directory"] = working->get<std::string>();
+            }
+            const auto project = values.find("project_location");
+            bool changed = false;
+            if (project != values.end() && project->is_string()) {
+                changed = values.erase("working_directory") > 0;
+                changed = values.erase("asset_manager_directory") > 0 || changed;
+            } else {
+                std::string selected;
+                const auto asset = values.find("asset_manager_directory");
+                if (asset != values.end() && asset->is_string() && !asset->get<std::string>().empty()) {
+                    selected = asset->get<std::string>();
+                } else {
+                    const auto root = paths->rootDir().lexically_normal();
+                    if (working != values.end() && working->is_string() && !working->get<std::string>().empty()) {
+                        const auto working_path = lfs::core::utf8_to_path(working->get<std::string>());
+                        if (working_path.lexically_normal() != root)
+                            selected = working->get<std::string>();
+                    }
+                    if (selected.empty() && containsLichtProject(paths->rootDir() / "assets"))
+                        selected = lfs::core::path_to_utf8(paths->rootDir() / "assets");
+                }
+                values["project_location"] = selected;
+                changed = true;
+                changed = values.erase("working_directory") > 0 || changed;
+                changed = values.erase("asset_manager_directory") > 0 || changed;
+            }
+            if (changed)
+                saveValuesLocked();
+        }
 
         void loadLocked() {
             if (disabled()) {
@@ -266,6 +339,8 @@ namespace lfs::vis {
                 if (!parsed.is_object())
                     throw std::runtime_error("root value is not an object");
                 values = std::move(parsed);
+                input.close();
+                migrateProjectLocationLocked();
             } catch (const std::exception& error) {
                 // Windows does not allow the malformed file to be moved while
                 // this reader still holds it open.
@@ -288,12 +363,7 @@ namespace lfs::vis {
 
         void saveLocked() {
             loadLocked();
-            if (!paths || !writable)
-                return;
-            values["schema_version"] = 1;
-            if (const auto result = paths->writePreferencesAtomically(values.dump(2) + '\n'); !result)
-                LOG_WARN("Unable to save user preferences: {}",
-                         lfs::format_for_developer(result.error()));
+            saveValuesLocked();
         }
     };
 
@@ -336,6 +406,34 @@ namespace lfs::vis {
                 return scale;
         }
         return 0.0f;
+    }
+    void UserPreferences::setZoomSpeed(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["zoom_speed"] = clampNavigationSpeed(value, kDefaultZoomSpeed);
+        impl_->saveLocked();
+    }
+    float UserPreferences::zoomSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("zoom_speed");
+        if (it != impl_->values.end() && it->is_number())
+            return clampNavigationSpeed(it->get<float>(), kDefaultZoomSpeed);
+        return kDefaultZoomSpeed;
+    }
+    void UserPreferences::setNavigationSpeed(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["navigation_speed"] = clampNavigationSpeed(value, kDefaultNavigationSpeed);
+        impl_->saveLocked();
+    }
+    float UserPreferences::navigationSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("navigation_speed");
+        if (it != impl_->values.end() && it->is_number())
+            return clampNavigationSpeed(it->get<float>(), kDefaultNavigationSpeed);
+        return kDefaultNavigationSpeed;
     }
     void UserPreferences::setLanguage(const std::string& value) {
         if (value.empty())
@@ -441,6 +539,54 @@ namespace lfs::vis {
         const std::string style = it->get<std::string>();
         return knownProgressBarStyle(style) ? style : "classic";
     }
+    void UserPreferences::setViewportChromeStyle(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_chrome_style"] =
+            knownViewportChromeStyle(value) ? std::string(value) : "translucent";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportChromeStyle() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_chrome_style");
+        if (it == impl_->values.end() || !it->is_string())
+            return "translucent";
+        const std::string style = it->get<std::string>();
+        return knownViewportChromeStyle(style) ? style : "translucent";
+    }
+    void UserPreferences::setViewportToolbarPosition(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_position"] =
+            knownViewportToolbarPosition(value) ? std::string(value) : "centered";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportToolbarPosition() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_position");
+        if (it == impl_->values.end() || !it->is_string())
+            return "centered";
+        const std::string position = it->get<std::string>();
+        return knownViewportToolbarPosition(position) ? position : "centered";
+    }
+    void UserPreferences::setViewportToolbarFreeY(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_free_y"] =
+            std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::viewportToolbarFreeY() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_free_y");
+        if (it == impl_->values.end() || !it->is_number())
+            return 0.5f;
+        const float value = it->get<float>();
+        return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
 
     void UserPreferences::setMcp(const McpPreferenceState& state) {
         std::scoped_lock lock(impl_->mutex);
@@ -535,6 +681,10 @@ namespace lfs::vis {
     void clearLanguagePreference() { UserPreferences::instance().clearLanguage(); }
     void saveCameraNavigationPreference(const std::string& value) { UserPreferences::instance().setCameraNavigation(value); }
     std::string loadCameraNavigationPreference() { return UserPreferences::instance().cameraNavigation(); }
+    void saveZoomSpeedPreference(const float speed) { UserPreferences::instance().setZoomSpeed(speed); }
+    float loadZoomSpeedPreference() { return UserPreferences::instance().zoomSpeed(); }
+    void saveNavigationSpeedPreference(const float speed) { UserPreferences::instance().setNavigationSpeed(speed); }
+    float loadNavigationSpeedPreference() { return UserPreferences::instance().navigationSpeed(); }
     void setRememberCameraNavigationPreference(const bool enabled) { UserPreferences::instance().setRememberCameraNavigation(enabled); }
     bool rememberCameraNavigationPreference() { return UserPreferences::instance().rememberCameraNavigation(); }
     void saveCameraViewSnapPreference(const bool enabled) { UserPreferences::instance().setCameraViewSnap(enabled); }
@@ -553,6 +703,24 @@ namespace lfs::vis {
     std::string loadProgressBarStylePreference() {
         return UserPreferences::instance().progressBarStyle();
     }
+    void saveViewportChromeStylePreference(const std::string_view style) {
+        UserPreferences::instance().setViewportChromeStyle(style);
+    }
+    std::string loadViewportChromeStylePreference() {
+        return UserPreferences::instance().viewportChromeStyle();
+    }
+    void saveViewportToolbarPositionPreference(const std::string_view position) {
+        UserPreferences::instance().setViewportToolbarPosition(position);
+    }
+    std::string loadViewportToolbarPositionPreference() {
+        return UserPreferences::instance().viewportToolbarPosition();
+    }
+    void saveViewportToolbarFreeYPreference(const float value) {
+        UserPreferences::instance().setViewportToolbarFreeY(value);
+    }
+    float loadViewportToolbarFreeYPreference() {
+        return UserPreferences::instance().viewportToolbarFreeY();
+    }
     void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
     McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }
     void saveSceneUpscalerPreference(const std::string& backend_id,
@@ -567,112 +735,80 @@ namespace lfs::vis {
         return UserPreferences::instance().sceneUpscalerPreset(backend_id);
     }
 
-    lfs::Status UserPreferences::setWorkingDirectory(const std::filesystem::path& path) {
-        auto resolved = validateWritableWorkingDirectory(path);
-        if (!resolved)
-            return lfs::Status::failure(std::move(resolved).error());
-        std::scoped_lock lock(impl_->mutex);
-        impl_->loadLocked();
-        impl_->values["working_directory"] = lfs::core::path_to_utf8(*resolved);
-        impl_->saveLocked();
-        return {};
-    }
-
-    std::filesystem::path UserPreferences::workingDirectory() {
-        const auto raw = workingDirectoryPreference();
-        if (raw.empty())
-            return defaultWorkingDirectoryPath();
-        return raw;
-    }
-
-    std::filesystem::path UserPreferences::workingDirectoryPreference() {
-        std::scoped_lock lock(impl_->mutex);
-        impl_->loadLocked();
-        const auto it = impl_->values.find("working_directory");
-        if (it == impl_->values.end() || !it->is_string())
-            return {};
-        const std::string stored = it->get<std::string>();
-        if (stored.empty())
-            return {};
-        return lfs::core::utf8_to_path(stored);
-    }
-
-    void UserPreferences::clearWorkingDirectory() {
-        std::scoped_lock lock(impl_->mutex);
-        impl_->loadLocked();
-        impl_->values["working_directory"] = "";
-        impl_->saveLocked();
-    }
-
-    lfs::Status UserPreferences::setAssetManagerDirectory(
+    lfs::Status UserPreferences::setProjectLocation(
         const std::filesystem::path& path) {
-        auto resolved = validateWritableAssetManagerDirectory(path);
+        auto resolved = validateWritableDirectory(
+            path, "project_location", "The project location",
+            ".lfs-project-write-probe-");
         if (!resolved)
             return lfs::Status::failure(std::move(resolved).error());
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["asset_manager_directory"] = lfs::core::path_to_utf8(*resolved);
+        impl_->values["project_location"] =
+            lfs::core::path_to_utf8(*resolved);
         impl_->saveLocked();
         return {};
     }
 
-    std::filesystem::path UserPreferences::assetManagerDirectory() {
-        const auto raw = assetManagerDirectoryPreference();
-        return raw.empty() ? defaultAssetManagerDirectoryPath() : raw;
+    std::filesystem::path UserPreferences::projectLocation() {
+        const auto raw = projectLocationPreference();
+        return raw.empty() ? defaultProjectLocationPath() : raw;
     }
 
-    std::filesystem::path UserPreferences::assetManagerDirectoryPreference() {
+    std::filesystem::path UserPreferences::projectLocationPreference() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        const auto it = impl_->values.find("asset_manager_directory");
+        const auto it = impl_->values.find("project_location");
         if (it == impl_->values.end() || !it->is_string())
             return {};
         const std::string stored = it->get<std::string>();
-        return stored.empty() ? std::filesystem::path{} : lfs::core::utf8_to_path(stored);
+        return stored.empty() ? std::filesystem::path{}
+                              : lfs::core::utf8_to_path(stored);
     }
 
-    void UserPreferences::clearAssetManagerDirectory() {
+    void UserPreferences::clearProjectLocation() {
         std::scoped_lock lock(impl_->mutex);
         impl_->loadLocked();
-        impl_->values["asset_manager_directory"] = "";
+        impl_->values["project_location"] = "";
         impl_->saveLocked();
     }
 
-    lfs::Status setWorkingDirectoryPreference(const std::filesystem::path& path) {
-        return UserPreferences::instance().setWorkingDirectory(path);
-    }
-    std::filesystem::path loadWorkingDirectoryPreference() {
-        return UserPreferences::instance().workingDirectory();
-    }
     std::filesystem::path workingDirectoryPreferenceRaw() {
-        return UserPreferences::instance().workingDirectoryPreference();
-    }
-    void clearWorkingDirectoryPreference() {
-        UserPreferences::instance().clearWorkingDirectory();
-    }
-    std::filesystem::path defaultWorkingDirectory() {
-        return defaultWorkingDirectoryPath();
-    }
-    std::filesystem::path tempProjectDirectoryPreference() {
-        const auto root = UserPreferences::instance().workingDirectory();
-        if (root.empty())
+        if (disabled())
             return {};
-        return root / "tmp";
+        const auto resolved = lfs::core::UserPaths::resolve();
+        if (!resolved)
+            return {};
+        std::ifstream input(resolved->preferencesFile());
+        if (!input)
+            return {};
+        try {
+            const auto values = json::parse(input);
+            auto it = values.find("legacy_working_directory");
+            if (it == values.end())
+                it = values.find("working_directory");
+            if (it == values.end() || !it->is_string() || it->get<std::string>().empty())
+                return {};
+            return lfs::core::utf8_to_path(it->get<std::string>());
+        } catch (const std::exception&) {
+            // LFS-CENSUS-OK(empty-catch): malformed legacy preferences are ignored by startup scanning.
+            return {};
+        }
     }
-    lfs::Status setAssetManagerDirectoryPreference(const std::filesystem::path& path) {
-        return UserPreferences::instance().setAssetManagerDirectory(path);
+    lfs::Status setProjectLocationPreference(
+        const std::filesystem::path& path) {
+        return UserPreferences::instance().setProjectLocation(path);
     }
-    std::filesystem::path loadAssetManagerDirectoryPreference() {
-        return UserPreferences::instance().assetManagerDirectory();
+    std::filesystem::path loadProjectLocationPreference() {
+        return UserPreferences::instance().projectLocation();
     }
-    std::filesystem::path assetManagerDirectoryPreferenceRaw() {
-        return UserPreferences::instance().assetManagerDirectoryPreference();
+    std::filesystem::path projectLocationPreferenceRaw() {
+        return UserPreferences::instance().projectLocationPreference();
     }
-    void clearAssetManagerDirectoryPreference() {
-        UserPreferences::instance().clearAssetManagerDirectory();
+    void clearProjectLocationPreference() {
+        UserPreferences::instance().clearProjectLocation();
     }
-    std::filesystem::path defaultAssetManagerDirectory() {
-        return defaultAssetManagerDirectoryPath();
+    std::filesystem::path defaultProjectLocation() {
+        return defaultProjectLocationPath();
     }
-
 } // namespace lfs::vis

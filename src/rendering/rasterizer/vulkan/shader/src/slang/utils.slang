@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "config.slang"
+#include "overlay_flags.inc"
 
 static const float eps = 1e-7;
 
@@ -1102,7 +1103,8 @@ static const uint OVERLAY_PARAM_CROP_EXTRA_COUNT = 15;
 static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE = OVERLAY_PARAM_CROP_EXTRA_BASE + OVERLAY_PARAM_CROP_STRIDE * OVERLAY_PARAM_CROP_EXTRA_COUNT;
 static const uint OVERLAY_PARAM_ELLIPSOID_STRIDE = 5;
 static const uint OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT = 15;
-static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
+static const uint OVERLAY_PARAM_VIEW_WINDOW = OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + OVERLAY_PARAM_ELLIPSOID_STRIDE * OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT;
+static const uint OVERLAY_PARAM_COUNT = OVERLAY_PARAM_VIEW_WINDOW + 1;
 
 [ForceInline]
 bool overlay_enabled(float value)
@@ -1122,6 +1124,19 @@ uint read_byte(ByteAddressBuffer buffer, uint idx)
     uint aligned_idx = idx & ~3u;
     uint shift = (idx & 3u) * 8u;
     return (buffer.Load(aligned_idx) >> shift) & 0xffu;
+}
+
+// The host clears every word before projection. Atomic OR preserves adjacent
+// bytes even when compact survivor slots in one word come from different waves.
+// All-zero flags need no store; clearing also removes flags from the last frame.
+[ForceInline]
+void write_overlay_byte(RWByteAddressBuffer buffer, uint idx, uint flags, uint lod_enabled)
+{
+    if ((lod_enabled & LFS_VK_OVERLAY_WRITE_BIT) == 0u || (flags & 0xffu) == 0u)
+        return;
+    const uint word_offset = idx & ~(LFS_VK_OVERLAY_WORD_BYTES - 1u);
+    const uint shift = (idx & (LFS_VK_OVERLAY_WORD_BYTES - 1u)) * 8u;
+    buffer.InterlockedOr(word_offset, (flags & 0xffu) << shift);
 }
 
 [ForceInline]
@@ -1148,6 +1163,7 @@ struct OverlayUniformState {
     bool add_mode;
     int focused_gaussian_id;
     float flash_intensity;
+    bool drag_preview_active;
 };
 
 [ForceInline]
@@ -1174,6 +1190,7 @@ OverlayUniformState load_overlay_uniform_state(StructuredBuffer<float4> overlay_
     state.add_mode = overlay_enabled(selection_flags.z);
     state.focused_gaussian_id = overlay_int(selection_flags.w);
     state.flash_intensity = emphasis_flags.w;
+    state.drag_preview_active = overlay_enabled(overlay_params[OVERLAY_PARAM_VIEW_WINDOW].z);
     return state;
 }
 
@@ -1208,12 +1225,12 @@ uint unpack_overlay_preview_byte(uint packed)
 [ForceInline]
 uint load_overlay_per_splat_pack(
     uint splat_id,
-    StructuredBuffer<uint> gaussian_overlay_flags,
+    ByteAddressBuffer gaussian_overlay_flags,
     ByteAddressBuffer selection_mask,
     ByteAddressBuffer preview_mask,
     OverlayUniformState state)
 {
-    uint flags = gaussian_overlay_flags[splat_id];
+    uint flags = read_byte(gaussian_overlay_flags, splat_id);
     uint selection_byte = state.selection_mask_enabled ? read_byte(selection_mask, splat_id) : 0u;
     uint preview_byte = state.preview_mask_enabled ? read_byte(preview_mask, splat_id) : 0u;
     return pack_overlay_per_splat(flags, selection_byte, preview_byte);
@@ -1259,7 +1276,10 @@ uint selection_status(
     }
     bool is_committed = group_id > 0;
     bool is_in_preview = false;
-    if (state.preview_mask_enabled) {
+    // During a depth-window drag the stale exact-preview mask is ignored; the
+    // live reveal is the containment undim itself. No tint class exists:
+    // eligible splats simply keep their normal appearance.
+    if (!state.drag_preview_active && state.preview_mask_enabled) {
         is_in_preview = preview_byte != 0;
     }
     bool under_brush = false;

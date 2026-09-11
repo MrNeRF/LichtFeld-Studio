@@ -120,8 +120,7 @@ namespace lfs::vis {
 
             std::string gt_label = LOC(lichtfeld::Strings::StatusBar::GROUND_TRUTH);
             if (ctx.scene_manager && ctx.current_camera_id >= 0) {
-                const auto disabled_uids = ctx.scene_manager->getScene().getTrainingDisabledCameraUids();
-                if (disabled_uids.count(ctx.current_camera_id) > 0) {
+                if (!ctx.scene_manager->getScene().isCameraTrainingEnabled(ctx.current_camera_id)) {
                     gt_label = LOC(lichtfeld::Strings::StatusBar::GROUND_TRUTH_EXCLUDED);
                 }
             }

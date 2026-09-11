@@ -183,6 +183,36 @@ namespace lfs::mcp {
         EXPECT_TRUE(meta["app.lichtfeld/long_running"].get<bool>());
     }
 
+    TEST(McpProtocolTest, LazyToolRegistrationMatchesEagerToolSet) {
+        ToolRegistry eager;
+        eager.register_tool(
+            McpTool{.name = "test.eager_one", .description = "one"},
+            [](const json&) { return json::object(); });
+        eager.register_tool(
+            McpTool{.name = "test.eager_two", .description = "two"},
+            [](const json&) { return json::object(); });
+
+        ToolRegistry lazy;
+        lazy.set_lazy_initializer([&lazy] {
+            lazy.register_tool(
+                McpTool{.name = "test.eager_one", .description = "one"},
+                [](const json&) { return json::object(); });
+            lazy.register_tool(
+                McpTool{.name = "test.eager_two", .description = "two"},
+                [](const json&) { return json::object(); });
+        });
+
+        const auto names = [](const std::vector<McpTool>& tools) {
+            std::vector<std::string> result;
+            result.reserve(tools.size());
+            for (const auto& tool : tools)
+                result.push_back(tool.name);
+            std::sort(result.begin(), result.end());
+            return result;
+        };
+        EXPECT_EQ(names(eager.list_tools()), names(lazy.list_tools()));
+    }
+
     TEST(McpProtocolTest, ToolJsonSerializesNullSchemaPropertiesAsObject) {
         const auto payload = tool_to_json(McpTool{
             .name = "test.empty_schema",

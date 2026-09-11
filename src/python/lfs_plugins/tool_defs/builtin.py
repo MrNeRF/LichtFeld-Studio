@@ -154,11 +154,11 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
         description="Select gaussians",
         shortcut="1",
         submodes=(
-            SubmodeDef("centers", "Centers", "circle-dot"),
+            SubmodeDef("centers", "Centers", "select-centers"),
             SubmodeDef("rectangle", "Rectangle", "rectangle"),
             SubmodeDef("polygon", "Polygon", "polygon"),
             SubmodeDef("lasso", "Lasso", "lasso"),
-            SubmodeDef("rings", "Rings", "ring"),
+            SubmodeDef("rings", "Rings", "select-rings"),
             SubmodeDef("color", "Color", "color-picker"),
             SubmodeDef("box", "Box", "box"),
             SubmodeDef("sphere", "Sphere", "sphere"),

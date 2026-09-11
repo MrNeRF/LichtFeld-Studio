@@ -33,6 +33,10 @@ namespace lfs::io {
 
 namespace lfs::io::project {
 
+    // The current SCNG-bound checkpoint is resumable; older CKPT chapters are
+    // retained history. This cap counts only unbound historical chapters.
+    inline constexpr std::size_t CHECKPOINT_HISTORY_LIMIT = 16;
+
     // A binary chapter whose clean source range is also its lazy hydration
     // handle. Reading a clean value never marks it dirty; saving that same
     // value reuses its CleanProof byte-for-byte. An owned value retains the
@@ -169,6 +173,11 @@ namespace lfs::io::project {
         std::uint64_t erased_chunks = 0;
     };
 
+    struct LFS_IO_API DatasetEmbedSource {
+        EmbeddedDatasetEntry entry;
+        std::filesystem::path source_path;
+    };
+
     struct ProjectDocumentHydrationReport {
         SelectionHydrationReport selection;
         ParameterManagerSnapshot pending_parameters;
@@ -246,6 +255,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const ProjectChapter& project() const noexcept;
         [[nodiscard]] ProjectChapter& edit_project() noexcept;
+        [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
+        [[nodiscard]] lfs::Result<void> clear_license();
         [[nodiscard]] const ReferencesChapter& references() const noexcept;
         [[nodiscard]] ReferencesChapter& edit_references() noexcept;
         [[nodiscard]] const SceneGraphChapter& scene_graph() const noexcept;
@@ -267,6 +278,8 @@ namespace lfs::io::project {
 
         [[nodiscard]] const LazyChunkValue*
         find_checkpoint(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] lfs::Result<std::optional<lfs::core::Uuid>>
+        bound_checkpoint_uuid() const;
         // Test-only: drop the file-backed CKPT CleanProof. find_checkpoint()
         // is const and LazyChunkValue::Impl is translation-unit local.
         void drop_checkpoint_clean_proof_for_testing(
@@ -278,6 +291,15 @@ namespace lfs::io::project {
         remove_checkpoint(const lfs::core::Uuid& instance_uuid);
         [[nodiscard]] std::vector<lfs::core::Uuid>
         checkpoint_uuids() const;
+
+        [[nodiscard]] const LazyChunkValue*
+        find_dataset_source(const lfs::core::Uuid& instance_uuid) const noexcept;
+        [[nodiscard]] std::vector<lfs::core::Uuid>
+        dataset_source_uuids() const;
+        [[nodiscard]] lfs::Result<ProjectDocumentSaveReport>
+        embed_dataset_batch(const EmbeddedDatasetManifest& manifest,
+                            std::span<const DatasetEmbedSource> sources,
+                            const ProjectDocumentSaveOptions& options = {});
 
         [[nodiscard]] const LazyChunkValue*
         find_ppisp(const lfs::core::Uuid& instance_uuid) const noexcept;

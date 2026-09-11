@@ -314,7 +314,7 @@ body {
     margin-left: -4dp;
 }
 
-#progress-container.minecraft .progress-marker {
+#progress-container.miner .progress-marker {
     top: 2dp;
     width: 12dp;
     height: 12dp;
@@ -324,8 +324,8 @@ body {
     background-color: transparent;
 }
 
-#progress-container.minecraft .progress-marker.is-hovered,
-#progress-container.minecraft .progress-marker.is-preview {
+#progress-container.miner .progress-marker.is-hovered,
+#progress-container.miner .progress-marker.is-preview {
     top: 1dp;
     width: 14dp;
     height: 14dp;
@@ -344,7 +344,7 @@ body {
     z-index: 1;
 }
 
-#progress-text.progress-text--minecraft {
+#progress-text.progress-text--miner {
     width: auto;
     text-align: left;
 }

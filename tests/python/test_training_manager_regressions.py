@@ -16,13 +16,12 @@ def test_exportable_grow_restores_vulkan_interop_after_detach_failures():
     end = source.index("void TrainerManager::setupStateMachineCallbacks", start)
     body = source[start:end]
 
-    detach = body.index("if (!rebindExportableCudaOnly())")
-    restore_guard = body.index("auto restore_vulkan_interop = ScopeExit", detach)
-    guard_reimport = body.index("if (!rebindExportableVulkanInterop())", restore_guard)
-    reimport = body.index("if (!rebindExportableVulkanInterop())", guard_reimport + 1)
-    release = body.index("restore_vulkan_interop.release()", reimport)
-
-    # The active scope guard spans every early return after a successful detach,
-    # and is dismissed only after the Vulkan re-import succeeds.
-    assert detach < restore_guard < reimport < release
-    assert "void release() noexcept { active_ = false; }" in source[:start]
+    assert "const std::size_t old_capacity" in body
+    assert "const auto old_bytes" in body
+    assert "const std::uint64_t old_generation" in body
+    assert "auto grew = splat_storage_->grow(want)" in body
+    assert "bindNewExportableChunks(*splat_storage_->block)" in body
+    assert "rebindSplatData(*model_ptr, alloc)" in body
+    assert body.count("restoreCapacity(old_capacity, old_bytes, old_generation)") == 4
+    assert "detachExportable" not in body
+    assert "ScopeExit" not in body

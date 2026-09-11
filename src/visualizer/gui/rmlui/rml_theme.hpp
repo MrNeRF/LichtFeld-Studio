@@ -53,6 +53,11 @@ namespace lfs::vis::gui::rml_theme {
     LFS_VIS_API const std::string& getComponentsRCSS();
     LFS_VIS_API void invalidateBaseRcssCache();
     LFS_VIS_API std::string generateSpriteSheetRCSS();
+    // The saved preference remains unchanged when frosted rendering is unavailable;
+    // only the effective token presentation falls back to translucent.
+    LFS_VIS_API std::string effectiveViewportChromeStyle();
+    // Returns true when the effective presentation changed.
+    LFS_VIS_API bool setFrostedGlassAvailable(bool available);
     LFS_VIS_API std::size_t currentThemeSignature();
     LFS_VIS_API void applyTheme(Rml::ElementDocument* doc, const std::string& base_rcss,
                                 const std::string& panel_theme_template = {});

@@ -21,6 +21,10 @@ def _source_python_path(monkeypatch):
 def _install_lichtfeld_stub(monkeypatch):
     state = {
         "theme": "dark",
+        "theme_family": "lichtfeld",
+        "theme_mode": "dark",
+        "supports_system_theme": True,
+        "theme_family_calls": [],
         "ui_scale": 1.0,
         "python_console_shown": 0,
         "undo_called": False,
@@ -40,11 +44,62 @@ def _install_lichtfeld_stub(monkeypatch):
     ui = SimpleNamespace(
         tr=lambda key: f"tr:{key}",
         themes=lambda: [
-            {"id": "dark", "name": "Dark", "label_key": "menu.view.theme.dark", "order": 0},
-            {"id": "light", "name": "Light", "label_key": "menu.view.theme.light", "order": 1},
+            {
+                "id": "lichtfeld_dark",
+                "name": "LichtFeld Dark",
+                "family_id": "lichtfeld",
+                "family_name": "LichtFeld",
+                "variant_name": "Dark",
+                "mode": "dark",
+                "order": 0,
+            },
+            {
+                "id": "lichtfeld_light",
+                "name": "LichtFeld Light",
+                "family_id": "lichtfeld",
+                "family_name": "LichtFeld",
+                "variant_name": "Light",
+                "mode": "light",
+                "order": 1,
+            },
+            {
+                "id": "signal_night",
+                "name": "Signal Night",
+                "family_id": "signal",
+                "family_name": "Signal",
+                "variant_name": "Night",
+                "mode": "dark",
+                "order": 10,
+            },
+            {
+                "id": "signal_day",
+                "name": "Signal Day",
+                "family_id": "signal",
+                "family_name": "Signal",
+                "variant_name": "Day",
+                "mode": "light",
+                "order": 11,
+            },
+            {
+                "id": "gruvbox_dark",
+                "name": "Gruvbox",
+                "family_id": "gruvbox",
+                "family_name": "Gruvbox",
+                "variant_name": "Dark",
+                "mode": "dark",
+                "order": 20,
+            },
         ],
         get_theme=lambda: state["theme"],
         set_theme=lambda theme: state.__setitem__("theme", theme),
+        get_theme_family=lambda: state["theme_family"],
+        get_theme_mode=lambda: state["theme_mode"],
+        supports_system_theme=lambda: state["supports_system_theme"],
+        set_theme_family=lambda family, mode: (
+            state.__setitem__("theme_family", family),
+            state.__setitem__("theme_mode", mode),
+            state["theme_family_calls"].append((family, mode)),
+        ),
         get_ui_scale_preference=lambda: state["ui_scale"],
         set_ui_scale=lambda scale: state.__setitem__("ui_scale", scale),
         show_python_console=lambda: state.__setitem__("python_console_shown", state["python_console_shown"] + 1),
@@ -108,6 +163,7 @@ def _install_lichtfeld_stub(monkeypatch):
 
 def test_menu_helpers_and_builtin_schemas(monkeypatch):
     monkeypatch.delitem(sys.modules, "lfs_plugins", raising=False)
+    monkeypatch.delitem(sys.modules, "lfs_plugins.layouts", raising=False)
     monkeypatch.delitem(sys.modules, "lfs_plugins.layouts.menus", raising=False)
     monkeypatch.delitem(sys.modules, "lfs_plugins.edit_menu", raising=False)
     monkeypatch.delitem(sys.modules, "lfs_plugins.select_menu", raising=False)
@@ -115,6 +171,15 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     monkeypatch.delitem(sys.modules, "lfs_plugins.view_menu", raising=False)
 
     state = _install_lichtfeld_stub(monkeypatch)
+
+    # These are schema-only tests. Import the menu modules without executing
+    # lfs_plugins.__init__, which initializes the plugin manager and its HTTPS
+    # stack. On Windows that unrelated path can load OpenSSL DLLs from the C++
+    # build directory before Python's _ssl extension resolves its own runtime.
+    package_stub = ModuleType("lfs_plugins")
+    package_stub.__path__ = [str(PROJECT_ROOT / "src" / "python" / "lfs_plugins")]
+    package_stub.__package__ = "lfs_plugins"
+    monkeypatch.setitem(sys.modules, "lfs_plugins", package_stub)
 
     menus_mod = import_module("lfs_plugins.layouts.menus")
     edit_mod = import_module("lfs_plugins.edit_menu")
@@ -200,8 +265,45 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"
+    assert view_items[0]["label"] == "tr:menu.view.theme · LichtFeld · Dark"
     assert view_items[1]["type"] == "submenu"
-    assert view_items[0]["items"][0]["selected"] is True
+    theme_families = view_items[0]["items"]
+    assert [item["label"] for item in theme_families] == [
+        "LichtFeld · Dark",
+        "Signal",
+        "Gruvbox",
+    ]
+    assert theme_families[0]["type"] == "submenu"
+    assert [item["label"] for item in theme_families[0]["items"]] == [
+        "Dark",
+        "Light",
+        "tr:menu.view.theme.auto",
+    ]
+    assert theme_families[0]["items"][0]["selected"] is True
+    assert theme_families[1]["type"] == "submenu"
+    assert [item["label"] for item in theme_families[1]["items"]] == [
+        "Night",
+        "Day",
+        "tr:menu.view.theme.auto",
+    ]
+    theme_families[1]["items"][0]["callback"]()
+    theme_families[1]["items"][2]["callback"]()
+    assert state["theme_family_calls"][-2:] == [("signal", "dark"), ("signal", "auto")]
+    assert theme_families[2]["type"] == "toggle"
+
+    state["supports_system_theme"] = False
+    updated_view_items = view_mod.ViewMenu().menu_items()
+    assert updated_view_items[0]["label"] == (
+        "tr:menu.view.theme · Signal · tr:menu.view.theme.auto"
+    )
+    theme_families = updated_view_items[0]["items"]
+    assert [item["label"] for item in theme_families] == [
+        "LichtFeld",
+        "Signal · tr:menu.view.theme.auto",
+        "Gruvbox",
+    ]
+    assert [item["label"] for item in theme_families[0]["items"]] == ["Dark", "Light"]
+    assert [item["label"] for item in theme_families[1]["items"]] == ["Night", "Day"]
     assert view_items[1]["items"][1]["label"] == "100%"
     # theme, ui_scale, separator, performance_hud, reset_view, console
     assert view_items[3]["label"] == "tr:menu.view.performance_hud"

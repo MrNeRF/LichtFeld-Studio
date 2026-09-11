@@ -5,25 +5,17 @@
 import lichtfeld as lf
 
 from .keymap_bindings import KeymapBindingsSection
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+from .panels import panel_class
 
 __lfs_panel_classes__ = ["PreferencesPanel"]
 __lfs_panel_ids__ = ["lfs.preferences"]
 
 
+@panel_class("preferences")
 class PreferencesPanel(Panel):
     """Floating home for application-level preferences."""
-
-    id = "lfs.preferences"
-    label = "Preferences"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 100
-    template = "rmlui/preferences.rml"
-    height_mode = lf.ui.PanelHeightMode.FILL
-    size = (780, 440)
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    update_policy = "interval"
-    update_interval_ms = 50
 
     SCALE_OPTIONS = (
         (0.0, "menu.view.ui_scale.auto"),
@@ -43,13 +35,29 @@ class PreferencesPanel(Panel):
 
     PROGRESS_BAR_OPTIONS = (
         ("classic", "preferences.progress_bar_classic"),
-        ("minecraft", "preferences.progress_bar_minecraft"),
+        ("miner", "preferences.progress_bar_miner"),
     )
+
+    VIEWPORT_CHROME_OPTIONS = (
+        ("solid", "preferences.viewport_chrome_solid"),
+        ("translucent", "preferences.viewport_chrome_translucent"),
+        ("frosted", "preferences.viewport_chrome_frosted"),
+    )
+
+    VIEWPORT_TOOLBAR_POSITION_OPTIONS = (
+        ("top", "preferences.viewport_toolbar_position_top"),
+        ("centered", "preferences.viewport_toolbar_position_centered"),
+        ("free", "preferences.viewport_toolbar_position_free"),
+    )
+
+    SPEED_SCRUB_FIELD_DEFS = {
+        "zoom_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+        "navigation_speed": ScrubFieldSpec(1.0, 100.0, 1.0, "%d", data_type=int),
+    }
 
     EXPANDABLE_SECTIONS = (
         "language",
-        "working_directory",
-        "asset_manager",
+        "project_location",
         "appearance",
         "scene_rendering",
         "navigation",
@@ -67,6 +75,7 @@ class PreferencesPanel(Panel):
         self._scene_upscaler_presets = {}
         self._keymap = KeymapBindingsSection()
         self._theme_catalog = []
+        self._theme_families = []
         self._language_catalog = []
         self._last_state = None
         self._section = "general"
@@ -78,17 +87,25 @@ class PreferencesPanel(Panel):
         self._mcp_request_logging = False
         self._mcp_safe_mode = False
         self._last_mcp_runtime_config = None
-        self._working_directory = ""
-        self._applied_working_directory = ""
-        self._asset_manager_directory = ""
-        self._applied_asset_manager_directory = ""
+        self._project_location = ""
+        self._applied_project_location = ""
         self._document = None
         self._file_associations = []
+        self._mount_count = 0
+        self._scrub_fields = ScrubFieldController(
+            self.SPEED_SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
+
+    @property
+    def mount_count(self):
+        """Number of RML document mounts; closing retains the current mount."""
+        return self._mount_count
 
     def on_bind_model(self, ctx):
         self._read_mcp_preferences()
-        self._read_working_directory()
-        self._read_asset_manager_directory()
+        self._read_project_location()
         model = ctx.create_data_model("preferences")
         if model is None:
             return
@@ -108,8 +125,19 @@ class PreferencesPanel(Panel):
                 f"{section}_expanded",
                 lambda section=section: section in self._expanded_sections,
             )
-        model.bind("theme_idx", self._theme_index, self._set_theme_index)
+        model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
+        model.bind_func("theme_has_variants", self._theme_has_variants)
         model.bind("progress_bar_idx", self._progress_bar_index, self._set_progress_bar_index)
+        model.bind(
+            "viewport_chrome_idx",
+            self._viewport_chrome_index,
+            self._set_viewport_chrome_index,
+        )
+        model.bind(
+            "viewport_toolbar_position_idx",
+            self._viewport_toolbar_position_index,
+            self._set_viewport_toolbar_position_index,
+        )
         model.bind("scale_idx", self._scale_index, self._set_scale_index)
         model.bind(
             "scene_upscaler_idx",
@@ -127,6 +155,12 @@ class PreferencesPanel(Panel):
         )
         model.bind("language_idx", self._language_index, self._set_language_index)
         model.bind("navigation_idx", self._navigation_index, self._set_navigation_index)
+        model.bind("zoom_speed", lf.ui.get_zoom_speed_preference, self._set_zoom_speed)
+        model.bind(
+            "navigation_speed",
+            lf.ui.get_navigation_speed_preference,
+            self._set_navigation_speed,
+        )
         model.bind("view_snap", lf.get_camera_view_snap_enabled, self._set_view_snap)
         model.bind("remember_navigation", lf.ui.remember_camera_navigation, self._set_remember_navigation)
         model.bind("remember_view_snap", lf.ui.remember_camera_view_snap, self._set_remember_view_snap)
@@ -138,15 +172,12 @@ class PreferencesPanel(Panel):
         model.bind("mcp_enabled", lambda: self._mcp_enabled, self._set_mcp_enabled)
         model.bind("mcp_expose_network", lambda: self._mcp_expose_network, self._set_mcp_expose_network)
         model.bind("mcp_port", lambda: self._mcp_port, self._set_mcp_port)
-        model.bind("working_directory", lambda: self._working_directory, self._set_working_directory_draft)
-        model.bind_func("working_directory_hint", self._working_directory_hint)
+        model.bind("project_location", lambda: self._project_location, self._set_project_location_draft)
+        model.bind_func("project_location_hint", self._project_location_hint)
         model.bind(
-            "asset_manager_directory",
-            lambda: self._asset_manager_directory,
-            self._set_asset_manager_directory_draft,
-        )
-        model.bind_func(
-            "asset_manager_directory_hint", self._asset_manager_directory_hint
+            "embed_dataset_by_default",
+            getattr(lf.ui, "get_embed_dataset_by_default", lambda: False),
+            self._set_embed_dataset_by_default,
         )
         model.bind("mcp_request_logging", lambda: self._mcp_request_logging, self._set_mcp_request_logging)
         model.bind_func("mcp_safe_mode", lambda: self._mcp_safe_mode)
@@ -169,30 +200,18 @@ class PreferencesPanel(Panel):
         model.bind_event("toggle_mcp_enabled", self._on_toggle_mcp_enabled)
         model.bind_event("mcp_port_change", self._on_mcp_port_change)
         model.bind_event("confirm_mcp_port", self._on_confirm_mcp_port)
-        model.bind_event("working_directory_change", self._on_working_directory_change)
-        model.bind_event("confirm_working_directory", self._on_confirm_working_directory)
-        model.bind_event("browse_working_directory", self._on_browse_working_directory)
-        model.bind_event("use_default_working_directory", self._on_use_default_working_directory)
-        model.bind_event(
-            "asset_manager_directory_change",
-            self._on_asset_manager_directory_change,
-        )
-        model.bind_event(
-            "confirm_asset_manager_directory",
-            self._on_confirm_asset_manager_directory,
-        )
-        model.bind_event(
-            "browse_asset_manager_directory",
-            self._on_browse_asset_manager_directory,
-        )
-        model.bind_event(
-            "use_default_asset_manager_directory",
-            self._on_use_default_asset_manager_directory,
-        )
+        model.bind_event("project_location_change", self._on_project_location_change)
+        model.bind_event("confirm_project_location", self._on_confirm_project_location)
+        model.bind_event("browse_project_location", self._on_browse_project_location)
+        model.bind_event("use_default_project_location", self._on_use_default_project_location)
         model.bind_event("open_mcp_log_folder", self._on_open_mcp_log_folder)
         model.bind_event("toggle_section", self._on_toggle_section)
-        model.bind_record_list("themes")
+        model.bind_event("set_theme_variant", self._set_theme_variant)
+        model.bind_record_list("theme_families")
+        model.bind_record_list("theme_variants")
         model.bind_record_list("progress_bar_styles")
+        model.bind_record_list("viewport_chrome_styles")
+        model.bind_record_list("viewport_toolbar_positions")
         model.bind_record_list("scales")
         model.bind_record_list("scene_upscalers")
         model.bind_record_list("scene_upscaler_presets")
@@ -213,6 +232,7 @@ class PreferencesPanel(Panel):
                 "click", lambda _ev: self._on_close(None, None, None)
             )
         self._document = doc
+        self._mount_count += 1
         self._expanded_sections = set(self.EXPANDABLE_SECTIONS)
         self._dirty_expanded_sections()
         self._rebuild_records()
@@ -221,8 +241,14 @@ class PreferencesPanel(Panel):
         self._last_state = self._state()
         self._refresh_selection()
         self._keymap.on_mount(doc)
+        self._ensure_keymap_rows_if_visible()
+        if callable(getattr(doc, "query_selector_all", None)) and callable(
+            getattr(doc, "add_event_listener", None)
+        ):
+            self._scrub_fields.mount(doc)
 
     def on_unmount(self, doc):
+        self._scrub_fields.unmount()
         self._keymap.on_unmount()
         self._document = None
         self._handle = None
@@ -231,24 +257,38 @@ class PreferencesPanel(Panel):
     def on_update(self, doc):
         self._consume_section_request()
         self._sync_mcp_runtime()
+        self._ensure_keymap_rows_if_visible()
         state = self._state()
         if state != self._last_state:
             self._last_state = state
             self._sync_scene_upscaler_preset_records()
+            self._sync_theme_variant_records()
             self._dirty_selection()
             self._dirty_mcp()
+        self._scrub_fields.sync_all()
         self._keymap.on_update(doc)
+
+    def _ensure_keymap_rows_if_visible(self):
+        if self._section == "input" and "key_bindings" in self._expanded_sections:
+            self._keymap.ensure_binding_rows()
 
     def _state(self):
         return (
             lf.ui.get_theme(),
+            lf.ui.get_theme_family(),
+            lf.ui.get_theme_mode(),
             lf.ui.get_progress_bar_style(),
+            lf.ui.get_viewport_chrome_style(),
+            lf.ui.get_viewport_toolbar_position(),
             float(lf.ui.get_ui_scale_preference()),
             self._scene_upscaler(),
             self._scene_upscaler_preset(),
             lf.ui.get_current_language(),
             lf.get_camera_navigation_mode(),
+            float(lf.ui.get_zoom_speed_preference()),
+            float(lf.ui.get_navigation_speed_preference()),
             lf.get_camera_view_snap_enabled(),
+            getattr(lf.ui, "get_embed_dataset_by_default", lambda: False)(),
             lf.ui.remember_camera_navigation(),
             lf.ui.remember_camera_view_snap(),
             self._mcp_status_signature(),
@@ -260,24 +300,58 @@ class PreferencesPanel(Panel):
             lf.ui.themes(),
             key=lambda theme: (theme.get("order", 0), theme.get("name", theme.get("id", ""))),
         )
+        families = {}
+        for theme in self._theme_catalog:
+            family_id = theme.get("family_id") or theme["id"]
+            family = families.setdefault(
+                family_id,
+                {
+                    "id": family_id,
+                    "name": theme.get("family_name") or theme.get("name") or family_id,
+                    "order": theme.get("order", 0),
+                    "variants": [],
+                },
+            )
+            family["order"] = min(family["order"], theme.get("order", 0))
+            family["variants"].append(theme)
+        self._theme_families = sorted(
+            families.values(), key=lambda family: (family["order"], family["name"])
+        )
         self._language_catalog = list(lf.ui.get_languages())
         if not self._handle:
             return
         self._handle.update_record_list(
-            "themes",
+            "theme_families",
             [
                 {
                     "index": str(index),
-                    "label": lf.ui.tr(theme.get("label_key") or theme.get("name") or theme["id"]),
+                    "label": family["name"],
                 }
-                for index, theme in enumerate(self._theme_catalog)
+                for index, family in enumerate(self._theme_families)
             ],
         )
+        self._sync_theme_variant_records()
         self._handle.update_record_list(
             "progress_bar_styles",
             [
                 {"index": str(index), "label": lf.ui.tr(label)}
                 for index, (_style, label) in enumerate(self.PROGRESS_BAR_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "viewport_chrome_styles",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_style, label) in enumerate(self.VIEWPORT_CHROME_OPTIONS)
+            ],
+        )
+        self._handle.update_record_list(
+            "viewport_toolbar_positions",
+            [
+                {"index": str(index), "label": lf.ui.tr(label)}
+                for index, (_position, label) in enumerate(
+                    self.VIEWPORT_TOOLBAR_POSITION_OPTIONS
+                )
             ],
         )
         self._handle.update_record_list(
@@ -314,20 +388,82 @@ class PreferencesPanel(Panel):
         )
         self._reload_file_associations()
 
-    def _theme_index(self):
-        current = lf.ui.get_theme()
-        for index, theme in enumerate(self._theme_catalog):
-            if theme["id"] == current:
+    def _theme_family_index(self):
+        current = lf.ui.get_theme_family()
+        for index, family in enumerate(self._theme_families):
+            if family["id"] == current:
                 return str(index)
         return "0"
 
-    def _set_theme_index(self, value):
+    def _set_theme_family_index(self, value):
         try:
             index = int(value)
         except (TypeError, ValueError):
             return
-        if 0 <= index < len(self._theme_catalog):
-            lf.ui.set_theme(self._theme_catalog[index]["id"])
+        if 0 <= index < len(self._theme_families):
+            family = self._theme_families[index]
+            variants = family["variants"]
+            available_modes = {variant["mode"] for variant in variants}
+            mode = lf.ui.get_theme_mode()
+            if len(variants) == 1:
+                mode = variants[0]["mode"]
+            elif mode != "auto" and mode not in available_modes:
+                mode = "dark" if "dark" in available_modes else "light"
+            lf.ui.set_theme_family(family["id"], mode)
+            self._sync_theme_variant_records()
+            self._refresh_selection()
+
+    def _selected_theme_family(self):
+        current = lf.ui.get_theme_family()
+        return next(
+            (family for family in self._theme_families if family["id"] == current),
+            None,
+        )
+
+    def _theme_has_variants(self):
+        family = self._selected_theme_family()
+        return bool(family and len(family["variants"]) > 1)
+
+    def _sync_theme_variant_records(self):
+        if not self._handle:
+            return
+        family = self._selected_theme_family()
+        selection_mode = lf.ui.get_theme_mode()
+        records = []
+        if family and len(family["variants"]) > 1:
+            variants = sorted(
+                family["variants"],
+                key=lambda variant: (variant.get("order", 0), variant.get("mode", "")),
+            )
+            for variant in variants:
+                records.append(
+                    {
+                        "mode": variant["mode"],
+                        "label": variant.get("variant_name") or variant.get("name") or variant["mode"],
+                        "selected": selection_mode == variant["mode"],
+                    }
+                )
+            modes = {variant["mode"] for variant in variants}
+            if {"dark", "light"}.issubset(modes) and lf.ui.supports_system_theme():
+                records.append(
+                    {
+                        "mode": "auto",
+                        "label": lf.ui.tr("menu.view.theme.auto"),
+                        "selected": selection_mode == "auto",
+                    }
+                )
+        self._handle.update_record_list("theme_variants", records)
+        self._handle.dirty("theme_has_variants")
+
+    def _set_theme_variant(self, _handle, _event, args):
+        if not args:
+            return
+        mode = str(args[0])
+        family = self._selected_theme_family()
+        if not family:
+            return
+        if lf.ui.set_theme_family(family["id"], mode):
+            self._sync_theme_variant_records()
             self._refresh_selection()
 
     def _progress_bar_index(self):
@@ -344,6 +480,40 @@ class PreferencesPanel(Panel):
             return
         if 0 <= index < len(self.PROGRESS_BAR_OPTIONS):
             lf.ui.set_progress_bar_style(self.PROGRESS_BAR_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _viewport_chrome_index(self):
+        current = lf.ui.get_viewport_chrome_style()
+        for index, (style, _label) in enumerate(self.VIEWPORT_CHROME_OPTIONS):
+            if style == current:
+                return str(index)
+        return "1"
+
+    def _set_viewport_chrome_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.VIEWPORT_CHROME_OPTIONS):
+            lf.ui.set_viewport_chrome_style(self.VIEWPORT_CHROME_OPTIONS[index][0])
+            self._refresh_selection()
+
+    def _viewport_toolbar_position_index(self):
+        current = lf.ui.get_viewport_toolbar_position()
+        for index, (position, _label) in enumerate(self.VIEWPORT_TOOLBAR_POSITION_OPTIONS):
+            if position == current:
+                return str(index)
+        return "1"
+
+    def _set_viewport_toolbar_position_index(self, value):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return
+        if 0 <= index < len(self.VIEWPORT_TOOLBAR_POSITION_OPTIONS):
+            lf.ui.set_viewport_toolbar_position(
+                self.VIEWPORT_TOOLBAR_POSITION_OPTIONS[index][0]
+            )
             self._refresh_selection()
 
     def _scale_index(self):
@@ -518,6 +688,27 @@ class PreferencesPanel(Panel):
             lf.set_camera_navigation_mode(self.NAVIGATION_OPTIONS[index][0])
             self._refresh_selection()
 
+    def _set_zoom_speed(self, value):
+        lf.ui.set_zoom_speed_preference(float(value))
+        self._refresh_selection()
+
+    def _set_navigation_speed(self, value):
+        lf.ui.set_navigation_speed_preference(float(value))
+        self._refresh_selection()
+
+    def _get_scrub_value(self, prop):
+        if prop == "zoom_speed":
+            return float(lf.ui.get_zoom_speed_preference())
+        if prop == "navigation_speed":
+            return float(lf.ui.get_navigation_speed_preference())
+        return self.SPEED_SCRUB_FIELD_DEFS[prop].min_value
+
+    def _set_scrub_value(self, prop, value):
+        if prop == "zoom_speed":
+            self._set_zoom_speed(value)
+        elif prop == "navigation_speed":
+            self._set_navigation_speed(value)
+
     def _set_view_snap(self, enabled):
         lf.set_camera_view_snap_enabled(bool(enabled))
         self._refresh_selection()
@@ -540,139 +731,75 @@ class PreferencesPanel(Panel):
         lf.ui.set_scene_graph_selection_markers(bool(enabled))
         self._refresh_selection()
 
-    def _read_working_directory(self):
-        stored = lf.ui.get_working_directory_preference()
-        self._applied_working_directory = stored or lf.ui.get_default_working_directory()
-        self._working_directory = self._applied_working_directory
-        self._dirty_working_directory()
+    def _read_project_location(self):
+        stored = lf.ui.get_project_location_preference()
+        self._applied_project_location = stored or lf.ui.get_default_project_location()
+        self._project_location = self._applied_project_location
+        self._dirty_project_location()
 
-    def _set_working_directory_draft(self, value):
-        self._working_directory = str(value).strip()
-        self._dirty_working_directory()
+    def _set_project_location_draft(self, value):
+        self._project_location = str(value).strip()
+        self._dirty_project_location()
 
-    def _on_working_directory_change(self, _handle, event, args):
+    @staticmethod
+    def _set_embed_dataset_by_default(enabled):
+        setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
+        if setter:
+            setter(bool(enabled))
+
+    def _on_project_location_change(self, _handle, event, args):
         if args:
-            self._set_working_directory_draft(args[0])
+            self._set_project_location_draft(args[0])
         if event.get_bool_parameter("linebreak", False):
-            self._commit_working_directory()
+            self._commit_project_location()
 
-    def _on_confirm_working_directory(self, _handle, _event, _args):
-        self._commit_working_directory()
+    def _on_confirm_project_location(self, _handle, _event, _args):
+        self._commit_project_location()
 
-    def _on_browse_working_directory(self, _handle, _event, _args):
-        start = self._working_directory or lf.ui.get_default_working_directory()
+    def _on_browse_project_location(self, _handle, _event, _args):
+        start = self._project_location or lf.ui.get_default_project_location()
         chosen = lf.ui.open_folder_dialog(
-            lf.ui.tr("preferences.working_directory"), start)
-        if not chosen:
-            return
-        self._working_directory = chosen
-        self._commit_working_directory()
+            lf.ui.tr("preferences.project_location"), start)
+        if chosen:
+            self._project_location = chosen
+            self._commit_project_location()
 
-    def _on_use_default_working_directory(self, _handle, _event, _args):
-        lf.ui.clear_working_directory()
-        self._read_working_directory()
+    def _on_use_default_project_location(self, _handle, _event, _args):
+        lf.ui.clear_project_location()
+        self._read_project_location()
 
-    def _working_directory_hint(self):
-        path = lf.ui.get_temp_project_directory()
-        template = lf.ui.tr("preferences.working_directory_hint") or "Temporary projects: {path}"
-        return template.replace("{path}", path)
-
-    def _commit_working_directory(self):
-        draft = (self._working_directory or "").strip()
-        default_path = lf.ui.get_default_working_directory()
-        if not draft or draft == default_path:
-            lf.ui.clear_working_directory()
-            self._read_working_directory()
-            return True
-        error = lf.ui.set_working_directory(draft)
-        if error:
-            lf.ui.message_dialog(
-                lf.ui.tr("preferences.working_directory"),
-                error or lf.ui.tr("preferences.working_directory_invalid"),
-                "error",
-            )
-            self._working_directory = self._applied_working_directory
-            self._dirty_working_directory()
-            return False
-        self._read_working_directory()
-        return True
-
-    def _dirty_working_directory(self):
-        if not self._handle:
-            return
-        self._handle.dirty("working_directory")
-        self._handle.dirty("working_directory_hint")
-
-    def _read_asset_manager_directory(self):
-        stored = lf.ui.get_asset_manager_directory_preference()
-        self._applied_asset_manager_directory = (
-            stored or lf.ui.get_default_asset_manager_directory()
-        )
-        self._asset_manager_directory = self._applied_asset_manager_directory
-        self._dirty_asset_manager_directory()
-
-    def _set_asset_manager_directory_draft(self, value):
-        self._asset_manager_directory = str(value).strip()
-        self._dirty_asset_manager_directory()
-
-    def _on_asset_manager_directory_change(self, _handle, event, args):
-        if args:
-            self._set_asset_manager_directory_draft(args[0])
-        if event.get_bool_parameter("linebreak", False):
-            self._commit_asset_manager_directory()
-
-    def _on_confirm_asset_manager_directory(self, _handle, _event, _args):
-        self._commit_asset_manager_directory()
-
-    def _on_browse_asset_manager_directory(self, _handle, _event, _args):
-        start = (
-            self._asset_manager_directory
-            or lf.ui.get_default_asset_manager_directory()
-        )
-        chosen = lf.ui.open_folder_dialog(
-            lf.ui.tr("preferences.asset_manager_directory"), start
-        )
-        if not chosen:
-            return
-        self._asset_manager_directory = chosen
-        self._commit_asset_manager_directory()
-
-    def _on_use_default_asset_manager_directory(self, _handle, _event, _args):
-        lf.ui.clear_asset_manager_directory()
-        self._read_asset_manager_directory()
-
-    def _asset_manager_directory_hint(self):
+    def _project_location_hint(self):
         template = (
-            lf.ui.tr("preferences.asset_manager_directory_hint")
-            or "Projects in this directory appear in the Default folder: {path}"
+            lf.ui.tr("preferences.project_location_hint")
+            or "New projects and the Asset Manager Default folder: {path}"
         )
-        return template.replace("{path}", self._applied_asset_manager_directory)
+        return template.replace("{path}", self._applied_project_location)
 
-    def _commit_asset_manager_directory(self):
-        draft = (self._asset_manager_directory or "").strip()
-        default_path = lf.ui.get_default_asset_manager_directory()
+    def _commit_project_location(self):
+        draft = (self._project_location or "").strip()
+        default_path = lf.ui.get_default_project_location()
         if not draft or draft == default_path:
-            lf.ui.clear_asset_manager_directory()
-            self._read_asset_manager_directory()
+            lf.ui.clear_project_location()
+            self._read_project_location()
             return True
-        error = lf.ui.set_asset_manager_directory(draft)
+        error = lf.ui.set_project_location(draft)
         if error:
             lf.ui.message_dialog(
-                lf.ui.tr("preferences.asset_manager_settings"),
-                error or lf.ui.tr("preferences.asset_manager_directory_invalid"),
+                lf.ui.tr("preferences.project_location"),
+                error or lf.ui.tr("preferences.project_location_invalid"),
                 "error",
             )
-            self._asset_manager_directory = self._applied_asset_manager_directory
-            self._dirty_asset_manager_directory()
+            self._project_location = self._applied_project_location
+            self._dirty_project_location()
             return False
-        self._read_asset_manager_directory()
+        self._read_project_location()
         return True
 
-    def _dirty_asset_manager_directory(self):
+    def _dirty_project_location(self):
         if not self._handle:
             return
-        self._handle.dirty("asset_manager_directory")
-        self._handle.dirty("asset_manager_directory_hint")
+        self._handle.dirty("project_location")
+        self._handle.dirty("project_location_hint")
 
     def _read_mcp_preferences(self):
         preferences = lf.ui.get_mcp_preferences()
@@ -956,20 +1083,20 @@ class PreferencesPanel(Panel):
     def _on_close(self, _handle, _event, _args):
         # The floating-window title bar is cancellation: discard an unconfirmed
         # port draft while preserving settings that were already applied live.
+        mcp_draft_changed = self._mcp_port != str(self._mcp_applied_port)
+        project_draft_changed = self._project_location != self._applied_project_location
         self._mcp_port = str(self._mcp_applied_port)
-        self._working_directory = self._applied_working_directory
-        self._asset_manager_directory = self._applied_asset_manager_directory
-        self._dirty_mcp()
-        self._dirty_working_directory()
-        self._dirty_asset_manager_directory()
+        self._project_location = self._applied_project_location
+        if mcp_draft_changed:
+            self._dirty_mcp()
+        if project_draft_changed:
+            self._dirty_project_location()
         lf.ui.set_panel_enabled(self.id, False)
 
     def _on_accept_and_close(self, _handle, _event, _args):
         if not self._commit_mcp_port():
             return
-        if not self._commit_working_directory():
-            return
-        if not self._commit_asset_manager_directory():
+        if not self._commit_project_location():
             return
         lf.ui.set_panel_enabled(self.id, False)
 
@@ -977,6 +1104,7 @@ class PreferencesPanel(Panel):
         if self._section == section:
             return
         self._section = section
+        self._ensure_keymap_rows_if_visible()
         if self._handle:
             for name in (
                 "show_general",
@@ -1003,6 +1131,7 @@ class PreferencesPanel(Panel):
             self._expanded_sections.add(section)
         if self._handle:
             self._handle.dirty(f"{section}_expanded")
+        self._ensure_keymap_rows_if_visible()
 
     def _dirty_expanded_sections(self):
         if not self._handle:
@@ -1073,18 +1202,23 @@ class PreferencesPanel(Panel):
         section = section or self._section
         if section == "general":
             lf.ui.set_language("en")
-            lf.ui.clear_working_directory()
-            lf.ui.clear_asset_manager_directory()
-            self._read_working_directory()
-            self._read_asset_manager_directory()
+            lf.ui.clear_project_location()
+            setter = getattr(lf.ui, "set_embed_dataset_by_default", None)
+            if setter:
+                setter(False)
+            self._read_project_location()
         elif section == "appearance":
             lf.ui.set_theme("dark")
             lf.ui.set_progress_bar_style("classic")
+            lf.ui.set_viewport_chrome_style("translucent")
+            lf.ui.set_viewport_toolbar_position("centered")
             lf.ui.set_ui_scale(0.0)
             lf.ui.set_scene_reconstruction("native", "native")
             lf.ui.reset_scene_reconstruction_preferences()
             self._sync_scene_upscaler_preset_records()
         elif section == "input":
+            lf.ui.set_zoom_speed_preference(11.0)
+            lf.ui.set_navigation_speed_preference(8.0)
             lf.ui.set_remember_camera_navigation(False)
             lf.ui.set_remember_camera_view_snap(False)
             lf.set_camera_navigation_mode("orbit")
@@ -1102,22 +1236,28 @@ class PreferencesPanel(Panel):
 
     def _refresh_selection(self):
         self._last_state = self._state()
+        self._sync_theme_variant_records()
         self._dirty_selection()
 
     def _dirty_selection(self):
         if self._handle:
-            self._handle.dirty("theme_idx")
+            self._handle.dirty("theme_family_idx")
+            self._handle.dirty("theme_has_variants")
             self._handle.dirty("progress_bar_idx")
+            self._handle.dirty("viewport_chrome_idx")
+            self._handle.dirty("viewport_toolbar_position_idx")
             self._handle.dirty("scale_idx")
             self._handle.dirty("scene_upscaler_idx")
             self._handle.dirty("scene_upscaler_preset_idx")
             self._handle.dirty("scene_upscaler_has_preset")
             self._handle.dirty("language_idx")
             self._handle.dirty("navigation_idx")
+            self._handle.dirty("zoom_speed")
+            self._handle.dirty("navigation_speed")
             self._handle.dirty("view_snap")
             self._handle.dirty("remember_navigation")
             self._handle.dirty("remember_view_snap")
             self._handle.dirty("scene_graph_selection_markers")
             self._dirty_mcp()
-            self._dirty_working_directory()
-            self._dirty_asset_manager_directory()
+            self._dirty_project_location()
+            self._handle.dirty("embed_dataset_by_default")

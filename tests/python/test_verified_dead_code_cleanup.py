@@ -20,7 +20,7 @@ def test_verified_zero_reference_census_stays_removed() -> None:
 
     joint_device = source("src/training/include/lfs/training/joint_adam_codec.cuh")
     assert "encode_g1g2" not in joint_device
-    sh_device = source("src/training/include/lfs/training/sh_value_codec.cuh")
+    sh_device = source("src/core/include/core/sh_value_codec.cuh")
     for token in ("kBlockSizeDevice", "decode_slot", "encode_slot"):
         assert token not in sh_device
 

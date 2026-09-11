@@ -91,6 +91,9 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
+lfs_validate_vcpkg_profile()
+
 project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SelectFastLinker.cmake")
@@ -160,35 +163,6 @@ add_custom_target(lfs_git_version ALL
             -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
     COMMENT "Refreshing git_version.h"
     VERBATIM
-)
-
-# App/core ABI tripwire. Hash every lfs_core implementation and interface input,
-# because a dirty-worktree rebuild cannot rely on the Git commit alone to
-# distinguish a newly linked app from a stale shared library.
-file(GLOB_RECURSE LFS_CORE_BUILD_INPUTS CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/core/*.cpp"
-    "${CMAKE_SOURCE_DIR}/src/core/*.cu"
-    "${CMAKE_SOURCE_DIR}/src/core/*.cuh"
-    "${CMAKE_SOURCE_DIR}/src/core/*.hpp"
-)
-list(APPEND LFS_CORE_BUILD_INPUTS
-    "${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt"
-)
-list(SORT LFS_CORE_BUILD_INPUTS)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    ${LFS_CORE_BUILD_INPUTS}
-)
-set(_lfs_core_abi_material
-    "${PROJECT_VERSION}|${GIT_COMMIT_HASH_SHORT}|${CMAKE_BUILD_TYPE}|${CMAKE_SYSTEM_NAME}|${CMAKE_SIZEOF_VOID_P}|${CMAKE_CXX_COMPILER_ID}|${CMAKE_CXX_COMPILER_VERSION}|${CMAKE_CUDA_COMPILER_ID}|${CMAKE_CUDA_COMPILER_VERSION}|${CMAKE_CUDA_ARCHITECTURES}|${VCPKG_TARGET_TRIPLET}")
-foreach(_lfs_core_build_input IN LISTS LFS_CORE_BUILD_INPUTS)
-    file(SHA256 "${_lfs_core_build_input}" _lfs_core_build_input_hash)
-    string(APPEND _lfs_core_abi_material "|${_lfs_core_build_input_hash}")
-endforeach()
-string(SHA256 LFS_CORE_ABI_STAMP "${_lfs_core_abi_material}")
-configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/lfs_core_abi_stamp.h.in"
-    "${CMAKE_BINARY_DIR}/include/lfs_core_abi_stamp.h"
-    @ONLY
 )
 
 option(BUILD_TESTS "Build tests" OFF)
@@ -495,42 +469,22 @@ find_package(glm REQUIRED)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNativeFileDialog.cmake")
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(JPEG REQUIRED)
+find_package(PNG REQUIRED)
+find_package(TIFF REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
+find_package(tinyexr CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
-find_package(OpenImageIO REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
-
-# OpenImageIO's static vcpkg target exposes fmt::fmt-header-only through
-# OpenImageIO_Util. That definition is needed by TUs which include OIIO, but it
-# otherwise makes every source in a consumer instantiate fmt. Preserve OIIO's
-# own public compile interface while making the static archive closure link-only;
-# each of our five OIIO source files opts into FMT_HEADER_ONLY explicitly.
-add_library(lfs_oiio INTERFACE)
-target_link_libraries(lfs_oiio INTERFACE "$<LINK_ONLY:OpenImageIO::OpenImageIO>")
-get_target_property(_lfs_oiio_includes OpenImageIO::OpenImageIO INTERFACE_INCLUDE_DIRECTORIES)
-if(_lfs_oiio_includes)
-    target_include_directories(lfs_oiio SYSTEM INTERFACE ${_lfs_oiio_includes})
-endif()
-get_target_property(_lfs_oiio_definitions OpenImageIO::OpenImageIO INTERFACE_COMPILE_DEFINITIONS)
-if(_lfs_oiio_definitions)
-    target_compile_definitions(lfs_oiio INTERFACE ${_lfs_oiio_definitions})
-endif()
-get_target_property(_lfs_oiio_features OpenImageIO::OpenImageIO INTERFACE_COMPILE_FEATURES)
-if(_lfs_oiio_features)
-    target_compile_features(lfs_oiio INTERFACE ${_lfs_oiio_features})
-endif()
-unset(_lfs_oiio_includes)
-unset(_lfs_oiio_definitions)
-unset(_lfs_oiio_features)
 
 # Vulkan-native depth: glm::perspective/ortho/frustum must emit clip-space z in
 # [0, 1], not OpenGL's [-1, 1]. Keeps gl_FragDepth, the grid pass, the depth-
@@ -548,6 +502,36 @@ configure_file(
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/config.h.in"
         "${CMAKE_CURRENT_BINARY_DIR}/include/config.h"
         @ONLY
+)
+
+# App/core ABI tripwire. Seed headers for IDEs and syntax checks at configure
+# time, then refresh before ABI consumers build without making core source/header
+# edits configure dependencies. Define this after the effective CUDA architecture
+# selection so the stamp represents the actual
+# target configuration. Each multi-config configuration gets its own header so
+# Debug and Release cannot race or overwrite each other.
+include(cmake/InitializeCoreAbiStamp.cmake)
+lfs_initialize_core_abi_stamps()
+add_custom_target(lfs_core_abi_stamp ALL
+    BYPRODUCTS "${LFS_CORE_ABI_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        "-DLFS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DLFS_CORE_ABI_TEMPLATE=${CMAKE_SOURCE_DIR}/cmake/lfs_core_abi_stamp.h.in"
+        "-DLFS_CORE_ABI_HEADER=${LFS_CORE_ABI_HEADER}"
+        "-DLFS_PROJECT_VERSION=${PROJECT_VERSION}"
+        "-DLFS_CONFIGURED_GIT_COMMIT_HASH_SHORT=${GIT_COMMIT_HASH_SHORT}"
+        "-DLFS_BUILD_CONFIG=$<CONFIG>"
+        "-DLFS_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
+        "-DLFS_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
+        "-DLFS_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        "-DLFS_CXX_COMPILER_VERSION=${CMAKE_CXX_COMPILER_VERSION}"
+        "-DLFS_CUDA_COMPILER_ID=${CMAKE_CUDA_COMPILER_ID}"
+        "-DLFS_CUDA_COMPILER_VERSION=${CMAKE_CUDA_COMPILER_VERSION}"
+        "-DLFS_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
+        "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
+    COMMENT "Refreshing lfs_core ABI stamp"
+    VERBATIM
 )
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -623,6 +607,7 @@ add_executable(${PROJECT_NAME}
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
+    resources/lichtfeld-studio.manifest
 )
 if(TARGET lfs_scene_upscaler_nvidia_dlss)
     add_dependencies(${PROJECT_NAME} lfs_scene_upscaler_nvidia_dlss)
@@ -630,6 +615,11 @@ endif()
 if(TARGET lfs_scene_upscaler_amd_fsr3)
     add_dependencies(${PROJECT_NAME} lfs_scene_upscaler_amd_fsr3)
 endif()
+
+add_dependencies(${PROJECT_NAME} lfs_core_abi_stamp)
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
+    "${LFS_CORE_ABI_INCLUDE_DIR}"
+)
 
 # The binary only carries code for these architectures; the app refuses to start on anything
 # lower instead of dying inside the first kernel launch (#1540).
@@ -806,8 +796,17 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     set(_vcpkg_debug_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
     set(_vcpkg_release_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
     file(GLOB _vcpkg_release_dlls CONFIGURE_DEPENDS "${_vcpkg_release_bin_dir}/*.dll")
-    file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
-    
+
+    # A single-config Release/RelWithDebInfo build never consumes Debug DLLs,
+    # so changes in debug/bin must not invalidate its CMake graph. Multi-config
+    # generators still need both lists because one graph serves all configs.
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_is_multi_config OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+        file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
+    else()
+        set(_vcpkg_debug_dlls)
+    endif()
+
     # Always copy release DLLs - needed for both Release and Debug builds
     if(_vcpkg_release_dlls)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -817,11 +816,10 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
             COMMENT "Copying vcpkg release DLLs"
         )
     endif()
-    
+
     # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
     # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
     # For multi-config generators (VS, Xcode): use generator expression
-    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     if(_is_multi_config)
         # Multi-config: use generator expression to conditionally copy
         if(_vcpkg_debug_dlls)
@@ -1052,6 +1050,9 @@ add_custom_target(copy_locale_files
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales"
         "${RESOURCE_DIR}/locales"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
+        "${RESOURCE_DIR}/locale_index.json"
     COMMENT "Syncing locale files"
 )
 add_dependencies(${PROJECT_NAME} copy_locale_files)
@@ -1066,57 +1067,6 @@ add_custom_target(copy_viewer_resource_files
     COMMENT "Syncing HTML viewer export resources"
 )
 add_dependencies(${PROJECT_NAME} copy_viewer_resource_files)
-
-# OpenUSD runtime resources (schema/file-format plugin metadata).
-# On Windows: copy to <exe>/usd/ so that relative LibraryPaths resolve to the
-# DLL copies already loaded from the exe directory.
-# On Linux: copy to <exe>/../lib/usd/ (conventional layout).
-set(_USD_PLUGIN_SOURCE_DIR "")
-foreach(_candidate
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd"
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd"
-    "${CMAKE_BINARY_DIR}/src/python/usd")
-    # Require an actual plugin sub-directory (not just the root index).
-    if(NOT _USD_PLUGIN_SOURCE_DIR AND EXISTS "${_candidate}/ar/resources/plugInfo.json")
-        set(_USD_PLUGIN_SOURCE_DIR "${_candidate}")
-    endif()
-endforeach()
-
-set(_USD_ROOT_INDEX "")
-foreach(_candidate
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd/plugInfo.json"
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd/plugInfo.json"
-    "${CMAKE_BINARY_DIR}/src/python/usd/plugInfo.json")
-    if(NOT _USD_ROOT_INDEX AND EXISTS "${_candidate}")
-        set(_USD_ROOT_INDEX "${_candidate}")
-    endif()
-endforeach()
-
-if(WIN32)
-    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/usd")
-else()
-    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../lib/usd")
-endif()
-
-if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${_USD_PLUGIN_DEST}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            "${_USD_PLUGIN_SOURCE_DIR}"
-            "${_USD_PLUGIN_DEST}"
-        COMMENT "Copying OpenUSD plugin resources (per-module)"
-    )
-    message(STATUS "Post-build: OpenUSD plugin resources will be copied from ${_USD_PLUGIN_SOURCE_DIR}")
-endif()
-
-if(EXISTS "${_USD_ROOT_INDEX}")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_USD_ROOT_INDEX}"
-            "${_USD_PLUGIN_DEST}/plugInfo.json"
-        COMMENT "Copying OpenUSD root plugin index"
-    )
-endif()
 
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
@@ -1276,7 +1226,6 @@ message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  CUDA Standard: ${CMAKE_CUDA_STANDARD}")
-message(STATUS "  OpenImageIO Found: ${OpenImageIO_FOUND}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Temporal CPU Tests: ${BUILD_TEMPORAL_CPU_TESTS}")
 message(STATUS "  Unicode Test Only: ${BUILD_UNICODE_TEST_ONLY}")
@@ -1350,24 +1299,9 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo.png" D
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
+        DESTINATION "${INSTALL_RESOURCE_DIR}")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer" DESTINATION "${INSTALL_RESOURCE_DIR}")
-
-# OpenUSD plugin resources (schema definitions + plugInfo.json files)
-# On Windows configure_usd_plugins() looks for <exe_dir>/usd → install next to the exe (bin/usd).
-# On Linux it looks for <exe_dir>/../lib/usd → install in lib/usd (unchanged).
-if(WIN32)
-    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_BINDIR}/usd")
-else()
-    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_LIBDIR}/usd")
-endif()
-if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    install(DIRECTORY "${_USD_PLUGIN_SOURCE_DIR}/" DESTINATION "${_USD_INSTALL_DEST}"
-            PATTERN "__pycache__" EXCLUDE
-            PATTERN "*.pyc" EXCLUDE)
-endif()
-if(EXISTS "${_USD_ROOT_INDEX}")
-    install(FILES "${_USD_ROOT_INDEX}" DESTINATION "${_USD_INSTALL_DEST}")
-endif()
 
 # Plugin development documentation
 set(DOC_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/doc/LichtFeld-Studio")

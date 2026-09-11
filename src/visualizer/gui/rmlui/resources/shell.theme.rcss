@@ -1,7 +1,13 @@
 /* Theme-dependent shell frame colors. */
 
-#menu-region,
-#right-panel-region,
+#menu-region {
+    @{chrome.menu_decor};
+}
+
+#right-panel-region {
+    @{panel.body_decor};
+}
+
 #status-region {
-    background-color: @{menu.background};
+    @{chrome.status_decor};
 }

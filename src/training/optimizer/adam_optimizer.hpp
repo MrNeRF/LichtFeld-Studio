@@ -144,7 +144,8 @@ namespace lfs::training {
                                      float median_extent,
                                      float r_min,
                                      float r_max);
-        void set_mean_step_far_mask(const bool* mask, int n);
+        // Retain the allocation for both explicit and fused Adam; CPU inputs are uploaded.
+        void set_mean_step_far_mask(lfs::core::Tensor mask);
         void set_screen_share_cap(const float* max_share, int n, float limit, float penalty);
         void refresh_screen_share_buffer();
         [[nodiscard]] bool per_splat_mean_step() const noexcept { return per_splat_mean_step_; }
@@ -228,6 +229,7 @@ namespace lfs::training {
         float mean_step_median_extent_ = 0.0f;
         float mean_step_r_min_ = 1.0f;
         float mean_step_r_max_ = 300.0f;
+        lfs::core::Tensor mean_step_far_mask_storage_;
         const bool* mean_step_far_mask_ = nullptr;
         int mean_step_far_mask_n_ = 0;
         const float* screen_share_max_ = nullptr;
@@ -242,6 +244,7 @@ namespace lfs::training {
         void init_state(ParamType type, bool allocate_grad = false);
         void ensure_grad(ParamType type);
         void step_param(ParamType type, int iteration);
+        void validate_mean_step_far_mask();
         size_t compute_new_capacity(size_t current_capacity, size_t required_size) const;
 
         // Quantized-moment helpers. Moments are uint8 (m signed @ zero-point 128, v as

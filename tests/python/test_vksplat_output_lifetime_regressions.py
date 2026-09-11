@@ -12,6 +12,19 @@ def _read(rel_path: str) -> str:
     return (PROJECT_ROOT / rel_path).read_text(encoding="utf-8")
 
 
+def test_live_training_reserves_shared_scratch_before_render_frame():
+    source = _read("src/visualizer/rendering/vksplat_viewport_renderer.cpp")
+    render_start = source.index("VksplatViewportRenderer::render(")
+    render_body = source[render_start:]
+
+    # A timed install/grow reservation needs an idle window. Taking the render
+    # guard first makes the renderer itself an active frame and starves that
+    # reservation. Keep scratch setup ahead of the guard acquisition.
+    ensure_pos = render_body.index("ensureSharedScratchArena(context, required_shared_scratch)")
+    guard_pos = render_body.index("shared_arena_guard.emplace()")
+    assert ensure_pos < guard_pos
+
+
 def test_vksplat_output_resize_retires_gui_sampled_images_into_pool():
     source = _read("src/visualizer/rendering/vksplat_viewport_renderer.cpp")
     function_start = source.index("VksplatViewportRenderer::ensureOutputImages")

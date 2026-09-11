@@ -10,6 +10,7 @@
 #include "visualizer/app_store.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
+#include <RmlUi/Core/EventListener.h>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -100,10 +101,12 @@ namespace lfs::vis::gui {
         void reloadResources();
         void render();
         void renderCached();
+        void renderFrostedGlass();
         void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
         [[nodiscard]] bool needsAnimationFrame() const {
             return render_needed_ || document_sync_dirty_ || animation_active_ || tooltip_.revealDue() ||
+                   toolbar_drag_active_ ||
                    (vram_hud_ && vram_hud_->needsAnimationFrame());
         }
         // Finite RmlUi scheduled update delay (seconds) when > 0; nullopt for
@@ -112,6 +115,11 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool blocksPointer(double screen_x, double screen_y) const;
 
     private:
+        struct ToolbarDragListener final : Rml::EventListener {
+            RmlViewportOverlay* owner = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
         bool updateTheme();
         void cacheBodyTemplate();
         void ensureBodyDataModelBound(Rml::Element* body);
@@ -120,6 +128,14 @@ namespace lfs::vis::gui {
         void markDocumentSyncDirty();
         bool syncBuiltinDocument(bool force);
         bool updateToolbarRoots();
+        bool updateToolbarRailLayout();
+        bool applyToolbarPosition();
+        void attachToolbarDragListeners();
+        void resetToolbarDragListeners();
+        void onToolbarDrag(Rml::Event& event);
+        [[nodiscard]] float toolbarFreeGap(float toolbar_height) const;
+        [[nodiscard]] float toolbarFreeTop(float toolbar_height) const;
+        [[nodiscard]] float toolbarFreeTravel(float toolbar_height) const;
         void updateViewportContentOffset();
         void bindReactiveStore();
         void refreshGTMetricsOverlayFromStore();
@@ -150,6 +166,7 @@ namespace lfs::vis::gui {
             LeftDockResize = 1u << 16,
             PerfHud = 1u << 17,
             ProjectDrag = 1u << 18,
+            ThemePresentation = 1u << 19,
         };
         void markRenderNeeded(RenderReason reason);
         [[nodiscard]] std::string renderReasonSources() const;
@@ -173,10 +190,27 @@ namespace lfs::vis::gui {
         float applied_secondary_toolbar_x_ = 0.0f;
         float applied_secondary_toolbar_width_ = -1.0f;
         bool toolbar_roots_dirty_ = true;
+        bool toolbar_rail_layout_dirty_ = true;
+        float last_toolbar_dpi_ = 0.0f;
+        bool toolbar_position_preference_dirty_ = true;
+        std::string viewport_toolbar_position_ = "centered";
+        std::string applied_viewport_toolbar_position_;
+        float viewport_toolbar_free_y_ = 0.5f;
+        float applied_primary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
+        float applied_secondary_toolbar_top_ = std::numeric_limits<float>::quiet_NaN();
+        Rml::Element* primary_toolbar_drag_handle_ = nullptr;
+        Rml::Element* secondary_toolbar_drag_handle_ = nullptr;
+        ToolbarDragListener toolbar_drag_listener_;
+        bool toolbar_drag_active_ = false;
+        bool applied_toolbar_drag_active_ = false;
+        bool toolbar_drag_moved_ = false;
+        float toolbar_drag_start_top_ = 0.0f;
+        float toolbar_drag_start_mouse_y_ = 0.0f;
         float viewport_content_offset_ = 0.0f;
         bool viewport_content_offset_dirty_ = true;
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
+        std::string viewport_chrome_style_ = "translucent";
         std::string base_rcss_;
         std::string body_template_rml_;
         bool wants_input_ = false;

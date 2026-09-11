@@ -123,7 +123,7 @@ class _EventStub:
 def test_mesh2splat_panel_uses_dirty_update_policy(mesh2splat_module):
     module, _state = mesh2splat_module
     assert module.Mesh2SplatPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in module.Mesh2SplatPanel.__dict__
+    assert module.Mesh2SplatPanel.update_interval_ms == 100
 
 
 def test_mesh2splat_panel_builds_mesh_and_resolution_records(mesh2splat_module):

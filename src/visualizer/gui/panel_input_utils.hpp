@@ -22,6 +22,8 @@ namespace lfs::vis::gui {
             input.mouse_released[i] = buf.mouse_released[i];
         }
         input.mouse_wheel = buf.mouse_wheel;
+        input.mouse_wheel_x = buf.mouse_wheel_x;
+        input.mouse_button_events = buf.mouse_button_events;
         input.screen_w = buf.window_w;
         input.screen_h = buf.window_h;
         input.key_ctrl = (buf.key_mods & SDL_KMOD_CTRL) != 0;

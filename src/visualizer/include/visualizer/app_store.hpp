@@ -173,6 +173,7 @@ namespace lfs::vis {
             TrainerLoaded,
             EvalPsnr,
             EvalSsim,
+            EvalLpips,
             SceneGeneration,
             SelectionGeneration,
             Fps,
@@ -196,6 +197,7 @@ namespace lfs::vis {
             LanguageGeneration,
             RenderSettingsGeneration,
             ViewportToolbarGeneration,
+            DepthWindowDrawGeneration,
         };
 
         AppStore();
@@ -213,6 +215,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<bool> trainer_loaded;
         lfs::core::reactive::Observable<std::optional<float>> eval_psnr;
         lfs::core::reactive::Observable<std::optional<float>> eval_ssim;
+        lfs::core::reactive::Observable<std::optional<float>> eval_lpips;
         lfs::core::reactive::Observable<std::uint64_t> scene_generation;
         lfs::core::reactive::Observable<std::uint64_t> selection_generation;
         lfs::core::reactive::Observable<float> fps;
@@ -236,6 +239,7 @@ namespace lfs::vis {
         lfs::core::reactive::Observable<std::uint64_t> language_generation;
         lfs::core::reactive::Observable<std::uint64_t> render_settings_generation;
         lfs::core::reactive::Observable<std::uint64_t> viewport_toolbar_generation;
+        lfs::core::reactive::Observable<std::uint64_t> depth_window_draw_generation;
 
     private:
         lfs::core::reactive::Store store_;
@@ -244,5 +248,6 @@ namespace lfs::vis {
     LFS_VIS_API AppStore& app_store();
     LFS_VIS_API void publish_language_generation();
     LFS_VIS_API void publish_viewport_toolbar_generation();
+    LFS_VIS_API void publish_depth_window_draw_commit();
 
 } // namespace lfs::vis

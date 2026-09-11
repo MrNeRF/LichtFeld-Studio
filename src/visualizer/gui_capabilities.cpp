@@ -21,7 +21,7 @@
 #include "visualizer/scene_coordinate_utils.hpp"
 #include <algorithm>
 #include <cmath>
-#include <cstring>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
@@ -597,7 +597,8 @@ namespace lfs::vis::cap {
             if (!local_transform)
                 return std::unexpected("Node not found: " + name);
 
-            scene_manager.setNodeTransform(name, *local_transform);
+            if (!scene_manager.setNodeTransform(name, *local_transform))
+                return std::unexpected("Cannot transform '" + name + "': node is locked");
             return {};
         }
 
@@ -865,8 +866,18 @@ namespace lfs::vis::cap {
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
         entry->captureTransforms(targets);
 
-        for (const auto& name : targets)
-            scene_manager.setNodeTransform(name, transform);
+        for (const auto& name : targets) {
+            const auto* node = scene_manager.getScene().getNode(name);
+            if (!node)
+                return std::unexpected(std::format("Cannot transform '{}': node not found", name));
+            if (static_cast<bool>(node->locked))
+                return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+        }
+
+        for (const auto& name : targets) {
+            if (!scene_manager.setNodeTransform(name, transform))
+                return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+        }
 
         entry->captureAfter();
         vis::op::pushSceneSnapshotIfChanged(std::move(entry));
@@ -1105,27 +1116,20 @@ namespace lfs::vis::cap {
             node->model->shN_set_from_canonical(canon, node->model->means().capacity());
             scene.markPayloadDiverged(node->id);
 
-            const auto before_host = before_rows.cpu().contiguous();
-            const auto after_host = src_tensor.cpu().contiguous();
-            const bool rows_differ =
-                before_host.bytes() != after_host.bytes() ||
-                (before_host.bytes() > 0 &&
-                 std::memcmp(before_host.data_ptr(), after_host.data_ptr(), before_host.bytes()) != 0);
-            if (rows_differ) {
-                vis::op::undoHistory().push(std::make_unique<vis::op::ShNCanonicalRowsUndoEntry>(
-                    "gaussians.write",
-                    vis::op::UndoMetadata{
-                        .id = "tensor.shN",
-                        .label = gaussian_field_label(canonical_field_name),
-                        .source = "mcp",
-                        .scope = "tensor",
-                    },
-                    node_name,
-                    index_tensor.clone(),
-                    std::move(before_rows),
-                    src_tensor.clone(),
-                    &scene_manager));
-            }
+            scene_manager.completePendingSelectionCounts();
+            vis::op::undoHistory().push(std::make_unique<vis::op::ShNCanonicalRowsUndoEntry>(
+                "gaussians.write",
+                vis::op::UndoMetadata{
+                    .id = "tensor.shN",
+                    .label = gaussian_field_label(canonical_field_name),
+                    .source = "mcp",
+                    .scope = "tensor",
+                },
+                node_name,
+                index_tensor.clone(),
+                std::move(before_rows),
+                src_tensor.clone(),
+                &scene_manager));
 
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
             if (rendering_manager)

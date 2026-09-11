@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <python/python_runtime.hpp>
+#include <visualizer/app_store.hpp>
 #include <visualizer/gui/panel_layout.hpp>
 #include <visualizer/gui/panel_registry.hpp>
 
@@ -15,9 +17,14 @@ namespace {
 
     class CountingDirectPanel final : public lfs::vis::gui::IPanel {
     public:
-        explicit CountingDirectPanel(float height) : height_(height) {}
+        explicit CountingDirectPanel(float height, bool poll_result = true)
+            : height_(height), poll_result_(poll_result) {}
 
         void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+
+        bool poll(const lfs::vis::gui::PanelDrawContext&) override { return poll_result_; }
+
+        void setPollResult(bool value) { poll_result_ = value; }
 
         lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override {
             return {.direct = true};
@@ -58,9 +65,51 @@ namespace {
         float last_draw_height = 0.0f;
         float last_cached_x = 0.0f;
         float last_cached_width = 0.0f;
+        bool poll_result_ = true;
 
     private:
         float height_ = 0.0f;
+    };
+
+    class PollGatedUpdatePanel final : public lfs::vis::gui::IPanel {
+    public:
+        void draw(const lfs::vis::gui::PanelDrawContext&) override {}
+
+        lfs::vis::gui::PanelRenderCapabilities renderCapabilities() const override {
+            return {.direct = true};
+        }
+
+        lfs::vis::gui::PanelDirectRenderResult renderDirect(
+            const lfs::vis::gui::PanelDirectRenderRequest& request,
+            const lfs::vis::gui::PanelDrawContext&) override {
+            if (request.mode == lfs::vis::gui::PanelDirectRenderMode::Draw)
+                pending_update = false;
+            return {.handled = true, .height = 24.0f};
+        }
+
+        bool poll(const lfs::vis::gui::PanelDrawContext&) override {
+            ++poll_count;
+            return poll_result;
+        }
+
+        void setPollVisibility(const bool visible) override {
+            poll_visible = visible;
+        }
+
+        bool isVisibleForAnimation() const override {
+            return poll_visible;
+        }
+
+        bool needsAnimationFrame() const override {
+            return pending_update;
+        }
+
+        void setPollResult(const bool result) { poll_result = result; }
+
+        bool poll_result = false;
+        bool poll_visible = true;
+        bool pending_update = true;
+        int poll_count = 0;
     };
 
     class PanelLayoutRenderDemandTest : public ::testing::Test {
@@ -79,8 +128,11 @@ namespace {
             float height,
             uint32_t options = 0,
             float initial_width = 0.0f,
-            float initial_height = 0.0f) {
-            auto panel = std::make_shared<CountingDirectPanel>(height);
+            float initial_height = 0.0f,
+            bool enabled = true,
+            bool poll_result = true,
+            bool is_native = false) {
+            auto panel = std::make_shared<CountingDirectPanel>(height, poll_result);
             lfs::vis::gui::PanelInfo info;
             info.id = std::move(id);
             info.label = info.id;
@@ -88,7 +140,8 @@ namespace {
             info.options = options;
             info.initial_width = initial_width;
             info.initial_height = initial_height;
-            info.is_native = false;
+            info.is_native = is_native;
+            info.enabled = enabled;
             info.panel = panel;
             EXPECT_TRUE(lfs::vis::gui::PanelRegistry::instance().register_panel(std::move(info)));
             return panel;
@@ -104,6 +157,138 @@ namespace {
     };
 
 } // namespace
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockDrawsOnlyActivePanelAtFullContentHeight) {
+    using namespace lfs::vis::gui;
+
+    auto first = registerPanel("test.bottom.draw.first", PanelSpace::BottomDock, 20.0f);
+    auto second = registerPanel("test.bottom.draw.second", PanelSpace::BottomDock, 20.0f);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext draw_ctx;
+    draw_ctx.ui = &ui;
+    PanelInputState input;
+
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+
+    ASSERT_TRUE(layout.isBottomDockVisible());
+    ASSERT_EQ(layout.bottomDockTabs().size(), 2);
+    EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.draw.first");
+    EXPECT_EQ(first->draw_count, 1);
+    EXPECT_EQ(second->draw_count, 0);
+    const auto bar = layout.bottomDockTabBarRect();
+    const float dpi = lfs::python::get_shared_dpi_scale();
+    EXPECT_FLOAT_EQ(bar.y, layout.bottomDockTopY() + PanelLayoutManager::DOCK_GRIP_H * dpi);
+    EXPECT_FLOAT_EQ(first->last_draw_y, bar.y + bar.height);
+    EXPECT_FLOAT_EQ(first->last_draw_y,
+                    layout.bottomDockTopY() +
+                        (PanelLayoutManager::DOCK_GRIP_H + PanelLayoutManager::TAB_BAR_H + 1.0f) * dpi);
+    EXPECT_FLOAT_EQ(first->last_draw_height,
+                    layout.getBottomDockHeight() - bar.height - PanelLayoutManager::DOCK_GRIP_H * dpi);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockEnablingPanelActivatesIt) {
+    using namespace lfs::vis::gui;
+
+    auto first = registerPanel("test.bottom.enable.first", PanelSpace::BottomDock, 20.0f);
+    auto second = registerPanel("test.bottom.enable.second", PanelSpace::BottomDock, 20.0f,
+                                0, 0.0f, 0.0f, false);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    PanelInputState input;
+
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+    PanelRegistry::instance().set_panel_enabled("test.bottom.enable.second", true);
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+
+    EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.enable.second");
+    EXPECT_EQ(first->draw_count, 1);
+    EXPECT_EQ(second->draw_count, 1);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockClosingActivePanelFallsBackToFirst) {
+    using namespace lfs::vis::gui;
+
+    auto first = registerPanel("test.bottom.close.first", PanelSpace::BottomDock, 20.0f);
+    auto second = registerPanel("test.bottom.close.second", PanelSpace::BottomDock, 20.0f);
+    PanelLayoutManager layout;
+    layout.setBottomDockActiveTab("test.bottom.close.second");
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    PanelInputState input;
+
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+    PanelRegistry::instance().set_panel_enabled("test.bottom.close.second", false);
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+
+    EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.close.first");
+    EXPECT_EQ(first->draw_count, 1);
+    EXPECT_EQ(second->draw_count, 1);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, PollFalsePanelIsNotVisibleAndPollFlipDoesNotActivateIt) {
+    using namespace lfs::vis::gui;
+
+    auto first = registerPanel("test.bottom.poll.first", PanelSpace::BottomDock, 20.0f);
+    auto hidden = registerPanel("test.bottom.poll.hidden", PanelSpace::BottomDock, 20.0f,
+                                0, 0.0f, 0.0f, true, false, false);
+    PanelLayoutManager layout;
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    PanelInputState input;
+
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+    ASSERT_EQ(layout.bottomDockTabs().size(), 1);
+    EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.poll.first");
+    hidden->setPollResult(true);
+    ++draw_ctx.scene_generation;
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+
+    ASSERT_EQ(layout.bottomDockTabs().size(), 2);
+    EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.poll.first");
+    EXPECT_EQ(first->draw_count, 2);
+    EXPECT_EQ(hidden->draw_count, 0);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, ApplyProjectStateRestoresBottomDockActiveTab) {
+    using namespace lfs::vis::gui;
+
+    auto first = registerPanel("test.bottom.restore.first", PanelSpace::BottomDock, 20.0f);
+    auto second = registerPanel("test.bottom.restore.second", PanelSpace::BottomDock, 20.0f);
+    PanelLayoutManager layout;
+    PanelLayoutProjectState state;
+    state.bottom_dock_active_tab_id = "test.bottom.restore.second";
+    layout.applyProjectState(state);
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    PanelInputState input;
+
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+
+    EXPECT_EQ(layout.getBottomDockActiveTab(), "test.bottom.restore.second");
+    EXPECT_EQ(first->draw_count, 0);
+    EXPECT_EQ(second->draw_count, 1);
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockCachedDrawsOnlyLastActivePanel) {
+    using namespace lfs::vis::gui;
+
+    auto first = registerPanel("test.bottom.cached.first", PanelSpace::BottomDock, 20.0f);
+    auto second = registerPanel("test.bottom.cached.second", PanelSpace::BottomDock, 20.0f);
+    PanelLayoutManager layout;
+    layout.setBottomDockActiveTab("test.bottom.cached.second");
+    UIContext ui;
+    PanelDrawContext draw_ctx{.ui = &ui};
+    PanelInputState input;
+
+    layout.renderBottomDock(draw_ctx, true, false, input, screen());
+    first->draw_count = second->draw_count = 0;
+    layout.renderBottomDockCached(draw_ctx, true, false, input, screen());
+
+    EXPECT_EQ(first->cached_draw_count, 0);
+    EXPECT_EQ(second->cached_draw_count, 1);
+}
 
 TEST_F(PanelLayoutRenderDemandTest, CanCacheSceneHeaderWhileDrawingActiveTabLive) {
     using namespace lfs::vis::gui;
@@ -288,4 +473,72 @@ TEST_F(PanelLayoutRenderDemandTest, SetPanelSpaceFloatingMasksSameFrame) {
 
     const float left_x = s.work_pos.x + 8.0f;
     EXPECT_FALSE(PanelRegistry::instance().isPositionOverFloatingPanel(left_x, band_y));
+}
+
+TEST_F(PanelLayoutRenderDemandTest,
+       PollHiddenPendingUpdateDoesNotDemandAnimationUntilVisible) {
+    using namespace lfs::vis::gui;
+
+    auto panel = std::make_shared<PollGatedUpdatePanel>();
+    PanelInfo info;
+    info.id = "test.poll_gated_update";
+    info.label = info.id;
+    info.space = PanelSpace::MainPanelTab;
+    info.is_native = false;
+    info.panel = panel;
+    ASSERT_TRUE(PanelRegistry::instance().register_panel(std::move(info)));
+
+    PanelDrawContext ctx;
+    const PanelRenderOptions preload{
+        .target = PanelRenderTarget::for_panel("test.poll_gated_update"),
+        .mode = PanelRenderMode::DirectPreload,
+        .width = 320.0f,
+        .height = 200.0f,
+    };
+    const PanelAnimationVisibility visibility{
+        .active_main_tab = "test.poll_gated_update",
+    };
+
+    PanelRegistry::instance().render_panels(preload, ctx);
+    EXPECT_FALSE(panel->poll_visible);
+    EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+    EXPECT_TRUE(panel->pending_update);
+
+    panel->setPollResult(true);
+    PanelRegistry::instance().invalidate_poll_cache();
+    PanelRegistry::instance().render_panels(preload, ctx);
+    EXPECT_TRUE(panel->poll_visible);
+    EXPECT_TRUE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+
+    PanelRegistry::instance().render_panels({
+                                                .target = preload.target,
+                                                .mode = PanelRenderMode::Direct,
+                                                .width = preload.width,
+                                                .height = preload.height,
+                                            },
+                                            ctx);
+    EXPECT_FALSE(panel->pending_update);
+    EXPECT_FALSE(PanelRegistry::instance().needsAnimationFrameForVisiblePanels(visibility));
+}
+
+TEST_F(PanelLayoutRenderDemandTest, BottomDockAndSequencerChangesPublishToolbarGeneration) {
+    using namespace lfs::vis::gui;
+
+    PanelLayoutManager layout;
+    auto& generation = lfs::vis::app_store().viewport_toolbar_generation;
+    const auto initial = generation.get();
+
+    layout.setBottomDockActiveTab("test.bottom.first");
+    EXPECT_EQ(generation.get(), initial + 1);
+    layout.setBottomDockActiveTab("test.bottom.first");
+    EXPECT_EQ(generation.get(), initial + 1);
+    layout.setBottomDockActiveTab("test.bottom.second");
+    EXPECT_EQ(generation.get(), initial + 2);
+
+    layout.setShowSequencer(true);
+    EXPECT_EQ(generation.get(), initial + 3);
+    layout.setShowSequencer(true);
+    EXPECT_EQ(generation.get(), initial + 3);
+    layout.setShowSequencer(false);
+    EXPECT_EQ(generation.get(), initial + 4);
 }

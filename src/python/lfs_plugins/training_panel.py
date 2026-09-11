@@ -109,6 +109,34 @@ STRATEGY_LABEL_KEYS = {
     "igs+": "training.options.strategy.igs_plus",
 }
 
+BACKEND_CONFLICT_FEATURE_LABEL_KEYS = {
+    "igs_plus": "training.options.strategy.igs_plus",
+    "mip_filter": "training_params.mip_filter",
+    "depth_supervision": "training_params.use_depth_loss",
+    "normal_supervision": "training_params.use_normal_loss",
+}
+
+
+def _localized_backend_conflict_message(
+    conflict,
+    *,
+    backend="3DGUT",
+    fallback_backend="3DGS",
+    feature_fallback="",
+):
+    label_key = BACKEND_CONFLICT_FEATURE_LABEL_KEYS.get(str(conflict), "")
+    feature = (
+        tr(label_key).rstrip(" \t\r\n:：")
+        if label_key
+        else str(feature_fallback or conflict)
+    )
+    return (
+        tr("training.backend_conflict.message")
+        .replace("{backend}", str(backend))
+        .replace("{feature}", feature)
+        .replace("{fallback_backend}", str(fallback_backend))
+    )
+
 DATASET_BOOL_PROPS = ["use_cpu_cache", "use_16bit_color"]
 
 def _resolved_ppisp_activation_step(
@@ -344,6 +372,7 @@ class TrainingPanel(Panel):
         model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
         model.bind_func("label_status_error", lambda: tr("status.error"))
         model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
+        model.bind_func("label_status_starting", lambda: tr("runtime.task_starting"))
         model.bind_func(
             "label_save_project", lambda: tr("training_panel.save_project")
         )
@@ -553,6 +582,7 @@ class TrainingPanel(Panel):
 
         for state_name in [
             "ready",
+            "starting",
             "running",
             "paused",
             "completed",
@@ -737,9 +767,42 @@ class TrainingPanel(Panel):
             "step_scaling_params_locked",
             lambda: self._auto_scale_steps_locked,
         )
+
+        def _params():
+            params = p()
+            return params if params is not None and params.has_params() else None
+
+        def _gut_feature_enable_disabled(prop):
+            params = _params()
+            return bool(
+                params is not None
+                and params.gut
+                and not bool(getattr(params, prop, False))
+            )
+
+        def _gut_enable_disabled():
+            params = _params()
+            if params is None or params.gut:
+                return False
+            return bool(
+                params.strategy == "igs+"
+                or params.mip_filter
+                or params.use_depth_loss
+                or params.use_normal_loss
+            )
+
+        model.bind_func("gut_disabled", _gut_enable_disabled)
         model.bind_func(
-            "gut_disabled",
-            lambda: p() is not None and p().has_params() and p().strategy == "igs+",
+            "gut_mip_filter_disabled",
+            lambda: _gut_feature_enable_disabled("mip_filter"),
+        )
+        model.bind_func(
+            "gut_depth_supervision_disabled",
+            lambda: _gut_feature_enable_disabled("use_depth_loss"),
+        )
+        model.bind_func(
+            "gut_normal_supervision_disabled",
+            lambda: _gut_feature_enable_disabled("use_normal_loss"),
         )
         model.bind_func(
             "dataset_disabled",
@@ -1385,6 +1448,24 @@ class TrainingPanel(Panel):
             self._handle.dirty("show_project_saved")
         self._schedule_deferred_update(2.05)
 
+    def _refresh_native_backend_controls(self):
+        params = lf.optimization_params()
+        if params and params.has_params():
+            backend_controls = tuple(
+                getattr(params, name, None)
+                for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss")
+            )
+            if backend_controls != getattr(self, "_last_backend_controls", None):
+                self._last_backend_controls = backend_controls
+                # Native rollback does not go through Python property setters.
+                # Republish on the UI thread when the effective values change.
+                for binding in self._pv_bindings:
+                    binding.publish()
+                self._sync_text_bufs()
+                self._handle.dirty_all()
+                return True
+        return False
+
     def on_update(self, doc):
         if not self._handle:
             return False
@@ -1392,6 +1473,7 @@ class TrainingPanel(Panel):
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()
+        dirty |= self._refresh_native_backend_controls()
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -1743,12 +1825,13 @@ class TrainingPanel(Panel):
                 p = lf.optimization_params()
                 if button == _gut:
                     p.gut = False
+                    self._sync_render_setting("gut", False)
                     p.set_strategy(_val)
                     self._refresh_strategy_values()
 
             lf.ui.confirm_dialog(
                 tr("training.error.strategy_gut_title"),
-                tr("training.conflict.strategy_gut_strategy_message"),
+                _localized_backend_conflict_message("igs_plus"),
                 [btn_gut, btn_cancel],
                 _on_conflict,
             )
@@ -2131,6 +2214,9 @@ class TrainingPanel(Panel):
                 binding.publish()
                 published = True
         if published:
+            # A worker may reject an edit between publication and the next
+            # update, restoring the same values as the previous snapshot.
+            self._last_backend_controls = None
             self._dirty_property_search_models()
             self._sync_section_states()
         return published
@@ -2311,7 +2397,8 @@ class TrainingPanel(Panel):
         elif action == "resume":
             if _training_session_state().get("restoring"):
                 return
-            _restore_stored_session_if_needed(then_start=True)
+            if _restore_stored_session_if_needed(then_start=True):
+                return
             lf.resume_training()
         elif action == "stop":
             lf.stop_training()
@@ -2417,24 +2504,69 @@ class TrainingPanel(Panel):
         params = lf.optimization_params()
         error = params.validate() if params and params.has_params() else ""
         if error:
-            btn_mcmc = tr("training.conflict.btn_use_mcmc")
-            btn_gut = tr("training.conflict.btn_disable_gut")
-            btn_cancel = tr("training.conflict.btn_cancel")
+            raw_context = getattr(params, "backend_conflict_context", {})
+            context = raw_context if isinstance(raw_context, dict) else {}
+            conflict = str(
+                context.get("id") or getattr(params, "backend_conflict", "")
+            )
+            conflict_message = str(
+                getattr(params, "backend_conflict_message", "")
+            )
+            is_backend_conflict = bool(
+                conflict and conflict_message and error == conflict_message
+            )
+            localized_conflict_message = (
+                _localized_backend_conflict_message(
+                    conflict,
+                    backend=context.get("backend", "3DGUT"),
+                    fallback_backend=context.get("fallback_backend", "3DGS"),
+                    feature_fallback=context.get("feature", ""),
+                )
+                if is_backend_conflict
+                else ""
+            )
+            if is_backend_conflict and conflict == "igs_plus":
+                btn_mcmc = tr("training.conflict.btn_use_mcmc")
+                btn_gut = tr("training.conflict.btn_disable_gut")
+                btn_cancel = tr("training.conflict.btn_cancel")
 
-            def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
-                p = lf.optimization_params()
-                if button == _mcmc:
-                    p.set_strategy("mcmc")
-                    lf.start_training()
-                elif button == _gut:
-                    p.gut = False
-                    lf.start_training()
+                def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
+                    current = lf.optimization_params()
+                    if not current or not current.has_params():
+                        return
+                    if button == _mcmc:
+                        # Repair the preset being left as well as the active one.
+                        # Otherwise the inactive IGS+ preset prevents PRMS saves.
+                        current.gut = False
+                        current.set_strategy("mcmc")
+                        current.gut = True
+                    elif button == _gut:
+                        current.gut = False
+                        self._sync_render_setting("gut", False)
+                    else:
+                        return
+                    self._refresh_strategy_values()
+                    self._start_after_consent()
 
-            lf.ui.confirm_dialog(
-                tr("training.error.strategy_gut_title"),
-                tr("training.conflict.strategy_gut_start_message"),
-                [btn_mcmc, btn_gut, btn_cancel],
-                _on_conflict,
+                lf.ui.confirm_dialog(
+                    tr("training.error.strategy_gut_title"),
+                    localized_conflict_message,
+                    [btn_mcmc, btn_gut, btn_cancel],
+                    _on_conflict,
+                )
+                return
+
+            message = (
+                localized_conflict_message
+                if is_backend_conflict
+                else error
+            )
+            lf.ui.message_dialog(
+                tr("training.error.strategy_gut_title")
+                if is_backend_conflict
+                else tr("status.error"),
+                message,
+                style="error",
             )
         elif self._should_offer_pc_save():
             self._show_save_pc_dialog()

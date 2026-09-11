@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "gui/sequencer_ui_state.hpp"
 #include "io/video/video_export_options.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
@@ -10,6 +12,7 @@
 #include "sequencer/timeline_view_math.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -20,6 +23,30 @@
 #include <nlohmann/json.hpp>
 
 namespace {
+
+    TEST(VideoReconstructionExportRequestTest, SharedRequestSnapshotsSelectionWithoutChangingExportOptions) {
+        lfs::vis::gui::panels::SequencerUIState state;
+        const auto native = state.videoExportRequest(1920, 1080, 30, 18);
+        EXPECT_EQ(native.reconstruction_backend_id, "native");
+        EXPECT_EQ(native.reconstruction_preset_id, "native");
+        EXPECT_EQ(native.reconstruction_fallback, "abort");
+        EXPECT_TRUE(native.path.empty());
+        EXPECT_TRUE(native.include_provenance);
+
+        state.reconstruction = {.backend_id = "missing", .preset_id = "quality", .fallback = lfs::io::video::VideoReconstructionFallback::Native};
+        const auto request = state.videoExportRequest(1280, 720, 48, 22, "export.mp4", false);
+        state.reconstruction = {}; // An already queued export owns its selection snapshot.
+        EXPECT_EQ(request.reconstruction_backend_id, "missing");
+        EXPECT_EQ(request.reconstruction_preset_id, "quality");
+        EXPECT_EQ(request.reconstruction_fallback, "native");
+        EXPECT_EQ(request.width, 1280);
+        EXPECT_EQ(request.height, 720);
+        EXPECT_EQ(request.framerate, 48);
+        EXPECT_EQ(request.crf, 22);
+        EXPECT_EQ(request.path, "export.mp4");
+        EXPECT_FALSE(request.include_provenance);
+        EXPECT_EQ(state.videoExportRequest(1920, 1080, 30, 18).reconstruction_backend_id, "native");
+    }
 
     using lfs::sequencer::AnimationClip;
     using lfs::sequencer::EasingType;
@@ -53,6 +80,37 @@ namespace {
             std::filesystem::remove(path, ec);
         }
     };
+
+    TEST(SequencerTimelineRegressionTest, ExportCameraPreservesScreenCornersAcrossPoses) {
+        // Independent screen-space oracle: right stays right, up maps to smaller
+        // image rows, and visible points have positive depth in a dataset Camera.
+        const std::array<glm::vec3, 4> eyes{{{0, 0, 5}, {2, 4, 1}, {-2, -4, 1}, {1, 2, 5}}};
+        const std::array<glm::vec3, 4> ups{{{0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {1, 0, 0}}};
+        for (size_t pose = 0; pose < eyes.size(); ++pose) {
+            SCOPED_TRACE(pose);
+            const auto rotation = lfs::rendering::tryMakeVisualizerLookAtRotation(
+                eyes[pose], glm::vec3(0), ups[pose]);
+            ASSERT_TRUE(rotation.has_value());
+            Timeline timeline;
+            auto keyframe = makeKeyframe(0, eyes[pose]);
+            keyframe.rotation = glm::quat_cast(*rotation);
+            timeline.addKeyframe(keyframe);
+            const auto camera = timeline.evaluate(0);
+            const auto view = lfs::rendering::dataWorldToCameraFromVisualizerPose(
+                glm::mat3_cast(camera.rotation), camera.position);
+            for (const float x : {-1.0f, 1.0f}) {
+                for (const float y : {-1.0f, 1.0f}) {
+                    const auto visualizer_point = eyes[pose] + *rotation * glm::vec3(x, y, -3);
+                    // Raw PLY world uses the opposite Y/Z axes to the visualizer.
+                    const glm::vec3 data_point(visualizer_point.x, -visualizer_point.y, -visualizer_point.z);
+                    const auto projected = glm::vec3(view * glm::vec4(data_point, 1));
+                    EXPECT_NEAR(projected.x, x, 1e-5f);
+                    EXPECT_NEAR(projected.y, -y, 1e-5f);
+                    EXPECT_NEAR(projected.z, 3, 1e-5f);
+                }
+            }
+        }
+    }
 
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {
         Timeline timeline;

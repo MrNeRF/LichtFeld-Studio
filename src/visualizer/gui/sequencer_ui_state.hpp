@@ -4,7 +4,11 @@
 
 #pragma once
 
+#include "core/events.hpp"
 #include "io/video/video_export_options.hpp"
+
+#include <string>
+#include <utility>
 
 namespace lfs::vis::gui::panels {
 
@@ -24,6 +28,25 @@ namespace lfs::vis::gui::panels {
         int custom_height = 1080;
         int framerate = 30;
         int quality = 18;
+        lfs::io::video::VideoReconstructionSelection reconstruction{};
+
+        // Snapshot the saved selection for both the Sequencer button and Python.
+        [[nodiscard]] lfs::core::events::cmd::SequencerExportVideo videoExportRequest(
+            const int width, const int height, const int fps, const int crf,
+            std::string path = {}, const bool include_provenance = true) const {
+            return {
+                .width = width,
+                .height = height,
+                .framerate = fps,
+                .crf = crf,
+                .path = std::move(path),
+                .include_provenance = include_provenance,
+                .reconstruction_backend_id = reconstruction.backend_id,
+                .reconstruction_preset_id = reconstruction.preset_id,
+                .reconstruction_fallback = std::string(
+                    lfs::io::video::videoReconstructionFallbackId(reconstruction.fallback)),
+            };
+        }
 
         [[nodiscard]] int outputWidth() const {
             if (preset == lfs::io::video::VideoPreset::CUSTOM)

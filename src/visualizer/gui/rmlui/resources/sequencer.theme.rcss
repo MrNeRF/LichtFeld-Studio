@@ -1,7 +1,7 @@
 /* Theme-dependent sequencer panel styles. */
 
 #panel {
-    background-color: @{surface};
+    @{panel.body_decor};
     border-width: 1dp;
     border-color: @{alpha(border,0.4)};
     border-radius: @{num(size.window_rounding)}dp;
@@ -76,6 +76,7 @@
 }
 
 #transport-row {
+    @{components.header_decor};
     border-bottom: 1dp @{alpha(border,0.3)};
 }
 
@@ -131,7 +132,7 @@
 }
 
 #film-strip-panel {
-    background-color: @{surface};
+    @{panel.body_decor};
     border-left: 1dp @{alpha(border,0.4)};
     border-right: 1dp @{alpha(border,0.4)};
     border-bottom: 1dp @{alpha(border,0.4)};

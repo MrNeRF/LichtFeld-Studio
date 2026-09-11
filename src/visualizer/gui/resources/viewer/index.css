@@ -330,6 +330,24 @@ button {
   margin: 8px 0;
   background-color: #666;
 }
+#settingsPanel > .settingsRow > .fovLabel {
+  cursor: default;
+  white-space: nowrap;
+}
+#settingsPanel > .settingsRow > #fovSlider {
+  flex-grow: 1;
+  margin: 8px 4px;
+  accent-color: #F60;
+}
+#settingsPanel > .settingsRow > #fovValue {
+  min-width: 38px;
+  text-align: center;
+  white-space: nowrap;
+}
+#settingsPanel > .settingsRow > #fovReset {
+  flex-grow: 0;
+  padding: 10px 12px;
+}
 
 /* infoPanel */
 #infoPanel {

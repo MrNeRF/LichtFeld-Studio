@@ -1,7 +1,7 @@
 /* Theme-dependent viewport overlay controls. */
 
 .toolbar-container {
-    background-color: @{toolbar.background};
+    @{chrome.toolbar_decor};
     border-radius: @{num(size.window_rounding)}dp;
 }
 
@@ -47,12 +47,38 @@
 }
 
 .toolbar-vertical {
-    background-color: transparent;
-    border-radius: 0;
+    @{viewport.toolbar_glass_decor};
+    border-width: 1dp;
+    border-color: @{viewport.toolbar_border};
+    border-radius: 9dp;
+    box-shadow: @{viewport.toolbar_shadow};
+}
+
+.toolbar-drag-line {
+    background-color: @{viewport.icon_disabled};
+}
+
+.toolbar-drag-handle:hover .toolbar-drag-line,
+.toolbar-dragging .toolbar-drag-line {
+    background-color: @{viewport.toolbar_text};
+}
+
+.toolbar-hcenter .toolbar-container {
+    @{viewport.toolbar_glass_decor};
+    border-width: 1dp;
+    border-color: @{viewport.toolbar_border};
+    border-radius: 8dp;
+    box-shadow: @{viewport.toolbar_shadow};
 }
 
 .viewport-gizmo-controls .icon-btn {
-    background-color: @{toolbar.background};
+    @{viewport.gizmo_decor};
+    border-color: @{overlay.border};
+    opacity: 1;
+}
+
+.viewport-gizmo-controls .icon-btn img {
+    image-color: @{viewport.gizmo_icon};
 }
 
 .toolbar-separator {
@@ -60,8 +86,10 @@
 }
 
 .viewport-transform-panel {
-    background-color: @{toolbar.background};
-    border-color: @{overlay.border};
+    @{viewport.toolbar_glass_decor};
+    color: @{viewport.toolbar_text};
+    border-color: @{viewport.toolbar_border};
+    box-shadow: @{viewport.toolbar_shadow};
 }
 
 .viewport-export-status {
@@ -72,7 +100,7 @@
 
 .viewport-transform-meta__tool,
 .viewport-transform-axis-label {
-    color: @{text};
+    color: @{viewport.toolbar_text};
 }
 
 .viewport-transform-axis--split {
@@ -82,7 +110,7 @@
 .viewport-transform-option-group,
 .viewport-transform-tool-group,
 .viewport-selection-tool-group {
-    background-color: @{toolbar.sub_background};
+    background-color: @{alpha(surface,0.42)};
     border-color: @{alpha(border,0.39)};
 }
 
@@ -95,34 +123,85 @@
 }
 
 .toolbar-vertical .icon-btn:hover,
-.toolbar-hcenter .icon-btn:hover,
-.viewport-gizmo-controls .icon-btn:hover {
+.toolbar-hcenter .icon-btn:hover {
     background-color: @{alpha(primary,0.16)};
     border-color: @{alpha(primary,0.42)};
 }
 
-.icon-btn.selected {
-    background-color: @{primary};
+.viewport-gizmo-controls .icon-btn:hover {
+    @{viewport.gizmo_hover_decor};
+    border-color: @{primary};
 }
 
-.toolbar-vertical .icon-btn.selected,
-.toolbar-hcenter .icon-btn.selected,
-.viewport-gizmo-controls .icon-btn.selected {
+.viewport-gizmo-controls .icon-btn:hover img {
+    image-color: @{viewport.gizmo_hover_icon};
+}
+
+.icon-btn.selected {
+    @{controls.selected_decor};
+}
+
+.toolbar-hcenter .icon-btn.selected {
+    @{viewport.toolbar_selected_decor};
     border-color: @{alpha(text,0.25)};
+}
+
+.toolbar-hcenter .icon-btn.selected img {
+    image-color: @{viewport.toolbar_selected_icon};
+}
+
+.toolbar-vertical .icon-btn.selected {
+    @{viewport.toolbar_selected_decor};
+    border-color: @{alpha(text,0.32)};
+}
+
+.toolbar-vertical .icon-btn.selected img {
+    image-color: @{viewport.toolbar_selected_icon};
+}
+
+.viewport-gizmo-controls .icon-btn.selected {
+    @{viewport.gizmo_selected_decor};
+    border-color: @{primary};
+}
+
+.viewport-gizmo-controls .icon-btn.selected img {
+    image-color: @{viewport.gizmo_selected_icon};
 }
 
 .icon-btn.selected:hover {
     background-color: @{viewport.selected_hover};
 }
 
-.toolbar-vertical .icon-btn.selected:hover,
-.toolbar-hcenter .icon-btn.selected:hover,
-.viewport-gizmo-controls .icon-btn.selected:hover {
+.toolbar-hcenter .icon-btn.selected:hover {
+    @{viewport.toolbar_selected_decor};
     border-color: @{alpha(text,0.35)};
 }
 
+.viewport-transform-panel .icon-btn.selected {
+    @{viewport.toolbar_selected_decor};
+    border-color: @{viewport.toolbar_border};
+}
+
+.viewport-transform-panel .icon-btn.selected img {
+    image-color: @{viewport.toolbar_selected_icon};
+}
+
+.toolbar-vertical .icon-btn.selected:hover {
+    @{viewport.toolbar_selected_decor};
+    border-color: @{alpha(text,0.42)};
+}
+
+.viewport-gizmo-controls .icon-btn.selected:hover {
+    @{viewport.gizmo_selected_hover_decor};
+    border-color: @{primary};
+}
+
+.viewport-gizmo-controls .icon-btn.selected:hover img {
+    image-color: @{viewport.gizmo_selected_hover_icon};
+}
+
 .icon-btn.selected img {
-    image-color: @{background};
+    image-color: @{controls.selected_icon};
 }
 
 .icon-btn.disabled,
@@ -133,7 +212,19 @@
 }
 
 .icon-btn.disabled img {
-    image-color: @{text_dim};
+    image-color: @{viewport.icon_disabled};
+}
+
+.viewport-gizmo-controls .icon-btn.disabled,
+.viewport-gizmo-controls .icon-btn.disabled:hover,
+.viewport-gizmo-controls .icon-btn.disabled:active {
+    @{viewport.gizmo_decor};
+    border-color: @{overlay.border};
+    opacity: 1;
+}
+
+.viewport-gizmo-controls .icon-btn.disabled img {
+    image-color: @{viewport.gizmo_disabled_icon};
 }
 
 .viewport-metrics-card {

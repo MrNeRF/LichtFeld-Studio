@@ -242,6 +242,66 @@ TEST_F(TensorMemoryTest, DeviceTransferOwnsMemory) {
     compare_tensors(custom_cuda2, torch_cuda2, 1e-6f, 1e-7f, "CUDATransfer");
 }
 
+TEST_F(TensorMemoryTest, BoolViewTransferResultsAndAssignmentStorage) {
+    for (const bool pinned : {false, true}) {
+        SCOPED_TRACE(pinned);
+        auto host = Tensor::empty({2, 2}, Device::CPU, DataType::Bool, pinned);
+        host.ptr<bool>()[0] = true;
+        host.ptr<bool>()[1] = false;
+        host.ptr<bool>()[2] = false;
+        host.ptr<bool>()[3] = true;
+        auto view = host.slice(1, 0, 1).squeeze(1);
+        const auto* host_pointer = view.ptr<bool>();
+        ASSERT_TRUE(view.is_view());
+        ASSERT_FALSE(view.is_contiguous());
+
+        const auto uploaded = view.cuda();
+        const auto packed = uploaded.contiguous();
+        const auto cloned = packed.clone();
+        for (const auto* result : {&uploaded, &packed, &cloned}) {
+            ASSERT_EQ(result->device(), Device::CUDA);
+            EXPECT_TRUE(result->is_contiguous());
+            EXPECT_TRUE(result->owns_memory());
+            cudaPointerAttributes attributes{};
+            ASSERT_EQ(cudaPointerGetAttributes(&attributes, result->ptr<bool>()), cudaSuccess);
+            EXPECT_EQ(attributes.type, cudaMemoryTypeDevice);
+            const auto values = result->cpu();
+            EXPECT_TRUE(values.ptr<bool>()[0]);
+            EXPECT_FALSE(values.ptr<bool>()[1]);
+        }
+        EXPECT_NE(cloned.ptr<bool>(), packed.ptr<bool>());
+
+        // View assignment writes through; none of these rebind the host view.
+        view = view.cuda();
+        EXPECT_EQ(view.device(), Device::CPU);
+        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        view = view.contiguous();
+        EXPECT_FALSE(view.is_contiguous());
+        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        view = view.clone();
+        EXPECT_EQ(view.device(), Device::CPU);
+        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        EXPECT_FALSE(view.owns_memory());
+    }
+}
+
+TEST_F(TensorMemoryTest, BoolFromBlobCloneResultOwnsStorage) {
+    auto source = Tensor::ones_bool({2}, Device::CUDA);
+    auto borrowed = Tensor::from_blob(source.ptr<bool>(), {2}, Device::CUDA, DataType::Bool);
+    ASSERT_TRUE(borrowed.is_view());
+    ASSERT_FALSE(borrowed.owns_memory());
+    const auto cloned = borrowed.clone();
+    EXPECT_TRUE(cloned.owns_memory());
+    EXPECT_NE(cloned.ptr<bool>(), source.ptr<bool>());
+    borrowed = borrowed.clone();
+    EXPECT_EQ(borrowed.ptr<bool>(), source.ptr<bool>());
+    EXPECT_FALSE(borrowed.owns_memory());
+    source.zero_();
+    const auto values = cloned.cpu();
+    EXPECT_TRUE(values.ptr<bool>()[0]);
+    EXPECT_TRUE(values.ptr<bool>()[1]);
+}
+
 TEST_F(TensorMemoryTest, DeviceTransferRoundtrip) {
     auto custom_original = Tensor::randn({10, 10}, Device::CUDA);
     auto custom_data = custom_original.to_vector(); // Save original data

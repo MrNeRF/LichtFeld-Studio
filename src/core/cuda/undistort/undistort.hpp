@@ -18,6 +18,7 @@ namespace lfs::core {
         CameraModelType model_type;
         float distortion[12];
         int num_distortion;
+        bool crop_solve_failed = false;
     };
 
     UndistortParams compute_undistort_params(

@@ -9,6 +9,7 @@
 #include "core/cuda/sh_layout.cuh"
 #include "core/cuda_error_typed.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -98,6 +99,9 @@ namespace lfs::io::project {
 
         constexpr std::size_t RAW_STREAM_WINDOW_BYTES = 16ull * 1024ull * 1024ull;
         constexpr std::uint64_t RAW_STREAM_MAX_MANIFEST_BYTES = 32ull * 1024ull * 1024ull;
+
+        std::optional<bool> splat_capture_no_headroom_override;
+        std::optional<bool> splat_capture_stream_creation_failure_override;
         std::optional<std::size_t> splat_stream_window_override;
 
         std::size_t splat_stream_window_bytes() noexcept {
@@ -297,6 +301,71 @@ namespace lfs::io::project {
 
     } // namespace
 
+    struct AsyncSplatCapture::Impl {
+        std::unique_ptr<lfs::core::SplatData> snapshot;
+        cudaStream_t stream = nullptr;
+        cudaEvent_t ready = nullptr;
+        SplatSourceKind source_kind = SplatSourceKind::Generated;
+        bool is_training_model = false;
+        std::chrono::steady_clock::time_point clone_started;
+
+        ~Impl() {
+            if (stream) {
+                cudaStreamSynchronize(stream);
+            }
+            snapshot.reset();
+            if (ready) {
+                cudaEventDestroy(ready);
+            }
+            if (stream) {
+                lfs::core::CudaMemoryPool::instance().release_stream(stream);
+                cudaStreamDestroy(stream);
+            }
+        }
+    };
+
+    AsyncSplatCapture::AsyncSplatCapture(std::unique_ptr<Impl> impl)
+        : impl_(std::move(impl)) {}
+
+    AsyncSplatCapture::AsyncSplatCapture(AsyncSplatCapture&&) noexcept = default;
+    AsyncSplatCapture& AsyncSplatCapture::operator=(AsyncSplatCapture&&) noexcept = default;
+    AsyncSplatCapture::~AsyncSplatCapture() = default;
+
+    lfs::Result<SplatChapterPayload> AsyncSplatCapture::complete() {
+        if (!impl_ || !impl_->snapshot) {
+            return splat_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "The asynchronous splat capture is no longer available.",
+                "capture completion was requested more than once");
+        }
+        if (const auto status = cudaEventSynchronize(impl_->ready);
+            status != cudaSuccess) {
+            auto error = splat_error(
+                lfs::core::cuda_status_to_error_code(status),
+                "The asynchronous splat snapshot could not be completed.",
+                std::format("CUDA snapshot synchronization failed: {}",
+                            cudaGetErrorString(status)));
+            impl_.reset();
+            return error;
+        }
+        const auto clone_finished = std::chrono::steady_clock::now();
+        const auto worker_download_started = clone_finished;
+        auto result = SplatChapterPayload::capture(
+            *impl_->snapshot, impl_->source_kind, impl_->is_training_model);
+        const auto worker_download_finished = std::chrono::steady_clock::now();
+        LOG_DEBUG(
+            "Project SPLT async serialization stages: clone={:.3f} ms worker_download={:.3f} ms result_bytes={}",
+            std::chrono::duration<double, std::milli>(
+                clone_finished - impl_->clone_started)
+                .count(),
+            std::chrono::duration<double, std::milli>(
+                worker_download_finished - worker_download_started)
+                .count(),
+            result ? result->bytes().size() : 0);
+        impl_.reset();
+        return result;
+    }
+
     namespace {
 
         lfs::Result<std::uint32_t> validate_lfsp(
@@ -362,6 +431,132 @@ namespace lfs::io::project {
         result.bytes_ = std::move(bytes);
         result.lfsp_version_ = *version;
         return result;
+    }
+
+    lfs::Result<std::unique_ptr<AsyncSplatCapture>>
+    SplatChapterPayload::start_async_capture(
+        const lfs::core::SplatData& model,
+        const SplatSourceKind source_kind,
+        const bool is_training_model) {
+        if (is_training_model) {
+            return splat_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "The training model cannot be written as a SPLT chapter.",
+                "Training model state is authoritative only in CKPT");
+        }
+        if (must_reference_external(source_kind)) {
+            return splat_error(
+                lfs::ErrorCode::FailedPrecondition,
+                "A live RAD node cannot be embedded in the project.",
+                "Live RAD nodes remain external REFS records until explicitly baked");
+        }
+
+        const auto tensors = std::array<const lfs::core::Tensor*, 10>{
+            &model.means(), &model.sh0(), &model.shN(),
+            &model.shN_value_bounds(), &model.scaling_raw(),
+            &model.rotation_raw(), &model.opacity_raw(), &model.deleted(),
+            &model._densification_info, &model._max_screen_share};
+        std::size_t device_bytes = 0;
+        bool has_cuda_tensor = false;
+        for (const auto* tensor : tensors) {
+            if (!tensor->is_valid() || tensor->device() != lfs::core::Device::CUDA) {
+                continue;
+            }
+            has_cuda_tensor = true;
+            if (tensor->bytes() > std::numeric_limits<std::size_t>::max() - device_bytes) {
+                return splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The splat snapshot is too large to allocate.",
+                    "device snapshot byte count overflowed size_t");
+            }
+            device_bytes += tensor->bytes();
+        }
+        if (!has_cuda_tensor) {
+            return std::unique_ptr<AsyncSplatCapture>{};
+        }
+
+        const auto& pressure = lfs::core::MemoryPressureCoordinator::instance();
+        const bool has_headroom = splat_capture_no_headroom_override
+                                      ? !*splat_capture_no_headroom_override
+                                      : pressure
+                                            .preflight({
+                                                .operation = "SPLT async capture",
+                                                .persistent_device_bytes = device_bytes,
+                                                .temporary_device_bytes = 0,
+                                                .old_new_overlap_bytes = 0,
+                                            })
+                                            .ok;
+        if (!has_headroom) {
+            LOG_WARN(
+                "SPLT async capture falling back to synchronous capture: "
+                "snapshot requires {} device bytes and VRAM headroom is unavailable",
+                device_bytes);
+            return std::unique_ptr<AsyncSplatCapture>{};
+        }
+
+        auto impl = std::make_unique<AsyncSplatCapture::Impl>();
+        impl->clone_started = std::chrono::steady_clock::now();
+        impl->source_kind = source_kind;
+        impl->is_training_model = is_training_model;
+        const auto status = splat_capture_stream_creation_failure_override.value_or(false)
+                                ? cudaErrorUnknown
+                                : cudaStreamCreateWithFlags(
+                                      &impl->stream, cudaStreamNonBlocking);
+        if (status != cudaSuccess) {
+            return splat_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The splat snapshot stream could not be created.",
+                std::format("CUDA stream creation failed: {}",
+                            cudaGetErrorString(status)));
+        }
+        lfs::core::SplatData cloned;
+        try {
+            cloned = model.clone_async(impl->stream);
+        } catch (const std::bad_alloc& error) {
+            LOG_WARN(
+                "SPLT async capture falling back to synchronous capture: "
+                "snapshot allocation failed after preflight: {}",
+                error.what());
+            return std::unique_ptr<AsyncSplatCapture>{};
+        } catch (const std::exception& error) {
+            return splat_error(
+                lfs::ErrorCode::Internal,
+                "The splat snapshot could not be queued.", error.what());
+        }
+        try {
+            impl->snapshot = std::make_unique<lfs::core::SplatData>(
+                std::move(cloned));
+            if (const auto status = cudaEventCreateWithFlags(
+                    &impl->ready, cudaEventDisableTiming);
+                status != cudaSuccess) {
+                return splat_error(
+                    lfs::ErrorCode::ResourceExhausted,
+                    "The splat snapshot event could not be created.",
+                    std::format("CUDA event creation failed: {}",
+                                cudaGetErrorString(status)));
+            }
+            if (const auto status = cudaEventRecord(impl->ready, impl->stream);
+                status != cudaSuccess) {
+                return splat_error(
+                    lfs::core::cuda_status_to_error_code(status),
+                    "The splat snapshot could not be queued.",
+                    std::format("CUDA event record failed: {}",
+                                cudaGetErrorString(status)));
+            }
+        } catch (const std::bad_alloc& error) {
+            return splat_error(
+                lfs::ErrorCode::ResourceExhausted,
+                "The splat snapshot could not be allocated.", error.what());
+        } catch (const std::exception& error) {
+            return splat_error(
+                lfs::ErrorCode::Internal,
+                "The splat snapshot could not be queued.", error.what());
+        }
+        LOG_DEBUG(
+            "Project SPLT async clone queued: tensors={} bytes={}",
+            tensors.size(), device_bytes);
+        return std::unique_ptr<AsyncSplatCapture>(
+            new AsyncSplatCapture(std::move(impl)));
     }
 
     lfs::Result<SplatChapterPayload> SplatChapterPayload::capture(
@@ -815,6 +1010,16 @@ namespace lfs::io::project {
     void detail::set_splat_stream_window_bytes_for_testing(
         const std::optional<std::size_t> window_bytes) {
         splat_stream_window_override = window_bytes;
+    }
+
+    void detail::set_splat_capture_no_headroom_for_testing(
+        const std::optional<bool> forced) {
+        splat_capture_no_headroom_override = forced;
+    }
+
+    void detail::set_splat_capture_stream_creation_failure_for_testing(
+        const std::optional<bool> forced) {
+        splat_capture_stream_creation_failure_override = forced;
     }
 
 } // namespace lfs::io::project

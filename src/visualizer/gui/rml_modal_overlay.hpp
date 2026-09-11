@@ -40,6 +40,7 @@ namespace lfs::vis {
     class VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
     class VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
     class VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
+    class VisualizerImplResetTest_ModalOverlayQueuedRequestDoesNotAnimateActiveModal_Test;
 } // namespace lfs::vis
 namespace lfs::vis::gui {
 
@@ -78,6 +79,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool hasPendingRequest() const;
         [[nodiscard]] bool hasPendingRenderWork() const;
         [[nodiscard]] bool needsAnimationFrame() const;
+        [[nodiscard]] std::string animationDemandDescription() const;
 
     private:
         friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
@@ -96,6 +98,7 @@ namespace lfs::vis::gui {
         friend class lfs::vis::VisualizerImplResetTest_StartupSweepsEmptyScratchAndDoesNotOffer_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverTempWithSidecarThenDiscardExitLeavesNoTempFiles_Test;
         friend class lfs::vis::VisualizerImplResetTest_RecoverLegacyScratchThenSaveAsRemovesLegacyFile_Test;
+        friend class lfs::vis::VisualizerImplResetTest_ModalOverlayQueuedRequestDoesNotAnimateActiveModal_Test;
         void initContext();
         bool syncTheme();
         void cacheElements();

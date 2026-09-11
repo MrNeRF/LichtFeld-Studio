@@ -116,7 +116,7 @@ namespace lfs::training {
         // Begin arena frame for memory allocation
         auto& arena = core::GlobalArenaManager::instance().get_arena();
         uint64_t frame_id = arena.begin_frame(core::getCurrentCUDAStream());
-        auto arena_allocator = arena.get_allocator(frame_id);
+        auto arena_allocator = arena.get_allocator(frame_id, "gsplat.forward");
         try {
 
             // Full image dimensions
@@ -129,9 +129,10 @@ namespace lfs::training {
 
             const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
 
-            // Convert from lfs::core::CameraModelType (enum class) to global CameraModelType (plain enum) for CUDA kernels
-            const ::CameraModelType camera_model = static_cast<::CameraModelType>(
-                static_cast<int>(viewpoint_camera.camera_model_type()));
+            // Prepared undistortion already supplies pinhole intrinsics and undistorted images.
+            // Ignore the retained camera model and coefficients to avoid applying distortion twice.
+            const bool undistorted = viewpoint_camera.is_undistort_prepared();
+            const ::CameraModelType camera_model = undistorted ? CameraModelType::PINHOLE : static_cast<::CameraModelType>(static_cast<int>(viewpoint_camera.camera_model_type()));
 
             // Build K directly from intrinsics to avoid extra CUDA->CPU->CUDA roundtrips.
             const auto [fx, fy, cx, cy] = viewpoint_camera.get_intrinsics();
@@ -301,40 +302,42 @@ namespace lfs::training {
                 gsplat_thread_caches.staging.copy_to(dest, host.ptr<float>(), copy_n, fwd_stream);
             };
 
-            switch (camera_model) {
-            case CameraModelType::THIN_PRISM_FISHEYE:
-                if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                    upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
-                    radial_cuda = gsplat_thread_caches.radial;
+            if (!undistorted) {
+                switch (camera_model) {
+                case CameraModelType::THIN_PRISM_FISHEYE:
+                    if (radial_dist.is_valid() && radial_dist.numel() == 4) {
+                        upload_dist(radial_dist, 4, gsplat_thread_caches.radial);
+                        radial_cuda = gsplat_thread_caches.radial;
+                    }
+                    if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
+                        upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
+                        thin_prism_cuda = gsplat_thread_caches.thin_prism;
+                    }
+                    break;
+                case CameraModelType::FISHEYE:
+                    if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
+                        upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
+                                    4, gsplat_thread_caches.radial);
+                        radial_cuda = gsplat_thread_caches.radial;
+                    }
+                    break;
+                case CameraModelType::PINHOLE: {
+                    if (radial_dist.is_valid() && radial_dist.numel() > 0) {
+                        const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
+                        upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
+                                    n_rad, gsplat_thread_caches.radial);
+                        radial_cuda = gsplat_thread_caches.radial;
+                    }
+                    if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
+                        upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
+                                    2, gsplat_thread_caches.tangential);
+                        tangential_cuda = gsplat_thread_caches.tangential;
+                    }
+                    break;
                 }
-                if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                    upload_dist(tangential_dist, 4, gsplat_thread_caches.thin_prism);
-                    thin_prism_cuda = gsplat_thread_caches.thin_prism;
+                default:
+                    break;
                 }
-                break;
-            case CameraModelType::FISHEYE:
-                if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                    upload_dist(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4),
-                                4, gsplat_thread_caches.radial);
-                    radial_cuda = gsplat_thread_caches.radial;
-                }
-                break;
-            case CameraModelType::PINHOLE: {
-                if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                    const size_t n_rad = std::min(radial_dist.numel(), size_t(6));
-                    upload_dist(radial_dist.numel() == n_rad ? radial_dist : radial_dist.slice(0, 0, n_rad),
-                                n_rad, gsplat_thread_caches.radial);
-                    radial_cuda = gsplat_thread_caches.radial;
-                }
-                if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                    upload_dist(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2),
-                                2, gsplat_thread_caches.tangential);
-                    tangential_cuda = gsplat_thread_caches.tangential;
-                }
-                break;
-            }
-            default:
-                break;
             }
             if (radial_cuda.is_valid() && radial_cuda.numel() > 0) {
                 radial_ptr = radial_cuda.ptr<float>();
@@ -499,7 +502,7 @@ namespace lfs::training {
                 thin_prism_ptr,
                 result,
                 fwd_stream);
-            // isect_ids / flatten_ids are borrowed from TLS high-water cache —
+            // isect_ids / flatten_ids are borrowed from the TLS VMM cache —
             // never transfer ownership or free on error paths.
 
             RenderOutput render_output;
@@ -556,7 +559,7 @@ namespace lfs::training {
             ctx.last_ids_ptr = last_ids_ptr_out;
             ctx.compensations_ptr = compensations_ptr_out;
 
-            // Borrowed TLS high-water pointers (valid through backward; do not free)
+            // Borrowed TLS VMM pointers (valid through backward; do not free)
             ctx.isect_ids_ptr = result.isect_ids;
             ctx.flatten_ids_ptr = result.flatten_ids;
             ctx.n_isects = result.n_isects;
@@ -615,7 +618,7 @@ namespace lfs::training {
 
             return std::pair{render_output, ctx};
         } catch (...) {
-            // Isect buffers are TLS high-water — leave them; only unwind arena.
+            // Isect buffers belong to the TLS VMM cache; only unwind the arena.
             // End on the same stream begin_frame used (same guard → same value),
             // not the streamless device-sync path, so the arena frame chain stays
             // intact for the next frame instead of falling back to a full sync.
@@ -630,11 +633,13 @@ namespace lfs::training {
         const core::Tensor& grad_alpha,
         core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
-        const core::Tensor& pixel_error_map) {
+        const core::Tensor& pixel_error_map,
+        const core::Tensor& edge_weight_map,
+        core::Tensor edge_score_out) {
 
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
-        auto arena_allocator = arena.get_allocator(ctx.frame_id);
+        auto arena_allocator = arena.get_allocator(ctx.frame_id, "gsplat.backward");
         // Run the backward work + arena frame release on the exact stream the
         // forward began the frame on (ctx.stream), so begin_frame and end_frame
         // chain on the same stream rather than relying on the caller's guard
@@ -753,6 +758,20 @@ namespace lfs::training {
             const float* const pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid())
                                                          ? error_map_2d.ptr<float>()
                                                          : nullptr;
+            const bool edge_scoring =
+                edge_weight_map.is_valid() && edge_score_out.is_valid() &&
+                edge_weight_map.device() == core::Device::CUDA &&
+                edge_score_out.device() == core::Device::CUDA &&
+                edge_weight_map.dtype() == core::DataType::Float32 &&
+                edge_score_out.dtype() == core::DataType::Float32 &&
+                edge_weight_map.ndim() == 2 && edge_score_out.ndim() == 1 &&
+                edge_weight_map.shape()[0] == static_cast<size_t>(H) &&
+                edge_weight_map.shape()[1] == static_cast<size_t>(W) &&
+                edge_score_out.numel() == static_cast<size_t>(N);
+            const float* const edge_weight_map_ptr =
+                edge_scoring ? edge_weight_map.ptr<float>() : nullptr;
+            float* const edge_score_out_ptr =
+                edge_scoring ? edge_score_out.ptr<float>() : nullptr;
 
             // Call backward with raw pointers
             gsplat_lfs::rasterize_from_world_with_sh_bwd(
@@ -809,6 +828,8 @@ namespace lfs::training {
                 v_sh_coeffs_ptr,
                 densification_info_ptr,
                 pixel_error_map_ptr,
+                edge_weight_map_ptr,
+                edge_score_out_ptr,
                 stream);
 
             // ============ Accumulate gradients into optimizer using CUDA kernels ============
@@ -881,8 +902,8 @@ namespace lfs::training {
                     stream);
             }
 
-            // Isect/flatten ids stay in the TLS high-water cache for the next
-            // forward (no per-step cudaFree). Arena still ends with the frame.
+            // Isect/flatten ids stay in the TLS VMM cache for the next forward.
+            // Arena still ends with the frame.
             arena.end_frame(ctx.frame_id, stream);
         } catch (...) {
             arena.end_frame(ctx.frame_id, stream);

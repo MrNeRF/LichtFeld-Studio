@@ -78,17 +78,17 @@ namespace lfs::vis {
         // Called every frame by GUI manager to update viewport bounds
         void updateViewportBounds(float x, float y, float w, float h) {
             viewport_bounds_ = {x, y, w, h};
+            cached_split_divider_screen_x_.reset();
         }
 
         void setFocusedSplitPanel(const SplitViewPanelId panel) {
             focusSplitPanel(panel);
         }
         void applySplitterCursorOverride() const;
+        void releaseDepthWindowCursor();
+        bool applyDepthWindowHoverCursor(double x, double y, bool modifiers_held);
 
-        void toggleIndependentSplitView() {
-            lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-            focusSplitPanel(SplitViewPanelId::Left);
-        }
+        void toggleIndependentSplitView();
 
         // Set special input modes
         void setPointCloudMode(bool enabled) {
@@ -101,6 +101,7 @@ namespace lfs::vis {
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
+        void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
         void restoreProjectNavigation(
@@ -142,6 +143,9 @@ namespace lfs::vis {
         }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
+        [[nodiscard]] int currentModifierKeys() const { return getModifierKeys(); }
+        [[nodiscard]] std::optional<input::SelectionOp> selectionDragOperation() const;
+        [[nodiscard]] bool hasViewportCursorOverride() const;
         void setInputRouter(input::InputRouter* router) { input_router_ = router; }
 
         // Node rectangle selection state (for rendering)
@@ -191,6 +195,7 @@ namespace lfs::vis {
         void updateZoomSpeed(bool increase);
         void publishCameraMove(Viewport* target_viewport = nullptr);
         bool isNearSplitter(double x, double y) const;
+        void refreshSplitDividerCache() const;
         int getModifierKeys() const;
         bool isKeyPressed(int app_key) const;
         bool isMouseButtonPressed(int app_button) const;
@@ -220,6 +225,7 @@ namespace lfs::vis {
         // Core state
         SDL_Window* window_;
         Viewport& viewport_;
+        mutable std::optional<float> cached_split_divider_screen_x_;
 
         // Input bindings for customizable hotkeys
         input::InputBindings bindings_;
@@ -298,6 +304,7 @@ namespace lfs::vis {
         // Used to resolve chord-bound scroll/drag triggers, e.g. R+Scroll for
         // Camera Roll. Newest held key wins when multiple chords are possible.
         std::vector<int> held_keys_;
+        std::optional<input::SelectionOp> selection_drag_op_;
         bool keys_movement_[6] = {false, false, false, false, false, false}; // fwd, left, back, right, up, down
 
         // Cached movement key bindings, indexed by ToolMode. Refreshed on
@@ -329,9 +336,11 @@ namespace lfs::vis {
         enum class CursorType {
             Default,
             Resize,
-            Hand
+            Hand,
+            DepthWindow
         };
         CursorType current_cursor_ = CursorType::Default;
+        int depth_window_cursor_ = 0;
         SDL_Cursor* resize_cursor_ = nullptr;
         SDL_Cursor* hand_cursor_ = nullptr;
 

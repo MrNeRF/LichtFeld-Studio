@@ -7,7 +7,6 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "diagnostics/vram_ledger_model.hpp"
-#include "training/rasterization/fastgs/rasterization/include/forward.h"
 
 #include <cuda_runtime.h>
 
@@ -419,14 +418,6 @@ namespace lfs::training {
         pool_used_at_peak_ = used_cur;
         pool_reserved_at_peak_ = reserved_cur;
 
-        const auto sort_required =
-            fast_lfs::rasterization::sort_workspace_required_bytes();
-        const auto sort_allocated =
-            fast_lfs::rasterization::sort_workspace_allocated_bytes();
-        peak_fastgs_sort_required_ =
-            std::max(peak_fastgs_sort_required_, sort_required);
-        peak_fastgs_sort_allocated_ =
-            std::max(peak_fastgs_sort_allocated_, sort_allocated);
         peak_fastgs_raster_live_ =
             std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
         peak_fastgs_raster_arena_live_ =
@@ -468,7 +459,8 @@ namespace lfs::training {
             }
             if (row.label.find("per_primitive_buffers") != std::string::npos ||
                 row.label.find("per_tile_buffers") != std::string::npos ||
-                row.label.find("sorted_indices") != std::string::npos) {
+                row.label.find("sorted_indices") != std::string::npos ||
+                row.label.find("sort_workspace_arena") != std::string::npos) {
                 raster_live += std::max(row.live_bytes, row.peak_bytes);
             }
             diagnostics::PeakSubsystemLine line;
@@ -509,8 +501,7 @@ namespace lfs::training {
         if (used > peak_cuda_used_) {
             capture_peak_snapshot(iter, used, total);
         } else {
-            // Still track pool peaks and retained sort allocation when
-            // device-wide free dips.
+            // Still track pool peaks when device-wide free dips.
             std::size_t used_high = 0;
             std::size_t reserved_high = 0;
             std::size_t used_cur = 0;
@@ -519,12 +510,6 @@ namespace lfs::training {
             peak_pool_used_ = std::max(peak_pool_used_, std::max(used_high, used_cur));
             peak_pool_reserved_ =
                 std::max(peak_pool_reserved_, std::max(reserved_high, reserved_cur));
-            peak_fastgs_sort_required_ = std::max(
-                peak_fastgs_sort_required_,
-                fast_lfs::rasterization::sort_workspace_required_bytes());
-            peak_fastgs_sort_allocated_ = std::max(
-                peak_fastgs_sort_allocated_,
-                fast_lfs::rasterization::sort_workspace_allocated_bytes());
             peak_fastgs_raster_live_ =
                 std::max(peak_fastgs_raster_live_, fastgs_raster_live_bytes_);
         }
@@ -726,14 +711,6 @@ namespace lfs::training {
         if (ledger_.total_bytes == 0) {
             ledger_ = diagnostics::VramProfiler::instance().trainingStateLedger();
         }
-
-        // Final retained sort allocation (TLS still alive on this thread).
-        peak_fastgs_sort_required_ = std::max(
-            peak_fastgs_sort_required_,
-            fast_lfs::rasterization::sort_workspace_required_bytes());
-        peak_fastgs_sort_allocated_ = std::max(
-            peak_fastgs_sort_allocated_,
-            fast_lfs::rasterization::sort_workspace_allocated_bytes());
 
         const double wall_s =
             static_cast<double>(train_end_ns_ - train_start_ns_) / 1.0e9;

@@ -2,7 +2,7 @@
 // counter into everything the visible-bounded chain dispatches with — the
 // clamped visible count, the depth radix-sort args, the generic per-element
 // args, and the indirect cumsum level counts/args. One 1x1 dispatch replaces
-// the visible_flags / visible_prefix / compact passes of the N-wide path.
+// the packed visibility-mask / block-scan / compact passes of the N-wide path.
 
 #include "config.slang"
 #include "indirect_layout.inc"

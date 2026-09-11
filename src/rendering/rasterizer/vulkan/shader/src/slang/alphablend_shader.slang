@@ -159,7 +159,7 @@ layout(binding=9) RWStructuredBuffer<float> pixel_depth_weight;
 layout(binding=14) ByteAddressBuffer selection_mask;
 layout(binding=15) ByteAddressBuffer preview_mask;
 layout(binding=16) StructuredBuffer<float4> selection_colors;
-layout(binding=17) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=17) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=18) StructuredBuffer<float4> overlay_params;
 layout(binding=19) ByteAddressBuffer transform_indices;
 layout(binding=20) StructuredBuffer<float4> model_transforms;
@@ -167,7 +167,7 @@ layout(binding=20) StructuredBuffer<float4> model_transforms;
 layout(binding=10) ByteAddressBuffer selection_mask;
 layout(binding=11) ByteAddressBuffer preview_mask;
 layout(binding=12) StructuredBuffer<float4> selection_colors;
-layout(binding=13) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=13) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=14) StructuredBuffer<float4> overlay_params;
 #endif
 

@@ -45,6 +45,48 @@ namespace lfs::rendering {
         [[nodiscard]] glm::mat4 getViewMatrix() const {
             return makeViewMatrix(rotation, translation);
         }
+
+        // A clipped render target keeps the camera calibrated to the full
+        // viewport. The renderer uses the target size for its tile grid and
+        // this size for projection/camera intrinsics.
+        [[nodiscard]] glm::ivec2 cameraSize() const {
+            return subregion_full_size.x > 0 && subregion_full_size.y > 0
+                       ? subregion_full_size
+                       : size;
+        }
+
+        [[nodiscard]] CameraIntrinsics getCameraIntrinsics() const {
+            const auto camera_size = cameraSize();
+            if (!orthographic && intrinsics_override) {
+                return *intrinsics_override;
+            }
+            if (orthographic) {
+                const float scale = std::isfinite(ortho_scale) && ortho_scale > 1.0e-5f
+                                        ? ortho_scale
+                                        : DEFAULT_ORTHO_SCALE;
+                return {.focal_x = scale,
+                        .focal_y = scale,
+                        .center_x = static_cast<float>(camera_size.x) * 0.5f,
+                        .center_y = static_cast<float>(camera_size.y) * 0.5f};
+            }
+            const auto [fx, fy] = computePixelFocalLengths(camera_size, focal_length_mm);
+            return {.focal_x = fx,
+                    .focal_y = fy,
+                    .center_x = static_cast<float>(camera_size.x) * 0.5f,
+                    .center_y = static_cast<float>(camera_size.y) * 0.5f};
+        }
+
+        [[nodiscard]] glm::mat4 getProjectionMatrix(
+            const float near_plane_override = DEFAULT_NEAR_PLANE,
+            const float far_plane_override = DEFAULT_FAR_PLANE) const {
+            return createProjectionMatrix(
+                cameraSize(),
+                focalLengthToVFov(focal_length_mm),
+                orthographic,
+                ortho_scale,
+                near_plane_override,
+                far_plane_override);
+        }
     };
 
     struct TextureHandle {

@@ -57,6 +57,25 @@ namespace lfs::io::project {
         std::unique_ptr<Impl> impl_;
     };
 
+    struct LFS_IO_API EmbeddedDatasetEntry {
+        std::string rel_path;
+        std::string kind;
+        lfs::core::Uuid chunk_uuid;
+        std::uint64_t bytes = 0;
+        Hash128 xxh3_128;
+
+        friend bool operator==(const EmbeddedDatasetEntry&, const EmbeddedDatasetEntry&) = default;
+    };
+
+    struct LFS_IO_API EmbeddedDatasetManifest {
+        std::uint32_t schema_version = 1;
+        std::string images_folder;
+        bool complete = false;
+        std::vector<EmbeddedDatasetEntry> entries;
+
+        friend bool operator==(const EmbeddedDatasetManifest&, const EmbeddedDatasetManifest&) = default;
+    };
+
     struct SemanticVersion {
         std::uint16_t major = 1;
         std::uint16_t minor = 0;
@@ -75,6 +94,13 @@ namespace lfs::io::project {
         std::vector<std::string> optional_capabilities;
 
         friend bool operator==(const ProjectManifest&, const ProjectManifest&) = default;
+    };
+
+    struct ProjectLicense {
+        std::string identifier;
+        std::string notice;
+
+        friend bool operator==(const ProjectLicense&, const ProjectLicense&) = default;
     };
 
     enum class WorldOriginProvenance : std::uint8_t {
@@ -197,6 +223,9 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ProjectGeoreference> georeference() const;
         [[nodiscard]] lfs::Result<void>
         set_georeference(const ProjectGeoreference& value);
+        [[nodiscard]] lfs::Result<std::optional<ProjectLicense>> license() const;
+        [[nodiscard]] lfs::Result<void> set_license(const ProjectLicense& value);
+        [[nodiscard]] lfs::Result<void> clear_license();
 
         [[nodiscard]] lfs::Result<std::vector<EmbedDecision>> embed_decisions() const;
         [[nodiscard]] lfs::Result<void> upsert_embed_decision(const EmbedDecision& value);
@@ -331,6 +360,8 @@ namespace lfs::io::project {
         friend bool operator==(const EllipsoidRecord&, const EllipsoidRecord&) = default;
     };
 
+    // Camera calibration in SCNG is always the source (pre-rectification) calibration
+    // that belongs to the stored distortion model; rectified calibration is derived runtime state.
     struct CameraRecord {
         std::int32_t uid = -1;
         std::int32_t camera_id = 0;
@@ -450,7 +481,31 @@ namespace lfs::io::project {
         ReferenceBindings mrnf_current_references;
         ReferenceBindings igs_current_references;
         lfs::core::param::DatasetConfig dataset;
+
+        // The pending parameters of the strategy selected in the project.
+        [[nodiscard]] const lfs::core::param::OptimizationParameters&
+        active_optimization() const noexcept {
+            const auto strategy =
+                lfs::core::param::canonical_strategy_name(active_strategy);
+            if (strategy == lfs::core::param::kStrategyMCMC)
+                return mcmc_current;
+            if (strategy == lfs::core::param::kStrategyIGSPlus)
+                return igs_current;
+            return mrnf_current;
+        }
     };
+
+    // Merge an untrained project's PRMS snapshot into the launch parameters
+    // of a headless run. Stored dataset and active-strategy optimization
+    // values replace the CLI defaults, the headless/auto_train/no_splash
+    // process flags stay with the command line, and explicit CLI flags win
+    // over stored values, as on --resume. dataset_root and images_folder
+    // are the resolved locations that replace the project's logical dataset.
+    LFS_IO_API void adopt_project_training_parameters(
+        lfs::core::param::TrainingParameters& params,
+        ParameterManagerSnapshot snapshot,
+        std::filesystem::path dataset_root,
+        std::string images_folder);
 
     class LFS_IO_API ParametersChapter {
     public:
@@ -471,6 +526,11 @@ namespace lfs::io::project {
         [[nodiscard]] lfs::Result<ParameterManagerSnapshot> snapshot() const;
         [[nodiscard]] lfs::Result<void>
         set_snapshot(const ParameterManagerSnapshot& value);
+        [[nodiscard]] lfs::Result<std::optional<EmbeddedDatasetManifest>>
+        embedded_dataset() const;
+        [[nodiscard]] lfs::Result<void>
+        set_embedded_dataset(const EmbeddedDatasetManifest& value);
+        void clear_embedded_dataset();
 
     private:
         JsonChapterDom dom_;

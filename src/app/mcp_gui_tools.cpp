@@ -156,6 +156,7 @@ namespace lfs::app {
                            *info.path))
                      : json(nullptr)},
                 {"project_uuid", info.project_uuid},
+                {"license_identifier", info.license_identifier},
                 {"generation", info.generation},
                 {"dirty", info.dirty},
                 {"session_dirty",
@@ -171,6 +172,12 @@ namespace lfs::app {
                  info.reopen_last_project},
                 {"auto_save_on_close",
                  info.auto_save_on_close},
+                {"dataset_external_available",
+                 info.dataset_external_available},
+                {"embedded_dataset_complete",
+                 info.embedded_dataset_complete},
+                {"embedded_dataset_entries",
+                 info.embedded_dataset_entries},
                 {"autosave_interval_seconds",
                  info.autosave_interval_seconds},
                 {"autosave_dirty_epoch_threshold",
@@ -402,17 +409,16 @@ namespace lfs::app {
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
             auto mask = scene.getSelectionMask();
-            if (!mask)
-                return json{{"selected_count", 0}, {"indices", json::array()}, {"truncated", false}};
+            const int64_t count = static_cast<int64_t>(scene.selectedCount());
+            if (!mask || max_indices == 0)
+                return json{{"selected_count", count}, {"indices", json::array()}, {"truncated", count > 0}};
 
             auto mask_vec = mask->to_vector_uint8();
 
-            int64_t count = 0;
             std::vector<int64_t> indices;
             for (size_t i = 0; i < mask_vec.size(); ++i) {
                 if (mask_vec[i] == 0)
                     continue;
-                ++count;
                 if (static_cast<int>(indices.size()) < max_indices)
                     indices.push_back(static_cast<int64_t>(i));
             }
@@ -474,11 +480,9 @@ namespace lfs::app {
             return vis::cap::decomposeTransform(matrix);
         }
 
-        int64_t selected_gaussian_count(const core::Scene& scene) {
-            const auto mask = scene.getSelectionMask();
-            if (!mask || !mask->is_valid())
-                return 0;
-            return static_cast<int64_t>(mask->count_nonzero());
+        int64_t selected_gaussian_count(vis::SceneManager& scene_manager) {
+            scene_manager.completePendingSelectionCounts();
+            return static_cast<int64_t>(scene_manager.getScene().selectedCount());
         }
 
         json node_summary_json(const core::Scene& scene, const core::SceneNode& node) {
@@ -586,14 +590,14 @@ namespace lfs::app {
             };
         }
 
-        json selection_result_json(const vis::SceneManager& scene_manager, const vis::SelectionResult& result) {
+        json selection_result_json(vis::SceneManager& scene_manager, const vis::SelectionResult& result) {
             if (!result.success)
                 return json{{"error", result.error}};
 
             return json{
                 {"success", true},
                 {"affected_count", static_cast<int64_t>(result.affected_count)},
-                {"selected_count", selected_gaussian_count(scene_manager.getScene())},
+                {"selected_count", selected_gaussian_count(scene_manager)},
             };
         }
 
@@ -1576,6 +1580,19 @@ namespace lfs::app {
                 if (!node)
                     return std::unexpected(node.error().message);
                 requested.push_back((*node)->name);
+            } else if (args.contains("node_ids")) {
+                const auto& ids = args["node_ids"];
+                if (!ids.is_array())
+                    return std::unexpected("Field 'node_ids' must be an array of node IDs");
+                for (const auto& id : ids) {
+                    if (!id.is_number_integer() || id.get<int64_t>() < 0 ||
+                        id.get<uint64_t>() > static_cast<uint64_t>(std::numeric_limits<core::NodeId>::max()))
+                        return std::unexpected("Field 'node_ids' must contain valid non-negative node IDs");
+                    const auto* node = scene.getNodeById(id.get<core::NodeId>());
+                    if (!node)
+                        return std::unexpected("Node ID does not resolve");
+                    requested.push_back(node->name);
+                }
             } else if (args.contains("nodes")) {
                 const auto& nodes = args["nodes"];
                 if (!nodes.is_array())
@@ -1678,7 +1695,8 @@ namespace lfs::app {
                                                             const core::ExportFormat format,
                                                             const std::filesystem::path& path,
                                                             const int sh_degree,
-                                                            const bool include_provenance = true) {
+                                                            const bool include_provenance = true,
+                                                            io::SsogSaveOptions ssog_options = {}) {
             const auto& scene = scene_manager.getScene();
             std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
             splats.reserve(node_names.size());
@@ -1721,6 +1739,13 @@ namespace lfs::app {
             }
             case core::ExportFormat::SOG: {
                 if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10, .provenance = stamp}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
+            case core::ExportFormat::SSOG: {
+                ssog_options.output_path = path;
+                ssog_options.provenance = stamp;
+                if (auto result = io::save_ssog(*merged, ssog_options); !result)
                     return std::unexpected(result.error().message);
                 break;
             }
@@ -2072,6 +2097,10 @@ namespace lfs::app {
                     });
             }
 
+            ~EventSubscriptionRegistry() {
+                handlers_ = event::ScopedHandler{};
+            }
+
             void prune_expired_locked(const Clock::time_point now) {
                 for (auto it = subscriptions_.begin(); it != subscriptions_.end();) {
                     if (now - it->second.last_access >= MCP_EVENT_SUBSCRIPTION_TTL) {
@@ -2166,11 +2195,11 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "scene.load_ply",
-                .description = "Load a PLY file for viewing",
+                .description = "Load a splat file for viewing, including SSOG (.ssog, lod-meta.json)",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to PLY file"}}}},
+                        {"path", json{{"type", "string"}, {"description", "Path to a splat file or SSOG directory"}}}},
                     .required = {"path"}}},
             [viewer](const json& args) -> json {
                 std::filesystem::path path = args["path"].get<std::string>();
@@ -2477,10 +2506,20 @@ namespace lfs::app {
                     });
                 },
             .start_training =
-                [viewer]() {
-                    return post_and_wait(viewer, [viewer]() {
+                [viewer, viewer_impl]() {
+                    // The GUI hop only acknowledges Starting. MCP keeps its
+                    // historical start contract by waiting for worker-side
+                    // initialization before returning to the caller.
+                    auto result = post_and_wait(viewer, [viewer]() {
                         return viewer->startTraining();
                     });
+                    if (result) {
+                        if (auto initialized = viewer_impl->getTrainerManager()->waitForInitialization();
+                            !initialized) {
+                            result = std::unexpected(lfs::format_for_developer(initialized.error()));
+                        }
+                    }
+                    return result;
                 },
             .render_capture =
                 [viewer](std::optional<int> camera_index, int width, int height, bool presented) {
@@ -2631,7 +2670,7 @@ namespace lfs::app {
                 .description = "Get the current interactive viewport camera state",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     const auto info = vis::get_current_view_info();
                     if (!info)
                         return json{{"error", "Viewport camera bridge is not available"}};
@@ -2672,7 +2711,7 @@ namespace lfs::app {
                 .description = "Reset the interactive viewport camera to its saved home position",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     core::events::cmd::ResetCamera{}.emit();
                     const auto info = vis::get_current_view_info();
                     if (!info)
@@ -2755,7 +2794,7 @@ namespace lfs::app {
                 .description = "Inspect the shared undo/redo history state",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     return history_json();
                 });
             });
@@ -2766,7 +2805,7 @@ namespace lfs::app {
                 .description = "List the full undo and redo stacks for the shared history service",
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
                     auto payload = history_json();
                     payload["performed"] = "list";
                     return payload;
@@ -2833,7 +2872,9 @@ namespace lfs::app {
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}},
                 .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    if (auto* const scene_manager = viewer_impl->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     const auto result = vis::op::undoHistory().undo();
                     auto payload = history_json();
                     append_history_result(payload, result);
@@ -2849,7 +2890,9 @@ namespace lfs::app {
                 .input_schema = {.type = "object", .properties = json::object(), .required = {}},
                 .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
             [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    if (auto* const scene_manager = viewer_impl->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     const auto result = vis::op::undoHistory().redo();
                     auto payload = history_json();
                     append_history_result(payload, result);
@@ -2872,7 +2915,9 @@ namespace lfs::app {
             [viewer_impl](const json& args) -> json {
                 const auto stack = args.value("stack", std::string{});
                 const auto count = static_cast<size_t>(std::max<int64_t>(1, args.value("count", 1)));
-                return post_and_wait(viewer_impl, [stack, count]() -> json {
+                return post_and_wait(viewer_impl, [viewer_impl, stack, count]() -> json {
+                    if (auto* const scene_manager = viewer_impl->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     vis::op::HistoryResult result;
                     if (stack == "undo") {
                         result = vis::op::undoHistory().undoMultiple(count);
@@ -3487,6 +3532,66 @@ namespace lfs::app {
 
         registry.register_tool(
             McpTool{
+                .name = "scene.export_ssog",
+                .description = "Export scene nodes synchronously to a PlayCanvas multi-LOD SSOG bundle or directory",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination .ssog file or directory (contains lod-meta.json)"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"uuid", json{{"type", "string"}, {"description", "Optional durable node UUID; wins over node"}}},
+                        {"uuids", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional durable node UUIDs; win over nodes"}}},
+                        {"node_ids", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Optional session-local node IDs"}}},
+                        {"lod_levels", json{{"type", "integer"}, {"default", 4}, {"minimum", 1}, {"maximum", 8}}},
+                        {"lod_ratio", json{{"type", "number"}, {"default", 0.5}, {"exclusiveMinimum", 0}, {"exclusiveMaximum", 1}}},
+                        {"chunk_count_k", json{{"type", "integer"}, {"default", 512}, {"minimum", 1}}},
+                        {"chunk_extent", json{{"type", "number"}, {"default", 16.0}, {"minimum", 0.01}}},
+                        {"chunk_min_k", json{{"type", "integer"}, {"default", 8}, {"minimum", 0}}},
+                        {"kmeans_iterations", json{{"type", "integer"}, {"default", 10}, {"minimum", 1}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}},
+                        {"include_provenance", json{{"type", "boolean"}, {"description", "When true (default), write a full provenance stamp; when false, write a minimal build stamp (app version + build commit)"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+                const bool include_provenance = args.value("include_provenance", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree, include_provenance]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    io::SsogSaveOptions options;
+                    options.lod_levels = args.value("lod_levels", 4);
+                    options.lod_ratio = args.value("lod_ratio", 0.5f);
+                    options.chunk_count_k = args.value("chunk_count_k", 512);
+                    options.chunk_extent = args.value("chunk_extent", 16.0f);
+                    options.chunk_min_k = args.value("chunk_min_k", 8);
+                    options.kmeans_iterations = args.value("kmeans_iterations", 10);
+                    if (!options.validate())
+                        return json{{"error", "Invalid SSOG export options"}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SSOG, path, sh_degree, include_provenance, options); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "ssog"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
                 .name = "scene.export_spz",
                 .description = "Start an asynchronous export of one or more scene nodes to SPZ",
                 .input_schema = {
@@ -3976,6 +4081,8 @@ namespace lfs::app {
                 const int max_indices = args.value("max_indices", 100000);
 
                 return post_and_wait(viewer, [viewer, max_indices]() -> json {
+                    if (auto* const scene_manager = viewer->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     const auto selection = vis::cap::getSelectionSnapshot(viewer->getScene(), max_indices);
                     return json{
                         {"success", true},
@@ -5532,6 +5639,8 @@ namespace lfs::app {
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
                     json payload;
+                    if (auto* const scene_manager = viewer->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     auto& scene = viewer->getScene();
                     payload["count"] = scene.getTotalGaussianCount();
 
@@ -5555,6 +5664,8 @@ namespace lfs::app {
                 .mime_type = "application/json"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    if (auto* const scene_manager = viewer->getSceneManager())
+                        scene_manager->completePendingSelectionCounts();
                     auto payload = selection_state_json(viewer->getScene());
                     payload["success"] = true;
                     return single_json_resource(uri, std::move(payload));

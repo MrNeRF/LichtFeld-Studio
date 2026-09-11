@@ -22,6 +22,7 @@
 #include <cassert>
 #include <cmath>
 #include <format>
+#include <limits>
 #include <string_view>
 
 namespace lfs::vis::gui {
@@ -168,7 +169,23 @@ namespace lfs::vis::gui {
     }
 
     bool RmlModalOverlay::needsAnimationFrame() const {
-        return hasPendingRequest();
+        // A queued request is rendered after the current modal is dismissed.
+        // While a modal is already visible, the queue must not be treated as
+        // an animation source: doing so spins the frame loop for a static
+        // modal until the user makes that choice.
+        return !active_.has_value() && hasPendingRequest();
+    }
+
+    std::string RmlModalOverlay::animationDemandDescription() const {
+        if (!needsAnimationFrame())
+            return {};
+
+        const double next_update_delay = rml_context_
+                                             ? rml_context_->GetNextUpdateDelay()
+                                             : std::numeric_limits<double>::infinity();
+        return std::format(
+            "modal_overlay(pending_request=true,active={},render_needed={},rml_delay={})",
+            active_.has_value(), render_needed_, next_update_delay);
     }
 
     void RmlModalOverlay::initContext() {

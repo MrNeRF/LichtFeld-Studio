@@ -38,7 +38,13 @@
 
 namespace lfs::vis {
 
+    // Starts with file-only work: shader blobs are cached for the first
+    // renderer initialization without touching Vulkan.
+    LFS_VIS_API void preloadVkSplatSpirvFiles();
+
     class VksplatViewportRenderer {
+        friend struct VksplatScratchReleaseTestAccess;
+
     public:
         struct RenderResult {
             VkImage image = VK_NULL_HANDLE;
@@ -129,8 +135,8 @@ namespace lfs::vis {
             OutputSlot output_slot = OutputSlot::Main;
         };
 
-        VksplatViewportRenderer();
-        ~VksplatViewportRenderer();
+        LFS_VIS_API VksplatViewportRenderer();
+        LFS_VIS_API ~VksplatViewportRenderer();
 
         VksplatViewportRenderer(const VksplatViewportRenderer&) = delete;
         VksplatViewportRenderer& operator=(const VksplatViewportRenderer&) = delete;
@@ -173,6 +179,10 @@ namespace lfs::vis {
             VulkanContext& context,
             std::size_t num_splats,
             glm::ivec2 viewport_size);
+
+        // Release viewer-owned scratch after an idle boundary. Shared training
+        // scratch is released only when the caller explicitly permits it.
+        void releaseScratchOnIdle(bool release_shared, bool allow_shared_reclaim = false);
 
         // Invoked with the completion value immediately after each live-model
         // submit, BEFORE the shared arena frame is released — the trainer's
@@ -345,7 +355,8 @@ namespace lfs::vis {
             VulkanContext& context,
             const lfs::rendering::ViewportRenderRequest& request,
             std::size_t num_splats,
-            std::size_t ring_slot);
+            std::size_t ring_slot,
+            OutputSlot output_slot);
         [[nodiscard]] lfs::Status ensureOutputImages(
             VulkanContext& context,
             glm::ivec2 size,
@@ -400,6 +411,7 @@ namespace lfs::vis {
             // Fingerprint of emphasized_node_mask currently staged in the
             // interop buffer.
             std::vector<bool> cached_emphasized_node_mask;
+            OutputSlot cached_node_mask_output_slot = OutputSlot::Main;
             bool node_mask_uploaded = false;
             std::vector<float> overlay_params_upload_cpu;
             // Output-byte fingerprint of the overlay-params table currently
@@ -459,11 +471,15 @@ namespace lfs::vis {
                                       std::size_t sort_capacity,
                                       std::size_t image_width,
                                       std::size_t image_height);
-        void releasePrivateScratchBuffers();
+        LFS_VIS_API void releasePrivateScratchBuffers();
         void releaseGpuLodTreeStorage();
         void detachSharedScratchBuffers();
         void releaseSharedScratchImportOnly();
         void releaseSharedScratchArena();
+        // Called by the training arena after its CUDA/Vulkan release timeline
+        // has drained, before exportable VMM chunks are unmapped.
+        bool prepareSharedScratchForArenaShrink(
+            const std::shared_ptr<lfs::core::ExportableBlock>& block);
         // evict=true: pool entries destroy on drain instead of free-list reuse.
         void releaseOutputSlot(OutputSlot output_slot, bool evict = false);
         // Queues a no-longer-current shared-scratch import for destruction once
@@ -682,6 +698,12 @@ namespace lfs::vis {
             std::shared_ptr<lfs::core::ExportableBlock> block;
             VulkanContext::ExternalBuffer imported_buffer{};
             std::size_t bytes = 0;
+            // Viewer high-water is measured from offset zero. The trainer arena
+            // deliberately reuses that same prefix during its exclusive epoch.
+            std::atomic<std::size_t> viewer_high_water_bytes{0};
+            // Set by the existing idle-release boundary. While set, the trainer
+            // may reclaim the viewer-only prefix; the next viewer ensure clears it.
+            std::atomic<bool> viewer_idle_reclaim_eligible{false};
             std::uint64_t generation = 0;
             bool installed_in_training_arena = false;
         };
@@ -775,10 +797,11 @@ namespace lfs::vis {
             EllipsoidExtraBase = CropExtraBase + CropParamStride * CropExtraCount,
             EllipsoidParamStride = 5,
             EllipsoidExtraCount = 15,
-            ParamCount = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
+            ViewWindow = EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount,
+            ParamCount = ViewWindow + 1,
         };
         static_assert(EllipsoidFlags + EllipsoidParamStride <= ViewIntrinsics);
-        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ParamCount);
+        static_assert(EllipsoidExtraBase + EllipsoidParamStride * EllipsoidExtraCount == ViewWindow);
 
         // Exposed for tests (O4): pure function over the request, no device state.
         [[nodiscard]] LFS_VIS_API std::expected<std::vector<float>, std::string>

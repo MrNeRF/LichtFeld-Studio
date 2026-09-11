@@ -140,6 +140,49 @@ namespace lfs::core {
     // linear buffers. Non-contiguous inputs must go through contiguous_read /
     // mutate_logical_view materialize firewalls before the linear path. Do not
     // add a strided bypass without a matching stride-aware kernel and regression tests.
+    Tensor& Tensor::and_live_(const Tensor& live_mask) {
+        tensor_contract::require_valid(
+            *this, "and_live_", "mask", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            live_mask, "and_live_", "live mask", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            *this, {DataType::Bool, DataType::UInt8}, "and_live_", "mask",
+            LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            live_mask, {DataType::Bool, DataType::UInt8}, "and_live_", "live mask",
+            LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            *this, live_mask, "and_live_", "mask", "live mask",
+            LFS_SOURCE_SITE_CURRENT());
+        LFS_ASSERT_MSG(shape_ == live_mask.shape(),
+                       "and_live_ requires equal mask shapes");
+
+        if (numel() == 0) {
+            return *this;
+        }
+
+        if (!is_contiguous() || !live_mask.is_contiguous()) {
+            LFS_ASSERT_MSG(false, "and_live_ requires contiguous masks");
+        }
+
+        if (device_ == Device::CUDA) {
+            pin_operands({this, &live_mask});
+            prepare_inputs_for_stream({this, &live_mask}, stream());
+            tensor_ops::launch_and_live(
+                ptr<uint8_t>(), live_mask.ptr<unsigned char>(), numel(), stream());
+            return *this;
+        }
+
+        auto* const mask_data = ptr<uint8_t>();
+        const auto* const live_data = live_mask.ptr<unsigned char>();
+        for (size_t i = 0; i < numel(); ++i) {
+            if (live_data[i] == 0) {
+                mask_data[i] = 0;
+            }
+        }
+        return *this;
+    }
+
     Tensor Tensor::masked_select(const Tensor& mask) const {
         LFS_CUDA_BREADCRUMB_STREAM("tensor.masked_select", stream());
         tensor_contract::require_valid(
@@ -2094,8 +2137,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             float value;
             LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(&value, ptr<float>() + linear_idx, sizeof(float),
-                           cudaMemcpyDeviceToHost),
+                memcpy_ordered(&value, ptr<float>() + linear_idx, sizeof(float),
+                               cudaMemcpyDeviceToHost, stream()),
                 "Tensor::at readback (bytes={}, linear_index={}, tensor_shape={}, "
                 "source_pointer={})",
                 sizeof(float), linear_idx, shape_.str(),
@@ -2118,8 +2161,8 @@ namespace lfs::core {
 
         if (t.numel() > 0 && data.data() != nullptr) {
             if (device == Device::CUDA) {
-                LFS_CUDA_CHECK(cudaMemcpy(t.data_ptr(), data.data(), t.bytes(),
-                                          cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(memcpy_ordered(t.data_ptr(), data.data(), t.bytes(),
+                                              cudaMemcpyHostToDevice, t.stream()));
             } else {
                 std::memcpy(t.data_ptr(), data.data(), t.bytes());
             }
@@ -2177,8 +2220,8 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(ptr<unsigned char>() + linear_idx, &val, 1,
-                           cudaMemcpyHostToDevice),
+                memcpy_ordered(ptr<unsigned char>() + linear_idx, &val, 1,
+                               cudaMemcpyHostToDevice, stream()),
                 "Tensor::set_bool upload (bytes=1, linear_index={}, tensor_shape={}, value={})",
                 linear_idx, shape_.str(), value);
         } else {
@@ -2205,8 +2248,8 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             unsigned char val;
             LFS_CUDA_CHECK_MSG(
-                cudaMemcpy(&val, ptr<unsigned char>() + linear_idx, 1,
-                           cudaMemcpyDeviceToHost),
+                memcpy_ordered(&val, ptr<unsigned char>() + linear_idx, 1,
+                               cudaMemcpyDeviceToHost, stream()),
                 "Tensor::get_bool readback (bytes=1, linear_index={}, tensor_shape={})",
                 linear_idx, shape_.str());
             return val != 0;

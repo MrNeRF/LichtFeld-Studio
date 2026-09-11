@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -39,6 +41,7 @@
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/app_store.hpp"
+#include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/scene/scene_manager.hpp"
@@ -103,6 +106,7 @@ namespace lfs::python {
     TEST(TrainingStateMachineTest, SerializesConcurrentTransitionsThroughCallbacks) {
         vis::TrainingStateMachine state_machine;
         ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Starting));
         ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Running));
 
         std::promise<void> pause_callback_entered;
@@ -132,6 +136,54 @@ namespace lfs::python {
         EXPECT_TRUE(pause_succeeded);
         EXPECT_TRUE(stop_future.get());
         EXPECT_EQ(state_machine.getState(), vis::TrainingState::Stopping);
+    }
+
+    TEST(TrainingStateMachineTest, StartingBlocksSceneChangesAndHonorsControls) {
+        vis::TrainingStateMachine state_machine;
+        std::vector<vis::TrainingState> transitions;
+        state_machine.setStateChangeCallback([&](const auto, const auto new_state) {
+            transitions.push_back(new_state);
+        });
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Starting));
+
+        EXPECT_TRUE(state_machine.isActive());
+        EXPECT_FALSE(state_machine.canPerform(vis::TrainingAction::Start));
+        EXPECT_TRUE(state_machine.canPerform(vis::TrainingAction::Pause));
+        EXPECT_TRUE(state_machine.canPerform(vis::TrainingAction::Stop));
+        EXPECT_FALSE(state_machine.canPerform(vis::TrainingAction::ClearScene));
+        EXPECT_FALSE(state_machine.canPerform(vis::TrainingAction::Reset));
+        EXPECT_EQ(state_machine.getActionBlockedReason(vis::TrainingAction::ClearScene),
+                  "Cannot modify scene while training is running.");
+
+        vis::TrainingStateMachine stop_during_start;
+        ASSERT_TRUE(stop_during_start.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(stop_during_start.transitionTo(vis::TrainingState::Starting));
+        ASSERT_TRUE(stop_during_start.transitionTo(vis::TrainingState::Stopping));
+        EXPECT_EQ(stop_during_start.getState(), vis::TrainingState::Stopping);
+
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Running));
+        EXPECT_TRUE(state_machine.transitionTo(vis::TrainingState::Paused));
+        EXPECT_TRUE(state_machine.transitionTo(vis::TrainingState::Running));
+        EXPECT_TRUE(state_machine.transitionTo(vis::TrainingState::Stopping));
+        EXPECT_EQ(transitions,
+                  (std::vector<vis::TrainingState>{vis::TrainingState::Ready,
+                                                   vis::TrainingState::Starting,
+                                                   vis::TrainingState::Running,
+                                                   vis::TrainingState::Paused,
+                                                   vis::TrainingState::Running,
+                                                   vis::TrainingState::Stopping}));
+    }
+
+    TEST(TrainingStateMachineTest, StartingCanFinishWithError) {
+        vis::TrainingStateMachine state_machine;
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Ready));
+        ASSERT_TRUE(state_machine.transitionTo(vis::TrainingState::Starting));
+
+        ASSERT_TRUE(state_machine.transitionToFinished(vis::FinishReason::Error));
+        EXPECT_EQ(state_machine.getState(), vis::TrainingState::Finished);
+        EXPECT_EQ(state_machine.getFinishReason(), vis::FinishReason::Error);
+        EXPECT_TRUE(state_machine.canPerform(vis::TrainingAction::Reset));
     }
 
     TEST(BilateralGridValidationTest, RejectsInvalidConstructorAndImageContracts) {
@@ -280,7 +332,7 @@ namespace lfs::python {
         core::param::TrainingParameters initial;
         initial.optimization.iterations = 1;
         initial.dataset.output_name = "generation_1";
-        trainer.setParams(initial);
+        ASSERT_TRUE(trainer.setParams(initial));
 
         std::atomic<bool> writer_done{false};
         std::thread writer([&] {
@@ -288,7 +340,7 @@ namespace lfs::python {
                 auto params = trainer.getParams();
                 params.optimization.iterations = generation;
                 params.dataset.output_name = "generation_" + std::to_string(generation);
-                trainer.setParams(params);
+                static_cast<void>(trainer.setParams(params));
             }
             writer_done.store(true, std::memory_order_release);
         });
@@ -303,6 +355,34 @@ namespace lfs::python {
         const auto final_snapshot = trainer.getParams();
         EXPECT_EQ(final_snapshot.dataset.output_name,
                   "generation_" + std::to_string(final_snapshot.optimization.iterations));
+    }
+
+    TEST(TrainerConstructionTest, InvalidParameterUpdateReturnsTheRejectionReason) {
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        scene.addCamera("camera.png", cameras, make_test_camera());
+        training::Trainer trainer(scene);
+        const auto original = trainer.getParams();
+        auto invalid = original;
+        invalid.optimization.gut = true;
+        invalid.optimization.use_depth_loss = true;
+
+        const auto updated = trainer.setParams(invalid);
+
+        ASSERT_FALSE(updated.has_value());
+        EXPECT_NE(
+            updated.error().user_message().find("Depth Loss"),
+            std::string::npos);
+        EXPECT_EQ(
+            trainer.getParams().optimization.to_json(),
+            original.optimization.to_json());
+
+        const auto restored = trainer.setParams(original);
+        ASSERT_TRUE(restored.has_value())
+            << lfs::format_for_developer(restored.error());
+        EXPECT_EQ(
+            trainer.getParams().optimization.to_json(),
+            original.optimization.to_json());
     }
 
     TEST(TrainerConstructionTest, InitializeRejectsInvalidIntervalsBeforeTraining) {
@@ -586,6 +666,12 @@ namespace lfs::python {
         bool transition_trainer_manager_for_test(lfs::vis::TrainerManager& trainer_manager,
                                                  lfs::vis::TrainingState state) {
             auto& state_machine = const_cast<lfs::vis::TrainingStateMachine&>(trainer_manager.getStateMachine());
+            if (state == lfs::vis::TrainingState::Running &&
+                state_machine.getState() == lfs::vis::TrainingState::Ready) {
+                if (!state_machine.transitionTo(lfs::vis::TrainingState::Starting)) {
+                    return false;
+                }
+            }
             return state_machine.transitionTo(state);
         }
 
@@ -635,6 +721,209 @@ namespace lfs::python {
             expect_sh_degree(splat, sh_degree, sh_degree, count);
         }
     } // namespace
+
+    TEST(TrainerConstructionTest, RejectsNoCamerasBeforeWorkerInitialization) {
+        core::Scene scene;
+        const auto model_id = scene.addSplat("Model", make_test_splat(1));
+        ASSERT_NE(model_id, core::NULL_NODE);
+        scene.setTrainingModelNode(model_id);
+
+        // Trainer construction still validates the scene before allocating
+        // CUDA resources. Remove the camera only after construction so the
+        // manager's synchronous start precondition is exercised.
+        const auto cameras = scene.addGroup("Cameras");
+        const auto camera = scene.addCamera("camera.png", cameras, make_test_camera());
+        ASSERT_NE(camera, core::NULL_NODE);
+
+        const auto initial_node_count = scene.getNodeCount();
+        const auto initial_model_uuid = scene.getTrainingModelNodeUuid();
+
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::make_unique<training::Trainer>(scene));
+        scene.removeNodeById(camera);
+        scene.removeNodeById(cameras);
+        const auto no_camera_node_count = scene.getNodeCount();
+        ASSERT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
+
+        std::string rejection_error;
+        int completions = 0;
+        const auto completion_id = lfs::core::events::state::TrainingCompleted::when(
+            [&](const auto&) { ++completions; });
+        const auto handler_id = lfs::core::events::state::TrainingStartRejected::when(
+            [&](const auto& event) {
+                rejection_error = event.error;
+            });
+
+        ASSERT_FALSE(manager.startTraining());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_FALSE(manager.isCompletionPending());
+        EXPECT_FALSE(rejection_error.empty());
+        EXPECT_EQ(completions, 0);
+        EXPECT_TRUE(manager.lastTrainingError().has_value());
+
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingStartRejected), handler_id);
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingCompleted), completion_id);
+
+        EXPECT_EQ(initial_node_count, no_camera_node_count + 2);
+        EXPECT_EQ(scene.getNodeCount(), no_camera_node_count);
+        EXPECT_EQ(scene.getTrainingModelNodeUuid(), initial_model_uuid);
+        ASSERT_NE(scene.getTrainingModel(), nullptr);
+        EXPECT_EQ(scene.getTrainingModel()->size(), 1u);
+    }
+
+    TEST(TrainerConstructionTest, StartRejectsInvalidPendingParamsBeforeTransition) {
+        struct EventScope {
+            EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+            ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+        } event_scope;
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); }
+            ~ServicesScope() { lfs::vis::services().clear(); }
+        } services_scope;
+
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()),
+                  core::NULL_NODE);
+        auto trainer = std::make_unique<training::Trainer>(scene);
+        const auto installed_params = trainer->getParams();
+
+        lfs::vis::ParameterManager parameter_manager;
+        ASSERT_TRUE(parameter_manager.ensureLoaded());
+        parameter_manager.setActiveStrategy("mcmc");
+        parameter_manager.modifyActiveParams([](auto& pending) {
+            pending.gut = true;
+            pending.use_depth_loss = true;
+        });
+        lfs::vis::services().set(&parameter_manager);
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::move(trainer));
+
+        EXPECT_FALSE(manager.startTraining());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Ready);
+        EXPECT_NE(manager.getLastError().find("Depth Loss"),
+                  std::string::npos);
+        // No run was accepted: a command rejection is not an initialization result.
+        EXPECT_TRUE(manager.waitForInitialization());
+        ASSERT_NE(manager.getTrainer(), nullptr);
+        EXPECT_EQ(manager.getTrainer()->getParams().optimization.to_json(),
+                  installed_params.optimization.to_json());
+    }
+
+    TEST(TrainerConstructionTest, ResumeRejectsInvalidPendingParamsWithoutLeavingPaused) {
+        struct EventScope {
+            EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+            ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+        } event_scope;
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); }
+            ~ServicesScope() { lfs::vis::services().clear(); }
+        } services_scope;
+        core::Scene scene;
+        const auto cameras = scene.addGroup("Cameras");
+        ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), core::NULL_NODE);
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainerFromCheckpoint(std::make_unique<training::Trainer>(scene), 1);
+        ASSERT_TRUE(manager.isPaused());
+        auto& pending = manager.getEditableOptParams();
+        pending.gut = true;
+        pending.mip_filter = true;
+        const auto resumed = manager.resumeTraining();
+        ASSERT_FALSE(resumed);
+        EXPECT_NE(resumed.error().user_message().find("Mip Filter"), std::string::npos);
+        EXPECT_TRUE(manager.isPaused());
+        EXPECT_FALSE(manager.isCompletionPending());
+        EXPECT_NE(manager.getLastError().find("Mip Filter"), std::string::npos);
+        EXPECT_TRUE(manager.waitForInitialization());
+    }
+
+    TEST(TrainerConstructionTest, StartAcknowledgesBeforeWorkerInitializationFailure) {
+        struct EventScope {
+            EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+            ~EventScope() { lfs::event::EventBridge::instance().clear_all(); }
+        } event_scope;
+        struct ServicesScope {
+            ServicesScope() { lfs::vis::services().clear(); }
+            ~ServicesScope() { lfs::vis::services().clear(); }
+        } services_scope;
+
+        core::Scene scene;
+        const auto model_id = scene.addSplat("Model", make_test_splat(1));
+        ASSERT_NE(model_id, core::NULL_NODE);
+        scene.setTrainingModelNode(model_id);
+        const auto cameras = scene.addGroup("Cameras");
+        ASSERT_NE(scene.addCamera("camera.png", cameras, make_test_camera()), core::NULL_NODE);
+
+        auto trainer = std::make_unique<training::Trainer>(scene);
+        auto params = trainer->getParams();
+        params.optimization.enable_eval = false;
+        params.no_download = true;
+        params.init_path = (std::filesystem::temp_directory_path() /
+                            "lichtfeld-missing-training-init.ply")
+                               .string();
+        ASSERT_TRUE(trainer->setParams(params));
+        std::unique_lock initialization_lock(trainer->getRenderMutex());
+
+        lfs::vis::TrainerManager manager;
+        manager.setScene(&scene);
+        manager.setTrainer(std::move(trainer));
+        manager.getEditableOptParams().enable_eval = true;
+
+        const auto caller_thread = std::this_thread::get_id();
+        std::atomic<bool> weights_prepared{false};
+        manager.set_evaluation_weights_preparer([&](const bool allow_download) -> std::optional<std::filesystem::path> {
+            EXPECT_NE(std::this_thread::get_id(), caller_thread);
+            EXPECT_FALSE(allow_download);
+            weights_prepared = true;
+            return std::nullopt;
+        });
+
+        std::promise<void> completion;
+        auto completion_future = completion.get_future();
+        const auto handler_id = lfs::core::events::state::TrainingCompleted::when(
+            [&](const auto& event) {
+                if (!event.success) {
+                    completion.set_value();
+                }
+            });
+
+        ASSERT_TRUE(manager.startTraining());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Starting);
+        EXPECT_FALSE(weights_prepared);
+        // The worker must apply the exact candidate accepted by Start, even if
+        // a script changes the pending slot before initialization acquires it.
+        manager.getEditableOptParams().enable_eval = false;
+        const auto rejected = manager.rejectStart("Training is starting.", lfs::ErrorCode::FailedPrecondition);
+        EXPECT_EQ(rejected.user_message(), "Training is starting.");
+        EXPECT_TRUE(manager.getLastError().empty());
+        EXPECT_FALSE(manager.lastTrainingError());
+        auto initialization_result = std::async(std::launch::async, [&] {
+            return manager.waitForInitialization();
+        });
+        EXPECT_EQ(initialization_result.wait_for(std::chrono::milliseconds(50)),
+                  std::future_status::timeout);
+        initialization_lock.unlock();
+        ASSERT_FALSE(initialization_result.get());
+        EXPECT_TRUE(weights_prepared);
+        ASSERT_EQ(completion_future.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Finished);
+        EXPECT_EQ(manager.getStateMachine().getFinishReason(), lfs::vis::FinishReason::Error);
+        EXPECT_TRUE(manager.canReset());
+        EXPECT_FALSE(manager.getLastError().empty());
+        EXPECT_TRUE(manager.lastTrainingError().has_value());
+
+        ASSERT_TRUE(manager.clearTrainer());
+        EXPECT_EQ(manager.getState(), lfs::vis::TrainingState::Idle);
+
+        lfs::event::EventBridge::instance().unsubscribe(
+            typeid(lfs::core::events::state::TrainingCompleted), handler_id);
+    }
 
     class SceneValidityTest : public ::testing::Test {
     protected:
@@ -1607,6 +1896,21 @@ namespace lfs::python {
         EXPECT_EQ(roots[0], c);
         EXPECT_EQ(roots[1], a);
         EXPECT_EQ(roots[2], b);
+    }
+
+    TEST_F(SceneValidityTest, MoveRootToEndWithTrailingGroup) {
+        const auto first = dummy_scene_.addSplat("First", make_test_splat(1));
+        const auto moved = dummy_scene_.addSplat("Moved", make_test_splat(1));
+        const auto group = dummy_scene_.addGroup("Group");
+        ASSERT_NE(first, core::NULL_NODE);
+        ASSERT_NE(moved, core::NULL_NODE);
+        ASSERT_NE(group, core::NULL_NODE);
+
+        ASSERT_TRUE(dummy_scene_.moveNode(moved, core::NULL_NODE, -1));
+
+        const auto roots = dummy_scene_.getRootNodes();
+        ASSERT_EQ(roots.size(), 3u);
+        EXPECT_EQ(roots.back(), moved);
     }
 
     TEST_F(SceneValidityTest, MoveNodeRejectsCycleIntoOwnDescendant) {

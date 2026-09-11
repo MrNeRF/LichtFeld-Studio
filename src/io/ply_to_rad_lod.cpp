@@ -624,7 +624,7 @@ namespace lfs::io {
 
         [[nodiscard]] bool write_bucket_nodes(const std::filesystem::path& path, const BucketNodes& nodes,
                                               const int rest_coeffs) {
-            FilePtr f(std::fopen(path.string().c_str(), "wb"));
+            FilePtr f(lfs::core::open_file(path, "wb"));
             if (!f) {
                 return false;
             }
@@ -1286,7 +1286,7 @@ namespace lfs::io {
             std::vector<FilePtr> bucket_files(bucket_count);
             std::vector<std::mutex> bucket_mutexes(bucket_count);
             for (std::size_t b = 0; b < bucket_count; ++b) {
-                bucket_files[b].reset(std::fopen(bucket_records_path(b).string().c_str(), "wb"));
+                bucket_files[b].reset(lfs::core::open_file(bucket_records_path(b), "wb"));
                 if (!bucket_files[b]) {
                     return make_error(ErrorCode::WRITE_FAILURE,
                                       std::format("Failed to create bucket file: {}", std::strerror(errno)),
@@ -1465,7 +1465,7 @@ namespace lfs::io {
                     {
                         const std::size_t packed_record_bytes = scatter_record_bytes(record_floats);
                         std::vector<std::uint8_t> packed(count * packed_record_bytes);
-                        FilePtr f(std::fopen(bucket_records_path(b).string().c_str(), "rb"));
+                        FilePtr f(lfs::core::open_file(bucket_records_path(b), "rb"));
                         if (!f || !read_exact(f.get(), packed.data(), packed.size())) {
                             fail(std::format("failed to read bucket records {}: {}", b, std::strerror(errno)));
                             return;
@@ -1785,7 +1785,7 @@ namespace lfs::io {
         // local level order, so each file is read front to back.
         std::vector<FilePtr> node_files(bucket_count);
         for (std::size_t b = 0; b < bucket_count; ++b) {
-            node_files[b].reset(std::fopen(bucket_nodes_path(b).string().c_str(), "rb"));
+            node_files[b].reset(lfs::core::open_file(bucket_nodes_path(b), "rb"));
             std::uint64_t n = 0;
             if (!node_files[b] || !read_exact(node_files[b].get(), &n, sizeof(n)) ||
                 n != summaries[b].node_count) {

@@ -208,11 +208,13 @@ namespace lfs::io {
             std::vector<std::shared_ptr<Camera>> cameras;
             Tensor scene_center;
             std::vector<std::string> warnings;
+            ColmapPointCloudRecords binary_point_records;
 
             if (has_cameras && has_images) {
                 LOG_DEBUG("Reading binary COLMAP data");
                 LOG_TIMER_DEBUG("COLMAP read binary cameras and images");
-                auto result = read_colmap_cameras_and_images(path, actual_images_folder, options);
+                auto result = read_colmap_cameras_and_images(
+                    path, actual_images_folder, options, &binary_point_records);
                 if (!result) {
                     return std::unexpected(result.error());
                 }
@@ -293,7 +295,8 @@ namespace lfs::io {
                 LOG_DEBUG("Loading binary point cloud");
                 LOG_TIMER_DEBUG("COLMAP load binary point cloud");
                 if (use_colmap_track_filter) {
-                    auto pc_result = read_colmap_point_cloud_with_stats(path, options);
+                    auto pc_result = read_colmap_point_cloud_with_stats(
+                        path, options, &binary_point_records);
                     if (!pc_result) {
                         return std::unexpected(pc_result.error());
                     }
@@ -310,7 +313,7 @@ namespace lfs::io {
                         warnings.push_back(diagnostic.message);
                     }
                 } else {
-                    auto pc_result = read_colmap_point_cloud(path, options);
+                    auto pc_result = read_colmap_point_cloud(path, options, &binary_point_records);
                     if (!pc_result) {
                         return std::unexpected(pc_result.error());
                     }

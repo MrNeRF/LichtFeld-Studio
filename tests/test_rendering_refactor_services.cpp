@@ -9,26 +9,39 @@
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
+#include "input/key_codes.hpp"
 #include "io/cache_image_loader.hpp"
 #include "operation/undo_history.hpp"
+#include "operator/operator_registry.hpp"
+#include "operator/ops/depth_window_ops.hpp"
+#include "operator/ops/selection_ops.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/vksplat_viewport_renderer.hpp"
+#include "selection/selection_service.hpp"
+#include "tools/selection_tool.hpp"
 #include "visualizer/gui_capabilities.hpp"
+#include "visualizer/rendering/gt_comparison_cache_utils.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/split_view_composition.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
+#include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
+#include "visualizer_impl.hpp"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
@@ -36,6 +49,48 @@
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(StaleFrameGuardTest, DeferralsBelowBoundKeepCachedThenEscalateOnce) {
+        StaleFrameGuard guard;
+        EXPECT_TRUE(guard.canUseCachedFrame());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral()) << attempt;
+            EXPECT_TRUE(guard.canUseCachedFrame()) << attempt;
+            EXPECT_FALSE(guard.takeRecoveryRequest()) << attempt;
+        }
+        EXPECT_TRUE(guard.onDeferral());
+        EXPECT_FALSE(guard.canUseCachedFrame());
+        EXPECT_TRUE(guard.takeRecoveryRequest());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        // Reimport/reset is not a successful publication. Failure after reset
+        // must not restore the stale image or trigger another reset/WARN.
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+            EXPECT_FALSE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+    }
+
+    TEST(StaleFrameGuardTest, SuccessfulPublicationResetsTheWholeEpisode) {
+        StaleFrameGuard guard;
+        for (int episode = 0; episode < 2; ++episode) {
+            for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+                EXPECT_FALSE(guard.onDeferral());
+            }
+            EXPECT_TRUE(guard.onDeferral());
+            guard.onSuccess();
+            EXPECT_TRUE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+        // Success also clears a partially consumed budget.
+        EXPECT_FALSE(guard.onDeferral());
+        guard.onSuccess();
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+        }
+        EXPECT_TRUE(guard.onDeferral());
+    }
 
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
@@ -137,6 +192,11 @@ namespace lfs::vis {
             });
             initialized = true;
         }
+
+        bool has_cuda_device() {
+            int device_count = 0;
+            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
+        }
     } // namespace
 
     class RenderingManagerEventsTest : public ::testing::Test {
@@ -190,6 +250,133 @@ namespace lfs::vis {
         EXPECT_TRUE(*disable.restore_equirectangular);
         EXPECT_TRUE(settings.equirectangular);
         EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST(GTComparisonCache, UInt8PreviewAccountingKeepsCurrentAndNeighbor) {
+        constexpr std::size_t budget = 128ULL * 1024ULL * 1024ULL;
+        const auto current = gt_comparison_detail::previewBytes({3840, 2160});
+        const auto neighbor = gt_comparison_detail::previewBytes({3840, 2160});
+        EXPECT_EQ(current, 3840ULL * 2160ULL * 3ULL);
+        EXPECT_TRUE(gt_comparison_detail::prefetchFits(0, current, neighbor, budget));
+        EXPECT_FALSE(gt_comparison_detail::prefetchFits(0, 80ULL, 40ULL, 100ULL));
+    }
+
+    TEST(GTComparisonCache, DisplayConversionMatchesFloatChwAndUInt8Hwc) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        constexpr std::size_t plane = 2 * 2;
+        const std::array<std::uint8_t, 12> hwc_bytes{
+            0, 255, 191,
+            128, 64, 0,
+            255, 128, 64,
+            64, 0, 255};
+        std::vector<float> float_chw_values(3 * plane);
+        for (std::size_t pixel = 0; pixel < plane; ++pixel) {
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                float_chw_values[channel * plane + pixel] =
+                    static_cast<float>(hwc_bytes[pixel * 3 + channel]) / 255.0f;
+            }
+        }
+        const auto float_chw = std::make_shared<Tensor>(Tensor::from_vector(
+            float_chw_values,
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU));
+        const auto uint8_hwc = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{2}, size_t{2}, size_t{3}}, Device::CPU, DataType::UInt8));
+        std::memcpy(uint8_hwc->ptr<std::uint8_t>(), hwc_bytes.data(), hwc_bytes.size());
+
+        const auto float_preview = gt_comparison_detail::convertDisplayTensorToUInt8(float_chw);
+        const auto uint8_preview = gt_comparison_detail::convertDisplayTensorToUInt8(uint8_hwc);
+        ASSERT_TRUE(float_preview);
+        ASSERT_TRUE(uint8_preview);
+        ASSERT_EQ(float_preview->shape(), uint8_preview->shape());
+        const auto* const float_preview_bytes = float_preview->ptr<std::uint8_t>();
+        const auto* const uint8_preview_bytes = uint8_preview->ptr<std::uint8_t>();
+        std::size_t first_mismatch = float_preview->bytes();
+        for (std::size_t index = 0; index < float_preview->bytes(); ++index) {
+            if (float_preview_bytes[index] != uint8_preview_bytes[index]) {
+                first_mismatch = index;
+                break;
+            }
+        }
+        const auto float_value = first_mismatch < float_preview->bytes()
+                                     ? float_preview_bytes[first_mismatch]
+                                     : std::uint8_t{0};
+        const auto uint8_value = first_mismatch < uint8_preview->bytes()
+                                     ? uint8_preview_bytes[first_mismatch]
+                                     : std::uint8_t{0};
+        EXPECT_EQ(first_mismatch, float_preview->bytes())
+            << "first mismatching index=" << first_mismatch
+            << ", float byte=" << static_cast<unsigned int>(float_value)
+            << ", uint8 byte=" << static_cast<unsigned int>(uint8_value);
+
+        const auto uint8_chw = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU, DataType::UInt8));
+        const std::array<std::uint8_t, 12> chw_bytes{
+            0, 128, 255, 64,
+            255, 64, 128, 0,
+            191, 0, 64, 255};
+        std::memcpy(uint8_chw->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size());
+        const auto uint8_chw_preview = gt_comparison_detail::convertDisplayTensorToUInt8(uint8_chw);
+        ASSERT_EQ(uint8_chw_preview.get(), uint8_chw.get());
+        EXPECT_EQ(std::memcmp(uint8_chw_preview->ptr<std::uint8_t>(),
+                              chw_bytes.data(),
+                              chw_bytes.size()),
+                  0);
+    }
+
+    TEST(GTComparisonCache, DisplayConversionCopiesCudaUInt8ChwToCpu) {
+        if (!has_cuda_device()) {
+            GTEST_SKIP() << "CUDA device required";
+        }
+
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        const std::array<std::uint8_t, 12> chw_bytes{
+            0, 128, 255, 64,
+            255, 64, 128, 0,
+            191, 0, 64, 255};
+        auto cpu_uint8_chw = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU, DataType::UInt8));
+        std::memcpy(cpu_uint8_chw->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size());
+        const auto cuda_uint8_chw = std::make_shared<Tensor>(cpu_uint8_chw->cuda());
+
+        const auto preview = gt_comparison_detail::convertDisplayTensorToUInt8(cuda_uint8_chw);
+        ASSERT_TRUE(preview);
+        EXPECT_EQ(preview->device(), Device::CPU);
+        EXPECT_NE(preview.get(), cuda_uint8_chw.get());
+        EXPECT_EQ(std::memcmp(preview->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size()), 0);
+    }
+
+    TEST(GTComparisonCache, RightImageGenerationUsesFrameGenerationForRecycledTarget) {
+        constexpr glm::ivec2 size{640, 480};
+        constexpr auto stable_bit = gt_comparison_detail::SPLIT_RIGHT_GENERATION_BIT;
+        const int recycled_address = 1;
+        const int held_display = 2;
+        std::uint64_t generation = 7;
+
+        gt_comparison_detail::updateSplitImageGeneration(
+            &recycled_address, size, nullptr, size, 11, generation);
+        EXPECT_EQ(generation, 11U);
+        // A new ordinary tensor may reuse the same address; it still carries
+        // the current frame generation and must not inherit the old upload key.
+        gt_comparison_detail::updateSplitImageGeneration(
+            &recycled_address, size, nullptr, size, 12, generation);
+        EXPECT_EQ(generation, 12U);
+        gt_comparison_detail::updateSplitImageGeneration(
+            &held_display, size, &held_display, size, 13, generation);
+        EXPECT_EQ(generation, 12U | stable_bit);
+        gt_comparison_detail::updateSplitImageGeneration(
+            &held_display, {800, 600}, &held_display, size, 14, generation);
+        EXPECT_EQ(generation, 14U);
+    }
+
+    TEST(SceneCameraTraining, UnknownUidIsEnabled) {
+        const lfs::core::Scene scene;
+        EXPECT_TRUE(scene.isCameraTrainingEnabled(123456));
     }
 
     TEST(SplitViewServiceTest, UpdateInfoClearsStaleSplitViewLabels) {
@@ -578,6 +765,23 @@ namespace lfs::vis {
         EXPECT_EQ(manager.getModelForRendering(), state.combined_model);
     }
 
+    TEST_F(SceneManagerRenderStateTest, VisibleSelectionMaskIsCachedForUnchangedGenerations) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+
+        scene.addSplat("Visible", makeTwoPointTestSplat(0.0f, 1.0f));
+        scene.addSplat("Hidden", makeTestSplat(2.0f));
+        scene.setNodeVisibility("Hidden", false);
+        scene.setSelection({0});
+
+        const auto first = scene.getVisibleSelectionMask();
+        const auto second = scene.getVisibleSelectionMask();
+
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        EXPECT_EQ(first.get(), second.get());
+    }
+
     TEST_F(SceneManagerRenderStateTest, PointCloudTransformIsTrackedSeparatelyFromModelTransforms) {
         SceneManager manager;
         auto& scene = manager.getScene();
@@ -836,6 +1040,38 @@ namespace lfs::vis {
 
         EXPECT_EQ(scene.getVisibleNodeIndex(left_id), 0);
         EXPECT_EQ(scene.getVisibleNodeIndex(right_id), 1);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, EditHandoffInvalidatesViewportDespitePreservingModelAddress) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+        auto& scene = manager.getScene();
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setTrainingModelNode("Model");
+
+        ViewportFrameLifecycleService lifecycle;
+        ViewportArtifactService artifacts;
+        const auto observe = [&] {
+            return lifecycle.handleModelChange(
+                reinterpret_cast<size_t>(manager.getModelForRendering()), artifacts,
+                manager.hasDataset() ? ViewportFrameLifecycleService::ModelSource::Training
+                                     : ViewportFrameLifecycleService::ModelSource::Scene);
+        };
+        const auto* training_model = manager.getModelForRendering();
+        ASSERT_NE(training_model, nullptr);
+        EXPECT_TRUE(observe().changed);
+        EXPECT_FALSE(observe().changed);
+        const auto generation = artifacts.artifactGeneration();
+
+        manager.switchToEditMode();
+
+        ASSERT_FALSE(manager.hasDataset());
+        ASSERT_EQ(manager.getModelForRendering(), training_model);
+        const auto handoff = observe();
+        EXPECT_TRUE(handoff.changed);
+        EXPECT_EQ(handoff.previous_model_ptr, reinterpret_cast<size_t>(training_model));
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        EXPECT_FALSE(observe().changed);
     }
 
     TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonUsesCombinedSceneMasks) {
@@ -2089,6 +2325,28 @@ namespace lfs::vis {
         EXPECT_EQ(artifacts.artifactGeneration(), generation_after_first_change);
     }
 
+    TEST(ViewportFrameLifecycleServiceTest, ModelSourceChangesInvalidateOnceInBothDirections) {
+        using Source = ViewportFrameLifecycleService::ModelSource;
+        ViewportFrameLifecycleService service;
+        ViewportArtifactService artifacts;
+
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        auto generation = artifacts.artifactGeneration();
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        generation = artifacts.artifactGeneration();
+        EXPECT_FALSE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+        EXPECT_EQ(artifacts.artifactGeneration(), generation);
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        generation = artifacts.artifactGeneration();
+        EXPECT_FALSE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        EXPECT_EQ(artifacts.artifactGeneration(), generation);
+
+        service.resetModelTracking();
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+    }
+
     TEST(ViewportArtifactServiceTest, ExplicitSplitPanelSamplingUsesPanelLocalCoordinates) {
         ViewportArtifactService artifacts;
 
@@ -2505,6 +2763,187 @@ namespace lfs::vis {
         EXPECT_FLOAT_EQ((*packed)[base + 1], 0.0f);
         EXPECT_FLOAT_EQ((*packed)[base + 2], 0.0f);
         EXPECT_FLOAT_EQ((*packed)[base + 3], 0.0f);
+    }
+
+    TEST(OverlayParamPackingTest, OverlayParamLayoutAndAnisotropicScreenWindowPacking) {
+        static_assert(detail::ViewIntrinsics == 12);
+        static_assert(detail::ViewWindow == 206);
+        static_assert(detail::ParamCount == 207);
+
+        lfs::rendering::ViewportRenderRequest request{};
+        request.frame_view.size = {640, 480};
+        request.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        request.filters.screen_window = lfs::rendering::SelectionScreenWindow{
+            .scale_x = 0.25f,
+            .scale_y = 0.75f,
+            .offset_x = 0.15f,
+            .offset_y = -0.35f,
+        };
+
+        const auto packed = detail::buildOverlayParamsCpuFloats(request, false, false, false, 0, false);
+        ASSERT_TRUE(packed.has_value());
+
+        const std::size_t view_flags_base = static_cast<std::size_t>(detail::ViewFlags) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[view_flags_base + 3], 0.0f);
+
+        const std::size_t view_window_base = static_cast<std::size_t>(detail::ViewWindow) * 4u;
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 0], 0.25f);
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 1], 0.75f);
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 2], 0.0f);
+        EXPECT_FLOAT_EQ((*packed)[view_window_base + 3], 0.0f);
+    }
+
+    TEST(OverlayParamPackingTest, ViewWindowZPacksDepthWindowDragPreviewFlag) {
+        const std::size_t view_window_base = static_cast<std::size_t>(detail::ViewWindow) * 4u;
+
+        lfs::rendering::ViewportRenderRequest preview_on{};
+        preview_on.frame_view.size = {640, 480};
+        preview_on.filters.view_volume = lfs::rendering::BoundingBox{
+            .min = glm::vec3(-1.0f),
+            .max = glm::vec3(1.0f),
+            .transform = glm::mat4(1.0f)};
+        preview_on.filters.screen_window = lfs::rendering::SelectionScreenWindow{
+            .scale_x = 0.25f,
+            .scale_y = 0.75f,
+            .drag_preview = true,
+        };
+
+        const auto packed_on =
+            detail::buildOverlayParamsCpuFloats(preview_on, false, false, false, 0, false);
+        ASSERT_TRUE(packed_on.has_value());
+        EXPECT_FLOAT_EQ((*packed_on)[view_window_base + 2], 1.0f);
+        EXPECT_FLOAT_EQ((*packed_on)[view_window_base + 3], 0.0f);
+
+        lfs::rendering::ViewportRenderRequest preview_off = preview_on;
+        preview_off.filters.screen_window->drag_preview = false;
+
+        const auto packed_off =
+            detail::buildOverlayParamsCpuFloats(preview_off, false, false, false, 0, false);
+        ASSERT_TRUE(packed_off.has_value());
+        EXPECT_FLOAT_EQ((*packed_off)[view_window_base + 2], 0.0f);
+        EXPECT_FLOAT_EQ((*packed_off)[view_window_base + 3], 0.0f);
+    }
+
+    class DepthWindowGtHookTest : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+            lfs::vis::services().clear();
+            lfs::vis::op::undoHistory().clear();
+
+            options_.show_startup_overlay = false;
+            options_.width = 200;
+            options_.height = 200;
+            viewer_ = std::make_unique<lfs::vis::VisualizerImpl>(options_);
+            viewer_->initializeTools();
+
+            rendering_manager_ = viewer_->getRenderingManager();
+            selection_tool_ = viewer_->getSelectionTool();
+            ASSERT_NE(rendering_manager_, nullptr);
+            ASSERT_NE(selection_tool_, nullptr);
+
+            const std::vector<float> means_data{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
+            const std::vector<float> rotation_data{1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+            auto means = lfs::core::Tensor::from_vector(means_data, {size_t{2}, size_t{3}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
+            auto sh0 = lfs::core::Tensor::zeros({size_t{2}, size_t{1}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto shN = lfs::core::Tensor::zeros({size_t{2}, size_t{3}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto scaling = lfs::core::Tensor::zeros({size_t{2}, size_t{3}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            auto rotation = lfs::core::Tensor::from_vector(rotation_data, {size_t{2}, size_t{4}}, lfs::core::Device::CUDA).to(lfs::core::DataType::Float32);
+            auto opacity = lfs::core::Tensor::zeros({size_t{2}, size_t{1}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+            viewer_->getSceneManager()->getScene().addSplat(
+                "depth_window_test",
+                std::make_unique<lfs::core::SplatData>(1, std::move(means), std::move(sh0), std::move(shN), std::move(scaling), std::move(rotation), std::move(opacity), 1.0f));
+            viewer_->getSceneManager()->initSelectionService();
+            if (auto* const service = viewer_->getSceneManager()->getSelectionService()) {
+                service->setTestingViewport({
+                    .x = 0.0f,
+                    .y = 0.0f,
+                    .width = static_cast<float>(options_.width),
+                    .height = static_cast<float>(options_.height),
+                    .render_width = options_.width,
+                    .render_height = options_.height,
+                });
+            }
+            selection_tool_->setEnabled(true);
+
+            auto settings = rendering_manager_->getSettings();
+            settings.depth_filter_enabled = true;
+            settings.depth_filter_scale_x = 0.5f;
+            settings.depth_filter_scale_y = 0.5f;
+            rendering_manager_->updateSettings(settings);
+            selection_tool_->setDepthFilterEnabled(true);
+        }
+
+        void TearDown() override {
+            lfs::vis::op::operators().cancelModalOperator();
+            lfs::event::EventBridge::instance().clear_all();
+            lfs::core::event::bus().clear_all();
+            lfs::vis::services().clear();
+            viewer_.reset();
+            lfs::vis::op::undoHistory().clear();
+        }
+
+        bool startDepthDrag() {
+            lfs::vis::op::OperatorProperties props;
+            props.set("x", 10.0);
+            props.set("y", 10.0);
+            props.set("viewport_x", 0.0f);
+            props.set("viewport_y", 0.0f);
+            props.set("viewport_width", static_cast<float>(options_.width));
+            props.set("viewport_height", static_cast<float>(options_.height));
+            props.set("modifiers", lfs::vis::input::KEYMOD_SHIFT | lfs::vis::input::KEYMOD_ALT);
+            const auto result = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::DepthWindowDrag, &props);
+            return result.status == lfs::vis::op::OperatorResult::RUNNING_MODAL;
+        }
+
+        lfs::vis::ViewerOptions options_{};
+        std::unique_ptr<lfs::vis::VisualizerImpl> viewer_;
+        lfs::vis::RenderingManager* rendering_manager_ = nullptr;
+        lfs::vis::tools::SelectionTool* selection_tool_ = nullptr;
+    };
+
+    TEST_F(DepthWindowGtHookTest, GtToggleCancelsDepthWindowDragAndClearsHover) {
+        ASSERT_TRUE(startDepthDrag());
+        const op::ModalEvent move{
+            .type = op::ModalEvent::Type::MOUSE_MOVE,
+            .data = MouseMoveEvent{
+                .position = {60.0, 60.0},
+                .delta = {50.0, 50.0},
+            },
+        };
+        ASSERT_EQ(op::operators().dispatchModalEvent(move), op::OperatorResult::RUNNING_MODAL);
+        ASSERT_TRUE(rendering_manager_->depthWindowDragPreview());
+        (void)lfs::vis::op::updateDepthWindowHover(
+            glm::vec2(50.0f, 50.0f),
+            glm::vec4(0.0f, 0.0f, static_cast<float>(options_.width), static_cast<float>(options_.height)),
+            true);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+        EXPECT_FALSE(lfs::vis::op::operators().hasModalOperator());
+        EXPECT_FALSE(lfs::vis::op::depthWindowOverlayState().visible);
+        EXPECT_EQ(lfs::vis::op::depthWindowOverlayState().hovered_handle, lfs::vis::op::DepthWindowHandle::None);
+    }
+
+    TEST_F(DepthWindowGtHookTest, GtToggleLeavesUnrelatedSelectionStrokeModalActive) {
+        lfs::vis::op::OperatorProperties stroke_props;
+        stroke_props.set("mode", 0);
+        stroke_props.set("op", 0);
+        stroke_props.set("x", 30.0);
+        stroke_props.set("y", 30.0);
+        const auto stroke = lfs::vis::op::operators().invoke(lfs::vis::op::BuiltinOp::SelectionStroke, &stroke_props);
+        ASSERT_EQ(stroke.status, lfs::vis::op::OperatorResult::RUNNING_MODAL);
+
+        lfs::core::events::cmd::ToggleGTComparison{}.emit();
+
+        EXPECT_TRUE(lfs::vis::op::operators().hasModalOperator());
+        EXPECT_EQ(lfs::vis::op::operators().activeModalId(), "selection.stroke");
+        lfs::vis::op::operators().cancelModalOperator();
     }
 
 } // namespace lfs::vis

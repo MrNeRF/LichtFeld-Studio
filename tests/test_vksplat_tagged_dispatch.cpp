@@ -14,6 +14,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -113,12 +115,21 @@ namespace {
         std::uint32_t memory_barrier_count = 0;
     };
 
+    struct CapturedFill {
+        VkBuffer buffer;
+        VkDeviceSize offset;
+        VkDeviceSize size;
+        std::uint32_t value;
+    };
+
     // Scripted dispatch: captures barrier2 dependency infos AND
     // bind/dispatch/push order. Also covers begin/end/submit/reset_query so
     // beginCommandBatch/endCommandBatch work without a real device.
     struct DispatchScript {
         std::vector<RecordedOp> ops;
         std::vector<CapturedBarrier2> barriers;
+        std::vector<CapturedFill> fills;
+        std::vector<VulkanGSRendererUniforms> projection_uniforms;
         int submit_calls = 0;
         int begin_calls = 0;
         int end_calls = 0;
@@ -137,6 +148,8 @@ namespace {
         void clear_recording() {
             ops.clear();
             barriers.clear();
+            fills.clear();
+            projection_uniforms.clear();
         }
 
         [[nodiscard]] std::size_t buffer_barrier_calls() const {
@@ -261,11 +274,16 @@ namespace {
         static VKAPI_ATTR void VKAPI_CALL push_constants(VkCommandBuffer,
                                                          VkPipelineLayout,
                                                          VkShaderStageFlags,
-                                                         uint32_t,
-                                                         uint32_t,
-                                                         const void*) {
+                                                         uint32_t offset,
+                                                         uint32_t size,
+                                                         const void* data) {
             EXPECT_NE(active(), nullptr);
             active()->ops.push_back(RecordedOp::PushConstants);
+            if (offset == 0 && size == sizeof(VulkanGSRendererUniforms) && data != nullptr) {
+                VulkanGSRendererUniforms uniforms{};
+                std::memcpy(&uniforms, data, sizeof(uniforms));
+                active()->projection_uniforms.push_back(uniforms);
+            }
         }
 
         static VKAPI_ATTR void VKAPI_CALL dispatch(VkCommandBuffer, uint32_t, uint32_t, uint32_t) {
@@ -279,12 +297,13 @@ namespace {
         }
 
         static VKAPI_ATTR void VKAPI_CALL fill_buffer(VkCommandBuffer,
-                                                      VkBuffer,
-                                                      VkDeviceSize,
-                                                      VkDeviceSize,
-                                                      uint32_t) {
+                                                      VkBuffer buffer,
+                                                      VkDeviceSize offset,
+                                                      VkDeviceSize size,
+                                                      uint32_t value) {
             EXPECT_NE(active(), nullptr);
             active()->ops.push_back(RecordedOp::FillBuffer);
+            active()->fills.push_back({buffer, offset, size, value});
         }
 
         static VKAPI_ATTR void VKAPI_CALL copy_buffer(VkCommandBuffer,
@@ -907,6 +926,8 @@ namespace {
 
     class TestableRenderer final : public VulkanGSRenderer {
     public:
+        using VulkanGSRenderer::prepareOverlayFlags;
+
         ~TestableRenderer() {
             disarm_for_destruction();
         }
@@ -1173,6 +1194,9 @@ namespace {
         const VkDeviceSize bytes = elements * sizeof(std::uint16_t);
         buf.deviceBuffer = makeBuffer(id, bytes);
     }
+    void forge_owned_u8(Buffer<std::uint8_t>& buf, const std::uintptr_t id, const std::size_t elements) {
+        buf.deviceBuffer = makeBuffer(id, elements);
+    }
 
     void track_buf(TestableRenderer& r, const _VulkanBuffer& b) {
         if (b.buffer != VK_NULL_HANDLE) {
@@ -1183,13 +1207,14 @@ namespace {
     // P4 baselines (catalog struct counts).
     constexpr std::size_t kAuditSelectionMask = 13;            // 11 pre + 2 post
     constexpr std::size_t kAuditSelectionPolygonRasterize = 3; // 2 pre + 1 post
-    constexpr std::size_t kAuditProjectionForwardNoLod = 12;   // 10 + 1 + 1 (no L1218)
-    constexpr std::size_t kAuditProjectionForwardWithLod = 16; // +4 LOD
+    // Packed flags add prior access -> clear and clear -> atomic projection.
+    constexpr std::size_t kAuditProjectionForwardNoLod = 12 + 2;
+    constexpr std::size_t kAuditProjectionForwardWithLod = 16 + 2;
     // P4 r2: cull 5+1+(0..2)+1+1+2; survivors 5+(0..2).
     constexpr std::size_t kAuditCullSplatsNoLod = 10;
     constexpr std::size_t kAuditCullSplatsWithLod = 12;
-    constexpr std::size_t kAuditProjectionSurvivorsNoLod = 5;
-    constexpr std::size_t kAuditProjectionSurvivorsWithLod = 7;
+    constexpr std::size_t kAuditProjectionSurvivorsNoLod = 5 + 2;
+    constexpr std::size_t kAuditProjectionSurvivorsWithLod = 7 + 2;
     // P4 r3: cumsum single-pass begin=3 structs (input+output; no blockSums) + phases 0;
     // prepare tile sort 2; generous caps for multi-phase + sort chain under freeze N=64.
     constexpr std::size_t kAuditCumsumSinglePass = 8;
@@ -1544,6 +1569,59 @@ TEST(VkSplatTaggedDispatch, SelectionChainAuditWithinBaseline) {
 // recordVisibleCount/InstanceCount owned by later chains — not migrated here.
 // =============================================================================
 
+// Catches: partial-word descriptors, stale flags, and incorrect arena fill ranges.
+TEST(VkSplatTaggedDispatch, OverlayFlagsUsePaddedBytesAndClearReusedStorage) {
+    DispatchScript script;
+    BindScript bind(script);
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+
+    VulkanGSPipelineBuffers buffers;
+    forge_owned_u8(buffers.overlay_flags, 0xD100, 8192);
+    // Exercise an arena view whose start is not the start of its parent buffer.
+    buffers.overlay_flags.deviceBuffer.offset = 256;
+    buffers.overlay_flags.deviceBuffer.allocSize += 256;
+    renderer.beginCommandBatch();
+    track_buf(renderer, buffers.overlay_flags.deviceBuffer);
+
+    for (const std::size_t count : {0u, 1u, 2u, 3u, 4u, 5u, 31u, 32u, 33u, 4097u, 5u}) {
+        SCOPED_TRACE(count);
+        script.clear_recording();
+        auto& flags = renderer.prepareOverlayFlags(buffers, count, true);
+        const std::size_t expected = count == 0 ? 4 : ((count - 1) / 4 + 1) * 4;
+        EXPECT_EQ(flags.size, expected);
+        EXPECT_EQ(flags.capacity, 8192u); // Reuse must still clear on every call.
+        ASSERT_EQ(script.fills.size(), 1u);
+        EXPECT_EQ(script.fills[0].buffer, flags.buffer);
+        EXPECT_EQ(script.fills[0].offset, 256u);
+        EXPECT_EQ(script.fills[0].size, expected);
+        EXPECT_EQ(script.fills[0].value, 0u);
+    }
+
+    script.clear_recording();
+    EXPECT_EQ(renderer.prepareOverlayFlags(buffers, 4097, false).size, 4u);
+    EXPECT_TRUE(script.fills.empty());
+
+    script.clear_recording();
+    EXPECT_EQ(renderer.prepareOverlayFlags(buffers, 5, true).size, 8u);
+    ASSERT_EQ(script.fills.size(), 1u);
+    EXPECT_EQ(script.fills[0].size, 8u);
+    renderer.endCommandBatch(/*use_fence=*/false);
+}
+
+TEST(VkSplatTaggedDispatch, OverlayFlagsRejectAlignmentOverflowBeforeRecording) {
+    DispatchScript script;
+    BindScript bind(script);
+    TestableRenderer renderer;
+    renderer.install_fake_handles();
+    renderer.setVulkanDispatch(make_scripted_dispatch());
+    VulkanGSPipelineBuffers buffers;
+    EXPECT_THROW(renderer.prepareOverlayFlags(buffers, std::numeric_limits<std::size_t>::max(), true),
+                 lfs::Exception);
+    EXPECT_TRUE(script.ops.empty());
+}
+
 // Catches: projection still hand-writing barriers / fill not planTransfer-recorded.
 TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
     DispatchScript script;
@@ -1563,12 +1641,11 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
     forge_owned_f(buffers.opacity_raw, 0xD006, kAuditSplatCount);
     forge_owned_i32(buffers.tiles_touched, 0xD007, kAuditSplatCount);
     forge_owned_i64(buffers.rect_tile_space, 0xD008, kAuditSplatCount);
-    forge_owned_i32(buffers.radii, 0xD009, kAuditSplatCount);
     forge_owned_f(buffers.xy_vs, 0xD00A, kAuditSplatCount * 2);
     forge_owned_f(buffers.depths, 0xD00B, kAuditSplatCount);
     forge_owned_f(buffers.inv_cov_vs_opacity, 0xD00C, kAuditSplatCount * 4);
     forge_owned_f(buffers.rgb, 0xD00D, kAuditSplatCount * 3);
-    forge_owned_i32(buffers.overlay_flags, 0xD00E, kAuditSplatCount);
+    forge_owned_u8(buffers.overlay_flags, 0xD00E, kAuditSplatCount);
     forge_owned(buffers.primitive_depth_keys, 0xD00F, kAuditSplatCount);
 
     auto transform_indices = makeBuffer(0xD020, kAuditSplatCount * 4);
@@ -1586,7 +1663,7 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
                     &buffers.shN.deviceBuffer, &buffers.rotations.deviceBuffer,
                     &buffers.scaling_raw.deviceBuffer, &buffers.opacity_raw.deviceBuffer,
                     &buffers.tiles_touched.deviceBuffer, &buffers.rect_tile_space.deviceBuffer,
-                    &buffers.radii.deviceBuffer, &buffers.xy_vs.deviceBuffer,
+                    &buffers.xy_vs.deviceBuffer,
                     &buffers.depths.deviceBuffer, &buffers.inv_cov_vs_opacity.deviceBuffer,
                     &buffers.rgb.deviceBuffer, &buffers.overlay_flags.deviceBuffer,
                     &buffers.primitive_depth_keys.deviceBuffer,
@@ -1640,6 +1717,8 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
         // sentinel fill: prior compute/R/W → transfer write, then transfer → compute R/W
         {buffers.primitive_depth_keys.deviceBuffer.buffer, BM::TRANSFER_WRITE,
          BM::COMPUTE_SHADER_WRITE, "depth_keys fill→projection write"},
+        {buffers.overlay_flags.deviceBuffer.buffer, BM::TRANSFER_WRITE,
+         BM::COMPUTE_SHADER_READ_WRITE, "overlay clear→packed atomic write"},
         // LOD inputs (when valid): prior write → compute read
         {lod_indices.buffer, BM::COMPUTE_SHADER_WRITE, BM::COMPUTE_SHADER_READ,
          "lod_indices → projection read"},
@@ -1669,6 +1748,26 @@ TEST(VkSplatTaggedDispatch, ProjectionForwardAuditWithinBaseline) {
         (stats_before.barriers_emitted + stats_before.accesses_elided);
     EXPECT_GT(planned_activity, 0u)
         << "projection must exercise planner (tagged + planTransfer fill)";
+
+    for (const bool enabled : {false, true}) {
+        script.clear_recording();
+        renderer.executeProjectionForward(
+            u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+            kAuditSplatCount, false, {}, {}, {}, {}, {}, enabled);
+        ASSERT_FALSE(script.projection_uniforms.empty());
+        EXPECT_EQ((script.projection_uniforms.back().lod_enabled & kLodEnabledWriteOverlayFlags) != 0,
+                  enabled);
+        std::size_t overlay_clears = 0;
+        for (const auto& fill : script.fills) {
+            if (fill.buffer == buffers.overlay_flags.deviceBuffer.buffer) {
+                ++overlay_clears;
+                EXPECT_EQ(fill.size, kAuditSplatCount);
+                EXPECT_EQ(fill.value, 0u);
+            }
+        }
+        EXPECT_EQ(overlay_clears, enabled ? 1u : 0u);
+        EXPECT_EQ(buffers.overlay_flags.deviceBuffer.size, enabled ? kAuditSplatCount : 4u);
+    }
 
     std::printf("ProjectionForwardAudit with_lod=%zu (≤%zu) no_lod=%zu (≤%zu) "
                 "derived=%zu planned_activity=%llu\n",
@@ -1715,7 +1814,7 @@ TEST(VkSplatTaggedDispatch, CullAndSurvivorsProjectionAuditWithinBaseline) {
     forge_owned_f(buffers.depths, 0xE010, kAuditSplatCount);
     forge_owned_f(buffers.inv_cov_vs_opacity, 0xE011, kAuditSplatCount * 4);
     forge_owned_f(buffers.rgb, 0xE012, kAuditSplatCount * 3);
-    forge_owned_i32(buffers.overlay_flags, 0xE013, kAuditSplatCount);
+    forge_owned_u8(buffers.overlay_flags, 0xE013, kAuditSplatCount);
     forge_owned_i32(buffers.orig_ids, 0xE014, kAuditSplatCount);
 
     auto transform_indices = makeBuffer(0xE020, kAuditSplatCount * 4);
@@ -1851,6 +1950,8 @@ TEST(VkSplatTaggedDispatch, CullAndSurvivorsProjectionAuditWithinBaseline) {
         // emit_count prepare write → projection R/W
         {buffers.visible_emit_count.deviceBuffer.buffer, BM::COMPUTE_SHADER_WRITE,
          BM::COMPUTE_SHADER_READ_WRITE, "emit_count prepare→projection"},
+        {buffers.overlay_flags.deviceBuffer.buffer, BM::TRANSFER_WRITE,
+         BM::COMPUTE_SHADER_READ_WRITE, "overlay clear→survivor packed atomic write"},
     };
     for (const auto& edge : edges) {
         EXPECT_TRUE(edge_covered(derived, edge)) << "missing edge: " << edge.name;
@@ -1862,6 +1963,26 @@ TEST(VkSplatTaggedDispatch, CullAndSurvivorsProjectionAuditWithinBaseline) {
         (stats_before.barriers_emitted + stats_before.accesses_elided);
     EXPECT_GT(planned_activity, 0u)
         << "cull/survivors must exercise planner (tagged + clear planTransfer)";
+
+    for (const bool enabled : {false, true}) {
+        script.clear_recording();
+        renderer.executeProjectionForwardSurvivors(
+            u, buffers, transform_indices, node_mask, overlay_params, model_transforms,
+            kAuditSplatCount, {}, {}, {}, {}, {}, enabled);
+        ASSERT_FALSE(script.projection_uniforms.empty());
+        EXPECT_EQ((script.projection_uniforms.back().lod_enabled & kLodEnabledWriteOverlayFlags) != 0,
+                  enabled);
+        std::size_t overlay_clears = 0;
+        for (const auto& fill : script.fills) {
+            if (fill.buffer == buffers.overlay_flags.deviceBuffer.buffer) {
+                ++overlay_clears;
+                EXPECT_EQ(fill.size, kAuditSplatCount);
+                EXPECT_EQ(fill.value, 0u);
+            }
+        }
+        EXPECT_EQ(overlay_clears, enabled ? 1u : 0u);
+        EXPECT_EQ(buffers.overlay_flags.deviceBuffer.size, enabled ? kAuditSplatCount : 4u);
+    }
 
     std::printf(
         "CullSurvivorsAudit cull_with_lod=%zu (≤%zu) cull_no_lod=%zu (≤%zu) "
@@ -2267,7 +2388,7 @@ namespace {
         forge_owned_f(buffers.rotations, 0xF609, kAuditSplatCount * 4);
         forge_owned_f(buffers.scaling_raw, 0xF60A, kAuditSplatCount * 3);
         forge_owned_f(buffers.opacity_raw, 0xF60B, kAuditSplatCount);
-        forge_owned_i32(buffers.overlay_flags, 0xF60C, kAuditSplatCount);
+        forge_owned_u8(buffers.overlay_flags, 0xF60C, kAuditSplatCount);
         forge_owned(buffers.visible_count, 0xF60D, 2);
         forge_owned_i32(buffers.orig_ids, 0xF60E, kAuditSplatCount);
 

@@ -34,6 +34,17 @@ namespace {
         int begin_calls = 0;
         int reset_cb_calls = 0;
         VkResult first_submit_result = VK_ERROR_DEVICE_LOST;
+        VkResult query_result = VK_NOT_READY;
+        int query_calls = 0;
+        VkQueryResultFlags query_flags = 0;
+
+        static VKAPI_ATTR VkResult VKAPI_CALL query_results(VkDevice, VkQueryPool, uint32_t,
+                                                            uint32_t, size_t, void*, VkDeviceSize,
+                                                            VkQueryResultFlags flags) {
+            ++active()->query_calls;
+            active()->query_flags = flags;
+            return active()->query_result;
+        }
 
         static SubmitScript*& active() {
             static SubmitScript* ptr = nullptr;
@@ -102,6 +113,8 @@ namespace {
             // paths on our forged handles. Disarm first.
             disarm_for_destruction();
         }
+
+        void collect_timestamps() { collectTimestampResults(command_batch_slots_[0], 2); }
 
         void install_fake_handles() {
             device = fakeVkHandle<VkDevice>(0x1001);
@@ -239,4 +252,24 @@ TEST(VkSplatFailedSubmitNoPublish, QW6_FailThenSuccessNoFalsePublication) {
     // false pre-submit publication; value_fail must still be absent.
     EXPECT_NE(pipeline.pending_signal_of_active(), VK_NULL_HANDLE);
     EXPECT_EQ(pipeline.pending_signal_value_of_active(), value_ok);
+}
+
+TEST(VksplatTimestampTest, MissingProfilingResultsNeverBlockOrFailRendering) {
+    SubmitScript script;
+    BindSubmit bind(script);
+    TestablePipeline pipeline;
+    pipeline.install_fake_handles();
+    auto dispatch = lfs::rendering::VulkanDispatch::real();
+    dispatch.get_query_pool_results = SubmitScript::query_results;
+    pipeline.setVulkanDispatch(dispatch);
+    EXPECT_NO_THROW(pipeline.collect_timestamps());
+    EXPECT_EQ(script.query_calls, 1);
+    EXPECT_EQ(script.query_flags & VK_QUERY_RESULT_WAIT_BIT, 0u);
+    script.query_result = VK_ERROR_DEVICE_LOST;
+    try {
+        pipeline.collect_timestamps();
+        FAIL() << "device loss must remain a typed error";
+    } catch (const lfs::Exception& error) {
+        EXPECT_EQ(error.error().code(), lfs::ErrorCode::DeviceLost);
+    }
 }

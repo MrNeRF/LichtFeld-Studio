@@ -247,7 +247,9 @@ def prepare_training_from_scene() -> None:
     """Initialize trainer from existing scene cameras and point cloud"""
 
 def start_training() -> None:
-    """Start training with current parameters"""
+    """
+    Start training with current parameters. Returns after dispatch on the viewer thread; other callers wait for initialization. Asynchronous failures are reported through training state.
+    """
 
 def training_start_overwrite_conflict() -> int | None:
     """Return the blocking training-start overwrite conflict, if any"""
@@ -276,16 +278,31 @@ def reset_training() -> None:
     """Reset training state to initial"""
 
 def is_training_active() -> bool:
-    """Whether training is running or paused"""
+    """Whether training is starting, running, or paused"""
 
 def new_project(discard_changes: bool = False, stop_training: bool = False) -> None:
     """Clear all project state and start a new project"""
+
+def project_create(path: str, discard_changes: bool = False, stop_training: bool = False) -> None:
+    """Create and bind a new .licht project at path"""
+
+def project_embed_dataset() -> None:
+    """Embed the active project's external dataset verbatim"""
 
 def project_save(wait: bool = False, regenerate_preview: bool = True) -> bool:
     """Save the active .licht project, prompting for a path when needed"""
 
 def project_save_as(path: str = '', wait: bool = False) -> bool:
     """Save the active project to a new .licht path"""
+
+def project_get_license() -> dict | None:
+    """Return the license metadata for the active project, or None"""
+
+def project_set_license(identifier: str, notice: str = '') -> None:
+    """Set the license metadata for the active project"""
+
+def project_clear_license() -> None:
+    """Clear the license metadata for the active project"""
 
 def project_poll_write() -> dict:
     """Return the active .licht project write state"""
@@ -301,6 +318,9 @@ def project_is_dirty() -> bool:
 
 def project_has_path() -> bool:
     """Return whether the active project has a bound .licht path"""
+
+def project_can_embed_dataset() -> bool:
+    """Return whether the active project can embed its external dataset"""
 
 def project_recent_files() -> list[str]:
     """Return the most-recently-used .licht project paths"""
@@ -327,6 +347,11 @@ def project_auto_save_on_close_enabled() -> bool:
 
 def project_set_auto_save_on_close(enabled: bool) -> None:
     """Enable or disable automatic project save on close"""
+
+def project_embed_dataset_by_default_enabled() -> bool: ...
+
+def project_set_embed_dataset_by_default(enabled: bool) -> None:
+    """Set whether new projects copy datasets into the project by default"""
 
 def project_autosave_interval_seconds() -> int:
     """Return the timed project autosave interval in seconds"""
@@ -373,9 +398,9 @@ def cancel_exit() -> None:
 def force_exit() -> None:
     """Explicitly discard unsaved changes and exit."""
 
-def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True) -> None:
+def export_scene(format: int, path: str, node_names: Sequence[str], sh_degree: int, rad_flip_y: bool = False, rad_streamable: bool = True, spz_version: int = 4, include_provenance: bool = True, *, lod_levels: int = 4, lod_ratio: float = 0.5, chunk_count_k: int = 512, chunk_extent: float = 16.0, chunk_min_k: int = 8, kmeans_iterations: int = 10) -> None:
     """
-    Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
+    Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. Ignored for COLMAP and SPZ v3.
     """
 
 def save_config_file(path: str) -> None:
@@ -1929,6 +1954,9 @@ class BackgroundMode(enum.Enum):
 
     RANDOM = 3
 
+def training_backends() -> list:
+    """Available training backends and their viewer mapping"""
+
 class OptimizationParams:
     def __init__(self) -> None: ...
 
@@ -1962,6 +1990,22 @@ class OptimizationParams:
 
     def validate(self) -> str:
         """Validate parameter consistency, returns empty string if valid"""
+
+    @property
+    def backend_conflict(self) -> str:
+        """
+        Stable identifier for the selected backend incompatibility, or an empty string
+        """
+
+    @property
+    def backend_conflict_context(self) -> dict:
+        """Structured values used to render the selected backend incompatibility"""
+
+    @property
+    def backend_conflict_message(self) -> str:
+        """
+        Native CLI message for the selected backend incompatibility, or an empty string
+        """
 
     @property
     def iterations(self) -> int:
@@ -2168,6 +2212,17 @@ class OptimizationParams:
 
     def auto_scale_steps(self, image_count: int) -> None:
         """Auto-scale steps for all strategies based on image count"""
+
+    @property
+    def raster_backend(self) -> str:
+        """Training raster backend: 3dgs or 3dgut; shares storage with legacy gut"""
+
+    @raster_backend.setter
+    def raster_backend(self, arg: str, /) -> None: ...
+
+    @property
+    def backend_capabilities(self) -> dict:
+        """Verified capabilities for the selected training backend"""
 
     @property
     def gut(self) -> bool:

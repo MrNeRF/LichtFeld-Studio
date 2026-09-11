@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/training_churn_metrics.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "memory_arena.hpp"
 #include <algorithm>
@@ -90,6 +91,7 @@ namespace lfs::core {
         active_frames_ = other.active_frames_;
         pending_render_frames_ = other.pending_render_frames_;
         active_training_frames_ = other.active_training_frames_;
+        last_handoff_frame_id_ = other.last_handoff_frame_id_;
         last_frame_event_ = other.last_frame_event_;
         last_frame_event_valid_ = other.last_frame_event_valid_;
         external_release_semaphore_ = other.external_release_semaphore_;
@@ -126,6 +128,7 @@ namespace lfs::core {
             active_frames_ = other.active_frames_;
             pending_render_frames_ = other.pending_render_frames_;
             active_training_frames_ = other.active_training_frames_;
+            last_handoff_frame_id_ = other.last_handoff_frame_id_;
             if (last_frame_event_) {
                 const cudaError_t destroy_status = cudaEventDestroy(last_frame_event_);
                 if (destroy_status != cudaSuccess) {
@@ -394,6 +397,17 @@ namespace lfs::core {
                 detail::format_cuda_safe("frame_id={}, stream={}", frame_id, static_cast<void*>(stream)));
         }
 
+        // This is the ownership handoff point for the shared external block.
+        // wait_for_previous_frame consumes the existing CUDA event or the
+        // viewer's imported Vulkan completion timeline before offset zero is
+        // reset below. For a stream-aware CUDA frame the Vulkan wait is queued
+        // on `stream`; the first CUDA access is therefore ordered after the
+        // Vulkan release without adding a new synchronization primitive.
+        {
+            std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+            last_handoff_frame_id_ = frame_id;
+        }
+
         // CRITICAL FIX: Reset arena offset at the beginning of each frame!
         int device = -1;
         const cudaError_t device_status = cudaGetDevice(&device);
@@ -426,6 +440,16 @@ namespace lfs::core {
         total_frames_processed_.fetch_add(1, std::memory_order_relaxed);
 
         return frame_id;
+    }
+
+    void RasterizerMemoryArena::assert_frame_handoff(const uint64_t frame_id) const {
+        std::lock_guard<std::mutex> sync_lock(sync_mutex_);
+        LFS_DEBUG_ASSERT_MSG(
+            active_frames_ == 1,
+            "shared scratch frame claim requires the sole active arena frame");
+        LFS_DEBUG_ASSERT_MSG(
+            last_handoff_frame_id_ == frame_id,
+            "shared scratch frame claim bypassed the prior-owner handoff");
     }
 
     void RasterizerMemoryArena::end_frame(uint64_t frame_id, cudaStream_t stream, bool from_rendering) {
@@ -597,18 +621,24 @@ namespace lfs::core {
         arena.last_log_time = std::chrono::steady_clock::now();
     }
 
-    std::function<char*(size_t)> RasterizerMemoryArena::get_allocator(uint64_t frame_id) {
-        return [this, frame_id](size_t size) -> char* {
+    std::function<char*(size_t)> RasterizerMemoryArena::get_allocator(
+        const uint64_t frame_id, const char* label) {
+        return [this, frame_id, label](size_t size) -> char* {
             if (size == 0) {
                 return nullptr;
             }
+
+            // FastGS claims the shared block at the first allocation of its
+            // frame. This checks that the prior viewer epoch was handed off
+            // through the existing event/timeline path before that claim.
+            assert_frame_handoff(frame_id);
 
             int device;
             LFS_CUDA_CHECK_MSG(cudaGetDevice(&device),
                                "RasterizerMemoryArena allocation");
 
             Arena& arena = get_or_create_arena(device);
-            return allocate_internal(arena, size, frame_id);
+            return allocate_internal(arena, size, frame_id, label);
         };
     }
 
@@ -732,6 +762,8 @@ namespace lfs::core {
         arena.external_owner.reset();
         arena.external_label.clear();
         arena.external_grow = nullptr;
+        arena.external_shrink = nullptr;
+        arena.external_minimum_size = nullptr;
         arena.committed_size = 0;
         arena.capacity = 0;
         arena.offset.store(0, std::memory_order_release);
@@ -789,7 +821,7 @@ namespace lfs::core {
                     if (device_drained) {
                         arena->offset.store(0, std::memory_order_release);
                         try {
-                            decommit_unused_memory(*arena);
+                            decommit_unused_memory(*arena, true);
                         } catch (const std::exception& e) {
                             LOG_ERROR("RasterizerMemoryArena full_reset decommit failed "
                                       "(continuing teardown): {}",
@@ -844,24 +876,52 @@ namespace lfs::core {
         return install_external_backing_impl(std::move(backing), true);
     }
 
-    bool RasterizerMemoryArena::try_install_external_backing(ExternalBacking backing) {
-        return install_external_backing_impl(std::move(backing), false);
+    bool RasterizerMemoryArena::try_install_external_backing(ExternalBacking backing, const uint32_t timeout_ms) {
+        return install_external_backing_impl(std::move(backing), false, timeout_ms);
     }
 
-    bool RasterizerMemoryArena::install_external_backing_impl(ExternalBacking backing, bool wait) {
+    bool RasterizerMemoryArena::install_external_backing_impl(ExternalBacking backing, const bool wait,
+                                                              const uint32_t timeout_ms) {
         if (!backing.valid()) {
             LOG_WARN("RasterizerMemoryArena::install_external_backing called with invalid backing");
             return false;
         }
 
-        std::unique_lock<std::mutex> sync_lock(sync_mutex_);
+        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::defer_lock);
+        if (wait) {
+            sync_lock.lock();
+        } else if (!sync_lock.try_lock()) {
+            return false;
+        }
         const auto can_install = [this]() {
             return active_frames_ == 0 && pending_render_frames_ == 0;
         };
         if (wait) {
             sync_cv_.wait(sync_lock, can_install);
         } else if (!can_install()) {
-            return false;
+            if (timeout_ms == 0 || pending_render_frames_ != 0) {
+                return false;
+            }
+            // Installation happens before the renderer acquires its arena frame.
+            // Reserve the next idle window so resumed training cannot continuously
+            // win it and leave a detached viewer backing permanently uninstalled.
+            ++pending_render_frames_;
+            bool idle = false;
+            try {
+                idle = sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(timeout_ms),
+                                         [this] { return active_frames_ == 0; });
+            } catch (...) {
+                --pending_render_frames_;
+                sync_cv_.notify_all();
+                throw;
+            }
+            --pending_render_frames_;
+            sync_cv_.notify_all();
+            if (!idle) {
+                return false;
+            }
+            // Keep sync_mutex_ through installation: no training frame can enter
+            // after the reservation is released and before the backing is visible.
         }
 
         // A submitted viewport batch may still be reading the current backing;
@@ -903,6 +963,8 @@ namespace lfs::core {
         arena.external_owner = std::move(backing.owner);
         arena.external_label = std::move(backing.label);
         arena.external_grow = std::move(backing.grow);
+        arena.external_shrink = std::move(backing.shrink);
+        arena.external_minimum_size = std::move(backing.minimum_size);
         arena.committed_size = backing.size;
         arena.capacity = backing.size;
         arena.granularity = std::max(config_.alignment, config_.granularity);
@@ -964,15 +1026,48 @@ namespace lfs::core {
     }
 
     bool RasterizerMemoryArena::grow_external_backing(const void* device_ptr, size_t new_size,
-                                                      const std::function<bool(size_t)>& commit) {
-        // Non-blocking on purpose: this is called by the render thread while it
-        // holds the trainer's render_mutex_ (shared). Waiting here for the arena
-        // to drain would deadlock against a refining training step that holds the
-        // arena frame and is itself blocked on render_mutex_ (write). If the arena
-        // is busy we bail; the caller falls back to a cached frame and retries.
-        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::try_to_lock);
-        if (!sync_lock.owns_lock() || active_frames_ != 0 || pending_render_frames_ != 0) {
+                                                      const std::function<bool(size_t)>& commit,
+                                                      const uint32_t timeout_ms,
+                                                      ExternalGrowFailure* failure) {
+        if (failure) {
+            *failure = ExternalGrowFailure::None;
+        }
+        const auto fail = [failure](ExternalGrowFailure reason) {
+            if (failure) {
+                *failure = reason;
+            }
             return false;
+        };
+        std::unique_lock<std::mutex> sync_lock(sync_mutex_, std::try_to_lock);
+        if (!sync_lock.owns_lock() || pending_render_frames_ != 0) {
+            return fail(ExternalGrowFailure::Busy);
+        }
+        if (active_frames_ != 0) {
+            if (timeout_ms == 0) {
+                return fail(ExternalGrowFailure::Busy);
+            }
+            // Growth happens before the renderer acquires its arena frame.
+            // Reserve that same idle window here, otherwise consecutive training
+            // frames can starve growth and leave the viewport on its cached image.
+            // Never wait indefinitely: refining can hold the arena while waiting
+            // for the caller's shared model lock to be released.
+            ++pending_render_frames_;
+            bool idle = false;
+            try {
+                idle = sync_cv_.wait_for(sync_lock, std::chrono::milliseconds(timeout_ms),
+                                         [this] { return active_frames_ == 0; });
+            } catch (...) {
+                --pending_render_frames_;
+                sync_cv_.notify_all();
+                throw;
+            }
+            --pending_render_frames_;
+            sync_cv_.notify_all();
+            if (!idle) {
+                return fail(ExternalGrowFailure::Busy);
+            }
+            // Keep sync_mutex_ through commit: no new frame can enter between
+            // releasing the reservation and updating the physical backing.
         }
 
         const cudaError_t sync_status = cudaDeviceSynchronize();
@@ -981,7 +1076,7 @@ namespace lfs::core {
                 sync_status, "cudaDeviceSynchronize(external arena growth)",
                 detail::format_cuda_safe("requested_bytes={}", new_size),
                 LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
-            return false;
+            return fail(ExternalGrowFailure::CudaFailure);
         }
 
         std::scoped_lock lock(arena_mutex_, frame_mutex_);
@@ -997,7 +1092,7 @@ namespace lfs::core {
         if (!target) {
             sync_lock.unlock();
             sync_cv_.notify_all();
-            return false;
+            return fail(ExternalGrowFailure::BackingMissing);
         }
         if (new_size <= target->committed_size) {
             sync_lock.unlock();
@@ -1009,14 +1104,20 @@ namespace lfs::core {
         // device is drained and no frame is active. device_ptr must stay constant.
         // The last submitted batch may still be in flight (#1621): commit must
         // retire the old import timeline-deferred, never destroy it inline.
+        const auto recommit_start = std::chrono::steady_clock::now();
         if (!commit(new_size)) {
             sync_lock.unlock();
             sync_cv_.notify_all();
-            return false;
+            return fail(ExternalGrowFailure::CommitFailure);
         }
+        TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - recommit_start)
+                .count()));
 
         target->committed_size = new_size;
         target->capacity = new_size;
+        target->boundaries_since_growth = 0;
         target->realloc_count.fetch_add(1, std::memory_order_relaxed);
         target->offset.store(0, std::memory_order_release);
         frame_contexts_.clear();
@@ -1029,11 +1130,12 @@ namespace lfs::core {
         return true;
     }
 
-    bool RasterizerMemoryArena::using_external_backing() const {
+    bool RasterizerMemoryArena::using_external_backing(const void* device_ptr) const {
         std::lock_guard<std::mutex> lock(arena_mutex_);
         for (const auto& entry : device_arenas_) {
             const auto& arena_ptr = entry.second;
-            if (arena_ptr && arena_ptr->external_backing) {
+            if (arena_ptr && arena_ptr->external_backing &&
+                (!device_ptr || arena_ptr->fallback_buffer == device_ptr)) {
                 return true;
             }
         }
@@ -1173,11 +1275,15 @@ namespace lfs::core {
         prop.location.id = arena.device;
 
         const auto timing_start = std::chrono::steady_clock::now();
-        const auto record_timing = [this, frame_id, &timing_start](bool committed) {
+        const auto record_timing = [this, frame_id, &arena, &timing_start](bool committed) {
             const auto elapsed_us = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                                               std::chrono::steady_clock::now() - timing_start)
                                                               .count());
             record_commit_timing(frame_id, elapsed_us, committed);
+            if (committed) {
+                arena.boundaries_since_growth = 0;
+                TrainingChurnMetrics::instance().record_arena_recommit(elapsed_us);
+            }
         };
 
         CUmemGenericAllocationHandle handle;
@@ -1296,11 +1402,22 @@ namespace lfs::core {
         return true;
     }
 
-    void RasterizerMemoryArena::decommit_unused_memory(Arena& arena) {
+    void RasterizerMemoryArena::decommit_unused_memory(Arena& arena,
+                                                       const bool release_all,
+                                                       const bool allow_reclaim) {
         // Called with arena_mutex_ held
         // The caller must additionally own the global frame gate and have
         // synchronized the device. cuMemUnmap/cudaFree are not stream ordered.
         const size_t current_offset = arena.offset.load(std::memory_order_acquire);
+        const size_t recent_peak = arena.peak_usage.load(std::memory_order_acquire);
+        const size_t granularity = std::max<size_t>(arena.granularity, 1);
+        const auto decommit_start = std::chrono::steady_clock::now();
+        const auto record_decommit = [&decommit_start]() noexcept {
+            TrainingChurnMetrics::instance().record_arena_decommit(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - decommit_start)
+                    .count()));
+        };
         const auto reset_logical_peak = [&arena, current_offset]() {
             size_t lifetime_peak = arena.lifetime_peak_usage.load(std::memory_order_relaxed);
             while (current_offset > lifetime_peak) {
@@ -1313,6 +1430,44 @@ namespace lfs::core {
         };
 
         if (arena.external_backing) {
+            // External shared scratch has a second tenant (the viewer). Keep
+            // one growth granule above the larger recent trainer peak and
+            // peer high-water. The arena's timeline drain happens in
+            // shrink_at_boundary() before this callback is reached.
+            const size_t viewer_high_water = arena.external_minimum_size
+                                                 ? arena.external_minimum_size()
+                                                 : 0;
+            const size_t tenant_high_water = release_all
+                                                 ? viewer_high_water
+                                                 : std::max(recent_peak, viewer_high_water);
+            const size_t with_headroom =
+                tenant_high_water > std::numeric_limits<size_t>::max() - granularity
+                    ? std::numeric_limits<size_t>::max()
+                    : tenant_high_water + granularity;
+            const size_t desired_size = align_up(with_headroom, granularity);
+            if (arena.external_shrink && desired_size != 0 && desired_size < arena.committed_size &&
+                (release_all ||
+                 (allow_reclaim && arena.committed_size - desired_size > granularity))) {
+                const size_t old_size = arena.committed_size;
+                const size_t shrunk_size = arena.external_shrink(desired_size);
+                if (shrunk_size != 0 && shrunk_size <= old_size) {
+                    arena.committed_size = shrunk_size;
+                    arena.capacity = shrunk_size;
+                    LOG_DEBUG("Shrank external arena '{}' from {} MiB to {} MiB "
+                              "(trainer_peak={} MiB, viewer_high_water={} MiB)",
+                              arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
+                              old_size >> 20,
+                              shrunk_size >> 20,
+                              recent_peak >> 20,
+                              viewer_high_water >> 20);
+                    record_decommit();
+                } else if (shrunk_size != 0) {
+                    LOG_WARN("External arena '{}' shrink returned invalid size {} MiB (old {} MiB)",
+                             arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
+                             shrunk_size >> 20,
+                             old_size >> 20);
+                }
+            }
             reset_logical_peak();
             return;
         }
@@ -1340,12 +1495,27 @@ namespace lfs::core {
             return;
         }
 
+        const size_t retained_floor = release_all
+                                          ? 0
+                                          : align_up(
+                                                recent_peak > std::numeric_limits<size_t>::max() - granularity
+                                                    ? std::numeric_limits<size_t>::max()
+                                                    : recent_peak + granularity,
+                                                granularity);
+
+        if (!release_all &&
+            (!allow_reclaim || retained_floor >= arena.committed_size ||
+             arena.committed_size - retained_floor <= granularity)) {
+            reset_logical_peak();
+            return;
+        }
+
         std::lock_guard<std::mutex> chunk_lock(arena.chunks_mutex);
         size_t total_freed = 0;
         size_t chunks_removed = 0;
         while (!arena.chunks.empty()) {
             auto& chunk = arena.chunks.back();
-            if (chunk.offset < current_offset) {
+            if (chunk.offset < retained_floor) {
                 break;
             }
             if (chunk.is_mapped) {
@@ -1380,6 +1550,7 @@ namespace lfs::core {
         if (chunks_removed > 0) {
             LOG_DEBUG("Decommitted %zu MB (%zu chunks), arena now at %zu MB",
                       total_freed >> 20, chunks_removed, arena.committed_size >> 20);
+            record_decommit();
         } else {
             LOG_TRACE("No unused chunks to decommit");
         }
@@ -1464,6 +1635,21 @@ namespace lfs::core {
                  static_cast<unsigned long long>(growth_timing_->b1_time_us),
                  static_cast<unsigned long long>(growth_timing_->b3_events),
                  static_cast<unsigned long long>(growth_timing_->b3_time_us));
+
+        const auto churn = TrainingChurnMetrics::instance().snapshot();
+        LOG_INFO("Training churn timing: trims=%llu (%llu us); "
+                 "arena_decommit=%llu (%llu us) arena_recommit=%llu (%llu us); "
+                 "child_alloc=%llu (%llu us) child_free=%llu (%llu us)",
+                 static_cast<unsigned long long>(churn.trim_calls),
+                 static_cast<unsigned long long>(churn.trim_time_us),
+                 static_cast<unsigned long long>(churn.arena_decommit_events),
+                 static_cast<unsigned long long>(churn.arena_decommit_time_us),
+                 static_cast<unsigned long long>(churn.arena_recommit_events),
+                 static_cast<unsigned long long>(churn.arena_recommit_time_us),
+                 static_cast<unsigned long long>(churn.child_alloc_events),
+                 static_cast<unsigned long long>(churn.child_alloc_time_us),
+                 static_cast<unsigned long long>(churn.child_free_events),
+                 static_cast<unsigned long long>(churn.child_free_time_us));
     }
 
     bool RasterizerMemoryArena::shrink_at_boundary(bool release_all) {
@@ -1485,7 +1671,7 @@ namespace lfs::core {
         {
             std::lock_guard<std::mutex> arena_lock(arena_mutex_);
             for (auto& [device, arena_ptr] : device_arenas_) {
-                if (!arena_ptr || arena_ptr->external_backing) {
+                if (!arena_ptr) {
                     continue;
                 }
 
@@ -1510,8 +1696,14 @@ namespace lfs::core {
 
                 if (release_all) {
                     arena_ptr->offset.store(0, std::memory_order_release);
+                } else {
+                    arena_ptr->boundaries_since_growth = std::min<std::uint32_t>(
+                        arena_ptr->boundaries_since_growth + 1,
+                        std::numeric_limits<std::uint32_t>::max());
                 }
-                decommit_unused_memory(*arena_ptr);
+                const bool allow_reclaim =
+                    release_all || arena_ptr->boundaries_since_growth >= 2;
+                decommit_unused_memory(*arena_ptr, release_all, allow_reclaim);
             }
         }
 
@@ -1537,7 +1729,9 @@ namespace lfs::core {
         return shrink_at_boundary(true);
     }
 
-    char* RasterizerMemoryArena::allocate_internal(Arena& arena, size_t size, uint64_t frame_id) {
+    char* RasterizerMemoryArena::allocate_internal(
+        Arena& arena, const size_t size, const uint64_t frame_id,
+        const char* label) {
         LFS_CUDA_BREADCRUMB("arena.allocate");
         size_t aligned_size = align_size(size);
 
@@ -1551,9 +1745,13 @@ namespace lfs::core {
 
         // Sanity check
         if (aligned_size > config_.max_physical) {
-            LOG_ERROR("Single allocation request %zu MB exceeds max physical size %zu MB",
+            LOG_ERROR("Arena allocation '%s' request %zu MB exceeds max physical size %zu MB",
+                      label ? label : "unnamed",
                       aligned_size >> 20,
                       config_.max_physical >> 20);
+            log_arena_failure_vram_snapshot(
+                label ? label : "unnamed", arena.committed_size,
+                arena.peak_usage.load(std::memory_order_relaxed));
             return nullptr;
         }
 
@@ -1612,6 +1810,7 @@ namespace lfs::core {
 
             // external_grow preserves the stable virtual base and returns the new
             // committed size. The Vulkan side re-imports its new handle later.
+            const auto recommit_start = std::chrono::steady_clock::now();
             const size_t new_committed = arena.external_grow(need);
             if (new_committed < need) {
                 LOG_ERROR("External rasterizer arena '%s' grow failed (need=%zu MiB, capacity=%zu MiB)",
@@ -1622,7 +1821,12 @@ namespace lfs::core {
             }
             arena.committed_size = new_committed;
             arena.capacity = new_committed;
+            arena.boundaries_since_growth = 0;
             arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
+            TrainingChurnMetrics::instance().record_arena_recommit(static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - recommit_start)
+                    .count()));
             LOG_INFO("External rasterizer arena '%s' grew in place to %zu MiB (need %zu MiB)",
                      arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                      static_cast<size_t>(new_committed >> 20),
@@ -1696,15 +1900,22 @@ namespace lfs::core {
                     }
                     if (result == ExternalGrowResult::Failed) {
                         LOG_ERROR("External rasterizer arena '%s' exhausted and could not grow: "
-                                  "capacity=%zu MiB request=%zu MiB",
+                                  "capacity=%zu MiB request=%zu MiB allocation='%s'",
                                   arena.external_label.empty() ? "unnamed" : arena.external_label.c_str(),
                                   static_cast<size_t>(arena.committed_size >> 20),
-                                  static_cast<size_t>(aligned_size >> 20));
+                                  static_cast<size_t>(aligned_size >> 20),
+                                  label ? label : "unnamed");
+                        log_arena_failure_vram_snapshot(
+                            label ? label : "unnamed", arena.committed_size,
+                            arena.peak_usage.load(std::memory_order_relaxed));
                         return nullptr;
                     }
                     if (std::chrono::steady_clock::now() >= deadline) {
                         LOG_ERROR("External rasterizer arena '%s' grow timed out waiting for the render gate",
                                   arena.external_label.empty() ? "unnamed" : arena.external_label.c_str());
+                        log_arena_failure_vram_snapshot(
+                            label ? label : "unnamed", arena.committed_size,
+                            arena.peak_usage.load(std::memory_order_relaxed));
                         return nullptr;
                     }
                     std::this_thread::yield();
@@ -1727,8 +1938,12 @@ namespace lfs::core {
             // We need to grow - calculate how much
             const size_t growth_needed = total_needed - arena.committed_size;
             if (total_needed > config_.max_physical) {
-                LOG_ERROR("Capacity limit reached: max=%zu MB, requested=%zu MB",
-                          config_.max_physical >> 20, aligned_size >> 20);
+                LOG_ERROR("Arena allocation '%s' capacity limit reached: max=%zu MB, total_needed=%zu MB, request=%zu MB",
+                          label ? label : "unnamed",
+                          config_.max_physical >> 20, total_needed >> 20, aligned_size >> 20);
+                log_arena_failure_vram_snapshot(
+                    label ? label : "unnamed", arena.committed_size,
+                    arena.peak_usage.load(std::memory_order_relaxed));
                 return nullptr;
             }
 
@@ -1780,8 +1995,13 @@ namespace lfs::core {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                     continue;
                 } else {
-                    LOG_ERROR("Out of memory after %d attempts: requested=%zu MB, usage=%zu MB, committed=%zu MB, max=%zu MB",
-                              MAX_RETRIES, size >> 20, current_offset >> 20, arena.committed_size >> 20, config_.max_physical >> 20);
+                    LOG_ERROR("Out of memory after %d attempts: allocation='%s' requested=%zu MB, usage=%zu MB, committed=%zu MB, max=%zu MB",
+                              MAX_RETRIES, label ? label : "unnamed",
+                              size >> 20, current_offset >> 20,
+                              arena.committed_size >> 20, config_.max_physical >> 20);
+                    log_arena_failure_vram_snapshot(
+                        label ? label : "unnamed", arena.committed_size,
+                        arena.peak_usage.load(std::memory_order_relaxed));
                     return nullptr;
                 }
             }
@@ -1789,7 +2009,10 @@ namespace lfs::core {
             // Growth succeeded, retry allocation
         }
 
-        LOG_ERROR("Allocation loop exhausted");
+        LOG_ERROR("Allocation loop exhausted for '%s'", label ? label : "unnamed");
+        log_arena_failure_vram_snapshot(
+            label ? label : "unnamed", arena.committed_size,
+            arena.peak_usage.load(std::memory_order_relaxed));
         return nullptr;
     }
 
@@ -1893,6 +2116,7 @@ namespace lfs::core {
         arena.fallback_buffer = new_buffer;
         arena.capacity = new_capacity;
         arena.committed_size = new_capacity;
+        arena.boundaries_since_growth = 0;
         arena.generation = generation_counter_.fetch_add(1, std::memory_order_relaxed);
         arena.realloc_count.fetch_add(1, std::memory_order_relaxed);
 
@@ -2059,13 +2283,16 @@ namespace lfs::core {
         return get_arena().install_external_backing(std::move(backing));
     }
 
-    bool GlobalArenaManager::try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing) {
-        return get_arena().try_install_external_backing(std::move(backing));
+    bool GlobalArenaManager::try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,
+                                                          const uint32_t timeout_ms) {
+        return get_arena().try_install_external_backing(std::move(backing), timeout_ms);
     }
 
     bool GlobalArenaManager::grow_external_backing(const void* device_ptr, size_t new_size,
-                                                   const std::function<bool(size_t)>& commit) {
-        return get_arena().grow_external_backing(device_ptr, new_size, commit);
+                                                   const std::function<bool(size_t)>& commit,
+                                                   const uint32_t timeout_ms,
+                                                   RasterizerMemoryArena::ExternalGrowFailure* failure) {
+        return get_arena().grow_external_backing(device_ptr, new_size, commit, timeout_ms, failure);
     }
 
     void GlobalArenaManager::clear_external_backing(const void* device_ptr) {
