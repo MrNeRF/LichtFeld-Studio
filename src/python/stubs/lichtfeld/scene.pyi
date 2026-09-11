@@ -112,6 +112,18 @@ class SplatData:
         Reserve capacity for Gaussians (for densification). Raises if the model is renderer-backed.
         """
 
+class SceneSplatSnapshot:
+    @property
+    def transform(self) -> tuple: ...
+
+    @property
+    def sh_degree(self) -> int: ...
+
+    def splat_data(self) -> SplatData:
+        """
+        Materialize this owned node's local geometry. May run on an export worker.
+        """
+
 class NodeType(enum.Enum):
     SPLAT = 0
 
@@ -453,16 +465,6 @@ class NodeCollection:
     def __iter__(self) -> NodeCollectionIterator:
         """Return an iterator over all nodes"""
 
-class SceneSplatSnapshot:
-    """Owned geometry and node metadata, independent of later scene edits."""
-    @property
-    def transform(self) -> tuple[tuple[float, ...], ...]: ...
-    @property
-    def sh_degree(self) -> int: ...
-    def splat_data(self) -> SplatData:
-        """Materialize local node geometry on an export worker."""
-        ...
-
 class Scene:
     def is_valid(self) -> bool:
         """Check if scene reference is still valid (thread-safe)"""
@@ -563,7 +565,9 @@ class Scene:
         """Get all visible nodes in the scene"""
 
     def snapshot_visible_splats(self) -> list[SceneSplatSnapshot]:
-        """Copy visible splats at a UI safe point for subsequent worker IO."""
+        """
+        Copy visible splats and world transforms at a UI safe point. Returned data owns its storage and supports worker-side export after scene edits or deletion.
+        """
 
     def is_node_effectively_visible(self, id: int) -> bool:
         """Check if a node is visible considering parent visibility"""

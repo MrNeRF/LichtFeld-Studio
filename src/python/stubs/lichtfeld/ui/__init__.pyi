@@ -2367,9 +2367,7 @@ def is_scene_empty() -> bool:
     """Check if no scene is loaded"""
 
 def get_export_state() -> dict:
-    """Get export active/progress/stage/outcome/format plus its output path and error.
-    Compare path with the requested destination before consuming an export result.
-    """
+    """Get current export progress state"""
 
 def cancel_export() -> None:
     """Cancel an ongoing export operation"""
@@ -2377,12 +2375,11 @@ def cancel_export() -> None:
 def get_import_state() -> dict:
     """Get current import progress state"""
 
-def cancel_gallery_import() -> bool:
-    """Request gallery import cancellation without waiting for its worker."""
-    ...
-
 def dismiss_import() -> None:
     """Dismiss the import completion overlay"""
+
+def cancel_gallery_import() -> bool:
+    """Request gallery import cancellation without waiting for its worker"""
 
 def get_video_export_state() -> dict:
     """Get current video export progress state"""
