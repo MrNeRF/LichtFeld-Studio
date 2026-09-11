@@ -534,6 +534,25 @@ namespace lfs::training {
             if (auto* loaded_adopter = dynamic_cast<ICheckpointStateAdopter*>(loaded_strategy.get());
                 loaded_adopter && loaded_adopter->has_checkpoint_runtime_state()) {
                 loaded_strategy->get_optimizer().set_frozen_lr_scale(loaded_params.freeze_lr_scale);
+
+                // Overwrite restored learning rates with this run's params
+                auto& reopt = loaded_strategy->get_optimizer();
+                const auto& current = params.optimization;
+                const float scene_scale = loaded_strategy->get_model().get_scene_scale();
+                const float means_lr = current.means_lr * scene_scale;
+                reopt.set_lr(means_lr); // global LR: drives means AND MCMC positional noise
+                reopt.set_param_lr(ParamType::Means, means_lr);
+                reopt.set_param_lr(ParamType::Sh0, current.shs_lr);
+                reopt.set_param_lr(ParamType::ShN, current.shs_lr / 20.0f);
+                reopt.set_param_lr(ParamType::Scaling, current.scaling_lr);
+                reopt.set_param_lr(ParamType::Rotation, current.rotation_lr);
+                reopt.set_param_lr(ParamType::Opacity, current.opacity_lr);
+                LOG_INFO("Checkpoint resume LR re-applied (current run): means={:.3e} "
+                         "(= means_lr {:.3e} x scene_scale {:.3f}) sh0={:.3e} shN={:.3e} "
+                         "scaling={:.3e} rotation={:.3e} opacity={:.3e}",
+                         means_lr, current.means_lr, scene_scale, current.shs_lr,
+                         current.shs_lr / 20.0f, current.scaling_lr, current.rotation_lr,
+                         current.opacity_lr);
             }
 
             std::unique_ptr<BilateralGrid> loaded_bilateral_grid;

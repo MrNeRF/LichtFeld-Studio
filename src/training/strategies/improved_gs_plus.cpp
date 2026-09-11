@@ -193,7 +193,10 @@ namespace lfs::training {
         const int64_t budget = _params->max_cap;
         this->_initial_points = _splat_data->size();
 
-        this->_total_steps = static_cast<int>((_params->stop_refine - _params->start_refine) / _params->refine_every) + 2;
+        this->_total_steps = 2;
+        if (_params->stop_refine > _params->start_refine) {
+            this->_total_steps += static_cast<int>((_params->stop_refine - _params->start_refine) / _params->refine_every);
+        }
 
         std::vector<int64_t> values;
         values.reserve(_total_steps);

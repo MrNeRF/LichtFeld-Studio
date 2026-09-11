@@ -3728,12 +3728,8 @@ namespace lfs::training {
         const bool background_changed = background_improvements_enabled() != params.background_improvements;
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
 
-        if (_mean_lr_unscaled <= 0.0) {
-            _mean_lr_unscaled = params.means_lr;
-        }
-        if (_scale_lr_current <= 0.0) {
-            _scale_lr_current = params.scaling_lr;
-        }
+        _mean_lr_unscaled = params.means_lr;
+        _scale_lr_current = params.scaling_lr;
 
         refresh_decay_schedule_from_current_state();
         if (_splat_data) {

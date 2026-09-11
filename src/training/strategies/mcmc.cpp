@@ -702,6 +702,10 @@ namespace lfs::training {
         LFS_TRACE("kernel.mcmc.add_noise");
         using namespace lfs::core;
 
+        if (_params->means_lr <= 0.0f) {
+            return;
+        }
+
         // Get current learning rate from optimizer (after scheduler has updated it)
         const float current_lr = _optimizer->get_lr() * NOISE_LR;
         const size_t n = static_cast<size_t>(_splat_data->size());
