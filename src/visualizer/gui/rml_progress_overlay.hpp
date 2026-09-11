@@ -19,6 +19,10 @@ namespace Rml {
     class EventListener;
 } // namespace Rml
 
+namespace lfs::vis {
+    class RmlProgressInputRoutingTest;
+}
+
 namespace lfs::vis::gui {
 
     struct PanelInputState;
@@ -65,7 +69,7 @@ namespace lfs::vis::gui {
         RmlProgressOverlay(const RmlProgressOverlay&) = delete;
         RmlProgressOverlay& operator=(const RmlProgressOverlay&) = delete;
 
-        void processInput(const PanelInputState& input);
+        void processInput(const PanelInputState& input, bool blocked = false);
         void render(int screen_w, int screen_h,
                     float screen_x, float screen_y,
                     float vp_x, float vp_y, float vp_w, float vp_h);
@@ -78,6 +82,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool hasPendingRenderWork() const { return isVisible(); }
 
     private:
+        friend class lfs::vis::RmlProgressInputRoutingTest;
         struct OverlayEventListener;
 
         void initContext();
@@ -85,6 +90,7 @@ namespace lfs::vis::gui {
         void cacheElements();
         void applyPresentation(const ProgressOverlayPresentation& presentation);
         void invokeAction();
+        void cancelPointerInput();
 
         RmlUIManager* rml_manager_ = nullptr;
         std::function<void()> dismiss_import_;
@@ -117,6 +123,7 @@ namespace lfs::vis::gui {
         float last_dialog_top_ = 0.0f;
         float last_dialog_content_width_ = 0.0f;
         bool dialog_position_valid_ = false;
+        bool pointer_down_delivered_[3] = {};
         bool last_mouse_valid_ = false;
         int last_mouse_x_ = 0;
         int last_mouse_y_ = 0;

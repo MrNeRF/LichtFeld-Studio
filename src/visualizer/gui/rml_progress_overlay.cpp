@@ -8,6 +8,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_document_utils.hpp"
+#include "gui/rmlui/rml_pointer_dispatch.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/string_keys.hpp"
@@ -269,9 +270,22 @@ namespace lfs::vis::gui {
         render_needed_ = true;
     }
 
-    void RmlProgressOverlay::processInput(const PanelInputState& input) {
-        if (!isVisible() || !rml_context_ || !elements_cached_)
+    void RmlProgressOverlay::cancelPointerInput() {
+        for (int button = 0; button < 3; ++button) {
+            if (pointer_down_delivered_[button]) {
+                pointer_down_delivered_[button] = false;
+                if (rml_context_)
+                    rml_context_->ProcessMouseButtonCancel(button, 0);
+            }
+        }
+        last_mouse_valid_ = false;
+    }
+
+    void RmlProgressOverlay::processInput(const PanelInputState& input, const bool blocked) {
+        if (blocked || !isVisible() || !rml_context_ || !elements_cached_) {
+            cancelPointerInput();
             return;
+        }
         if (rml_manager_)
             rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
@@ -281,6 +295,27 @@ namespace lfs::vis::gui {
 
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
+        // Preserve SDL order and each transition's position. The final cursor
+        // position may already be outside the action button after a valid click.
+        std::vector<FrameMouseButtonEvent> fallback_events;
+        if (input.mouse_button_events.empty()) {
+            if (input.mouse_clicked[0])
+                fallback_events.push_back({.button = 0, .down = true, .x = input.mouse_x, .y = input.mouse_y});
+            if (input.mouse_released[0])
+                fallback_events.push_back({.button = 0, .down = false, .x = input.mouse_x, .y = input.mouse_y});
+        }
+        const auto& events = input.mouse_button_events.empty() ? fallback_events : input.mouse_button_events;
+        const auto dimensions = rml_context_->GetDimensions();
+        const bool replayed = rml_input::replayButtonEvents(
+            *rml_context_, pointer_down_delivered_, events,
+            {input.screen_x, input.screen_y}, {dimensions.x, dimensions.y}, mods, false,
+            [](const Rml::Element* element) { return element != nullptr; });
+        if (!events.empty()) {
+            last_mouse_valid_ = false;
+            render_needed_ = true;
+        }
+        render_needed_ |= replayed;
+
         const int rml_mx = static_cast<int>(input.mouse_x - input.screen_x);
         const int rml_my = static_cast<int>(input.mouse_y - input.screen_y);
         if (!last_mouse_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) {
@@ -291,14 +326,6 @@ namespace lfs::vis::gui {
             render_needed_ = true;
         }
 
-        if (input.mouse_clicked[0]) {
-            rml_context_->ProcessMouseButtonDown(0, mods);
-            render_needed_ = true;
-        }
-        if (input.mouse_released[0]) {
-            rml_context_->ProcessMouseButtonUp(0, mods);
-            render_needed_ = true;
-        }
         if (input.mouse_wheel != 0.0f || input.mouse_wheel_x != 0.0f) {
             rml_context_->ProcessMouseWheel(
                 Rml::Vector2f(-input.mouse_wheel_x, -input.mouse_wheel), mods);
@@ -426,6 +453,7 @@ namespace lfs::vis::gui {
         if (!rml_context_)
             return;
 
+        cancelPointerInput();
         if (document_) {
             rml_context_->UnloadDocument(document_);
             rml_context_->Update();

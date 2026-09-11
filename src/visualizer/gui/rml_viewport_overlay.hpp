@@ -40,6 +40,7 @@ namespace lfs::vis::gui {
     // The original event stream remains available for still-owned releases.
     struct ViewportOverlayInputBlockers {
         bool startup = false;
+        bool progress = false;
         bool modal = false;
         bool pending_modal = false;
         bool context_menu = false;
@@ -47,7 +48,7 @@ namespace lfs::vis::gui {
         bool floating_panel = false;
 
         [[nodiscard]] bool blocksInput() const {
-            return startup || modal || pending_modal || context_menu || menu_pointer || floating_panel;
+            return startup || progress || modal || pending_modal || context_menu || menu_pointer || floating_panel;
         }
     };
 

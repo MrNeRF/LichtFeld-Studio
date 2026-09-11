@@ -7343,6 +7343,7 @@ namespace lfs::vis::gui {
             LOG_TIMER_THRESHOLD("gui_render.rml_viewport_overlay.processInput", 0.25);
             rml_viewport_overlay_.processInput(viewport_overlay_input, {
                                                                            .startup = startup_overlay_blocking,
+                                                                           .progress = progress_overlay_visible,
                                                                            .modal = modal_overlay_open,
                                                                            .pending_modal = modal_overlay_pending,
                                                                            .context_menu = context_menu_open,
@@ -7529,11 +7530,10 @@ namespace lfs::vis::gui {
             python::draw_python_modals(scene);
         }
 
-        if (!rml_modal_overlay_->isOpen() &&
-            !rml_modal_overlay_->hasPendingRequest() &&
-            progress_overlay_visible) {
+        if (rml_progress_overlay_) {
             LOG_TIMER_THRESHOLD("gui_render.rml_progress_processInput", 0.25);
-            rml_progress_overlay_->processInput(raw_panel_input);
+            rml_progress_overlay_->processInput(
+                raw_panel_input, rml_modal_overlay_->isOpen() || rml_modal_overlay_->hasPendingRequest());
         }
         if (rml_modal_overlay_->isOpen()) {
             LOG_TIMER_THRESHOLD("gui_render.rml_modal_processInput", 0.25);

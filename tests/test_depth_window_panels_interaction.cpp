@@ -10,6 +10,7 @@
 #include "gui/gui_focus_state.hpp"
 #include "gui/panel_input_utils.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_pointer_dispatch.hpp"
@@ -3547,6 +3548,7 @@ namespace lfs::vis {
     INSTANTIATE_TEST_SUITE_P(
         GuiBlockers, RmlViewportInputRoutingBlockerTest,
         ::testing::Values(OverlayBlockerCase{"Startup", {.startup = true}},
+                          OverlayBlockerCase{"Progress", {.progress = true}},
                           OverlayBlockerCase{"Modal", {.modal = true}},
                           OverlayBlockerCase{"PendingModal", {.pending_modal = true}},
                           OverlayBlockerCase{"ContextMenu", {.context_menu = true}},
@@ -4249,5 +4251,181 @@ namespace lfs::vis {
         EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
     }
     INSTANTIATE_TEST_SUITE_P(CleanupCallbacks, RmlSharedSliderCancelTest, ::testing::Bool());
+
+    // Attach a headless context to the real progress overlay and use its action
+    // listener, so these tests exercise the same click delivery as GuiManager.
+    class RmlProgressInputRoutingTest : public RmlPointerReplayTest {
+    protected:
+        void SetUp() override {
+            RmlPointerReplayTest::SetUp();
+            document_->Hide();
+            gui::guiFocusState().reset();
+            controls_ = context_->LoadDocumentFromMemory(
+                "<rml><head><style>body{width:400px;height:300px;}"
+                "#progress-action{position:absolute;left:20px;top:100px;width:100px;height:40px;}"
+                "</style></head><body><button id='progress-action'/></body></rml>");
+            ASSERT_NE(controls_, nullptr);
+            for (const char* id : {"progress-backdrop", "progress-dialog", "progress-title", "progress-path",
+                                   "progress-row", "progress-value", "progress-text", "progress-stage",
+                                   "progress-detail", "progress-error", "progress-actions"}) {
+                auto element = controls_->CreateElement("div");
+                element->SetId(id);
+                controls_->AppendChild(std::move(element));
+            }
+            controls_->Show();
+            context_->Update();
+            ASSERT_EQ(context_->GetElementAtPoint({50, 120})->GetId(), "progress-action");
+            overlay_ = std::make_unique<gui::RmlProgressOverlay>(
+                &manager_, [this] { ++dismissals_; }, [this] { ++cancels_; });
+            overlay_->rml_manager_ = nullptr;
+            overlay_->rml_context_ = context_;
+            overlay_->document_ = controls_;
+            overlay_->cacheElements();
+            ASSERT_TRUE(overlay_->elements_cached_);
+            showVideo();
+        }
+
+        void TearDown() override {
+            if (overlay_) {
+                overlay_->cancelPointerInput();
+                context_->UnloadDocument(controls_);
+                context_->Update();
+                overlay_->rml_context_ = nullptr;
+                overlay_->document_ = nullptr;
+                overlay_.reset();
+            }
+            app_store().video_export_overlay_state.set({});
+            app_store().import_overlay_state.set({});
+            gui::guiFocusState().reset();
+            RmlPointerReplayTest::TearDown();
+        }
+
+        void showVideo() {
+            AppStore::VideoExportOverlayState video;
+            video.active = true;
+            app_store().video_export_overlay_state.set(video);
+            overlay_->presentation_ = gui::makeProgressOverlayPresentation({}, video);
+        }
+
+        void showFailedImport() {
+            app_store().video_export_overlay_state.set({});
+            AppStore::ImportOverlayState state;
+            state.show_completion = true;
+            state.error = "Invalid cameras";
+            app_store().import_overlay_state.set(state);
+            overlay_->presentation_ = gui::makeProgressOverlayPresentation(state, {});
+        }
+
+        gui::PanelInputState inputAt(const glm::vec2 point) const {
+            gui::PanelInputState input;
+            input.screen_x = 30.0f;
+            input.screen_y = 40.0f;
+            input.mouse_x = point.x + input.screen_x;
+            input.mouse_y = point.y + input.screen_y;
+            return input;
+        }
+
+        FrameMouseButtonEvent transition(const bool down, const glm::vec2 point) const {
+            return {.button = 0, .down = down, .x = point.x + 30.0f, .y = point.y + 40.0f};
+        }
+
+        gui::PanelInputState clickAt(const glm::vec2 point, const glm::vec2 final_point) const {
+            auto input = inputAt(final_point);
+            input.mouse_clicked[0] = true;
+            input.mouse_released[0] = true;
+            input.mouse_button_events = {transition(true, point), transition(false, point)};
+            return input;
+        }
+
+        bool ownsPress() const { return overlay_->pointer_down_delivered_[0]; }
+        const glm::vec2 button_point_{50.0f, 120.0f};
+        const glm::vec2 outside_point_{350.0f, 250.0f};
+        gui::RmlUIManager manager_;
+        std::unique_ptr<gui::RmlProgressOverlay> overlay_;
+        Rml::ElementDocument* controls_ = nullptr;
+        int cancels_ = 0;
+        int dismissals_ = 0;
+    };
+
+    TEST_F(RmlProgressInputRoutingTest, RecordedCancelClickSurvivesMotionAway) {
+        overlay_->processInput(clickAt(button_point_, outside_point_));
+        EXPECT_EQ(cancels_, 1);
+        EXPECT_FALSE(ownsPress());
+        EXPECT_NE(context_->GetHoverElement()->GetId(), "progress-action");
+    }
+
+    TEST_F(RmlProgressInputRoutingTest, RecordedFailedImportDismissalSurvivesMotionAway) {
+        showFailedImport();
+        overlay_->processInput(clickAt(button_point_, outside_point_));
+        EXPECT_EQ(dismissals_, 1);
+        EXPECT_EQ(cancels_, 0);
+    }
+
+    TEST_F(RmlProgressInputRoutingTest, MotionOntoButtonCannotMoveAnOutsideClick) {
+        overlay_->processInput(clickAt(outside_point_, button_point_));
+        EXPECT_EQ(cancels_, 0);
+        EXPECT_EQ(context_->GetHoverElement()->GetId(), "progress-action");
+    }
+
+    TEST_F(RmlProgressInputRoutingTest, CanonicalEventsWorkWithoutAggregateFlagsAndDoNotDuplicateClicks) {
+        auto input = clickAt(button_point_, button_point_);
+        input.mouse_clicked[0] = false;
+        input.mouse_released[0] = false;
+        overlay_->processInput(input);
+        EXPECT_EQ(cancels_, 1);
+        input.mouse_clicked[0] = true;
+        input.mouse_released[0] = true;
+        input.mouse_button_events.push_back(transition(true, button_point_));
+        input.mouse_button_events.push_back(transition(false, button_point_));
+        overlay_->processInput(input);
+        EXPECT_EQ(cancels_, 3);
+        EXPECT_FALSE(ownsPress());
+    }
+
+    TEST_F(RmlProgressInputRoutingTest, AggregateOnlyClickRemainsSupported) {
+        auto input = clickAt(button_point_, button_point_);
+        input.mouse_button_events.clear();
+        overlay_->processInput(input);
+        EXPECT_EQ(cancels_, 1);
+        EXPECT_FALSE(ownsPress());
+    }
+
+    TEST_F(RmlProgressInputRoutingTest, PressSpansFramesAndOutsideReleaseDisarms) {
+        auto input = inputAt(button_point_);
+        input.mouse_button_events = {transition(true, button_point_)};
+        overlay_->processInput(input);
+        ASSERT_TRUE(ownsPress());
+        input.mouse_button_events = {transition(false, button_point_)};
+        overlay_->processInput(input);
+        EXPECT_EQ(cancels_, 1);
+        input.mouse_button_events = {transition(true, button_point_)};
+        overlay_->processInput(input);
+        input = inputAt({-100.0f, -100.0f});
+        input.mouse_button_events = {transition(false, {-100.0f, -100.0f})};
+        overlay_->processInput(input);
+        EXPECT_EQ(cancels_, 1);
+        EXPECT_FALSE(ownsPress());
+        overlay_->processInput(clickAt(button_point_, button_point_));
+        EXPECT_EQ(cancels_, 2);
+    }
+
+    TEST_F(RmlProgressInputRoutingTest, HiddenOrBlockedOverlayCannotRetainAnArmedAction) {
+        for (const bool blocked : {false, true}) {
+            auto input = inputAt(button_point_);
+            input.mouse_button_events = {transition(true, button_point_)};
+            overlay_->processInput(input);
+            ASSERT_TRUE(ownsPress());
+            if (!blocked)
+                app_store().video_export_overlay_state.set({});
+            overlay_->processInput(inputAt(button_point_), blocked);
+            EXPECT_FALSE(ownsPress());
+            showVideo();
+            input.mouse_button_events = {transition(false, button_point_)};
+            overlay_->processInput(input);
+            EXPECT_EQ(cancels_, 0);
+        }
+        overlay_->processInput(clickAt(button_point_, button_point_));
+        EXPECT_EQ(cancels_, 1);
+    }
 
 } // namespace lfs::vis
