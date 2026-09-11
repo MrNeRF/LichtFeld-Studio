@@ -12,7 +12,7 @@ namespace lfs::tcp {
     TCPServer::TCPServer(int port, std::shared_ptr<lfs::vis::TrainerManager> trainer_manager, zmq::socket_type type)
         : port_(port), trainer_manager_(std::move(trainer_manager)), context_(kNumberOfThreads), socket_(context_, type) {
         port_ = std::max(port_, 0); // Port == 0 sets automatic port
-        socket_.bind("tcp://*:" + std::to_string(port_));
+        socket_.bind("tcp://127.0.0.1:" + std::to_string(port_));
         auto str_endpoint = getEndpoint();
         auto str_port = str_endpoint.substr(str_endpoint.find_last_of(':') + 1);
         port_ = std::stoi(str_port);
