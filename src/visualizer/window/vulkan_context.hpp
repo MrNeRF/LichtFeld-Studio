@@ -385,8 +385,8 @@ namespace lfs::vis {
         // When set_framebuffer_resized_on_hard_error is true (image-fence site), only
         // hard Error results set framebuffer_resized_ (never Quarantined/soft).
         [[nodiscard]] LFS_VIS_API bool mapWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
-                                          std::string_view op,
-                                          bool set_framebuffer_resized_on_hard_error = false);
+                                                      std::string_view op,
+                                                      bool set_framebuffer_resized_on_hard_error = false);
         // Validation timeline waits (sites 5–6): every non-Ready path fails with detail.
         [[nodiscard]] bool mapValidationWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
                                                     std::string_view detail_on_fail);
