@@ -1308,46 +1308,5 @@
         </div>
     </div>
 
-    <div id="import-status-overlay"
-         class="viewport-status-overlay hidden"
-         data-class-hidden="!show_import_overlay">
-        <div class="viewport-status-backdrop"
-             data-class-hidden="!show_import_backdrop"></div>
-        <div class="viewport-status-panel">
-            <span class="viewport-status-title"
-                  data-attr-class="'viewport-status-title ' + import_title_class">{{ import_title }}</span>
-            <span class="viewport-status-path text-disabled" data-if="show_import_path">{{ import_path }}</span>
-            <div class="viewport-status-progress" data-if="show_import_progress">
-                <progress max="1" data-attr-value="import_progress_value"></progress>
-                <span class="progress__text">{{ import_progress_pct }}</span>
-            </div>
-            <span class="viewport-status-stage text-disabled" data-if="show_import_stage">{{ import_stage }}</span>
-            <span class="status-success" data-if="show_import_counts">{{ import_counts }}</span>
-            <span class="status-error" data-if="show_import_error">{{ import_error }}</span>
-            <div class="viewport-status-actions" data-if="show_import_dismiss">
-                <button class="btn btn--primary"
-                        data-event-click="overlay_action('dismiss_import')">{{ import_dismiss_label }}</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="video-status-overlay"
-         class="viewport-status-overlay hidden"
-         data-class-hidden="!show_video_overlay">
-        <div class="viewport-status-backdrop"></div>
-        <div class="viewport-status-panel">
-            <span class="viewport-status-title">{{ video_title }}</span>
-            <div class="viewport-status-progress">
-                <progress max="1" data-attr-value="video_progress_value"></progress>
-                <span class="progress__text">{{ video_progress_pct }}</span>
-            </div>
-            <span class="viewport-status-stage">{{ video_frame_text }}</span>
-            <span class="viewport-status-stage text-disabled" data-if="show_video_stage">{{ video_stage }}</span>
-            <div class="viewport-status-actions">
-                <button class="btn btn--secondary"
-                        data-event-click="overlay_action('cancel_video_export')">{{ video_cancel_label }}</button>
-            </div>
-        </div>
-    </div>
 </body>
 </rml>

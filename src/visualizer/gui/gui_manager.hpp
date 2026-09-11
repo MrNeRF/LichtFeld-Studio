@@ -18,6 +18,7 @@
 #include "gui/rml_bottom_dock.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_modal_overlay.hpp"
+#include "gui/rml_progress_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -377,6 +378,7 @@ namespace lfs::vis {
 
             // Owned components
             std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
+            std::unique_ptr<RmlProgressOverlay> rml_progress_overlay_;
             std::unique_ptr<RmlToastOverlay> rml_toast_overlay_;
             std::unique_ptr<lfs::gui::IVideoExtractorWidget> video_widget_;
 

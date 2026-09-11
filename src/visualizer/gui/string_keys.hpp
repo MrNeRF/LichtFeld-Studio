@@ -554,7 +554,11 @@ namespace lichtfeld::Strings {
 
     namespace Progress {
         inline constexpr const char* EXPORTING = "progress.exporting";
+        inline constexpr const char* EXPORTING_VIDEO = "progress.exporting_video";
         inline constexpr const char* IMPORTING = "progress.importing";
+        inline constexpr const char* PATH = "progress.path";
+        inline constexpr const char* IMPORT_COUNTS = "progress.import_counts";
+        inline constexpr const char* VIDEO_FRAME = "progress.video_frame";
         inline constexpr const char* OPENING_PROJECT = "progress.opening_project";
         inline constexpr const char* IMPORT_COMPLETE = "progress.import_complete";
         inline constexpr const char* IMPORT_FAILED = "progress.import_failed";

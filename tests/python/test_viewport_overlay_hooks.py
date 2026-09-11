@@ -4,6 +4,7 @@
 
 from importlib import import_module
 from pathlib import Path
+import re
 from types import ModuleType, SimpleNamespace
 import sys
 
@@ -201,116 +202,44 @@ def test_on_document_unloaded_resets_controller(overlays_module):
     assert module._document_controller._handle is None
 
 
-def test_document_sync_binds_model_and_updates_actions(overlays_module):
+def test_document_sync_binds_toolbar_model_without_task_progress(overlays_module):
     (
         module,
         _hook_calls,
         _remove_calls,
-        dismiss_calls,
-        cancel_calls,
+        _dismiss_calls,
+        _cancel_calls,
         import_state,
         video_state,
         document,
     ) = overlays_module
 
-    import_state.update({
-        "active": True,
-        "dataset_type": "dataset",
-        "path": "/tmp/demo",
-        "progress": 0.25,
-        "stage": "Scanning",
-    })
-    video_state.update({
-        "active": True,
-        "progress": 0.5,
-        "current_frame": 12,
-        "total_frames": 48,
-        "stage": "Encoding",
-    })
+    import_state.update({"active": True})
+    video_state.update({"active": True})
 
     module._hook_registered = True
     assert module.sync_document(document) is True
 
     assert document.created_models == ["viewport_overlay_status"]
-    assert document.model.handle.dirty_all_calls == 3
+    assert document.model.handle.dirty_all_calls >= 1
     assert document.body.get_attribute("data-viewport-overlay-status-bound", "") == "1"
-    assert document.model.bound_funcs["show_import_overlay"]() is True
-    assert document.model.bound_funcs["show_import_backdrop"]() is True
-    assert document.model.bound_funcs["import_progress_pct"]() == "25%"
-    assert document.model.bound_funcs["video_frame_text"]() == "Frame 12 / 48"
-
-    document.model.bound_events["overlay_action"](None, None, ["dismiss_import"])
-    document.model.bound_events["overlay_action"](None, None, ["cancel_video_export"])
-
-    assert dismiss_calls == [True]
-    assert cancel_calls == [True]
+    assert "show_import_overlay" not in document.model.bound_funcs
+    assert "show_video_overlay" not in document.model.bound_funcs
+    assert "overlay_action" not in document.model.bound_events
 
 
-def test_document_sync_prefers_native_overlay_store(overlays_module, monkeypatch):
-    (
-        module,
-        _hook_calls,
-        _remove_calls,
-        _dismiss_calls,
-        _cancel_calls,
-        import_state,
-        video_state,
-        document,
-    ) = overlays_module
+def test_progress_overlay_is_a_separate_full_window_rml_surface():
+    repo_root = Path(__file__).resolve().parents[2]
+    resources = repo_root / "src" / "visualizer" / "gui" / "rmlui" / "resources"
+    viewport_rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    progress_rml = (resources / "progress_overlay.rml").read_text(encoding="utf-8")
+    progress_rcss = (resources / "progress_overlay.rcss").read_text(encoding="utf-8")
 
-    import_state.update({"active": False})
-    video_state.update({"active": False})
-    native_states = {
-        "import_overlay_state": {
-            "active": True,
-            "dataset_type": "COLMAP",
-            "path": "bicycle",
-            "progress": 0.7,
-            "stage": "Reading cameras",
-        },
-        "video_export_overlay_state": {
-            "active": True,
-            "progress": 0.25,
-            "current_frame": 4,
-            "total_frames": 16,
-            "stage": "Encoding",
-        },
-    }
-    monkeypatch.setattr(
-        module,
-        "_native_store_value",
-        lambda field, fallback: native_states.get(field, fallback),
-    )
-
-    module._hook_registered = True
-    assert module.sync_document(document) is True
-
-    assert document.model.bound_funcs["show_import_overlay"]() is True
-    assert document.model.bound_funcs["import_progress_pct"]() == "70%"
-    assert document.model.bound_funcs["import_stage"]() == "Reading cameras"
-    assert document.model.bound_funcs["show_video_overlay"]() is True
-    assert document.model.bound_funcs["video_frame_text"]() == "Frame 4 / 16"
-
-
-def test_import_completion_hides_backdrop(overlays_module):
-    (
-        module,
-        _hook_calls,
-        _remove_calls,
-        _dismiss_calls,
-        _cancel_calls,
-        import_state,
-        _video_state,
-        document,
-    ) = overlays_module
-
-    import_state.update({
-        "active": False,
-        "show_completion": True,
-        "success": True,
-    })
-
-    module._sync_viewport_overlay_document(document)
-
-    assert document.model.bound_funcs["show_import_overlay"]() is True
-    assert document.model.bound_funcs["show_import_backdrop"]() is False
+    assert "import-status-overlay" not in viewport_rml
+    assert "video-status-overlay" not in viewport_rml
+    assert 'id="progress-backdrop"' in progress_rml
+    assert 'id="progress-dialog"' in progress_rml
+    backdrop_rule = re.search(r"\.progress-backdrop\s*\{(?P<body>[^}]*)\}", progress_rcss)
+    assert backdrop_rule is not None
+    assert "width: 100%;" in backdrop_rule.group("body")
+    assert "height: 100%;" in backdrop_rule.group("body")
