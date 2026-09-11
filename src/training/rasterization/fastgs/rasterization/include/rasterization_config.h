@@ -12,10 +12,28 @@ enum class DensificationType : int { None = 0,
                                      MCMC = 1,
                                      MRNF = 2 };
 
+// FastGS camera model. PINHOLE is the historical path (bit-identical). FISHEYE
+// is native Kannala-Brandt (COLMAP OPENCV_FISHEYE); see fisheye_kb.cuh.
+enum class FastGSCameraKind : int { PINHOLE = 0,
+                                    FISHEYE = 1 };
+
 namespace fast_lfs::rasterization::config {
     // rendering constants
     DEF float dilation = 0.3f;            // Standard dilation when mip_filter OFF
     DEF float dilation_mip_filter = 0.1f; // Smaller dilation when mip_filter ON
+
+    // 2D kernel size added to cov2d. PINHOLE keeps the historical 0.3 / 0.1
+    // values; FISHEYE composites the EWA footprint without dilation.
+    template <FastGSCameraKind KIND, bool MIP>
+    constexpr float dilation_for() {
+        if constexpr (KIND == FastGSCameraKind::FISHEYE) {
+            return 0.0f;
+        } else if constexpr (MIP) {
+            return dilation_mip_filter;
+        } else {
+            return dilation;
+        }
+    }
     DEF float min_alpha_threshold_rcp = 255.0f;
     DEF float min_alpha_threshold = 1.0f / min_alpha_threshold_rcp; // 0.00392156862
     DEF float max_fragment_alpha = 0.999f;                          // 0.99f in original 3dgs

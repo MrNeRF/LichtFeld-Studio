@@ -114,6 +114,8 @@ namespace lfs::training::kernels {
 
     // Scale-and-shift-invariant depth supervision on alpha-normalized expected
     // depth in inverse-depth space using a fixed per-camera anchor alignment.
+    // FastGS pinhole writes camera-z into the depth map; Kannala-Brandt fisheye
+    // writes ray length D=|P|. Compare the prior against that same quantity.
     // The loss is alpha-weighted Geman-McClure plus a gradient-alignment term.
     // Emits gradients w.r.t. both the accumulated depth map and the alpha map.
     // anchor: fixed per-camera alignment; invalid or null anchors disable the

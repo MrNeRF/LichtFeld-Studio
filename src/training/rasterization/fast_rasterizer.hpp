@@ -67,6 +67,12 @@ namespace lfs::training {
         float near_plane = 0.0f;
         float far_plane = 0.0f;
         bool mip_filter = false;
+        FastGSCameraKind camera_kind = FastGSCameraKind::PINHOLE;
+        float fisheye_k1 = 0.0f;
+        float fisheye_k2 = 0.0f;
+        float fisheye_k3 = 0.0f;
+        float fisheye_k4 = 0.0f;
+        float fisheye_theta_max = 0.0f;
 
         // Tile information (for tile-based training)
         int tile_x_offset = 0; // Horizontal offset of this tile
@@ -124,6 +130,12 @@ namespace lfs::training {
             near_plane = std::exchange(other.near_plane, 0.0f);
             far_plane = std::exchange(other.far_plane, 0.0f);
             mip_filter = std::exchange(other.mip_filter, false);
+            camera_kind = std::exchange(other.camera_kind, FastGSCameraKind::PINHOLE);
+            fisheye_k1 = std::exchange(other.fisheye_k1, 0.0f);
+            fisheye_k2 = std::exchange(other.fisheye_k2, 0.0f);
+            fisheye_k3 = std::exchange(other.fisheye_k3, 0.0f);
+            fisheye_k4 = std::exchange(other.fisheye_k4, 0.0f);
+            fisheye_theta_max = std::exchange(other.fisheye_theta_max, 0.0f);
             tile_x_offset = std::exchange(other.tile_x_offset, 0);
             tile_y_offset = std::exchange(other.tile_y_offset, 0);
             tile_width = std::exchange(other.tile_width, 0);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "buffer_utils.h"
+#include "fisheye_kb.cuh"
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "lfs/core/warp_reduce.cuh"
@@ -13,6 +14,7 @@
 #include "utils.h"
 #include <cooperative_groups.h>
 #include <cstdint>
+#include <type_traits>
 namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::backward {
@@ -34,7 +36,7 @@ namespace fast_lfs::rasterization::kernels::backward {
 
     // minBlocks=3 budgets registers so shN Adam no longer lives across
     // the geometry backward (sweep 2..4; 3 is the measured default).
-    template <bool MIP_FILTER, int ACTIVE_SH_BASES>
+    template <bool MIP_FILTER, int ACTIVE_SH_BASES, FastGSCameraKind KIND>
     __global__ void __launch_bounds__(config::block_size_preprocess_backward, 3) preprocess_backward_cu(
         // These four alias fused_adam.{means,scaling,rotation,opacity}.param (Adam writes).
         const float3* means,
@@ -65,6 +67,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float clip_top,
         const float clip_bottom,
         const uint sh_layout_slots,
+        const float4 fisheye_k,
+        const float theta_max,
         FusedAdamSettings fused_adam,
         const bool* __restrict__ mean_step_far_mask,
         const int mean_step_far_mask_n,
@@ -74,8 +78,14 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float2* __restrict__ shN_value_bounds,
         const uint shN_value_n_cells,
         const uint shN_value_bits) {
-        (void)cx;
-        (void)cy;
+        if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+            (void)cx;
+            (void)cy;
+            (void)fisheye_k;
+            (void)theta_max;
+        } else {
+            (void)theta_max;
+        }
         auto primitive_idx = cg::this_grid().thread_rank();
         const bool in_range = primitive_idx < n_primitives;
 
@@ -180,13 +190,24 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float3 mean3d = means[primitive_idx];
 
             const float4 w2c_r3 = w2c[2];
-            const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
-            const float depth_safe = fmaxf(depth, 1e-4f);
-            const float inv_depth = 1.0f / depth_safe;
-            const float4 w2c_r1 = w2c[0];
-            const float x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
-            const float4 w2c_r2 = w2c[1];
-            const float y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
+            float4 w2c_r1, w2c_r2;
+            float inv_depth, x, y, tx, ty, j11, j13, j22, j23;
+            if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+                const float depth = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
+                const float depth_safe = fmaxf(depth, 1e-4f);
+                inv_depth = 1.0f / depth_safe;
+                w2c_r1 = w2c[0];
+                x = (w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w) * inv_depth;
+                w2c_r2 = w2c[1];
+                y = (w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w) * inv_depth;
+            } else {
+                (void)clip_left;
+                (void)clip_right;
+                (void)clip_top;
+                (void)clip_bottom;
+                w2c_r1 = w2c[0];
+                w2c_r2 = w2c[1];
+            }
 
             // compute 3d covariance from raw scale and rotation
             const float3 raw_scale = raw_scales[primitive_idx];
@@ -224,21 +245,43 @@ namespace fast_lfs::rasterization::kernels::backward {
                 rotation_scaled.m31 * rotation.m31 + rotation_scaled.m32 * rotation.m32 + rotation_scaled.m33 * rotation.m33,
             };
 
-            // ewa splatting gradient helpers (clip box is grid-uniform; computed once on the host)
-            const float tx = clamp(x, clip_left, clip_right);
-            const float ty = clamp(y, clip_top, clip_bottom);
-            const float j11 = fx * inv_depth;
-            const float j13 = -j11 * tx;
-            const float j22 = fy * inv_depth;
-            const float j23 = -j22 * ty;
-            const float3 jw_r1 = make_float3(
-                j11 * w2c_r1.x + j13 * w2c_r3.x,
-                j11 * w2c_r1.y + j13 * w2c_r3.y,
-                j11 * w2c_r1.z + j13 * w2c_r3.z);
-            const float3 jw_r2 = make_float3(
-                j22 * w2c_r2.x + j23 * w2c_r3.x,
-                j22 * w2c_r2.y + j23 * w2c_r3.y,
-                j22 * w2c_r2.z + j23 * w2c_r3.z);
+            float3 jw_r1, jw_r2;
+            [[maybe_unused]] float Px, Py, Pz;
+            using KbProjT = std::conditional_t<KIND == FastGSCameraKind::FISHEYE,
+                                               fisheye_kb::KbProjection<float>, char>;
+            [[maybe_unused]] KbProjT kb_proj;
+            if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+                // ewa splatting gradient helpers (clip box is grid-uniform; computed once on the host)
+                tx = clamp(x, clip_left, clip_right);
+                ty = clamp(y, clip_top, clip_bottom);
+                j11 = fx * inv_depth;
+                j13 = -j11 * tx;
+                j22 = fy * inv_depth;
+                j23 = -j22 * ty;
+                jw_r1 = make_float3(
+                    j11 * w2c_r1.x + j13 * w2c_r3.x,
+                    j11 * w2c_r1.y + j13 * w2c_r3.y,
+                    j11 * w2c_r1.z + j13 * w2c_r3.z);
+                jw_r2 = make_float3(
+                    j22 * w2c_r2.x + j23 * w2c_r3.x,
+                    j22 * w2c_r2.y + j23 * w2c_r3.y,
+                    j22 * w2c_r2.z + j23 * w2c_r3.z);
+            } else {
+                Px = w2c_r1.x * mean3d.x + w2c_r1.y * mean3d.y + w2c_r1.z * mean3d.z + w2c_r1.w;
+                Py = w2c_r2.x * mean3d.x + w2c_r2.y * mean3d.y + w2c_r2.z * mean3d.z + w2c_r2.w;
+                Pz = w2c_r3.x * mean3d.x + w2c_r3.y * mean3d.y + w2c_r3.z * mean3d.z + w2c_r3.w;
+                kb_proj = fisheye_kb::kb_project(
+                    Px, Py, Pz, fx, fy, cx, cy,
+                    fisheye_k.x, fisheye_k.y, fisheye_k.z, fisheye_k.w);
+                jw_r1 = make_float3(
+                    kb_proj.J00 * w2c_r1.x + kb_proj.J01 * w2c_r2.x + kb_proj.J02 * w2c_r3.x,
+                    kb_proj.J00 * w2c_r1.y + kb_proj.J01 * w2c_r2.y + kb_proj.J02 * w2c_r3.y,
+                    kb_proj.J00 * w2c_r1.z + kb_proj.J01 * w2c_r2.z + kb_proj.J02 * w2c_r3.z);
+                jw_r2 = make_float3(
+                    kb_proj.J10 * w2c_r1.x + kb_proj.J11 * w2c_r2.x + kb_proj.J12 * w2c_r3.x,
+                    kb_proj.J10 * w2c_r1.y + kb_proj.J11 * w2c_r2.y + kb_proj.J12 * w2c_r3.y,
+                    kb_proj.J10 * w2c_r1.z + kb_proj.J11 * w2c_r2.z + kb_proj.J12 * w2c_r3.z);
+            }
             const float3 jwc_r1 = make_float3(
                 jw_r1.x * cov3d.m11 + jw_r1.y * cov3d.m12 + jw_r1.z * cov3d.m13,
                 jw_r1.x * cov3d.m12 + jw_r1.y * cov3d.m22 + jw_r1.z * cov3d.m23,
@@ -249,7 +292,7 @@ namespace fast_lfs::rasterization::kernels::backward {
                 jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
             // 2d covariance gradient (use same dilation as forward pass)
-            constexpr float kernel_size = MIP_FILTER ? config::dilation_mip_filter : config::dilation;
+            constexpr float kernel_size = config::dilation_for<KIND, MIP_FILTER>();
             const float raw_a = dot(jwc_r1, jw_r1);
             const float raw_b = dot(jwc_r1, jw_r2);
             const float raw_c = dot(jwc_r2, jw_r2);
@@ -270,11 +313,15 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float grad_compensated_opacity = grad_opacity_helper[work_idx];
             float opacity_compensation = 1.0f;
             if constexpr (MIP_FILTER) {
-                const float det_raw = raw_a * raw_c - raw_b * raw_b;
-                if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
-                    opacity_compensation = sqrtf(det_raw * determinant_rcp);
+                if constexpr (KIND == FastGSCameraKind::FISHEYE) {
+                    opacity_compensation = 1.0f;
                 } else {
-                    opacity_compensation = 0.0f;
+                    const float det_raw = raw_a * raw_c - raw_b * raw_b;
+                    if (det_raw > config::min_cov2d_determinant && determinant > config::min_cov2d_determinant) {
+                        opacity_compensation = sqrtf(det_raw * determinant_rcp);
+                    } else {
+                        opacity_compensation = 0.0f;
+                    }
                 }
             }
 
@@ -302,16 +349,18 @@ namespace fast_lfs::rasterization::kernels::backward {
                                                 jwc_r1.y * dL_dcov2d.y + jwc_r2.y * dL_dcov2d.z,
                                                 jwc_r1.z * dL_dcov2d.y + jwc_r2.z * dL_dcov2d.z);
 
-            // gradient of non-zero entries in J
+            const float2 dL_dmean2d = grad_mean2d[work_idx];
+            const float dL_ddepth = grad_depth ? grad_depth[work_idx] : 0.0f;
+            float3 dL_dmean3d_cam;
+            if constexpr (KIND == FastGSCameraKind::PINHOLE) {
+                // gradient of non-zero entries in J
             const float dL_dj11 = w2c_r1.x * dL_djw_r1.x + w2c_r1.y * dL_djw_r1.y + w2c_r1.z * dL_djw_r1.z;
             const float dL_dj22 = w2c_r2.x * dL_djw_r2.x + w2c_r2.y * dL_djw_r2.y + w2c_r2.z * dL_djw_r2.z;
             const float dL_dj13 = w2c_r3.x * dL_djw_r1.x + w2c_r3.y * dL_djw_r1.y + w2c_r3.z * dL_djw_r1.z;
             const float dL_dj23 = w2c_r3.x * dL_djw_r2.x + w2c_r3.y * dL_djw_r2.y + w2c_r3.z * dL_djw_r2.z;
 
             // mean3d camera space gradient from J and mean2d (accounts for tx/ty clipping)
-            const float2 dL_dmean2d = grad_mean2d[work_idx];
-            const float dL_ddepth = grad_depth ? grad_depth[work_idx] : 0.0f;
-            float3 dL_dmean3d_cam = make_float3(
+            dL_dmean3d_cam = make_float3(
                 j11 * dL_dmean2d.x,
                 j22 * dL_dmean2d.y,
                 -j11 * x * dL_dmean2d.x - j22 * y * dL_dmean2d.y + dL_ddepth);
@@ -324,6 +373,28 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float factor_x = 1.0f + static_cast<float>(valid_x);
             const float factor_y = 1.0f + static_cast<float>(valid_y);
             dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) * inv_depth;
+            } else {
+                const float dL_dJ00 = w2c_r1.x * dL_djw_r1.x + w2c_r1.y * dL_djw_r1.y + w2c_r1.z * dL_djw_r1.z;
+                const float dL_dJ01 = w2c_r2.x * dL_djw_r1.x + w2c_r2.y * dL_djw_r1.y + w2c_r2.z * dL_djw_r1.z;
+                const float dL_dJ02 = w2c_r3.x * dL_djw_r1.x + w2c_r3.y * dL_djw_r1.y + w2c_r3.z * dL_djw_r1.z;
+                const float dL_dJ10 = w2c_r1.x * dL_djw_r2.x + w2c_r1.y * dL_djw_r2.y + w2c_r1.z * dL_djw_r2.z;
+                const float dL_dJ11 = w2c_r2.x * dL_djw_r2.x + w2c_r2.y * dL_djw_r2.y + w2c_r2.z * dL_djw_r2.z;
+                const float dL_dJ12 = w2c_r3.x * dL_djw_r2.x + w2c_r3.y * dL_djw_r2.y + w2c_r3.z * dL_djw_r2.z;
+
+                float dL_dPx = kb_proj.J00 * dL_dmean2d.x + kb_proj.J10 * dL_dmean2d.y;
+                float dL_dPy = kb_proj.J01 * dL_dmean2d.x + kb_proj.J11 * dL_dmean2d.y;
+                float dL_dPz = kb_proj.J02 * dL_dmean2d.x + kb_proj.J12 * dL_dmean2d.y;
+                fisheye_kb::kb_contract_dL_dJ(
+                    kb_proj, fx, fy,
+                    dL_dJ00, dL_dJ01, dL_dJ02, dL_dJ10, dL_dJ11, dL_dJ12,
+                    dL_dPx, dL_dPy, dL_dPz);
+                // Depth is ray length D; dD/dP = P/D.
+                const float inv_D = 1.0f / fmaxf(kb_proj.D, fisheye_kb::kMinRayLength);
+                dL_dPx += dL_ddepth * Px * inv_D;
+                dL_dPy += dL_ddepth * Py * inv_D;
+                dL_dPz += dL_ddepth * Pz * inv_D;
+                dL_dmean3d_cam = make_float3(dL_dPx, dL_dPy, dL_dPz);
+            }
 
             if (grad_w2c != nullptr) {
                 atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
