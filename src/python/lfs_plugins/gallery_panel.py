@@ -648,6 +648,19 @@ class GalleryPanel(Panel):
     def _can_sync_camera_track(self):
         return self._camera_track_block_reason() is None
 
+    def _camera_track_send_revision(self, scene):
+        """Send uses the live gallery revision; dirty form fields stay on `_scene` for Edit."""
+        state = self.service.snapshot()
+        current = next((item for item in state.get("scenes") or []
+            if item.get("id") == scene["id"] and item.get("status") == "ready"), None)
+        if current is None or not isinstance(current.get("revision"), str):
+            raise ValueError("The selected gallery item changed. The camera track was not sent.")
+        project_id, _ = self._project_identity()
+        link = (state.get("links") or {}).get(project_id)
+        if not link or link.get("sceneId") != scene["id"]:
+            raise ValueError("Select the gallery item linked to this LichtFeld Studio project to send or get its camera track.")
+        return current["revision"]
+
     def _camera_track_help(self):
         reason = self._camera_track_block_reason()
         if reason:
@@ -693,7 +706,7 @@ class GalleryPanel(Panel):
         if not self._scene or self._scene["id"] != scene["id"]:
             raise ValueError("The selected gallery item changed. The camera track was not sent.")
         self._message = ""
-        self.service.send_camera_track(scene["id"], scene["revision"], track)
+        self.service.send_camera_track(scene["id"], self._camera_track_send_revision(scene), track)
         self._suppress_transfer_progress = False
         self._refresh_model()
 

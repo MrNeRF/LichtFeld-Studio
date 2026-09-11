@@ -123,6 +123,59 @@ def test_account_switch_hides_and_cannot_resume_previous_jobs(tmp_path, monkeypa
     assert service.snapshot()["links"] == {}
 
 
+def _download_scene():
+    return {"id": "scene", "revision": "r1", "sourceFormat": "spz", "title": "Garden", "contentLength": 8}
+
+
+def test_download_survives_launch_failure_and_restart(tmp_path, monkeypatch):
+    from pathlib import Path
+    service = connected(tmp_path, monkeypatch)
+    monkeypatch.setattr(service, "resume", lambda *_: (_ for _ in ()).throw(RuntimeError("thread start failed")))
+    service.download(_download_scene())
+    job = service.snapshot()["jobs"][0]
+    assert job["kind"] == "download" and job["status"] == "paused"
+    assert job["sceneId"] == "scene" and job["revision"] == "r1"
+    persisted = json.loads((tmp_path / "sync.json").read_text())
+    saved = next(item for bucket in persisted["accounts"].values() for item in bucket["jobs"])
+    assert saved["id"] == job["id"] and saved["sceneId"] == "scene" and saved["status"] == "queued"
+    restarted = gallery_sync.GallerySync(service.account, tmp_path)
+    restarted.refresh()
+    finish(restarted)
+    kept = restarted.snapshot()["jobs"][0]
+    assert kept["id"] == job["id"] and kept["status"] == "paused" and kept["sceneId"] == "scene"
+    def download(self, scene_id, destination, **kwargs):
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"payload!")
+        return {"id": scene_id, "revision": "r1", "title": "Garden"}
+    monkeypatch.setattr(Client, "download", download, raising=False)
+    restarted.resume(kept["id"])
+    finish(restarted)
+    assert restarted.snapshot()["jobs"][0]["status"] == "completed"
+
+
+def test_download_journal_write_failure_rolls_back(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    original = (tmp_path / "sync.json").read_bytes()
+    monkeypatch.setattr(service, "_save", lambda: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        service.download(_download_scene())
+    assert service.snapshot()["jobs"] == []
+    assert (tmp_path / "sync.json").read_bytes() == original
+
+
+def test_download_rejects_stale_journal_before_queueing(tmp_path, monkeypatch):
+    service = connected(tmp_path, monkeypatch)
+    journal = tmp_path / "sync.json"
+    different = {"version": 1, "accounts": {"other": {"jobs": [], "links": {}}}}
+    journal.write_text(json.dumps(different))
+    monkeypatch.setattr(service, "resume", lambda *_: pytest.fail("Stale downloads must not start"))
+    with pytest.raises(ValueError, match="Another LichtFeld Studio window"):
+        service.download(_download_scene())
+    assert json.loads(journal.read_text()) == different
+    assert service.snapshot()["jobs"] == []
+
+
 def test_upload_cannot_silently_retarget_project_link(tmp_path, monkeypatch):
     service = connected(tmp_path, monkeypatch)
     service._bucket()["links"]["project"] = {"sceneId": "original", "revision": "r"}
@@ -251,7 +304,7 @@ def test_other_process_journal_change_cannot_be_overwritten(tmp_path, monkeypatc
     monkeypatch.setattr(Client, "update", lambda *a, **kw: pytest.fail("Stale mutations must not reach the network"), raising=False)
     service.edit("scene", "old-revision", {"title": "Old edit"})
     finish(service)
-    assert "Another Studio window" in service.message
+    assert "Another LichtFeld Studio window" in service.message
     assert not service.snapshot()["connected"]
     assert json.loads(journal.read_text()) == different
     service.refresh()
@@ -427,7 +480,7 @@ def test_native_use_excludes_cleanup_in_another_window(tmp_path, monkeypatch):
     second.clear_finished([job["id"]])
     finish(second)
     assert not path.exists() and second.snapshot()["jobs"] == []
-    with pytest.raises(ValueError, match="Another Studio window"):
+    with pytest.raises(ValueError, match="Another LichtFeld Studio window"):
         with first.local_use(job["id"]):
             pytest.fail("Stale imports must not reach native code")
 

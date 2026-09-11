@@ -22,10 +22,10 @@ from . import gallery_bundle, gallery_preparation
 
 MAX_JOURNAL_BYTES = 32 * 1024 * 1024
 JOURNAL_RECOVERY_MESSAGE = (
-    "Studio couldn't read your saved gallery links and transfers. "
+    "LichtFeld Studio couldn't read your saved gallery links and transfers. "
     "Your files have been kept. Open the recovery folder for help, then retry."
 )
-JOURNAL_CHANGED_MESSAGE = "Another Studio window updated gallery sync. Refresh to load its changes before continuing."
+JOURNAL_CHANGED_MESSAGE = "Another LichtFeld Studio window updated gallery sync. Refresh to load its changes before continuing."
 
 
 def _journal_object(pairs):
@@ -98,7 +98,7 @@ def _validate_journal(data):
 def friendly_error(exc):
     if isinstance(exc, PortalHTTPError):
         if exc.error == "gallery_relink_required":
-            return "Sign out and reconnect your Studio account to approve gallery access. Your local work is safe."
+            return "Sign out and reconnect your LichtFeld Studio account to approve gallery access. Your local work is safe."
         return {
             401: "Sign in again, then resume the transfer.",
             403: "Gallery access is unavailable for this account. Check your account on the portal.",
@@ -311,7 +311,7 @@ class GallerySync:
             client = PortalGalleryClient(self.account, expected_session=session)
             capabilities = client._request("GET", "/me")
             if capabilities.get("gallerySyncVersion") != 1:
-                raise PortalProtocolError("This portal needs an update before Studio gallery sync is available.")
+                raise PortalProtocolError("This portal needs an update before LichtFeld Studio gallery sync is available.")
             scenes = client.list_scenes()
             with self._lock:
                 current = self.account.snapshot()
@@ -328,7 +328,7 @@ class GallerySync:
     def queue_prepared_upload(self, staging, metadata, project_id):
         staging = gallery_preparation.staging_path(self.root, staging)
         if not (staging / "project.licht").is_file():
-            raise ValueError("Prepare a fresh .licht file in Studio before uploading.")
+            raise ValueError("Prepare a fresh .licht file in LichtFeld Studio before uploading.")
         return self.queue_upload(staging.with_suffix(".licht"), metadata, project_id,
                                  owned_export=True, preparation=str(staging))
 
@@ -357,7 +357,7 @@ class GallerySync:
             try:
                 guard.__enter__()
             except OSError:
-                raise ValueError("Another Studio window is updating gallery sync. Try again when it finishes.") from None
+                raise ValueError("Another LichtFeld Studio window is updating gallery sync. Try again when it finishes.") from None
             try:
                 if self._journal_digest() != self._disk_digest:
                     self._stale = True
@@ -382,19 +382,43 @@ class GallerySync:
         return job["id"]
 
     def download(self, scene):
-        self._client()
-        if self.busy:
-            raise ValueError("Wait for the current transfer or pause it first.")
-        if scene["sourceFormat"] not in ("ply", "sog", "ssog", "spz", "lfsg", "licht"):
-            raise ValueError("This scene format cannot be opened in Studio.")
-        identifier = str(uuid.uuid4())
-        path = self.root / "downloads" / (identifier + "." + scene["sourceFormat"])
         with self._lock:
-            self._bucket()["jobs"].append({"id": identifier, "project": "", "kind": "download",
+            self._client()
+            if self.busy:
+                raise ValueError("Wait for the current transfer or pause it first.")
+            if scene["sourceFormat"] not in ("ply", "sog", "ssog", "spz", "lfsg", "licht"):
+                raise ValueError("This scene format cannot be opened in LichtFeld Studio.")
+            identifier = str(uuid.uuid4())
+            path = self.root / "downloads" / (identifier + "." + scene["sourceFormat"])
+            jobs = self._bucket()["jobs"]
+            job = {"id": identifier, "project": "", "kind": "download",
                 "path": str(path), "metadata": {"title": scene["title"]}, "sceneId": scene["id"],
                 "revision": scene["revision"], "checkpoint": None, "status": "queued", "completed": 0,
-                "total": scene["contentLength"], "message": "Ready to download"})
-        self.resume(identifier)
+                "total": scene["contentLength"], "message": "Ready to download"}
+            guard = _locked_sidecar(self.root / "sync.lock", blocking=False)
+            try:
+                guard.__enter__()
+            except OSError:
+                raise ValueError("Another LichtFeld Studio window is updating gallery sync. Try again when it finishes.") from None
+            try:
+                if self._journal_digest() != self._disk_digest:
+                    self._stale = True
+                    raise ValueError(JOURNAL_CHANGED_MESSAGE)
+                jobs.append(job)
+                try:
+                    self._save()
+                except Exception:
+                    jobs.remove(job)
+                    raise
+            finally:
+                guard.__exit__(None, None, None)
+        try:
+            self.resume(job["id"])
+        except Exception:
+            with self._lock:
+                job.update(status="paused", message="Ready to download. Resume when ready.")
+                self.message = job["message"]
+                self.version += 1
 
     def _job(self, job_id):
         return next(j for j in self._bucket()["jobs"] if j["id"] == job_id)
@@ -778,7 +802,7 @@ class GallerySync:
         try:
             guard.__enter__()
         except OSError:
-            raise ValueError("Another Studio window is opening or clearing a download. Try again when it finishes.") from None
+            raise ValueError("Another LichtFeld Studio window is opening or clearing a download. Try again when it finishes.") from None
         try:
             self._client()
             try:
@@ -890,7 +914,7 @@ class GallerySync:
             try:
                 guard.__enter__()
             except OSError:
-                raise ValueError("A Studio window is using a downloaded scene. Clear transfers after it finishes.") from None
+                raise ValueError("A LichtFeld Studio window is using a downloaded scene. Clear transfers after it finishes.") from None
             try:
                 available = {j["id"]: j for j in bucket["jobs"]}
                 if any(identifier not in available for identifier in identifiers):

@@ -279,7 +279,7 @@ def test_changed_journal_refuses_handoff_before_accepting_the_snapshot(tmp_path,
     directory = staging(tmp_path)
     journal = tmp_path / "sync.json"
     journal.write_text(journal.read_text() + "\n")
-    with pytest.raises(ValueError, match="Another Studio window updated"):
+    with pytest.raises(ValueError, match="Another LichtFeld Studio window updated"):
         queue_legacy_staging(service, directory, {"title": "Scene"}, "project")
     assert not any(bucket["jobs"] for bucket in service._data["accounts"].values())
     assert directory.exists()  # Caller retains ownership when queueing raises.

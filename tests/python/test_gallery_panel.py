@@ -925,6 +925,30 @@ def test_send_camera_track_captures_current_path_and_does_not_export(gallery, mo
     assert _bound_gallery_message(panel) == TRACK_SENT
 
 
+def test_send_camera_track_uses_snapshot_revision_when_form_is_dirty(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: dict(CAMERA_TRACK), raising=False)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._title = "Unsaved title change"
+    panel._action_send_camera_track()
+    panel._action_confirm_action()
+    assert actions == [("send_camera_track", "private-one", "original", CAMERA_TRACK)]
+    state["scenes"] = [dict(scene(), revision="after-first-send")]
+    state["links"]["project"] = {**state["links"]["project"], "revision": "after-first-send"}
+    panel._refresh_model()
+    assert panel._title == "Unsaved title change"
+    assert panel._scene["revision"] == "original"
+    panel._action_send_camera_track()
+    panel._action_confirm_action()
+    assert actions[-1] == ("send_camera_track", "private-one", "after-first-send", CAMERA_TRACK)
+    panel._action_edit()
+    assert actions[-1][0] == "private-one"
+    assert actions[-1][1] == "original"
+    assert actions[-1][2]["title"] == "Unsaved title change"
+
+
 def test_send_camera_track_null_clears_remote_playback_after_review(gallery, monkeypatch):
     panel, state, actions = gallery
     module = import_module("lfs_plugins.gallery_panel")
