@@ -877,6 +877,42 @@ def test_search_ownership_and_advanced_ancestor(prop_id, section):
     assert not property_view.section_is_visible((binding,), "basic_params")
 
 
+@pytest.mark.parametrize("query", ["bilateral", "use_bilateral_grid"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_bilateral_search_keeps_toggle_and_advanced_ancestor_visible(lf, query, enabled):
+    section = next(spec for spec in property_view.SECTIONS if spec.id == "bilateral")
+    group_info = lf.ui.property_group_info("optimization")
+    defaults = lf.optimization_params()
+    params = {
+        prop_id: defaults.get(prop_id)
+        for run in section.runs for prop_id in run.prop_ids
+    }
+    params["use_bilateral_grid"] = enabled
+    bindings = [
+        property_view.SectionBinding(
+            run.id,
+            property_view.build_rows(group_info, run.prop_ids, params),
+            params,
+            {},
+            lambda _binding: None,
+            search_accessor=lambda: query,
+            visibility_condition_id=run.visibility_condition_id,
+            visibility_predicate=lambda condition: (
+                enabled if condition == "dep_bilateral" else False
+            ),
+        )
+        for run in section.runs
+    ]
+
+    records = [record for binding in bindings for record in binding._records()]
+    toggle = next(record for record in records if record["id"] == "use_bilateral_grid")
+    assert toggle["checked"] is enabled
+    if not enabled or query == "use_bilateral_grid":
+        assert [record["id"] for record in records] == ["use_bilateral_grid"]
+    assert property_view.section_is_visible(bindings, "bilateral")
+    assert property_view.section_is_visible(bindings, "advanced_params")
+
+
 def test_background_image_search_preserves_mode_selector():
     binding = property_view.SectionBinding(
         "background", [{**_number_row(), "id": "bg_mode"}], {"bg_mode": 0}, {}, lambda _binding: None,

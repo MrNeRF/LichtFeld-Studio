@@ -341,7 +341,6 @@ SEARCH_SECTION_RUN_IDS.update(
     dataset=tuple(run.id for run in DATASET_RUNS),
     learning_rates=("learning_rates",),
     refinement=tuple(run.id for run in OPTIMIZATION_RUNS if run.id != "learning_rates"),
-    bilateral=tuple(run.id for run in BILATERAL_RUNS),
     exposure=("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"),
 )
 ADVANCED_SECTIONS = ("depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random_init", "sparsity", "optimization", "losses", "init", "save_steps", "advanced_registry")
