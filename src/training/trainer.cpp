@@ -3438,7 +3438,7 @@ namespace lfs::training {
 
             try {
                 RenderOutput output;
-                if (params.optimization.gut) {
+                if (params.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                     output = gsplat_rasterize(
                         camera, model, background,
                         1.0f, false, GsplatRenderMode::RGB, true);
@@ -6016,7 +6016,7 @@ namespace lfs::training {
                     profiler.sampleCudaMemory();
                 }
 
-                if (params_.optimization.gut) {
+                if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                     if (cam->camera_model_type() == core::CameraModelType::ORTHO) {
                         return lfs::make_error(lfs::ErrorInit{
                             .code = lfs::ErrorCode::InvalidArgument,
@@ -6121,7 +6121,7 @@ namespace lfs::training {
                     bg_image = get_random_background_for_camera(cam->image_width(), cam->image_height(), iter);
                 }
 
-                const bool fastgs_path = !params_.optimization.gut;
+                const bool three_dgs_path = params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGS;
 
                 if (!loss_accumulator_.is_valid()) {
                     loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
@@ -6180,14 +6180,14 @@ namespace lfs::training {
                     densification_type = DensificationType::MRNF;
                 const bool update_gaussians_this_iter = !freeze_gaussians_this_iter;
                 const bool run_fastgs_gaussian_backward =
-                    fastgs_path &&
+                    three_dgs_path &&
                     update_gaussians_this_iter;
 
                 bool fastgs_strategy_hooks_at_start = false;
                 const bool refining_this_step =
                     strategy_ && strategy_->is_refining(iter);
                 const bool morton_due = morton_reorder_due(iter);
-                if (fastgs_path && !in_sparsification) {
+                if (three_dgs_path && !in_sparsification) {
                     current_phase = StepPhase::RefinementCommit;
                     LFS_VRAM_SCOPE("train.strategy.fastgs_pre_step");
                     LOG_VRAM_DIFF("train.strategy.fastgs_pre_step");
@@ -6306,12 +6306,12 @@ namespace lfs::training {
                     ++mutation_epoch_;
                     persistent_commit = true;
                 }
-                if (fastgs_path && refining_this_step && !in_sparsification) {
+                if (three_dgs_path && refining_this_step && !in_sparsification) {
                     // Post-barrier topology publish (deferred from inside densify).
                     auto& model_after = strategy_->get_model();
                     syncTrainingSceneTopology(scene_, model_after);
                 }
-                if (fastgs_path && in_sparsification) {
+                if (three_dgs_path && in_sparsification) {
                     install_cropbox_step_damping(strategy_->get_model(), strategy_->get_optimizer());
                 }
 
@@ -6324,7 +6324,7 @@ namespace lfs::training {
                 lfs::core::Tensor fused_opacity_reg_loss_gpu;
                 lfs::core::Tensor sparsity_loss_gpu;
                 const bool run_gut_gaussian_backward =
-                    params_.optimization.gut && update_gaussians_this_iter;
+                    params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT && update_gaussians_this_iter;
                 if (run_fastgs_gaussian_backward || run_gut_gaussian_backward) {
                     auto& model = strategy_->get_model();
                     edge_score_scratch = strategy_->edge_score_scratch(iter);
@@ -6339,7 +6339,7 @@ namespace lfs::training {
                 } else if (edge_weight_scoring_active_) {
                     clearEdgeWeightCache();
                 }
-                if (fastgs_path) {
+                if (three_dgs_path) {
                     LFS_VRAM_SCOPE("train.regularizers.fastgs_forward_only");
                     LOG_VRAM_DIFF("train.regularizers.fastgs_forward_only");
                     auto& model = strategy_->get_model();
@@ -6464,7 +6464,7 @@ namespace lfs::training {
                         LFS_VRAM_SCOPE("train.rasterize_forward");
                         LOG_VRAM_DIFF("train.rasterize_forward");
                         current_phase = StepPhase::Forward;
-                        if (params_.optimization.gut) {
+                        if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                             const MutationStamp forward_stamp{
                                 static_cast<std::uint64_t>(iter), mutation_epoch_,
                                 StepPhase::Forward, fastgs_strategy_hooks_at_start};
@@ -7715,7 +7715,7 @@ namespace lfs::training {
                         nvtxRangePush("compute_scale_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.scale_loss");
                         LOG_VRAM_DIFF("train.regularizers.scale_loss");
-                        if (fastgs_path) {
+                        if (three_dgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_scale_reg_loss_gpu;
                         } else {
                             auto scale_loss_result = compute_scale_reg_loss(strategy_->get_model(), strategy_->get_optimizer(), params_.optimization);
@@ -7739,7 +7739,7 @@ namespace lfs::training {
                         nvtxRangePush("compute_opacity_reg_loss");
                         LFS_VRAM_SCOPE("train.regularizers.opacity_loss");
                         LOG_VRAM_DIFF("train.regularizers.opacity_loss");
-                        if (fastgs_path) {
+                        if (three_dgs_path) {
                             loss_tensor_gpu = loss_tensor_gpu + fused_opacity_reg_loss_gpu;
                         } else {
                             auto opacity_loss_result = compute_opacity_reg_loss(
@@ -7803,7 +7803,7 @@ namespace lfs::training {
                 // Sparsity loss - ALL ON GPU, no CPU sync here
                 if (sparsity_optimizer_ &&
                     sparsity_optimizer_->should_apply_loss(iter) &&
-                    (!fastgs_path || update_gaussians_this_iter)) {
+                    (!three_dgs_path || update_gaussians_this_iter)) {
                     nvtxRangePush("sparsity_loss");
                     LFS_VRAM_SCOPE("train.regularizers.sparsity_loss");
                     LOG_VRAM_DIFF("train.regularizers.sparsity_loss");
@@ -7982,7 +7982,7 @@ namespace lfs::training {
                             strategy_->post_backward(iter, r_output);
                             maybe_morton_reorder(iter);
                         }
-                        if (!fastgs_path) {
+                        if (!three_dgs_path) {
                             install_cropbox_step_damping(model, strategy_->get_optimizer());
                         }
 
@@ -8170,7 +8170,7 @@ namespace lfs::training {
                                 }
 
                                 RenderOutput rendered_timelapse_output;
-                                if (params_.optimization.gut) {
+                                if (params_.optimization.raster_backend() == lfs::core::param::RasterBackendId::ThreeDGUT) {
                                     rendered_timelapse_output = gsplat_rasterize(*cam_to_use, strategy_->get_model(), background_,
                                                                                  1.0f, false, GsplatRenderMode::RGB, true);
                                 } else {

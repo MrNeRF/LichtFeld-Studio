@@ -6,6 +6,7 @@
 
 #include "core/export.hpp"
 #include "core/mesh2splat.hpp"
+#include "core/training_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -329,6 +330,17 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
+            // Compatibility storage remains gut until all legacy writers migrate.
+            [[nodiscard]] RasterBackendId raster_backend() const {
+                return gut ? RasterBackendId::ThreeDGUT : RasterBackendId::ThreeDGS;
+            }
+            void set_raster_backend(RasterBackendId backend) {
+                switch (backend) {
+                case RasterBackendId::ThreeDGS: gut = false; return;
+                case RasterBackendId::ThreeDGUT: gut = true; return;
+                }
+                throw std::invalid_argument("Unsupported training raster backend");
+            }
             [[nodiscard]] TrainingBackendConflict backend_conflict() const;
             [[nodiscard]] std::string backend_conflict_message() const;
             [[nodiscard]] std::string validate() const;

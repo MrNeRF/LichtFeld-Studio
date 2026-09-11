@@ -9,6 +9,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
 #include "input/frame_input_buffer.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <string>
@@ -62,6 +63,22 @@ namespace lfs::vis::gui {
         bool has_text_editing = false;
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
+
+        // Return this frame's last DOWN for `button`, or nullptr if none.
+        // Read-only convenience lookup; do not use it to replace per-press decisions.
+        // The overlay classification and GuiManager focus loops process each press
+        // in arrival order (rml_viewport_overlay.cpp / gui_manager.cpp).
+        // Keep the canonical vector intact. Use the returned event's own coordinates
+        // and ownership together: mouse_x/mouse_y may have moved since the press.
+        [[nodiscard]] const FrameMouseButtonEvent* lastPress(const int button) const {
+            if (button < 0 || button > 2)
+                return nullptr;
+            for (auto it = mouse_button_events.rbegin(); it != mouse_button_events.rend(); ++it) {
+                if (it->down && it->button == static_cast<uint8_t>(button))
+                    return &*it;
+            }
+            return nullptr;
+        }
     };
 
     struct ScreenState {
@@ -133,6 +150,38 @@ namespace lfs::vis::gui {
             return python_console_resizing_ || python_console_hovering_edge_ ||
                    bottom_dock_resizing_ || bottom_dock_hovering_edge_ ||
                    left_dock_resizing_ || left_dock_hovering_edge_;
+        }
+
+        // Window-space resize strip from renderLeftDock()'s geometry. Half extends
+        // into the viewport; direct hit-testing works before a GUI frame updates
+        // the isResizingPanel() hover latch.
+        [[nodiscard]] bool isPositionOverLeftDockResizeEdge(float x, float y,
+                                                            float work_x, float work_y,
+                                                            float work_h) const;
+
+        // Shared strip rectangle for the press-time hit test and render-time hover.
+        struct LeftDockResizeRect {
+            float x0 = 0.0f;
+            float x1 = 0.0f;
+            float y0 = 0.0f;
+            float y1 = 0.0f;
+
+            [[nodiscard]] bool contains(const float x, const float y) const {
+                return x >= x0 && x <= x1 && y >= y0 && y <= y1;
+            }
+        };
+
+        [[nodiscard]] static LeftDockResizeRect leftDockResizeRect(float work_x, float work_y,
+                                                                   float work_h, float dpi,
+                                                                   float dock_width) {
+            const float edge_grab_w = std::max(SPLITTER_H * dpi, 8.0f * dpi);
+            const float panel_right_x = work_x + ICON_BAR_WIDTH * dpi + dock_width;
+            return LeftDockResizeRect{
+                .x0 = panel_right_x - edge_grab_w,
+                .x1 = panel_right_x + edge_grab_w,
+                .y0 = work_y,
+                .y1 = work_y + work_h,
+            };
         }
 
         bool isResizeInteractionActive() const {

@@ -671,7 +671,7 @@ namespace lfs::vis {
             return panels;
         }
 
-        // CPU split-view composite kept ONLY for capture/screenshot — runs lazily on
+        // CPU split-view composite kept ONLY for capture/screenshot â€” runs lazily on
         // demand when captureViewportImage() is called, never per-frame. Mirrors the
         // pixel-for-pixel result of the Vulkan split_view.frag shader so screenshots
         // match what the user sees on screen.
@@ -1704,9 +1704,27 @@ namespace lfs::vis {
             lfs::core::GlobalArenaManager::instance().clear_external_backing();
             vksplat_viewport_renderer_->releaseScratchOnIdle(true);
         }
-        const auto [frame_settings, frame_depth_window_drag_preview] = [this] {
+        const auto [frame_settings, frame_depth_window_drag_preview, frame_panel_depth_windows] = [this] {
             std::lock_guard lock(settings_mutex_);
-            return std::pair(settings_, depth_window_drag_preview_);
+            std::array<DepthWindowState, 2> resolved_depth_windows{};
+            if (split_view_service_.isIndependentDualActive(settings_)) {
+                resolved_depth_windows = panel_depth_windows_;
+            } else {
+                const auto projection_window = [&]() {
+                    return DepthWindowState{
+                        .near_plane = -settings_.depth_filter_max.z,
+                        .far_plane = -settings_.depth_filter_min.z,
+                        .scale_x = settings_.depth_filter_scale_x,
+                        .scale_y = settings_.depth_filter_scale_y,
+                        .offset_x = settings_.depth_filter_offset_x,
+                        .offset_y = settings_.depth_filter_offset_y,
+                    };
+                }();
+                resolved_depth_windows = {projection_window, projection_window};
+            }
+            // The preview gate is a counter (nested/replacing modals); the
+            // frame only cares whether any drag is live.
+            return std::tuple(settings_, depthWindowDragActiveLocked(), resolved_depth_windows);
         }();
         SceneManager* const scene_manager = context.scene_manager;
         auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
@@ -1748,7 +1766,7 @@ namespace lfs::vis {
         }
         // Minimized / zero-extent: no presentable viewport work. Never hold a
         // resize training pause, never start model reads, and never publish
-        // new viewer borrows — the trainer continues headless on the existing
+        // new viewer borrows â€” the trainer continues headless on the existing
         // handshake fences only. Restore re-enters the normal frame path
         // (first frame may block once for a stable model, same as cold start).
         if (current_size.x <= 0 || current_size.y <= 0) {
@@ -2005,7 +2023,7 @@ namespace lfs::vis {
         // Window resize/minimize must never alter the training schedule. Viewer
         // work quiesces itself (cached frames while deferring; output-ring
         // recreate waits ring watermarks only). pauseTrainingTemporary is not
-        // used on this path — other interactive wait sites keep it.
+        // used on this path â€” other interactive wait sites keep it.
 
         // Training previews never wait for a step-boundary read, including
         // discrete layout resizes. On contention, retain the previous matching
@@ -2249,7 +2267,7 @@ namespace lfs::vis {
             }
         }
         // Scene state is authoritative here (contended frames returned above): nothing
-        // visible must clear the viewport even when a cached frame exists — a consolidated
+        // visible must clear the viewport even when a cached frame exists â€” a consolidated
         // multi-splat scene keeps the same combined-model pointer when every node is
         // hidden, so model-change tracking never clears the stale image.
         if (!has_render_content) {
@@ -2390,7 +2408,7 @@ namespace lfs::vis {
                     render_lock.reset();
                     return cached_frame_result();
                 }
-                // No cache yet — block once for the first published frame.
+                // No cache yet â€” block once for the first published frame.
                 candidate = std::shared_lock<std::shared_mutex>(live_trainer->getModelAccessMutex());
             }
             model_read_lock.emplace(std::move(candidate));
@@ -2448,7 +2466,8 @@ namespace lfs::vis {
             .hovered_gaussian_id = viewport_overlay_service_.hoveredGaussianId(),
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .view_panels = {},
-            .scene_jitter_pixels = applied_temporal_jitter_pixels};
+            .scene_jitter_pixels = applied_temporal_jitter_pixels,
+            .panel_depth_windows = frame_panel_depth_windows};
 
         const auto complete_temporal_convergence_frame =
             [this, temporal_camera_cut_generation]() {
@@ -3506,12 +3525,12 @@ namespace lfs::vis {
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
                                 if (render_camera && gtComparisonUsesRGBReference(gt_mode)) {
-                                    // Synchronous production only (RGB and, post-#1857, Loss — the
+                                    // Synchronous production only (RGB and, post-#1857, Loss â€” the
                                     // predicate is upstream's own name for the synchronous set): the
                                     // panel just rendered IS the current camera's image, so publish
                                     // that pairing. Depth/Normal go
                                     // through the hold-then-swap ticket and publish the HELD camera with
-                                    // the held image above — assigning the current camera here would pair
+                                    // the held image above â€” assigning the current camera here would pair
                                     // panel image A with camera B while a new ticket is in flight.
                                     // Degenerate GT calibration: buildGTRenderCamera returns nullopt when render_size is
                                     // degenerate or the camera's R/T tensors have no CPU pointer
@@ -3723,7 +3742,7 @@ namespace lfs::vis {
             // sized tensor and squash the left panel through the scene interop.
         } else if (render_point_cloud &&
                    ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
-            // Brush edits mutate sh0 in place — same tensor pointer but new
+            // Brush edits mutate sh0 in place â€” same tensor pointer but new
             // contents. Invalidate the derived-colors cache so the next frame
             // re-derives + re-uploads.
             if ((frame_dirty & DirtyFlag::SPLATS) != 0) {
@@ -3948,7 +3967,13 @@ namespace lfs::vis {
                 render_error = "Point-cloud Vulkan render failed";
             }
         } else if (has_visible_gaussian_model) {
-            auto request = buildViewportRenderRequest(frame_ctx, render_size);
+            // The main render is Left in independent-dual mode. Tag it explicitly
+            // so the builder cannot substitute Right's window when Right has focus.
+            const std::optional<SplitViewPanelId> main_render_panel =
+                splitViewUsesIndependentPanels(frame_settings.split_view_mode)
+                    ? std::optional<SplitViewPanelId>(SplitViewPanelId::Left)
+                    : std::nullopt;
+            auto request = buildViewportRenderRequest(frame_ctx, render_size, nullptr, main_render_panel);
             request.raster_backend =
                 lfs::rendering::normalizeViewerRasterBackend(request.raster_backend, request.gut);
             request.gut = lfs::rendering::isGutBackend(request.raster_backend);
@@ -4471,7 +4496,7 @@ namespace lfs::vis {
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
                     // During a depth-window drag the per-move changes are CONTAINMENT-side
                     // (overlay flags from the projection pass), which this fast path cannot
-                    // refresh — it re-rasters from cached overlay_flags. Force the full
+                    // refresh â€” it re-rasters from cached overlay_flags. Force the full
                     // render while the drag is live so the reveal tracks the box.
                     const bool can_rerender_selection_overlay =
                         !frame_depth_window_drag_preview &&

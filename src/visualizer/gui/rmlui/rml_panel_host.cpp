@@ -1347,14 +1347,11 @@ namespace lfs::vis::gui {
 
         if (forward_keys) {
             const auto process_key_down = [&](const int sc) {
-                if (!composing && sc == SDL_SCANCODE_ESCAPE) {
-                    if (auto* const focused = rml_context_->GetFocusElement();
-                        focused && (rml_input::isTextEditableElement(focused) ||
-                                    rml_input::isSelectRelatedElement(focused))) {
-                        escape_requested = true;
-                        had_input = true;
-                        return;
-                    }
+                if (sc == SDL_SCANCODE_ESCAPE &&
+                    rml_input::shouldCancelOnEscape(rml_context_->GetFocusElement(), composing)) {
+                    escape_requested = true;
+                    had_input = true;
+                    return;
                 }
                 const bool is_submit_key =
                     (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER);

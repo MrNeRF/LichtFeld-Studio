@@ -57,6 +57,7 @@ struct SDL_Cursor;
 namespace lfs::vis {
     class VisualizerImpl;
     class WindowManager;
+    class InputControllerFocusTest_FreshLeftDockEdgePressUsesOneOwnershipVerdict_Test;
     class VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
     class VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
     class VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;
@@ -159,6 +160,8 @@ namespace lfs::vis {
             bool isPositionInViewport(double x, double y) const;
             bool isPositionOverFloatingPanel(double x, double y) const;
             [[nodiscard]] GuiHitTestResult hitTestPointer(double x, double y) const;
+            // Event-time press hit shared by input routing and frame ownership.
+            [[nodiscard]] GuiHitTestResult hitTestMouseButton(double x, double y) const;
             [[nodiscard]] GuiInputState inputState() const;
 
             bool isForceExit() const { return force_exit_; }
@@ -240,6 +243,7 @@ namespace lfs::vis {
             void renderViewportDecorations();
 
         private:
+            friend class lfs::vis::InputControllerFocusTest_FreshLeftDockEdgePressUsesOneOwnershipVerdict_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveryDeclineKeepsSidecarSuppressesRepeatAndExplicitSaveDeletesIt_Test;
             friend class lfs::vis::VisualizerImplResetTest_NewProjectClearsRecoveryPromptPendingSoNextOpenProceeds_Test;
             friend class lfs::vis::VisualizerImplResetTest_RecoveredPublishUsesRecoveredCommitKind_Test;

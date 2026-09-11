@@ -976,6 +976,14 @@ namespace lfs::python {
                     "that is not available in this process");
             }
         }
+        // Re-read live settings immediately before applying the requested property
+        // and its dependent normalization. A retained snapshot may be stale after
+        // a focus change or another write; dispatching it with DirtyFlag::ALL would
+        // overwrite unrelated settings.
+        const auto fresh = vis::get_render_settings();
+        if (fresh) {
+            settings_ = *fresh;
+        }
         prop_.setattr(name, value);
         if (name == "raster_backend") {
             const auto backend = static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend);
@@ -983,6 +991,11 @@ namespace lfs::python {
                 static_cast<int>(rendering::normalizeViewerRasterBackend(backend, settings_.gut));
             settings_.gut = rendering::isGutBackend(
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
+        }
+        if (!fresh) {
+            // Without live settings, keep local validation/mutation but do not dispatch
+            // a potentially stale proxy.
+            return;
         }
         vis::update_render_settings(
             settings_,

@@ -561,12 +561,34 @@ def load_icon(name: str) -> int:
 def free_icon(texture_id: int) -> None:
     """Free an icon texture"""
 
-def reset_camera() -> None:
-    """Reset camera to default position and orientation"""
-
-def focus_selection() -> bool:
+def reset_camera(*, panel: str | None = None) -> None:
     """
-    Focus the active viewport on the selection, or the whole scene when nothing is selected
+    Reset the primary camera by default, even when another panel has focus.
+    Use panel="main" to reset the focused camera. Reset restores the camera's
+    default position and orientation.
+
+    Unlike focus_selection(), omitting panel (or passing None) does not follow focus.
+
+    panel (keyword-only):
+    - None (default): primary camera.
+    - 'main': focused camera.
+    - 'left' / 'right': named panel's camera.
+
+    Outside independent-dual split, all choices target the primary camera.
+    Addressing a panel never changes focus.
+    """
+
+def focus_selection(*, panel: str | None = None) -> bool:
+    """
+    Focus the active viewport on the selection, or the whole scene when nothing is selected.
+
+    panel (keyword-only) selects which split panel's camera is moved:
+    - None (default): the focused panel, exactly as before.
+    - 'main': the panel that currently has focus, requested explicitly.
+      Same panel as None here, reached through the panel-addressed path.
+    - 'left' / 'right': that panel's own camera. Outside independent-dual
+      split every token resolves to the primary camera, because there is
+      only one. Addressing a panel never changes which panel has focus.
     """
 
 def get_camera_navigation_mode() -> str:
@@ -1954,6 +1976,9 @@ class BackgroundMode(enum.Enum):
 
     RANDOM = 3
 
+def training_backends() -> list:
+    """Available training backends and their viewer mapping"""
+
 class OptimizationParams:
     def __init__(self) -> None: ...
 
@@ -2209,6 +2234,17 @@ class OptimizationParams:
 
     def auto_scale_steps(self, image_count: int) -> None:
         """Auto-scale steps for all strategies based on image count"""
+
+    @property
+    def raster_backend(self) -> str:
+        """Training raster backend: 3dgs or 3dgut; shares storage with legacy gut"""
+
+    @raster_backend.setter
+    def raster_backend(self, arg: str, /) -> None: ...
+
+    @property
+    def backend_capabilities(self) -> dict:
+        """Verified capabilities for the selected training backend"""
 
     @property
     def gut(self) -> bool:

@@ -6,6 +6,7 @@ from importlib import import_module
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 import json
+import re
 import sys
 
 import pytest
@@ -1337,6 +1338,14 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "selection_depth_range",
         "selection_depth_near",
         "selection_depth_far",
+        # List every depth control's tooltip key in every locale. Completeness alone
+        # only compares files with English and would miss a key absent from all ten.
+        "selection_depth_size",
+        "selection_depth_offset_x",
+        "selection_depth_offset_y",
+        "selection_depth_panel_chip",
+        "selection_depth_sync",
+        "selection_viz_mode",
         "selection_depth_mode",
         "selection_delete",
         "selection_undo",
@@ -1414,7 +1423,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "../icon/depth-map.png" in rml
     assert "../icon/select-invert.png" in rml
     assert "../icon/scene/trash.png" in rml
-    assert "../icon/scene/x.png" in rml
+    assert "../icon/deselect.png" in rml
     assert rml.count('class="crop-roi-popover hidden"') == 2
     assert rml.count('data-class-hidden="!crop_roi_settings_open"') == 2
     assert rml.count('data-value="cropbox_lr_scale"') == 2
@@ -1889,6 +1898,138 @@ def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
     assert "border-color: @{right_panel.border};" in scene_tree_theme
 
 
+def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():
+    """Give each of the five axis wrappers its own distinct tooltip, covering its slider
+    and number box. resolveRmlTooltip takes the nearest data-tooltip; a missing axis key
+    falls back to the generic row text, while duplicate keys obscure which control is
+    hovered. Keep the row tooltip for gutters and the wrapped-line gap, where no axis
+    overrides it.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
+
+    block_start = rml.index('<div class="viewport-selection-depth-fields"')
+    block_end = rml.index('<div id="depth-view-block"')
+    block = rml[block_start:block_end]
+
+    axes = (
+        "depth-axis-near",
+        "depth-axis-far",
+        "depth-axis-size",
+        "depth-axis-x",
+        "depth-axis-y",
+    )
+    found = {}
+    for axis in axes:
+        match = re.search(
+            r'<div class="[^"]*\b' + re.escape(axis) + r'\b[^"]*"[^>]*'
+            r'data-tooltip="tooltip\.([a-z_]+)"',
+            block,
+        )
+        assert match, (
+            f"the {axis} wrapper carries no data-tooltip of its own, so "
+            "hovering that slider falls through to the whole row's tooltip"
+        )
+        found[axis] = match.group(1)
+
+    assert len(set(found.values())) == 5, (
+        f"the five depth sliders do not have five distinct tooltips: {found}"
+    )
+    assert "selection_depth_range" not in found.values(), (
+        "an axis reuses the ROW's tooltip key, which describes all five at "
+        f"once: {found}"
+    )
+    # The row keeps its own, one level up, for the gutters.
+    row_open = block[: block.index(">")]
+    assert 'data-tooltip="tooltip.selection_depth_range"' in row_open, (
+        "the depth row lost its own tooltip; nothing now answers a hover on "
+        "the row outside the five axes"
+    )
+
+    for path in sorted(locale_dir.glob("*.json")):
+        tooltips = json.loads(path.read_text(encoding="utf-8"))["tooltip"]
+        for axis, key in found.items():
+            value = tooltips.get(key)
+            assert value, f"{path.name} has no tooltip.{key} for {axis}"
+            assert value.strip() == value and value != key, (
+                f"{path.name}: tooltip.{key} is not a usable string ({value!r})"
+            )
+        localized = [tooltips[key] for key in found.values()]
+        assert len(set(localized)) == 5, (
+            f"{path.name} gives two depth sliders the same tooltip text: "
+            f"{localized}"
+        )
+
+
+# Per locale: the existing selection_depth_sync object name, the retired competing name,
+# and the Size percentage term. All five sliders must share that locale's established
+# noun.
+_DEPTH_WINDOW_TERMS = {
+    "en.json": ("depth window", "depth box", "percentage"),
+    "de.json": ("Tiefenfenster", "Auswahlbox", "Prozent"),
+    "es.json": ("ventana de profundidad", "caja de profundidad", "porcentaje"),
+    "fr.json": ("fenêtre de profondeur", "boîte de profondeur", "pourcentage"),
+    "it.json": ("finestra di profondità", "riquadro di profondità", "percentuale"),
+    "ja.json": ("深度ウィンドウ", "深度ボックス", "割合"),
+    "ko.json": ("깊이 창", "깊이 박스", "백분율"),
+    "nl.json": ("dieptevenster", "dieptegebied", "percentage"),
+    "pl.json": ("okna głębi", "pola głębi", "procent"),
+    "zh.json": ("深度窗口", "深度框", "百分比"),
+}
+
+
+def test_the_five_depth_tooltips_name_one_depth_window_and_size_says_percentage():
+    """All five sliders move the same object, so each locale must use its existing
+    selection_depth_sync term instead of mixing depth box and selection window. Size
+    additionally names its unit: percent of the reference scale. X/Y are normalized
+    offsets times 100 with no reference size, so only Size gains that clause; the other
+    four change terminology only.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
+
+    slider_keys = (
+        "selection_depth_near",
+        "selection_depth_far",
+        "selection_depth_size",
+        "selection_depth_offset_x",
+        "selection_depth_offset_y",
+    )
+
+    seen = set()
+    for path in sorted(locale_dir.glob("*.json")):
+        assert path.name in _DEPTH_WINDOW_TERMS, (
+            f"{path.name} is a locale this test does not know the depth-window "
+            "term for; add it rather than letting the file go unchecked"
+        )
+        seen.add(path.name)
+        window, old_name, percent_word = _DEPTH_WINDOW_TERMS[path.name]
+        tooltips = json.loads(path.read_text(encoding="utf-8"))["tooltip"]
+
+        for key in slider_keys:
+            value = tooltips[key]
+            assert window in value, (
+                f"{path.name}: tooltip.{key} is {value!r}, which never names "
+                f"the {window!r} the other four sliders move"
+            )
+            assert old_name not in value, (
+                f"{path.name}: tooltip.{key} still calls it {old_name!r}; the "
+                f"row settled on {window!r}"
+            )
+
+        size_text = tooltips["selection_depth_size"]
+        assert percent_word in size_text, (
+            f"{path.name}: tooltip.selection_depth_size is {size_text!r} and "
+            "never says the value is a percentage of the reference size"
+        )
+
+    assert seen == set(_DEPTH_WINDOW_TERMS), (
+        "a locale named in the term table has no file: "
+        f"{sorted(set(_DEPTH_WINDOW_TERMS) - seen)}"
+    )
+
 
 def test_gt_compare_modes_show_matching_color_legends():
     project_root = Path(__file__).parent.parent.parent
@@ -2318,3 +2459,133 @@ def test_toolbar_tool_action_refreshes_button_records_immediately(toolbar_module
         if button["value"] == "builtin.rotate"
     )
     assert rotate_button["selected"] is True
+
+
+def test_each_gizmo_group_stamps_its_own_panel_into_the_toolbar_event():
+    """Both gizmo groups render the same records. Their event literal distinguishes
+    primary left from secondary right; no other toolbar_action call site stamps a panel.
+    """
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+
+    primary_group = rml[rml.index('id="primary-viewport-gizmo-controls"') :]
+    primary_group = primary_group[: primary_group.index("</div>")]
+    secondary_group = rml[rml.index('id="secondary-viewport-gizmo-controls"') :]
+    secondary_group = secondary_group[: secondary_group.index("</div>")]
+
+    assert (
+        "toolbar_action(button.action, button.value, 'left')" in primary_group
+    ), "the primary panel's gizmo group must address its own panel"
+    assert (
+        "toolbar_action(button.action, button.value, 'right')" in secondary_group
+    ), "the secondary panel's gizmo group must address its own panel"
+    assert "'right'" not in primary_group
+    assert "'left'" not in secondary_group
+
+    # Exactly two panel-stamped call sites in the whole template. A third would
+    # mean some other toolbar picked up an addressing it was never given.
+    assert rml.count("toolbar_action(button.action, button.value, ") == 2
+    # Every other group still passes two arguments and therefore carries no panel.
+    assert rml.count("toolbar_action(button.action, button.value)") == 33
+
+
+def test_toolbar_action_forwards_the_group_panel_to_the_camera_actions(
+    toolbar_module, monkeypatch
+):
+    """The panel identity survives the Python hop, and an action that
+    carries none calls exactly what it called before -- no keyword at all."""
+    module, _hook_calls, _remove_calls = toolbar_module
+    model = _DataModelStub()
+    lf_stub = sys.modules["lichtfeld"]
+    calls = []
+
+    lf_stub.RenderMode = SimpleNamespace(
+        SPLATS="splats", POINTS="points", RINGS="rings", CENTERS="centers"
+    )
+    lf_stub.get_camera_navigation_mode = lambda: "orbit"
+    lf_stub.get_camera_view_snap_enabled = lambda: False
+    lf_stub.get_render_mode = lambda: lf_stub.RenderMode.SPLATS
+    lf_stub.is_fullscreen = lambda: False
+    lf_stub.is_orthographic = lambda: False
+    lf_stub.get_depth_view = lambda: False
+    lf_stub.get_selected_node_names = lambda: []
+
+    def _reset_camera(**kwargs):
+        calls.append(("reset_camera", kwargs))
+
+    def _focus_selection(**kwargs):
+        calls.append(("focus_selection", kwargs))
+
+    lf_stub.reset_camera = _reset_camera
+    lf_stub.focus_selection = _focus_selection
+
+    monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 1, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_multi_transform_mode", lambda: 0, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: 0, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "single", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_sequencer_visible", lambda: False, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "is_panel_enabled", lambda _panel_id: False, raising=False)
+    monkeypatch.setattr(module, "histogram_mode_available", lambda _context: False)
+
+    module.reset_overlay_state()
+    module.bind_overlay_model(model)
+    module.attach_overlay_model_handle(model.handle)
+    dispatch = model.bound_events["toolbar_action"]
+
+    dispatch(None, None, ["home", "", "right"])
+    dispatch(None, None, ["focus_selection", "", "right"])
+    dispatch(None, None, ["home", "", "left"])
+    dispatch(None, None, ["focus_selection", "", "left"])
+    # No third argument: the pre-panel-addressing call, unchanged.
+    dispatch(None, None, ["home", ""])
+    dispatch(None, None, ["focus_selection", ""])
+
+    assert calls == [
+        ("reset_camera", {"panel": "right"}),
+        ("focus_selection", {"panel": "right"}),
+        ("reset_camera", {"panel": "left"}),
+        ("focus_selection", {"panel": "left"}),
+        ("reset_camera", {}),
+        ("focus_selection", {}),
+    ]
+
+
+def _real_lichtfeld():
+    """Import the compiled extension without toolbar_module's namespace stub.
+
+    Require a .pyd or .so suffix, skipping other origins so binding tests cannot pass
+    vacuously on a stub.
+    """
+    lichtfeld = pytest.importorskip("lichtfeld")
+    origin = getattr(lichtfeld, "__file__", "") or ""
+    if not origin.endswith((".pyd", ".so")):
+        pytest.skip(f"lichtfeld is not the compiled extension (origin={origin!r})")
+    return lichtfeld
+
+
+@pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
+def test_camera_actions_accept_the_main_panel_token(action_name):
+    """Accept None for legacy routing, main for explicit focused-panel routing, and
+    left/right for named panels. No visualizer is attached, so this checks parser
+    acceptance only.
+    """
+    action = getattr(_real_lichtfeld(), action_name)
+    for token in ("main", "left", "right"):
+        action(panel=token)
+    action(panel=None)
+    action()
+
+
+@pytest.mark.parametrize("action_name", ["reset_camera", "focus_selection"])
+def test_camera_actions_reject_an_unknown_panel_token(action_name):
+    """The rejection message names the full panel vocabulary, so a caller that
+    guesses wrong is told what 'main' is. Same wording py_selection.cpp's
+    parseDepthWindowPanelArg already uses."""
+    action = getattr(_real_lichtfeld(), action_name)
+    with pytest.raises(ValueError) as excinfo:
+        action(panel="middle")
+    assert "'main', 'left', or 'right'" in str(excinfo.value)

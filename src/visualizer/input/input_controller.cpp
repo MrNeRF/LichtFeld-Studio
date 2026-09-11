@@ -382,11 +382,10 @@ namespace lfs::vis {
         go_to_cam_view_handler_id_ =
             cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
 
+        // Panel-less reset targets the primary viewport; explicit-panel callers
+        // use resetCameraForPanel.
         reset_camera_handler_id_ = cmd::ResetCamera::when([this](const auto&) {
-            viewport_.camera.resetToHome();
-            if (auto* const rendering = services().renderingOrNull())
-                rendering->markCameraCut();
-            publishCameraMove();
+            handleResetCameraHome(viewport_);
         });
 
         dataset_load_completed_handler_id_ = state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -790,6 +789,10 @@ namespace lfs::vis {
             wants_text_input &&
             !over_gui &&
             isInViewport(x, y)) {
+            // Swallow text-dismissal presses for camera, operators and selection.
+            // GuiManager may move panel focus only after the buffered press has blurred
+            // and committed the edit; focusing in this earlier event handler would
+            // commit to the wrong panel.
             text_input_viewport_click_button_ = button;
             return;
         }
@@ -2814,7 +2817,8 @@ namespace lfs::vis {
         }
     }
 
-    bool InputController::handleFocusSelection(Viewport& target_viewport) {
+    bool InputController::handleFocusSelection(Viewport& target_viewport,
+                                               const std::optional<SplitViewPanelId> acted_panel) {
         if (!tool_context_)
             return false;
         auto* const sm = tool_context_->getSceneManager();
@@ -2842,7 +2846,7 @@ namespace lfs::vis {
             target_viewport.camera.focusOnBounds(total_min, total_max);
             if (auto* const rendering = services().renderingOrNull())
                 rendering->markCameraCut();
-            publishCameraMove(&target_viewport);
+            publishCameraMove(&target_viewport, acted_panel);
             return true;
         }
         return false;
@@ -2918,6 +2922,29 @@ namespace lfs::vis {
 
     bool InputController::focusSelection() {
         return handleFocusSelection(activeKeyboardViewport());
+    }
+
+    void InputController::handleResetCameraHome(Viewport& target_viewport,
+                                                const std::optional<SplitViewPanelId> acted_panel) {
+        target_viewport.camera.resetToHome();
+        if (auto* const rendering = services().renderingOrNull())
+            rendering->markCameraCut();
+        publishCameraMove(&target_viewport, acted_panel);
+    }
+
+    Viewport& InputController::panelViewport(const SplitViewPanelId panel) {
+        if (auto* const rendering = services().renderingOrNull()) {
+            return rendering->resolvePanelViewport(viewport_, panel);
+        }
+        return viewport_;
+    }
+
+    void InputController::resetCameraForPanel(const SplitViewPanelId panel) {
+        handleResetCameraHome(panelViewport(panel), panel);
+    }
+
+    bool InputController::focusSelectionForPanel(const SplitViewPanelId panel) {
+        return handleFocusSelection(panelViewport(panel), panel);
     }
 
     // Helpers
@@ -3335,10 +3362,27 @@ namespace lfs::vis {
             .emit();
     }
 
-    void InputController::publishCameraMove(Viewport* target_viewport) {
+    // The depth transform and x/y extents are global, outside DepthWindowState.
+    // Moving an off-focus panel's camera must not re-anchor the focused panel's
+    // box; panelViewport() already chose the target without changing focus.
+    bool InputController::shouldSkipDepthAnchorSync(
+        const std::optional<SplitViewPanelId> acted_panel) const {
+        if (!acted_panel) {
+            return false;
+        }
+        auto* const rendering = services().renderingOrNull();
+        if (!rendering || !rendering->isIndependentSplitViewActive()) {
+            return false;
+        }
+        return rendering->getFocusedSplitPanel() != *acted_panel;
+    }
+
+    void InputController::publishCameraMove(Viewport* target_viewport,
+                                            const std::optional<SplitViewPanelId> acted_panel) {
         LOG_PERF("InputController::publishCameraMove drag_mode={}", static_cast<int>(drag_mode_));
         auto* const active_viewport = target_viewport ? target_viewport : &viewport_;
-        if (selection_tool_ && selection_tool_->isEnabled()) {
+        if (selection_tool_ && selection_tool_->isEnabled() &&
+            !shouldSkipDepthAnchorSync(acted_panel)) {
             selection_tool_->syncDepthFilterToCamera(*active_viewport);
         }
 

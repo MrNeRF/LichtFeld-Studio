@@ -1,0 +1,139 @@
+--- a/Include/RmlUi/Core/Context.h
++++ b/Include/RmlUi/Core/Context.h
+@@ -191,6 +191,11 @@
+ 	/// members of the Input::KeyModifier enumeration.
+ 	/// @return True if the mouse is not interacting with any elements in the context (see 'IsMouseInteracting'), otherwise false.
+ 	bool ProcessMouseButtonUp(int button_index, int key_modifier_state);
++
++	// Cancel primary mouse state without release, click, or drop. Other buttons are ignored.
++	// Sends cancelled mouseout/dragout and, for a started drag, dragend notifications.
++	void ProcessMouseButtonCancel(int button_index, int key_modifier_state);
++
+ 	/// Sends a mousescroll event into this context.
+ 	/// @deprecated Please use the Vector2f version of this function.
+ 	bool ProcessMouseWheel(float wheel_delta, int key_modifier_state);
+@@ -448,6 +453,7 @@
+ 	static void SendEvents(const ElementSet& old_items, const ElementSet& new_items, EventId id, const Dictionary& parameters);
+ 
+ 	friend class Rml::Element;
++	friend class WidgetSlider;
+ };
+ 
+ } // namespace Rml
+--- a/Source/Core/Context.cpp
++++ b/Source/Core/Context.cpp
+@@ -718,6 +718,90 @@
+ 	return !IsMouseInteracting();
+ }
+ 
++void Context::ProcessMouseButtonCancel(int button_index, int key_modifier_state)
++{
++	if (button_index != 0)
++		return;
++
++	const auto observe = [](const auto& chain) {
++		Vector<ObserverPtr<Element>> result;
++		result.reserve(chain.size());
++		for (Element* element : chain)
++			result.push_back(element->GetObserverPtr());
++		return result;
++	};
++	auto cancelled_active = observe(active_chain);
++	auto cancelled_hover = observe(hover_chain);
++	auto cancelled_drag_hover = observe(drag_hover_chain);
++	ObserverPtr<Element> cancelled_drag = drag && drag_started ? drag->GetObserverPtr() : nullptr;
++	ObserverPtr<Element> cancelled_clone = drag_clone ? drag_clone->GetObserverPtr() : nullptr;
++	const bool notify_drag_out = drag_started && drag_verbose;
++	Dictionary parameters;
++	GenerateMouseEventParameters(parameters);
++	GenerateKeyModifierEventParameters(parameters, key_modifier_state);
++	parameters["cancelled"] = true;
++
++	// Detach before pseudo-class hooks, clone removal, or event callbacks can reenter.
++	active = nullptr;
++	active_chain.clear();
++	hover = nullptr;
++	hover_chain.clear();
++	mouse_active = false;
++	last_click_element = nullptr;
++	last_click_time = 0;
++	drag = nullptr;
++	drag_hover = nullptr;
++	drag_hover_chain.clear();
++	drag_started = false;
++	drag_verbose = false;
++	drag_clone = nullptr;
++	if (cancelled_drag && drag != cancelled_drag.get())
++	{
++		parameters["drag_element"] = (void*)cancelled_drag.get();
++		cancelled_drag->DispatchEvent(EventId::Dragend, parameters);
++	}
++	if (cancelled_clone)
++	{
++		if (!drag_clone)
++			static_cast<ElementDocument&>(*cursor_proxy).SetStyleSheetContainer(nullptr);
++		if (cancelled_clone && cancelled_clone->GetParentNode() == cursor_proxy.get())
++			cursor_proxy->RemoveChild(cancelled_clone.get());
++	}
++	if (enable_cursor && !mouse_active)
++	{
++		String new_cursor_name;
++		if (scroll_controller->GetMode() == ScrollController::Mode::Autoscroll)
++			new_cursor_name = scroll_controller->GetAutoscrollCursor(mouse_position, density_independent_pixel_ratio);
++		if (new_cursor_name != cursor_name)
++		{
++			cursor_name = new_cursor_name;
++			GetSystemInterface()->SetMouseCursor(new_cursor_name);
++		}
++	}
++
++
++	// A callback may already have acquired the same element for a fresh interaction.
++	for (auto& element : cancelled_active)
++	{
++		if (element && std::find(active_chain.begin(), active_chain.end(), element.get()) == active_chain.end())
++			element->SetPseudoClass("active", false);
++	}
++	for (auto& element : cancelled_hover)
++	{
++		if (element && hover_chain.count(element.get()) == 0)
++			element->DispatchEvent(EventId::Mouseout, parameters);
++	}
++	if (notify_drag_out)
++	{
++		for (auto& element : cancelled_drag_hover)
++		{
++			parameters["drag_element"] = (void*)cancelled_drag.get();
++			if (element && drag_hover_chain.count(element.get()) == 0)
++				element->DispatchEvent(EventId::Dragout, parameters);
++		}
++	}
++}
++
+ bool Context::ProcessMouseButtonUp(int button_index, int key_modifier_state)
+ {
+ 	Dictionary parameters;
+--- a/Source/Core/Elements/WidgetSlider.cpp
++++ b/Source/Core/Elements/WidgetSlider.cpp
+@@ -361,7 +361,7 @@
+ 
+ void WidgetSlider::ProcessEvent(Event& event)
+ {
+-	if (parent->IsDisabled())
++	if (parent->IsDisabled() && event.GetId() != EventId::Mouseout && event.GetId() != EventId::Dragend)
+ 		return;
+ 
+ 	switch (event.GetId())
+@@ -419,6 +419,12 @@
+ 	{
+ 		if (event.GetTargetElement() == bar || event.GetTargetElement() == track || event.GetTargetElement() == progress)
+ 		{
++			if (Context* context = parent->GetContext())
++			{
++				auto& active_chain = context->active_chain;
++				if (std::find(active_chain.begin(), active_chain.end(), bar) == active_chain.end())
++					active_chain.push_back(bar);
++			}
+ 			bar->SetPseudoClass("active", true);
+ 
+ 			if (orientation == HORIZONTAL)

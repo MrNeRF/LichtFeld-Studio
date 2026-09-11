@@ -804,6 +804,47 @@ namespace {
         return viewer->projectTrainingSessionState();
     }
 
+    // Keyword-only panel= matches depth-window actions: None uses the legacy path;
+    // main explicitly requests focus; left/right name a panel. None and main
+    // coincide for focus_selection. For reset_camera, panel=None targets the
+    // primary viewport; panel='main' targets the focused panel.
+    [[nodiscard]] std::optional<lfs::vis::SplitViewPanelId>
+    parseGizmoPanelArg(const std::string& panel) {
+        if (panel == "left")
+            return lfs::vis::SplitViewPanelId::Left;
+        if (panel == "right")
+            return lfs::vis::SplitViewPanelId::Right;
+        if (panel == "main")
+            return std::nullopt; // resolved to the focused panel by the caller
+        throw std::invalid_argument("panel must be 'main', 'left', or 'right'");
+    }
+
+    // Resolve main on the viewer thread: focused_panel_ is unprotected and
+    // main-thread-owned. Without a manager, use Left as get_focused_split_panel does.
+    [[nodiscard]] lfs::vis::SplitViewPanelId focusedGizmoPanel() {
+        const auto read = [] {
+            auto* const rm = lfs::python::get_rendering_manager();
+            return rm ? rm->getFocusedSplitPanel() : lfs::vis::SplitViewPanelId::Left;
+        };
+        auto* const viewer = lfs::python::get_visualizer();
+        if (!viewer || viewer->isOnViewerThread())
+            return read();
+        if (!viewer->acceptsPostedWork())
+            return lfs::vis::SplitViewPanelId::Left;
+
+        nb::gil_scoped_release release;
+        return lfs::vis::post_work_and_wait(
+            [viewer](lfs::vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+            read,
+            [] { return lfs::vis::SplitViewPanelId::Left; });
+    }
+
+    // Raise ValueError for unknown tokens before state access or partial application.
+    [[nodiscard]] lfs::vis::SplitViewPanelId resolveGizmoPanelArg(const std::string& panel) {
+        const auto parsed = parseGizmoPanelArg(panel);
+        return parsed ? *parsed : focusedGizmoPanel();
+    }
+
     int scene_training_gaussian_count() {
         if (auto* const scene = get_scene_internal()) {
             return static_cast<int>(scene->getTrainingModelGaussianCount());
@@ -2536,14 +2577,47 @@ NB_MODULE(lichtfeld, m) {
 
     // Camera commands
     m.def(
-        "reset_camera", []() { lfs::core::events::cmd::ResetCamera{}.emit(); },
-        "Reset camera to default position and orientation");
-    m.def(
-        "focus_selection", []() -> bool {
-            auto* const controller = lfs::vis::InputController::instance();
-            return controller ? controller->focusSelection() : false;
+        "reset_camera", [](const std::optional<std::string>& panel) {
+            if (!panel.has_value()) {
+                lfs::core::events::cmd::ResetCamera{}.emit();
+                return;
+            }
+            const auto panel_id = resolveGizmoPanelArg(*panel);
+            if (auto* const controller = lfs::vis::InputController::instance())
+                controller->resetCameraForPanel(panel_id);
         },
-        "Focus the active viewport on the selection, or the whole scene when nothing is selected");
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Reset the primary camera by default, even when another panel has focus.\n"
+                                                      "Use panel=\"main\" to reset the focused camera. Reset restores the camera's\n"
+                                                      "default position and orientation.\n"
+                                                      "\n"
+                                                      "Unlike focus_selection(), omitting panel (or passing None) does not follow focus.\n"
+                                                      "\n"
+                                                      "panel (keyword-only):\n"
+                                                      "- None (default): primary camera.\n"
+                                                      "- 'main': focused camera.\n"
+                                                      "- 'left' / 'right': named panel's camera.\n"
+                                                      "\n"
+                                                      "Outside independent-dual split, all choices target the primary camera.\n"
+                                                      "Addressing a panel never changes focus.");
+    m.def(
+        "focus_selection", [](const std::optional<std::string>& panel) -> bool {
+            if (!panel.has_value()) {
+                auto* const controller = lfs::vis::InputController::instance();
+                return controller ? controller->focusSelection() : false;
+            }
+            const auto panel_id = resolveGizmoPanelArg(*panel);
+            auto* const controller = lfs::vis::InputController::instance();
+            return controller ? controller->focusSelectionForPanel(panel_id) : false;
+        },
+        nb::kw_only(), nb::arg("panel") = nb::none(), "Focus the active viewport on the selection, or the whole scene when nothing is selected.\n"
+                                                      "\n"
+                                                      "panel (keyword-only) selects which split panel's camera is moved:\n"
+                                                      "- None (default): the focused panel, exactly as before.\n"
+                                                      "- 'main': the panel that currently has focus, requested explicitly.\n"
+                                                      "  Same panel as None here, reached through the panel-addressed path.\n"
+                                                      "- 'left' / 'right': that panel's own camera. Outside independent-dual\n"
+                                                      "  split every token resolves to the primary camera, because there is\n"
+                                                      "  only one. Addressing a panel never changes which panel has focus.");
     m.def(
         "get_camera_navigation_mode", []() -> std::string {
             const auto* controller = lfs::vis::InputController::instance();

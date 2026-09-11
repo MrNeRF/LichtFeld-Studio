@@ -111,6 +111,7 @@
             </div>
         </div>
 
+        <!-- Primary gizmo buttons address Left regardless of focus. -->
         <div id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -121,7 +122,7 @@
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
+                     data-event-click="toolbar_action(button.action, button.value, 'left')">
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
@@ -366,6 +367,8 @@
             </div>
         </div>
 
+        <!-- Secondary gizmo buttons address Right; outside independent-dual,
+             Right resolves to the shared camera. -->
         <div id="secondary-viewport-gizmo-controls" class="viewport-gizmo-controls">
             <div class="viewport-gizmo-control-row">
                 <div class="icon-btn"
@@ -376,7 +379,7 @@
                      data-attr-title="button.tooltip_text"
                      data-attrif-disabled="!button.enabled"
                      data-class-disabled="!button.enabled"
-                     data-event-click="toolbar_action(button.action, button.value)">
+                     data-event-click="toolbar_action(button.action, button.value, 'right')">
                     <img data-attr-src="button.icon_src" />
                 </div>
             </div>
@@ -686,6 +689,13 @@
                  data-if="selection_depth_mode_active"
                  data-tooltip="tooltip.selection_depth_range">
                 <div class="depth-axis-group depth-axis-group-nf">
+                <!-- Keep the chip first in the centered Near/Far group at every width.
+                     As a direct child of the wrapping row, it would take a separate line
+                     before the flex-basis:100% group, with the pinned sync toggle beside it.
+                     Keep the chip in flow, not pinned to the row's left edge. -->
+                <span class="viewport-selection-depth-panel-chip"
+                      data-if="selection_panel_chip_visible"
+                      data-tooltip="tooltip.selection_depth_panel_chip">{{selection_panel_chip_label}}</span>
                 <div class="viewport-transform-axis viewport-selection-depth-axis depth-axis-near" data-tooltip="tooltip.selection_depth_near">
                     <span class="viewport-transform-axis-label">{{ui_near_label}}</span>
                     <input type="range"
@@ -779,8 +789,17 @@
                            data-attrif-disabled="!selection_has_scene" />
                 </div>
                 </div>
-                <button class="icon-btn viewport-transform-action"
+                <button class="icon-btn viewport-transform-action viewport-selection-sync-action"
+                        data-if="selection_panel_chip_visible"
+                        data-attr-title="selection_depth_sync_label"
+                        data-tooltip="tooltip.selection_depth_sync"
+                        data-attrif-disabled="!selection_has_scene"
+                        data-event-click="selection_action('toggle_sync')">
+                    <img data-attr-src="selection_depth_sync_icon" />
+                </button>
+                <button class="icon-btn viewport-transform-action viewport-selection-viz-action"
                         data-attr-title="selection_viz_mode_label"
+                        data-tooltip="tooltip.selection_viz_mode"
                         data-attrif-disabled="!selection_has_scene"
                         data-event-click="selection_action('cycle_viz')">
                     <img data-attr-src="selection_viz_mode_icon" />

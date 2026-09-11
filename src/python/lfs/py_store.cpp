@@ -255,6 +255,28 @@ namespace lfs::python {
             return state;
         }
 
+        // Include the committed panel so Size rebases that panel's reference,
+        // regardless of which window the toolbar currently displays.
+        nb::dict depth_window_draw_commit_to_dict(const lfs::vis::AppStore::DepthWindowDrawCommit& value) {
+            nb::dict state;
+            state["generation"] = value.generation;
+            state["panel"] = value.panel == lfs::vis::SplitViewPanelId::Right ? "right" : "left";
+            return state;
+        }
+        lfs::vis::AppStore::DepthWindowDrawCommit depth_window_draw_commit_from_object(const nb::object& value) {
+            if (value.is_none())
+                return {};
+            if (!nb::isinstance<nb::dict>(value))
+                throw nb::type_error("depth window draw commit must be a dict");
+
+            const nb::dict dict = nb::cast<nb::dict>(value);
+            lfs::vis::AppStore::DepthWindowDrawCommit state;
+            state.generation = dict_value(dict, "generation", std::uint64_t{0});
+            state.panel = dict_value(dict, "panel", std::string{"left"}) == "right"
+                              ? lfs::vis::SplitViewPanelId::Right
+                              : lfs::vis::SplitViewPanelId::Left;
+            return state;
+        }
         lfs::vis::AppStore::TaskProgressState task_progress_state_from_object(const nb::object& value) {
             if (value.is_none())
                 return {};
@@ -337,6 +359,8 @@ namespace lfs::python {
                 store.render_settings_generation.set(nb::cast<std::uint64_t>(value));
             else if (field == "depth_window_draw_generation")
                 store.depth_window_draw_generation.set(nb::cast<std::uint64_t>(value));
+            else if (field == "depth_window_draw_commit")
+                store.depth_window_draw_commit.set(depth_window_draw_commit_from_object(value));
             else
                 throw_unknown_field(field);
         }
@@ -403,6 +427,8 @@ namespace lfs::python {
                 return nb::cast(store.render_settings_generation.get());
             if (field == "depth_window_draw_generation")
                 return nb::cast(store.depth_window_draw_generation.get());
+            if (field == "depth_window_draw_commit")
+                return depth_window_draw_commit_to_dict(store.depth_window_draw_commit.get());
             throw_unknown_field(field);
         }
 
@@ -474,6 +500,9 @@ namespace lfs::python {
                 return subscribe_observable(store.render_settings_generation, std::move(callback));
             if (field == "depth_window_draw_generation")
                 return subscribe_observable(store.depth_window_draw_generation, std::move(callback));
+            if (field == "depth_window_draw_commit")
+                return subscribe_observable_as(
+                    store.depth_window_draw_commit, std::move(callback), depth_window_draw_commit_to_dict);
             throw_unknown_field(field);
         }
 

@@ -1290,17 +1290,25 @@ class _UtilityToolbarController:
             "utility_bottom_buttons": utility_bottom_buttons,
         }
 
-    def dispatch(self, action, value):
+    def dispatch(self, action, value, panel=""):
         import lichtfeld as lf
 
         if action == "set_camera_navigation_mode":
             lf.set_camera_navigation_mode(value)
             return
+        # Gizmo events name their panel; other actions keep the legacy call
+        # without a panel keyword.
         if action == "home":
-            lf.reset_camera()
+            if panel:
+                lf.reset_camera(panel=panel)
+            else:
+                lf.reset_camera()
             return
         if action == "focus_selection":
-            lf.focus_selection()
+            if panel:
+                lf.focus_selection(panel=panel)
+            else:
+                lf.focus_selection()
             return
         if action == "toggle_sequencer":
             if RuntimeState.trainer_state.value in _TOOLBAR_HIDDEN_STATES:
@@ -1836,6 +1844,8 @@ class _ViewportToolbarController:
             return
         action = str(args[0])
         value = str(args[1]) if len(args) > 1 else ""
+        # Only the two per-viewport gizmo groups supply the third panel argument.
+        panel = str(args[2]) if len(args) > 2 else ""
         if action == "toggle_viewport_export":
             self._gizmo.clear_active_horizontal_tool()
             self._sync_flag("crop_roi_settings_open", False)
@@ -1872,7 +1882,7 @@ class _ViewportToolbarController:
             self._viewport_export_controls.close(notify=False)
             self._gizmo.dispatch(action, value)
         else:
-            self._utility.dispatch(action, value)
+            self._utility.dispatch(action, value, panel)
         self._last_toolbar_signature = None
         self._sync_toolbar_state()
         self._sync_tool_overlays_now()

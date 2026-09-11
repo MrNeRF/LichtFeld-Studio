@@ -173,12 +173,22 @@ RENDER_SYNC = {
 
 SECTIONS = [
     "basic_params",
-    "advanced_params",
+    "camera",
+    "background",
+    "appearance",
+    "masking",
     "dataset",
-    "optimization",
+    "advanced_params",
+    "depth",
+    "normal",
+    "ppisp",
     "bilateral",
+    "exposure",
+    "evaluation",
+    "optimization",
     "losses",
     "init",
+    "random_init",
     "sparsity",
     "save_steps",
     "advanced_registry",
@@ -187,7 +197,6 @@ SECTIONS = [
 INITIALLY_COLLAPSED = {
     "advanced_params",
     "advanced_registry",
-    "dataset",
     "optimization",
     "bilateral",
     "losses",
@@ -265,6 +274,8 @@ class TrainingPanel(Panel):
         self._psnr_tick_min = ""
         self._last_panel_label = ""
         self._last_language_generation = -1
+        self._last_toolbar_fit_key = None
+        self._last_saving_model = False
         self._reactive_binding = PanelStateBinding()
         self._deferred_update_pending = False
         self._deferred_update_deadline = None
@@ -315,6 +326,7 @@ class TrainingPanel(Panel):
         self._bind_visibility(model, p, d)
         self._bind_disabled(model, p)
         self._bind_dataset_bools(model, d)
+        self._bind_backend_and_appearance(model)
         self._bind_select_props(model, p, d)
         self._bind_text_props(model, p)
         self._bind_bespoke_num_props(model, p, d)
@@ -330,6 +342,7 @@ class TrainingPanel(Panel):
             value_setter=self._set_property_view_value,
             search_accessor=lambda: self._pv_search_query,
             visibility_predicate=self._property_view_condition_visible,
+            bespoke_predicate=self._bespoke_section_visible,
         )
         self._pv_binding_by_prop = {
             row["id"]: binding
@@ -338,6 +351,10 @@ class TrainingPanel(Panel):
         }
         self._bind_events(model)
         self._handle = model.get_handle()
+        self._handle.update_record_list("training_backend_options", [
+            {"id": item["id"], "label": item["label"]}
+            for item in lf.training_backends()
+        ])
         for binding in self._pv_bindings:
             binding.attach_handle(self._handle)
         self._sync_panel_label()
@@ -364,6 +381,10 @@ class TrainingPanel(Panel):
         model.bind_func("label_clear", lambda: tr("training_panel.clear"))
         model.bind_func("label_pause", lambda: tr("training_panel.pause"))
         model.bind_func("label_resume", lambda: tr("training_panel.resume"))
+        model.bind_func("label_toolbar_edit", lambda: tr("common.edit"))
+        model.bind_func("label_toolbar_reset", lambda: tr("common.reset"))
+        model.bind_func("label_toolbar_stop", lambda: tr("training.action_stop"))
+        model.bind_func("label_toolbar_save", lambda: tr("training.action_save"))
         model.bind_func("label_stop", lambda: tr("training_panel.stop"))
         model.bind_func(
             "label_switch_edit", lambda: tr("training_panel.switch_edit_mode")
@@ -476,14 +497,16 @@ class TrainingPanel(Panel):
             if it <= 0:
                 it = int(session.get("iteration") or 0)
             return (
-                tr("training_panel.resume_training")
+                tr("training_panel.resume")
                 if it > 0
-                else tr("training_panel.start_training")
+                else tr("training.action_start")
             )
 
         model.bind_func("btn_start", _btn_start)
 
     def _bind_property_search(self, model):
+        for name in self._BESPOKE_SEARCH:
+            model.bind_func("pv_show_" + name, lambda n=name: self._bespoke_matches(n))
         model.bind(
             "pv_search_query",
             lambda: self._pv_search_query,
@@ -492,6 +515,120 @@ class TrainingPanel(Panel):
         model.bind_func(
             "pv_search_active", lambda: bool(self._pv_search_query.strip())
         )
+
+    _BESPOKE_SEARCH = {
+        "strategy": ("basic_params", "strategy mrnf igs+ mcmc", ("training_params.strategy",)),
+        "backend": ("basic_params", "raster backend 3dgs 3dgut gut", ("training.backend",)),
+        "sh_degree": ("optimization", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
+        "depth_loss_mode": ("depth", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
+        "background_fields": ("background", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
+        "appearance": ("ppisp", "ppisp", ("training.section.appearance",)),
+        "appearance_fields": ("ppisp", "ppisp sidecar path controller activation step", ("training.tooltip.ppisp_sidecar_path", "training.tooltip.ppisp_activation_step")),
+        "dataset_fields": ("dataset", "dataset path images output resize_factor max_width cpu_cache use_16bit_color", ("training.tooltip.dataset_path", "training.tooltip.dataset_images", "training.tooltip.resize_factor", "training.tooltip.max_width", "training.tooltip.cpu_cache", "training.tooltip.use_16bit_color", "training.tooltip.dataset_output")),
+        "evaluation_fields": ("evaluation", "test_every evaluation", ("training.tooltip.test_every",)),
+        "lambda_dssim": ("losses", "lambda_dssim ssim", ("training.tooltip.lambda_dssim",)),
+        "init_opacity": ("init", "init_opacity", ("training.tooltip.init_opacity",)),
+        "prune_ratio": ("sparsity", "prune_ratio", ("training.tooltip.prune_ratio",)),
+        "save_steps": ("save_steps", "save_steps eval_steps", ("training_panel.save_eval_steps",)),
+    }
+
+    def _bespoke_matches(self, name):
+        _section, tokens, keys = self._BESPOKE_SEARCH[name]
+        return property_view.row_matches_query(
+            tokens, " ".join(tr(key) for key in keys), self._pv_search_query
+        )
+
+    def _bespoke_section_visible(self, section):
+        if not self._pv_search_query.strip():
+            return True
+        if section == "advanced_params":
+            return any(owner in property_view.ADVANCED_SECTIONS and self._bespoke_matches(name)
+                       for name, (owner, _tokens, _keys) in self._BESPOKE_SEARCH.items())
+        return any(
+            owner == section and self._bespoke_matches(name)
+            for name, (owner, _tokens, _keys) in self._BESPOKE_SEARCH.items()
+        )
+
+    def _bind_backend_and_appearance(self, model):
+        model.bind_record_list("training_backend_options")
+        model.bind("training_backend", self._training_backend, self._set_training_backend)
+        model.bind_func("backend_notice", self._backend_notice)
+        model.bind_func("start_error", self._start_error)
+        model.bind_func("start_fix_hint", lambda: tr("training.start_fix_settings"))
+        model.bind_func("start_blocked", lambda: bool(self._start_error()))
+        model.bind_func("start_conflicts", lambda: self._backend_notice(selected_only=True))
+
+    @staticmethod
+    def _can_edit_configuration():
+        return RuntimeState.trainer_state.value == "ready" and RuntimeState.iteration.value == 0
+
+    @staticmethod
+    def _training_backend():
+        params = lf.optimization_params()
+        return params.raster_backend if params and params.has_params() else "3dgs"
+
+    def _set_training_backend(self, name):
+        params = lf.optimization_params()
+        if not params or not params.has_params() or not self._can_edit_configuration():
+            return
+        backend = next((item for item in lf.training_backends() if item["id"] == name), None)
+        if backend is None:
+            return
+        params.set("raster_backend", name)
+        settings = lf.get_render_settings()
+        if settings:
+            settings.set("raster_backend", backend["viewer_backend"])
+        self._refresh_strategy_values()
+
+    @staticmethod
+    def _validation_error():
+        params = lf.optimization_params()
+        return params.validate() if params and params.has_params() else ""
+
+    def _start_error(self):
+        # Next-run settings must not gate Resume of an initialized/stored trainer.
+        if RuntimeState.trainer_state.value != "ready":
+            return ""
+        return self._validation_error()
+
+    def _sync_start_feedback(self):
+        error = self._start_error()
+        feedback = (error, self._backend_notice(selected_only=True) if error else "")
+        if feedback == getattr(self, "_last_start_feedback", None):
+            return False
+        self._last_start_feedback = feedback
+        for name in ("start_error", "start_blocked", "start_conflicts"):
+            self._handle.dirty(name)
+        return True
+
+    def _backend_notice(self, selected_only=False):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return ""
+        labels = {
+            "igs_plus": "IGS+",
+            "undistort": tr("training_params.undistort"),
+            "mip_filter": tr("training_params.mip_filter"),
+            "depth_supervision": tr("training_params.use_depth_loss"),
+            "normal_supervision": tr("training_params.use_normal_loss"),
+        }
+        selected = {
+            "igs_plus": getattr(params, "strategy", "").lower() in ("igs+", "igs_plus"),
+            "undistort": getattr(params, "undistort", False),
+            "mip_filter": getattr(params, "mip_filter", False),
+            "depth_supervision": getattr(params, "use_depth_loss", False),
+            "normal_supervision": getattr(params, "use_normal_loss", False),
+        } if selected_only else None
+        unsupported = [label.rstrip(":") for key, label in labels.items()
+                       if params.backend_capabilities.get(key) == "unsupported"
+                       and (selected is None or selected[key])]
+        if not unsupported:
+            return ""
+        backend_id = params.raster_backend
+        backend_label = next((item["label"] for item in lf.training_backends()
+                              if item["id"] == backend_id), backend_id)
+        return tr_fallback("training.backend_unsupported", "Not available with {backend}: {features}").format(
+            backend=backend_label, features=", ".join(unsupported))
 
     def _set_property_search_query(self, value):
         query = str(value or "")
@@ -534,6 +671,10 @@ class TrainingPanel(Panel):
         def _state():
             value = RuntimeState.trainer_state.value
             session = _training_session_state()
+            if session.get("restoring"):
+                return "restoring"
+            if session.get("error") and not session.get("hydrated") and not RuntimeState.has_trainer.value:
+                return "error"
             if (
                 not RuntimeState.has_trainer.value
                 and session.get("available")
@@ -542,6 +683,8 @@ class TrainingPanel(Panel):
                 and value in ("idle", "ready", "", None)
             ):
                 return "completed" if session.get("completed") else "paused"
+            if value == "stopping" and lf.trainer_saving_model():
+                return "saving"
             return value
 
         def _iteration():
@@ -589,6 +732,8 @@ class TrainingPanel(Panel):
             "stopped",
             "error",
             "stopping",
+            "restoring",
+            "saving",
         ]:
             if state_name == "ready":
                 model.bind_func("show_ctrl_ready", _show_ctrl_ready)
@@ -1040,7 +1185,7 @@ class TrainingPanel(Panel):
         else:
             self._mark_text_buf_dirty(key)
 
-    def _sync_text_bufs(self):
+    def _sync_text_bufs(self, *, publish=True):
         p = lf.optimization_params()
         d = lf.dataset_params()
         if p and p.has_params():
@@ -1058,7 +1203,7 @@ class TrainingPanel(Panel):
         self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
         self._sync_bg_color_text_bufs(p)
         for binding in self._pv_bindings:
-            binding.sync_text_bufs()
+            binding.sync_text_bufs(publish=publish)
 
     def _sync_bg_color_text_bufs(self, params=None):
         if params is None:
@@ -1136,19 +1281,12 @@ class TrainingPanel(Panel):
         )
 
     def _bind_status(self, model, p):
-        def _status_mode():
+        def _status_state():
             session = _training_session_state()
             if session.get("restoring"):
-                n = int(session.get("iteration") or 0)
-                return (
-                    f"{tr('status.mode')} "
-                    + tr("training_panel.loading_session").replace("{n}", f"{n:,}")
-                )
-            if session.get("error"):
-                return (
-                    f"{tr('status.mode')} "
-                    + tr("training_panel.session_restore_failed")
-                )
+                return "restoring"
+            if session.get("error") and not session.get("hydrated") and not RuntimeState.has_trainer.value:
+                return "error"
             state = RuntimeState.trainer_state.value
             if (
                 not RuntimeState.has_trainer.value
@@ -1156,20 +1294,30 @@ class TrainingPanel(Panel):
                 and not session.get("hydrated")
             ):
                 state = "completed" if session.get("completed") else "paused"
-            it = RuntimeState.iteration.value
             if state == "stopping" and lf.trainer_saving_model():
-                return f"{tr('status.mode')} Saving model..."
+                return "saving"
+            return state
+
+        def _status_label():
+            state = _status_state()
+            it = RuntimeState.iteration.value
             labels = {
                 "idle": tr("training_panel.idle"),
                 "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
+                "restoring": tr("training.status_restoring"),
+                "starting": tr("runtime.task_starting"),
                 "running": tr("training_panel.running"),
                 "paused": tr("status.paused"),
+                "saving": tr("training.status_saving"),
                 "stopping": tr("status.stopping"),
                 "completed": tr("status.complete"),
                 "stopped": tr("status.stopped"),
                 "error": tr("status.error"),
             }
-            return f"{tr('status.mode')} {labels.get(state, tr('status.unknown'))}"
+            return labels.get(state, tr("status.unknown"))
+
+        def _status_mode():
+            return f"{tr('status.mode')} {_status_label()}"
 
         def _status_iteration():
             it = RuntimeState.iteration.value
@@ -1193,6 +1341,10 @@ class TrainingPanel(Panel):
             return f"{it:,}/{mx:,}" if mx > 0 else ""
 
         def _error_message():
+            session = _training_session_state()
+            session_error = str(session.get("error") or "")
+            if session_error and not session.get("hydrated") and not RuntimeState.has_trainer.value:
+                return f"{tr('training_panel.session_restore_failed')}: {session_error}"
             return lf.trainer_error() or ""
 
         model.bind_func("status_mode", _status_mode)
@@ -1297,6 +1449,7 @@ class TrainingPanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
+        doc.add_event_listener("resize", lambda _event: self._schedule_deferred_update(0.01))
         self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
@@ -1455,16 +1608,86 @@ class TrainingPanel(Panel):
                 getattr(params, name, None)
                 for name in ("strategy", "gut", "mip_filter", "use_depth_loss", "use_normal_loss")
             )
-            if backend_controls != getattr(self, "_last_backend_controls", None):
+            backend_changed = backend_controls != getattr(self, "_last_backend_controls", None)
+            numeric_changed = False
+            for binding in self._pv_bindings:
+                numeric_changed |= binding.sync_text_bufs(publish=False)
+            if backend_changed or numeric_changed:
                 self._last_backend_controls = backend_controls
                 # Native rollback does not go through Python property setters.
                 # Republish on the UI thread when the effective values change.
+                # Sync before publishing, without enqueueing another refresh.
+                self._sync_text_bufs(publish=False)
                 for binding in self._pv_bindings:
                     binding.publish()
-                self._sync_text_bufs()
                 self._handle.dirty_all()
                 return True
         return False
+
+    def _sync_saving_status(self):
+        stopping = RuntimeState.trainer_state.value == "stopping"
+        saving = stopping and lf.trainer_saving_model()
+        if stopping:
+            # Saving has no separate runtime signal. Poll only this transient state.
+            self._schedule_deferred_update(0.1)
+        if saving == self._last_saving_model:
+            return False
+        self._last_saving_model = saving
+        for name in ("status_mode", "show_ctrl_stopping", "show_ctrl_saving"):
+            self._handle.dirty(name)
+        return True
+
+    def _sync_toolbar_fit(self):
+        if not self._doc:
+            return False
+        toolbar = self._doc.get_element_by_id("training-toolbar")
+        if not toolbar:
+            return False
+        session = _training_session_state()
+        state = RuntimeState.trainer_state.value
+        if session.get("restoring"):
+            state = "restoring"
+        elif not RuntimeState.has_trainer.value and not session.get("hydrated"):
+            if session.get("error"):
+                state = "error"
+            elif session.get("available") and state in ("idle", "ready", "", None):
+                state = "completed" if session.get("completed") else "paused"
+        if state == "stopping" and lf.trainer_saving_model():
+            state = "saving"
+        fit_key = (state, RuntimeState.iteration.value > 0,
+                    RuntimeState.language_generation.value, toolbar.client_width)
+        if fit_key != self._last_toolbar_fit_key:
+            self._last_toolbar_fit_key = fit_key
+            # The dirty-driven hook runs before RmlUi lays out new bindings.
+            # Measure once more after that layout, including initially hidden rows.
+            self._schedule_deferred_update(0.01)
+        if toolbar.client_width <= 0:
+            return False
+        actions = {
+            "ready": ("start", "reset", "clear") if RuntimeState.iteration.value > 0 else ("start", "clear"),
+            "starting": ("pause", "stop"),
+            "running": ("pause", "save_project"),
+            "paused": ("resume", "save_project", "reset", "stop"),
+            "completed": ("switch_edit", "reset", "clear"),
+            "stopped": ("switch_edit", "reset", "clear"),
+            "error": ("reset", "clear"),
+        }.get(state, ())
+        probes = [self._doc.get_element_by_id("measure-" + action) for action in actions]
+        gap = self._doc.get_element_by_id("measure-action-gap")
+        max_width_probe = self._doc.get_element_by_id("measure-action-max")
+        if (not gap or not max_width_probe or max_width_probe.absolute_width <= 0
+                or any(not p or p.absolute_width <= 0 for p in probes)):
+            return False
+        # Visible actions share the widest localized caption width. This keeps
+        # each state visually balanced without stretching actions across the row.
+        widest = max((p.absolute_width for p in probes), default=0)
+        required = (widest * len(probes)
+                    + max(0, len(probes) - 1) * gap.absolute_width)
+        compact = widest > max_width_probe.absolute_width or required > toolbar.client_width
+        if toolbar.is_class_set("is-compact") == compact:
+            return False
+        toolbar.set_class("is-compact", compact)
+        return True
 
     def on_update(self, doc):
         if not self._handle:
@@ -1473,7 +1696,10 @@ class TrainingPanel(Panel):
         self._sync_auto_scale_markers()
 
         dirty = self._flush_pv_publish()
+        dirty |= self._sync_saving_status()
+        dirty |= self._sync_toolbar_fit()
         dirty |= self._refresh_native_backend_controls()
+        dirty = self._sync_start_feedback() or dirty
         language_generation = RuntimeState.language_generation.value
         if language_generation != self._last_language_generation:
             self._last_language_generation = language_generation
@@ -1504,6 +1730,10 @@ class TrainingPanel(Panel):
             self._handle.dirty("show_ctrl_ready")
             self._handle.dirty("show_ctrl_paused")
             self._handle.dirty("show_ctrl_completed")
+            self._handle.dirty("show_ctrl_restoring")
+            self._handle.dirty("show_ctrl_error")
+            self._handle.dirty("show_project_save")
+            self._handle.dirty("error_message")
             self._handle.dirty("show_training_telemetry")
             dirty = True
         state = RuntimeState.trainer_state.value
@@ -1518,6 +1748,8 @@ class TrainingPanel(Panel):
             it = RuntimeState.iteration.value
             if it != self._last_iteration:
                 self._last_iteration = it
+                self._handle.dirty("status_mode")
+                self._handle.dirty("btn_start")
                 self._handle.dirty("status_iteration")
                 self._handle.dirty("progress_text")
                 self._handle.dirty("show_training_telemetry")
@@ -2154,13 +2386,13 @@ class TrainingPanel(Panel):
         "use_exposure_correction": (
             "use_bilateral_grid",
             "ppisp",
-            "ppisp_controller",
-            "ppisp_freeze",
+            "ppisp_use_controller",
+            "ppisp_freeze_from_sidecar",
         ),
         "use_bilateral_grid": ("use_exposure_correction",),
         "ppisp": ("use_exposure_correction",),
-        "ppisp_controller": ("use_exposure_correction",),
-        "ppisp_freeze": ("use_exposure_correction",),
+        "ppisp_use_controller": ("use_exposure_correction",),
+        "ppisp_freeze_from_sidecar": ("use_exposure_correction",),
     }
 
     def _on_pv_value_change(self, _handle, _event, args):
@@ -2169,12 +2401,26 @@ class TrainingPanel(Panel):
         prop = str(args[0])
         binding = self._pv_binding_by_prop.get(prop)
         if binding is not None:
-            binding.set_value(prop, args[1])
+            if binding.set_value(prop, args[1]) is False:
+                return
             if bool(args[1]):
                 for other in self._APPEARANCE_EXCLUSIVE.get(prop, ()):
                     other_binding = self._pv_binding_by_prop.get(other)
                     if other_binding is not None:
                         other_binding.set_value(other, False)
+                # The enable flag is authoritative; opening its settings is a UI effect.
+                sections = {
+                    "use_depth_loss": "depth", "use_normal_loss": "normal",
+                    "use_bilateral_grid": "bilateral", "ppisp": "ppisp",
+                    "use_exposure_correction": "exposure", "enable_sparsity": "sparsity",
+                    "random": "random_init", "enable_eval": "evaluation",
+                }
+                section = sections.get(prop)
+                params = lf.optimization_params()
+                if section and params and getattr(params, prop, False):
+                    self._collapsed.discard("advanced_params")
+                    self._collapsed.discard(section)
+                    self._sync_section_states()
 
     def _on_pv_search_clear(self, *_args):
         self._set_property_search_query("")
@@ -2228,6 +2474,7 @@ class TrainingPanel(Panel):
             "pv_search_query",
             "pv_search_active",
             *property_view.SEARCH_VISIBILITY_MODEL_KEYS,
+            *("pv_show_" + name for name in self._BESPOKE_SEARCH),
         ):
             self._handle.dirty(key)
 
@@ -2334,7 +2581,7 @@ class TrainingPanel(Panel):
             header, arrow, content = self._get_section_elements(name)
             if content:
                 search_expanded = search_active and property_view.section_is_visible(
-                    self._pv_bindings, name
+                    self._pv_bindings, name, self._bespoke_section_visible
                 )
                 w.sync_section_state(
                     content,
@@ -2349,7 +2596,7 @@ class TrainingPanel(Panel):
             return
         name = str(args[0])
         if self._pv_search_query.strip() and property_view.section_is_visible(
-            self._pv_bindings, name
+            self._pv_bindings, name, self._bespoke_section_visible
         ):
             self._sync_section_states()
             return
@@ -2490,6 +2737,11 @@ class TrainingPanel(Panel):
             return
         params = lf.optimization_params()
 
+        # Recheck before asking overwrite/save consent, including direct events.
+        if self._validation_error():
+            self._start_after_consent()
+            return
+
         if params and params.has_params() and params.enable_eval:
             self._sync_eval_steps_with_save_steps(params)
 
@@ -2502,7 +2754,7 @@ class TrainingPanel(Panel):
 
     def _start_after_consent(self):
         params = lf.optimization_params()
-        error = params.validate() if params and params.has_params() else ""
+        error = self._validation_error()
         if error:
             raw_context = getattr(params, "backend_conflict_context", {})
             context = raw_context if isinstance(raw_context, dict) else {}
