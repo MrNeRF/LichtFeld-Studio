@@ -172,8 +172,8 @@ namespace lfs::core {
                     if (json.contains("gut")) {
                         const bool gut = json.at("gut").get<bool>();
                         const auto boolean_backend = gut
-                                                        ? RasterBackendId::ThreeDGUT
-                                                        : RasterBackendId::ThreeDGS;
+                                                         ? RasterBackendId::ThreeDGUT
+                                                         : RasterBackendId::ThreeDGS;
                         if (*backend != boolean_backend) {
                             throw std::invalid_argument(std::format(
                                 "Conflicting raster_backend '{}' and gut={}; set both consistently or specify only one",

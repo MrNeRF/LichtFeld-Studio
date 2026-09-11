@@ -94,9 +94,8 @@ namespace lfs::core::param {
             .wire_name = "3dgut",
             .label = "3DGUT",
             .viewer_name = "3dgut",
-            .description =
-                "3DGUT: Gaussian rasterization using the Unscented Transform for nonlinear "
-                "and distorted camera models",
+            .description = "3DGUT: Gaussian rasterization using the Unscented Transform for nonlinear "
+                           "and distorted camera models",
             .capabilities = {
                 .mcmc = TrainingFeatureSupport::Supported,
                 .mrnf = TrainingFeatureSupport::Supported,
