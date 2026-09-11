@@ -264,6 +264,7 @@
     "section.exposure_appearance": "Belichtung & Erscheinungsbild",
     "section.supervision": "Überwachung",
     "section.evaluation": "Auswertung",
+    "section.training_features": "Trainingsfunktionen",
     "section.appearance": "Erscheinungskorrektur",
     "backend": "Raster-Backend",
     "backend_unsupported": "Mit {backend} nicht verfügbar: {features}",

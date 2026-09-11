@@ -264,6 +264,7 @@
     "section.exposure_appearance": "曝光与外观",
     "section.supervision": "监督",
     "section.evaluation": "评估",
+    "section.training_features": "训练功能",
     "section.appearance": "外观校正",
     "backend": "光栅化后端",
     "backend_unsupported": "{backend} 不可用的功能：{features}",

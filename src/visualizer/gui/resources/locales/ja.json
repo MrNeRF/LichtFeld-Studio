@@ -264,6 +264,7 @@
     "section.exposure_appearance": "露出と外観",
     "section.supervision": "監督",
     "section.evaluation": "評価",
+    "section.training_features": "トレーニング機能",
     "section.appearance": "外観補正",
     "backend": "ラスタバックエンド",
     "backend_unsupported": "{backend} では利用できません: {features}",

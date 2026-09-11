@@ -264,6 +264,7 @@
     "section.exposure_appearance": "노출 및 외관",
     "section.supervision": "감독",
     "section.evaluation": "평가",
+    "section.training_features": "훈련 기능",
     "section.appearance": "외관 보정",
     "backend": "래스터 백엔드",
     "backend_unsupported": "{backend}에서 사용할 수 없음: {features}",

@@ -264,6 +264,7 @@
     "section.exposure_appearance": "Exposition et apparence",
     "section.supervision": "Supervision",
     "section.evaluation": "Évaluation",
+    "section.training_features": "Fonctionnalités d’entraînement",
     "section.appearance": "Correction de l’apparence",
     "backend": "Backend de rastérisation",
     "backend_unsupported": "Indisponible avec {backend} : {features}",

@@ -264,6 +264,7 @@
     "section.exposure_appearance": "Belichting en uiterlijk",
     "section.supervision": "Supervisie",
     "section.evaluation": "Evaluatie",
+    "section.training_features": "Trainingsfuncties",
     "section.appearance": "Uiterlijkcorrectie",
     "backend": "Rasterbackend",
     "backend_unsupported": "Niet beschikbaar met {backend}: {features}",

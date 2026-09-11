@@ -264,6 +264,7 @@
     "section.exposure_appearance": "Ekspozycja i wygląd",
     "section.supervision": "Nadzór",
     "section.evaluation": "Ocena",
+    "section.training_features": "Funkcje treningu",
     "section.appearance": "Korekcja wyglądu",
     "backend": "Backend rasteryzacji",
     "backend_unsupported": "Niedostępne z {backend}: {features}",

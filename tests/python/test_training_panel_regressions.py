@@ -397,7 +397,7 @@ def test_advanced_has_single_real_activation_for_each_optional_feature():
     category_titles = {node.text for node in advanced.findall("div[@class='training-subsection-title']")}
     assert "@tr:training.section.supervision" in category_titles
     assert "@tr:training.section.exposure_appearance" in category_titles
-    assert "@tr:training.section.evaluation" in category_titles
+    assert "@tr:training.section.training_features" in category_titles
     for section in ("depth", "normal", "ppisp", "bilateral", "evaluation", "random-init", "sparsity", "optimization"):
         assert advanced.find(f".//*[@id='sec-{section}']") is not None
     assert advanced.find(".//*[@id='sec-background']") is None
@@ -2756,6 +2756,30 @@ def test_enabled_features_have_independent_parameter_sections():
     assert sections["normal"].find(".//*[@data-for='row : pv_basic_depth_weight_rows']") is None
     assert sections["evaluation"].find(".//*[@data-value='test_every_str']") is not None
     assert sections["random-init"].find(".//*[@data-for='row : pv_init_random_rows']") is not None
+    advanced_children = list(advanced)
+    feature_heading = next(
+        node for node in advanced_children
+        if node.get("class") == "training-subsection-title"
+        and node.text == "@tr:training.section.training_features"
+    )
+
+    def direct_child_index_containing(xpath):
+        return next(
+            index for index, node in enumerate(advanced_children)
+            if node.find(xpath) is not None
+        )
+
+    feature_order = [
+        advanced_children.index(feature_heading),
+        direct_child_index_containing(".//*[@data-for='row : pv_dataset_eval_rows']"),
+        direct_child_index_containing(".//*[@id='sec-evaluation']"),
+        direct_child_index_containing(".//*[@data-for='row : pv_feature_random_rows']"),
+        direct_child_index_containing(".//*[@id='sec-random-init']"),
+        direct_child_index_containing(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']"),
+        direct_child_index_containing(".//*[@id='sec-sparsity']"),
+        direct_child_index_containing(".//*[@id='sec-optimization']"),
+    ]
+    assert feature_order == sorted(feature_order)
     for name in ("ppisp", "bilateral"):
         parent = next(node for node in advanced.iter() if sections[name] in list(node))
         assert "!dep_exposure_correction" in parent.get("data-if")

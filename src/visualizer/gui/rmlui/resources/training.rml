@@ -617,7 +617,7 @@
             </div>
 </div></div></div></div>
 
-    <div class="training-subsection-title" data-if="pv_section_evaluation_visible">@tr:training.section.evaluation</div>
+    <div class="training-subsection-title" data-if="pv_section_evaluation_visible || pv_section_random_init_visible || pv_section_sparsity_visible">@tr:training.section.training_features</div>
     <div data-if="pv_section_evaluation_visible" data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_dataset_eval_rows"
            data-attr-data-tooltip="row.tooltip_key">
@@ -637,7 +637,68 @@
           </div>
 </div>
 </div></div></div>
-    <!-- Dataset subsection -->
+
+    <!-- Optional training features -->
+    <div data-if="pv_section_random_init_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_feature_random_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-click="pv_value_change(row.id, !row.checked)" />
+      </div>
+    </div>
+    <div class="training-panel-block" data-if="pv_section_random_init_visible &amp;&amp; dep_random">
+      <div class="section-header text-accent" id="hdr-random-init" data-event-click="toggle_section('random_init')"><span class="section-arrow" id="arrow-random-init">&#x25BC;</span><span>{{pv_header_random_init}}</span></div>
+      <div class="section-content" id="sec-random-init"><div data-class-disabled-overlay="live_disabled">
+        <div data-class-disabled-overlay="adv_disabled"><div data-if="dep_random">
+          <div class="setting-row" data-for="row : pv_init_random_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
+        </div></div>
+      </div></div>
+    </div>
+    <div data-if="pv_section_sparsity_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
+           data-attr-data-tooltip="row.tooltip_key">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-click="pv_value_change(row.id, !row.checked)" />
+      </div>
+    </div>
+    <div class="training-subsection" data-if="pv_section_sparsity_visible &amp;&amp; dep_sparsity">
+      <div class="section-header text-accent" id="hdr-sparsity" data-event-click="toggle_section('sparsity')">
+        <span class="section-arrow text-accent" id="arrow-sparsity">&#x25B6;</span>
+        <span class="text-accent">{{pv_header_sparsity}}</span>
+      </div>
+      <div class="section-content collapsed" id="sec-sparsity">
+        <div data-class-disabled-overlay="adv_disabled"><div data-if="dep_sparsity">
+          <div class="setting-row" data-for="row : pv_sparsity_rows"
+               data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                   data-event-change="pv_change(row.id, ev.value)"
+                   data-event-blur="pv_blur(row.id, row.text)"
+                   data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="pv_show_prune_ratio">
+            <span class="prop-label">{{label_prune_ratio}}</span>
+            <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
+            <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
+          </div>
+        </div></div>
+      </div>
+    </div>
 
     <!-- Optimization subsection -->
     <div class="training-subsection" data-if="pv_section_optimization_visible">
@@ -785,70 +846,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Random initialization parameters -->
-    <div data-if="pv_section_random_init_visible" data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-for="row : pv_feature_random_rows"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
-    </div>
-<div class="training-panel-block" data-if="pv_section_random_init_visible &amp;&amp; (dep_random)">
-<div class="section-header text-accent" id="hdr-random-init" data-event-click="toggle_section('random_init')"><span class="section-arrow" id="arrow-random-init">&#x25BC;</span><span>{{pv_header_random_init}}</span></div>
-<div class="section-content" id="sec-random-init"><div data-class-disabled-overlay="live_disabled">
-<div data-class-disabled-overlay="adv_disabled">          <div data-if="dep_random">
-            <div class="setting-row" data-for="row : pv_init_random_rows"
-                 data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
-              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                     data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                     data-event-change="pv_change(row.id, ev.value)"
-                     data-event-blur="pv_blur(row.id, row.text)"
-                     data-event-escapecancel="pv_escape(row.id)" />
-              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-            </div></div></div>
-</div></div></div>
-    <div data-if="pv_section_sparsity_visible" data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
-    </div>
-    <div class="training-subsection" data-if="pv_section_sparsity_visible &amp;&amp; dep_sparsity">
-      <div class="section-header text-accent" id="hdr-sparsity" data-event-click="toggle_section('sparsity')">
-        <span class="section-arrow text-accent" id="arrow-sparsity">&#x25B6;</span>
-        <span class="text-accent">{{pv_header_sparsity}}</span>
-      </div>
-      <div class="section-content collapsed" id="sec-sparsity">
-      <div data-class-disabled-overlay="adv_disabled">
-
-<div data-if="dep_sparsity">
-        <div class="setting-row" data-for="row : pv_sparsity_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                 data-event-change="pv_change(row.id, ev.value)"
-                 data-event-blur="pv_blur(row.id, row.text)"
-                 data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="pv_show_prune_ratio">
-          <span class="prop-label">{{label_prune_ratio}}</span>
-          <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
-          <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
-        </div>
-      </div>
-    </div>
-</div>
-
-      </div>
 
     <!-- Save Steps subsection -->
     <div class="training-subsection" data-if="pv_show_save_steps">

@@ -46,8 +46,9 @@ identity change; only installed, implemented descriptors appear in the selector.
 Advanced is closed by default and uses the same top-level visual hierarchy as
 General Parameters. Its activation controls are grouped by purpose: Depth and
 Normal under Supervision; PPISP, Bilateral Grid and managed exposure tuning under
-Exposure & Appearance; then Evaluation, Random Initialization and Sparsity next
-to their own parameter sections. Advanced contains one activation checkbox each
+Exposure & Appearance; then Evaluation, Random Initialization and Sparsity in a
+single Training Features group, each immediately followed by its own conditional
+parameter section. Advanced contains one activation checkbox each
 for Depth, Normal, Bilateral Grid, PPISP, Sparsity, Evaluation and Random
 Initialization. These write the existing
 training parameters through the property bindings; they are not visibility

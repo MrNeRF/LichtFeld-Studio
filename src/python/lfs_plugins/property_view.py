@@ -320,14 +320,14 @@ SECTIONS = (
     SectionSpec("bilateral", "training.section.bilateral_grid", _basic_runs("basic_bilateral_toggle") + BILATERAL_RUNS),
     SectionSpec("exposure", "training_params.exposure_correction"),
     SectionSpec("evaluation", "training_params.enable_eval", EVALUATION_RUNS),
+    SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + INIT_RUNS[1:]),
+    SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
     SectionSpec("advanced_params", "training.section.advanced_params"),
     SectionSpec("optimization", "training.section.optimization", OPTIMIZATION_RUNS),
     SectionSpec("learning_rates", "training.opt.learning_rates"),
     SectionSpec("refinement", "training.section.refinement"),
     SectionSpec("losses", "training.section.losses", LOSS_RUNS),
     SectionSpec("init", "training.section.initialization", INIT_RUNS[:1]),
-    SectionSpec("random_init", "training_params.random_init", (_run("feature_random", "random"),) + INIT_RUNS[1:]),
-    SectionSpec("sparsity", "training_panel.sparsity", _basic_runs("basic_sparsity_toggle") + SPARSITY_RUNS),
     SectionSpec("save_steps", "training_panel.save_eval_steps"),
     SectionSpec("advanced_registry", "training.section.advanced_registry", (_run(AUTO_ADVANCED_RUN_ID),)),
 )
@@ -344,7 +344,7 @@ SEARCH_SECTION_RUN_IDS.update(
     bilateral=tuple(run.id for run in BILATERAL_RUNS),
     exposure=("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"),
 )
-ADVANCED_SECTIONS = ("exposure", "depth", "normal", "ppisp", "bilateral", "evaluation", "random_init", "optimization", "losses", "init", "sparsity", "save_steps", "advanced_registry")
+ADVANCED_SECTIONS = ("depth", "normal", "ppisp", "bilateral", "exposure", "evaluation", "random_init", "sparsity", "optimization", "losses", "init", "save_steps", "advanced_registry")
 SEARCH_VISIBILITY_MODEL_KEYS = tuple(
     f"pv_section_{section_id}_visible" for section_id in SEARCH_SECTION_RUN_IDS
 ) + ("pv_section_advanced_params_visible",)
