@@ -3,6 +3,7 @@
 """Authored view interchange. Invoke native accessors on the UI thread."""
 from __future__ import annotations
 
+import copy
 import math
 
 TONEMAPPING = ("none", "linear", "filmic", "hejl", "aces", "aces2", "neutral")
@@ -12,6 +13,25 @@ def viewer_vector(value):
     # Studio visualizer D=diag(1,-1,-1); gallery import rotates data about Z.
     x, y, z = value
     return [-float(x), float(y), -float(z)]
+
+
+def capture_camera_path(lf):
+    """Return the authored camera track, or None when portal playback should be cleared."""
+    path = lf.ui.get_camera_path()
+    if path is None:
+        return None
+    if not isinstance(path, dict):
+        raise ValueError("LichtFeld Studio could not read this camera track.")
+    return copy.deepcopy(path)
+
+
+def restore_camera_path(lf, path):
+    """Apply only the authored camera track. Other view settings stay unchanged."""
+    if path is None:
+        lf.ui.clear_keyframes()
+        return
+    if not isinstance(path, dict) or not lf.ui.set_camera_path(path):
+        raise ValueError("LichtFeld Studio could not restore this camera path.")
 
 
 def capture_view(lf):
@@ -37,7 +57,7 @@ def capture_view(lf):
     view = {
         "camera": {"position": viewer_vector(camera.eye), "target": viewer_vector(camera.target),
             "up": viewer_vector(camera.up), "fov": float(camera.fov)},
-        "verticalFov": True, "cameraPath": lf.ui.get_camera_path(), "renderProfile": profile,
+        "verticalFov": True, "cameraPath": capture_camera_path(lf), "renderProfile": profile,
         "shDegree": sh_degree,
         "antialiasing": bool(settings.mip_filter),
         "renderMode": "3dgut" if str(settings.raster_backend) == "3dgut" else "3dgs",
@@ -149,7 +169,4 @@ def restore_view(lf, view, *, environment_path=None):
         settings.environment_rotation_degrees = environment["rotation"]
         settings.environment_mode = "EQUIRECTANGULAR"
     if "cameraPath" in view:
-        if view["cameraPath"] is None:
-            lf.ui.clear_keyframes()
-        elif not lf.ui.set_camera_path(view["cameraPath"]):
-            raise ValueError("Studio could not restore this camera path.")
+        restore_camera_path(lf, view["cameraPath"])

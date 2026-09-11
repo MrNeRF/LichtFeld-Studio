@@ -688,3 +688,138 @@ def test_compressed_studio_snapshot_uploads_and_retires_only_its_owned_file(tmp_
     assert service.snapshot()['jobs'][-1]['status'] == 'completed'
     assert not path.exists()
     assert service.snapshot()['links']['project']['sceneId'] == 'compressed'
+
+
+def test_sync_camera_track_patches_only_path_updates_revision_and_keeps_conflict(tmp_path, monkeypatch):
+    from lfs_plugins.portal_account import PortalHTTPError
+    path = {"version": 1, "keyframes": [{"t": 0}], "duration": 2, "loopMode": "once", "playbackSpeed": 1}
+    merged = {
+        "id": "scene", "revision": "next", "title": "Keep title", "description": "Keep description",
+        "visibility": "private",
+        "viewerSettings": {"camera": {"fov": 50}, "exposure": 2, "cameraPath": path},
+    }
+    calls = []
+
+    def update(self, scene_id, revision, **metadata):
+        calls.append((scene_id, revision, metadata))
+        assert list(metadata) == ["viewerSettings"]
+        assert list(metadata["viewerSettings"]) == ["cameraPath"]
+        return merged
+
+    monkeypatch.setattr(Client, "update", update, raising=False)
+    service = connected(tmp_path, monkeypatch)
+    service.scenes = [{"id": "scene", "revision": "old", "title": "Keep title"}]
+    service._bucket()["links"]["project"] = {
+        "sceneId": "scene", "revision": "old",
+        "metadata": {"title": "Keep title", "viewerSettings": {"camera": {"fov": 50}, "exposure": 2}},
+    }
+    version_before = service.version
+    service.send_camera_track("scene", "old", path)
+    assert service.busy
+    assert service.message == "Sending the gallery camera track…"
+    finish(service)
+    assert calls == [("scene", "old", {"viewerSettings": {"cameraPath": path}})]
+    state = service.snapshot()
+    assert state["links"]["project"]["revision"] == "next"
+    assert state["scenes"][0]["revision"] == "next"
+    assert state["links"]["project"]["metadata"]["title"] == "Keep title"
+    assert state["links"]["project"]["metadata"]["viewerSettings"]["camera"] == {"fov": 50}
+    assert state["links"]["project"]["metadata"]["viewerSettings"]["exposure"] == 2
+    assert "camera track" in state["message"].lower()
+    assert state["version"] > version_before
+
+    def conflict(*args, **kwargs):
+        raise PortalHTTPError(409, "sync_conflict")
+
+    monkeypatch.setattr(Client, "update", conflict)
+    before = json.loads(json.dumps(service.snapshot()["links"]))
+    service.send_camera_track("scene", "old", None)
+    assert service.message == "Sending the gallery camera track…"
+    finish(service)
+    assert service.snapshot()["links"] == before
+    assert "changed" in service.message.lower()
+    assert "review both versions" in service.message.lower()
+
+
+def test_sync_camera_track_sends_explicit_null_without_other_metadata(tmp_path, monkeypatch):
+    calls = []
+
+    def update(self, scene_id, revision, **metadata):
+        calls.append((scene_id, revision, metadata))
+        return {"id": scene_id, "revision": "cleared", "title": "Keep",
+                "viewerSettings": {"camera": {"fov": 40}, "cameraPath": None}}
+
+    monkeypatch.setattr(Client, "update", update, raising=False)
+    service = connected(tmp_path, monkeypatch)
+    service.scenes = [{"id": "scene", "revision": "old"}]
+    service._bucket()["links"]["project"] = {"sceneId": "scene", "revision": "old", "metadata": {"title": "Keep"}}
+    service.send_camera_track("scene", "old", None)
+    finish(service)
+    assert calls == [("scene", "old", {"viewerSettings": {"cameraPath": None}})]
+    assert service.snapshot()["links"]["project"]["revision"] == "cleared"
+    assert service.snapshot()["links"]["project"]["metadata"]["viewerSettings"]["cameraPath"] is None
+
+
+def test_fetch_camera_track_gets_path_without_changing_link_revision(tmp_path, monkeypatch):
+    path = {"version": 1, "keyframes": [{"t": 1}], "duration": 4, "loopMode": "loop", "playbackSpeed": 1}
+    remote = {"id": "scene", "revision": "web-editor", "title": "Keep title",
+        "viewerSettings": {"camera": {"fov": 40}, "exposure": 3, "cameraPath": path}}
+    calls = []
+
+    def scene(self, scene_id):
+        calls.append(("GET", scene_id))
+        return remote
+
+    monkeypatch.setattr(Client, "scene", scene, raising=False)
+    monkeypatch.setattr(Client, "update", lambda *a, **k: pytest.fail("track fetch must not PATCH"), raising=False)
+    monkeypatch.setattr(Client, "upload", lambda *a, **k: pytest.fail("track fetch must not upload"), raising=False)
+    service = connected(tmp_path, monkeypatch)
+    service.scenes = [{"id": "scene", "revision": "old", "title": "Keep title"}]
+    service._bucket()["links"]["project"] = {
+        "sceneId": "scene", "revision": "geometry-rev",
+        "metadata": {"title": "Keep title", "viewerSettings": {"camera": {"fov": 40}}},
+    }
+    operation = service.fetch_camera_track("scene")
+    assert service.busy
+    assert service.message == "Getting the gallery camera track…"
+    finish(service)
+    assert calls == [("GET", "scene")]
+    fetch = service.snapshot()["trackFetch"]
+    assert fetch["id"] == operation and fetch["state"] == "ready"
+    assert fetch["cameraPath"] == path and fetch["cameraPath"] is not path
+    assert fetch["revision"] == "web-editor"
+    assert service.snapshot()["links"]["project"]["revision"] == "geometry-rev"
+    assert service.snapshot()["scenes"][0]["revision"] == "web-editor"
+    assert "received" in service.snapshot()["message"].lower()
+
+
+def test_fetch_camera_track_null_and_missing_path_are_explicit_clear(tmp_path, monkeypatch):
+    monkeypatch.setattr(Client, "scene", lambda self, scene_id: {"id": scene_id, "revision": "r",
+        "viewerSettings": {"cameraPath": None}}, raising=False)
+    service = connected(tmp_path, monkeypatch)
+    service._bucket()["links"]["project"] = {"sceneId": "scene", "revision": "old"}
+    service.fetch_camera_track("scene")
+    finish(service)
+    assert service.snapshot()["trackFetch"]["cameraPath"] is None
+    assert service.snapshot()["links"]["project"]["revision"] == "old"
+
+    monkeypatch.setattr(Client, "scene", lambda self, scene_id: {"id": scene_id, "revision": "r2"}, raising=False)
+    service.fetch_camera_track("scene")
+    finish(service)
+    assert service.snapshot()["trackFetch"]["cameraPath"] is None
+
+
+def test_fetch_camera_track_conflict_does_not_mutate_link(tmp_path, monkeypatch):
+    from lfs_plugins.portal_account import PortalHTTPError
+
+    def scene(*args, **kwargs):
+        raise PortalHTTPError(409, "sync_conflict")
+
+    monkeypatch.setattr(Client, "scene", scene, raising=False)
+    service = connected(tmp_path, monkeypatch)
+    service._bucket()["links"]["project"] = {"sceneId": "scene", "revision": "old", "metadata": {"title": "Keep"}}
+    service.fetch_camera_track("scene")
+    finish(service)
+    assert service.snapshot()["trackFetch"]["state"] == "failed"
+    assert service.snapshot()["links"]["project"]["revision"] == "old"
+    assert "changed" in service.message.lower()

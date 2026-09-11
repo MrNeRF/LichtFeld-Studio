@@ -78,9 +78,12 @@
       <span class="gallery-muted">{{visibility_hint}}</span>
       <div class="gallery-actions" data-if="selected">
         <button class="btn btn--primary" data-event-click="edit" data-attrif-disabled="busy">Save details</button>
+        <button class="btn btn--secondary" data-event-click="send_camera_track" data-attrif-disabled="sync_camera_track_disabled">Send camera track</button>
+        <button class="btn btn--secondary" data-event-click="get_camera_track" data-attrif-disabled="sync_camera_track_disabled">Get camera track</button>
         <button class="btn btn--secondary" data-event-click="open" data-attrif-disabled="busy">View on portal</button>
-        <button class="btn btn--secondary" data-event-click="download" data-attrif-disabled="busy">Download to Studio</button>
+        <button class="btn btn--secondary" data-event-click="download" data-attrif-disabled="busy">Download to LichtFeld Studio</button>
       </div>
+      <span class="gallery-muted" data-if="selected">{{camera_track_help}}</span>
       <div class="gallery-actions gallery-secondary-actions">
         <button class="btn btn--secondary" data-event-click="unlink" data-if="linked" data-attrif-disabled="busy">Unlink current project</button>
         <button class="btn btn--secondary gallery-remove" data-event-click="remove" data-if="selected" data-attrif-disabled="busy">Remove from gallery</button>

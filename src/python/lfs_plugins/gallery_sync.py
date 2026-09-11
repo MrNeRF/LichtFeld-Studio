@@ -116,6 +116,22 @@ def file_stamp(path):
     return [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
 
 
+def _camera_path_from_scene(scene):
+    if not isinstance(scene, dict):
+        raise PortalProtocolError("Invalid gallery scene")
+    settings = scene.get("viewerSettings")
+    if settings is None:
+        return None
+    if not isinstance(settings, dict):
+        raise ValueError("The gallery camera track is invalid.")
+    path = settings.get("cameraPath")
+    if path is None:
+        return None
+    if not isinstance(path, dict):
+        raise ValueError("The gallery camera track is invalid.")
+    return copy.deepcopy(path)
+
+
 class GallerySync:
     def __init__(self, account, root):
         self.account = account
@@ -130,6 +146,7 @@ class GallerySync:
         self._owner = None
         self._source_formats = []
         self.scenes = []
+        self._track_fetch = {}
         self.message = "Refresh to connect your gallery."
         self.version = 0
         self._data = {"version": 1, "accounts": {}}
@@ -240,6 +257,7 @@ class GallerySync:
                 "message": self.message if self._journal_problem or self._stale or same or (snap.signed_in and self._owner is None) else "Sign in and refresh to connect your gallery.",
                 "storage_issue": self._journal_problem,
                 "source_formats": self._source_formats if same else [],
+                "trackFetch": self._track_fetch if same else {},
                 "busy": self.busy, "connected": bool(same and self._owner), "version": self.version})
 
     def _client(self):
@@ -974,6 +992,63 @@ class GallerySync:
                         link.update(revision=scene["revision"], metadata=copy.deepcopy(scene))
             self._save()
         self._launch(action)
+
+    def send_camera_track(self, scene_id, revision, camera_path):
+        if camera_path is not None and not isinstance(camera_path, dict):
+            raise ValueError("LichtFeld Studio could not read this camera track.")
+        metadata = {"viewerSettings": {"cameraPath": copy.deepcopy(camera_path)}}
+        client = self._client()
+        bucket = self._bucket()
+        self.message = "Sending the gallery camera track…"
+        def action():
+            scene = client.update(scene_id, revision, **metadata)
+            with self._lock:
+                self.scenes = [scene if s["id"] == scene_id else s for s in self.scenes]
+                self.message = "Gallery camera track sent."
+                for link in bucket["links"].values():
+                    if link["sceneId"] == scene_id:
+                        link.update(revision=scene["revision"], metadata=copy.deepcopy(scene))
+            self._save()
+        self._launch(action)
+
+    def fetch_camera_track(self, scene_id):
+        client = self._client()
+        identifier = str(uuid.uuid4())
+        self.message = "Getting the gallery camera track…"
+        with self._lock:
+            self._track_fetch = {"id": identifier, "state": "running", "sceneId": scene_id}
+
+        def action():
+            try:
+                scene = client.scene(scene_id)
+                path = _camera_path_from_scene(scene)
+                if scene.get("id") != scene_id:
+                    raise ValueError("The gallery item changed. Refresh and review it before getting the camera track.")
+                with self._lock:
+                    if self._track_fetch.get("id") != identifier:
+                        return
+                    if self._cancel.is_set():
+                        self._track_fetch = {"id": identifier, "state": "canceled", "sceneId": scene_id}
+                        self.message = "Getting the camera track was canceled."
+                        return
+                    self.scenes = [scene if s.get("id") == scene_id else s for s in self.scenes]
+                    self._track_fetch = {"id": identifier, "state": "ready", "sceneId": scene_id,
+                        "revision": scene.get("revision"), "cameraPath": path}
+                    self.message = "Gallery camera track received."
+            except Exception:
+                with self._lock:
+                    if self._track_fetch.get("id") == identifier:
+                        self._track_fetch = {"id": identifier, "state": "failed", "sceneId": scene_id}
+                raise
+
+        try:
+            self._launch(action)
+        except Exception:
+            with self._lock:
+                if self._track_fetch.get("id") == identifier:
+                    self._track_fetch = {}
+            raise
+        return identifier
 
     def remove(self, scene_id, revision):
         client = self._client()

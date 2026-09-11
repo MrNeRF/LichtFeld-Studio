@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from lfs_plugins.gallery_view import capture_view, restore_view, TONEMAPPING
+from lfs_plugins.gallery_view import capture_camera_path, capture_view, restore_camera_path, restore_view, TONEMAPPING
 
 
 def app(width=1600, height=900):
@@ -61,6 +61,43 @@ def test_explicit_empty_path_clears_old_path_but_absent_path_is_unchanged():
     calls.clear()
     restore_view(lf, {})
     assert calls == []
+
+
+def test_capture_camera_path_copies_authored_track_and_treats_missing_as_clear():
+    lf, _, settings = app()
+    settings.apply_appearance_correction = settings.equirectangular = False
+    assert capture_camera_path(lf) is None
+    authored = {"version": 1, "keyframes": [{"t": 0}], "duration": 2, "loopMode": "once", "playbackSpeed": 1}
+    lf.ui.get_camera_path = lambda: authored
+    captured = capture_camera_path(lf)
+    assert captured == authored and captured is not authored
+    authored["duration"] = 9
+    assert captured["duration"] == 2
+    assert capture_view(lf)["cameraPath"]["duration"] == 9
+
+
+def test_restore_reports_lichtfeld_studio_when_native_path_is_rejected():
+    lf, calls, _ = app()
+    lf.ui.set_camera_path = lambda path: False
+    with pytest.raises(ValueError, match="LichtFeld Studio could not restore this camera path"):
+        restore_view(lf, {"cameraPath": {"version": 1, "keyframes": []}})
+    assert calls == []
+
+
+def test_restore_camera_path_does_not_reset_unrelated_view_settings():
+    lf, calls, settings = app()
+    settings.apply_appearance_correction = True
+    settings.equirectangular = True
+    settings.orthographic = True
+    settings.background_color = (0.2, 0.3, 0.4)
+    path = {"version": 1, "keyframes": [{"t": 0}], "duration": 3, "loopMode": "once", "playbackSpeed": 1}
+    restore_camera_path(lf, path)
+    assert calls == [("path", path)]
+    assert settings.apply_appearance_correction and settings.equirectangular and settings.orthographic
+    assert settings.background_color == (0.2, 0.3, 0.4)
+    restore_camera_path(lf, None)
+    assert ("clear_path",) in calls
+    assert settings.background_color == (0.2, 0.3, 0.4)
 
 
 def test_authored_solid_background_replaces_an_existing_environment_map():

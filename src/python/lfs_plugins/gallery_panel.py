@@ -12,7 +12,7 @@ from pathlib import Path
 import lichtfeld as lf
 
 from .gallery_sync import get_gallery_sync, friendly_error, file_stamp
-from .gallery_view import capture_view, restore_view
+from .gallery_view import capture_camera_path, capture_view, restore_camera_path, restore_view
 from . import gallery_preparation
 from .panels import panel_class
 from .types import Panel
@@ -54,6 +54,8 @@ class GalleryPanel(Panel):
         self._history_limit = 30
         self._native_use = None
         self._progress_pending = False
+        self._suppress_transfer_progress = False
+        self._track_pull_pending = None
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("gallery_sync")
@@ -66,7 +68,7 @@ class GalleryPanel(Panel):
         model.bind_func("message", lambda: self._message or self._state["message"])
         model.bind_func("recovery_job", lambda: next((j["id"] for j in reversed(self._state["jobs"])
             if j.get("localUpdate", {}).get("backupPath")), ""))
-        model.bind_func("busy", lambda: self._state["busy"] or bool(self._export_pending or self._import_pending or self._save_pending or self._native_use))
+        model.bind_func("busy", self._panel_busy)
         model.bind_func("connected", lambda: self._state["connected"])
         model.bind_func("storage_issue", lambda: self._state.get("storage_issue", False))
         model.bind_func("signed_in", lambda: self._state["signed_in"])
@@ -82,9 +84,9 @@ class GalleryPanel(Panel):
         model.bind_func("editor_heading", lambda: "Gallery item details" if self._scene else "Publish your current scene")
         model.bind_func("visibility_hint", lambda: "Hidden from public galleries. Existing scene or gallery share links still work." if self._visibility == "private" else "Anyone can view this splat. It may appear in Explore.")
         model.bind_func("can_pause", self._can_pause)
-        model.bind_func("pause_label", lambda: "Cancel gallery action" if self._save_pending else "Cancel import" if self._import_pending else "Cancel preparation" if self._export_pending else
+        model.bind_func("pause_label", lambda: "Cancel gallery action" if self._save_pending or self._track_pull_pending else "Cancel import" if self._import_pending else "Cancel preparation" if self._export_pending else
             "Stop waiting" if any(j.get("serverProcessing") and j["status"] == "running" for j in self._state["jobs"]) else "Pause transfer")
-        model.bind_func("preparing", lambda: bool(self._export_pending or self._import_pending or self._save_pending))
+        model.bind_func("preparing", lambda: bool(self._export_pending or self._import_pending or self._save_pending or self._track_pull_pending))
         model.bind_func("preparation_progress", lambda: self._export_progress)
         model.bind("search", lambda: self._search, self._set_search)
         model.bind_func("selected", lambda: bool(self._scene))
@@ -97,24 +99,30 @@ class GalleryPanel(Panel):
         model.bind_func("confirm_text", lambda: self._confirm[0] if self._confirm else "")
         model.bind_func("confirm_label", lambda: self._confirm[2] if self._confirm else "")
         model.bind_func("publish_label", lambda: "Replace selected splat" if self._scene else "Upload new splat")
+        model.bind_func("can_sync_camera_track", self._can_sync_camera_track)
+        model.bind_func("camera_track_help", self._camera_track_help)
+        model.bind_func("sync_camera_track_disabled", lambda: self._panel_busy() or not self._can_sync_camera_track())
         model.bind_record_list("scenes")
         model.bind_record_list("jobs")
-        for name in ("refresh", "account", "select", "new", "publish", "edit", "remove", "unlink",
+        for name in ("refresh", "account", "select", "new", "publish", "edit", "send_camera_track", "get_camera_track", "remove", "unlink",
                      "resume", "discard", "pause", "confirm_action", "cancel_action", "open", "download", "import", "resolve", "linked", "open_project", "use_current", "update_local", "show_backup", "show_recovery_folder", "clear_finished", "more_history", "transfer_progress"):
             model.bind_event(name, lambda _handle, _event, args, h=name: self._dispatch(h, args))
         self._handle = model.get_handle()
 
     def _dispatch(self, name, args):
         self._progress_pending = False
+        if name not in ("confirm_action", "pause", "cancel_action", "transfer_progress"):
+            self._suppress_transfer_progress = False
         try:
             if self._check_identity() and name not in ("account", "refresh"):
                 raise ValueError("The account changed. Review your gallery before continuing.")
             self._message = ""
             self._release_native_use()
-            if (self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._native_use) and name not in ("pause", "account", "cancel_action", "transfer_progress"):
+            if (self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._native_use or self._track_pull_pending) and name not in ("pause", "account", "cancel_action", "transfer_progress"):
                 raise ValueError("Wait for the operation to finish or pause the transfer.")
             getattr(self, "_action_"+name)(*args)
-            self._progress_pending = name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local")
+            self._progress_pending = (name in ("publish", "confirm_action", "download", "resume", "resolve", "import", "update_local")
+                and not self._suppress_transfer_progress)
         except Exception as exc:
             self._message = friendly_error(exc)
         self._release_native_use()
@@ -134,8 +142,11 @@ class GalleryPanel(Panel):
         lf.ui.set_panel_enabled("lfs.gallery", False)
         lf.ui.set_panel_enabled("lfs.gallery_transfer", True)
 
+    def _panel_busy(self):
+        return self._state["busy"] or bool(self._export_pending or self._import_pending or self._save_pending or self._native_use or self._track_pull_pending)
+
     def _can_pause(self):
-        if self._export_pending or self._save_pending:
+        if self._export_pending or self._save_pending or self._track_pull_pending:
             return True
         job = self._import_pending
         if job:
@@ -158,6 +169,10 @@ class GalleryPanel(Panel):
         self._focus_project = False
         self._reset_account_ui = True
         self._progress_pending = False
+        self._suppress_transfer_progress = False
+        if self._track_pull_pending:
+            self._track_pull_pending["canceled"] = True
+            self._track_pull_pending = None
         if self._export_pending:
             self._cancel_own_export()
             self._export_cancelled = True
@@ -289,7 +304,7 @@ class GalleryPanel(Panel):
                 element = doc.query_selector(selector)
                 if element is not None:
                     element.scroll_top = 0
-        if self._export_pending or self._import_pending or self._save_pending or self._native_use:
+        if self._export_pending or self._import_pending or self._save_pending or self._native_use or self._track_pull_pending:
             self._advance_phases()
         key = (self.service.state_key(), lf.project_poll_write().get("path"))
         if key != self._version:
@@ -309,7 +324,7 @@ class GalleryPanel(Panel):
     def _schedule_phase_poll(self):
         # Native export/import must finish even when the user closes this panel.
         # Only scheduling runs on the timer; all app access stays on the UI thread.
-        if self._phase_poll_scheduled or not (self._export_pending or self._import_pending or self._save_pending or self._native_use):
+        if self._phase_poll_scheduled or not (self._export_pending or self._import_pending or self._save_pending or self._native_use or self._track_pull_pending):
             return
         self._phase_poll_scheduled = True
         timer = threading.Timer(0.2, lambda: lf.ui.schedule_on_ui_thread(self._poll_phases))
@@ -328,6 +343,10 @@ class GalleryPanel(Panel):
                 self._finish_current_project_save()
                 if self._save_pending:
                     return
+            if self._track_pull_pending:
+                self._finish_camera_track_pull()
+                if self._save_pending or (self._track_pull_pending and self._track_pull_pending.get("phase") == "fetching"):
+                    return
             if self._export_pending:
                 self._finish_export()
             if self._import_pending:
@@ -344,7 +363,7 @@ class GalleryPanel(Panel):
                         self._handle.dirty_all()
         except Exception as exc:
             self._discard_update_preview()
-            self._export_pending = self._import_pending = self._save_pending = None
+            self._export_pending = self._import_pending = self._save_pending = self._track_pull_pending = None
             self._message = friendly_error(exc)
             self._refresh_model()
         finally:
@@ -378,7 +397,7 @@ class GalleryPanel(Panel):
 
     def focus_project(self, path=None):
         """Asset Manager supplies an explicit local source before publishing."""
-        if self.service.busy or self._save_pending or self._import_pending or self._export_pending:
+        if self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._track_pull_pending:
             self._message = "Finish or pause the current gallery operation before choosing another project."
             self._refresh_model()
             return
@@ -398,7 +417,7 @@ class GalleryPanel(Panel):
                     self._check_identity()
                     if self._identity != identity or self._requested_project != requested:
                         raise ValueError("The account or selected project changed. Review your gallery before continuing.")
-                    if self.service.busy or self._save_pending or self._import_pending or self._export_pending:
+                    if self.service.busy or self._save_pending or self._import_pending or self._export_pending or self._track_pull_pending:
                         raise ValueError("Finish or pause the current gallery operation before opening another project.")
                     lf.project_open(requested, True, stop_training, True)
                 except Exception as exc:
@@ -463,9 +482,11 @@ class GalleryPanel(Panel):
             return
         self._save_pending = None
         if poll.get("error"):
+            self._track_pull_pending = None
             raise ValueError("The project could not be saved. Your gallery operation was stopped; resolve the save error before retrying.")
         if pending.get("canceled") or self.service.identity() != pending["identity"]:
             self._message = "Project save finished. The gallery operation was canceled."
+            self._track_pull_pending = None
             return
         if (poll.get("generation") != pending["generation"] or self._project_identity() != pending["project"] or lf.project_is_dirty()):
             raise ValueError("The project changed while saving. Your gallery operation was stopped; review your work and try again.")
@@ -608,6 +629,184 @@ class GalleryPanel(Panel):
             else:
                 action()
 
+    def _camera_track_block_reason(self):
+        if not self._scene:
+            return "Select the gallery item linked to this LichtFeld Studio project first."
+        if self._requested_project:
+            return "Open the selected Asset Manager project first, or choose Use current project."
+        try:
+            project_id, _ = self._project_identity()
+        except ValueError as exc:
+            return str(exc)
+        link = self._state["links"].get(project_id)
+        if not link:
+            return "This LichtFeld Studio project is not linked to a gallery item. Upload it first, then send or get its camera track."
+        if link["sceneId"] != self._scene["id"]:
+            return "Select the gallery item linked to this LichtFeld Studio project to send or get its camera track."
+        return None
+
+    def _can_sync_camera_track(self):
+        return self._camera_track_block_reason() is None
+
+    def _camera_track_help(self):
+        reason = self._camera_track_block_reason()
+        if reason:
+            return reason
+        return "Send or get playback cameras for the current LichtFeld Studio project."
+
+    def _action_send_camera_track(self):
+        reason = self._camera_track_block_reason()
+        if reason:
+            raise ValueError(reason)
+        project = self._project_identity()
+        identity = self.service.identity()
+        scene = dict(self._scene)
+        track = capture_camera_path(lf)
+        title = scene["title"]
+        if track is None:
+            message = f'Clear the camera track on “{title}”? Portal playback will stop until you send a track again.'
+            label = "Clear camera track"
+        else:
+            message = f'Send the camera track on “{title}” from this LichtFeld Studio project?'
+            label = "Send camera track"
+        self._suppress_transfer_progress = True
+        self._confirm = (message, lambda: self._start_camera_track_send(scene, project, identity, track), label)
+
+    def _start_camera_track_send(self, scene, project, identity, track):
+        if self.service.identity() != identity or self._project_identity() != project:
+            raise ValueError("The account or current project changed. Review its gallery details before sending the camera track.")
+        reason = self._camera_track_block_reason()
+        if reason:
+            raise ValueError(reason)
+        if capture_camera_path(lf) != track:
+            raise ValueError("The camera track changed. Review it in LichtFeld Studio and try again.")
+        self._save_current_project(lambda: self._send_camera_track_saved(scene, project, identity, track))
+
+    def _send_camera_track_saved(self, scene, project, identity, track):
+        if self.service.identity() != identity or self._project_identity() != project:
+            raise ValueError("The account or current project changed while saving. The camera track was not sent.")
+        if capture_camera_path(lf) != track:
+            raise ValueError("The camera track changed while saving. Review it in LichtFeld Studio and try again.")
+        reason = self._camera_track_block_reason()
+        if reason:
+            raise ValueError(reason)
+        if not self._scene or self._scene["id"] != scene["id"]:
+            raise ValueError("The selected gallery item changed. The camera track was not sent.")
+        self._message = ""
+        self.service.send_camera_track(scene["id"], scene["revision"], track)
+        self._suppress_transfer_progress = False
+        self._refresh_model()
+
+    def _action_get_camera_track(self):
+        reason = self._camera_track_block_reason()
+        if reason:
+            raise ValueError(reason)
+        project = self._project_identity()
+        identity = self.service.identity()
+        scene = dict(self._scene)
+        local = capture_camera_path(lf)
+        self._suppress_transfer_progress = True
+        self._confirm = (
+            f'Replace the local camera track with the gallery playback from “{scene["title"]}”? An empty gallery track clears local playback.',
+            lambda: self._start_camera_track_pull(scene, project, identity, local),
+            "Get camera track")
+
+    def _start_camera_track_pull(self, scene, project, identity, local):
+        if self.service.identity() != identity or self._project_identity() != project:
+            raise ValueError("The account or current project changed. Review its gallery details before getting the camera track.")
+        reason = self._camera_track_block_reason()
+        if reason:
+            raise ValueError(reason)
+        if capture_camera_path(lf) != local:
+            raise ValueError("The camera track changed. Review it in LichtFeld Studio and try again.")
+        if not self._scene or self._scene["id"] != scene["id"]:
+            raise ValueError("The selected gallery item changed. The camera track was not applied.")
+        self._save_current_project(lambda: self._camera_track_pull_saved(scene, project, identity, local))
+
+    def _camera_track_pull_saved(self, scene, project, identity, local):
+        if self.service.identity() != identity or self._project_identity() != project:
+            raise ValueError("The account or current project changed while saving. The camera track was not applied.")
+        if capture_camera_path(lf) != local:
+            raise ValueError("The camera track changed while saving. The gallery track was not applied.")
+        reason = self._camera_track_block_reason()
+        if reason:
+            raise ValueError(reason)
+        if not self._scene or self._scene["id"] != scene["id"]:
+            raise ValueError("The selected gallery item changed. The camera track was not applied.")
+        self._message = ""
+        operation = self.service.fetch_camera_track(scene["id"])
+        self._track_pull_pending = {"id": operation, "scene": scene, "project": project,
+            "identity": identity, "local": local, "phase": "fetching"}
+        self._suppress_transfer_progress = False
+        self._refresh_model()
+        if not self.service.busy:
+            self._finish_camera_track_pull()
+        else:
+            self._schedule_phase_poll()
+
+    def _finish_camera_track_pull(self):
+        pending = self._track_pull_pending
+        if not pending:
+            return
+        if pending.get("canceled"):
+            self._track_pull_pending = None
+            self._message = "Getting the camera track was canceled."
+            return
+        if pending.get("phase") != "fetching":
+            return
+        if self.service.identity() != pending["identity"] or self._project_identity() != pending["project"]:
+            self._track_pull_pending = None
+            raise ValueError("The account or current project changed. The gallery camera track was not applied.")
+        if self.service.busy:
+            return
+        fetch = (self.service.snapshot().get("trackFetch") or {})
+        if fetch.get("id") != pending["id"]:
+            self._track_pull_pending = None
+            raise ValueError("The gallery camera track request changed. Try again.")
+        if fetch.get("state") == "canceled":
+            self._track_pull_pending = None
+            self._message = "Getting the camera track was canceled."
+            return
+        if fetch.get("state") != "ready":
+            self._track_pull_pending = None
+            status = fetch.get("message") or getattr(self.service, "message", None) or self.service.snapshot().get("message")
+            raise ValueError(status or "The gallery camera track could not be retrieved.")
+        if fetch.get("sceneId") != pending["scene"]["id"] or not self._scene or self._scene["id"] != pending["scene"]["id"]:
+            self._track_pull_pending = None
+            raise ValueError("The selected gallery item changed. The camera track was not applied.")
+        reason = self._camera_track_block_reason()
+        if reason:
+            self._track_pull_pending = None
+            raise ValueError(reason)
+        if capture_camera_path(lf) != pending["local"]:
+            self._track_pull_pending = None
+            raise ValueError("The camera track changed while retrieving it. Review it in LichtFeld Studio and try again.")
+        remote = fetch.get("cameraPath")
+        restore_camera_path(lf, remote)
+        applied = capture_camera_path(lf)
+        if remote is None:
+            if applied is not None:
+                self._track_pull_pending = None
+                raise ValueError("LichtFeld Studio could not restore this camera path.")
+        elif applied is None:
+            self._track_pull_pending = None
+            raise ValueError("LichtFeld Studio could not restore this camera path.")
+        pending["applied"] = applied
+        pending["phase"] = "save_after"
+        self._save_current_project(lambda: self._camera_track_pull_applied_saved(pending))
+
+    def _camera_track_pull_applied_saved(self, pending):
+        self._track_pull_pending = None
+        if pending.get("canceled") or self.service.identity() != pending["identity"]:
+            self._message = "Project save finished. The gallery operation was canceled."
+            return
+        if self._project_identity() != pending["project"]:
+            raise ValueError("The current project changed while saving. Review the camera track before trying again.")
+        if capture_camera_path(lf) != pending.get("applied"):
+            raise ValueError("The camera track changed while saving. Review it in LichtFeld Studio and try again.")
+        self._message = "Gallery camera track applied."
+        self._refresh_model()
+
     def _action_remove(self):
         if self._scene:
             scene = dict(self._scene)
@@ -637,6 +836,11 @@ class GalleryPanel(Panel):
     def _action_pause(self):
         if self._save_pending:
             self._save_pending["canceled"] = True
+        if self._track_pull_pending:
+            self._track_pull_pending["canceled"] = True
+            if not self._save_pending:
+                self._track_pull_pending = None
+                self._message = "Getting the camera track was canceled."
         if self._export_pending:
             self._cancel_own_export()
             self._export_cancelled = True
@@ -1069,6 +1273,7 @@ class GalleryPanel(Panel):
 
     def _action_cancel_action(self):
         self._confirm = None
+        self._suppress_transfer_progress = False
 
     def _action_open(self):
         if self._scene:

@@ -4,6 +4,9 @@
 from importlib import import_module
 from contextlib import nullcontext
 from types import SimpleNamespace
+import copy
+import math
+import struct
 
 import pytest
 
@@ -18,11 +21,14 @@ def gallery(monkeypatch, panel_module):
         "identity": ("https://portal.example", "one@example.com", "first", True),
         "signed_in": True, "connected": True, "email": "one@example.com",
         "display_name": "One", "scenes": [], "jobs": [], "links": {},
-        "message": "", "busy": False, "version": 0,
+        "message": "", "busy": False, "version": 0, "trackFetch": {},
     }
     actions = []
     service = SimpleNamespace(snapshot=lambda: state.copy(), identity=lambda: state["identity"], busy=False, pause=lambda: None,
-        edit=lambda *args: actions.append(args), local_use=lambda job_id: nullcontext())
+        edit=lambda *args: actions.append(args),
+        send_camera_track=lambda *args: actions.append(("send_camera_track", *args)),
+        fetch_camera_track=lambda scene_id: actions.append(("fetch_camera_track", scene_id)) or "fetch-op",
+        local_use=lambda job_id: nullcontext())
     monkeypatch.setattr(module, "get_gallery_sync", lambda: service)
     monkeypatch.setattr(module.lf.ui, "cancel_export", lambda: actions.append("cancel-export"), raising=False)
     monkeypatch.setattr(module.lf.ui, "dismiss_import", lambda: actions.append("dismiss-import"), raising=False)
@@ -774,3 +780,483 @@ def test_upload_format_is_fixed_at_confirmation_and_all_payload_formats_keep_hdr
     assert options['upload_format'] == format_name
     assert 'environment' in metadata['viewerSettings']
     assert metadata['viewerSettings']['renderMode'] == '3dgut'
+
+
+CAMERA_TRACK = {
+    "version": 1,
+    "keyframes": [{"t": 0, "eye": [0, 1, 3]}],
+    "duration": 2.5,
+    "loopMode": "once",
+    "playbackSpeed": 1.0,
+}
+REMOTE_PRECISE_TRACK = {
+    "duration": 4.5,
+    "keyframes": [{
+        "easing": 0, "focal_length_mm": 25.73408317565918,
+        "position": [-2.0, 2.0, -6.0],
+        "rotation": [-0.15830765664577484, 0.02443433739244938, 0.9755357503890991, 0.15057116746902466],
+        "time": 0.0,
+    }, {
+        "easing": 3, "focal_length_mm": 26.33159828186035,
+        "position": [-1.1, 2.1, -5.6],
+        "rotation": [-0.1110728457570076, 0.06121033430099487, 0.9799413681030273, 0.15372401475906372],
+        "time": 2.0,
+    }],
+    "loopMode": "ping_pong",
+    "playbackSpeed": 1.25,
+    "version": 1,
+}
+
+
+def _f32(value):
+    return struct.unpack("f", struct.pack("f", value))[0]
+
+
+def _native_camera_path(path):
+    if path is None:
+        return None
+
+    def convert(value, key=None):
+        if isinstance(value, bool) or value is None:
+            return value
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return _f32(value)
+        if isinstance(value, list):
+            items = [convert(item) for item in value]
+            if key == "rotation" and len(items) == 4 and all(isinstance(item, float) for item in items):
+                length = math.sqrt(sum(item * item for item in items)) or 1.0
+                return [_f32(item / length) for item in items]
+            return items
+        if isinstance(value, dict):
+            return {name: convert(item, name) for name, item in value.items()}
+        return value
+
+    return convert(copy.deepcopy(path))
+SENDING_TRACK = "Sending the gallery camera track…"
+TRACK_SENT = "Gallery camera track sent."
+GETTING_TRACK = "Getting the gallery camera track…"
+TRACK_RECEIVED = "Gallery camera track received."
+TRACK_APPLIED = "Gallery camera track applied."
+TRACK_CONFLICT = "The gallery item changed. Refresh and review both versions before replacing it."
+
+
+def _link_selected_scene(panel, state, monkeypatch, *, scene_id="private-one"):
+    state["scenes"] = [scene()]
+    state["links"] = {"project": {"sceneId": scene_id, "revision": "original", "metadata": scene()}}
+    monkeypatch.setattr(panel, "_project_identity", lambda: ("project", "/project.licht"))
+    panel._refresh_model()
+    panel._action_select(scene_id)
+
+
+def _bound_gallery_message(panel):
+    from test_asset_manager_panel import _BindingContext, _BindingModel
+    panel._refresh_model()
+    model = _BindingModel()
+    panel.on_bind_model(_BindingContext(model))
+    return model.func_bindings["message"]()
+
+
+def _install_camera_track_send(panel, state, actions):
+    def start(*args):
+        actions.append(("send_camera_track", *args))
+        state["message"] = SENDING_TRACK
+        state["busy"] = True
+        panel.service.busy = True
+
+    def complete(message):
+        state["message"] = message
+        state["busy"] = False
+        panel.service.busy = False
+
+    panel.service.send_camera_track = start
+    return complete
+
+
+def _install_camera_track_fetch(panel, state, actions, *, operation="fetch-op"):
+    def start(scene_id):
+        actions.append(("fetch_camera_track", scene_id))
+        state["message"] = GETTING_TRACK
+        state["busy"] = True
+        panel.service.busy = True
+        state["trackFetch"] = {"id": operation, "state": "running", "sceneId": scene_id}
+        return operation
+
+    def complete(path, *, message=TRACK_RECEIVED, revision="remote-track"):
+        state["trackFetch"] = {"id": operation, "state": "ready", "sceneId": "private-one",
+            "revision": revision, "cameraPath": path}
+        state["message"] = message
+        state["busy"] = False
+        panel.service.busy = False
+
+    def fail(message):
+        state["trackFetch"] = {"id": operation, "state": "failed", "sceneId": "private-one"}
+        state["message"] = message
+        state["busy"] = False
+        panel.service.busy = False
+
+    panel.service.fetch_camera_track = start
+    return complete, fail
+
+
+def test_send_camera_track_captures_current_path_and_does_not_export(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    complete = _install_camera_track_send(panel, state, actions)
+    live = dict(CAMERA_TRACK)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: live, raising=False)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *a, **k: pytest.fail("camera track send must not prepare an export"), raising=False)
+    monkeypatch.setattr(panel.service, "queue_prepared_upload", lambda *a, **k: pytest.fail("camera track send must not upload geometry"), raising=False)
+    monkeypatch.setattr(panel.service, "edit", lambda *a, **k: pytest.fail("camera track send must not save details"))
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._title = "Unsaved title change"
+    panel._description = "Unsaved description"
+    panel._action_send_camera_track()
+    assert panel._confirm and panel._confirm[2] == "Send camera track"
+    assert "LichtFeld Studio" in panel._confirm[0]
+    panel._action_confirm_action()
+    assert actions == [("send_camera_track", "private-one", "original", CAMERA_TRACK)]
+    assert panel._export_pending is None
+    assert panel._message == ""
+    assert _bound_gallery_message(panel) == SENDING_TRACK
+    complete(TRACK_SENT)
+    assert _bound_gallery_message(panel) == TRACK_SENT
+
+
+def test_send_camera_track_null_clears_remote_playback_after_review(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: None, raising=False)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._action_send_camera_track()
+    assert panel._confirm[2] == "Clear camera track"
+    assert "playback will stop" in panel._confirm[0]
+    panel._action_confirm_action()
+    assert actions == [("send_camera_track", "private-one", "original", None)]
+
+
+@pytest.mark.parametrize("change", ["track", "project", "account"])
+def test_send_camera_track_blocks_stale_path_after_async_save(gallery, monkeypatch, change):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = {"path": dict(CAMERA_TRACK)}
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: current["path"], raising=False)
+    project = ["project", "/project.licht"]
+    monkeypatch.setattr(panel, "_project_identity", lambda: tuple(project))
+
+    def save(proceed):
+        if change == "track":
+            current["path"] = dict(CAMERA_TRACK, duration=9)
+        elif change == "project":
+            project[0] = "other-project"
+            state["links"] = {"other-project": {"sceneId": "private-one", "revision": "original"}}
+        else:
+            state["identity"] = ("https://portal.example", "two@example.com", "second", True)
+        proceed()
+
+    monkeypatch.setattr(panel, "_save_current_project", save)
+    panel._action_send_camera_track()
+    with pytest.raises(ValueError, match="changed"):
+        panel._action_confirm_action()
+    assert actions == []
+    assert panel._export_pending is None
+
+
+def test_send_camera_track_does_not_send_when_save_never_finishes(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: dict(CAMERA_TRACK), raising=False)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: None)
+    panel._action_send_camera_track()
+    panel._action_confirm_action()
+    assert actions == []
+
+
+def test_edit_still_sends_details_without_camera_path_or_export(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    state["scenes"] = [scene()]
+    panel._refresh_model()
+    panel._action_select("private-one")
+    monkeypatch.setattr(module, "capture_view", lambda _: pytest.fail("details save must not capture the view"))
+    monkeypatch.setattr(module, "capture_camera_path", lambda _: pytest.fail("details save must not capture the camera track"))
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *a, **k: pytest.fail("details save must not export"), raising=False)
+    panel._action_edit()
+    assert actions == [("private-one", "original",
+        {"title": "My scene", "description": "Private description", "visibility": "private"})]
+
+
+def test_unlinked_or_mismatched_scene_cannot_sync_camera_track(gallery, monkeypatch):
+    panel, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    state["scenes"] = [scene(), dict(scene(), id="other-scene", title="Other")]
+    monkeypatch.setattr(panel, "_project_identity", lambda: ("project", "/project.licht"))
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: dict(CAMERA_TRACK), raising=False)
+    panel._refresh_model()
+    panel._action_select("private-one")
+    assert not panel._can_sync_camera_track()
+    assert "not linked" in panel._camera_track_help()
+    with pytest.raises(ValueError, match="not linked"):
+        panel._action_send_camera_track()
+    with pytest.raises(ValueError, match="not linked"):
+        panel._action_get_camera_track()
+    state["links"] = {"project": {"sceneId": "other-scene", "revision": "original"}}
+    panel._refresh_model()
+    assert not panel._can_sync_camera_track()
+    assert "linked to this LichtFeld Studio project" in panel._camera_track_help()
+    with pytest.raises(ValueError, match="linked"):
+        panel._action_send_camera_track()
+    with pytest.raises(ValueError, match="linked"):
+        panel._action_get_camera_track()
+    panel._action_select("other-scene")
+    assert panel._can_sync_camera_track()
+    assert panel._camera_track_help() == "Send or get playback cameras for the current LichtFeld Studio project."
+    panel._requested_project = "/other.licht"
+    assert not panel._can_sync_camera_track()
+    with pytest.raises(ValueError, match="Open the selected Asset Manager project"):
+        panel._action_send_camera_track()
+
+
+def test_send_camera_track_confirmation_does_not_open_transfer_popup(gallery, monkeypatch):
+    panel, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    shown = []
+    _link_selected_scene(panel, state, monkeypatch)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: dict(CAMERA_TRACK), raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_panel_enabled", lambda *args: shown.append(args), raising=False)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: setattr(panel, "_save_pending", {"continuation": proceed}) or True)
+    panel._dispatch("send_camera_track", [])
+    panel._dispatch("confirm_action", [])
+    assert panel._save_pending and panel._can_pause()
+    assert not shown
+    assert not panel._progress_pending
+
+
+@pytest.mark.parametrize("outcome,expected", [
+    ("success", TRACK_SENT),
+    ("conflict", TRACK_CONFLICT),
+])
+def test_send_camera_track_panel_message_follows_service_success_and_conflict(gallery, monkeypatch, outcome, expected):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    complete = _install_camera_track_send(panel, state, actions)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: dict(CAMERA_TRACK), raising=False)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._dispatch("send_camera_track", [])
+    panel._dispatch("confirm_action", [])
+    assert panel._message == ""
+    assert _bound_gallery_message(panel) == SENDING_TRACK
+    complete(expected)
+    assert panel._message == ""
+    assert _bound_gallery_message(panel) == expected
+
+
+def test_send_camera_track_save_error_is_not_replaced_by_updating(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    _install_camera_track_send(panel, state, actions)
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: dict(CAMERA_TRACK), raising=False)
+
+    def save(_proceed):
+        raise ValueError("The project could not be saved. Your gallery operation was stopped; resolve the save error before retrying.")
+
+    monkeypatch.setattr(panel, "_save_current_project", save)
+    panel._dispatch("send_camera_track", [])
+    panel._dispatch("confirm_action", [])
+    assert actions == []
+    status = _bound_gallery_message(panel)
+    assert "could not be saved" in status
+    assert SENDING_TRACK not in status
+
+
+def _local_track_state(monkeypatch, module, initial=None):
+    current = {"path": None if initial is None else _native_camera_path(initial)}
+
+    def set_path(path):
+        if not isinstance(path, dict):
+            return False
+        current["path"] = _native_camera_path(path)
+        return True
+
+    monkeypatch.setattr(module.lf.ui, "get_camera_path", lambda: None if current["path"] is None else copy.deepcopy(current["path"]), raising=False)
+    monkeypatch.setattr(module.lf.ui, "set_camera_path", set_path, raising=False)
+    monkeypatch.setattr(module.lf.ui, "clear_keyframes", lambda: current.update(path=None), raising=False)
+    return current
+
+
+def test_get_camera_track_applies_remote_poses_without_geometry_transfer(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = _local_track_state(monkeypatch, module, {"version": 1, "duration": 1})
+    complete, _ = _install_camera_track_fetch(panel, state, actions)
+    monkeypatch.setattr(module.lf, "prepare_gallery_scene", lambda *a, **k: pytest.fail("get camera track must not export"), raising=False)
+    monkeypatch.setattr(module.lf, "load_file", lambda *a, **k: pytest.fail("get camera track must not load geometry"), raising=False)
+    monkeypatch.setattr(module.lf, "load_gallery_scene", lambda *a, **k: pytest.fail("get camera track must not import geometry"), raising=False)
+    monkeypatch.setattr(panel.service, "download", lambda *a, **k: pytest.fail("get camera track must not download geometry"), raising=False)
+    monkeypatch.setattr(panel.service, "queue_prepared_upload", lambda *a, **k: pytest.fail("get camera track must not upload"), raising=False)
+    remote = copy.deepcopy(REMOTE_PRECISE_TRACK)
+    monkeypatch.setattr(panel, "_schedule_phase_poll", lambda: None)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._dispatch("get_camera_track", [])
+    assert panel._confirm[2] == "Get camera track"
+    assert "empty gallery track clears" in panel._confirm[0]
+    panel._dispatch("confirm_action", [])
+    assert actions == [("fetch_camera_track", "private-one")]
+    assert panel._track_pull_pending and panel._can_pause()
+    assert _bound_gallery_message(panel) == GETTING_TRACK
+    complete(remote, revision="web-editor")
+    panel._advance_phases()
+    assert current["path"] == _native_camera_path(remote)
+    assert current["path"] != remote
+    assert _bound_gallery_message(panel) == TRACK_APPLIED
+    assert state["links"]["project"]["revision"] == "original"
+    assert panel._export_pending is None
+    assert panel._track_pull_pending is None
+
+
+def test_get_camera_track_null_clears_local_playback(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = _local_track_state(monkeypatch, module, CAMERA_TRACK)
+    complete, _ = _install_camera_track_fetch(panel, state, actions)
+    monkeypatch.setattr(panel, "_schedule_phase_poll", lambda: None)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._action_get_camera_track()
+    panel._action_confirm_action()
+    complete(None)
+    panel._advance_phases()
+    assert current["path"] is None
+    assert actions == [("fetch_camera_track", "private-one")]
+    assert _bound_gallery_message(panel) == TRACK_APPLIED
+
+
+@pytest.mark.parametrize("change", ["track", "project", "account"])
+def test_get_camera_track_blocks_stale_apply_after_fetch(gallery, monkeypatch, change):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = _local_track_state(monkeypatch, module, CAMERA_TRACK)
+    complete, _ = _install_camera_track_fetch(panel, state, actions)
+    project = ["project", "/project.licht"]
+    monkeypatch.setattr(panel, "_project_identity", lambda: tuple(project))
+    monkeypatch.setattr(panel, "_schedule_phase_poll", lambda: None)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._action_get_camera_track()
+    panel._action_confirm_action()
+    if change == "track":
+        current["path"] = dict(CAMERA_TRACK, duration=9)
+    elif change == "project":
+        project[0] = "other-project"
+        state["links"] = {"other-project": {"sceneId": "private-one", "revision": "original"}}
+    else:
+        state["identity"] = ("https://portal.example", "two@example.com", "second", True)
+    complete(dict(CAMERA_TRACK, duration=8))
+    panel._advance_phases()
+    assert panel._track_pull_pending is None
+    if change == "track":
+        assert current["path"] == dict(CAMERA_TRACK, duration=9)
+    else:
+        assert current["path"] == CAMERA_TRACK
+    assert "changed" in _bound_gallery_message(panel).lower() or change == "account"
+
+
+def test_get_camera_track_failed_fetch_does_not_apply_or_advance_link(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = _local_track_state(monkeypatch, module, CAMERA_TRACK)
+    _, fail = _install_camera_track_fetch(panel, state, actions)
+    monkeypatch.setattr(panel, "_schedule_phase_poll", lambda: None)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceed())
+    panel._action_get_camera_track()
+    panel._action_confirm_action()
+    fail(TRACK_CONFLICT)
+    panel._advance_phases()
+    assert current["path"] == CAMERA_TRACK
+    assert state["links"]["project"]["revision"] == "original"
+    assert panel._track_pull_pending is None
+    assert "changed" in _bound_gallery_message(panel).lower()
+
+
+def test_get_camera_track_save_error_before_fetch_does_not_call_service(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    _local_track_state(monkeypatch, module, CAMERA_TRACK)
+    _install_camera_track_fetch(panel, state, actions)
+
+    def save(_proceed):
+        raise ValueError("The project could not be saved. Your gallery operation was stopped; resolve the save error before retrying.")
+
+    monkeypatch.setattr(panel, "_save_current_project", save)
+    panel._dispatch("get_camera_track", [])
+    panel._dispatch("confirm_action", [])
+    assert actions == []
+    status = _bound_gallery_message(panel)
+    assert "could not be saved" in status
+    assert GETTING_TRACK not in status
+
+
+def test_get_camera_track_save_after_compares_native_snapshot_not_wire_json(gallery, monkeypatch):
+    panel, state, actions = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = _local_track_state(monkeypatch, module, CAMERA_TRACK)
+    complete, _ = _install_camera_track_fetch(panel, state, actions)
+    proceeds = []
+    monkeypatch.setattr(panel, "_schedule_phase_poll", lambda: None)
+    monkeypatch.setattr(panel, "_save_current_project", lambda proceed: proceeds.append(proceed))
+    panel._action_get_camera_track()
+    panel._action_confirm_action()
+    assert len(proceeds) == 1
+    proceeds[0]()
+    complete(copy.deepcopy(REMOTE_PRECISE_TRACK))
+    panel._advance_phases()
+    assert current["path"] == _native_camera_path(REMOTE_PRECISE_TRACK)
+    assert current["path"] != REMOTE_PRECISE_TRACK
+    assert len(proceeds) == 2
+    current["path"] = _native_camera_path(dict(current["path"], duration=99.0))
+    with pytest.raises(ValueError, match="changed while saving"):
+        proceeds[1]()
+    assert current["path"]["duration"] == _f32(99.0)
+
+
+def test_get_camera_track_post_apply_save_failure_clears_pending(gallery, monkeypatch):
+    panel, state, _ = gallery
+    module = import_module("lfs_plugins.gallery_panel")
+    _link_selected_scene(panel, state, monkeypatch)
+    current = _local_track_state(monkeypatch, module, CAMERA_TRACK)
+    applied = _native_camera_path(REMOTE_PRECISE_TRACK)
+    current["path"] = applied
+    pending = {"phase": "save_after", "applied": applied, "project": ("project", "/project.licht"),
+        "identity": state["identity"]}
+    panel._track_pull_pending = pending
+    panel._save_pending = {"project": ("project", "/project.licht"), "identity": state["identity"],
+        "generation": 2, "continuation": lambda: panel._camera_track_pull_applied_saved(pending)}
+    monkeypatch.setattr(panel, "_project_identity", lambda: ("project", "/project.licht"))
+    monkeypatch.setattr(module.lf, "project_poll_write", lambda: {"running": False, "generation": 2, "error": "disk full", "path": "/project.licht"}, raising=False)
+    monkeypatch.setattr(module.lf, "project_is_dirty", lambda: False, raising=False)
+    panel._advance_phases()
+    assert panel._track_pull_pending is None
+    assert panel._save_pending is None
+    assert "could not be saved" in panel._message
+    assert not panel._panel_busy()
+
+
+def test_pause_clears_fetching_camera_track_pull_so_other_actions_are_not_blocked(gallery):
+    panel, _, _ = gallery
+    panel._track_pull_pending = {"phase": "fetching", "id": "fetch-op"}
+    assert panel._panel_busy() and panel._can_pause()
+    panel._action_pause()
+    assert panel._track_pull_pending is None
+    assert not panel._panel_busy()
+    assert "canceled" in panel._message.lower()
