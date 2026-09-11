@@ -260,7 +260,8 @@ namespace lfs::io::project {
                 return {};
             }
             if (node.type == lfs::core::NodeType::SPLAT && binding.fourcc == "DSRC" &&
-                (binding.source_kind == "ply" || binding.source_kind == "sog" || binding.source_kind == "ssog") &&
+                (binding.source_kind == "ply" || binding.source_kind == "sog" ||
+                 binding.source_kind == "ssog" || binding.source_kind == "spz") &&
                 binding.instance_uuid == node.uuid && !binding.reference_uuid) {
                 return {};
             }

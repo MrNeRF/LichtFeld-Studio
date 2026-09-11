@@ -237,7 +237,7 @@ class ProjectFile:
             _check(node.get('training_enabled') is False)
             payload = node['payload']
             extension = payload['source_kind']
-            _check(payload['fourcc'] == 'DSRC' and extension in ('ply', 'sog', 'ssog') and payload.get('reference_uuid') is None)
+            _check(payload['fourcc'] == 'DSRC' and extension in ('ply', 'sog', 'ssog', 'spz') and payload.get('reference_uuid') is None)
             identity = payload['instance_uuid']
             _check(identity == node['uuid'] and identity in self.assets and identity not in bound)
             bound.add(identity)
@@ -253,6 +253,9 @@ class ProjectFile:
             if extension == 'ply':
                 actual, stored_degree = codec._ply_header(stream, asset['size'])
                 _check(actual == count and stored_degree >= degree)
+            elif extension == 'spz':
+                _check(degree <= validate_spz(stream, count),
+                       'Published lighting detail exceeds the encoded splat data.')
             else:
                 _check(degree <= validate_compressed(stream, extension, count),
                        'Published lighting detail exceeds the encoded splat data.')
@@ -322,6 +325,89 @@ class ProjectFile:
 
     def copy_environment(self, output, *, progress=None):
         return self._copy(self._environment, output, self.manifest['environment'], progress, environment=True)
+
+
+NGSP_MAGIC = 0x5053474e
+SPZ_COORDINATE_EXTENSION = 0xADBE0003
+SPZ_FLAG_ANTIALIASED = 0x1
+SPZ_FLAG_HAS_EXTENSIONS = 0x2
+SPZ_MAX_COORDINATE_SYSTEM = 16  # RBU
+SPZ_HEADER_SIZE = 32
+
+
+def spz_stream_sizes(count, degree):
+    # Packed NGSP streams: positions, alphas, colors, scales, rotations, optional SH.
+    sizes = [count * 9, count, count * 3, count * 3, count * 4]
+    sh = count * ((degree + 1) ** 2 - 1) * 3
+    if sh:
+        sizes.append(sh)
+    return sizes
+
+
+def validate_spz(stream, count):
+    """Bounded SPZ v4 NGSP header/TOC checks. Does not decode ZSTD payloads."""
+    size = stream.size
+    _check(type(count) is int and 0 < count <= codec.MAX_SPLATS)
+    _check(size >= SPZ_HEADER_SIZE, 'Incomplete SPZ payload.')
+    header = stream.read(SPZ_HEADER_SIZE)
+    _check(len(header) == SPZ_HEADER_SIZE)
+    magic, version, num_points, sh_degree, fractional_bits, flags, num_streams, toc_offset = struct.unpack_from(
+        '<III BBBB I', header)
+    reserved = header[20:32]
+    _check(magic == NGSP_MAGIC, 'Not an SPZ payload.')
+    _check(version == 4, 'Gallery SPZ payloads must be container version 4.')
+    _check(reserved == b'\x00' * 12, 'SPZ header is reserved or corrupt.')
+    _check(flags & ~(SPZ_FLAG_ANTIALIASED | SPZ_FLAG_HAS_EXTENSIONS) == 0, 'SPZ flags are invalid.')
+    codec._degree(sh_degree)
+    _check(fractional_bits <= 24, 'SPZ fractional bits exceed the format limit.')
+    _check(num_points == count)
+    expected = spz_stream_sizes(count, sh_degree)
+    _check(num_streams == len(expected), 'SPZ stream table is invalid.')
+    _check(toc_offset >= SPZ_HEADER_SIZE and toc_offset <= size, 'SPZ table of contents is invalid.')
+    has_extensions = bool(flags & SPZ_FLAG_HAS_EXTENSIONS)
+    _check(has_extensions != (toc_offset == SPZ_HEADER_SIZE), 'SPZ extension region is invalid.')
+    _check(toc_offset - SPZ_HEADER_SIZE <= codec.MAX_READ_BYTES, 'SPZ extension region is too large.')
+    if has_extensions:
+        _validate_spz_extensions(stream, SPZ_HEADER_SIZE, toc_offset)
+    toc_size = num_streams * 16
+    _check(toc_offset + toc_size <= size, 'SPZ table of contents is truncated.')
+    stream.seek(toc_offset)
+    toc = stream.read(toc_size)
+    _check(len(toc) == toc_size)
+    packed = toc_offset + toc_size
+    for index, expected_size in enumerate(expected):
+        compressed, uncompressed = struct.unpack_from('<QQ', toc, index * 16)
+        _check(compressed > 0 and compressed <= size - packed, 'SPZ attribute stream size is invalid.')
+        _check(uncompressed == expected_size, 'SPZ attribute stream size is invalid.')
+        packed += compressed
+    _check(packed == size, 'SPZ compressed streams do not fill the payload.')
+    return sh_degree
+
+
+def _validate_spz_extensions(stream, start, end):
+    remaining = end - start
+    stream.seek(start)
+    seen_coord = False
+    while remaining > 0:
+        _check(remaining >= 8, 'SPZ extension records are truncated.')
+        header = stream.read(8)
+        _check(len(header) == 8)
+        ext_type, byte_length = struct.unpack('<II', header)
+        remaining -= 8
+        _check(byte_length <= remaining, 'SPZ extension records are truncated.')
+        if ext_type == SPZ_COORDINATE_EXTENSION:
+            _check(byte_length == 4, 'SPZ coordinate extension is invalid.')
+            payload = stream.read(byte_length)
+            _check(len(payload) == byte_length)
+            coord, = struct.unpack('<I', payload)
+            _check(coord <= SPZ_MAX_COORDINATE_SYSTEM, 'SPZ coordinate extension is invalid.')
+            _check(not seen_coord, 'SPZ coordinate extension is invalid.')
+            seen_coord = True
+            # coord 0 is UNSPECIFIED and treated as default RUB, matching upstream.
+        else:
+            stream.seek(byte_length, 1)
+        remaining -= byte_length
+    _check(remaining == 0)
 
 
 def validate_compressed(stream, extension, count):

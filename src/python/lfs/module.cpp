@@ -1875,9 +1875,10 @@ NB_MODULE(lichtfeld, m) {
         [](const std::string& path, const std::string& payload_format) {
             const int format = payload_format == "ply" ? 9 : payload_format == "sog" ? 10
                                                          : payload_format == "ssog"  ? 11
+                                                         : payload_format == "spz"   ? 12
                                                                                      : -1;
             if (format < 0)
-                throw std::invalid_argument("Choose PLY, SOG or SSOG compression.");
+                throw std::invalid_argument("Choose PLY, SOG, SSOG or SPZ compression.");
             nb::gil_scoped_release release;
             emit_project_cmd_marshaled("python.prepare_gallery_scene", [path, format] {
                 lfs::python::invoke_export(format, path, {}, 3, false, true, 4, false);
@@ -1885,14 +1886,14 @@ NB_MODULE(lichtfeld, m) {
         },
         nb::arg("path"), nb::arg("payload_format") = "ply",
         "Publish visible splats and appearance into a fresh native .licht file. "
-        "The selected PLY, SOG or SSOG data and HDR assets are embedded; training and editor state are excluded.");
+        "The selected PLY, SOG, SSOG or SPZ v4 data and HDR assets are embedded; training and editor state are excluded.");
 
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
            bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
            int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
-            if (format >= 9 && format <= 11)
+            if (format >= 9 && format <= 12)
                 throw std::runtime_error("Use prepare_gallery_scene() to prepare a gallery upload.");
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
                                        spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);

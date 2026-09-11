@@ -758,7 +758,7 @@ def test_transfer_popup_opens_after_worker_leaves_queued_state(gallery, monkeypa
     assert len(shown) == 2
 
 
-@pytest.mark.parametrize('format_name', ['studio', 'sog', 'ssog'])
+@pytest.mark.parametrize('format_name', ['studio', 'sog', 'ssog', 'spz'])
 def test_upload_format_is_fixed_at_confirmation_and_all_payload_formats_keep_hdr(gallery, monkeypatch, format_name):
     panel, _, calls = gallery
     module = import_module('lfs_plugins.gallery_panel')

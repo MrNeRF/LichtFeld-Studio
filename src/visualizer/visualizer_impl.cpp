@@ -556,17 +556,17 @@ namespace lfs::vis {
                 state.path = core::path_to_utf8(tasks.getExportPath());
                 state.error = tasks.getExportError();
                 const auto fmt = tasks.getExportFormat();
-                state.format = fmt == core::ExportFormat::PLY                                                                                                    ? "PLY"
-                               : (fmt == core::ExportFormat::GALLERY_SCENE || fmt == core::ExportFormat::GALLERY_SOG || fmt == core::ExportFormat::GALLERY_SSOG) ? ".licht"
-                               : fmt == core::ExportFormat::SSOG                                                                                                 ? "SSOG"
-                               : fmt == core::ExportFormat::SOG                                                                                                  ? "SOG"
-                               : fmt == core::ExportFormat::SPZ                                                                                                  ? "SPZ"
-                               : fmt == core::ExportFormat::HTML_VIEWER                                                                                          ? "HTML"
-                               : fmt == core::ExportFormat::USD                                                                                                  ? "USD"
-                               : fmt == core::ExportFormat::NUREC_USDZ                                                                                           ? "USDZ"
-                               : fmt == core::ExportFormat::RAD                                                                                                  ? "RAD"
-                               : fmt == core::ExportFormat::COLMAP                                                                                               ? "COLMAP"
-                                                                                                                                                                 : "file";
+                state.format = fmt == core::ExportFormat::PLY                                                                                                                                              ? "PLY"
+                               : (fmt == core::ExportFormat::GALLERY_SCENE || fmt == core::ExportFormat::GALLERY_SOG || fmt == core::ExportFormat::GALLERY_SSOG || fmt == core::ExportFormat::GALLERY_SPZ) ? ".licht"
+                               : fmt == core::ExportFormat::SSOG                                                                                                                                           ? "SSOG"
+                               : fmt == core::ExportFormat::SOG                                                                                                                                            ? "SOG"
+                               : fmt == core::ExportFormat::SPZ                                                                                                                                            ? "SPZ"
+                               : fmt == core::ExportFormat::HTML_VIEWER                                                                                                                                    ? "HTML"
+                               : fmt == core::ExportFormat::USD                                                                                                                                            ? "USD"
+                               : fmt == core::ExportFormat::NUREC_USDZ                                                                                                                                     ? "USDZ"
+                               : fmt == core::ExportFormat::RAD                                                                                                                                            ? "RAD"
+                               : fmt == core::ExportFormat::COLMAP                                                                                                                                         ? "COLMAP"
+                                                                                                                                                                                                           : "file";
                 return state;
             },
             []() {

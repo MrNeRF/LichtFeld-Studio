@@ -113,7 +113,7 @@
     <p class="gallery-muted">Upload visible splats with the initial view, camera path and supported render settings.</p>
     <label for="gallery-upload-format">Splat format inside .licht</label>
     <select id="gallery-upload-format" data-value="upload_format" data-attrif-disabled="busy">
-      <option value="studio">Original precision</option><option value="sog">SOG (compact)</option><option value="ssog">SSOG (multiple LODs)</option>
+      <option value="studio">Original precision</option><option value="sog">SOG (compact)</option><option value="ssog">SSOG (multiple LODs)</option><option value="spz">SPZ v4</option>
     </select>
     <p class="gallery-muted">Every upload is a .licht file containing the selected splat format, separate objects, view settings and HDR background. Training checkpoints and source images are excluded.</p>
     <button class="btn btn--primary" data-event-click="publish" data-attrif-disabled="busy">{{publish_label}}</button>

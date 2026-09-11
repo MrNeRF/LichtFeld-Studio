@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/scene.hpp"
+#include "core/tensor.hpp"
 #include "gui/gallery_scene_publication.hpp"
+#include "io/formats/spz.hpp"
 #include "io/project_document.hpp"
 #include "licht_test_support.hpp"
 #include "project/session_state.hpp"
@@ -130,6 +132,25 @@ namespace {
 
 } // namespace
 
+TEST(GalleryScenePublicationTest, PublishedCameraRecordsWorldExtentFromSettingsScale) {
+    Viewport viewport(1920, 1080);
+    const float settings_scale = 1080.0f / 6.25f;
+    const auto state = lfs::vis::project::capturePanelCameraProjectState(viewport, settings_scale);
+    ASSERT_TRUE(state.ortho_extent_world.has_value());
+    EXPECT_FLOAT_EQ(*state.ortho_extent_world, 6.25f);
+    const auto json = lfs::vis::project::panelCameraProjectStateToJson("primary", state);
+    ASSERT_TRUE(json.contains("ortho_extent_world"));
+    EXPECT_FLOAT_EQ(json["ortho_extent_world"].get<float>(), 6.25f);
+    EXPECT_TRUE(json["ortho_scale"].is_null());
+
+    Viewport secondary(960, 540);
+    secondary.ortho_scale_override = 540.0f / 3.0f;
+    const auto secondary_state =
+        lfs::vis::project::capturePanelCameraProjectState(secondary, settings_scale);
+    ASSERT_TRUE(secondary_state.ortho_extent_world.has_value());
+    EXPECT_FLOAT_EQ(*secondary_state.ortho_extent_world, 3.0f);
+}
+
 TEST(GalleryScenePublicationTest, StudioPreservesCleanCompressedSourceAndExplicitSogMatchesSog) {
     EXPECT_TRUE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SCENE, "sog", false));
     EXPECT_TRUE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SCENE, "ssog", false));
@@ -140,9 +161,14 @@ TEST(GalleryScenePublicationTest, StudioPreservesCleanCompressedSourceAndExplici
     EXPECT_FALSE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SOG, "ssog", false));
     EXPECT_TRUE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SSOG, "ssog", false));
     EXPECT_FALSE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SSOG, "sog", false));
+    EXPECT_TRUE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SPZ, "spz", false));
+    EXPECT_FALSE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SPZ, "sog", false));
+    EXPECT_TRUE(galleryEncodedAssetReusable(ExportFormat::GALLERY_SCENE, "spz", false));
     EXPECT_EQ(galleryPublicationExtension(ExportFormat::GALLERY_SCENE, "sog"), "sog");
     EXPECT_EQ(galleryPublicationExtension(ExportFormat::GALLERY_SCENE, std::nullopt), "ply");
     EXPECT_EQ(galleryPublicationExtension(ExportFormat::GALLERY_SOG, std::nullopt), "sog");
+    EXPECT_EQ(galleryPublicationExtension(ExportFormat::GALLERY_SPZ, std::nullopt), "spz");
+    EXPECT_EQ(galleryPublicationExtension(ExportFormat::GALLERY_SPZ, "spz"), "spz");
 }
 
 TEST(GalleryScenePublicationTest, UnchangedEncodedAssetIsByteIdenticalAfterPublication) {
@@ -263,4 +289,161 @@ TEST(GalleryScenePublicationTest, SharedEncodedSourceSurvivesDocumentCloseAndRep
     const auto copy = temporary.path / "retained.sog";
     copyLazyChunkToFile(captured->bytes, copy);
     EXPECT_EQ(read_file_bytes(copy), original);
+}
+
+std::vector<std::byte> ngsp_v4_stub(const std::uint32_t count, const std::uint8_t sh_degree) {
+    std::vector<std::byte> bytes(32 + 16, std::byte{0});
+    const std::uint32_t magic = 0x5053474e;
+    const std::uint32_t version = 4;
+    const std::uint8_t streams = 1;
+    const std::uint32_t toc = 32;
+    std::memcpy(bytes.data(), &magic, 4);
+    std::memcpy(bytes.data() + 4, &version, 4);
+    std::memcpy(bytes.data() + 8, &count, 4);
+    bytes[12] = static_cast<std::byte>(sh_degree);
+    bytes[13] = std::byte{12};
+    bytes[15] = static_cast<std::byte>(streams);
+    std::memcpy(bytes.data() + 16, &toc, 4);
+    const std::uint64_t compressed = 0;
+    const std::uint64_t uncompressed = 0;
+    std::memcpy(bytes.data() + 32, &compressed, 8);
+    std::memcpy(bytes.data() + 40, &uncompressed, 8);
+    return bytes;
+}
+
+TEST(GalleryScenePublicationTest, UnchangedSpzV4AssetIsByteIdenticalAfterPublication) {
+    TemporaryDirectory temporary;
+    const auto original = ngsp_v4_stub(8, 0);
+    auto request = base_request(temporary.path / "identical-spz.scene", ExportFormat::GALLERY_SPZ);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = cpu_snapshot(),
+        .name = "clean-spz",
+        .encoded = owned_asset("spz", original, fixed_uuid(21)),
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "spz");
+    EXPECT_EQ(published.sidecar, "0.spz");
+    EXPECT_EQ(published.dsrc, original);
+    EXPECT_EQ(read_file_bytes(request.path / "0.spz"), original);
+}
+
+TEST(GalleryScenePublicationTest, StudioDefaultKeepsCleanSpzInsteadOfExpandingToPly) {
+    TemporaryDirectory temporary;
+    const auto original = ngsp_v4_stub(8, 1);
+    auto request = base_request(temporary.path / "studio-spz.scene", ExportFormat::GALLERY_SCENE);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = cpu_snapshot(),
+        .name = "imported-spz",
+        .encoded = owned_asset("spz", original, fixed_uuid(22)),
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "spz");
+    EXPECT_EQ(published.sidecar, "0.spz");
+    EXPECT_EQ(published.dsrc, original);
+    EXPECT_FALSE(std::filesystem::exists(request.path / "0.ply"));
+}
+
+TEST(GalleryScenePublicationTest, StudioOriginalPrecisionReencodesLegacySpzToPly) {
+    TemporaryDirectory temporary;
+    std::vector<std::byte> gzip_legacy(128, std::byte{0x5a});
+    gzip_legacy[0] = std::byte{0x1f};
+    gzip_legacy[1] = std::byte{0x8b};
+    auto request = base_request(temporary.path / "studio-spz3.scene", ExportFormat::GALLERY_SCENE);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = cpu_snapshot(),
+        .name = "legacy-spz",
+        .encoded = owned_asset("spz", gzip_legacy, fixed_uuid(24)),
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "ply");
+    EXPECT_EQ(published.sidecar, "0.ply");
+    ASSERT_GE(published.dsrc.size(), 3u);
+    EXPECT_EQ(std::memcmp(published.dsrc.data(), "ply", 3), 0);
+    EXPECT_FALSE(std::filesystem::exists(request.path / "0.spz"));
+}
+
+TEST(GalleryScenePublicationTest, GallerySpzReencodesNonV4SourceViaNativeWriter) {
+    TemporaryDirectory temporary;
+    auto request = base_request(temporary.path / "legacy-spz.scene", ExportFormat::GALLERY_SPZ);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = cpu_snapshot(),
+        .name = "legacy",
+        .encoded = owned_asset("spz", unique_encoded_bytes(0x11), fixed_uuid(23)),
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "spz");
+    EXPECT_EQ(published.sidecar, "0.spz");
+    ASSERT_GE(published.dsrc.size(), 8u);
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::memcpy(&magic, published.dsrc.data(), 4);
+    std::memcpy(&version, published.dsrc.data() + 4, 4);
+    EXPECT_EQ(magic, 0x5053474eu);
+    EXPECT_EQ(version, 4u);
+    EXPECT_NE(published.dsrc, unique_encoded_bytes(0x11));
+}
+
+TEST(GalleryScenePublicationTest, GallerySpzPublicationCountMatchesVisibleAfterSoftDelete) {
+    TemporaryDirectory temporary;
+    auto snapshot = cpu_snapshot();
+    ASSERT_EQ(snapshot.row_count, 8u);
+    lfs::core::Tensor del = lfs::core::Tensor::zeros_bool({8}, snapshot.data->means().device());
+    del.slice(0, 2, 5) = lfs::core::Tensor::ones_bool({3}, snapshot.data->means().device());
+    snapshot.data->soft_delete(del);
+    // Snapshot row_count covers stored rows; the deletion mask selects live rows.
+    ASSERT_EQ(snapshot.row_count, 8u);
+    ASSERT_EQ(snapshot.data->visible_count(), 5u);
+
+    auto request = base_request(temporary.path / "deleted-spz.scene", ExportFormat::GALLERY_SPZ);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = std::move(snapshot),
+        .name = "cropped",
+        .encoded = std::nullopt,
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "spz");
+    EXPECT_EQ(published.sidecar, "0.spz");
+    ASSERT_GE(published.dsrc.size(), 16u);
+    std::uint32_t count = 0;
+    std::memcpy(&count, published.dsrc.data() + 8, 4);
+    EXPECT_EQ(count, 5u);
+
+    const auto loaded = lfs::io::load_spz(request.path / "0.spz");
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->size(), 5u);
+    EXPECT_EQ(loaded->visible_count(), 5u);
+}
+
+TEST(GalleryScenePublicationTest, GallerySpzWritesGenuineV4WhenEncodingFromSplat) {
+    TemporaryDirectory temporary;
+    auto request = base_request(temporary.path / "encode-spz.scene", ExportFormat::GALLERY_SPZ);
+    request.nodes.push_back(GalleryScenePublishNode{
+        .snapshot = cpu_snapshot(),
+        .name = "encoded",
+        .encoded = std::nullopt,
+    });
+    writeGalleryScenePublication(request, {}, {});
+    const auto published = read_published_node(request.path);
+    EXPECT_EQ(published.source_kind, "spz");
+    EXPECT_EQ(published.sidecar, "0.spz");
+    ASSERT_GE(published.dsrc.size(), 16u);
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::uint32_t count = 0;
+    std::memcpy(&magic, published.dsrc.data(), 4);
+    std::memcpy(&version, published.dsrc.data() + 4, 4);
+    std::memcpy(&count, published.dsrc.data() + 8, 4);
+    EXPECT_EQ(magic, 0x5053474eu);
+    EXPECT_EQ(version, 4u);
+    EXPECT_EQ(count, 8u);
+    EXPECT_LE(static_cast<unsigned>(published.dsrc[12]), 3u);
+    auto document = require_result_ptr(ProjectDocument::open(request.path / "project.licht"));
+    const auto nodes = require_result(document->scene_graph().nodes());
+    EXPECT_EQ(nodes.front().payload->source_kind, "spz");
+    EXPECT_EQ(nodes.front().payload->fourcc, "DSRC");
 }

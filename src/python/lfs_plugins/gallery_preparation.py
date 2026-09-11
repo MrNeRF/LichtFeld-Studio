@@ -36,7 +36,7 @@ def staging_files(root, value):
         if len(files) >= gallery_bundle.MAX_NODES + 5:
             raise ValueError("Scene preparation contains too many files.")
         if (entry.name not in ("manifest.json", "manifest.json.tmp", "environment.lfsenv", "project.licht", "project.licht.lock")
-                and not re.fullmatch(r"(?:0|[1-9][0-9]{0,3})\.(?:ply|sog|ssog)", entry.name)):
+                and not re.fullmatch(r"(?:0|[1-9][0-9]{0,3})\.(?:ply|sog|ssog|spz)", entry.name)):
             raise ValueError("Scene preparation contains an unexpected file. Keep it for recovery.")
         if not stat.S_ISREG(entry.lstat().st_mode) or getattr(entry, "is_junction", lambda: False)():
             raise ValueError("Scene preparation contains a redirected file. Keep it for recovery.")
@@ -59,7 +59,7 @@ def read_staging(root, value):
     nodes, total = [], 0
     for number, node in enumerate(data["nodes"]):
         if (not isinstance(node, dict) or node.keys() != {"path", "transform", "shDegree"}
-                or node["path"] not in (f"{number}.ply", f"{number}.sog", f"{number}.ssog")):
+                or node["path"] not in (f"{number}.ply", f"{number}.sog", f"{number}.ssog", f"{number}.spz")):
             raise ValueError("Scene preparation has an invalid node path.")
         source = path / node["path"]
         total += source.stat().st_size

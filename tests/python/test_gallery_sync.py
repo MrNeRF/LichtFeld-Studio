@@ -670,7 +670,7 @@ def test_reviewed_create_conflict_uses_new_request_before_any_parts(tmp_path, mo
     assert service.snapshot()["jobs"][0]["status"] == "completed"
 
 
-@pytest.mark.parametrize('suffix', ['sog', 'ssog'])
+@pytest.mark.parametrize('suffix', ['sog', 'ssog', 'spz'])
 def test_compressed_studio_snapshot_uploads_and_retires_only_its_owned_file(tmp_path, monkeypatch, suffix):
     import uuid
     service = connected(tmp_path, monkeypatch)

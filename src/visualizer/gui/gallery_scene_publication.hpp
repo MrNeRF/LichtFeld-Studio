@@ -43,7 +43,19 @@ namespace lfs::vis::gui {
         bool created_directory = false;
     };
 
-    // Studio/GALLERY_SCENE keeps a clean ply/sog/ssog asset. Explicit SOG/SSOG
+    [[nodiscard]] inline bool isGalleryPublicationFormat(const core::ExportFormat format) noexcept {
+        switch (format) {
+        case core::ExportFormat::GALLERY_SCENE:
+        case core::ExportFormat::GALLERY_SOG:
+        case core::ExportFormat::GALLERY_SSOG:
+        case core::ExportFormat::GALLERY_SPZ:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // Studio/GALLERY_SCENE keeps a clean ply/sog/ssog/spz asset. Explicit SOG/SSOG/SPZ
     // reuse only when the requested compression already matches the source.
     [[nodiscard]] LFS_VIS_API bool galleryEncodedAssetReusable(
         core::ExportFormat requested, std::string_view source_kind,

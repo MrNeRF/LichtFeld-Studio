@@ -174,15 +174,16 @@ namespace lfs::io {
             return {};
         }
 
+        Tensor gather_live_rows(const Tensor& src, const Tensor& keep, const bool filter) {
+            Tensor selected = filter ? src.index_select(0, keep) : src;
+            return selected.contiguous().to_pageable_host();
+        }
+
         spz::GaussianCloud convert_to_spz(const SplatData& splat) {
-            const auto num_points = static_cast<int>(splat.size());
+            const bool filter = splat.has_deleted_mask();
+            const Tensor keep = filter ? splat.deleted().logical_not() : Tensor{};
             const int sh_degree = splat.get_max_sh_degree();
             const int sh_coeffs = sh_degree > 0 ? SH_COEFFS_FOR_DEGREE[sh_degree] : 0;
-
-            spz::GaussianCloud cloud;
-            cloud.numPoints = num_points;
-            cloud.shDegree = sh_degree;
-            cloud.antialiased = false;
 
             Tensor means;
             Tensor scaling;
@@ -192,16 +193,30 @@ namespace lfs::io {
             Tensor shN;
             {
                 LOG_TIMER_DEBUG("SPZ export: host copies");
-                means = splat.means().contiguous().to_pageable_host();
-                scaling = splat.scaling_raw().contiguous().to_pageable_host();
-                rotation = splat.rotation_raw().contiguous().to_pageable_host();
-                opacity = splat.opacity_raw().contiguous().to_pageable_host();
-                sh0 = splat.sh0().contiguous().to_pageable_host();
+                means = gather_live_rows(splat.means(), keep, filter);
+                scaling = gather_live_rows(splat.scaling_raw(), keep, filter);
+                rotation = gather_live_rows(splat.rotation_raw(), keep, filter);
+                opacity = gather_live_rows(splat.opacity_raw(), keep, filter);
+                sh0 = gather_live_rows(splat.sh0(), keep, filter);
             }
             if (sh_coeffs > 0 && splat.shN().is_valid() && splat.shN().numel() > 0) {
                 LOG_TIMER_DEBUG("SPZ export: sh unpack");
-                shN = splat.shN_canonical_cpu_gpu_decoded();
+                Tensor decoded = splat.shN_canonical_cpu_gpu_decoded();
+                if (filter && decoded.is_valid() && decoded.numel() > 0) {
+                    Tensor keep_for_sh = keep;
+                    if (keep_for_sh.device() != decoded.device())
+                        keep_for_sh = keep_for_sh.to(decoded.device());
+                    decoded = decoded.index_select(0, keep_for_sh);
+                }
+                shN = decoded.contiguous().to_pageable_host();
             }
+
+            const auto num_points = static_cast<int>(means.size(0));
+
+            spz::GaussianCloud cloud;
+            cloud.numPoints = num_points;
+            cloud.shDegree = sh_degree;
+            cloud.antialiased = false;
 
             LOG_TIMER_DEBUG("SPZ export: pack");
             cloud.positions.resize(num_points * 3);
@@ -460,10 +475,13 @@ namespace lfs::io {
                 std::format("SPZ export version must be 3 or 4 (got {})", options.version),
                 options.output_path);
         }
-        if (splat_data.size() == 0 || splat_data.size() > spz::kMaxSpzPoints) {
+        const auto export_count = splat_data.has_deleted_mask()
+                                      ? static_cast<size_t>(splat_data.visible_count())
+                                      : splat_data.size();
+        if (export_count == 0 || export_count > spz::kMaxSpzPoints) {
             return make_error(
                 ErrorCode::INVALID_DATASET,
-                std::format("SPZ export supports 1..{} splats", spz::kMaxSpzPoints),
+                std::format("SPZ export supports 1..{} visible splats", spz::kMaxSpzPoints),
                 options.output_path);
         }
 

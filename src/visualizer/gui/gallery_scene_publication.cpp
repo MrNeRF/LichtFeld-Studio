@@ -14,8 +14,11 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <stdexcept>
 #include <utility>
 
@@ -25,7 +28,7 @@ namespace lfs::vis::gui {
         using ExportFormat = lfs::core::ExportFormat;
 
         [[nodiscard]] bool isEncodedSplatKind(const std::string_view kind) noexcept {
-            return kind == "ply" || kind == "sog" || kind == "ssog";
+            return kind == "ply" || kind == "sog" || kind == "ssog" || kind == "spz";
         }
 
         [[nodiscard]] const char* requestedFallbackExtension(const ExportFormat format) noexcept {
@@ -34,9 +37,31 @@ namespace lfs::vis::gui {
                 return "sog";
             case ExportFormat::GALLERY_SSOG:
                 return "ssog";
+            case ExportFormat::GALLERY_SPZ:
+                return "spz";
             default:
                 return "ply";
             }
+        }
+
+        // Bounded header sniff: NGSP v4 magic/version/count/SH. Does not decompress ZSTD.
+        [[nodiscard]] bool spzEncodedAssetLooksLikeV4(const lfs::io::project::LazyChunkValue& bytes,
+                                                      const std::uint64_t expected_count) {
+            if (bytes.size() < 16)
+                return false;
+            std::array<std::byte, 16> header{};
+            const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(header.size(), bytes.size()));
+            if (!bytes.read_at(0, std::span<std::byte>(header.data(), n)))
+                return false;
+            std::uint32_t magic = 0;
+            std::uint32_t version = 0;
+            std::uint32_t num_points = 0;
+            std::memcpy(&magic, header.data(), 4);
+            std::memcpy(&version, header.data() + 4, 4);
+            std::memcpy(&num_points, header.data() + 8, 4);
+            const auto sh_degree = static_cast<std::uint8_t>(header[12]);
+            constexpr std::uint32_t kNgspMagic = 0x5053474e; // 'NGSP'
+            return magic == kNgspMagic && version == 4 && num_points == expected_count && sh_degree <= 3;
         }
 
         void throwIfCanceled(const std::function<bool()>& canceled, const char* message) {
@@ -55,6 +80,8 @@ namespace lfs::vis::gui {
             return source_kind == "sog";
         case ExportFormat::GALLERY_SSOG:
             return source_kind == "ssog";
+        case ExportFormat::GALLERY_SPZ:
+            return source_kind == "spz";
         case ExportFormat::GALLERY_SCENE:
             return true;
         default:
@@ -187,11 +214,16 @@ namespace lfs::vis::gui {
                                   "Preparing scene for upload"))
                 throw std::runtime_error("Scene preparation canceled.");
             auto& published = request.nodes[i];
-            const std::string extension = galleryPublicationExtension(
-                request.format, published.encoded ? std::optional<std::string>(published.encoded->source_kind)
-                                                  : std::nullopt);
-            std::uint64_t published_count = 0;
+            std::optional<std::string> reused_kind;
             if (published.encoded) {
+                reused_kind = published.encoded->source_kind;
+                if (reused_kind == "spz" &&
+                    !spzEncodedAssetLooksLikeV4(published.encoded->bytes, published.snapshot.row_count))
+                    reused_kind.reset();
+            }
+            const std::string extension = galleryPublicationExtension(request.format, reused_kind);
+            std::uint64_t published_count = 0;
+            if (published.encoded && reused_kind) {
                 if (published.snapshot.row_count == 0)
                     continue;
                 published_count = published.snapshot.row_count;
@@ -222,6 +254,11 @@ namespace lfs::vis::gui {
                         ? io::save_ssog(*data, {.output_path = options.output_path,
                                                 .progress_callback = options.progress_callback,
                                                 .provenance = options.provenance})
+                    : extension == "spz"
+                        ? io::save_spz(*data, {.output_path = options.output_path,
+                                               .version = 4,
+                                               .progress_callback = options.progress_callback,
+                                               .provenance = options.provenance})
                         : io::save_ply(*data, options);
                 if (!result)
                     throw std::runtime_error(result.error().message);

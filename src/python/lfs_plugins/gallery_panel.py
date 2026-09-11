@@ -477,7 +477,7 @@ class GalleryPanel(Panel):
         project = self._project_identity()
         metadata = self._details()
         upload_format = self._upload_format
-        if upload_format not in ("studio", "sog", "ssog"):
+        if upload_format not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Choose a supported upload format.")
         metadata["viewerSettings"] = capture_view(lf)
         environment_source = str(lf.get_render_settings().environment_map_path) if metadata["viewerSettings"].get("environment") else None
@@ -516,7 +516,7 @@ class GalleryPanel(Panel):
         nodes = [n.name for n in self._visible_splats()]
         if not nodes:
             raise ValueError("There are no visible splats to upload.")
-        if upload_format not in ("studio", "sog", "ssog"):
+        if upload_format not in ("studio", "sog", "ssog", "spz"):
             raise ValueError("Choose a supported upload format.")
         if "licht" not in self.service.snapshot().get("source_formats", []):
             raise ValueError("Update the portal connection before publishing .licht files.")

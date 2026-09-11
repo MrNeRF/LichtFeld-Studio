@@ -3,6 +3,7 @@
 import io
 import json
 from pathlib import Path
+import struct
 import threading
 import uuid
 
@@ -391,3 +392,18 @@ def test_current_publishing_uploads_only_the_fresh_licht(tmp_path, monkeypatch):
     job = service.snapshot()['jobs'][0]
     assert job['status'] == 'completed', job['message']
     assert not directory.exists() and not Path(job['path']).exists()
+
+
+def test_staging_accepts_spz_sidecar_payload(tmp_path):
+    directory = tmp_path / (str(uuid.uuid4()) + ".scene")
+    directory.mkdir(mode=0o700)
+    payload = struct.pack('<III BBBB I 12s', 0x5053474e, 4, 1, 0, 12, 0, 1, 32, b'\x00' * 12)
+    payload += struct.pack('<QQ', 0, 9)
+    (directory / "0.spz").write_bytes(payload)
+    (directory / "manifest.json").write_text(json.dumps({
+        "version": 1,
+        "nodes": [{"path": "0.spz", "transform": IDENTITY, "shDegree": 0}],
+    }))
+    nodes, total = gallery_preparation.read_staging(tmp_path, directory)
+    assert nodes[0]["path"].name == "0.spz"
+    assert total == len(payload)

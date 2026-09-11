@@ -1,3 +1,4 @@
+import gzip
 import io
 import json
 from pathlib import Path
@@ -111,3 +112,113 @@ class PortableProjectTests(unittest.TestCase):
 
 from lfs_plugins import portable_project as codec
 FIXTURES = Path(__file__).parents[1] / "data"
+NATIVE_SPZ = Path(__file__).parents[1] / "data" / "spz"
+
+
+def _validate(payload, count):
+    return codec.validate_spz(codec.SliceReader(io.BytesIO(payload), 0, len(payload)), count)
+
+
+def _spz_v4(count, sh_degree=0, *, flags=0, coord=None, unknown_ext=None, compressed=None):
+    expected = codec.spz_stream_sizes(count, sh_degree)
+    streams = len(expected)
+    extensions = b''
+    if unknown_ext is not None:
+        extensions += struct.pack('<II', 0xDEAD0001, len(unknown_ext)) + unknown_ext
+        flags |= 2
+    if coord is not None:
+        extensions += struct.pack('<II I', 0xADBE0003, 4, coord)
+        flags |= 2
+    toc_offset = 32 + len(extensions)
+    header = struct.pack('<III BBBB I 12s', 0x5053474e, 4, count, sh_degree, 12, flags, streams, toc_offset, b'\x00' * 12)
+    if compressed is None:
+        compressed = [1] * streams
+    toc = b''.join(struct.pack('<QQ', size, expected[i]) for i, size in enumerate(compressed))
+    payload = b''.join(bytes(size) for size in compressed)
+    return header + extensions + toc + payload
+
+
+class SpzPortableValidationTests(unittest.TestCase):
+    def test_v4_header_count_degree_aa_and_coordinate_extension(self):
+        payload = _spz_v4(64, 2, flags=1, coord=6)
+        self.assertEqual(_validate(payload, 64), 2)
+        self.assertEqual(_validate(_spz_v4(8, 0, coord=0), 8), 0)
+
+    def test_exact_stream_counts_for_sh0_and_sh3(self):
+        self.assertEqual(codec.spz_stream_sizes(64, 0), [576, 64, 192, 192, 256])
+        self.assertEqual(len(codec.spz_stream_sizes(64, 0)), 5)
+        self.assertEqual(codec.spz_stream_sizes(4096, 3)[-1], 4096 * 15 * 3)
+        self.assertEqual(len(codec.spz_stream_sizes(4096, 3)), 6)
+        self.assertEqual(_validate(_spz_v4(8, 0), 8), 0)
+        self.assertEqual(_validate(_spz_v4(8, 3), 8), 3)
+
+    def test_rejects_wrong_stream_count_and_uncompressed_toc(self):
+        payload = bytearray(_spz_v4(8, 0))
+        payload[15] = 1
+        with self.assertRaises(ValueError):
+            _validate(bytes(payload), 8)
+        payload = bytearray(_spz_v4(8, 0))
+        struct.pack_into('<Q', payload, 40, 10**12)
+        with self.assertRaises(ValueError):
+            _validate(bytes(payload), 8)
+        payload = bytearray(_spz_v4(8, 0))
+        struct.pack_into('<Q', payload, 32, 0)
+        with self.assertRaises(ValueError):
+            _validate(bytes(payload), 8)
+
+    def test_rejects_count_mismatch_unknown_version_truncated_and_legacy_gzip(self):
+        payload = _spz_v4(8, 0)
+        with self.assertRaises(ValueError):
+            _validate(payload, 9)
+        broken = bytearray(payload)
+        struct.pack_into('<I', broken, 4, 99)
+        with self.assertRaises(ValueError):
+            _validate(bytes(broken), 8)
+        with self.assertRaises(ValueError):
+            _validate(payload[:20], 8)
+        gzipped = gzip.compress(struct.pack('<III BBB x', 0x5053474e, 3, 8, 1, 12, 1))
+        with self.assertRaises(ValueError):
+            _validate(gzipped, 8)
+
+    def test_rejects_unknown_coordinate_duplicate_coord_and_flag_mismatch(self):
+        with self.assertRaises(ValueError):
+            _validate(_spz_v4(8, 0, coord=99), 8)
+        dup = _spz_v4(8, 0, coord=6)
+        extra = struct.pack('<II I', 0xADBE0003, 4, 4)
+        toc = 32 + 12
+        patched = bytearray(dup)
+        patched[16:20] = struct.pack('<I', toc + len(extra))
+        patched = patched[:toc] + extra + patched[toc:]
+        with self.assertRaises(ValueError):
+            _validate(bytes(patched), 8)
+        flagged = bytearray(_spz_v4(8, 0))
+        flagged[14] = 2
+        with self.assertRaises(ValueError):
+            _validate(bytes(flagged), 8)
+
+    def test_skips_unknown_extensions_without_materializing_payload(self):
+        blob = b'\x11' * 4096
+        payload = _spz_v4(8, 1, unknown_ext=blob, coord=4)
+        self.assertEqual(_validate(payload, 8), 1)
+
+    def test_highly_compressed_exact_toc_is_accepted(self):
+        count = 1_000_000
+        payload = _spz_v4(count, 0)
+        uncompressed = sum(codec.spz_stream_sizes(count, 0))
+        self.assertGreater(uncompressed, 8 * 1024 * 1024)
+        self.assertGreater(uncompressed / len(payload), 20)
+        self.assertEqual(_validate(payload, count), 0)
+
+    def test_native_writer_fixtures_validate(self):
+        for name, count, degree in [('native-v4.spz', 64, 0), ('reference-sh3-v4.spz', 4096, 3)]:
+            data = (NATIVE_SPZ / name).read_bytes()
+            self.assertEqual(_validate(data, count), degree, name)
+        # Native writer emits one Adobe coordinate record before the TOC.
+        data = bytearray((NATIVE_SPZ / 'reference-sh3-v4.spz').read_bytes())
+        self.assertEqual(struct.unpack_from('<I', data, 32)[0], 0xADBE0003)
+        for coordinate in (0, 4, 6, 9, 14, 16):
+            struct.pack_into('<I', data, 40, coordinate)
+            self.assertEqual(_validate(bytes(data), 4096), 3)
+
+    def test_does_not_require_python_zstd(self):
+        self.assertFalse(hasattr(codec, 'zstd') or hasattr(codec, 'zstandard'))

@@ -1700,6 +1700,11 @@ namespace lfs::app {
             }
             case core::ExportFormat::COLMAP:
                 return std::unexpected("COLMAP export uses scene_export_colmap");
+            case core::ExportFormat::GALLERY_SCENE:
+            case core::ExportFormat::GALLERY_SOG:
+            case core::ExportFormat::GALLERY_SSOG:
+            case core::ExportFormat::GALLERY_SPZ:
+                return std::unexpected("Use prepare_gallery_scene() to prepare a gallery upload.");
             }
 
             return {};

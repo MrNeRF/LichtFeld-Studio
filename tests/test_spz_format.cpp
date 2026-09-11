@@ -416,6 +416,37 @@ TEST_F(SpzFormatTest, ExtremeEncodedOpacityLoadsAsFinite) {
     EXPECT_TRUE(std::isfinite(opacity.ptr<float>()[0]));
 }
 
+TEST_F(SpzFormatTest, SaveOmitsSoftDeletedRows) {
+    auto original = create_test_splat(8, 1);
+    Tensor del = Tensor::zeros_bool({8}, original.means().device());
+    del.slice(0, 0, 3) = Tensor::ones_bool({3}, original.means().device());
+    original.soft_delete(del);
+    ASSERT_TRUE(original.has_deleted_mask());
+    ASSERT_EQ(original.size(), 8u);
+    ASSERT_EQ(original.visible_count(), 5u);
+
+    const fs::path path = temp_dir / "soft_deleted.spz";
+    ASSERT_TRUE(save_spz(original, {.output_path = path}).has_value());
+
+    const auto loaded = load_spz(path);
+    ASSERT_TRUE(loaded.has_value()) << loaded.error();
+    EXPECT_EQ(loaded->size(), 5u);
+    EXPECT_EQ(loaded->visible_count(), 5u);
+    EXPECT_FALSE(loaded->has_deleted_mask());
+    EXPECT_EQ(loaded->get_max_sh_degree(), original.get_max_sh_degree());
+
+    std::ifstream in(path, std::ios::binary);
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::uint32_t count = 0;
+    in.read(reinterpret_cast<char*>(&magic), 4);
+    in.read(reinterpret_cast<char*>(&version), 4);
+    in.read(reinterpret_cast<char*>(&count), 4);
+    EXPECT_EQ(magic, spz::NGSP_MAGIC);
+    EXPECT_EQ(version, 4u);
+    EXPECT_EQ(count, 5u);
+}
+
 // CRITICAL: Verify sh0 tensor shape is [N, 1, 3] - this caught our color bug
 TEST_F(SpzFormatTest, Sh0TensorShapeIsCorrect) {
     auto original = create_test_splat(100, 1);

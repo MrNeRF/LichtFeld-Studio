@@ -1348,7 +1348,8 @@ namespace lfs::io::project {
                 }
 
                 if (node.type == "splat" && binding.fourcc == "DSRC" &&
-                    (binding.source_kind == "ply" || binding.source_kind == "sog" || binding.source_kind == "ssog") &&
+                    (binding.source_kind == "ply" || binding.source_kind == "sog" ||
+                     binding.source_kind == "ssog" || binding.source_kind == "spz") &&
                     binding.instance_uuid == node.uuid && !binding.reference_uuid && dataset_sources.contains(node.uuid)) {
                     continue;
                 }
@@ -2605,7 +2606,8 @@ namespace lfs::io::project {
 
     lfs::Result<std::filesystem::path> ProjectDocument::materialize_embedded_asset(
         const core::Uuid& uuid, const std::string_view extension) const {
-        if (extension != "ply" && extension != "sog" && extension != "ssog" && extension != "lfsenv")
+        if (extension != "ply" && extension != "sog" && extension != "ssog" &&
+            extension != "spz" && extension != "lfsenv")
             return embedded_asset_error("Unsupported embedded scene asset.");
         const auto* payload = find_dataset_source(uuid);
         if (!payload)

@@ -166,8 +166,8 @@ class PortalGalleryClient:
 
         check_canceled()
         size = path.stat().st_size
-        if size <= 0 or path.suffix.lower() not in (".ply", ".sog", ".ssog", ".lfsg", ".licht"):
-            raise ValueError("Choose a nonempty PLY, SOG, SSOG or .licht export")
+        if size <= 0 or path.suffix.lower() not in (".ply", ".sog", ".ssog", ".spz", ".lfsg", ".licht"):
+            raise ValueError("Choose a nonempty PLY, SOG, SSOG, SPZ or .licht export")
         fingerprint = _fingerprint(path, cancel)
         capabilities = self._request("GET", "/me")
         if capabilities.get("gallerySyncVersion") != 1:

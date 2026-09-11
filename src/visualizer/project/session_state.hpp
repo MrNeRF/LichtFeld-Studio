@@ -80,7 +80,8 @@ namespace lfs::vis {
 
         [[nodiscard]] LFS_VIS_API PanelCameraProjectState
         capturePanelCameraProjectState(
-            const Viewport& viewport);
+            const Viewport& viewport,
+            std::optional<float> fallback_ortho_scale = {});
         LFS_VIS_API void applyPanelCameraProjectState(
             Viewport& viewport,
             const PanelCameraProjectState& state);

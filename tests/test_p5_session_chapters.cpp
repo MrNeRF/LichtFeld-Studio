@@ -820,6 +820,32 @@ namespace {
         EXPECT_TRUE(panelCameraProjectStateFromJson(json));
     }
 
+    TEST(P5SessionChapterTest, CaptureUsesRenderSettingsOrthoScaleWhenOverrideMissing) {
+        Viewport viewport(1280, 720);
+        const float fallback = 720.0f / 6.25f;
+        auto captured = capturePanelCameraProjectState(viewport, fallback);
+        EXPECT_FALSE(captured.ortho_scale.has_value());
+        ASSERT_TRUE(captured.ortho_extent_world.has_value());
+        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 6.25f);
+
+        viewport.ortho_scale_override = 720.0f / 5.0f;
+        captured = capturePanelCameraProjectState(viewport, fallback);
+        ASSERT_TRUE(captured.ortho_scale.has_value());
+        EXPECT_FLOAT_EQ(*captured.ortho_scale, 720.0f / 5.0f);
+        ASSERT_TRUE(captured.ortho_extent_world.has_value());
+        EXPECT_FLOAT_EQ(*captured.ortho_extent_world, 5.0f);
+
+        Viewport empty(1280, 0);
+        captured = capturePanelCameraProjectState(empty, fallback);
+        EXPECT_FALSE(captured.ortho_extent_world.has_value());
+
+        Viewport invalid(1280, 720);
+        captured = capturePanelCameraProjectState(invalid, -1.0f);
+        EXPECT_FALSE(captured.ortho_extent_world.has_value());
+        captured = capturePanelCameraProjectState(invalid, std::nullopt);
+        EXPECT_FALSE(captured.ortho_extent_world.has_value());
+    }
+
     TEST(P5SessionChapterTest,
          GalleryColorSettingsPersistAndOldProjectsKeepTheirAppearance) {
         lfs::vis::RenderSettings settings;

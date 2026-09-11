@@ -950,7 +950,7 @@ namespace {
         Scene scene;
         const auto id = scene.addSplat("Encoded", make_splat(2));
         const auto uuid = scene.getNodeUuid(id);
-        for (const auto* format : {"ply", "sog", "ssog"}) {
+        for (const auto* format : {"ply", "sog", "ssog", "spz"}) {
             ScenePayloadBindings bindings{{uuid, PayloadBinding{
                                                      .fourcc = "DSRC",
                                                      .instance_uuid = uuid,

@@ -892,13 +892,22 @@ namespace lfs::vis::project {
 
     PanelCameraProjectState
     capturePanelCameraProjectState(
-        const Viewport& viewport) {
+        const Viewport& viewport,
+        const std::optional<float> fallback_ortho_scale) {
         const auto& camera = viewport.camera;
-        std::optional<float> extent;
-        if (viewport.ortho_scale_override && std::isfinite(*viewport.ortho_scale_override) &&
-            *viewport.ortho_scale_override > 0.0f && viewport.windowSize.y > 0) {
-            extent = static_cast<float>(viewport.windowSize.y) / *viewport.ortho_scale_override;
+        // Same effective scale the renderer uses: per-viewport override, else
+        // RenderSettings.ortho_scale (lf.set_orthographic writes the latter).
+        std::optional<float> scale = viewport.ortho_scale_override;
+        if (!scale || !std::isfinite(*scale) || *scale <= 0.0f) {
+            if (fallback_ortho_scale && std::isfinite(*fallback_ortho_scale) &&
+                *fallback_ortho_scale > 0.0f)
+                scale = fallback_ortho_scale;
+            else
+                scale.reset();
         }
+        std::optional<float> extent;
+        if (scale && viewport.windowSize.y > 0)
+            extent = static_cast<float>(viewport.windowSize.y) / *scale;
         return {
             .rotation = matrix_array(camera.R),
             .translation = vector_array(camera.t),
@@ -2233,11 +2242,12 @@ namespace lfs::vis::project {
 
         const auto primary =
             capturePanelCameraProjectState(
-                viewer.getViewport());
+                viewer.getViewport(), settings.ortho_scale);
         const auto secondary =
             capturePanelCameraProjectState(
                 rendering_manager
-                    ->projectSecondaryViewport());
+                    ->projectSecondaryViewport(),
+                settings.ortho_scale);
         const auto& tool_registry =
             UnifiedToolRegistry::instance();
         const auto& gizmo =

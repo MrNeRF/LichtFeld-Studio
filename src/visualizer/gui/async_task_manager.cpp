@@ -57,6 +57,7 @@
 #include <functional>
 #include <future>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <shared_mutex>
 #include <string_view>
 #include <type_traits>
@@ -127,7 +128,8 @@ namespace lfs::vis::gui {
         case ExportFormat::COLMAP: return "COLMAP";
         case ExportFormat::GALLERY_SCENE:
         case ExportFormat::GALLERY_SOG:
-        case ExportFormat::GALLERY_SSOG: return ".licht";
+        case ExportFormat::GALLERY_SSOG:
+        case ExportFormat::GALLERY_SPZ: return ".licht";
         default: return "file";
         }
     }
@@ -1429,12 +1431,12 @@ namespace lfs::vis::gui {
                                          bool include_provenance,
                                          int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
         if (isExporting()) {
-            if (format == ExportFormat::GALLERY_SCENE || format == ExportFormat::GALLERY_SOG || format == ExportFormat::GALLERY_SSOG)
+            if (lfs::vis::gui::isGalleryPublicationFormat(format))
                 throw std::runtime_error("Wait for the current export to finish before uploading.");
             return;
         }
 
-        if (format == ExportFormat::GALLERY_SCENE || format == ExportFormat::GALLERY_SOG || format == ExportFormat::GALLERY_SSOG) {
+        if (lfs::vis::gui::isGalleryPublicationFormat(format)) {
             startGallerySceneExport(path, format);
             return;
         }
@@ -1673,16 +1675,18 @@ namespace lfs::vis::gui {
                                                                                                                 : "once";
                 publication.published_playback_speed = gui->sequencer().playbackSpeed();
             }
-            publication.published_camera = project::panelCameraProjectStateToJson(
-                "primary", project::capturePanelCameraProjectState(viewer_->getViewport()));
             if (publication.nodes.empty())
                 throw std::runtime_error("There are no visible splats to upload.");
+            std::optional<float> fallback_ortho_scale;
             if (auto* rendering = viewer_->getRenderingManager()) {
                 const auto settings = rendering->getSettings();
                 publication.published_render = project::renderSettingsToProjectJson(settings);
+                fallback_ortho_scale = settings.ortho_scale;
                 if (environmentBackgroundEnabled(settings))
                     publication.environment_source = core::utf8_to_path(settings.environment_map_path);
             }
+            publication.published_camera = project::panelCameraProjectStateToJson(
+                "primary", project::capturePanelCameraProjectState(viewer_->getViewport(), fallback_ortho_scale));
         } catch (const std::exception& e) {
             publishExportFailureState(format, path, e.what());
             return;
@@ -2003,6 +2007,7 @@ namespace lfs::vis::gui {
                         case ExportFormat::GALLERY_SCENE:
                         case ExportFormat::GALLERY_SOG:
                         case ExportFormat::GALLERY_SSOG:
+                        case ExportFormat::GALLERY_SPZ:
                             error_msg = "Gallery preparation requires an owned scene snapshot.";
                             break;
                         }

@@ -367,7 +367,7 @@ class GallerySync:
         self._client()
         if self.busy:
             raise ValueError("Wait for the current transfer or pause it first.")
-        if scene["sourceFormat"] not in ("ply", "sog", "ssog", "lfsg", "licht"):
+        if scene["sourceFormat"] not in ("ply", "sog", "ssog", "spz", "lfsg", "licht"):
             raise ValueError("This scene format cannot be opened in Studio.")
         identifier = str(uuid.uuid4())
         path = self.root / "downloads" / (identifier + "." + scene["sourceFormat"])
@@ -797,7 +797,7 @@ class GallerySync:
 
         def owned(value, directory, identifier=None):
             path = Path(value).absolute()
-            if path.parent != directory or path.suffix not in (".ply", ".sog", ".ssog", ".lfsg", ".licht"):
+            if path.parent != directory or path.suffix not in (".ply", ".sog", ".ssog", ".spz", ".lfsg", ".licht"):
                 raise ValueError("A transfer file is outside its saved temporary folder. Keep it for recovery.")
             try:
                 uuid.UUID(path.stem)
@@ -821,7 +821,7 @@ class GallerySync:
                 else:
                     owned(stage["path"], root / "imports", stage["id"])
         elif job.get("ownedExport"):
-            if Path(job["path"]).suffix not in (".ply", ".sog", ".ssog", ".lfsg", ".licht"):
+            if Path(job["path"]).suffix not in (".ply", ".sog", ".ssog", ".spz", ".lfsg", ".licht"):
                 raise ValueError("The saved export is not a prepared gallery upload. Keep it for recovery.")
             owned(job["path"], root)
             if job.get("preparation"):
