@@ -13,47 +13,89 @@
 
   <!-- ── Controls ──────────────────────────────────────── -->
   <div id="controls">
-    <div data-if="show_ctrl_ready">
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')">{{btn_start}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div id="training-toolbar-measure" aria-hidden="true">
+      <span id="measure-start" class="btn training-toolbar-action training-toolbar-action--primary"><img src="../icon/sequencer/play.png" /><span>{{btn_start}}</span></span>
+      <span id="measure-pause" class="btn training-toolbar-action training-toolbar-action--primary"><img src="../icon/sequencer/pause.png" /><span>{{label_pause}}</span></span>
+      <span id="measure-resume" class="btn training-toolbar-action training-toolbar-action--primary"><img src="../icon/sequencer/play.png" /><span>{{label_resume}}</span></span>
+      <span id="measure-switch_edit" class="btn training-toolbar-action training-toolbar-action--primary"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></span>
+      <span id="measure-reset" class="btn training-toolbar-action"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></span>
+      <span id="measure-stop" class="btn training-toolbar-action"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></span>
+      <span id="measure-clear" class="btn training-toolbar-action"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></span>
+      <span id="measure-save_project" class="btn training-toolbar-action training-toolbar-action--save"><img src="../icon/archive.png" /><span>{{label_toolbar_save}}</span></span>
+      <span id="measure-action-gap"></span><span id="measure-action-max"></span>
     </div>
-    <div data-if="show_ctrl_starting">
-      <span class="status-text status-muted">{{label_status_starting}}</span>
-      <button class="btn btn--warning btn--full" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')">{{label_pause}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_stop" data-event-click="action('stop')">{{label_stop}}</button>
+    <div id="training-toolbar" class="training-toolbar">
+
+    <div class="training-actions-group" data-if="show_ctrl_ready">
+
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attrif-disabled="start_blocked" data-attr-aria-label="btn_start" data-tooltip="training.tooltip.btn_start" data-event-click="action('start')"><img src="../icon/sequencer/play.png" /><span>{{btn_start}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-if="show_reset_ready" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_running">
-      <button class="btn btn--warning btn--full" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')">{{label_pause}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_starting">
+      <div class="training-action-row">
+        <button class="btn btn--warning training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_pause" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')"><img src="../icon/sequencer/pause.png" /><span>{{label_pause}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_stop" data-attr-aria-label="label_stop" data-attr-title="label_stop" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_paused">
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_resume" data-event-click="action('resume')">{{label_resume}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_stop" data-event-click="action('stop')">{{label_stop}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_running">
+      <div class="training-action-row">
+        <button class="btn btn--warning training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_pause" data-tooltip="training.tooltip.btn_pause" data-event-click="action('pause')"><img src="../icon/sequencer/pause.png" /><span>{{label_pause}}</span></button>
+        <button class="btn btn--primary training-toolbar-action training-toolbar-action--save" data-attr-aria-label="label_toolbar_save" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')"><img src="../icon/archive.png" /><span>{{label_toolbar_save}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_completed">
-      <span class="status-text status-success">{{label_status_completed}}</span>
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_paused">
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_resume" data-tooltip="training.tooltip.btn_resume" data-event-click="action('resume')"><img src="../icon/sequencer/play.png" /><span>{{label_resume}}</span></button>
+        <button class="btn btn--primary training-toolbar-action training-toolbar-action--save" data-attr-aria-label="label_toolbar_save" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')"><img src="../icon/archive.png" /><span>{{label_toolbar_save}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--error training-toolbar-action" data-tooltip="training.tooltip.btn_stop" data-attr-aria-label="label_stop" data-attr-title="label_stop" data-event-click="action('stop')"><img src="../icon/sequencer/stop.png" /><span>{{label_toolbar_stop}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_stopped">
-      <span class="status-text status-muted">{{label_status_stopped}}</span>
-      <button class="btn btn--success btn--full" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_completed">
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_toolbar_edit" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_error">
-      <span class="status-text status-error">{{label_status_error}}</span>
-      <span class="status-text">{{error_message}}</span>
-      <button class="btn btn--secondary btn--full" data-tooltip="training.tooltip.btn_reset" data-event-click="action('reset')">{{label_reset}}</button>
-      <button class="btn btn--error btn--full" data-tooltip="training.tooltip.btn_clear" data-event-click="action('clear')">{{label_clear}}</button>
+    <div class="training-actions-group" data-if="show_ctrl_stopped">
+      <div class="training-action-row">
+        <button class="btn btn--success training-toolbar-action training-toolbar-action--primary" data-attr-aria-label="label_toolbar_edit" data-tooltip="training.tooltip.btn_switch_edit" data-event-click="action('switch_edit')"><img src="../icon/adjustments.png" /><span>{{label_toolbar_edit}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <div data-if="show_ctrl_stopping">
-      <span class="status-text status-muted">{{label_status_stopping}}</span>
+    <div class="training-actions-group" data-if="show_ctrl_error">
+      <div class="training-action-row">
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_reset" data-attr-aria-label="label_reset" data-attr-title="label_reset" data-event-click="action('reset')"><img src="../icon/reset.png" /><span>{{label_toolbar_reset}}</span></button>
+        <button class="btn btn--secondary training-toolbar-action" data-tooltip="training.tooltip.btn_clear" data-attr-aria-label="label_clear" data-attr-title="label_clear" data-event-click="action('clear')"><img src="../icon/scene/trash.png" /><span>{{label_clear}}</span></button>
+      </div>
     </div>
-    <button class="btn btn--primary btn--full" data-tooltip="training.tooltip.btn_save_project" data-if="show_project_save" data-event-click="action('save_project')">{{label_save_project}}</button>
-    <span class="status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
+    </div>
+    <div id="training-controls-header" class="training-state-line">
+      <span class="training-status-badge is-ready" data-if="show_ctrl_ready"><span class="training-status-badge-label">@tr:status.ready</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_starting"><span class="training-status-badge-label">@tr:runtime.task_starting</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_running"><span class="training-status-badge-label">@tr:training_panel.running</span></span>
+      <span class="training-status-badge is-paused" data-if="show_ctrl_paused"><span class="training-status-badge-label">@tr:status.paused</span></span>
+      <span class="training-status-badge is-complete" data-if="show_ctrl_completed"><span class="training-status-badge-label">@tr:status.complete</span></span>
+      <span class="training-status-badge is-complete" data-if="show_ctrl_stopped"><span class="training-status-badge-label">@tr:status.stopped</span></span>
+      <span class="training-status-badge is-error" data-if="show_ctrl_error"><span class="training-status-badge-label">@tr:status.error</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_stopping"><span class="training-status-badge-label">@tr:status.stopping</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_saving"><span class="training-status-badge-label">@tr:training.status_saving</span></span>
+      <span class="training-status-badge is-active" data-if="show_ctrl_restoring"><span class="training-status-badge-label">@tr:training.status_restoring</span></span>
+    </div>
+    <div class="training-start-feedback" id="training-error-feedback" data-if="show_ctrl_error">
+      <span class="training-action-status status-text status-error">{{error_message}}</span>
+    </div>
+<div class="training-start-feedback" data-if="start_blocked">
+        <span class="training-action-status status-text status-error">{{start_error}}</span>
+        <span class="training-action-status status-text status-error">{{start_conflicts}}</span>
+        <span class="training-action-status status-text status-muted">{{start_fix_hint}}</span>
+      </div>
+    <span class="training-action-status status-text status-success" data-if="show_project_saved">{{label_project_saved}}</span>
   </div>
 
   <!-- ── Training Parameters ── -->
@@ -68,7 +110,6 @@
 
   <!-- Training telemetry remains visible while parameter rows scroll independently. -->
   <div class="section-gap training-telemetry" data-if="show_training_telemetry">
-    <span class="status-text text-default training-status-line">{{status_mode}}</span>
     <span class="status-text text-default training-status-line">{{status_iteration}}</span>
     <span class="status-text text-default training-status-line">{{status_gaussians}}</span>
     <div class="training-progress-wrap">
@@ -108,7 +149,7 @@
 
     <!-- Structural params (disabled when training started) -->
     <div data-class-disabled-overlay="struct_disabled">
-      <div class="setting-row" data-tooltip="training.tooltip.strategy" data-if="!pv_search_active">
+      <div class="setting-row" data-tooltip="training.tooltip.strategy" data-if="pv_show_strategy">
         <span class="prop-label">{{label_strategy}}</span>
         <select data-value="strategy">
           <option value="mrnf" data-tooltip="training.tooltip.opt.strategy.mrnf">{{label_strategy_mrnf}}</option>
@@ -116,6 +157,13 @@
           <option value="mcmc" data-tooltip="training.tooltip.opt.strategy.mcmc">{{label_strategy_mcmc}}</option>
         </select>
       </div>
+      <div class="setting-row" data-if="pv_show_backend" data-tooltip="training.tooltip.backend">
+        <label class="prop-label" for="training-backend">@tr:training.backend</label>
+        <select id="training-backend" data-value="training_backend">
+          <option data-for="backend : training_backend_options" data-attr-value="backend.id">{{backend.label}}</option>
+        </select>
+      </div>
+      <span class="status-text status-muted" data-if="pv_show_backend">{{backend_notice}}</span>
       <div class="setting-row"
            data-for="row : pv_basic_struct_rows"
            data-attr-data-tooltip="row.tooltip_key"
@@ -145,134 +193,465 @@
           <img data-attr-src="steps_scaling_lock_icon" />
         </button>
       </div>
-      <div class="setting-row" data-for="row : pv_basic_background_rows"
-           data-if="dep_mrnf"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-               data-event-change="pv_value_change(row.id, row.checked)" />
+    </div>
+  </div>
+  <div class="training-panel-block" data-if="pv_section_camera_visible">
+    <div class="section-header text-accent" id="hdr-camera" data-event-click="toggle_section('camera')">
+      <span class="section-arrow text-accent" id="arrow-camera">&#x25BC;</span>
+      <span class="text-accent">{{pv_header_camera}}</span>
+    </div>
+    <div class="section-content" id="sec-camera">
+      <div data-class-disabled-overlay="live_disabled">
+        <div class="setting-row" data-for="row : pv_basic_undistort_rows"
+          data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+            data-event-click="pv_value_change(row.id, !row.checked)" />
+        </div>
+        <div class="setting-row" data-for="row : pv_basic_mip_filter_rows"
+          data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_mip_filter_disabled">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+            data-event-click="pv_value_change(row.id, !row.checked)" />
+        </div>
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="!pv_search_active">
-        <span class="prop-label">{{label_sh_degree}}</span>
-        <select data-value="sh_degree_str">
-          <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
-          <option value="1" data-tooltip="training.tooltip.opt.sh_degree.1">1</option>
-          <option value="2" data-tooltip="training.tooltip.opt.sh_degree.2">2</option>
-          <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
-        </select>
+    </div>
+  </div>
+  <div class="training-panel-block" data-if="pv_section_background_visible">
+    <div class="section-header text-accent" id="hdr-background" data-event-click="toggle_section('background')">
+      <span class="section-arrow text-accent" id="arrow-background">&#x25BC;</span>
+      <span class="text-accent">{{pv_header_background}}</span>
+    </div>
+    <div class="section-content" id="sec-background">
+      <div data-class-disabled-overlay="live_disabled">
+        <div class="setting-row" data-for="row : pv_basic_background_rows"
+             data-if="dep_mrnf" data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-change="pv_value_change(row.id, row.checked)" />
+        </div>
+        <div class="setting-row" data-for="row : pv_bg_mode_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
+            <option data-for="item : pv_bg_mode_options" data-if="item.prop_id == row.id"
+                    data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+          </select>
+        </div>
+        <div class="setting-row setting-row--aligned" data-tooltip="training.tooltip.bg_color"
+             data-if="dep_bg_color &amp;&amp; pv_show_background_fields">
+          <span class="setting-row__label-col">{{label_bg_color}}</span>
+          <div class="setting-row__control-col setting-row__control-col--color color-compact-control">
+            <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
+            <input type="text" class="color-hex visible" data-value="bg_color_hex" />
+          </div>
+        </div>
+        <div data-if="(dep_bg_image || pv_search_active) &amp;&amp; pv_show_background_fields">
+          <div class="setting-row" data-tooltip="training.tooltip.bg_image_path">
+            <span class="prop-label">{{label_bg_image}}</span>
+            <span class="text-disabled">{{bg_image_path_display}}</span>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">&#160;</span>
+            <button class="btn btn--secondary" data-tooltip="training.tooltip.bg_image_browse"
+                    data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
+            <button class="btn btn--secondary" data-tooltip="training.tooltip.bg_image_clear"
+                    data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="training-panel-block" data-if="pv_section_appearance_visible">
+    <div class="section-header text-accent" id="hdr-appearance" data-event-click="toggle_section('appearance')">
+      <span class="section-arrow text-accent" id="arrow-appearance">&#x25BC;</span>
+      <span class="text-accent">{{pv_header_appearance}}</span>
+    </div>
+    <div class="section-content" id="sec-appearance">
+      <div data-class-disabled-overlay="live_disabled">
+        <div class="setting-row" data-for="row : pv_basic_exposure_correction_rows"
+             data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+                 data-event-click="pv_value_change(row.id, !row.checked)" />
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="training-panel-block" data-if="pv_section_masking_visible">
+    <div class="section-header text-accent" id="hdr-masking" data-event-click="toggle_section('masking')">
+      <span class="section-arrow text-accent" id="arrow-masking">&#x25BC;</span>
+      <span class="text-accent">{{pv_header_masking}}</span>
+    </div>
+    <div class="section-content" id="sec-masking">
+      <div data-class-disabled-overlay="live_disabled">
+        <div class="setting-row" data-for="row : pv_basic_live_start_rows"
+          data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+            data-event-click="pv_value_change(row.id, !row.checked)" />
+          <select data-if="row.kind == 'select'" data-value="row.value"
+            data-event-change="pv_value_change(row.id, ev.value)">
+            <option data-for="item : pv_basic_live_start_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
+              data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+          </select>
+        </div>
+        <div class="mask-settings-group" data-if="dep_mask_mode">
+          <div class="setting-row" data-for="row : pv_mask_invert_rows"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+              data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="setting-row" data-for="row : pv_mask_threshold_rows" data-if="dep_mask_threshold"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+              data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+              data-event-change="pv_change(row.id, ev.value)"
+              data-event-blur="pv_blur(row.id, row.text)"
+              data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
+          <div class="setting-row" data-for="row : pv_mask_alpha_rows"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+              data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
+          <div data-if="dep_mask_segment">
+            <div class="setting-row" data-for="row : pv_mask_penalties_rows"
+              data-attr-data-tooltip="row.tooltip_key">
+              <span class="prop-label">{{row.label}}</span>
+              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                data-event-change="pv_change(row.id, ev.value)"
+                data-event-blur="pv_blur(row.id, row.text)"
+                data-event-escapecancel="pv_escape(row.id)" />
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<div class="training-panel-block" data-if="pv_section_dataset_visible">
+      <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
+        <span class="section-arrow text-accent" id="arrow-dataset">&#x25BC;</span>
+        <span class="text-accent">{{pv_header_dataset}}</span>
+      </div>
+      <div class="section-content" id="sec-dataset">
+        <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_path" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_dataset_path}}</span>
+            <span class="text-disabled">{{dataset_path_display}}</span>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_images" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_dataset_images}}</span>
+            <span class="text-disabled">{{dataset_images_display}}</span>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.resize_factor" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_resize_factor}}</span>
+            <select data-value="resize_factor_str">
+              <option value="-1" data-tooltip="training.tooltip.opt.resize_factor.auto">{{label_auto}}</option>
+              <option value="1" data-tooltip="training.tooltip.opt.resize_factor.1">1</option>
+              <option value="2" data-tooltip="training.tooltip.opt.resize_factor.2">2</option>
+              <option value="4" data-tooltip="training.tooltip.opt.resize_factor.4">4</option>
+              <option value="8" data-tooltip="training.tooltip.opt.resize_factor.8">8</option>
+            </select>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.max_width" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_max_width}}</span>
+            <input type="text" class="number-input" data-value="max_width_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.cpu_cache" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_cpu_cache}}</span>
+            <input type="checkbox" data-checked="use_cpu_cache" />
+          </div>
+          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_use_16bit_color}}</span>
+            <input type="checkbox" data-checked="use_16bit_color" />
+          </div>
+
+          <div class="setting-row" data-tooltip="training.tooltip.dataset_output" data-if="pv_show_dataset_fields">
+            <span class="prop-label">{{label_dataset_output}}</span>
+            <span class="text-disabled">{{dataset_output_display}}</span>
+          </div>
+        </div>
+        <span class="status-text status-muted" data-if="show_dataset_no_data &amp;&amp; pv_show_dataset_fields">{{label_no_dataset}}</span>
       </div>
     </div>
 
-    <!-- Params that follow the main training edit lock -->
-    <div data-class-disabled-overlay="live_disabled">
-      <div class="setting-row" data-for="row : pv_basic_exposure_correction_rows"
+  <!-- ── Advanced Parameters ── -->
+  <div class="training-panel-title training-panel-title--secondary section-header" id="hdr-advanced-params" data-event-click="toggle_section('advanced_params')" data-if="pv_section_advanced_params_visible"><span id="arrow-advanced-params" class="section-arrow">&#x25B6;</span>
+    <img class="training-panel-title-icon" src="../icon/adjustments.png" />
+    <span>{{pv_header_advanced_params}}</span>
+  </div>
+  <div class="training-panel-block section-content collapsed" id="sec-advanced-params" data-if="pv_section_advanced_params_visible">
+    <div class="training-subsection-title" data-if="pv_section_depth_visible || pv_section_normal_visible">@tr:training.section.supervision</div>
+    <div data-if="pv_section_depth_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_basic_depth_toggle_rows"
+           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_depth_supervision_disabled">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-click="pv_value_change(row.id, !row.checked)" />
+      </div>
+    </div>
+<div class="training-panel-block" data-if="pv_section_depth_visible &amp;&amp; (dep_depth_loss)">
+<div class="section-header text-accent" id="hdr-depth" data-event-click="toggle_section('depth')"><span class="section-arrow" id="arrow-depth">&#x25BC;</span><span>{{pv_header_depth}}</span></div>
+<div class="section-content" id="sec-depth"><div data-class-disabled-overlay="live_disabled">
+        <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss &amp;&amp; pv_show_depth_loss_mode">
+          <span class="prop-label">{{label_depth_loss_mode}}</span>
+          <select data-value="depth_loss_mode_str">
+            <option value="ssi" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi">{{label_depth_loss_ssi}}</option>
+            <option value="ssi-disparity" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_disparity">{{label_depth_loss_ssi_disparity}}</option>
+            <option value="ssi-depth" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_depth">{{label_depth_loss_ssi_depth}}</option>
+          </select>
+        </div>
+        <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss"
+          data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+            data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+            data-event-change="pv_change(row.id, ev.value)"
+            data-event-blur="pv_blur(row.id, row.text)"
+            data-event-escapecancel="pv_escape(row.id)" />
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+        </div>
+
+
+</div></div></div>
+    <div data-if="pv_section_normal_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
+           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_normal_supervision_disabled">
+        <span class="prop-label">{{row.label}}</span>
+        <input type="checkbox" data-checked="row.checked"
+               data-event-click="pv_value_change(row.id, !row.checked)" />
+      </div>
+    </div>
+<div class="training-panel-block" data-if="pv_section_normal_visible &amp;&amp; (dep_normal_loss)">
+<div class="section-header text-accent" id="hdr-normal" data-event-click="toggle_section('normal')"><span class="section-arrow" id="arrow-normal">&#x25BC;</span><span>{{pv_header_normal}}</span></div>
+<div class="section-content" id="sec-normal"><div data-class-disabled-overlay="live_disabled">
+        <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'checkbox'"
+          data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="checkbox" data-checked="row.checked"
+            data-event-click="pv_value_change(row.id, !row.checked)" />
+        </div>
+        <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
+          data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+            data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+            data-event-change="pv_change(row.id, ev.value)"
+            data-event-blur="pv_blur(row.id, row.text)"
+            data-event-escapecancel="pv_escape(row.id)" />
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+        </div>
+        <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'select'"
+          data-attr-data-tooltip="row.tooltip_key">
+          <span class="prop-label">{{row.label}}</span>
+          <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
+            <option data-for="item : pv_basic_normal_weights_options" data-if="item.prop_id == row.id"
+              data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
+          </select>
+        </div>
+
+</div></div></div>
+    <div class="training-subsection-title" data-if="pv_section_ppisp_visible || pv_section_bilateral_visible || pv_section_exposure_visible">@tr:training.section.exposure_appearance</div>
+    <div data-if="pv_section_ppisp_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_basic_ppisp_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
+    </div>
+<div class="training-panel-block" data-if="pv_section_ppisp_visible &amp;&amp; dep_ppisp &amp;&amp; !dep_exposure_correction">
+<div class="section-header text-accent" id="hdr-ppisp" data-event-click="toggle_section('ppisp')"><span class="section-arrow" id="arrow-ppisp">&#x25BC;</span><span>{{pv_header_ppisp}}</span></div>
+<div class="section-content" id="sec-ppisp"><div data-class-disabled-overlay="live_disabled">
+        <div data-if="dep_ppisp_params">
+          <div class="setting-row" data-for="row : pv_ppisp_exif_rows"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+              data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+        </div>
+        <div data-if="dep_ppisp">
+          <div class="setting-row" data-for="row : pv_ppisp_freeze_rows"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+              data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div data-if="dep_ppisp_frozen_sidecar &amp;&amp; pv_show_appearance_fields">
+            <div class="setting-row" data-tooltip="training.tooltip.ppisp_sidecar_path">
+              <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
+              <input type="text" data-value="ppisp_sidecar_path" />
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_browse" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
+            </div>
+            <div class="setting-row">
+              <span class="prop-label">&#160;</span>
+              <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_clear" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
+            </div>
+          </div>
+          <div class="setting-row" data-for="row : pv_ppisp_controller_rows"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+              data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+          <div data-if="dep_ppisp_controller">
+            <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step" data-if="pv_show_appearance_fields">
+              <span class="prop-label">{{label_ppisp_activation_step}}</span>
+              <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
+              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
+            </div>
+            <div class="setting-row" data-for="row : pv_ppisp_controller_tail_rows"
+              data-attr-data-tooltip="row.tooltip_key">
+              <span class="prop-label">{{row.label}}</span>
+              <input type="text" class="number-input" data-if="row.kind == 'number'"
+                data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
+                data-event-focus="pv_focus(row.id)"
+                data-event-change="pv_change(row.id, ev.value)"
+                data-event-blur="pv_blur(row.id, row.text)"
+                data-event-escapecancel="pv_escape(row.id)" />
+              <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
+                data-event-click="pv_value_change(row.id, !row.checked)" />
+              <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
+              <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            </div>
+          </div>
+        </div>
+        <div data-if="dep_ppisp_params">
+          <div class="setting-row" data-for="row : pv_appearance_tuning_rows" data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+              data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+              data-event-change="pv_change(row.id, ev.value)"
+              data-event-blur="pv_blur(row.id, row.text)"
+              data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
+        </div>
+
+</div></div></div>
+    <div data-if="pv_section_bilateral_visible" data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_basic_bilateral_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
-      <div class="setting-row" data-for="row : pv_basic_live_start_rows"
+    </div>
+<div class="training-panel-block" data-if="pv_section_bilateral_visible &amp;&amp; dep_bilateral &amp;&amp; !dep_exposure_correction">
+<div class="section-header text-accent" id="hdr-bilateral" data-event-click="toggle_section('bilateral')"><span class="section-arrow" id="arrow-bilateral">&#x25BC;</span><span>{{pv_header_bilateral}}</span></div>
+<div class="section-content" id="sec-bilateral"><div data-class-disabled-overlay="live_disabled">
+          <div data-class-disabled-overlay="adv_disabled">
+            <div class="setting-row" data-for="row : pv_bilateral_rows"
+              data-attr-data-tooltip="row.tooltip_key">
+              <span class="prop-label">{{row.label}}</span>
+              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                data-event-change="pv_change(row.id, ev.value)"
+                data-event-blur="pv_blur(row.id, row.text)"
+                data-event-escapecancel="pv_escape(row.id)" />
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            </div>
+          </div>
+
+</div></div></div>
+<div class="training-panel-block" data-if="pv_section_exposure_visible &amp;&amp; dep_exposure_correction">
+<div class="section-header text-accent" id="hdr-exposure" data-event-click="toggle_section('exposure')"><span class="section-arrow" id="arrow-exposure">&#x25BC;</span><span>{{pv_header_exposure}}</span></div>
+<div class="section-content" id="sec-exposure"><div data-class-disabled-overlay="live_disabled"><div data-class-disabled-overlay="adv_disabled">
+<div class="setting-row" data-for="row : pv_ppisp_exif_rows"
+            data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="checkbox" data-checked="row.checked"
+              data-event-click="pv_value_change(row.id, !row.checked)" />
+          </div>
+<div class="setting-row" data-for="row : pv_appearance_tuning_rows" data-attr-data-tooltip="row.tooltip_key">
+            <span class="prop-label">{{row.label}}</span>
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+              data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+              data-event-change="pv_change(row.id, ev.value)"
+              data-event-blur="pv_blur(row.id, row.text)"
+              data-event-escapecancel="pv_escape(row.id)" />
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+          </div>
+<div class="setting-row" data-for="row : pv_bilateral_rows"
+              data-attr-data-tooltip="row.tooltip_key">
+              <span class="prop-label">{{row.label}}</span>
+              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                data-event-change="pv_change(row.id, ev.value)"
+                data-event-blur="pv_blur(row.id, row.text)"
+                data-event-escapecancel="pv_escape(row.id)" />
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            </div>
+<div class="setting-row" data-for="row : pv_exposure_grid_start_rows"
+              data-if="dep_exposure_correction"
+              data-attr-data-tooltip="row.tooltip_key">
+              <span class="prop-label">{{row.label}}</span>
+              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
+                data-event-change="pv_change(row.id, ev.value)"
+                data-event-blur="pv_blur(row.id, row.text)"
+                data-event-escapecancel="pv_escape(row.id)" />
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            </div>
+</div></div></div></div>
+
+    <div class="training-subsection-title" data-if="pv_section_evaluation_visible || pv_section_random_init_visible || pv_section_sparsity_visible">@tr:training.section.training_features</div>
+    <div data-if="pv_section_evaluation_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_dataset_eval_rows"
            data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-        <select data-if="row.kind == 'select'" data-value="row.value"
-                data-event-change="pv_value_change(row.id, ev.value)">
-          <option data-for="item : pv_basic_live_start_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
-                  data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
-        </select>
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_depth_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key"
-           data-class-disabled-overlay="gut_depth_supervision_disabled">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
-      <div class="setting-row" data-tooltip="training.tooltip.depth_loss_mode" data-if="dep_depth_loss &amp;&amp; !pv_search_active">
-        <span class="prop-label">{{label_depth_loss_mode}}</span>
-        <select data-value="depth_loss_mode_str">
-          <option value="ssi" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi">{{label_depth_loss_ssi}}</option>
-          <option value="ssi-disparity" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_disparity">{{label_depth_loss_ssi_disparity}}</option>
-          <option value="ssi-depth" data-tooltip="training.tooltip.opt.depth_loss_mode.ssi_depth">{{label_depth_loss_ssi_depth}}</option>
-        </select>
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_depth_weight_rows" data-if="dep_depth_loss"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-               data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-               data-event-change="pv_change(row.id, ev.value)"
-               data-event-blur="pv_blur(row.id, row.text)"
-               data-event-escapecancel="pv_escape(row.id)" />
-        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_normal_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key"
-           data-class-disabled-overlay="gut_normal_supervision_disabled">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'checkbox'"
+    </div>
+<div class="training-panel-block" data-if="pv_section_evaluation_visible &amp;&amp; (dep_eval)">
+<div class="section-header text-accent" id="hdr-evaluation" data-event-click="toggle_section('evaluation')"><span class="section-arrow" id="arrow-evaluation">&#x25BC;</span><span>{{pv_header_evaluation}}</span></div>
+<div class="section-content" id="sec-evaluation"><div data-class-disabled-overlay="live_disabled">
+<div data-class-disabled-overlay="dataset_disabled">          <div class="setting-row" data-if="dep_eval &amp;&amp; pv_show_evaluation_fields" data-tooltip="training.tooltip.test_every">
+            <span class="prop-label">{{label_test_every}}</span>
+            <input type="text" class="number-input" data-value="test_every_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('test_every', 1)">+</button>
+          </div>
+</div>
+</div></div></div>
+
+    <!-- Optional training features -->
+    <div data-if="pv_section_random_init_visible" data-class-disabled-overlay="live_disabled">
+      <div class="setting-row" data-for="row : pv_feature_random_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
-      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'number'"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-               data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-               data-event-change="pv_change(row.id, ev.value)"
-               data-event-blur="pv_blur(row.id, row.text)"
-               data-event-escapecancel="pv_escape(row.id)" />
-        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-        <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_normal_weights_rows" data-if="dep_normal_loss &amp;&amp; row.kind == 'select'"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
-          <option data-for="item : pv_basic_normal_weights_options" data-if="item.prop_id == row.id"
-                  data-attr-value="item.value" data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
-        </select>
-      </div>
-      <div class="mask-settings-group" data-if="dep_mask_mode">
-        <div class="setting-row" data-for="row : pv_mask_invert_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="checkbox" data-checked="row.checked"
-                 data-event-click="pv_value_change(row.id, !row.checked)" />
-        </div>
-        <div class="setting-row" data-for="row : pv_mask_threshold_rows" data-if="dep_mask_threshold"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                 data-event-change="pv_change(row.id, ev.value)"
-                 data-event-blur="pv_blur(row.id, row.text)"
-                 data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        </div>
-        <div class="setting-row" data-for="row : pv_mask_alpha_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="checkbox" data-checked="row.checked"
-                 data-event-click="pv_value_change(row.id, !row.checked)" />
-        </div>
-        <div class="mask-settings-divider" data-if="dep_mask_segment"></div>
-        <div data-if="dep_mask_segment">
-          <div class="setting-row" data-for="row : pv_mask_penalties_rows"
+    </div>
+    <div class="training-panel-block" data-if="pv_section_random_init_visible &amp;&amp; dep_random">
+      <div class="section-header text-accent" id="hdr-random-init" data-event-click="toggle_section('random_init')"><span class="section-arrow" id="arrow-random-init">&#x25BC;</span><span>{{pv_header_random_init}}</span></div>
+      <div class="section-content" id="sec-random-init"><div data-class-disabled-overlay="live_disabled">
+        <div data-class-disabled-overlay="adv_disabled"><div data-if="dep_random">
+          <div class="setting-row" data-for="row : pv_init_random_rows"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
             <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
@@ -283,188 +662,41 @@
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-        </div>
-      </div>
+        </div></div>
+      </div></div>
+    </div>
+    <div data-if="pv_section_sparsity_visible" data-class-disabled-overlay="live_disabled">
       <div class="setting-row" data-for="row : pv_basic_sparsity_toggle_rows"
            data-attr-data-tooltip="row.tooltip_key">
         <span class="prop-label">{{row.label}}</span>
         <input type="checkbox" data-checked="row.checked"
                data-event-click="pv_value_change(row.id, !row.checked)" />
       </div>
-      <div class="setting-row" data-for="row : pv_basic_gut_rows"
-           data-attr-data-tooltip="row.tooltip_key" data-class-disabled-overlay="gut_disabled">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
+    </div>
+    <div class="training-subsection" data-if="pv_section_sparsity_visible &amp;&amp; dep_sparsity">
+      <div class="section-header text-accent" id="hdr-sparsity" data-event-click="toggle_section('sparsity')">
+        <span class="section-arrow text-accent" id="arrow-sparsity">&#x25B6;</span>
+        <span class="text-accent">{{pv_header_sparsity}}</span>
       </div>
-      <div class="setting-row" data-for="row : pv_basic_undistort_rows"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_mip_filter_rows"
-           data-attr-data-tooltip="row.tooltip_key"
-           data-class-disabled-overlay="gut_mip_filter_disabled">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
-      <div class="setting-row" data-for="row : pv_basic_ppisp_toggle_rows"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <input type="checkbox" data-checked="row.checked"
-               data-event-click="pv_value_change(row.id, !row.checked)" />
-      </div>
-      <div data-if="dep_ppisp_params">
-        <div class="setting-row" data-for="row : pv_ppisp_exif_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="checkbox" data-checked="row.checked"
-                 data-event-click="pv_value_change(row.id, !row.checked)" />
-        </div>
-      </div>
-      <div data-if="dep_ppisp">
-        <div class="setting-row" data-for="row : pv_ppisp_freeze_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="checkbox" data-checked="row.checked"
-                 data-event-click="pv_value_change(row.id, !row.checked)" />
-        </div>
-        <div data-if="dep_ppisp_frozen_sidecar &amp;&amp; !pv_search_active">
-          <div class="setting-row" data-tooltip="training.tooltip.ppisp_sidecar_path">
-            <span class="prop-label">{{label_ppisp_sidecar_path}}</span>
-            <input type="text" data-value="ppisp_sidecar_path" />
-            <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_browse" data-event-click="action('browse_ppisp_sidecar')">@tr:common.browse</button>
-          </div>
-          <div class="setting-row">
-            <span class="prop-label">&#160;</span>
-            <button class="btn btn--secondary" data-tooltip="training.tooltip.ppisp_sidecar_clear" data-if="has_ppisp_sidecar_clear" data-event-click="action('clear_ppisp_sidecar')">{{label_ppisp_sidecar_clear}}</button>
-          </div>
-        </div>
-        <div class="setting-row" data-for="row : pv_ppisp_controller_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="checkbox" data-checked="row.checked"
-                 data-event-click="pv_value_change(row.id, !row.checked)" />
-        </div>
-        <div data-if="dep_ppisp_controller">
-          <div class="setting-row" data-tooltip="training.tooltip.ppisp_activation_step" data-if="!pv_search_active">
-            <span class="prop-label">{{label_ppisp_activation_step}}</span>
-            <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
-          </div>
-          <div class="setting-row" data-for="row : pv_ppisp_controller_tail_rows"
+      <div class="section-content collapsed" id="sec-sparsity">
+        <div data-class-disabled-overlay="adv_disabled"><div data-if="dep_sparsity">
+          <div class="setting-row" data-for="row : pv_sparsity_rows"
                data-attr-data-tooltip="row.tooltip_key">
             <span class="prop-label">{{row.label}}</span>
-            <input type="text" class="number-input" data-if="row.kind == 'number'"
-                   data-pv-input="1" data-value="row.text" data-attr-data-pv-id="row.id"
-                   data-event-focus="pv_focus(row.id)"
+            <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
+                   data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
                    data-event-change="pv_change(row.id, ev.value)"
                    data-event-blur="pv_blur(row.id, row.text)"
                    data-event-escapecancel="pv_escape(row.id)" />
-            <input type="checkbox" data-if="row.kind == 'checkbox'" data-checked="row.checked"
-                   data-event-click="pv_value_change(row.id, !row.checked)" />
-            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
-            <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-        </div>
-      </div>
-      <div class="setting-row" data-for="row : pv_bg_mode_rows"
-           data-attr-data-tooltip="row.tooltip_key">
-        <span class="prop-label">{{row.label}}</span>
-        <select data-value="row.value" data-event-change="pv_value_change(row.id, ev.value)">
-          <option data-for="item : pv_bg_mode_options" data-if="item.prop_id == row.id" data-attr-value="item.value"
-                  data-attr-data-tooltip="item.tooltip_key">{{item.label}}</option>
-        </select>
-      </div>
-      <div class="setting-row setting-row--aligned" data-tooltip="training.tooltip.bg_color" data-if="dep_bg_color &amp;&amp; !pv_search_active">
-        <span class="setting-row__label-col">{{label_bg_color}}</span>
-        <div class="setting-row__control-col setting-row__control-col--color color-compact-control">
-          <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
-          <input type="text" class="color-hex visible" data-value="bg_color_hex" />
-        </div>
-      </div>
-      <div data-if="dep_bg_image &amp;&amp; !pv_search_active">
-        <div class="setting-row" data-tooltip="training.tooltip.bg_image_path">
-          <span class="prop-label">{{label_bg_image}}</span>
-          <span class="text-disabled">{{bg_image_path_display}}</span>
-        </div>
-        <div class="setting-row">
-          <span class="prop-label">&#160;</span>
-          <button class="btn btn--secondary" data-tooltip="training.tooltip.bg_image_browse" data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
-          <button class="btn btn--secondary" data-tooltip="training.tooltip.bg_image_clear" data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Advanced Parameters ── -->
-  <div class="training-panel-title training-panel-title--secondary" data-if="pv_section_advanced_params_visible">
-    <img class="training-panel-title-icon" src="../icon/adjustments.png" />
-    <span>{{pv_header_advanced_params}}</span>
-  </div>
-  <div class="training-panel-block" data-if="pv_section_advanced_params_visible">
-
-    <!-- Dataset subsection -->
-    <div class="training-subsection" data-if="pv_section_dataset_visible">
-      <div class="section-header text-accent" id="hdr-dataset" data-event-click="toggle_section('dataset')">
-        <span class="section-arrow text-accent" id="arrow-dataset">&#x25B6;</span>
-        <span class="text-accent">{{pv_header_dataset}}</span>
-      </div>
-      <div class="section-content collapsed" id="sec-dataset">
-        <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_path" data-if="!pv_search_active">
-            <span class="prop-label">{{label_dataset_path}}</span>
-            <span class="text-disabled">{{dataset_path_display}}</span>
+          <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="pv_show_prune_ratio">
+            <span class="prop-label">{{label_prune_ratio}}</span>
+            <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
+            <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
           </div>
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_images" data-if="!pv_search_active">
-            <span class="prop-label">{{label_dataset_images}}</span>
-            <span class="text-disabled">{{dataset_images_display}}</span>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.resize_factor" data-if="!pv_search_active">
-            <span class="prop-label">{{label_resize_factor}}</span>
-            <select data-value="resize_factor_str">
-              <option value="-1" data-tooltip="training.tooltip.opt.resize_factor.auto">{{label_auto}}</option>
-              <option value="1" data-tooltip="training.tooltip.opt.resize_factor.1">1</option>
-              <option value="2" data-tooltip="training.tooltip.opt.resize_factor.2">2</option>
-              <option value="4" data-tooltip="training.tooltip.opt.resize_factor.4">4</option>
-              <option value="8" data-tooltip="training.tooltip.opt.resize_factor.8">8</option>
-            </select>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.max_width" data-if="!pv_search_active">
-            <span class="prop-label">{{label_max_width}}</span>
-            <input type="text" class="number-input" data-value="max_width_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.cpu_cache" data-if="!pv_search_active">
-            <span class="prop-label">{{label_cpu_cache}}</span>
-            <input type="checkbox" data-checked="use_cpu_cache" />
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.use_16bit_color" data-if="!pv_search_active">
-            <span class="prop-label">{{label_use_16bit_color}}</span>
-            <input type="checkbox" data-checked="use_16bit_color" />
-          </div>
-          <div class="setting-row" data-for="row : pv_dataset_eval_rows"
-               data-attr-data-tooltip="row.tooltip_key">
-            <span class="prop-label">{{row.label}}</span>
-            <input type="checkbox" data-checked="row.checked"
-                   data-event-click="pv_value_change(row.id, !row.checked)" />
-          </div>
-          <div class="setting-row" data-if="dep_eval &amp;&amp; !pv_search_active" data-tooltip="training.tooltip.test_every">
-            <span class="prop-label">{{label_test_every}}</span>
-            <input type="text" class="number-input" data-value="test_every_str" />
-            <button class="num-step-btn" data-event-mousedown="num_step('test_every', -1)">-</button>
-            <button class="num-step-btn" data-event-mousedown="num_step('test_every', 1)">+</button>
-          </div>
-          <div class="setting-row" data-tooltip="training.tooltip.dataset_output" data-if="!pv_search_active">
-            <span class="prop-label">{{label_dataset_output}}</span>
-            <span class="text-disabled">{{dataset_output_display}}</span>
-          </div>
-        </div>
-        <span class="status-text status-muted" data-if="show_dataset_no_data &amp;&amp; !pv_search_active">{{label_no_dataset}}</span>
+        </div></div>
       </div>
     </div>
 
@@ -474,9 +706,17 @@
         <span class="section-arrow text-accent" id="arrow-optimization">&#x25B6;</span>
         <span class="text-accent">{{pv_header_optimization}}</span>
       </div>
-      <div class="section-content collapsed" id="sec-optimization">
+      <div class="section-content collapsed" id="sec-optimization"><div data-class-disabled-overlay="live_disabled"><div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="pv_show_sh_degree">
+        <span class="prop-label">{{label_sh_degree}}</span>
+        <select data-value="sh_degree_str">
+          <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
+          <option value="1" data-tooltip="training.tooltip.opt.sh_degree.1">1</option>
+          <option value="2" data-tooltip="training.tooltip.opt.sh_degree.2">2</option>
+          <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
+        </select>
+      </div></div>
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.opt_strategy_display" data-if="!pv_search_active">
+          <div class="setting-row" data-tooltip="training.tooltip.opt_strategy_display" data-if="pv_show_save_steps">
             <span class="prop-label">{{label_opt_strategy}}</span>
             <span class="text-disabled">{{opt_strategy_display}}</span>
           </div>
@@ -546,34 +786,6 @@
     </div>
 
     <!-- Bilateral Grid subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_bilateral &amp;&amp; pv_section_bilateral_visible">
-      <div class="training-subsection-title">{{pv_header_bilateral}}</div>
-      <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row" data-for="row : pv_bilateral_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                 data-event-change="pv_change(row.id, ev.value)"
-                 data-event-blur="pv_blur(row.id, row.text)"
-                 data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        </div>
-        <div class="setting-row" data-for="row : pv_exposure_grid_start_rows"
-             data-if="dep_exposure_correction"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                 data-event-change="pv_change(row.id, ev.value)"
-                 data-event-blur="pv_blur(row.id, row.text)"
-                 data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        </div>
-      </div>
-    </div>
 
     <!-- Losses subsection -->
     <div class="training-subsection" data-if="pv_section_losses_visible">
@@ -583,7 +795,7 @@
       </div>
       <div class="section-content collapsed" id="sec-losses">
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.lambda_dssim" data-if="!pv_search_active">
+          <div class="setting-row" data-tooltip="training.tooltip.lambda_dssim" data-if="pv_show_lambda_dssim">
             <span class="prop-label">{{label_lambda_dssim}}</span>
             <input type="range" class="setting-slider" data-value="lambda_dssim" min="0" max="1" step="0.01" />
             <span class="slider-value">{{lambda_dssim | format_float(3)}}</span>
@@ -611,7 +823,7 @@
       </div>
       <div class="section-content collapsed" id="sec-init">
         <div data-class-disabled-overlay="adv_disabled">
-          <div class="setting-row" data-tooltip="training.tooltip.init_opacity" data-if="!pv_search_active">
+          <div class="setting-row" data-tooltip="training.tooltip.init_opacity" data-if="pv_show_init_opacity">
             <span class="prop-label">{{label_init_opacity}}</span>
             <input type="range" class="setting-slider" data-value="init_opacity" min="0.01" max="1" step="0.01" />
             <span class="slider-value">{{init_opacity | format_float(3)}}</span>
@@ -630,48 +842,13 @@
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, -1)">-</button>
             <button class="num-step-btn" data-if="row.kind == 'number'" data-event-mousedown="pv_step(row.id, 1)">+</button>
           </div>
-          <div data-if="dep_random">
-            <div class="setting-row" data-for="row : pv_init_random_rows"
-                 data-attr-data-tooltip="row.tooltip_key">
-              <span class="prop-label">{{row.label}}</span>
-              <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                     data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                     data-event-change="pv_change(row.id, ev.value)"
-                     data-event-blur="pv_blur(row.id, row.text)"
-                     data-event-escapecancel="pv_escape(row.id)" />
-              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-              <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
 
-    <!-- Sparsity subsection (conditional) -->
-    <div class="training-subsection" data-if="dep_sparsity &amp;&amp; pv_section_sparsity_visible">
-      <div class="training-subsection-title">{{pv_header_sparsity}}</div>
-      <div data-class-disabled-overlay="adv_disabled">
-        <div class="setting-row" data-for="row : pv_sparsity_rows"
-             data-attr-data-tooltip="row.tooltip_key">
-          <span class="prop-label">{{row.label}}</span>
-          <input type="text" class="number-input" data-pv-input="1" data-value="row.text"
-                 data-attr-data-pv-id="row.id" data-event-focus="pv_focus(row.id)"
-                 data-event-change="pv_change(row.id, ev.value)"
-                 data-event-blur="pv_blur(row.id, row.text)"
-                 data-event-escapecancel="pv_escape(row.id)" />
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, -1)">-</button>
-          <button class="num-step-btn" data-event-mousedown="pv_step(row.id, 1)">+</button>
-        </div>
-        <div class="setting-row" data-tooltip="training.tooltip.prune_ratio" data-if="!pv_search_active">
-          <span class="prop-label">{{label_prune_ratio}}</span>
-          <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
-          <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
         </div>
       </div>
     </div>
 
     <!-- Save Steps subsection -->
-    <div class="training-subsection" data-if="!pv_search_active">
+    <div class="training-subsection" data-if="pv_show_save_steps">
       <div class="section-header text-accent" id="hdr-save-steps" data-event-click="toggle_section('save_steps')" data-tooltip="training.tooltip.save_steps">
         <span class="section-arrow text-accent" id="arrow-save-steps">&#x25B6;</span>
         <span class="text-accent">{{pv_header_save_steps}}</span>
