@@ -491,13 +491,16 @@ namespace lfs::io {
                 }
             }
             __syncthreads();
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
             const int warp = tid / 32;
             nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> a[3];
             for (int d = 0; d < D; d += 16)
                 nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + (start + (warp / 2) * 16) * D + d, D);
+#endif
             for (int base = 0; base < k; base += C) {
                 if (tid < C)
                     norms[tid] = base + tid < k ? centroid_norms[base + tid] : 0;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
                 nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, half, nvcuda::wmma::col_major> b;
                 nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float> acc;
                 nvcuda::wmma::fill_fragment(acc, 0.0f);
@@ -507,7 +510,11 @@ namespace lfs::io {
                 }
                 nvcuda::wmma::store_matrix_sync(&approx[(warp / 2) * 16][(warp % 2) * 16], acc, C + 4, nvcuda::wmma::mem_row_major);
                 __syncthreads();
+#else
+                __syncthreads();
+#endif
                 for (int c = lane; c < C && base + c < k; c += 4) {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
                     const float estimate = fmaf(-2.0f, approx[row][c], norms[c]);
                     // Half rounding contributes at most (2*u+u*u)*(||x||^2+
                     // ||c||^2), u=2^-11, to the score. The remaining relative
@@ -516,6 +523,7 @@ namespace lfs::io {
                     // Out-of-range values always take the reference path.
                     const float margin = 0.0011f * (point_norm[row] + norms[c]) + 1e-8f;
                     if (!point_safe[row] || !(norms[c] >= 0 && norms[c] < 4.0e9f) || !isfinite(estimate) || estimate <= best + margin) {
+#endif
                         float dot = 0;
 #pragma unroll
                         for (int d = 0; d < 45; ++d)
@@ -526,7 +534,9 @@ namespace lfs::io {
                             best = dist;
                             best_id = id;
                         }
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
                     }
+#endif
                 }
                 for (int delta = 2; delta > 0; delta /= 2) {
                     const float other = __shfl_xor_sync(0xffffffffu, best, delta, 4);
