@@ -1397,6 +1397,33 @@ namespace {
     };
 } // namespace
 
+TEST_F(PythonIntegrationTest, FreshDepthWindowPanelRangeSurvivesReadModifyEnable) {
+    for (const char* panel : {"main", "left", "right"}) {
+        SCOPED_TRACE(panel);
+        DepthWindowBindingState state;
+        const lfs::python::GilAcquire gil;
+        const auto decref = [](PyObject* object) { Py_XDECREF(object); };
+        std::unique_ptr<PyObject, decltype(decref)> globals(PyDict_New(), decref);
+        ASSERT_NE(globals, nullptr);
+        ASSERT_EQ(PyDict_SetItemString(globals.get(), "__builtins__", PyEval_GetBuiltins()), 0);
+        std::unique_ptr<PyObject, decltype(decref)> name(PyUnicode_FromString(panel), decref);
+        ASSERT_EQ(PyDict_SetItemString(globals.get(), "panel", name.get()), 0);
+        ASSERT_NO_THROW(execPythonInGlobals(globals.get(), R"PY(
+import lichtfeld as lf
+legacy = lf.selection.get_depth_filter_window()
+window = lf.selection.get_depth_filter_window(panel=panel)
+assert not window[0]
+assert window[1:3] == legacy[1:3] == (0.0, 100.0), (panel, window, legacy)
+_, near, far, sx, sy, ox, oy = window
+lf.selection.set_depth_filter_window(True, near, far, sx, ox, oy, sy, panel=panel)
+assert lf.selection.get_depth_filter_window(panel=panel) == (True, *window[1:])
+# A configured window remains intact while disabled.
+lf.selection.set_depth_filter_window(False, 2.0, 25.0, 0.5, 0.25, -0.25, 0.75, panel=panel)
+assert lf.selection.get_depth_filter_window(panel=panel) == (False, 2.0, 25.0, 0.5, 0.75, 0.25, -0.25)
+)PY"));
+    }
+}
+
 TEST_F(PythonIntegrationTest, ParkedGtPanelWindowRequestsAreAtomicallyRefused) {
     DepthWindowBindingState state;
     ASSERT_EQ(state.viewer->getSelectionTool(), nullptr);

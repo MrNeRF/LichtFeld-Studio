@@ -58,9 +58,14 @@ namespace lfs::vis {
         constexpr float kDepthMax = 1000.0f;
 
         [[nodiscard]] DepthWindowState depthWindowFromProjection(const RenderSettings& settings) {
+            // Fresh disabled settings still carry the legacy positive-Z sentinel.
+            // Decode it before seeding panel slots, just as the legacy getter does.
+            const bool legacy_default = !settings.depth_filter_enabled &&
+                                        settings.depth_filter_min.z == 0.0f &&
+                                        settings.depth_filter_max.z == 100.0f;
             return {
-                .near_plane = -settings.depth_filter_max.z,
-                .far_plane = -settings.depth_filter_min.z,
+                .near_plane = legacy_default ? 0.0f : -settings.depth_filter_max.z,
+                .far_plane = legacy_default ? 100.0f : -settings.depth_filter_min.z,
                 .scale_x = settings.depth_filter_scale_x,
                 .scale_y = settings.depth_filter_scale_y,
                 .offset_x = settings.depth_filter_offset_x,
