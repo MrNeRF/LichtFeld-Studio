@@ -55,7 +55,7 @@ namespace lfs::vis {
         };
 
         VulkanContext() = default;
-        ~VulkanContext();
+        LFS_VIS_API ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
         VulkanContext& operator=(const VulkanContext&) = delete;
@@ -273,18 +273,18 @@ namespace lfs::vis {
             return debug_utils_enabled_ && debug_name_writer_.enabled();
         }
 
-        [[nodiscard]] bool beginFrame(const VkClearValue& clear_value, Frame& frame);
+        [[nodiscard]] LFS_VIS_API bool beginFrame(const VkClearValue& clear_value, Frame& frame);
         // Dynamic rendering must be closed while external-image layout barriers
         // are recorded. These helpers bracket that interop window.
         [[nodiscard]] bool finishActiveRendering(VkCommandBuffer command_buffer);
         [[nodiscard]] bool restartActiveRendering(VkCommandBuffer command_buffer,
                                                   const Frame& frame);
-        [[nodiscard]] bool endFrame();
+        [[nodiscard]] LFS_VIS_API bool endFrame();
         [[nodiscard]] bool hasActiveFrame() const noexcept { return frame_active_; }
         [[nodiscard]] LFS_VIS_API std::expected<WindowCapture, std::string> captureAndEndActiveFrameRgba();
         [[nodiscard]] bool waitForNextFrameSlot();
         [[nodiscard]] bool waitForCurrentFrameSlot();
-        [[nodiscard]] bool waitForSubmittedFrames();
+        [[nodiscard]] LFS_VIS_API bool waitForSubmittedFrames();
         // Serial of the most recent graphics frame submission attempt (pre-incremented
         // before vkQueueSubmit; advances even if the submit fails).
         [[nodiscard]] std::uint64_t lastFrameSubmitSerial() const;
@@ -384,7 +384,7 @@ namespace lfs::vis {
         // clear last_error_ and return false; Quarantined/DeviceLost/other fail().
         // When set_framebuffer_resized_on_hard_error is true (image-fence site), only
         // hard Error results set framebuffer_resized_ (never Quarantined/soft).
-        [[nodiscard]] bool mapWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
+        [[nodiscard]] LFS_VIS_API bool mapWaitOutcome(lfs::Result<lfs::rendering::WaitOutcome> result,
                                           std::string_view op,
                                           bool set_framebuffer_resized_on_hard_error = false);
         // Validation timeline waits (sites 5–6): every non-Ready path fails with detail.
