@@ -91,6 +91,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <format>
@@ -4142,6 +4143,19 @@ namespace lfs::vis::gui {
     GuiManager::computeSelectionRingCursorParameters(const float mouse_x, const float mouse_y) const {
         if (!viewer_ || ui_hidden_ || guiFocusState().want_capture_mouse ||
             !isPositionInViewport(mouse_x, mouse_y)) {
+            return std::nullopt;
+        }
+
+        // Some Wayland compositors independently present the custom SDL cursor
+        // and the Vulkan selection-brush fallback. SDL may use XWayland inside a
+        // Wayland desktop, so consult the session markers as well as its active
+        // video driver. The fallback has identical selection semantics, so keep
+        // hardware brush cursors off in these sessions to avoid a duplicate ring.
+        const char* const video_driver = SDL_GetCurrentVideoDriver();
+        const char* const session_type = std::getenv("XDG_SESSION_TYPE");
+        if ((video_driver && std::strcmp(video_driver, "wayland") == 0) ||
+            (session_type && std::strcmp(session_type, "wayland") == 0) ||
+            std::getenv("WAYLAND_DISPLAY")) {
             return std::nullopt;
         }
 
