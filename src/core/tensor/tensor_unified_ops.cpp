@@ -1611,6 +1611,9 @@ namespace lfs::core {
         }
 
         auto result = Tensor::empty(TensorShape(out_shape), input->device_, out_dtype);
+        if (input->device_ == Device::CUDA) {
+            result.set_stream(getCurrentCUDAStream());
+        }
 
         if (input->device_ == Device::CUDA) {
             pin_operands({input});

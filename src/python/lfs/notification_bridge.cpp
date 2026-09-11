@@ -22,6 +22,7 @@ namespace lfs::python {
             int iteration = 0;
             float psnr = 0.0f;
             float ssim = 0.0f;
+            std::optional<float> lpips;
         };
 
         std::mutex g_latest_eval_metrics_mutex;
@@ -63,7 +64,8 @@ namespace lfs::python {
             g_latest_eval_metrics = LatestEvaluationMetrics{
                 .iteration = e.iteration,
                 .psnr = e.psnr,
-                .ssim = e.ssim};
+                .ssim = e.ssim,
+                .lpips = e.lpips};
         });
 
         state::TrainingCompleted::when([](const auto& e) {
@@ -99,6 +101,8 @@ namespace lfs::python {
                         eval_snapshot->psnr,
                         eval_snapshot->ssim);
                 }
+                if (eval_snapshot->lpips)
+                    message += std::format(" | LPIPS {:.4f}", *eval_snapshot->lpips);
             }
 
             if (e.user_stopped) {

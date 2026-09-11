@@ -1,10 +1,14 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
 #include "io/filesystem_utils.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/loaders/blender_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
+#include "io/pipelined_image_loader.hpp"
+#include <cmath>
 
 #include <atomic>
 #include <cuda_runtime.h>
@@ -365,7 +369,9 @@ TEST_F(ColmapImageLayoutTest, ResolvesDepthMapsByImageName) {
 
     write_minimal_colmap_text_dataset(dataset_dir, "frame_0000.png");
     write_png(image_path);
-    write_png(depth_path);
+    fs::create_directories(depth_path.parent_path());
+    const uint16_t depth_value = 32768;
+    ASSERT_TRUE(lfs::core::save_png(depth_path, &depth_value, 1, 1, 1, 16, 6));
 
     auto result =
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
@@ -393,6 +399,7 @@ TEST_F(ColmapImageLayoutTest, BrokenDepthIsIgnoredUnlessDepthLoadingIsEnabled) {
     const auto with_depth =
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images", {.load_depths = true});
     ASSERT_FALSE(with_depth.has_value());
+    EXPECT_EQ(with_depth.error().code, lfs::io::ErrorCode::CORRUPTED_DATA);
 }
 
 TEST_F(ColmapImageLayoutTest, AmbiguousMaskOnlyFailsWhenMaskLoadingEnabled) {
@@ -467,7 +474,7 @@ TEST_F(ColmapImageLayoutTest, AcceptsIntegerRatioDepthForScaledImages) {
     EXPECT_TRUE(std::get<0>(result->value)[0]->has_depth());
 }
 
-TEST_F(ColmapImageLayoutTest, RejectsNonIntegerRatioDepthForScaledImages) {
+TEST_F(ColmapImageLayoutTest, RejectsAspectMismatchedDepthForScaledImages) {
     if (!has_cuda_device()) {
         GTEST_SKIP() << "CUDA device required for COLMAP camera load";
     }
@@ -482,7 +489,7 @@ TEST_F(ColmapImageLayoutTest, RejectsNonIntegerRatioDepthForScaledImages) {
                         " 1000 1000 618.5 411\n");
     write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
     write_derived_image(image_path, source, source.width / 2, source.height / 2);
-    write_derived_depth(depth_path, source, source.width, source.height - 1);
+    write_derived_depth(depth_path, source, source.width, source.height / 2);
 
     const auto result =
         lfs::io::read_colmap_cameras_and_images_text(dataset_dir, "images_2", {.load_depths = true});
@@ -491,13 +498,109 @@ TEST_F(ColmapImageLayoutTest, RejectsNonIntegerRatioDepthForScaledImages) {
 }
 
 TEST(SidecarDimensionsContract, OriginalSizePassesForSmallerTrainingImage) {
-    // 1237x822 is a typical COLMAP original; images_8 is 154x102 and 1237 % 154 != 0,
-    // so only the original-size branch of the contract accepts a full-res map.
-    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(1237, 822, 154, 102, 1237, 822));
-    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(400, 200, 50, 25, 400, 200));
-    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(100, 50, 50, 25, 400, 200));
-    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(154, 102, 1237, 822, 1237, 822));
-    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(51, 25, 50, 25, 400, 200));
+    // Integer rounding in selected image folders stays inside the 1% tolerance.
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(1237, 822, 154, 102));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(400, 200, 50, 25));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(100, 50, 50, 25));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(154, 102, 1237, 822));
+    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(51, 25, 50, 25));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(75, 50, 300, 200));
+    EXPECT_TRUE(lfs::io::sidecar_dimensions_match_contract(201, 100, 200, 100));
+    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(203, 100, 200, 100));
+    EXPECT_FALSE(lfs::io::sidecar_dimensions_match_contract(0, 0, 200, 100));
+}
+
+TEST_F(ColmapImageLayoutTest, HalfResolutionDepthAndNormalReachTrainingSize) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    const auto source = read_bicycle_pixels();
+    for (const bool blender : {false, true}) {
+        for (const int bits : {8, 16}) {
+            const auto dataset = temp_dir_ / (std::to_string(blender) + "_" + std::to_string(bits));
+            write_derived_image(dataset / "images/frame.png", source, 154, 102);
+            fs::create_directories(dataset / "depth");
+            fs::create_directories(dataset / "normals");
+            std::vector<uint16_t> depth(77 * 51, 49151);
+            std::vector<uint16_t> normals(77 * 51 * 3, 32768);
+            for (size_t i = 0; i < depth.size(); ++i) {
+                if (i % 77 < 25)
+                    depth[i] = 0;
+                else
+                    normals[i * 3 + 2] = 65535;
+            }
+            ASSERT_TRUE(lfs::core::save_png(dataset / "depth/frame.png", depth.data(), 77, 51, 1, 16, 6));
+            if (bits == 16) {
+                ASSERT_TRUE(lfs::core::save_png(dataset / "normals/frame.png", normals.data(), 77, 51, 3, 16, 6));
+            } else {
+                std::vector<uint8_t> normal8(normals.size());
+                std::transform(normals.begin(), normals.end(), normal8.begin(), [](uint16_t v) { return v >> 8; });
+                ASSERT_TRUE(lfs::core::save_png(dataset / "normals/frame.png", normal8.data(), 77, 51, 3, 8, 6));
+            }
+            const lfs::io::LoadOptions options{.max_width = 120, .load_depths = true, .load_normals = true};
+            std::shared_ptr<lfs::core::Camera> camera;
+            if (blender) {
+                write_text_file(dataset / "transforms.json", R"({"w":154,"h":102,"fl_x":100,"fl_y":100,"cx":77,"cy":51,"frames":[{"file_path":"images/frame.png","transform_matrix":[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]}]})");
+                lfs::io::BlenderLoader loader;
+                auto result = loader.load(dataset, options);
+                ASSERT_TRUE(result.has_value()) << result.error().format();
+                camera = std::get<lfs::io::LoadedScene>(result->data).cameras.at(0);
+            } else {
+                write_text_file(dataset / "cameras.txt", "1 PINHOLE 154 102 100 100 77 51\n");
+                write_text_file(dataset / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
+                const auto result = lfs::io::read_colmap_cameras_and_images_text(dataset, "images", options);
+                ASSERT_TRUE(result.has_value()) << result.error().format();
+                camera = std::get<0>(result->value).at(0);
+            }
+            const auto check = [](const lfs::core::Tensor& d, const lfs::core::Tensor& n) {
+                ASSERT_EQ(d.shape(), lfs::core::TensorShape({79, 120}));
+                ASSERT_EQ(n.shape(), lfs::core::TensorShape({3, 79, 120}));
+                const auto dv = d.cpu().to_vector();
+                const auto nv = n.cpu().to_vector();
+                for (size_t i = 0; i < dv.size(); ++i) {
+                    const size_t x = i % 120;
+                    const int nearest = static_cast<int>((x + 0.5f) * 77 / 120);
+                    const bool valid = nearest >= 25;
+                    ASSERT_NEAR(dv[i], valid ? 49151.0f / 65535.0f : 0.0f, 2e-5f) << i;
+                    const float norm = std::sqrt(nv[i] * nv[i] + nv[dv.size() + i] * nv[dv.size() + i] + nv[2 * dv.size() + i] * nv[2 * dv.size() + i]);
+                    ASSERT_NEAR(norm, valid ? 1.0f : 0.0f, 5e-5f) << i;
+                }
+            };
+            // Exercise fallback with no preceding RGB pixel load.
+            ASSERT_NO_FATAL_FAILURE(check(camera->load_and_get_depth(1, 120), camera->load_and_get_normal(1, 120, {})));
+            const auto rgb = camera->load_and_get_image(1, 120);
+            ASSERT_EQ(rgb.shape()[1], 79u);
+            ASSERT_EQ(rgb.shape()[2], 120u);
+            lfs::io::PipelinedLoaderConfig config;
+            config.io_threads = 1;
+            config.cold_process_threads = 1;
+            config.decoder_pool_size = 1;
+            lfs::io::PipelinedImageLoader pipeline(config);
+            lfs::io::ImageRequest request;
+            request.path = camera->image_path();
+            request.depth_path = camera->depth_path();
+            request.normal_path = camera->normal_path();
+            request.params.max_width = 120;
+            request.aux_target_width = camera->image_width();
+            request.aux_target_height = camera->image_height();
+            for (size_t sequence = 0; sequence < 2; ++sequence) {
+                request.sequence_id = sequence;
+                pipeline.prefetch({request});
+                const auto ready = pipeline.get();
+                ASSERT_TRUE(ready.error.empty()) << ready.error;
+                ASSERT_TRUE(ready.depth.has_value());
+                ASSERT_TRUE(ready.normal.has_value());
+                ASSERT_NO_FATAL_FAILURE(check(*ready.depth, *ready.normal));
+            }
+            // Both loaders must retain their existing failure codes.
+            write_derived_image(dataset / "normals/frame.png", source, 32, 32);
+            if (blender) {
+                lfs::io::BlenderLoader loader;
+                const auto result = loader.load(dataset, options);
+                ASSERT_FALSE(result.has_value());
+                EXPECT_EQ(result.error().code, lfs::io::ErrorCode::NORMAL_SIZE_MISMATCH);
+            }
+        }
+    }
 }
 
 TEST_F(ColmapImageLayoutTest, AcceptsOriginalSizeNormalForScaledImages) {
@@ -539,7 +642,7 @@ TEST_F(ColmapImageLayoutTest, RejectsMismatchedNormalWithoutAutoGenerate) {
                         " 1000 1000 618.5 411\n");
     write_text_file(dataset_dir / "images.txt", "1 1 0 0 0 0 0 0 1 frame.png\n");
     write_derived_image(image_path, source, source.width / 2, source.height / 2);
-    // Neither original size nor an integer multiple of the training image.
+    // Square prior does not match the image aspect ratio.
     write_derived_image(normal_path, source, 8, 8);
 
     const auto result =
@@ -1158,4 +1261,23 @@ TEST_F(ColmapImageLayoutTest, WriteBackDropsImagesForDeletedCamerasAndClearsTrac
     int track_image_id = 0;
     EXPECT_FALSE(point_record >> track_image_id)
         << "tracks must be cleared after dropping images so no dangling image_id remains";
+}
+
+TEST(SidecarResampling, InvalidDepthAndNormalVectorsStayZero) {
+    if (!has_cuda_device())
+        GTEST_SKIP() << "CUDA device required";
+    using namespace lfs::core;
+    const std::vector<float> depth{0.0f, -1.0f, std::numeric_limits<float>::quiet_NaN(),
+                                   std::numeric_limits<float>::infinity(), 0.75f, 0.75f};
+    auto d = Tensor::from_blob(const_cast<float*>(depth.data()), TensorShape({1, 6}), Device::CPU, DataType::Float32).to(Device::CUDA);
+    const auto result = resize_depth_prior(d, 2, 12).cpu().to_vector();
+    for (size_t i = 0; i < result.size(); ++i)
+        EXPECT_FLOAT_EQ(result[i], i % 12 < 8 ? 0.0f : 0.75f);
+    // Opposing valid vectors cancel at the center: the epsilon guard yields zero.
+    std::vector<float> normal{1, -1, 0, 0, 0, 0};
+    auto n = Tensor::from_blob(normal.data(), TensorShape({3, 1, 2}), Device::CPU, DataType::Float32).to(Device::CUDA);
+    const auto resized = resize_normal_prior(n, 1, 3).cpu().to_vector();
+    EXPECT_FLOAT_EQ(resized[0], 1.0f);
+    EXPECT_FLOAT_EQ(resized[1], 0.0f);
+    EXPECT_FLOAT_EQ(resized[2], -1.0f);
 }

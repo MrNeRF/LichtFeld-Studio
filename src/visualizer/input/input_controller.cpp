@@ -19,6 +19,7 @@
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
+#include "io/splat_path.hpp"
 #include "io/video/video_extensions.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
@@ -1797,6 +1798,14 @@ namespace lfs::vis {
             bound_action = resolveCrossToolActivationShortcut(bindings_, tool_mode, logical_key, mods);
         }
 
+        const bool gui_keyboard_focus = input_router_
+                                            ? input_router_->keyboardFocus() == input::InputTarget::Gui
+                                            : gui::guiFocusState().want_capture_keyboard;
+        if (action == input::ACTION_PRESS && logical_key == input::KEY_ESCAPE &&
+            gui_keyboard_focus) {
+            return;
+        }
+
         const bool is_mcp_runtime_action =
             bound_action == input::Action::TOGGLE_MCP_SERVER ||
             bound_action == input::Action::TOGGLE_MCP_BINDING;
@@ -1859,7 +1868,6 @@ namespace lfs::vis {
         const bool modal_open = input_router_
                                     ? input_router_->isModalOpen()
                                     : (gui && gui->isModalWindowOpen());
-
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
 
@@ -2091,6 +2099,17 @@ namespace lfs::vis {
                 return;
 
             case input::Action::DELETE_SELECTED:
+                if (tool_context_) {
+                    if (auto* sm = tool_context_->getSceneManager();
+                        sm && !sm->getScene().hasSelection()) {
+                        const auto selected = sm->getSelectedNodeNames();
+                        if (!selected.empty()) {
+                            for (const auto& name : selected)
+                                cmd::RemovePLY{.name = name, .keep_children = false}.emit();
+                            return;
+                        }
+                    }
+                }
                 cmd::DeleteSelected{}.emit();
                 return;
 
@@ -2547,6 +2566,8 @@ namespace lfs::vis {
             if (ext == ".resume") {
                 cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 continue;
+            } else if (lfs::io::is_ssog_path(filepath)) {
+                splat_files.push_back(filepath);
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
                     dataset_path = filepath;
@@ -2561,7 +2582,7 @@ namespace lfs::vis {
                 } else {
                     LOG_DEBUG("Ignoring additional dropped environment map: {}", lfs::core::path_to_utf8(filepath));
                 }
-            } else if (ext == ".ply" || ext == ".sog" || ext == ".spz" || ext == ".rad" ||
+            } else if (ext == ".ply" || ext == ".sog" || ext == ".ssog" || ext == ".spz" || ext == ".rad" ||
                        ext == ".usd" || ext == ".usda" || ext == ".usdc" || ext == ".usdz") {
                 splat_files.push_back(filepath);
             } else if (ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb" ||
@@ -2642,7 +2663,7 @@ namespace lfs::vis {
 
         if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path && !environment_map_path) {
             const std::string supported_formats = std::format(
-                "Supported formats: .licht, .ply, .sog, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
+                "Supported formats: .licht, .ply, .sog, .ssog, lod-meta.json, .spz, .rad, .usd, .usda, .usdc, .usdz, .obj, .fbx, .gltf, .glb, .stl, .dae, .hdr, .exr, .json, .resume, {}, or dataset directories",
                 lfs::io::video::supported_video_extensions_display());
             LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
             state::FileDropFailed{.files = unrecognized_files, .error = supported_formats}.emit();

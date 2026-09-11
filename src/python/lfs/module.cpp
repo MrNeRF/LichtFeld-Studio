@@ -1052,20 +1052,39 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
+            auto* const viewer = lfs::python::get_visualizer();
+            // Capture the caller's thread before marshalling the command. UI
+            // callbacks must return so initialization can post work back to
+            // the viewer; off-thread scripts retain the synchronous contract.
+            const bool called_on_viewer = viewer && viewer->isOnViewerThread();
             auto* const trainer_manager = lfs::python::get_trainer_manager();
+            std::optional<std::string> rejection;
             emit_project_cmd_marshaled(
-                "python.start_training", [] {
-                    lfs::core::events::cmd::StartTraining{}
-                        .emit();
+                "python.start_training", [&] {
+                    if (viewer) {
+                        if (auto started = viewer->startTraining(); !started)
+                            rejection = started.error();
+                    } else if (!trainer_manager) {
+                        rejection = "Trainer manager not initialized";
+                    } else if (!trainer_manager->startTraining()) {
+                        rejection = trainer_manager->getLastError().empty()
+                                        ? std::string(trainer_manager->getActionBlockedReason(lfs::vis::TrainingAction::Start))
+                                        : trainer_manager->getLastError();
+                    }
                 });
-            if (trainer_manager) {
+            if (rejection)
+                throw std::runtime_error(*rejection);
+            if (trainer_manager && !called_on_viewer) {
                 if (auto initialized = trainer_manager->waitForInitialization();
                     !initialized) {
-                    throw std::runtime_error(lfs::format_for_developer(initialized.error()));
+                    const auto& error = initialized.error();
+                    throw std::runtime_error(std::string(
+                        error.user_message().empty() ? error.detail() : error.user_message()));
                 }
             }
         },
-        "Start training with current parameters; waits for off-thread initialization");
+        "Start training with current parameters. Returns after dispatch on the viewer thread; "
+        "other callers wait for initialization. Asynchronous failures are reported through training state.");
     m.def(
         "training_start_overwrite_conflict",
         []() -> std::optional<int> {
@@ -1085,7 +1104,18 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "resume_training", []() {
             nb::gil_scoped_release release;
-            lfs::core::events::cmd::ResumeTraining{}.emit();
+            std::optional<std::string> rejection;
+            emit_project_cmd_marshaled("python.resume_training", [&] {
+                auto* const manager = lfs::python::get_trainer_manager();
+                if (!manager) {
+                    rejection = "Trainer manager not initialized";
+                } else if (auto resumed = manager->resumeTraining(); !resumed) {
+                    const auto& error = resumed.error();
+                    rejection = std::string(error.user_message().empty() ? error.detail() : error.user_message());
+                }
+            });
+            if (rejection)
+                throw std::runtime_error(*rejection);
         },
         "Resume a paused training run");
     m.def(
@@ -1873,16 +1903,25 @@ NB_MODULE(lichtfeld, m) {
     m.def(
         "export_scene",
         [](int format, const std::string& path, const std::vector<std::string>& node_names, int sh_degree,
-           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance) {
+           bool rad_flip_y, bool rad_streamable, int spz_version, bool include_provenance,
+           int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations) {
             lfs::python::invoke_export(format, path, node_names, sh_degree, rad_flip_y, rad_streamable,
-                                       spz_version, include_provenance);
+                                       spz_version, include_provenance, lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k, kmeans_iterations);
         },
         nb::arg("format"), nb::arg("path"), nb::arg("node_names"), nb::arg("sh_degree"),
         nb::arg("rad_flip_y") = false,
         nb::arg("rad_streamable") = true,
         nb::arg("spz_version") = 4,
         nb::arg("include_provenance") = true,
-        "Export scene nodes to file. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP. "
+        nb::kw_only(),
+        nb::arg("lod_levels") = 4,
+        nb::arg("lod_ratio") = 0.5f,
+        nb::arg("chunk_count_k") = 512,
+        nb::arg("chunk_extent") = 16.0f,
+        nb::arg("chunk_min_k") = 8,
+        nb::arg("kmeans_iterations") = 10,
+        "Export scene nodes to file or directory. Format: 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD, 5=USDZ NuRec, 6=RAD, 7=COLMAP, 8=SSOG. "
+        "For SSOG, path names a .ssog bundle or directory; lod_levels, lod_ratio, chunk_count_k, chunk_extent, chunk_min_k and kmeans_iterations control its LODs and chunks. "
         "spz_version is 3 (legacy gzip) or 4 (zstd, default) and is only used for SPZ. "
         "include_provenance (default true) writes a full provenance stamp into the format metadata slot; when false, a minimal build stamp is still embedded. "
         "Ignored for COLMAP and SPZ v3.");

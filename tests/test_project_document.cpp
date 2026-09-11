@@ -5,6 +5,7 @@
 
 #include "app/headless_recovery_document.hpp"
 #include "core/image_io.hpp"
+#include "io/embedded_dataset.hpp"
 #include "io/loaders/loader_utils.hpp"
 #include "io/project/project_container_internal.hpp"
 #include "io/project/span_streambuf.hpp"
@@ -1061,17 +1062,21 @@ namespace {
     }
 
     std::shared_ptr<lfs::core::Camera> make_adapter_test_camera(
-        const std::string& image_name, const int uid) {
+        const std::string& image_name, const int uid, const bool distorted = false) {
         const auto empty_distortion = Tensor::zeros(
             {0}, Device::CPU, DataType::Float32);
+        const auto radial = distorted
+                                ? Tensor::from_vector({0.5f}, {1}, Device::CPU)
+                                : empty_distortion;
+        const int size = distorted ? 100 : 64;
         return std::make_shared<lfs::core::Camera>(
             Tensor::eye(3, Device::CPU),
             Tensor::zeros({3}, Device::CPU),
-            100.0f, 100.0f, 32.0f, 32.0f,
-            empty_distortion, empty_distortion,
+            100.0f, 100.0f, size / 2.0f, size / 2.0f,
+            radial, empty_distortion,
             lfs::core::CameraModelType::PINHOLE,
             image_name, std::filesystem::path{},
-            std::filesystem::path{}, 64, 64, uid);
+            std::filesystem::path{}, size, size, uid);
     }
 
     TEST(SceneChapterAdapterTest,
@@ -1175,6 +1180,113 @@ namespace {
         EXPECT_TRUE(std::ranges::any_of(active, [](const auto& camera) {
             return camera && camera->uid() == 3;
         }));
+    }
+
+    TEST(SceneChapterAdapterTest, PreparedCameraRoundTripPreservesSourceCalibration) {
+        if (!cuda_device_available()) {
+            GTEST_SKIP() << "CUDA device unavailable";
+        }
+
+        auto source = std::make_unique<Scene>();
+        const auto dataset = source->addDataset("Dataset");
+        const auto group = source->addCameraGroup("Training", dataset, 2);
+        ASSERT_NE(dataset, lfs::core::NULL_NODE);
+        ASSERT_NE(group, lfs::core::NULL_NODE);
+        auto prepared = make_adapter_test_camera("prepared.png", 1, true);
+        auto unprepared = make_adapter_test_camera("unprepared.png", 2, true);
+        ASSERT_NE(source->addCamera("prepared.png", group, prepared), lfs::core::NULL_NODE);
+        ASSERT_NE(source->addCamera("unprepared.png", group, unprepared), lfs::core::NULL_NODE);
+
+        prepared->prepare_undistortion();
+        const auto destination = prepared->undistort_params();
+        ASSERT_EQ(destination.dst_width, 84);
+        ASSERT_EQ(destination.dst_height, 84);
+        EXPECT_FLOAT_EQ(destination.dst_fx, 100.0f);
+        EXPECT_FLOAT_EQ(destination.dst_fy, 100.0f);
+        EXPECT_FLOAT_EQ(destination.dst_cx, 42.0f);
+        EXPECT_FLOAT_EQ(destination.dst_cy, 42.0f);
+        prepared->set_image_dimensions(destination.dst_width, destination.dst_height);
+
+        const auto expect_destination = [&](const lfs::core::Camera& camera) {
+            EXPECT_TRUE(camera.is_undistort_precomputed());
+            EXPECT_TRUE(camera.is_undistort_prepared());
+            EXPECT_FLOAT_EQ(camera.focal_x(), destination.dst_fx);
+            EXPECT_FLOAT_EQ(camera.focal_y(), destination.dst_fy);
+            EXPECT_FLOAT_EQ(camera.center_x(), destination.dst_cx);
+            EXPECT_FLOAT_EQ(camera.center_y(), destination.dst_cy);
+            EXPECT_EQ(camera.camera_width(), destination.dst_width);
+            EXPECT_EQ(camera.camera_height(), destination.dst_height);
+        };
+
+        for (int cycle = 0; cycle < 2; ++cycle) {
+            SCOPED_TRACE(cycle);
+            auto chapter = capture_scene_graph(*source, ScenePayloadBindings{});
+            ASSERT_TRUE(chapter) << lfs::format_for_developer(chapter.error());
+            auto nodes = chapter->nodes();
+            ASSERT_TRUE(nodes) << lfs::format_for_developer(nodes.error());
+            size_t camera_count = 0;
+            for (const auto& node : *nodes) {
+                if (!node.camera) {
+                    continue;
+                }
+                ++camera_count;
+                const auto& record = *node.camera;
+                // Both the prepared camera and the unprepared control store source calibration.
+                EXPECT_FLOAT_EQ(record.focal_x, 100.0f);
+                EXPECT_FLOAT_EQ(record.focal_y, 100.0f);
+                EXPECT_FLOAT_EQ(record.center_x, 50.0f);
+                EXPECT_FLOAT_EQ(record.center_y, 50.0f);
+                EXPECT_EQ(record.camera_width, 100);
+                EXPECT_EQ(record.camera_height, 100);
+                EXPECT_EQ(record.radial_distortion, std::vector<float>{0.5f});
+                EXPECT_TRUE(record.tangential_distortion.empty());
+                EXPECT_EQ(record.camera_model_type,
+                          static_cast<std::int32_t>(lfs::core::CameraModelType::PINHOLE));
+                EXPECT_EQ(record.image_width, node.name == "prepared.png" ? 84 : 100);
+                EXPECT_EQ(record.image_height, node.name == "prepared.png" ? 84 : 100);
+            }
+            ASSERT_EQ(camera_count, 2u);
+            expect_destination(*prepared);
+            EXPECT_EQ(prepared->image_width(), 84);
+            EXPECT_EQ(prepared->image_height(), 84);
+            EXPECT_TRUE(prepared->has_distortion());
+            EXPECT_FALSE(unprepared->is_undistort_prepared());
+            EXPECT_FLOAT_EQ(unprepared->center_x(), 50.0f);
+            EXPECT_EQ(unprepared->camera_width(), 100);
+
+            const auto bytes = chapter->to_bytes();
+            auto decoded = SceneGraphChapter::from_bytes(bytes);
+            ASSERT_TRUE(decoded) << lfs::format_for_developer(decoded.error());
+            auto restored = std::make_unique<Scene>();
+            auto hydrated = hydrate_scene_graph(*decoded, *restored, ScenePayloadResolver{});
+            ASSERT_TRUE(hydrated) << lfs::format_for_developer(hydrated.error());
+            for (const auto* name : {"prepared.png", "unprepared.png"}) {
+                const auto* node = restored->getNode(name);
+                ASSERT_NE(node, nullptr);
+                ASSERT_NE(node->camera, nullptr);
+                const auto& camera = *node->camera;
+                EXPECT_TRUE(camera.has_distortion());
+                EXPECT_TRUE(camera.is_undistort_precomputed());
+                EXPECT_FALSE(camera.is_undistort_prepared());
+                EXPECT_FLOAT_EQ(camera.focal_x(), 100.0f);
+                EXPECT_FLOAT_EQ(camera.focal_y(), 100.0f);
+                EXPECT_FLOAT_EQ(camera.center_x(), 50.0f);
+                EXPECT_FLOAT_EQ(camera.center_y(), 50.0f);
+                EXPECT_EQ(camera.camera_width(), 100);
+                EXPECT_EQ(camera.camera_height(), 100);
+                EXPECT_FLOAT_EQ(camera.undistort_params().src_fx, destination.src_fx);
+                EXPECT_FLOAT_EQ(camera.undistort_params().src_fy, destination.src_fy);
+                EXPECT_FLOAT_EQ(camera.undistort_params().src_cx, destination.src_cx);
+                EXPECT_FLOAT_EQ(camera.undistort_params().src_cy, destination.src_cy);
+                EXPECT_EQ(camera.undistort_params().src_width, destination.src_width);
+                EXPECT_EQ(camera.undistort_params().src_height, destination.src_height);
+            }
+            prepared = restored->getNode("prepared.png")->camera;
+            unprepared = restored->getNode("unprepared.png")->camera;
+            prepared->prepare_undistortion();
+            expect_destination(*prepared);
+            source = std::move(restored);
+        }
     }
 
     TEST(ProjectDocumentTest,
@@ -1620,6 +1732,79 @@ namespace {
                 document->stage_hydration(live);
             ASSERT_FALSE(staged);
             EXPECT_TRUE(witness_scene(live) == before);
+        }
+    }
+
+    TEST(ProjectDocumentTest,
+         ShellRestoredProjectHydratesWithNonGeometryNodeSelected) {
+        Scene source;
+        const auto group = source.addGroup("Empty group");
+        ASSERT_NE(group, lfs::core::NULL_NODE);
+        const auto group_uuid = source.getNodeUuid(group);
+        const auto point_uuid = fixed_uuid(949);
+        auto points = make_point_cloud(2);
+        ASSERT_NE(source.restoreNodeWithUuid(Scene::RestoreNodeDesc{
+                      .uuid = point_uuid,
+                      .type = NodeType::POINTCLOUD,
+                      .name = "Points",
+                      .point_cloud = points,
+                  }),
+                  lfs::core::NULL_NODE);
+        const ScenePayloadBindings bindings{
+            {point_uuid, PayloadBinding{
+                             .fourcc = "PCLD",
+                             .instance_uuid = point_uuid,
+                             .source_kind = "ply",
+                         }}};
+        const auto make_document = [&] {
+            auto document = make_empty_document(fixed_uuid(948), 100);
+            document->edit_scene_graph() =
+                require_result(capture_scene_graph(source, bindings));
+            require_status(document->set_point_cloud(
+                point_uuid, PointCloudPayload(points)));
+            require_status(document->edit_project().upsert_embed_decision(
+                EmbedDecision{
+                    .uuid = point_uuid,
+                    .node_uuid = point_uuid,
+                    .payload_fourcc = "PCLD",
+                    .decision = "embedded",
+                    .reason = "selection regression",
+                }));
+            require_status(document->edit_project().upsert_embedded_payload_provenance(
+                provenance(point_uuid, "PCLD", "assets/points.ply", 39)));
+            return document;
+        };
+
+        TemporaryDirectory temporary;
+        for (const auto& selected_uuid : {point_uuid, group_uuid}) {
+            SCOPED_TRACE(selected_uuid == point_uuid ? "point cloud selected" : "empty group selected");
+            const auto path = temporary.path / (selected_uuid.to_string() + ".licht");
+            auto document = make_document();
+            require_status(document->edit_selection().set_selected_node_uuids(
+                {selected_uuid}));
+            const auto saved = document->save(path, save_options(948, 200));
+            ASSERT_TRUE(saved) << lfs::format_for_developer(saved.error());
+            auto reopened = require_result_ptr(ProjectDocument::open(
+                path, ProjectDocumentOpenOptions{.defer_geometry_payloads = true}));
+            Scene live;
+            auto shell = reopened->stage_shell(live);
+            ASSERT_TRUE(shell) << lfs::format_for_developer(shell.error());
+            live.commitRestoreStage(std::move(*shell));
+            ASSERT_NE(live.getNodeByUuid(group_uuid), nullptr);
+            auto staged = reopened->stage_hydration(live);
+            ASSERT_TRUE(staged) << lfs::format_for_developer(staged.error());
+            EXPECT_EQ(staged->report().selection.selected_node_uuids,
+                      (std::vector<Uuid>{selected_uuid}));
+            const auto report = ProjectDocument::commit_partial_hydration(
+                live, std::move(*staged), true);
+            EXPECT_EQ(report.hydrated_payload_units, 1u);
+            EXPECT_EQ(report.invalidated_payload_units, 0u);
+            EXPECT_TRUE(report.selection_installed);
+            EXPECT_NE(live.getNodeByUuid(group_uuid), nullptr);
+            const auto* point = live.getNodeByUuid(point_uuid);
+            ASSERT_NE(point, nullptr);
+            ASSERT_NE(point->point_cloud, nullptr);
+            EXPECT_EQ(point->point_cloud->size(), 2u);
         }
     }
 
@@ -6081,6 +6266,163 @@ namespace {
             EXPECT_EQ(require_result(compacted_reader.read_chunk(*row)),
                       read_file_bytes(dataset / entry.rel_path));
         }
+    }
+
+    // Covers lfs::io::project::extract_embedded_dataset, the headless side of
+    // dataset embedding: DSRC chunks are written back to disk byte-for-byte,
+    // guarded by the manifest hash, into a caller-chosen cache folder.
+    TEST(ProjectDocumentTest, ExtractEmbeddedDatasetRestoresFilesIntoCache) {
+        TemporaryDirectory temporary;
+        // A minimal dataset with a downscaled images folder, so the test also
+        // exercises a non-default images_folder in the manifest.
+        const auto dataset = temporary.path / "dataset";
+        const auto image = dataset / "images_2" / "frame.bin";
+        const auto sparse = dataset / "sparse" / "0" / "cameras.bin";
+        std::filesystem::create_directories(image.parent_path());
+        std::filesystem::create_directories(sparse.parent_path());
+        const std::vector<std::byte> image_bytes{
+            std::byte{0x10}, std::byte{0x20}, std::byte{0x30}};
+        const std::vector<std::byte> sparse_bytes{std::byte{0x01}, std::byte{0x03}};
+        write_file_bytes(image, image_bytes);
+        write_file_bytes(sparse, sparse_bytes);
+
+        // The project references the dataset folder like a GUI save would.
+        auto document = require_result_ptr(ProjectDocument::create(
+            fixed_uuid(2501), 100));
+        bind_dataset(*document, dataset);
+        const auto project_path = temporary.path / "extract.licht";
+        (void)require_result(document->save(project_path, save_options(2502, 200)));
+
+        const auto entry_for = [](const fs::path& path,
+                                  const std::string& rel,
+                                  const std::string& kind,
+                                  const Uuid& uuid) {
+            const auto bytes = read_file_bytes(path);
+            return EmbeddedDatasetEntry{
+                .rel_path = rel,
+                .kind = kind,
+                .chunk_uuid = uuid,
+                .bytes = bytes.size(),
+                .xxh3_128 = xxh3_128(bytes),
+            };
+        };
+        const auto image_entry = entry_for(
+            image, "images_2/frame.bin", "image", fixed_uuid(2503));
+        const auto sparse_entry = entry_for(
+            sparse, "sparse/0/cameras.bin", "sparse", fixed_uuid(2504));
+        const std::array sources{
+            DatasetEmbedSource{.entry = image_entry, .source_path = image},
+            DatasetEmbedSource{.entry = sparse_entry, .source_path = sparse},
+        };
+        const auto cache = temporary.path / "cache";
+
+        // Embed only the image first. Extraction must refuse a manifest that is
+        // not marked complete and leave the cache without a ".complete" marker.
+        const EmbeddedDatasetManifest partial_manifest{
+            .schema_version = 1,
+            .images_folder = "images_2",
+            .complete = false,
+            .entries = {image_entry},
+        };
+        (void)require_result(document->embed_dataset_batch(
+            partial_manifest, std::span(sources).first(1),
+            save_options(2505, 300)));
+        EXPECT_FALSE(require_result(lfs::io::project::extract_embedded_dataset(
+                                        *document, cache))
+                         .has_value());
+        EXPECT_FALSE(fs::exists(cache / ".complete"));
+
+        const EmbeddedDatasetManifest manifest{
+            .schema_version = 1,
+            .images_folder = "images_2",
+            .complete = true,
+            .entries = {image_entry, sparse_entry},
+        };
+        (void)require_result(document->embed_dataset_batch(
+            manifest, std::span(sources).subspan(1),
+            save_options(2506, 400)));
+
+        // Reopen from disk so the DSRC chunks are read as lazy file-backed
+        // sources, the way headless training sees them.
+        auto reopened = require_result_ptr(ProjectDocument::open(project_path));
+        const auto source_bytes = read_file_bytes(project_path);
+        const auto destination = temporary.path / "redirected" / "project.licht";
+        fs::create_directories(destination.parent_path());
+        auto redirected_options = save_options(2507, 500);
+        redirected_options.save_as_project_uuid = fixed_uuid(2508);
+        (void)require_result(reopened->save_as(destination, redirected_options));
+        EXPECT_EQ(read_file_bytes(project_path), source_bytes);
+        EXPECT_EQ(require_result(reopened->parameters().embedded_dataset()), manifest);
+        const auto dataset_ref = require_result(reopened->project().dataset_reference());
+        ASSERT_TRUE(dataset_ref);
+        EXPECT_EQ(resolve_path_reference(
+                      reopened->references(), destination.parent_path(), *dataset_ref),
+                  dataset);
+        document.reset();
+        fs::remove(project_path);
+        fs::remove_all(dataset);
+        // A second save must reuse the destination after the source and its
+        // external dataset have disappeared. The cache has never been created.
+        (void)require_result(reopened->save(destination, save_options(2509, 600)));
+        reopened = require_result_ptr(ProjectDocument::open(destination));
+        EXPECT_EQ(reopened->project_uuid(), fixed_uuid(2508));
+        EXPECT_EQ(require_result(reopened->parameters().embedded_dataset()), manifest);
+        auto redirected_reader = require_result(ProjectReader::open(destination));
+        for (const auto& entry : manifest.entries) {
+            const auto* row = redirected_reader.find(FOURCC_DSRC, entry.chunk_uuid);
+            ASSERT_NE(row, nullptr);
+            EXPECT_TRUE(row->is_live());
+            EXPECT_EQ(require_result(redirected_reader.read_chunk(*row)),
+                      entry.kind == "image" ? image_bytes : sparse_bytes);
+        }
+        const auto extracted = require_result(
+            lfs::io::project::extract_embedded_dataset(*reopened, cache));
+        ASSERT_TRUE(extracted);
+        EXPECT_EQ(*extracted, cache);
+        EXPECT_TRUE(fs::is_regular_file(cache / ".complete"));
+        EXPECT_EQ(read_file_bytes(cache / "images_2" / "frame.bin"), image_bytes);
+        EXPECT_EQ(read_file_bytes(cache / "sparse" / "0" / "cameras.bin"),
+                  sparse_bytes);
+        EXPECT_EQ(require_result(lfs::io::project::hash_dataset_file(
+                      cache / "images_2" / "frame.bin")),
+                  image_entry.xxh3_128);
+
+        // Extraction is idempotent: a cached file that no longer matches its
+        // manifest hash is rewritten, while matching files would be reused.
+        write_file_bytes(cache / "images_2" / "frame.bin", sparse_bytes);
+        (void)require_result(
+            lfs::io::project::extract_embedded_dataset(*reopened, cache));
+        EXPECT_EQ(read_file_bytes(cache / "images_2" / "frame.bin"), image_bytes);
+
+        struct ScopedLfsHome {
+            std::optional<std::string> previous;
+            explicit ScopedLfsHome(const fs::path& root) {
+                if (const auto* value = std::getenv("LFS_HOME"))
+                    previous = value;
+#ifdef _WIN32
+                (void)_putenv_s("LFS_HOME", root.string().c_str());
+#else
+                (void)setenv("LFS_HOME", root.string().c_str(), 1);
+#endif
+            }
+            ~ScopedLfsHome() {
+#ifdef _WIN32
+                (void)_putenv_s("LFS_HOME", previous ? previous->c_str() : "");
+#else
+                if (previous)
+                    (void)setenv("LFS_HOME", previous->c_str(), 1);
+                else
+                    (void)unsetenv("LFS_HOME");
+#endif
+            }
+        } home_guard(temporary.path / "user");
+        const auto fallback_cache = require_result(embedded_dataset_cache_dir(*reopened));
+        EXPECT_FALSE(fs::exists(fallback_cache));
+        const auto fallback = require_result(extract_embedded_dataset_if_needed(*reopened));
+        ASSERT_TRUE(fallback);
+        EXPECT_EQ(*fallback, fallback_cache);
+        EXPECT_EQ(read_file_bytes(*fallback / "images_2/frame.bin"), image_bytes);
+        EXPECT_EQ(read_file_bytes(*fallback / "sparse/0/cameras.bin"), sparse_bytes);
     }
 
 } // namespace

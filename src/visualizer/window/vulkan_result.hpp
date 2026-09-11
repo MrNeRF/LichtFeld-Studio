@@ -128,14 +128,15 @@ namespace lfs::vis {
 
 } // namespace lfs::vis
 
-#define LFS_VK_CONTEXT_CHECK_MSG(expr, ...)                              \
-    do {                                                                 \
-        const VkResult lfs_vk_check_result_ = (expr);                    \
-        if (lfs_vk_check_result_ != VK_SUCCESS) {                        \
-            return this->setVkFailure(::lfs::vis::formatVkCheckFailure(  \
-                #expr, lfs_vk_check_result_,                             \
-                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__))); \
-        }                                                                \
+#define LFS_VK_CONTEXT_CHECK_MSG(expr, ...)                                                       \
+    do {                                                                                          \
+        const VkResult lfs_vk_check_result_ = (expr);                                             \
+        if (lfs_vk_check_result_ != VK_SUCCESS) {                                                 \
+            return this->setVkFailure(::lfs::vis::formatVkCheckFailure(                           \
+                                          #expr, lfs_vk_check_result_,                            \
+                                          ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__)), \
+                                      lfs_vk_check_result_);                                      \
+        }                                                                                         \
     } while (false)
 
 #ifndef LFS_VK_DEBUG_ASSERT

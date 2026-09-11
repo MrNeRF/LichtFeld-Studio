@@ -1247,6 +1247,7 @@ namespace lfs::training {
         if (_far_growth.outside_mask.is_valid()) {
             _far_growth.outside_mask = _far_field_mask;
         }
+        publish_mean_step_far_mask();
     }
 
     bool MRNF::is_refining(int iter) const {
@@ -1321,12 +1322,13 @@ namespace lfs::training {
         assert(log_scales.shape()[0] == n && log_scales.shape()[1] == 3);
         assert(means.shape()[0] == n && means.shape()[1] == 3);
 
-        auto scale_min = log_scales.min(1);
         auto scale_max = log_scales.max(1);
 
+        // Normal regularization intentionally flattens one axis. A thin
+        // surface still has useful extent; prune only if every axis collapses.
         auto prune_mask = (raw_opacities < MRNF_RAW_OPACITY_PRUNE_THRESHOLD) |
                           compute_near_zero_rotation_mask(_splat_data->rotation_raw()) |
-                          (scale_min < MRNF_LOG_MIN_SCALE_THRESHOLD);
+                          (scale_max < MRNF_LOG_MIN_SCALE_THRESHOLD);
 
         // Bounds-dependent pruning is unsafe for one-point or colocated models:
         // log(0) would classify every finite scale as oversized. Keep the
@@ -1502,6 +1504,8 @@ namespace lfs::training {
 
     void MRNF::refresh_camera_hull() {
         _camera_hull_valid = false;
+        // Invalidate the borrowed pointer before any census allocation or early return.
+        publish_mean_step_far_mask();
         _cam_centroid[0] = 0.0f;
         _cam_centroid[1] = 0.0f;
         _cam_centroid[2] = 0.0f;
@@ -1757,16 +1761,16 @@ namespace lfs::training {
             return;
         }
         if (!background_improvements_enabled()) {
-            _optimizer->set_mean_step_far_mask(nullptr, 0);
+            _optimizer->set_mean_step_far_mask({});
             return;
         }
         const size_t n = _splat_data ? static_cast<size_t>(_splat_data->size()) : 0;
         if (!_camera_hull_valid || n == 0 || !_far_field_mask.is_valid() ||
             _far_field_mask.numel() != n) {
-            _optimizer->set_mean_step_far_mask(nullptr, 0);
+            _optimizer->set_mean_step_far_mask({});
             return;
         }
-        _optimizer->set_mean_step_far_mask(_far_field_mask.ptr<bool>(), static_cast<int>(n));
+        _optimizer->set_mean_step_far_mask(_far_field_mask);
     }
 
     void MRNF::ensure_mean_step_far_mask() {
@@ -2648,6 +2652,7 @@ namespace lfs::training {
 
         remap_frozen_ranges_after_compaction(*_splat_data, valid_indices, old_size);
         apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+        ensure_mean_step_far_mask();
     }
 
     void MRNF::inject_noise(int /*iter*/) {
@@ -3647,6 +3652,7 @@ namespace lfs::training {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();
         }
+        ensure_mean_step_far_mask();
         publish_vram_attribution();
     }
 
@@ -3719,6 +3725,7 @@ namespace lfs::training {
     }
 
     void MRNF::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
+        const bool background_changed = background_improvements_enabled() != params.background_improvements;
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
 
         if (_mean_lr_unscaled <= 0.0) {
@@ -3733,6 +3740,10 @@ namespace lfs::training {
             ensure_densification_info_shape();
         }
 
+        if (background_changed) {
+            refresh_camera_hull();
+            ensure_mean_step_far_mask();
+        }
         if (_optimizer) {
             _optimizer->set_param_lr(ParamType::Scaling, _scale_lr_current);
             sync_mean_learning_rate();

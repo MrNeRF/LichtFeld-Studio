@@ -3480,6 +3480,15 @@ namespace lfs::python {
             "Open a save file dialog for SOG files. Returns empty string if cancelled.");
 
         m.def(
+            "save_ssog_file_dialog",
+            [](const std::string& default_name) -> std::string {
+                auto result = lfs::vis::gui::SaveSsogFileDialog(default_name);
+                return result.empty() ? "" : lfs::core::path_to_utf8(result);
+            },
+            nb::arg("default_name") = "export",
+            "Open a save file dialog for SSOG files. Returns empty string if cancelled.");
+
+        m.def(
             "save_spz_file_dialog",
             [](const std::string& default_name) -> std::string {
                 auto result = lfs::vis::gui::SaveSpzFileDialog(default_name);

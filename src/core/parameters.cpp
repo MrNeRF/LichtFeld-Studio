@@ -163,6 +163,24 @@ namespace lfs::core {
                 OptimizationParameters& params,
                 const nlohmann::json& json,
                 const bool skip_missing = false) {
+                std::optional<RasterBackendId> backend;
+                if (json.contains("raster_backend")) {
+                    const auto name = json.at("raster_backend").get<std::string>();
+                    backend = parse_training_backend(name);
+                    if (!backend)
+                        throw std::invalid_argument("Unknown training raster_backend: " + name);
+                    if (json.contains("gut")) {
+                        const bool gut = json.at("gut").get<bool>();
+                        const auto boolean_backend = gut
+                                                         ? RasterBackendId::ThreeDGUT
+                                                         : RasterBackendId::ThreeDGS;
+                        if (*backend != boolean_backend) {
+                            throw std::invalid_argument(std::format(
+                                "Conflicting raster_backend '{}' and gut={}; set both consistently or specify only one",
+                                name, gut));
+                        }
+                    }
+                }
                 if (json.contains("strategy")) {
                     const auto strategy = json.at("strategy").get<std::string>();
                     if (const auto canonical = canonical_strategy_name(strategy); !canonical.empty()) {
@@ -172,6 +190,9 @@ namespace lfs::core {
                     }
                 }
                 read_registered_optimization_properties(json, params, skip_missing);
+
+                if (backend)
+                    params.set_raster_backend(*backend);
 
                 if (json.contains("eval_steps")) {
                     params.eval_steps.clear();
@@ -339,6 +360,7 @@ namespace lfs::core {
         nlohmann::json OptimizationParameters::to_json() const {
             nlohmann::json opt_json;
             write_registered_optimization_properties(opt_json, *this);
+            opt_json["raster_backend"] = training_backend_descriptor(raster_backend()).wire_name;
 
             const auto canonical_strategy = canonical_strategy_name(strategy);
             opt_json["strategy"] = canonical_strategy.empty() ? strategy : std::string(canonical_strategy);
@@ -355,6 +377,51 @@ namespace lfs::core {
                 opt_json["explore_starvation_weighting"] = false;
 
             return opt_json;
+        }
+
+        TrainingBackendConflictDescriptor training_backend_conflict_descriptor(
+            const TrainingBackendConflict conflict) {
+            constexpr std::string_view backend = "3DGUT";
+            constexpr std::string_view fallback_backend = "3DGS";
+            switch (conflict) {
+            case TrainingBackendConflict::IGSPlus:
+                return {"igs_plus", backend, "IGS+", fallback_backend};
+            case TrainingBackendConflict::MipFilter:
+                return {"mip_filter", backend, "Mip Filter", fallback_backend};
+            case TrainingBackendConflict::DepthSupervision:
+                return {"depth_supervision", backend, "Depth Loss", fallback_backend};
+            case TrainingBackendConflict::NormalSupervision:
+                return {"normal_supervision", backend, "Normal Loss", fallback_backend};
+            case TrainingBackendConflict::None:
+                return {};
+            }
+            return {};
+        }
+
+        TrainingBackendConflict OptimizationParameters::backend_conflict() const {
+            const auto& capabilities = training_backend_descriptor(raster_backend()).capabilities;
+            if (is_training_feature_unsupported(capabilities.igs_plus) &&
+                canonical_strategy_name(strategy) == kStrategyIGSPlus)
+                return TrainingBackendConflict::IGSPlus;
+            if (is_training_feature_unsupported(capabilities.mip_filter) && mip_filter)
+                return TrainingBackendConflict::MipFilter;
+            if (is_training_feature_unsupported(capabilities.depth_supervision) && use_depth_loss)
+                return TrainingBackendConflict::DepthSupervision;
+            if (is_training_feature_unsupported(capabilities.normal_supervision) && use_normal_loss)
+                return TrainingBackendConflict::NormalSupervision;
+            return TrainingBackendConflict::None;
+        }
+
+        std::string OptimizationParameters::backend_conflict_message() const {
+            const auto descriptor = training_backend_conflict_descriptor(backend_conflict());
+            if (descriptor.id.empty()) {
+                return {};
+            }
+            return std::format(
+                "{} cannot be used with {}. Change this setting or select {}.",
+                descriptor.backend_name,
+                descriptor.feature_name,
+                descriptor.fallback_backend_name);
         }
 
         std::string OptimizationParameters::validate() const {
@@ -478,8 +545,10 @@ namespace lfs::core {
                                    static_cast<uint64_t>(bilateral_grid_W))
                 return std::format("bilateral grid dimensions are too large ({}x{}x{})",
                                    bilateral_grid_X, bilateral_grid_Y, bilateral_grid_W);
-            if (gut && canonical_strategy_name(strategy) == kStrategyIGSPlus)
-                return "GUT and igs+ strategy cannot be used together";
+            const auto conflict = backend_conflict();
+            if (conflict != TrainingBackendConflict::None) {
+                return backend_conflict_message();
+            }
             if (use_exposure_correction &&
                 (use_bilateral_grid || use_ppisp || ppisp_use_controller || ppisp_freeze_from_sidecar)) {
                 return "use_exposure_correction cannot be combined with use_bilateral_grid, "
@@ -559,6 +628,10 @@ namespace lfs::core {
             if (project_path &&
                 (resume_checkpoint || resume_project)) {
                 return "A project path and --resume are mutually exclusive";
+            }
+            if (dataset_project &&
+                (resume_checkpoint || resume_project)) {
+                return "--data-path project.licht and --resume are mutually exclusive";
             }
             if (project_path) {
                 auto extension = project_path->extension().string();

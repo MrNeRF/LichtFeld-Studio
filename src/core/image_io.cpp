@@ -265,7 +265,7 @@ namespace {
 
     lfs::core::Tensor prepare_image_for_write(lfs::core::Tensor image) {
         auto normalized = normalize_image_for_save(std::move(image));
-        return (normalized.clamp(0, 1) * 255.0f)
+        return (normalized.clamp(0, 1) * 255.0f + 0.5f)
             .to(lfs::core::DataType::UInt8)
             .to(lfs::core::Device::CPU)
             .contiguous();

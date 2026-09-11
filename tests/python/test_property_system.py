@@ -15,6 +15,69 @@ def clear_property_callbacks(lf):
 class TestOptimizationParams:
     """Tests for lf.optimization_params() and property introspection."""
 
+    def test_training_backend_alias_and_capabilities(self, lf):
+        params = lf.optimization_params()
+        original = params.gut
+        try:
+            params.raster_backend = "3dgut"
+            assert params.gut is True
+            assert params.get("raster_backend") == "3dgut"
+            assert params.backend_capabilities == {
+                "mcmc": "supported",
+                "mrnf": "supported",
+                "igs_plus": "unsupported",
+                "undistort": "supported",
+                "mip_filter": "unsupported",
+                "depth_supervision": "unsupported",
+                "normal_supervision": "unsupported",
+                "masking": "supported",
+                "segmentation": "supported",
+                "background_modes": "supported",
+                "background_improvements": "supported",
+                "exposure_correction": "supported",
+                "bilateral_grid": "supported",
+                "ppisp": "supported",
+                "sparsity": "supported",
+            }
+            params.gut = False
+            assert params.raster_backend == "3dgs"
+            assert set(params.backend_capabilities.values()) == {"supported"}
+            params.raster_backend = "3dgs"
+            assert params.gut is False
+            params.set("raster_backend", "3dgut")
+            assert params.gut is True
+            with pytest.raises(ValueError, match="Unknown training raster_backend"):
+                params.raster_backend = "unknown"
+            assert params.raster_backend == "3dgut"
+            descriptors = {item["id"]: item for item in lf.training_backends()}
+            assert set(descriptors) == {"3dgs", "3dgut"}
+            assert descriptors["3dgs"]["label"] == "3DGS"
+            assert descriptors["3dgs"]["viewer_backend"] == "3dgs"
+            assert "EWA projection" in descriptors["3dgs"]["description"]
+            assert descriptors["3dgut"]["viewer_backend"] == "3dgut"
+            assert "Unscented Transform" in descriptors["3dgut"]["description"]
+            assert "distorted camera models" in descriptors["3dgut"]["description"]
+            assert descriptors["3dgut"]["capabilities"] == params.backend_capabilities
+        finally:
+            params.gut = original
+
+    @pytest.mark.parametrize("value", [5, 1.5, True, None, [], {}, b"3dgs", "unknown"])
+    def test_invalid_backend_set_preserves_selection(self, lf, value):
+        params = lf.optimization_params()
+        original = params.gut
+        try:
+            for backend in ("3dgs", "3dgut"):
+                params.set("raster_backend", backend)
+                # None is rejected by the existing binding before setter dispatch.
+                error_type = TypeError if value is None else ValueError
+                error_match = "incompatible function arguments" if value is None else "raster_backend"
+                with pytest.raises(error_type, match=error_match):
+                    params.set("raster_backend", value)
+                assert params.raster_backend == backend
+                assert params.gut is (backend == "3dgut")
+        finally:
+            params.gut = original
+
     def test_optimization_params_exists(self, lf):
         """optimization_params() function should be available."""
         assert hasattr(lf, "optimization_params")

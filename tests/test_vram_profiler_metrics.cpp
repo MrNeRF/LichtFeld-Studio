@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 using lfs::diagnostics::VramAllocationMethod;
 using lfs::diagnostics::VramProfiler;
@@ -102,10 +103,16 @@ namespace {
         p.recordCurrentBytes("test.medium", "tensor", 1024 * 1024, VramAllocationMethod::External);
 
         const auto snap = p.snapshot();
-        ASSERT_GE(snap.top_live.size(), 3u);
-        EXPECT_EQ(snap.top_live[0].scope, "test.large");
-        EXPECT_EQ(snap.top_live[1].scope, "test.medium");
-        EXPECT_EQ(snap.top_live[2].scope, "test.small");
+        std::vector<std::string> test_scopes;
+        for (const auto& entry : snap.top_live) {
+            if (entry.scope.starts_with("test.")) {
+                test_scopes.push_back(entry.scope);
+            }
+        }
+        ASSERT_EQ(test_scopes.size(), 3u);
+        EXPECT_EQ(test_scopes[0], "test.large");
+        EXPECT_EQ(test_scopes[1], "test.medium");
+        EXPECT_EQ(test_scopes[2], "test.small");
     }
 
     TEST_F(VramProfilerMetricsTest, TimerSampleFillsWallPercentiles) {

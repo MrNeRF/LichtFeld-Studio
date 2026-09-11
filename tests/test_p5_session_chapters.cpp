@@ -1796,7 +1796,7 @@ namespace {
         params.optimization.iterations = 10;
         params.optimization.enable_sparsity =
             false;
-        trainer->setParams(params);
+        ASSERT_TRUE(trainer->setParams(params));
         lfs::vis::TrainerManager manager;
         manager.restoreProjectMetrics(metrics);
         manager.setTrainerFromCheckpoint(
@@ -1832,7 +1832,7 @@ namespace {
         params.optimization.iterations = 10;
         params.optimization.enable_sparsity =
             false;
-        trainer->setParams(params);
+        ASSERT_TRUE(trainer->setParams(params));
         lfs::vis::TrainerManager manager;
         manager.restoreProjectMetrics(metrics);
         manager.setTrainerFromCheckpoint(
@@ -1863,7 +1863,7 @@ namespace {
         auto params = trainer->getParams();
         params.resume_project =
             std::filesystem::path{"/tmp/live.licht"};
-        trainer->setParams(params);
+        ASSERT_TRUE(trainer->setParams(params));
         lfs::vis::TrainerManager manager;
         manager.setTrainerFromCheckpoint(
             std::move(trainer), 3);

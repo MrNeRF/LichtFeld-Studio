@@ -213,6 +213,8 @@ namespace lfs::app {
                 return "ply";
             case core::ExportFormat::SOG:
                 return "sog";
+            case core::ExportFormat::SSOG:
+                return "ssog";
             case core::ExportFormat::SPZ:
                 return "spz";
             case core::ExportFormat::HTML_VIEWER:
@@ -974,7 +976,9 @@ namespace lfs::app {
                     if (!trainer->canResume()) {
                         return std::unexpected("Training cannot be resumed in the current state");
                     }
-                    trainer->resumeTraining();
+                    if (auto resumed = trainer->resumeTraining(); !resumed) {
+                        return std::unexpected(std::string(resumed.error().user_message()));
+                    }
                     return {};
                 }
                 if (action == "cancel") {
