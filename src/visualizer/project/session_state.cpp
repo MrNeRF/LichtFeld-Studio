@@ -3472,6 +3472,9 @@ namespace lfs::vis::project {
             const bool sequencer_visible =
                 gui_manager->panelLayout().isShowSequencer();
             const auto finish = [&] {
+                // Seed both slots from final restored tool values with sync off on every exit.
+                rendering
+                    ->restoreDepthWindowStateFromProject();
                 viewer.getEditorContext()
                     .armToolRestoreGuard();
                 gui_manager->panelLayout()

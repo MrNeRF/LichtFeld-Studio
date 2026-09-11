@@ -163,6 +163,12 @@ namespace lfs::vis {
         void onWindowFocusLost();
         bool focusSelection();
 
+        // Toolbar actions target their named panel's camera without moving focus.
+        // Outside independent-dual mode, resolvePanelViewport returns the primary
+        // viewport for either panel.
+        void resetCameraForPanel(SplitViewPanelId panel);
+        bool focusSelectionForPanel(SplitViewPanelId panel);
+
     private:
         struct PanelInteractionState {
             SplitViewPanelId panel = SplitViewPanelId::Left;
@@ -176,7 +182,17 @@ namespace lfs::vis {
         };
 
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
-        bool handleFocusSelection(Viewport& target_viewport);
+        // Optional action identity guards only the shared-anchor side effect in
+        // publishCameraMove; panel-less paths pass nullopt. It never selects a viewport.
+        bool handleFocusSelection(Viewport& target_viewport,
+                                  std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // Shared home reset: the legacy event passes viewport_; explicit-panel
+        // callers pass the resolved panel viewport.
+        void handleResetCameraHome(Viewport& target_viewport,
+                                   std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // The panel's viewport, or the primary one when rendering is unavailable
+        // or the mode is not independent-dual. Reads no focus state.
+        Viewport& panelViewport(SplitViewPanelId panel);
         bool computeWholeSceneBounds(glm::vec3& out_min, glm::vec3& out_max,
                                      bool use_percentile = false) const;
         float sceneExtent();
@@ -193,7 +209,12 @@ namespace lfs::vis {
         void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
-        void publishCameraMove(Viewport* target_viewport = nullptr);
+        void publishCameraMove(Viewport* target_viewport = nullptr,
+                               std::optional<SplitViewPanelId> acted_panel = std::nullopt);
+        // Suppress shared transform/x-y re-anchoring only for an explicitly addressed,
+        // off-focus panel in independent-dual mode. Home/Eye still move that panel's
+        // camera; this predicate neither selects a viewport nor changes focus.
+        [[nodiscard]] bool shouldSkipDepthAnchorSync(std::optional<SplitViewPanelId> acted_panel) const;
         bool isNearSplitter(double x, double y) const;
         void refreshSplitDividerCache() const;
         int getModifierKeys() const;

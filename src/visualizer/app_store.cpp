@@ -52,7 +52,8 @@ namespace lfs::vis {
           language_generation(store_, Field::LanguageGeneration, "language_generation", 0),
           render_settings_generation(store_, Field::RenderSettingsGeneration, "render_settings_generation", 0),
           viewport_toolbar_generation(store_, Field::ViewportToolbarGeneration, "viewport_toolbar_generation", 0),
-          depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0) {}
+          depth_window_draw_generation(store_, Field::DepthWindowDrawGeneration, "depth_window_draw_generation", 0),
+          depth_window_draw_commit(store_, Field::DepthWindowDrawCommitValue, "depth_window_draw_commit", AppStore::DepthWindowDrawCommit{}) {}
 
     AppStore& app_store() {
         static AppStore instance;
@@ -69,9 +70,14 @@ namespace lfs::vis {
         signal.set(signal.get() + 1);
     }
 
-    void publish_depth_window_draw_commit() {
-        auto& signal = app_store().depth_window_draw_generation;
-        signal.set(signal.get() + 1);
+    void publish_depth_window_draw_commit(const SplitViewPanelId panel) {
+        auto& generation = app_store().depth_window_draw_generation;
+        const auto next_generation = generation.get() + 1;
+        generation.set(next_generation);
+        app_store().depth_window_draw_commit.set(AppStore::DepthWindowDrawCommit{
+            .generation = next_generation,
+            .panel = panel,
+        });
     }
 
 } // namespace lfs::vis

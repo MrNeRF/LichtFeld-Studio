@@ -540,3 +540,10 @@
 .perf-hud-meter-track {
     background-color: @{statusbar.progress_bg};
 }
+
+/* Give the independent-dual L/R chip a faint wash of the palette's text color.
+   Like toolbar icon borders, this follows the theme instead of fixed white,
+   keeping the chip distinct in light themes without competing with sliders. */
+#selection-block .viewport-selection-depth-panel-chip {
+    background-color: @{alpha(text,0.125)};
+}

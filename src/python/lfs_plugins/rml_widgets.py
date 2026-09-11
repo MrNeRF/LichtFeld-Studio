@@ -206,6 +206,15 @@ class EscapeRevertController:
         element.add_event_listener("escapecancel", lambda event, k=binding_key: self._restore_binding(k, event))
         return element
 
+    def recapture(self, key):
+        """Re-take the pre-edit snapshot for an already-bound key.
+
+        Callers that retarget a live edit at different underlying state need the
+        Escape snapshot to follow it; without this they would have to reach into
+        the private capture.
+        """
+        self._capture_binding(str(key))
+
     def _restore_binding(self, key, event):
         binding = self._bindings.get(key)
         if binding is None or binding.element.parent() is None:

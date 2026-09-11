@@ -5874,6 +5874,115 @@ namespace lfs::python {
             "Get split view info");
 
         m.def(
+            "get_focused_split_panel", []() -> const char* {
+                // Read unprotected, main-thread-owned focused_panel_ on the viewer thread.
+                const bool right = invoke_on_viewer(
+                    [] {
+                        auto* const rm = get_rendering_manager();
+                        return rm && rm->getFocusedSplitPanel() == vis::SplitViewPanelId::Right;
+                    },
+                    false);
+                return right ? "right" : "left";
+            },
+            "Get the focused split-view panel ('left' or 'right').\n"
+            "Outside independent-dual split this reports the panel the depth\n"
+            "toolbar would address; it is 'left' with no rendering manager.");
+
+        m.def(
+            "get_depth_window_sync", []() -> bool {
+                auto* rm = get_rendering_manager();
+                return rm ? rm->getDepthWindowSync() : false;
+            },
+            "Is the per-panel depth-window sync flag on? While on, a depth-window\n"
+            "edit in either split panel writes both panels.");
+
+        m.def(
+            "get_depth_window_collapse_source", []() -> const char* {
+                // The getter holds settings_mutex_, so no viewer-thread marshal is needed.
+                auto* rm = get_rendering_manager();
+                return rm && rm->getDepthWindowCollapseSource() == vis::SplitViewPanelId::Right
+                           ? "right"
+                           : "left";
+            },
+            "Which panel the last LINEAGE EVENT took its surviving window from\n"
+            "('left' or 'right') -- not only a collapse. Leaving independent-dual\n"
+            "copies the PRE-transition focused panel's depth window into the\n"
+            "single remaining one, and the split service resets the observable\n"
+            "focus to Left in the same transition, so a poller cannot recover\n"
+            "that panel from get_focused_split_panel(). A sync-ON copy and a\n"
+            "project or sync-undo restore overwrite this field too, so it names\n"
+            "the source of whichever write stamped LAST; use\n"
+            "get_depth_window_collapse_record() to learn which kind that was.\n"
+            "Only meaningful once such a write has happened; it reports 'left'\n"
+            "before the first one and with no rendering manager.");
+
+        m.def(
+            "get_depth_window_collapse_record", []() -> nb::tuple {
+                // Read source, generation and kind together under the manager's settings lock.
+                auto* rm = get_rendering_manager();
+                if (!rm) {
+                    return nb::make_tuple("left", static_cast<uint64_t>(0), "leave_collapse");
+                }
+                const auto record = rm->getDepthWindowCollapseRecord();
+                const char* kind = "leave_collapse";
+                switch (record.kind) {
+                case vis::RenderingManager::DepthWindowLineageKind::SyncCopy:
+                    kind = "sync_copy";
+                    break;
+                case vis::RenderingManager::DepthWindowLineageKind::ProjectRestore:
+                    kind = "project_restore";
+                    break;
+                case vis::RenderingManager::DepthWindowLineageKind::RetainedPairDiscard:
+                    kind = "retained_pair_discard";
+                    break;
+                case vis::RenderingManager::DepthWindowLineageKind::LeaveCollapse:
+                    break;
+                }
+                return nb::make_tuple(
+                    record.source == vis::SplitViewPanelId::Right ? "right" : "left",
+                    record.generation,
+                    kind);
+            },
+            "The last depth-window reference-lineage stamp, as\n"
+            "('left'|'right', generation, kind).\n"
+            "kind is 'leave_collapse', 'sync_copy', 'project_restore' or\n"
+            "'retained_pair_discard'. These invalidate slot-derived references;\n"
+            "sync undo/redo also reports 'project_restore'. A retained-pair discard\n"
+            "requires fresh baselines from live windows, not from source. The\n"
+            "generation counts them, so a poller whose delta exceeds the\n"
+            "transitions it observed slept through boundaries and cannot replay\n"
+            "anything it cached; the kind says how to recover from the ones it\n"
+            "missed. 'leave_collapse' and 'sync_copy' leave ONE window, so every\n"
+            "cached reference recovers from it; 'project_restore' means\n"
+            "'fresh-baseline required' and can leave the two panel windows\n"
+            "DIFFERING, so a per-panel consumer must re-read each panel with\n"
+            "selection.get_depth_filter_window(panel=...) rather than reuse the\n"
+            "projection. source is the panel the surviving window came from and\n"
+            "is meaningful for 'leave_collapse' (the PRE-transition focus, which\n"
+            "get_focused_split_panel() can no longer report) and for 'sync_copy'\n"
+            "(the panel copied FROM); a 'project_restore' takes its windows from\n"
+            "the restored state, not from a panel. The generation is 0 before\n"
+            "the first such write and with no rendering manager.");
+
+        m.def(
+            "set_depth_window_sync", [](bool sync) -> bool {
+                auto* rm = get_rendering_manager();
+                if (!rm)
+                    return false;
+                rm->setDepthWindowSync(sync);
+                // Refused drag/parked-GT requests return the actual flag.
+                return rm->getDepthWindowSync();
+            },
+            nb::arg("sync"), "Set the per-panel depth-window sync flag. Turning it on with\n"
+                             "differing panels copies the focused panel's window to the other as\n"
+                             "one undo step. Both ON and OFF changes are silently ignored while a\n"
+                             "depth-window drag owns a panel, including subthreshold presses, or\n"
+                             "while an independent pair is parked in GT. GT without a parked pair\n"
+                             "is unaffected. In a retained Disabled interval an actual flag change\n"
+                             "discards the pair before applying; a same-value request preserves it.\n"
+                             "Returns the flag's actual state after the call, not the requested one.");
+
+        m.def(
             "get_current_camera_id", []() -> int {
                 auto* rm = get_rendering_manager();
                 return rm ? rm->getCurrentCameraId() : -1;

@@ -65,6 +65,19 @@ namespace lfs::vis::gui::rml_input {
         return false;
     }
 
+    // Match cancelFocusedElement's targets so the Escape gate can reach every
+    // supported cancellation (revert/blur) instead of forwarding an ordinary key.
+    // Shared only by sidebar and viewport hosts. Modal/startup hosts keep their
+    // own Escape rules, such as closing a modal instead of reverting a field.
+    inline bool isEscapeCancelTarget(Rml::Element* element) {
+        return element && (isTextEditableElement(element) || isSelectRelatedElement(element));
+    }
+
+    // During IME composition, reserve Escape for aborting composition, not field cancellation.
+    inline bool shouldCancelOnEscape(Rml::Element* element, const bool composing) {
+        return !composing && isEscapeCancelTarget(element);
+    }
+
     inline bool cancelFocusedElement(Rml::Context& context) {
         auto* const focused = context.GetFocusElement();
         if (!focused)

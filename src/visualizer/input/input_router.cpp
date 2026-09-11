@@ -41,19 +41,28 @@ namespace lfs::vis::input {
             return;
         }
 
+        const auto* gui = services().guiOrNull();
+        beginMouseButton(action, x, y, gui ? gui->hitTestMouseButton(x, y) : gui::GuiHitTestResult{});
+    }
+
+    void InputRouter::beginMouseButton(const int action, const double x, const double y,
+                                       const gui::GuiHitTestResult& hit) {
+        if (action != ACTION_PRESS) {
+            return;
+        }
+
         ++pressed_mouse_buttons_;
 
         if (state_.pointer_capture == InputTarget::None) {
-            if (auto* gui = services().guiOrNull()) {
-                const auto hit = gui->hitTestPointer(x, y);
-                if (hit.blocks_pointer || hit.blocks_mouse_button) {
-                    state_.pointer_capture = InputTarget::Gui;
-                    if (hit.takes_keyboard_focus)
-                        state_.keyboard_focus = InputTarget::Gui;
-                    return;
-                }
+            if (hit.blocks_pointer || hit.blocks_mouse_button) {
+                state_.pointer_capture = InputTarget::Gui;
+                if (hit.takes_keyboard_focus)
+                    state_.keyboard_focus = InputTarget::Gui;
+                return;
             }
-            state_.pointer_capture = hoverTarget(x, y);
+            state_.pointer_capture = isViewportPoint(x, y)
+                                         ? InputTarget::Viewport
+                                         : (services().guiOrNull() ? InputTarget::Gui : InputTarget::None);
         }
 
         switch (state_.pointer_capture) {
