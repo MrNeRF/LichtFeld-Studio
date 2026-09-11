@@ -39,7 +39,6 @@ namespace lfs::vis::gui {
         void processThumbnails();
         bool isThumbnailReady(const std::string& video_id) const;
         uint64_t getThumbnailTexture(const std::string& video_id) const;
-        void clearThumbnails();
 
     private:
         struct Thumbnail {

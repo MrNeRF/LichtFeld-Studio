@@ -2,14 +2,14 @@
   "builtin-baseline": "c3867e714dd3a51c272826eea77267876517ed99",
   "dependencies": [
     "cppzmq",
+    "curl",
     "args",
     "assimp",
-    "boost-preprocessor",
-    "boost-regex",
     {
       "name": "ffmpeg",
       "features": [
         "avcodec",
+        "avfilter",
         "avformat",
         "nvcodec",
         "swscale",
@@ -17,19 +17,21 @@
       ]
     },
     "freetype",
+    "fmt",
     "glm",
-    "gtest",
     {
-      "name": "imgui",
+      "name": "libarchive",
+      "default-features": false,
       "features": [
-        "docking-experimental",
-        "freetype",
-        "sdl3-binding"
+        "bzip2",
+        "lzma",
+        "zstd"
       ]
     },
-    "implot",
-    "libarchive",
     "libdeflate",
+    "libjpeg-turbo",
+    "libpng",
+    "libplacebo",
     "libwebp",
     "nanobind",
     {
@@ -37,12 +39,6 @@
       "platform": "windows | osx"
     },
     "nlohmann-json",
-    {
-      "name": "openimageio",
-      "features": [
-        "webp"
-      ]
-    },
     {
       "name": "python3",
       "features": [
@@ -63,6 +59,8 @@
     },
     "spdlog",
     "tbb",
+    "tiff",
+    "tinyexr",
     "vulkan",
     {
       "name": "vulkan-loader",
@@ -81,8 +79,30 @@
       ]
     },
     "shader-slang",
-    "usd"
+    "xxhash",
+    "zstd"
   ],
+  "features": {
+    "tests": {
+      "description": "Dependencies used only by the C++ test targets",
+      "dependencies": [
+        "gtest"
+      ]
+    },
+    "vulkan-validation": {
+      "description": "Pinned Vulkan validation layer and SPIR-V validator for developer builds",
+      "dependencies": [
+        {
+          "name": "spirv-tools",
+          "features": [
+            "tools"
+          ],
+          "host": true
+        },
+        "vulkan-validationlayers"
+      ]
+    }
+  },
   "overrides": [
     {
       "name": "cppzmq",
@@ -95,14 +115,6 @@
     {
       "name": "args",
       "version": "6.4.8"
-    },
-    {
-      "name": "boost-preprocessor",
-      "version": "1.90.0#1"
-    },
-    {
-      "name": "boost-regex",
-      "version": "1.90.0#1"
     },
     {
       "name": "ffmpeg",
@@ -125,14 +137,6 @@
       "version": "1.17.0#2"
     },
     {
-      "name": "imgui",
-      "version": "1.92.6"
-    },
-    {
-      "name": "implot",
-      "version": "0.17"
-    },
-    {
       "name": "libarchive",
       "version": "3.8.6"
     },
@@ -147,10 +151,6 @@
     {
       "name": "nlohmann-json",
       "version": "3.12.0#2"
-    },
-    {
-      "name": "openimageio",
-      "version": "3.0.9.1#3"
     },
     {
       "name": "spdlog",
@@ -171,10 +171,6 @@
     {
       "name": "volk",
       "version": "1.4.341.0"
-    },
-    {
-      "name": "usd",
-      "version": "26.3"
     },
     {
       "name": "python3",

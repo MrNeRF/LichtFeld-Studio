@@ -8,7 +8,7 @@ API_VERSION: str = '1.0'
 FEATURES: list = ...
 
 def discover() -> object:
-    """Discover plugins in ~/.lichtfeld/plugins/"""
+    """Discover plugins in the resolved user plugin directory"""
 
 def load(name: str) -> bool:
     """Load plugin"""
@@ -39,6 +39,9 @@ def get_error(name: str) -> object:
 
 def get_traceback(name: str) -> object:
     """Get plugin error traceback"""
+
+def startup_load_status() -> dict:
+    """Return a thread-safe snapshot of startup plugin loading"""
 
 def install(url: str, auto_load: bool = True, transport: str = 'archive') -> str:
     """Install from GitHub URL"""

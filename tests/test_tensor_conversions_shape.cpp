@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include <array>
 #include <gtest/gtest.h>
 #include <numeric>
 #include <torch/torch.h>
@@ -175,6 +176,21 @@ TEST_F(TensorConversionsShapesTest, BoolToFloat32) {
 
     EXPECT_EQ(custom_result.dtype(), DataType::Float32);
     compare_tensors(custom_result, torch_result, 1e-6f, 1e-7f, "BoolToFloat32");
+}
+
+TEST_F(TensorConversionsShapesTest, UInt8ToBoolNormalizesLikeTorch) {
+    std::array<uint8_t, 5> data = {0, 1, 2, 255, 0};
+    const auto custom_cpu =
+        Tensor::from_blob(data.data(), {data.size()}, Device::CPU, DataType::UInt8)
+            .clone();
+    const auto torch_cpu = torch::tensor(
+        {0, 1, 2, 255, 0}, torch::TensorOptions().dtype(torch::kUInt8));
+
+    compare_tensors(custom_cpu.to(DataType::Bool), torch_cpu.to(torch::kBool),
+                    1e-6f, 1e-7f, "UInt8ToBoolCpu");
+    compare_tensors(custom_cpu.cuda().to(DataType::Bool),
+                    torch_cpu.cuda().to(torch::kBool),
+                    1e-6f, 1e-7f, "UInt8ToBoolCuda");
 }
 
 TEST_F(TensorConversionsShapesTest, ConversionPreservesShape) {
@@ -364,9 +380,7 @@ TEST_F(TensorConversionsShapesTest, ReshapeInvalidSize) {
     auto custom_t = Tensor::from_vector(data, {24}, Device::CUDA);
 
     // Try to reshape 24 elements to 25 elements
-    auto custom_result = custom_t.reshape({5, 5});
-
-    EXPECT_FALSE(custom_result.is_valid());
+    EXPECT_THROW(custom_t.reshape({5, 5}), std::runtime_error);
 }
 
 TEST_F(TensorConversionsShapesTest, ViewAlias) {

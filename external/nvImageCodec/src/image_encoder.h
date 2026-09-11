@@ -42,7 +42,7 @@ namespace nvimgcodec {
 
     private:
         const nvimgcodecEncoderDesc_t* encoder_desc_;
-        nvimgcodecEncoder_t encoder_;
+        nvimgcodecEncoder_t encoder_ = nullptr;
     };
 
 } // namespace nvimgcodec

@@ -9,8 +9,6 @@
 #include <string>
 #include <unordered_map>
 
-struct ImFont;
-
 namespace lfs::vis {
     // Forward declarations
     class VisualizerImpl;
@@ -19,21 +17,24 @@ namespace lfs::vis {
 
     namespace gui {
         class RmlUIManager;
+        class RmlViewportOverlay;
 
         // Font set for typography hierarchy
         struct FontSet {
-            ImFont* regular = nullptr;
-            ImFont* bold = nullptr;
-            ImFont* heading = nullptr;
-            ImFont* small_font = nullptr; // Avoid Windows macro collision
-            ImFont* section = nullptr;
-            ImFont* monospace = nullptr; // For code editor
+            using FontHandle = void*;
+
+            FontHandle regular = nullptr;
+            FontHandle bold = nullptr;
+            FontHandle heading = nullptr;
+            FontHandle small_font = nullptr; // Avoid Windows macro collision
+            FontHandle section = nullptr;
+            FontHandle monospace = nullptr; // For code editor
 
             static constexpr int MONO_SIZE_COUNT = 5;
-            ImFont* monospace_sized[MONO_SIZE_COUNT] = {};
+            FontHandle monospace_sized[MONO_SIZE_COUNT] = {};
             float monospace_sizes[MONO_SIZE_COUNT] = {};
 
-            ImFont* monoForScale(float scale) const {
+            FontHandle monoForScale(float scale) const {
                 if (MONO_SIZE_COUNT == 0 || !monospace_sized[0])
                     return monospace;
                 int best = 0;
@@ -58,6 +59,7 @@ namespace lfs::vis {
             EditorContext* editor = nullptr;
             SequencerController* sequencer_controller = nullptr;
             RmlUIManager* rml_manager = nullptr;
+            RmlViewportOverlay* viewport_overlay = nullptr;
             FontSet fonts;
         };
 

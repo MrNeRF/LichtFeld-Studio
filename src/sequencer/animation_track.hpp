@@ -33,8 +33,6 @@ namespace lfs::sequencer {
 
         void addKeyframe(float time, const AnimationValue& value, EasingType easing = EasingType::LINEAR);
         void removeKeyframe(size_t index);
-        void updateKeyframe(size_t index, float time, const AnimationValue& value);
-
         [[nodiscard]] size_t keyframeCount() const { return keyframes_.size(); }
         [[nodiscard]] const GenericKeyframe& keyframe(size_t index) const { return keyframes_[index]; }
         [[nodiscard]] const std::vector<GenericKeyframe>& keyframes() const { return keyframes_; }
@@ -45,6 +43,9 @@ namespace lfs::sequencer {
         [[nodiscard]] float endTime() const;
 
     private:
+        friend class AnimationClip;
+
+        void replaceKeyframes(std::vector<GenericKeyframe> keyframes);
         void sortKeyframes();
 
         TrackId id_;

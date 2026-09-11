@@ -6,17 +6,10 @@
 
 #include <RmlUi/Core/RenderInterface.h>
 
+#include "core/assert.hpp"
+#include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
-
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#ifndef VK_USE_PLATFORM_WIN32_KHR
-#define VK_USE_PLATFORM_WIN32_KHR
-#endif
-#include <windows.h>
-#endif
 
 #ifndef VMA_STATIC_VULKAN_FUNCTIONS
 #define VMA_STATIC_VULKAN_FUNCTIONS 1
@@ -29,17 +22,24 @@
 #include <vulkan/vulkan.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <stop_token>
 #include <string>
+#include <string_view>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
-#ifdef RMLUI_DEBUG
-#define RMLUI_VK_ASSERTMSG(statement, msg) RMLUI_ASSERTMSG(statement, msg)
+#ifdef DEBUG_BUILD
+#define RMLUI_VK_ASSERTMSG(statement, msg) LFS_DEBUG_ASSERT_MSG(statement, msg)
 
 // Uncomment the following line to enable additional Vulkan debugging.
 // #define RMLUI_VK_DEBUG
@@ -58,8 +58,6 @@ public:
     RenderInterface_VK();
     ~RenderInterface_VK();
 
-    using CreateSurfaceCallback = bool (*)(VkInstance instance, VkSurfaceKHR* out_surface);
-
     struct ExternalContext {
         VkInstance instance = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device = VK_NULL_HANDLE;
@@ -72,9 +70,6 @@ public:
         VkExtent2D extent{};
         bool host_image_copy = false;
     };
-
-    bool Initialize(Rml::Vector<const char*> required_extensions, CreateSurfaceCallback create_surface_callback);
-    void Shutdown();
 
     bool InitializeExternal(const ExternalContext& context);
     void ShutdownExternal();
@@ -90,17 +85,35 @@ public:
     void SetContextClipRect(float x1, float y1, float x2, float y2);
     void RenderTextureQuad(Rml::TextureHandle texture, float x, float y, float w, float h);
 
-    void BeginFrame();
-    void EndFrame();
+    struct FrostedGlassRegion {
+        float x = 0.0f;
+        float y = 0.0f;
+        float width = 0.0f;
+        float height = 0.0f;
+        float radius = 0.0f;
+    };
+    // Draw a blurred copy of the current swapchain beneath viewport chrome.
+    // Returns false when the swapchain or format cannot support the low-cost blit path.
+    bool RenderFrostedGlass(Rml::Span<const FrostedGlassRegion> regions);
 
-    void SetViewport(int width, int height);
-    bool IsSwapchainValid();
-    void RecreateSwapchain();
+    // Restrict layer render-pass area (and thus loadOp clears / scissor bounds) to the
+    // capture clip rect while recording a cached-panel refresh. Pair with EndCacheCapture.
+    // Nested PushLayer during the capture inherits the same restricted area. Normal
+    // (non-capture) layer usage is unaffected when capture is inactive.
+    void BeginCacheCapture(int x, int y, int width, int height);
+    void EndCacheCapture();
 
     // Build a Rml::Image src URL referencing an externally-owned VkImageView/VkSampler.
     // The view+sampler must remain alive while any element references this URL. The
     // returned URL form is "lfs-vk://?v=<view_hex>&s=<sampler_hex>&w=W&h=H".
     static std::string MakeExternalTextureSource(VkImageView image_view, VkSampler sampler, int width, int height);
+    void SetTextureDebugName(Rml::TextureHandle texture_handle, std::string_view debug_name) const;
+
+    struct VmaStatistics {
+        VkDeviceSize block_bytes = 0;
+        VkDeviceSize allocation_bytes = 0;
+    };
+    [[nodiscard]] VmaStatistics QueryVmaStatistics() const;
 
     // -- Inherited from Rml::RenderInterface --
 
@@ -143,6 +156,12 @@ public:
     void PopLayer() override;
     /// Called by RmlUi when it wants to capture the current layer as a texture.
     Rml::TextureHandle SaveLayerAsTexture() override;
+    /// Captures an explicit layer region for manager-owned context caches.
+    /// When `reuse_texture` has the same extent as `region`, reuses that image instead of
+    /// allocating a new one.
+    /// On extent mismatch or invalid handle, allocates a new texture (caller must release
+    /// the old one if it is no longer needed).
+    Rml::TextureHandle SaveLayerRegionAsTexture(VkRect2D region, Rml::TextureHandle reuse_texture);
 
     /// Called by RmlUi when it wants to set the current transform matrix to a new matrix.
     void SetTransform(const Rml::Matrix4f* transform) override;
@@ -170,7 +189,22 @@ private:
         std::string m_vram_scope;
         std::string m_vram_label;
         VkDeviceSize m_vram_allocation_size = 0;
+        int m_width = 0;
+        int m_height = 0;
         bool m_is_async_preview = false;
+        // Resource identity for VulkanImageBarrierTracker (#1478).
+        std::uint64_t m_barrier_generation = 0;
+    };
+
+    struct frosted_glass_backdrop_t {
+        texture_data_t primary{};
+        texture_data_t secondary{};
+        VkImageLayout primary_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VkImageLayout secondary_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        int primary_width = 0;
+        int primary_height = 0;
+        int secondary_width = 0;
+        int secondary_height = 0;
     };
 
     struct async_preview_result_t {
@@ -185,6 +219,14 @@ private:
         std::mutex mutex;
         async_preview_result_t result;
         std::atomic<bool> ready = false;
+        std::atomic<bool> cancelled = false;
+    };
+
+    struct preview_work_t {
+        std::shared_ptr<async_preview_state_t> state;
+        std::filesystem::path path;
+        int max_size = 0;
+        bool embedded_project_preview = false;
     };
 
     struct geometry_handle_t {
@@ -229,8 +271,8 @@ private:
         ~UploadResourceManager() {}
 
         void Initialize(VkDevice p_device, VkQueue p_queue, uint32_t queue_family_index) {
-            RMLUI_VK_ASSERTMSG(p_queue, "you have to pass a valid VkQueue");
-            RMLUI_VK_ASSERTMSG(p_device, "you have to pass a valid VkDevice for creation resources");
+            if (p_queue == VK_NULL_HANDLE || p_device == VK_NULL_HANDLE)
+                return;
 
             m_p_device = p_device;
             m_p_graphics_queue = p_queue;
@@ -239,13 +281,22 @@ private:
         }
 
         void Shutdown() {
-            vkDestroyFence(m_p_device, m_p_fence, nullptr);
-            vkDestroyCommandPool(m_p_device, m_p_command_pool, nullptr);
+            if (m_p_device != VK_NULL_HANDLE) {
+                vkDestroyFence(m_p_device, m_p_fence, nullptr);
+                vkDestroyCommandPool(m_p_device, m_p_command_pool, nullptr);
+            }
+            m_p_fence = VK_NULL_HANDLE;
+            m_p_command_buffer = VK_NULL_HANDLE;
+            m_p_command_pool = VK_NULL_HANDLE;
         }
 
         template <typename Func>
-        void UploadToGPU(Func&& p_user_commands) noexcept {
-            RMLUI_VK_ASSERTMSG(m_p_command_buffer, "you didn't initialize VkCommandBuffer");
+        [[nodiscard]] bool UploadToGPU(Func&& p_user_commands) noexcept {
+            if (m_p_device == VK_NULL_HANDLE || m_p_graphics_queue == VK_NULL_HANDLE ||
+                m_p_command_pool == VK_NULL_HANDLE || m_p_command_buffer == VK_NULL_HANDLE ||
+                m_p_fence == VK_NULL_HANDLE) {
+                return false;
+            }
 
             VkCommandBufferBeginInfo info_command = {};
 
@@ -255,17 +306,21 @@ private:
             info_command.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
             VkResult status = vkBeginCommandBuffer(m_p_command_buffer, &info_command);
-
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkBeginCommandBuffer");
+            if (status != VK_SUCCESS)
+                return false;
 
             p_user_commands(m_p_command_buffer);
 
             status = vkEndCommandBuffer(m_p_command_buffer);
-
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "faield to vkEndCommandBuffer");
-
-            Submit();
-            Wait();
+            if (status != VK_SUCCESS) {
+                vkResetCommandPool(m_p_device, m_p_command_pool, 0);
+                return false;
+            }
+            if (!Submit()) {
+                vkResetCommandPool(m_p_device, m_p_command_pool, 0);
+                return false;
+            }
+            return Wait();
         }
 
     private:
@@ -276,12 +331,13 @@ private:
             info.flags = 0;
 
             VkResult status = vkCreateFence(m_p_device, &info, nullptr, &m_p_fence);
-
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateFence");
+            if (status != VK_SUCCESS)
+                m_p_fence = VK_NULL_HANDLE;
         }
 
         void Create_CommandBuffer() noexcept {
-            RMLUI_VK_ASSERTMSG(m_p_command_pool, "you have to initialize VkCommandPool before calling this method!");
+            if (m_p_command_pool == VK_NULL_HANDLE)
+                return;
 
             VkCommandBufferAllocateInfo info = {};
             info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -291,8 +347,8 @@ private:
             info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 
             VkResult status = vkAllocateCommandBuffers(m_p_device, &info, &m_p_command_buffer);
-
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkAllocateCommandBuffers");
+            if (status != VK_SUCCESS)
+                m_p_command_buffer = VK_NULL_HANDLE;
         }
 
         void Create_CommandPool(uint32_t queue_family_index) noexcept {
@@ -304,8 +360,8 @@ private:
             info.flags = 0;
 
             VkResult status = vkCreateCommandPool(m_p_device, &info, nullptr, &m_p_command_pool);
-
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateCommandPool");
+            if (status != VK_SUCCESS)
+                m_p_command_pool = VK_NULL_HANDLE;
         }
 
         void Create_All(uint32_t queue_family_index) noexcept {
@@ -314,15 +370,26 @@ private:
             Create_CommandBuffer();
         }
 
-        void Wait() noexcept {
-            RMLUI_VK_ASSERTMSG(m_p_fence, "you must initialize your VkFence");
-
-            vkWaitForFences(m_p_device, 1, &m_p_fence, VK_TRUE, UINT64_MAX);
-            vkResetFences(m_p_device, 1, &m_p_fence);
-            vkResetCommandPool(m_p_device, m_p_command_pool, 0);
+        [[nodiscard]] bool Wait() noexcept {
+            lfs::rendering::WaitContext wait_ctx;
+            wait_ctx.fingerprint = "rmlui.resource.wait";
+            auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                m_p_device,
+                m_p_fence,
+                std::stop_token{},
+                lfs::rendering::VulkanWaitPolicy{},
+                wait_ctx);
+            if (!wait_outcome.has_value() ||
+                *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                // Soft-fail; retain fence (do not reset while in-flight).
+                return false;
+            }
+            if (vkResetFences(m_p_device, 1, &m_p_fence) != VK_SUCCESS)
+                return false;
+            return vkResetCommandPool(m_p_device, m_p_command_pool, 0) == VK_SUCCESS;
         }
 
-        void Submit() noexcept {
+        [[nodiscard]] bool Submit() noexcept {
             VkSubmitInfo info = {};
 
             info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -335,9 +402,7 @@ private:
             info.pCommandBuffers = &m_p_command_buffer;
             info.commandBufferCount = 1;
 
-            auto status = vkQueueSubmit(m_p_graphics_queue, 1, &info, m_p_fence);
-
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkQueueSubmit");
+            return lfs::rendering::vk_queue_submit_synced(m_p_graphics_queue, 1, &info, m_p_fence) == VK_SUCCESS;
         }
 
     private:
@@ -382,37 +447,6 @@ private:
         VkDevice m_p_device;
         VmaAllocator m_p_vk_allocator;
         VmaVirtualBlock m_p_block;
-    };
-
-    // If we need additional command buffers, we can add them to this list and retrieve them from the ring.
-    enum class CommandBufferName { Primary,
-                                   Count };
-
-    // The command buffer ring stores a unique set of named command buffers for each bufferd frame.
-    // Explanation of how to use Vulkan efficiently: https://vkguide.dev/docs/chapter-4/double_buffering/
-    class CommandBufferRing {
-    public:
-        static constexpr uint32_t kNumFramesToBuffer = kSwapchainBackBufferCount;
-        static constexpr uint32_t kNumCommandBuffersPerFrame = static_cast<uint32_t>(CommandBufferName::Count);
-
-        CommandBufferRing();
-
-        void Initialize(VkDevice p_device, uint32_t queue_index_graphics) noexcept;
-        void Shutdown();
-
-        void OnBeginFrame();
-        VkCommandBuffer GetCommandBufferForActiveFrame(CommandBufferName named_command_buffer);
-
-    private:
-        struct CommandBuffersPerFrame {
-            Rml::Array<VkCommandPool, kNumCommandBuffersPerFrame> m_command_pools;
-            Rml::Array<VkCommandBuffer, kNumCommandBuffersPerFrame> m_command_buffers;
-        };
-
-        VkDevice m_p_device;
-        uint32_t m_frame_index;
-        CommandBuffersPerFrame* m_p_current_frame;
-        Rml::Array<CommandBuffersPerFrame, kNumFramesToBuffer> m_frames;
     };
 
     // Grows on demand: when a pool is exhausted (VK_ERROR_OUT_OF_POOL_MEMORY / VK_ERROR_FRAGMENTED_POOL)
@@ -541,75 +575,25 @@ private:
         std::unordered_map<VkDescriptorSet, VkDescriptorPool> m_set_to_pool;
     };
 
-    struct PhysicalDeviceWrapper {
-        VkPhysicalDevice m_p_physical_device;
-        VkPhysicalDeviceProperties m_physical_device_properties;
-    };
-
-    using PhysicalDeviceWrapperList = Rml::Vector<PhysicalDeviceWrapper>;
-    using LayerPropertiesList = Rml::Vector<VkLayerProperties>;
-    using ExtensionPropertiesList = Rml::Vector<VkExtensionProperties>;
-
 private:
     Rml::TextureHandle CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions,
                                      const Rml::String& name, VkSampler sampler = VK_NULL_HANDLE);
     Rml::TextureHandle LoadAsyncPreviewTexture(Rml::Vector2i& texture_dimensions, const Rml::String& source);
     void ProcessAsyncPreviewUploads();
     void DropAsyncPreviewTexture(texture_data_t* texture);
+    void EnsurePreviewWorkerPool();
+    void StopPreviewWorkerPool() noexcept;
+    void EnqueuePreviewWork(preview_work_t work);
     void QueueTextureForDeferredDeletion(texture_data_t* texture);
-    static async_preview_result_t DecodePreviewTexture(std::filesystem::path path, int max_size);
+    static async_preview_result_t DecodePreviewTexture(std::filesystem::path path,
+                                                       int max_size,
+                                                       bool embedded_project_preview);
 
-    void Initialize_Instance(Rml::Vector<const char*> required_extensions) noexcept;
-    void Initialize_Device() noexcept;
-    void Initialize_PhysicalDevice(VkPhysicalDeviceProperties& out_physical_device_properties) noexcept;
-    void Initialize_Swapchain(VkExtent2D window_extent) noexcept;
-    void Initialize_Surface(CreateSurfaceCallback create_surface_callback) noexcept;
-    void Initialize_QueueIndecies() noexcept;
-    void Initialize_Queues() noexcept;
-    void Initialize_SyncPrimitives() noexcept;
     void Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept;
     void Initialize_Allocator() noexcept;
 
-    void Destroy_Instance() noexcept;
-    void Destroy_Device() noexcept;
-    void Destroy_Swapchain() noexcept;
-    void Destroy_Surface() noexcept;
-    void Destroy_SyncPrimitives() noexcept;
     void Destroy_Resources() noexcept;
     void Destroy_Allocator() noexcept;
-
-    void QueryInstanceLayers(LayerPropertiesList& result) noexcept;
-    void QueryInstanceExtensions(ExtensionPropertiesList& result, const LayerPropertiesList& instance_layer_properties) noexcept;
-    bool AddLayerToInstance(Rml::Vector<const char*>& result, const LayerPropertiesList& instance_layer_properties,
-                            const char* p_instance_layer_name) noexcept;
-    bool AddExtensionToInstance(Rml::Vector<const char*>& result, const ExtensionPropertiesList& instance_extension_properties,
-                                const char* p_instance_extension_name) noexcept;
-    void CreatePropertiesFor_Instance(Rml::Vector<const char*>& instance_layer_names, Rml::Vector<const char*>& instance_extension_names) noexcept;
-
-    bool IsLayerPresent(const LayerPropertiesList& properties, const char* p_layer_name) noexcept;
-    bool IsExtensionPresent(const ExtensionPropertiesList& properties, const char* p_extension_name) noexcept;
-
-    bool AddExtensionToDevice(Rml::Vector<const char*>& result, const ExtensionPropertiesList& device_extension_properties,
-                              const char* p_device_extension_name) noexcept;
-    void CreatePropertiesFor_Device(ExtensionPropertiesList& result) noexcept;
-
-    void CreateReportDebugCallback() noexcept;
-    void Destroy_ReportDebugCallback() noexcept;
-
-    uint32_t GetUserAPIVersion() const noexcept;
-    uint32_t GetRequiredVersionAndValidateMachine() noexcept;
-
-    void CollectPhysicalDevices(PhysicalDeviceWrapperList& out_physical_devices) noexcept;
-    const PhysicalDeviceWrapper* ChoosePhysicalDevice(const PhysicalDeviceWrapperList& physical_devices, VkPhysicalDeviceType device_type) noexcept;
-
-    VkSurfaceFormatKHR ChooseSwapchainFormat() noexcept;
-    VkSurfaceTransformFlagBitsKHR CreatePretransformSwapchain() noexcept;
-    VkCompositeAlphaFlagBitsKHR ChooseSwapchainCompositeAlpha() noexcept;
-    int Choose_SwapchainImageCount(uint32_t user_swapchain_count_for_creation = kSwapchainBackBufferCount, bool if_failed_choose_min = true) noexcept;
-    VkPresentModeKHR GetPresentMode(VkPresentModeKHR type = VkPresentModeKHR::VK_PRESENT_MODE_FIFO_KHR) noexcept;
-    VkSurfaceCapabilitiesKHR GetSurfaceCapabilities() noexcept;
-
-    VkExtent2D GetValidSurfaceExtent() noexcept;
 
     void CreateShaders() noexcept;
     void CreateDescriptorSetLayout() noexcept;
@@ -618,31 +602,22 @@ private:
     void CreateSamplers() noexcept;
     void Create_Pipelines() noexcept;
 
-    // This method is called in Views, so don't call it manually
-    void CreateSwapchainImages() noexcept;
-    void CreateSwapchainImageViews() noexcept;
-
-    void Create_DepthStencilImage() noexcept;
-    void Create_DepthStencilImageViews() noexcept;
-
     void UpdateViewportState(const VkExtent2D& real_render_image_size) noexcept;
-    void CreateResourcesDependentOnSize(const VkExtent2D& real_render_image_size) noexcept;
 
     buffer_data_t CreateResource_StagingBuffer(VkDeviceSize size, VkBufferUsageFlags flags) noexcept;
     void DestroyResource_StagingBuffer(const buffer_data_t& data) noexcept;
 
     void Destroy_Textures() noexcept;
+    void Destroy_LiveTextures() noexcept;
     void Destroy_Geometries() noexcept;
 
     void Destroy_Texture(const texture_data_t& p_texture) noexcept;
+    void RegisterLiveTexture(texture_data_t* texture);
+    void UnregisterLiveTexture(texture_data_t* texture);
 
-    void DestroyResourcesDependentOnSize() noexcept;
-    void DestroySwapchainImageViews() noexcept;
     void DestroyRenderLayers() noexcept;
     void DestroyRenderLayer(render_layer_t& layer) noexcept;
     void Destroy_Pipelines() noexcept;
-    void DestroyDescriptorSets() noexcept;
-    void DestroyPipelineLayout() noexcept;
     void DestroySamplers() noexcept;
     void FreeTransientShaderAllocations(uint32_t resource_slot) noexcept;
     void FreeAllTransientShaderAllocations() noexcept;
@@ -654,25 +629,24 @@ private:
     void BeginSwapchainRendering(VkAttachmentLoadOp color_load_op, VkAttachmentLoadOp depth_load_op);
     void EndActiveRendering();
     bool CopySwapchainToLayer(Rml::LayerHandle destination);
-    void TransitionImageLayout(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout);
+    void TransitionImageLayout(VkImage image, std::uint64_t generation, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout);
     VkImageAspectFlags DepthStencilAspectMask() const noexcept;
     void ApplyTransformState();
     VkRect2D ContextClipScissor() const noexcept;
     VkRect2D IntersectContextClip(VkRect2D scissor) const noexcept;
+    // Intersect with the active cache-capture render area when capture is active; no-op otherwise.
+    VkRect2D ClampToCacheCaptureArea(VkRect2D rect) const noexcept;
     void ResetDynamicRenderState();
     void RenderFullscreenTexture(texture_data_t& texture, Rml::BlendMode blend_mode);
-
-    void Wait() noexcept;
+    bool EnsureFrostedGlassBackdrop();
+    bool CreateFrostedGlassTexture(texture_data_t& texture, int width, int height,
+                                   std::string_view label);
+    void DestroyFrostedGlassBackdrop(bool deferred) noexcept;
+    void RenderFrostedGlassQuad(texture_data_t& texture);
 
     void Update_PendingForDeletion_Textures_By_Frame(uint32_t resource_slot) noexcept;
     void Update_PendingForDeletion_Geometries(uint32_t resource_slot) noexcept;
     uint32_t ActiveResourceSlot() const noexcept;
-    void WaitForSubmittedFrames() noexcept;
-
-    void Submit() noexcept;
-    void Present() noexcept;
-
-    VkFormat Get_SupportedDepthFormat();
 
 private:
     bool m_is_transform_enabled;
@@ -686,20 +660,14 @@ private:
     int m_width;
     int m_height;
 
-    uint32_t m_queue_index_present;
     uint32_t m_queue_index_graphics;
-    uint32_t m_queue_index_compute;
-    uint32_t m_semaphore_index;
-    uint32_t m_semaphore_index_previous;
     uint32_t m_resource_slot = 0;
     uint32_t m_reclaim_resource_slot = 0;
-    uint32_t m_image_index;
 
     VkInstance m_p_instance;
     VkDevice m_p_device;
+    lfs::rendering::VulkanDebugNameWriter m_debug_name_writer;
     VkPhysicalDevice m_p_physical_device;
-    VkSurfaceKHR m_p_surface;
-    VkSwapchainKHR m_p_swapchain;
     VkPipelineCache m_p_pipeline_cache;
     VmaAllocator m_p_allocator;
     // VK_EXT_host_image_copy: when both pointers load (extension + feature
@@ -722,18 +690,13 @@ private:
     VkSampler m_p_sampler_linear;
     VkSampler m_p_sampler_nearest;
     VkRect2D m_scissor;
+    VkRect2D m_scissor_requested;
 
     // @ means it captures the window size full width and full height, offset equals both x and y to 0
     VkRect2D m_scissor_original;
     VkViewport m_viewport;
 
-    VkQueue m_p_queue_present;
     VkQueue m_p_queue_graphics;
-    VkQueue m_p_queue_compute;
-
-#ifdef RMLUI_VK_DEBUG
-    VkDebugUtilsMessengerEXT m_debug_messenger;
-#endif
 
     VkSurfaceFormatKHR m_swapchain_format;
     VkFormat m_depth_stencil_format = VK_FORMAT_UNDEFINED;
@@ -744,20 +707,27 @@ private:
     VkRect2D m_context_clip_scissor{};
     bool m_context_clip_enabled = false;
     bool m_current_context_used_preview_texture = false;
-    texture_data_t m_texture_depthstencil;
+    bool m_frosted_glass_blit_supported = false;
+    // When true, layer render passes clear/draw only this sub-rect of the full-size layer.
+    bool m_cache_capture_active = false;
+    VkRect2D m_cache_capture_render_area{};
 
     Rml::Matrix4f m_projection;
-    Rml::Vector<VkFence> m_executed_fences;
-    Rml::Vector<VkSemaphore> m_semaphores_image_available;
-    Rml::Vector<VkSemaphore> m_semaphores_finished_render;
-    Rml::Vector<VkImage> m_swapchain_images;
-    Rml::Vector<VkImageView> m_swapchain_image_views;
-    Rml::Vector<VkImageLayout> m_swapchain_image_layouts;
     Rml::Vector<VkShaderModule> m_shaders;
     Rml::Array<Rml::Vector<texture_data_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_textures_by_frames;
+    std::unordered_set<texture_data_t*> m_live_textures;
     std::vector<std::shared_ptr<async_preview_state_t>> m_async_preview_textures;
+    std::mutex m_preview_queue_mutex;
+    std::condition_variable m_preview_queue_cv;
+    std::deque<preview_work_t> m_preview_queue;
+    std::vector<std::thread> m_preview_workers;
+    bool m_preview_workers_stopping = false;
     std::atomic<uint64_t> m_preview_texture_generation{0};
     Rml::Vector<render_layer_t> m_render_layers;
+    frosted_glass_backdrop_t m_frosted_glass_backdrop;
+    Rml::CompiledGeometryHandle m_frosted_glass_quad_geometry = {};
+    int m_frosted_glass_quad_width = 0;
+    int m_frosted_glass_quad_height = 0;
     Rml::CompiledGeometryHandle m_texture_quad_geometry = {};
     float m_texture_quad_x = 0.0f;
     float m_texture_quad_y = 0.0f;
@@ -768,8 +738,11 @@ private:
     VkImageView m_external_swapchain_image_view = VK_NULL_HANDLE;
     VkImageView m_external_depth_stencil_image_view = VK_NULL_HANDLE;
     VkImageLayout m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VkImageLayout m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     lfs::vis::VulkanImageBarrierTracker m_image_barriers;
+    // Per-image resource generation (same counter as textures; stored on texture_data_t /
+    // layer color+depth / external swapchain — no parallel handle map).
+    std::uint64_t m_image_barrier_generation = 0;
+    std::uint64_t m_external_swapchain_barrier_generation = 0;
     active_render_target_t m_active_render_target = active_render_target_t::None;
     Rml::LayerHandle m_active_layer = 0;
     int m_render_layer_stack_size = 0;
@@ -777,7 +750,6 @@ private:
     // vma handles that thing, so there's no need for frame splitting
     Rml::Array<Rml::Vector<geometry_handle_t*>, kSwapchainBackBufferCount> m_pending_for_deletion_geometries_by_frame;
 
-    CommandBufferRing m_command_buffer_ring;
     MemoryPool m_memory_pool;
     UploadResourceManager m_upload_manager;
     DescriptorPoolManager m_manager_descriptors;

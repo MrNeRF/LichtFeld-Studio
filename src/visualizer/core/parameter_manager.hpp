@@ -4,23 +4,27 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include "io/project_chapters.hpp"
 #include <atomic>
 #include <expected>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lfs::vis {
 
-    // Session defaults come from the most recent explicit parameter source, current params are user-editable.
+    // Session defaults come from the most recent explicit source (CLI, JSON, checkpoint/import); current params are user-editable.
     class LFS_VIS_API ParameterManager {
     public:
         std::expected<void, std::string> ensureLoaded();
 
         [[nodiscard]] lfs::core::param::OptimizationParameters& getCurrentParams(std::string_view strategy);
         [[nodiscard]] const lfs::core::param::OptimizationParameters& getCurrentParams(std::string_view strategy) const;
+        [[nodiscard]] lfs::core::param::OptimizationParameters copySessionParams(std::string_view strategy = {});
 
         [[nodiscard]] lfs::core::param::DatasetConfig& getDatasetConfig() { return dataset_config_; }
         [[nodiscard]] const lfs::core::param::DatasetConfig& getDatasetConfig() const { return dataset_config_; }
@@ -35,7 +39,6 @@ namespace lfs::vis {
         void setSessionDefaults(const lfs::core::param::TrainingParameters& params);
 
         // Set current params (e.g., from loaded checkpoint)
-        void setCurrentParams(const lfs::core::param::OptimizationParameters& params);
 
         // Import params: overwrites both session and current for active strategy
         void importParams(const lfs::core::param::OptimizationParameters& params);
@@ -57,8 +60,34 @@ namespace lfs::vis {
 
         [[nodiscard]] bool isLoaded() const { return loaded_; }
 
-        void markDirty() { dirty_.store(true, std::memory_order_release); }
+        [[nodiscard]] lfs::Result<lfs::io::project::ParameterManagerSnapshot>
+        capturePendingProjectState() const;
+        [[nodiscard]] static lfs::Result<void>
+        validatePendingProjectState(
+            const lfs::io::project::ParameterManagerSnapshot& snapshot);
+        // Restores only ParameterManager's role-qualified next-run/session
+        // values. It deliberately has no TrainerManager dependency and cannot
+        // alter an active trainer.
+        lfs::Result<void> restorePendingProjectState(
+            const lfs::io::project::ParameterManagerSnapshot& snapshot);
+        // Phase-B install for a snapshot already accepted by
+        // validatePendingProjectState during transactional project-open Phase A.
+        void installValidatedPendingProjectState(
+            const lfs::io::project::ParameterManagerSnapshot& snapshot);
+
+        void markDirty() {
+            dirty_serial_.fetch_add(1, std::memory_order_acq_rel);
+            dirty_.store(true, std::memory_order_release);
+        }
+        [[nodiscard]] bool isDirty() const { return dirty_.load(std::memory_order_acquire); }
         bool consumeDirty() { return dirty_.exchange(false, std::memory_order_acq_rel); }
+        [[nodiscard]] std::uint64_t dirtySerial() const {
+            return dirty_serial_.load(std::memory_order_acquire);
+        }
+        void clearDirtyIfUnchanged(const std::uint64_t serial) {
+            if (dirty_serial_.load(std::memory_order_acquire) == serial)
+                dirty_.store(false, std::memory_order_release);
+        }
 
         [[nodiscard]] lfs::core::param::OptimizationParameters copyActiveParams() const {
             std::lock_guard lock(params_mutex_);
@@ -69,7 +98,7 @@ namespace lfs::vis {
         void modifyActiveParams(F&& fn) {
             std::lock_guard lock(params_mutex_);
             fn(getActiveParams());
-            dirty_.store(true, std::memory_order_release);
+            markDirty();
         }
 
     private:
@@ -86,11 +115,30 @@ namespace lfs::vis {
         lfs::core::param::OptimizationParameters mrnf_current_;
         lfs::core::param::OptimizationParameters igs_current_;
 
+        // Logical REFS bindings are part of each role, not derivable from
+        // the path-bearing runtime parameter structs. Keep them alongside
+        // the live slots so a training safe-point can preserve inactive
+        // sessions without consulting serialized PRMS.
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mcmc_session_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mrnf_session_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings igs_session_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mcmc_current_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings mrnf_current_references_;
+        lfs::io::project::ParameterManagerSnapshot::
+            ReferenceBindings igs_current_references_;
+
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;
+        std::vector<lfs::core::param::OutputFormat> export_formats_;
 
         mutable std::mutex params_mutex_;
         std::atomic<bool> dirty_{false};
+        std::atomic<std::uint64_t> dirty_serial_{0};
     };
 
 } // namespace lfs::vis

@@ -38,7 +38,7 @@ namespace lfs::python {
                 bridge().prepare_ui();
             const SceneContextGuard scene_guard(ctx.scene);
             const GilAcquire gil;
-            PyUILayout layout;
+            PyUILayout layout(PyUILayout::Mode::DrawHook);
             panel_instance_.attr("draw")(layout);
         }
 

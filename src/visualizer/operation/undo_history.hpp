@@ -91,6 +91,7 @@ namespace lfs::vis::op {
         [[nodiscard]] UndoMemoryBreakdown transactionMemory() const;
         [[nodiscard]] UndoMemoryBreakdown totalMemory() const;
         [[nodiscard]] bool hasActiveTransaction() const;
+        [[nodiscard]] bool isPlaybackActive() const;
         [[nodiscard]] size_t transactionDepth() const;
         [[nodiscard]] uint64_t transactionAgeMs() const;
         [[nodiscard]] std::string activeTransactionName() const;

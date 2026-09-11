@@ -13,12 +13,9 @@
   <div class="section-content" id="sec-viewport">
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.background">
       <span class="setting-row__label-col">{{label_background_color}}</span>
-      <div class="setting-row__control-col setting-row__control-col--color">
-        <span class="color-comp">{{background_color_r}}</span>
-        <span class="color-comp">{{background_color_g}}</span>
-        <span class="color-comp">{{background_color_b}}</span>
+      <div class="setting-row__control-col setting-row__control-col--color color-compact-control">
         <div class="color-swatch" id="swatch-background_color" data-event-click="color_click('background_color')"></div>
-        <input type="text" class="color-hex" data-value="background_color_hex" />
+        <input type="text" class="color-hex visible" data-value="background_color_hex" />
       </div>
     </div>
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.render_scale">
@@ -32,8 +29,8 @@
       <span class="setting-row__label-col">{{label_environment_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="environment_mode">
-          <option value="SOLID_COLOR" data-tooltip="tooltip.opt.environment_mode.solid_color">Solid Color</option>
-          <option value="EQUIRECTANGULAR" data-tooltip="tooltip.opt.environment_mode.equirect">Equirectangular HDRI</option>
+          <option value="SOLID_COLOR" data-tooltip="tooltip.opt.environment_mode.solid_color">@tr:ui.solid_color</option>
+          <option value="EQUIRECTANGULAR" data-tooltip="tooltip.opt.environment_mode.equirect">@tr:ui.equirectangular_hdri</option>
         </select>
       </div>
     </div>
@@ -104,9 +101,9 @@
         <span class="setting-row__label-col">{{label_grid_plane}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="grid_plane">
-            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">YZ (Right)</option>
-            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">XZ (Top)</option>
-            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">XY (Front)</option>
+            <option value="0" data-tooltip="tooltip.opt.grid_plane.yz">@tr:ui.grid_plane_yz</option>
+            <option value="1" data-tooltip="tooltip.opt.grid_plane.xz">@tr:ui.grid_plane_xz</option>
+            <option value="2" data-tooltip="tooltip.opt.grid_plane.xy">@tr:ui.grid_plane_xy</option>
           </select>
         </div>
       </div>
@@ -149,7 +146,7 @@
       </div>
     </div>
     <div class="setting-row setting-row--aligned">
-      <span class="setting-row__label-col">FOV:</span>
+      <span class="setting-row__label-col">@tr:main_panel.fov</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <span class="text-disabled">{{fov_display}}</span>
       </div>
@@ -190,9 +187,9 @@
       <span class="setting-row__label-col">{{label_camera_metrics_mode}}</span>
       <div class="setting-row__control-col setting-row__control-col--fill">
         <select data-value="camera_metrics_mode">
-          <option value="OFF" data-tooltip="tooltip.opt.camera_metrics.off">Off</option>
-          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">PSNR</option>
-          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">PSNR + SSIM</option>
+          <option value="OFF" data-tooltip="tooltip.opt.camera_metrics.off">@tr:ui.off</option>
+          <option value="PSNR" data-tooltip="tooltip.opt.camera_metrics.psnr">@tr:ui.psnr</option>
+          <option value="PSNR_SSIM" data-tooltip="tooltip.opt.camera_metrics.psnr_ssim">@tr:ui.psnr_ssim</option>
         </select>
       </div>
     </div>
@@ -409,7 +406,7 @@
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe">
       <span class="setting-row__label-col">{{label_mesh_wireframe}}</span>
       <label class="setting-row__control-col setting-row__control-col--checkbox">
-        <input type="checkbox" data-checked="mesh_wireframe" />
+        <input type="checkbox" data-checked="mesh_wireframe" data-attrif-disabled="!mesh_wireframe_supported" />
       </label>
     </div>
     <div data-if="mesh_wireframe">
@@ -423,7 +420,7 @@
           <input type="text" class="color-hex" data-value="mesh_wireframe_color_hex" />
         </div>
       </div>
-      <div class="setting-row setting-row--aligned" data-tooltip="tooltip.mesh_wireframe_width">
+      <div class="setting-row setting-row--aligned" data-if="mesh_wide_lines_supported" data-tooltip="tooltip.mesh_wireframe_width">
         <span class="setting-row__label-col">{{label_mesh_wireframe_width}}</span>
         <div class="setting-row__control-col setting-row__control-col--slider">
           <input type="range" class="setting-slider" data-value="mesh_wireframe_width" min="0.5" max="5" step="0.01" />
@@ -518,8 +515,8 @@
         <span class="setting-row__label-col">{{label_ppisp_mode}}</span>
         <div class="setting-row__control-col setting-row__control-col--fill">
           <select data-value="ppisp_mode">
-            <option value="MANUAL" data-tooltip="tooltip.opt.ppisp_mode.manual">Manual</option>
-            <option value="AUTO" data-tooltip="tooltip.opt.ppisp_mode.auto">Auto (Controller)</option>
+            <option value="MANUAL" data-tooltip="tooltip.opt.ppisp_mode.manual">@tr:ui.manual</option>
+            <option value="AUTO" data-tooltip="tooltip.opt.ppisp_mode.auto">@tr:ui.auto_controller</option>
           </select>
         </div>
       </div>
@@ -636,6 +633,13 @@
     <color-picker id="color-picker-el"
       data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b"
       data-event-change="picker_change" />
+    <div class="color-popup-fields" data-if="editing_background_color">
+      <div class="color-rgb-row">
+        <input type="text" class="color-channel" data-value="background_color_r" />
+        <input type="text" class="color-channel" data-value="background_color_g" />
+        <input type="text" class="color-channel" data-value="background_color_b" />
+      </div>
+    </div>
   </div>
 
 </body>

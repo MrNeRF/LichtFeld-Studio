@@ -15,9 +15,12 @@ namespace lfs::vis::gui {
         size_t process_used = 0;
         size_t total_used = 0;
         size_t total = 0;
+        float gpu_utilization_percent = -1.f;
+        bool gpu_utilization_valid = false;
         std::string device_name;
     };
 
     LFS_VIS_API GpuMemoryInfo queryGpuMemory();
+    LFS_VIS_API float queryGpuUtilization();
 
 } // namespace lfs::vis::gui

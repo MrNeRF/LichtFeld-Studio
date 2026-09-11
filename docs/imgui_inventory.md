@@ -1,37 +1,56 @@
-# ImGui Inventory
+# ImGui / ImPlot Removal — Closure Note
 
-This inventory tracks remaining ImGui usage while the application moves new UI work to RmlUi.
-Do not add new ImGui surfaces or backend dependencies; new user-facing panels should be RmlUi.
+**Status: complete (2026-07), PR #1395.**
 
-## Dependency State
+Dear ImGui and ImPlot are fully removed from LichtFeld Studio. RmlUi is the
+only GUI stack. There are no `imgui` / `implot` vcpkg dependencies, no CMake
+`find_package` or link targets, no production includes, and no remaining
+ImGui/ImPlot symbols in app or library binaries.
 
-- `vcpkg.json` still includes `imgui` with `docking-experimental`, `freetype`, and `sdl3-binding`.
-- No `imgui[opengl3-binding]` dependency remains.
-- No owned `imgui_impl_opengl*` include remains.
-- `implot` remains only because legacy ImGui surfaces still link against it.
+## What replaced what
 
-## Remaining ImGui Surfaces
+| Former ImGui / ImPlot surface | Replacement |
+| --- | --- |
+| Frame bootstrap, input capture, panel shell, native chrome | RmlUi documents, shell, and SDL-native input |
+| Python plugin immediate-mode panels | `RmlImModeLayout` / `RmlImModePanelAdapter` — im-mode bridge over retained RmlUi with slot-based reconciliation and equality-gated updates |
+| Viewport immediate drawing (`draw_window_*`, `draw_*`) | `ScreenOverlayRenderer` (viewport-scoped); Python path via the viewport overlay bridge |
+| Pie-menu icons | `IconCache` + `ScreenOverlayRenderer::addImage` |
+| Floating-panel and color-picker drop shadows | RmlUi `box-shadow` theme tokens in RCSS |
+| Chromaticity / CRF plot widgets | Retained Rml custom elements `<chromaticity-diagram>` / `<crf-curve>`; the legacy layout methods warn once and direct authors to these elements |
+| Zep text editor display backend | `ZepDisplay_Rml` |
 
-| Area | Files | Current role | Migration hint |
-| --- | --- | --- | --- |
-| Frame/input bootstrap | `src/visualizer/gui/gui_manager.*`, `src/visualizer/window/window_manager.cpp`, `src/visualizer/input/input_controller.cpp` | Owns ImGui context, SDL3 platform backend, frame begin/end, focus capture, cursor mapping, and `.ini` persistence. | Move input capture/cursor/text-input ownership to RmlUi and keep a small compatibility bridge only while legacy panels exist. |
-| Panel shell compatibility | `src/visualizer/gui/panel_registry.cpp`, `src/visualizer/gui/panel_layout.cpp`, `src/visualizer/gui/rmlui/rml_panel_host.cpp` | Uses ImGui docking/layout/draw-list coordinates to host native and Rml panels. | Keep `PanelRegistry` as data, replace the layout host with the Rml shell/frame and remove ImGui dummy/clip/dock dependencies. |
-| Legacy native widgets | `src/visualizer/gui/ui_widgets.*`, `src/visualizer/gui/panels/windows_console_utils.cpp`, `src/visualizer/gui/windows/video_extractor_dialog.cpp` | Shared immediate widgets and one remaining dialog implementation. | Replace with Rml modal/dialog components and shared RCSS controls. |
-| Viewport overlays and tools | `src/visualizer/tools/{align_tool,selection_tool}.cpp`, `src/visualizer/gui/{gizmo_transform.hpp,pie_menu.hpp,startup_overlay.cpp,gui_manager.cpp}` | Draw-list overlays, tool hints, selection rectangles, cursor labels, pie menu, and transitional viewport chrome. | World/viewport geometry belongs in `VulkanViewportPass`; command UI and tool affordances belong in Rml overlay documents. |
-| Theme bridge | `src/visualizer/theme/theme.*` | Theme model still uses `ImVec2`, `ImVec4`, and `ImU32` and applies an ImGui style. | Split theme tokens into renderer-neutral types, then provide separate ImGui compatibility and Rml RCSS adapters. |
-| Sequencer bridge | `src/visualizer/sequencer/rml_sequencer_panel.cpp` | Sequencer UI is RmlUi, but the panel still touches ImGui for host integration details. | Remove once panel hosting no longer depends on ImGui geometry/frame state. |
-| Python plugin UI compatibility | `src/python/lfs/py_ui*.cpp`, `src/python/lfs/py_uilist.cpp`, `src/python/lfs/*panel_adapter*` | Maintains the existing immediate-mode Python UI API and adapters, including Rml-backed adapters that still sample ImGui input state. | Freeze the ImGui-shaped API, route new plugin UI through Rml documents/data binding, and avoid exposing new ImGui primitives. |
+Hooks that cannot host interactive widgets log a one-shot warning instead of
+silently no-oping.
 
-## Already RmlUi-First
+Viewport-overlay Python drawing is available only while the
+`ScreenOverlayRenderer` frame is active. Both `draw_*` and `draw_window_*`
+take absolute screen coordinates; the legacy `background` arguments are
+compatibility-only. The renderer has one command stream, packed into a shape
+batch followed by a text/image batch, with enqueue order retained within each
+batch.
 
-- Main menu/status/right shell: `src/visualizer/gui/rml_menu_bar.cpp`, `rml_status_bar.cpp`, `rml_right_panel.cpp`, `rml_shell_frame.cpp`.
-- Python console/editor panel: `src/visualizer/gui/panels/python_console_panel.cpp`, `src/visualizer/gui/rmlui/elements/python_editor_element.cpp`.
-- Sequencer panel and timeline: `src/visualizer/sequencer/rml_sequencer_panel*.cpp`.
-- Modal overlay and global context menu: `src/visualizer/gui/rml_modal_overlay.cpp`, `global_context_menu.cpp`.
-- Vulkan UI textures and viewport textured overlays: `src/visualizer/gui/vulkan_ui_texture.cpp`, `src/visualizer/rendering/passes/vulkan_viewport_pass.cpp`.
+## Mechanical acceptance (post-merge)
 
-## Guardrails
+```sh
+# Source / build graph: no hits
+rg -n 'imgui|implot|ImGui|ImPlot' src/ CMakeLists.txt vcpkg.json \
+  src/**/CMakeLists.txt cmake/ tests/CMakeLists.txt
 
-- Do not add `imgui_impl_opengl*`, `glad`, or OpenGL-backed texture paths.
-- Do not add new ImGui panels for profiler or Vulkan tooling; use RmlUi.
-- Keep compatibility code scoped and removable: new state should live outside ImGui-specific types unless it is an adapter boundary.
+# Project binaries: no leftover symbol or linked DSO
+nm -C build/LichtFeld-Studio build/liblfs_*.so \
+  build/src/python/lichtfeld*.so 2>/dev/null | rg -i 'imgui|implot'  # empty
+ldd build/LichtFeld-Studio 2>/dev/null | rg -i 'imgui|implot'        # empty
+```
+
+Phase 1 exit criteria for the broader Vulkan track live in
+[`docs/development/vulkan-elite-roadmap.md`](development/vulkan-elite-roadmap.md)
+(Phase 1 — legacy immediate-mode UI exorcism).
+
+## Known follow-up (outside this PR)
+
+Pre-existing on master, not a PR #1395 regression: the tools-hook chain is
+dead. `python_runtime.cpp::draw_tools_section()` has no in-tree caller, and
+`panels.py` does not import or register the first-party
+`cropbox_controls.py` / `ellipsoid_controls.py` modules. Those modules would
+register on `"tools"/"transform"` if loaded. Track this as a separate
+resurrect-or-retire cleanup.

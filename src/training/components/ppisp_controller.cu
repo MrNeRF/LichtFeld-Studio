@@ -1,6 +1,8 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/tensor_ops.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
@@ -55,6 +57,7 @@ namespace lfs::training {
                                   cudaStream_t stream) {
             const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             relu_backward_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(grad, input, out, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller.relu_backward");
         }
 
         __global__ void outer_product_accumulate_kernel(const float* a, const float* b, float* c,
@@ -71,6 +74,7 @@ namespace lfs::training {
             const dim3 block(TILE_SIZE, TILE_SIZE);
             const dim3 grid((n + TILE_SIZE - 1) / TILE_SIZE, (m + TILE_SIZE - 1) / TILE_SIZE);
             outer_product_accumulate_kernel<<<grid, block, 0, stream>>>(a, b, c, m, n, scale);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller.outer_product");
         }
 
         __global__ void bias_grad_accumulate_kernel(const float* grad, float* bias_grad, const int n) {
@@ -83,6 +87,7 @@ namespace lfs::training {
         void launch_bias_grad_accumulate(const float* grad, float* bias_grad, const int n, cudaStream_t stream) {
             const int blocks = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
             bias_grad_accumulate_kernel<<<blocks, BLOCK_SIZE, 0, stream>>>(grad, bias_grad, n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "training.ppisp_controller.bias_grad");
         }
 
     } // namespace
@@ -95,6 +100,9 @@ namespace lfs::training {
     lfs::core::Tensor PPISPController::shared_buf_conv2_;
     lfs::core::Tensor PPISPController::shared_buf_conv3_;
     lfs::core::Tensor PPISPController::shared_buf_pool2_;
+
+    PPISPController::PPISPController(const int total_iterations)
+        : PPISPController(total_iterations, Config{}) {}
 
     PPISPController::PPISPController(const int total_iterations, Config config)
         : config_(config),
@@ -177,6 +185,30 @@ namespace lfs::training {
 
         LOG_INFO("[PPISPController] Shared buffers: {}x{}", max_H, max_W);
     }
+
+    void PPISPController::release_shared_buffers() noexcept {
+        // Class-static Tensor members are default-constructed before main (and
+        // thus before the CudaMemoryPool Meyers singleton). Reverse destruction
+        // would free them *after* the pool → SIGSEGV. Release here
+        // via the process pre-shutdown hook while the pool is still alive.
+        shared_buf_conv1_ = {};
+        shared_buf_pool_ = {};
+        shared_buf_conv2_ = {};
+        shared_buf_conv3_ = {};
+        shared_buf_pool2_ = {};
+        shared_buf_h_ = 0;
+        shared_buf_w_ = 0;
+    }
+
+    namespace {
+        // Register once at dynamic init so test binaries and the app both
+        // release PPISP shared buffers before Tensor::shutdown_memory_pool.
+        const bool g_ppisp_shared_release_hook_registered = [] {
+            lfs::core::register_gpu_pre_shutdown_hook(
+                []() noexcept { PPISPController::release_shared_buffers(); });
+            return true;
+        }();
+    } // namespace
 
     lfs::core::Tensor PPISPController::predict(const lfs::core::Tensor& rendered_rgb, const float exposure_prior) {
         assert(rendered_rgb.shape().rank() == 4);

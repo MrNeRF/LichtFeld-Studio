@@ -99,14 +99,14 @@ function(CUDA_check_cudacc_flag out_status compiler flags)
     try_compile(compilation_result
       SOURCES "${source_file}"
       CMAKE_FLAGS -DCOMPILE_DEFINITIONS="${flags}"
-    )
+                  )
 
     # Save the result to the cache and return it.
     set(${flag_var} ${compilation_result} CACHE INTERNAL "Check CUDA flag ${flags}")
     set(${out_status} ${compilation_result} PARENT_SCOPE)
   else()
      # Fallback for compilers that don't match the current project compiler.
-     set(${out_status} FALSE PARENT_SCOPE)
+    set(${out_status} FALSE PARENT_SCOPE)
   endif()
 endfunction()
 

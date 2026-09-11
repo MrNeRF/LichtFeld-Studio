@@ -120,6 +120,26 @@ namespace lfs::core {
         return sh_swizzled_byte_count(n, kShMaxCoeffsRest);
     }
 
+    // IEEE f16 float4-swizzle (same topology as fp32, 2 bytes per component).
+    // Used by the GUI exportable/viewer path to cut resident SH ~in half vs fp32.
+    [[nodiscard]] inline constexpr std::size_t sh_swizzled_f16_byte_count(
+        std::size_t n,
+        std::uint32_t coeffs_rest) noexcept {
+        return sh_swizzled_float_count(n, coeffs_rest) * sizeof(std::uint16_t);
+    }
+
+    [[nodiscard]] inline constexpr std::size_t sh_swizzled_f16_byte_count(std::size_t n) noexcept {
+        return sh_swizzled_f16_byte_count(n, kShMaxCoeffsRest);
+    }
+
+    // Element size for resident SH rest storage: 4 = fp32, 2 = IEEE f16.
+    [[nodiscard]] inline constexpr std::size_t sh_swizzled_byte_count_for_element(
+        std::size_t n,
+        std::uint32_t coeffs_rest,
+        std::size_t element_bytes) noexcept {
+        return sh_swizzled_float_count(n, coeffs_rest) * element_bytes;
+    }
+
     // Host index helper. Returns the float4-slot index (multiply by 4 to get the float offset).
     [[nodiscard]] inline std::uint32_t sh_swizzled_index(
         std::uint32_t primitive_idx,
@@ -171,6 +191,19 @@ namespace lfs::core {
     void undo_reorder_sh_from_swizzled(
         const float* src_swizzled,
         float* dst_canonical,
+        std::size_t n_primitives,
+        std::uint32_t dst_coeffs_rest,
+        std::uint32_t layout_coeffs_rest,
+        cudaStream_t stream = nullptr);
+
+    // Bounded snapshot variant. Writes canonical floats in
+    // [canonical_float_offset, canonical_float_offset + float_count) to a
+    // zero-based scratch destination, avoiding a checkpoint-sized D2D buffer.
+    void undo_reorder_sh_range_from_swizzled(
+        const float* src_swizzled,
+        float* dst_canonical_scratch,
+        std::uint64_t canonical_float_offset,
+        std::uint64_t float_count,
         std::size_t n_primitives,
         std::uint32_t dst_coeffs_rest,
         std::uint32_t layout_coeffs_rest,

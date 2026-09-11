@@ -304,7 +304,10 @@ namespace OpenMesh {
         }
 
         std::string Timer::as_string(double seconds, Timer::Format format) {
-            char string[32];
+            // LOCAL PATCH (LichtFeld): buffer was 32 bytes; CodeQL
+            // cpp/overrunning-write-with-float notes float conversions may need ~316 bytes.
+            // Sized to 512 and float cases use snprintf. See LOCAL_PATCHES.md.
+            char string[512];
 
             double fraction;
             double integer;
@@ -397,11 +400,21 @@ namespace OpenMesh {
                 }
                 *ptr = '\0';
                 break;
-            case Timer::Seconds: sprintf(ptr, "%.3fs", seconds); break;
-            case Timer::HSeconds: sprintf(ptr, "%.3fcs", seconds * 1e2); break;
-            case Timer::MSeconds: sprintf(ptr, "%.3fms", seconds * 1e3); break;
-            case Timer::MicroSeconds: sprintf(ptr, "%.1f\xb5s", seconds * 1e6); break;
-            case Timer::NanoSeconds: sprintf(ptr, "%.1fns", seconds * 1e9); break;
+            case Timer::Seconds:
+                snprintf(ptr, sizeof(string) - (ptr - string), "%.3fs", seconds);
+                break;
+            case Timer::HSeconds:
+                snprintf(ptr, sizeof(string) - (ptr - string), "%.3fcs", seconds * 1e2);
+                break;
+            case Timer::MSeconds:
+                snprintf(ptr, sizeof(string) - (ptr - string), "%.3fms", seconds * 1e3);
+                break;
+            case Timer::MicroSeconds:
+                snprintf(ptr, sizeof(string) - (ptr - string), "%.1f\xb5s", seconds * 1e6);
+                break;
+            case Timer::NanoSeconds:
+                snprintf(ptr, sizeof(string) - (ptr - string), "%.1fns", seconds * 1e9);
+                break;
             }
             return string;
         }

@@ -2,6 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/assert.hpp"
+#include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/l1_loss.cuh"
 #include <type_traits>
@@ -41,11 +43,8 @@ namespace lfs::training::kernels {
              idx < N;
              idx += blockDim.x * gridDim.x) {
 
-            float diff = img1[idx] - target_value(img2, idx);
-            float abs_diff = fabsf(diff);
-
-            // Accumulate for loss
-            local_sum += abs_diff;
+            const float diff = img1[idx] - target_value(img2, idx);
+            local_sum += fabsf(diff);
 
             // Store gradient: sign(diff) * grad_scale
             // NOTE: sign(0) = 0 to match PyTorch behavior
@@ -94,6 +93,10 @@ namespace lfs::training::kernels {
         float* temp_buffer,
         size_t N,
         cudaStream_t stream) {
+        LFS_ASSERT_MSG(img1 != nullptr && img2 != nullptr && grad_out != nullptr &&
+                           loss_out != nullptr && temp_buffer != nullptr,
+                       "Fused L1 loss pointers must be non-null");
+        LFS_ASSERT_MSG(N > 0, "Fused L1 loss requires at least one element");
         stream = resolve_stream(stream);
 
         const int block_size = 256;
@@ -104,11 +107,13 @@ namespace lfs::training::kernels {
         // Launch fused kernel
         fused_l1_kernel<TargetT><<<num_blocks, block_size, 0, stream>>>(
             img1, img2, grad_out, temp_buffer, N, grad_scale);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.l1.fused");
 
         // Launch final reduction (normalize by N for mean)
         float norm_factor = 1.0f / static_cast<float>(N);
         final_reduce_kernel<<<1, block_size, 0, stream>>>(
             temp_buffer, loss_out, num_blocks, norm_factor);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.l1.final_reduce");
     }
 
     void launch_fused_l1_loss(

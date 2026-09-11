@@ -1,0 +1,24 @@
+name: Locale Completeness
+
+on:
+  push:
+    branches: [master, dev]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  locale-completeness:
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify locale completeness
+        run: python3 tools/check_locale_completeness.py
+
+      - name: Audit hardcoded UI text
+        run: python3 tools/check_ui_hardcoded.py --fail-on-candidates
+
+      - name: Run headless localization contracts
+        run: python3 tests/python/test_localization_contracts.py

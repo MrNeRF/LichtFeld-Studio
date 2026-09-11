@@ -55,8 +55,14 @@ namespace lfs::io {
                                   "Cannot open RAD file", path);
             }
 
-            uint8_t header[4];
-            file.read(reinterpret_cast<char*>(header), 4);
+            uint8_t header[4] = {};
+            file.read(reinterpret_cast<char*>(header), sizeof(header));
+            if (!file) {
+                return make_error(ErrorCode::INVALID_HEADER,
+                                  std::format("Invalid RAD header (expected {} bytes, got {})",
+                                              sizeof(header), file.gcount()),
+                                  path);
+            }
 
             // RAD magic: "RAD0" in little-endian = 0x30444152
             if (header[0] != 0x52 || header[1] != 0x41 || header[2] != 0x44 || header[3] != 0x30) {
@@ -117,11 +123,8 @@ namespace lfs::io {
                 }
                 data.lod_tree->meta_view = *view;
             }
-            const char* const page_capacity_env = std::getenv("LFS_LOD_PAGE_CAPACITY");
-            LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration "
-                     "(chunks={}, requested_pages={})",
-                     data.lod_tree->chunk_count(),
-                     page_capacity_env != nullptr ? page_capacity_env : "auto");
+            LOG_INFO("RAD paged LOD active: deferring full CUDA tensor migration (chunks={})",
+                     data.lod_tree->chunk_count());
         } else {
             // Move tensors to CUDA for Vulkan renderer compatibility.
             data.means_raw() = data.means_raw().to(Device::CUDA);
@@ -150,7 +153,8 @@ namespace lfs::io {
             .scene_center = Tensor::zeros({3}, Device::CPU),
             .loader_used = name(),
             .load_time = load_time,
-            .warnings = {}};
+            .warnings = {},
+            .georeference = std::nullopt};
 
         LOG_INFO("RAD loaded successfully in {}ms", load_time.count());
 

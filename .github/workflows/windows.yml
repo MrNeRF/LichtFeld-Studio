@@ -14,6 +14,10 @@ on:
   workflow_dispatch:
 
 jobs:
+  windows-preflight:
+    if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
+    uses: ./.github/workflows/windows-build-preflight.yml
+
   test-plugin-venv:
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: windows-2022
@@ -85,6 +89,7 @@ jobs:
           Write-Host "PASS: uv sync resilient to wrong PYTHONHOME"
 
   build-windows:
+    needs: windows-preflight
     if: github.repository == 'MrNeRF/LichtFeld-Studio' || github.event.pull_request.base.repo.full_name == 'MrNeRF/LichtFeld-Studio'
     runs-on: windows-2022
     strategy:
@@ -94,6 +99,8 @@ jobs:
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
       VCPKG_BUILD_TYPE: release
+      CUDA_PATH: "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8"
+      BUILD_DIR: b
 
     steps:
       - name: Checkout source
@@ -110,6 +117,7 @@ jobs:
 
       - name: Set CUDA environment
         run: |
+          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CUDA_PATH_V12_8=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
@@ -132,19 +140,59 @@ jobs:
       - name: Cache vcpkg_installed
         uses: actions/cache@v4
         with:
-          path: build/vcpkg_installed
-          key: vcpkg-installed-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json') }}
-          restore-keys: vcpkg-installed-${{ runner.os }}-
+          path: ${{ env.BUILD_DIR }}/vcpkg_installed
+          key: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', '.github/overlays/**') }}
+          restore-keys: vcpkg-installed-${{ runner.os }}-prebuilt-ort-v1-
 
       - name: Configure
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLFS_FAST_COMPILE=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DCUDA_DEVICE_DEBUG=OFF
+          cmake -B %BUILD_DIR% -S . -G Ninja -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLFS_FAST_COMPILE=ON -DBUILD_FORMAT_TESTS=ON -DBUILD_PYTHON_STUBS=OFF -DLFS_DEV_IMPORT_SOURCE_PYTHON=OFF -DLFS_DEV_IMPORT_SOURCE_RESOURCES=OFF -DLFS_ENABLE_CUDA_DEVICE_DEBUG=OFF
+
+      - name: Generate shader headers for preflight
+        shell: cmd
+        env:
+          VCPKG_RUNTIME_SUBDIR: ${{ matrix.build_type == 'Debug' && 'debug\bin' || 'bin' }}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          set PATH=%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\%VCPKG_RUNTIME_SUBDIR%;%PATH%
+          cmake --build %BUILD_DIR% --target lfs_shader_headers --config ${{ matrix.build_type }} -j 4
+
+      - name: Run configured MSVC preflight
+        shell: cmd
+        env:
+          LFS_PREFLIGHT_BASE: ${{ github.event_name == 'pull_request' && 'HEAD^1' || github.event.before }}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          python tools\windows_build_preflight.py --skip-source-checks --compile-commands %BUILD_DIR%\compile_commands.json --max-commands 128
 
       - name: Build
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          set PATH=%CD%\build;%CD%\build\vcpkg_installed\x64-windows\bin;%PATH%
-          cmake --build build -j %NUMBER_OF_PROCESSORS%
+          set PATH=%CD%\%BUILD_DIR%;%CD%\%BUILD_DIR%\vcpkg_installed\x64-windows\bin;%PATH%
+          cmake --build %BUILD_DIR% -j %NUMBER_OF_PROCESSORS%
+
+      - name: Build and run CPU-only format tests
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build %BUILD_DIR% --target lichtfeld_format_tests -j %NUMBER_OF_PROCESSORS%
+          ctest --test-dir %BUILD_DIR% --output-on-failure -R "^lichtfeld_format_tests$"
+
+      - name: Verify nvJPEG2000 runtime bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $runtime = Join-Path $env:BUILD_DIR 'nvjpeg2k_0.dll'
+          $extensionDir = Join-Path $env:BUILD_DIR 'extensions'
+          $extensions = @(Get-ChildItem $extensionDir -Filter 'nvjpeg2k_ext*.dll' -ErrorAction SilentlyContinue)
+          if (-not (Test-Path $runtime)) {
+            throw "nvJPEG2000 runtime DLL was not bundled next to the binary: $runtime"
+          }
+          if ($extensions.Count -eq 0) {
+            throw "nvjpeg2k extension DLL was not bundled in $extensionDir"
+          }
+          Write-Host "Found nvJPEG2000 runtime: $runtime"
+          $extensions | ForEach-Object { Write-Host "Found nvjpeg2k extension: $($_.FullName)" }

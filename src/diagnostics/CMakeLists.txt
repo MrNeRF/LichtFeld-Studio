@@ -4,6 +4,7 @@
 
 add_library(lfs_diagnostics SHARED
     vram_profiler.cpp
+    vram_ledger_model.cpp
 )
 
 target_compile_definitions(lfs_diagnostics PRIVATE LFS_DIAGNOSTICS_EXPORTS)

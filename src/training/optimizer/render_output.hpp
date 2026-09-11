@@ -17,6 +17,7 @@ namespace lfs::training {
         lfs::core::Tensor target_image; // Current GT image [C, H, W], when available
         lfs::core::Tensor alpha;        // [..., C, H, W, 1]
         lfs::core::Tensor depth;        // [..., C, H, W, 1] - accumulated or expected depth
+        lfs::core::Tensor normal;       // [3, H, W] - accumulated camera-space normals, empty unless rendered
         lfs::core::Tensor means2d;      // [..., C, N, 2]
         lfs::core::Tensor depths;       // [..., N] - per-gaussian depths
         lfs::core::Tensor radii;        // [..., N]
@@ -28,31 +29,7 @@ namespace lfs::training {
     };
 
     enum class RenderMode {
-        RGB = 0,
-        D = 1,
-        ED = 2,
-        RGB_D = 3,
-        RGB_ED = 4
+        RGB = 0
     };
-
-    inline RenderMode render_mode_from_string(const std::string& mode) {
-        if (mode == "RGB")
-            return RenderMode::RGB;
-        else if (mode == "D")
-            return RenderMode::D;
-        else if (mode == "ED")
-            return RenderMode::ED;
-        else if (mode == "RGB_D")
-            return RenderMode::RGB_D;
-        else if (mode == "RGB_ED")
-            return RenderMode::RGB_ED;
-        else
-            throw std::runtime_error("Invalid render mode: " + mode);
-    }
-
-    // Alias for backward compatibility
-    inline RenderMode stringToRenderMode(const std::string& mode) {
-        return render_mode_from_string(mode);
-    }
 
 } // namespace lfs::training

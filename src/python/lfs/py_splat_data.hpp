@@ -64,7 +64,7 @@ namespace lfs::python {
         void set_max_sh_degree(int degree) { data_->set_max_sh_degree(degree); }
 
         // Capacity management
-        void reserve_capacity(size_t capacity) { data_->reserve_capacity(capacity); }
+        void reserve_capacity(size_t capacity);
 
         // Access underlying data (for internal use)
         core::SplatData* data() { return data_; }

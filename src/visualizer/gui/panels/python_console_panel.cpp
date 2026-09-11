@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panels/python_console_panel.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
@@ -13,6 +14,7 @@
 #include "gui/rmlui/elements/terminal_element.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/utils/native_file_dialog.hpp"
 
@@ -82,7 +84,7 @@ namespace {
         if (!result.success) {
             editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
-                state.addError("[Format] " + result.error);
+                state.addError(LOCF(lichtfeld::Strings::PythonConsole::FORMAT_ERROR, result.error));
             }
             return;
         }
@@ -106,7 +108,7 @@ namespace {
         if (!result.success) {
             editor->refreshSyntaxDiagnostics();
             if (!result.error.empty()) {
-                state.addError("[Cleanup] " + result.error);
+                state.addError(LOCF(lichtfeld::Strings::PythonConsole::CLEANUP_ERROR, result.error));
             }
             return;
         }
@@ -456,16 +458,18 @@ namespace {
 
         std::vector<lfs::vis::gui::ContextMenuItem> items;
         if (has_selection) {
-            items.push_back(lfs::vis::gui::ContextMenuItem{.label = "Copy", .action = "copy"});
+            items.push_back(lfs::vis::gui::ContextMenuItem{
+                .label = lfs::event::LocalizationManager::getInstance().get("common.copy"),
+                .action = "copy"});
         }
         items.push_back(lfs::vis::gui::ContextMenuItem{
-            .label = "Copy All",
+            .label = lfs::event::LocalizationManager::getInstance().get("common.copy_all"),
             .action = "copy-all",
             .separator_before = has_selection,
         });
         if (!read_only) {
             items.push_back(lfs::vis::gui::ContextMenuItem{
-                .label = "Paste",
+                .label = lfs::event::LocalizationManager::getInstance().get("common.paste"),
                 .action = "paste",
                 .separator_before = !items.empty(),
             });
@@ -493,6 +497,7 @@ namespace {
 
     bool can_stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         return lfs::python::has_frame_callback() ||
+               lfs::python::has_scene_time_callback() ||
                state.isScriptRunning() ||
                (state.getOutputTerminal() && state.getOutputTerminal()->is_running()) ||
                lfs::python::PackageManager::instance().has_running_operation();
@@ -501,6 +506,8 @@ namespace {
     void stop_python_work(lfs::vis::gui::panels::PythonConsoleState& state) {
         if (lfs::python::has_frame_callback())
             lfs::python::clear_frame_callback();
+        if (lfs::python::has_scene_time_callback())
+            lfs::python::clear_scene_time_callback();
         if (state.isScriptRunning())
             state.interruptScript();
         if (lfs::python::PackageManager::instance().has_running_operation())
@@ -510,8 +517,10 @@ namespace {
     }
 
     void new_script(lfs::vis::gui::panels::PythonConsoleState& state) {
-        if (auto* editor = state.getEditor())
+        if (auto* editor = state.getEditor()) {
             editor->clear();
+            editor->clearActiveSessionLocator();
+        }
         state.setScriptPath({});
         state.setModified(false);
     }
@@ -763,6 +772,12 @@ namespace {
             close_popover();
         } else if (action == "packages-refresh") {
             request_packages_refresh(pane);
+        } else if (action == "close-panel") {
+            auto close_event = lfs::core::events::cmd::ShowWindow{
+                .window_name = "python_console",
+                .show = false,
+            };
+            close_event.emit();
         }
 
         mark_dirty(pane);
@@ -1093,9 +1108,9 @@ namespace {
 
         std::string status;
         if (pane.packages_loading)
-            status = "Loading...";
+            status = LOC("status.loading");
         else if (!pane.packages_error.empty())
-            status = "Error";
+            status = LOC("status.error");
         else if (pane.packages_search_filter.empty())
             status = std::format("({})", pane.packages.size());
         else
@@ -1115,6 +1130,37 @@ namespace {
     void sync_console_dom(RmlPythonConsolePane& pane,
                           lfs::vis::gui::panels::PythonConsoleState& state,
                           const float panel_h) {
+        if (pane.document) {
+            const auto set_label = [&](const char* id, const char* key) {
+                set_text(pane, pane.document->GetElementById(id), LOC(key));
+            };
+            set_label("new-button", lichtfeld::Strings::PythonConsole::NEW);
+            set_label("load-button", lichtfeld::Strings::PythonConsole::LOAD);
+            set_label("reload-button", lichtfeld::Strings::PythonConsole::RELOAD);
+            set_label("save-button", lichtfeld::Strings::PythonConsole::SAVE);
+            set_label("save-as-button", lichtfeld::Strings::PythonConsole::SAVE_AS);
+            set_label("format-button", lichtfeld::Strings::PythonConsole::FORMAT);
+            set_label("vim-button", lichtfeld::Strings::PythonConsole::VIM);
+            set_label("run-button", lichtfeld::Strings::PythonConsole::RUN);
+            set_label("stop-button", lichtfeld::Strings::PythonConsole::STOP);
+            set_label("reset-button", lichtfeld::Strings::Common::RESET);
+            set_label("clear-button", lichtfeld::Strings::Training::Button::CLEAR);
+            set_label("syntax-status", lichtfeld::Strings::PythonConsole::SYNTAX);
+            set_label("outline-button", lichtfeld::Strings::PythonConsole::OUTLINE);
+            set_label("breadcrumb-button", lichtfeld::Strings::PythonConsole::SCOPE);
+            set_label("fold-button", lichtfeld::Strings::PythonConsole::BLOCKS);
+            set_label("script-label", lichtfeld::Strings::PythonConsole::UNTITLED);
+            set_label("tab-output", lichtfeld::Strings::PythonConsole::OUTPUT);
+            set_label("tab-terminal", lichtfeld::Strings::PythonConsole::TERMINAL);
+            set_label("tab-packages", lichtfeld::Strings::PythonConsole::PACKAGES);
+            set_label("packages-refresh", lichtfeld::Strings::PythonConsole::REFRESH);
+            set_label("packages-name", lichtfeld::Strings::PythonConsole::NAME);
+            set_label("packages-version", lichtfeld::Strings::PythonConsole::VERSION);
+            set_label("packages-path", lichtfeld::Strings::PythonConsole::PATH);
+            if (auto* const search = pane.document->GetElementById("packages-search"))
+                search->SetAttribute("placeholder", LOC(lichtfeld::Strings::PythonConsole::SEARCH_PACKAGES));
+            set_label("packages-empty", lichtfeld::Strings::PythonConsole::NO_PACKAGES);
+        }
         auto* editor = state.getEditor();
         const bool has_script = !state.getScriptPath().empty();
         const bool can_stop = can_stop_python_work(state);
@@ -1122,7 +1168,9 @@ namespace {
 
         set_disabled(pane, pane.reload_button_el, !has_script);
         set_disabled(pane, pane.stop_button_el, !can_stop);
-        set_text(pane, pane.run_status_el, can_stop ? "Running..." : "Python");
+        set_text(pane, pane.run_status_el,
+                 can_stop ? LOC(lichtfeld::Strings::PythonConsole::RUNNING)
+                          : LOC(lichtfeld::Strings::PythonConsole::PYTHON));
         set_class(pane, pane.run_status_el, "running", can_stop);
 
         const bool vim_enabled = editor && editor->isVimModeEnabled();
@@ -1228,8 +1276,6 @@ namespace {
             new_script(state);
         } else if (has_key(*input, SDL_SCANCODE_O)) {
             open_script_dialog(state);
-        } else if (has_key(*input, SDL_SCANCODE_S)) {
-            save_current_script(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_F)) {
             format_editor_script(state);
         } else if (input->key_shift && has_key(*input, SDL_SCANCODE_I)) {
@@ -1256,7 +1302,9 @@ namespace {
             if (!python_module_dir.empty()) {
                 PyObject* sys_path = PySys_GetObject("path");
                 if (sys_path) {
-                    PyObject* py_path = PyUnicode_FromString(python_module_dir.string().c_str());
+                    const auto python_module_dir_utf8 =
+                        lfs::core::path_to_utf8(python_module_dir);
+                    PyObject* py_path = PyUnicode_FromString(python_module_dir_utf8.c_str());
                     if (py_path) {
                         PyList_Insert(sys_path, 0, py_path);
                         Py_DECREF(py_path);
@@ -1338,7 +1386,7 @@ namespace {
     bool load_script(const std::filesystem::path& path, lfs::vis::gui::panels::PythonConsoleState& state) {
         std::ifstream file;
         if (!lfs::core::open_file_for_read(path, file)) {
-            state.addError("Failed to open: " + lfs::core::path_to_utf8(path));
+            state.addError(LOCF(lichtfeld::Strings::PythonConsole::OPEN_FAILED, lfs::core::path_to_utf8(path)));
             return false;
         }
 
@@ -1347,6 +1395,8 @@ namespace {
 
         if (auto* editor = state.getEditor()) {
             editor->setText(content);
+            editor->setActiveSessionLocator(
+                lfs::core::path_to_utf8(path));
         }
 
         state.setScriptPath(path);
@@ -1363,7 +1413,7 @@ namespace {
 
         std::ofstream file;
         if (!lfs::core::open_file_for_write(path, file)) {
-            state.addError("Failed to save: " + lfs::core::path_to_utf8(path));
+            state.addError(LOCF(lichtfeld::Strings::PythonConsole::SAVE_FAILED, lfs::core::path_to_utf8(path)));
             return false;
         }
 
@@ -1371,6 +1421,8 @@ namespace {
         file.close();
 
         state.setScriptPath(path);
+        editor->setActiveSessionLocator(
+            lfs::core::path_to_utf8(path));
         state.setModified(false);
         state.addInfo("Saved: " + lfs::core::path_to_utf8(path.filename()));
         return true;
@@ -1431,27 +1483,10 @@ namespace lfs::vis::gui::panels {
         return g_python_console_state;
     }
 
-    void PythonConsoleState::addOutput(const std::string& text, uint32_t /*color*/) {
-        std::lock_guard lock(mutex_);
-        if (output_terminal_) {
-            output_terminal_->write(text);
-            output_terminal_->write("\n");
-        }
-    }
-
     void PythonConsoleState::addError(const std::string& text) {
         std::lock_guard lock(mutex_);
         if (output_terminal_) {
             output_terminal_->write("\033[31m"); // Red
-            output_terminal_->write(text);
-            output_terminal_->write("\033[0m\n"); // Reset + newline
-        }
-    }
-
-    void PythonConsoleState::addInput(const std::string& text) {
-        std::lock_guard lock(mutex_);
-        if (output_terminal_) {
-            output_terminal_->write("\033[32m>>> "); // Green prompt
             output_terminal_->write(text);
             output_terminal_->write("\033[0m\n"); // Reset + newline
         }
@@ -1483,7 +1518,7 @@ namespace lfs::vis::gui::panels {
 
     void PythonConsoleState::runScriptAsync(const std::string& code) {
         if (script_running_.load()) {
-            addError("A script is already running");
+            addError(LOC("python_console.already_running"));
             return;
         }
 
@@ -1565,37 +1600,33 @@ namespace lfs::vis::gui::panels {
         }
     }
 
+    void PythonConsoleState::setFontScale(const float scale) {
+        const auto nearest = std::min_element(
+            std::begin(FONT_STEPS), std::end(FONT_STEPS),
+            [scale](const float lhs, const float rhs) {
+                return std::abs(lhs - scale) <
+                       std::abs(rhs - scale);
+            });
+        font_scale_ =
+            nearest == std::end(FONT_STEPS)
+                ? 1.0f
+                : *nearest;
+    }
+
+    float PythonConsoleState::splitterRatio() {
+        return g_splitter_ratio;
+    }
+
+    void PythonConsoleState::setSplitterRatio(const float ratio) {
+        g_splitter_ratio = std::clamp(ratio, 0.2f, 0.8f);
+    }
+
     void PythonConsoleState::addToHistory(const std::string& cmd) {
         std::lock_guard lock(mutex_);
         if (!cmd.empty() && (command_history_.empty() || command_history_.back() != cmd)) {
             command_history_.push_back(cmd);
         }
         history_index_ = -1;
-        if (editor_) {
-            editor_->addToHistory(cmd);
-        }
-    }
-
-    void PythonConsoleState::historyUp() {
-        std::lock_guard lock(mutex_);
-        if (command_history_.empty())
-            return;
-        if (history_index_ < 0) {
-            history_index_ = static_cast<int>(command_history_.size()) - 1;
-        } else if (history_index_ > 0) {
-            history_index_--;
-        }
-    }
-
-    void PythonConsoleState::historyDown() {
-        std::lock_guard lock(mutex_);
-        if (history_index_ < 0)
-            return;
-        if (history_index_ < static_cast<int>(command_history_.size()) - 1) {
-            history_index_++;
-        } else {
-            history_index_ = -1;
-        }
     }
 
     terminal::TerminalWidget* PythonConsoleState::getTerminal() {
@@ -1607,6 +1638,11 @@ namespace lfs::vis::gui::panels {
     }
 
     editor::PythonEditor* PythonConsoleState::getEditor() {
+        return editor_.get();
+    }
+
+    const editor::PythonEditor*
+    PythonConsoleState::getEditor() const {
         return editor_.get();
     }
 
@@ -1649,7 +1685,7 @@ namespace lfs::vis::gui::panels {
 
     void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h,
                                  const PanelInputState* input) {
-        lfs::python::ensure_initialized();
+        (void)lfs::python::ensure_initialized();
         lfs::python::install_output_redirect();
         setup_sys_path();
         setup_console_output_capture();

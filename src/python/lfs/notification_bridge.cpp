@@ -5,7 +5,6 @@
 #include "notification_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
-#include "core/path_utils.hpp"
 #include "gui/string_keys.hpp"
 #include "py_ui.hpp"
 
@@ -23,6 +22,7 @@ namespace lfs::python {
             int iteration = 0;
             float psnr = 0.0f;
             float ssim = 0.0f;
+            std::optional<float> lpips;
         };
 
         std::mutex g_latest_eval_metrics_mutex;
@@ -49,89 +49,11 @@ namespace lfs::python {
     }
 
     void setup_notification_handlers() {
-        state::DatasetLoadCompleted::when([](const auto& e) {
-            if (!e.success && e.error.has_value()) {
-                PyModalRegistry::instance().show_message(
-                    "Failed to Load Dataset", *e.error, MessageStyle::Error);
-            }
-        });
-
-        state::CudaVersionUnsupported::when([](const auto& e) {
-            PyModalRegistry::instance().show_message(
-                "Unsupported CUDA Driver",
-                std::format("Your CUDA driver version ({}.{}) is not supported.\n\n"
-                            "LichtFeld Studio requires CUDA {}.{} or later\n"
-                            "(NVIDIA driver 570+).\n\n"
-                            "Please update your NVIDIA driver for full functionality.",
-                            e.major, e.minor, e.min_major, e.min_minor),
-                MessageStyle::Warning);
-        });
-
-        state::ConfigLoadFailed::when([](const auto& e) {
-            PyModalRegistry::instance().show_message(
-                "Invalid Config File",
-                std::format("Could not load '{}':\n\n{}", lfs::core::path_to_utf8(e.path.filename()), e.error),
-                MessageStyle::Error);
-        });
-
-        state::FileDropFailed::when([](const auto& e) {
-            constexpr size_t MAX_DISPLAY = 5;
-            namespace Notif = lichtfeld::Strings::Notification;
-
-            const size_t count = e.files.size();
-            const size_t display_count = std::min(count, MAX_DISPLAY);
-
-            std::string file_list;
-            file_list.reserve(display_count * 64);
-
-            for (size_t i = 0; i < display_count; ++i) {
-                const std::filesystem::path p(e.files[i]);
-                const bool is_dir = std::filesystem::is_directory(p);
-                file_list += std::format("  - {} ({})\n", lfs::core::path_to_utf8(p.filename()),
-                                         is_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE));
-            }
-            if (count > MAX_DISPLAY) {
-                file_list += std::format("  {} {}\n", LOC(Notif::AND_MORE), count - MAX_DISPLAY);
-            }
-
-            const bool single_dir = count == 1 && std::filesystem::is_directory(e.files[0]);
-            const char* item_type = count == 1 ? (single_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE))
-                                               : LOC(Notif::ITEMS);
-
-            PyModalRegistry::instance().show_message(
-                LOC(Notif::CANNOT_OPEN),
-                std::format("{} {}:\n\n{}\n{}", LOC(Notif::DROPPED_NOT_RECOGNIZED), item_type, file_list, e.error),
-                MessageStyle::Error);
-        });
-
-        state::DiskSpaceSaveFailed::when([](const auto& e) {
-            if (!e.is_disk_space_error) {
-                const std::string title = e.is_checkpoint ? "Checkpoint Save Failed" : "Export Failed";
-                const std::string msg = e.is_checkpoint
-                                            ? std::format("Failed to save checkpoint at iteration {}:\n\n{}", e.iteration, e.error)
-                                            : std::format("Failed to export:\n\n{}", e.error);
-                PyModalRegistry::instance().show_message(title, msg, MessageStyle::Error);
-            }
-            // Note: Disk space error dialog is handled separately in gui_manager
-        });
-
-        state::ExportFailed::when([](const auto& e) {
-            PyModalRegistry::instance().show_message(
-                "Export Failed", std::format("Failed to export:\n\n{}", e.error), MessageStyle::Error);
-        });
-
-        state::VideoExportFailed::when([](const auto& e) {
-            PyModalRegistry::instance().show_message(
-                "Video Export Failed", std::format("Failed to export video:\n\n{}", e.error),
-                MessageStyle::Error);
-        });
-
-        state::Mesh2SplatFailed::when([](const auto& e) {
-            PyModalRegistry::instance().show_message(
-                "Mesh to Splat Failed", std::format("Conversion failed:\n\n{}", e.error),
-                MessageStyle::Error);
-        });
-
+        // Failure events (dataset/config/export/video/mesh/training/CUDA/disk) now
+        // surface through the native C++ ErrorBus (Phase 8, error_event_bridge),
+        // so they appear even when Python is absent. Re-adding failure modals here
+        // would double them. Only the success TrainingCompleted modal and the
+        // eval-metrics tracking it depends on remain Python-owned.
         state::TrainingStarted::when([](const auto&) {
             std::lock_guard lock(g_latest_eval_metrics_mutex);
             g_latest_eval_metrics.reset();
@@ -142,40 +64,54 @@ namespace lfs::python {
             g_latest_eval_metrics = LatestEvaluationMetrics{
                 .iteration = e.iteration,
                 .psnr = e.psnr,
-                .ssim = e.ssim};
+                .ssim = e.ssim,
+                .lpips = e.lpips};
         });
 
         state::TrainingCompleted::when([](const auto& e) {
-            if (e.user_stopped)
-                return;
+            if (!e.success)
+                return; // failures surface via the native ErrorBus bridge
+            if (e.suppress_notification)
+                return; // stop was part of New Project / app close / reset / trainer teardown on scene/dataset replacement — no modal (issue #1604, #1645)
 
-            if (e.success) {
-                namespace Str = lichtfeld::Strings::Training::Button;
+            namespace Str = lichtfeld::Strings::Training::Button;
 
-                auto message = std::format(
-                    "Training completed successfully.\n\n"
-                    "{} iterations | loss {:.6f} | {}",
-                    e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));
-                std::optional<LatestEvaluationMetrics> eval_snapshot;
-                {
-                    std::lock_guard lock(g_latest_eval_metrics_mutex);
-                    eval_snapshot = g_latest_eval_metrics;
+            auto message = e.user_stopped
+                               ? std::format("Training stopped by user at iteration {}.\n\n"
+                                             "Resume is available from the training panel. Save the project to keep this state.",
+                                             e.iteration)
+                               : std::format("Training completed successfully.\n\n"
+                                             "{} iterations | loss {:.6f} | {}",
+                                             e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));
+            std::optional<LatestEvaluationMetrics> eval_snapshot;
+            {
+                std::lock_guard lock(g_latest_eval_metrics_mutex);
+                eval_snapshot = g_latest_eval_metrics;
+            }
+            if (eval_snapshot.has_value()) {
+                if (eval_snapshot->iteration == e.iteration) {
+                    message += std::format(
+                        "\nFinal metrics: PSNR {:.2f} | SSIM {:.4f}",
+                        eval_snapshot->psnr,
+                        eval_snapshot->ssim);
+                } else {
+                    message += std::format(
+                        "\nLast eval @ {}: PSNR {:.2f} | SSIM {:.4f}",
+                        eval_snapshot->iteration,
+                        eval_snapshot->psnr,
+                        eval_snapshot->ssim);
                 }
-                if (eval_snapshot.has_value()) {
-                    if (eval_snapshot->iteration == e.iteration) {
-                        message += std::format(
-                            "\nFinal metrics: PSNR {:.2f} | SSIM {:.4f}",
-                            eval_snapshot->psnr,
-                            eval_snapshot->ssim);
-                    } else {
-                        message += std::format(
-                            "\nLast eval @ {}: PSNR {:.2f} | SSIM {:.4f}",
-                            eval_snapshot->iteration,
-                            eval_snapshot->psnr,
-                            eval_snapshot->ssim);
-                    }
-                }
+                if (eval_snapshot->lpips)
+                    message += std::format(" | LPIPS {:.4f}", *eval_snapshot->lpips);
+            }
 
+            if (e.user_stopped) {
+                // Stopped by user: OK only — Edit mode is nonsensical when scene may be clearing (issue #1604)
+                PyModalRegistry::instance().show_confirm(
+                    "Training Stopped", message,
+                    {"OK"},
+                    [](const std::string&) {});
+            } else {
                 const std::string edit_label = LOC(Str::SWITCH_EDIT_MODE);
                 PyModalRegistry::instance().show_confirm(
                     "Training Complete", message,
@@ -184,36 +120,6 @@ namespace lfs::python {
                         if (clicked == edit_label)
                             cmd::SwitchToEditMode{}.emit();
                     });
-
-                cmd::SwitchToLatestCheckpoint{}.emit();
-            } else {
-                std::string error_msg = e.error.value_or("Unknown error occurred during training.");
-
-                // Check if this is an OOM error and format it clearly
-                if (error_msg.find("CUDA out of memory") != std::string::npos ||
-                    error_msg.find("OUT_OF_MEMORY") != std::string::npos) {
-                    std::string size_info;
-                    auto gb_pos = error_msg.find(" GB)");
-                    if (gb_pos != std::string::npos) {
-                        auto paren_pos = error_msg.rfind('(', gb_pos);
-                        if (paren_pos != std::string::npos) {
-                            size_info = error_msg.substr(paren_pos + 1, gb_pos - paren_pos + 3);
-                        }
-                    }
-
-                    error_msg = "Out of GPU memory!\n\n";
-                    if (!size_info.empty()) {
-                        error_msg += "Tried to allocate " + size_info + "\n\n";
-                    }
-                    error_msg += "Suggestions:\n"
-                                 "  - Reduce max Gaussians (max_cap)\n"
-                                 "  - Lower spherical harmonics degree (sh_degree)\n"
-                                 "  - Reduce image resolution (resize_factor)\n"
-                                 "  - Enable tile mode for large images";
-                }
-
-                PyModalRegistry::instance().show_message(
-                    "Training Failed", error_msg, MessageStyle::Error);
             }
         });
     }

@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #pragma once
+#include "core/source_site.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <concepts>
@@ -11,7 +13,6 @@
 #include <memory>
 #include <mutex>
 #include <print>
-#include <source_location>
 #include <sstream>
 #include <typeindex>
 #include <unordered_map>
@@ -65,7 +66,7 @@ namespace lfs::core::event {
 
         // Emit an event
         template <Event E>
-        void emit(const E& event, std::source_location loc = std::source_location::current()) {
+        void emit(const E& event, SourceSite loc = LFS_SOURCE_SITE_CURRENT()) {
             if (debug_.enabled && debug_.log_emit) {
                 log_emit_event<E>(loc);
             }
@@ -101,7 +102,7 @@ namespace lfs::core::event {
 
         // Subscribe to events
         template <Event E>
-        HandlerId when(Handler<E> handler, std::source_location loc = std::source_location::current()) {
+        HandlerId when(Handler<E> handler, SourceSite loc = LFS_SOURCE_SITE_CURRENT()) {
             auto& channel = get_channel<E>();
             std::lock_guard lock(channel.mutex);
 
@@ -208,7 +209,7 @@ namespace lfs::core::event {
         }
 
         template <Event E>
-        void log_emit_event(const std::source_location& loc) {
+        void log_emit_event(const SourceSite& loc) {
             std::string msg = std::format("[Event::Bus] EMIT: {}", demangle(typeid(E).name()));
 
             if (debug_.show_location) {
@@ -232,7 +233,7 @@ namespace lfs::core::event {
         }
 
         template <Event E>
-        void log_subscribe_event(HandlerId id, const std::source_location& loc) {
+        void log_subscribe_event(HandlerId id, const SourceSite& loc) {
             std::string msg = std::format("[Event::Bus] SUBSCRIBE: {} (id={})",
                                           demangle(typeid(E).name()), id);
 

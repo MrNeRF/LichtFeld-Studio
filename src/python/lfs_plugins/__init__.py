@@ -10,6 +10,7 @@ from .context import CapabilityBroker, PluginContext, SceneContext, ViewContext
 from .errors import (
     PluginDependencyError,
     PluginError,
+    PluginLoadCancelled,
     PluginLoadError,
     PluginNotFoundError,
     PluginVersionError,
@@ -17,16 +18,8 @@ from .errors import (
     RegistryOfflineError,
     VersionNotFoundError,
 )
-from .manager import PluginManager
-from .marketplace import (
-    MarketplacePluginEntry,
-    PluginMarketplaceCatalog,
-)
 from .plugin import PluginInfo, PluginInstance, PluginState
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
-from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
-from .settings import PluginSettings, SettingsManager
-from .templates import create_plugin
 from .utils import cleanup_torch_model, get_gpu_memory, log_gpu_memory
 
 if TYPE_CHECKING:
@@ -36,7 +29,6 @@ if TYPE_CHECKING:
 def _load_builtin_panel_api():
     from .panels import PluginMarketplacePanel, register_builtin_panels as _register_builtin_panels
 
-    globals()["PluginMarketplacePanel"] = PluginMarketplacePanel
     return PluginMarketplacePanel, _register_builtin_panels
 
 
@@ -50,10 +42,35 @@ def register_builtin_panels():
     return builtin_register()
 
 
+_LAZY_EXPORTS = {
+    "PluginManager": ("manager", "PluginManager"),
+    "PluginMarketplaceCatalog": ("marketplace", "PluginMarketplaceCatalog"),
+    "MarketplacePluginEntry": ("marketplace", "MarketplacePluginEntry"),
+    "RegistryClient": ("registry", "RegistryClient"),
+    "RegistryPluginInfo": ("registry", "RegistryPluginInfo"),
+    "RegistryVersionInfo": ("registry", "RegistryVersionInfo"),
+    "PluginSettings": ("settings", "PluginSettings"),
+    "SettingsManager": ("settings", "SettingsManager"),
+    "create_plugin": ("templates", "create_plugin"),
+}
+_LAZY_MODULES = {"manager", "marketplace", "registry", "settings", "templates", "installer"}
+
+
 def __getattr__(name):
     if name == "PluginMarketplacePanel":
         panel_cls, _ = _load_builtin_panel_api()
         return panel_cls
+
+    if name in _LAZY_EXPORTS:
+        from importlib import import_module
+
+        module_name, attribute = _LAZY_EXPORTS[name]
+        return getattr(import_module(f"{__name__}.{module_name}"), attribute)
+
+    if name in _LAZY_MODULES:
+        from importlib import import_module
+
+        return import_module(f"{__name__}.{name}")
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -70,6 +87,7 @@ __all__ = [
     "PluginError",
     "PluginLoadError",
     "PluginDependencyError",
+    "PluginLoadCancelled",
     "PluginVersionError",
     "RegistryError",
     "RegistryOfflineError",

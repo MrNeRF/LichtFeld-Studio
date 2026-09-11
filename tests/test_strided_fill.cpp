@@ -4,6 +4,7 @@
 #include "core/tensor.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <stdexcept>
 
 using namespace lfs::core;
 
@@ -207,10 +208,12 @@ TEST_F(StridedFillTest, Fill_LargeTensor3D) {
 TEST_F(StridedFillTest, ExpandedView_Fill) {
     auto col = Tensor::full({256, 1}, 0.0f, Device::CUDA);
     auto expanded = col.expand({256, 256});
-    // expanded has stride 0 on dim 1 — fill should respect this
-    // Note: filling an expanded tensor writes to the same memory multiple times
-    // This should NOT crash, even if semantically odd
-    expanded.fill_(2.0f);
+    // zero-stride expand views reject in-place mutation (shared cells).
+    // Materialize first if a dense write is required.
+    EXPECT_TRUE(expanded.has_zero_stride());
+    EXPECT_THROW(expanded.fill_(2.0f), std::runtime_error);
+    auto dense = expanded.contiguous();
+    dense.fill_(2.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
 }
@@ -285,6 +288,26 @@ TEST_F(StridedFillTest, Slice2D_GeneralNonContiguous) {
             EXPECT_FLOAT_EQ(p[r * 100 + c], expected) << "at [" << r << "," << c << "]";
         }
     }
+}
+
+TEST_F(StridedFillTest, TransposedViewFillUpdatesOriginalStorage) {
+    auto tensor = Tensor::zeros({3, 5}, Device::CUDA);
+    auto transposed = tensor.t();
+    ASSERT_FALSE(transposed.is_contiguous());
+
+    transposed.fill_(4.25f);
+
+    EXPECT_EQ(tensor.cpu().to_vector(), (std::vector<float>(15, 4.25f)));
+}
+
+TEST_F(StridedFillTest, CpuColumnSliceFillPreservesOtherColumns) {
+    auto tensor = Tensor::zeros({3, 4}, Device::CPU);
+    tensor.slice(1, 1, 2).fill_(7.0f);
+
+    EXPECT_EQ(tensor.to_vector(),
+              (std::vector<float>{0.0f, 7.0f, 0.0f, 0.0f,
+                                  0.0f, 7.0f, 0.0f, 0.0f,
+                                  0.0f, 7.0f, 0.0f, 0.0f}));
 }
 
 // ===== Contiguous fill (should NOT hit strided path) =====

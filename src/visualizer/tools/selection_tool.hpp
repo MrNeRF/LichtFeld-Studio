@@ -44,6 +44,27 @@ namespace lfs::vis::tools {
         [[nodiscard]] bool isCropFilterEnabled() const { return crop_filter_enabled_; }
         void setCropFilterEnabled(bool enabled);
         void toggleCropFilter() { setCropFilterEnabled(!crop_filter_enabled_); }
+        [[nodiscard]] bool restrictToSelectedNodes() const {
+            return restrict_to_selected_nodes_;
+        }
+        // Project restore runs after VIEW render state has been staged. Set
+        // preference owners without recomputing the saved depth transform from
+        // the current camera or emitting an in-progress tool gesture.
+        void restoreProjectPreferences(
+            float brush_radius,
+            bool crop_filter,
+            bool depth_filter,
+            bool restrict_to_selected_nodes) {
+            setBrushRadius(brush_radius);
+            crop_filter_enabled_ = crop_filter;
+            depth_filter_enabled_ = depth_filter;
+            restrict_to_selected_nodes_ =
+                restrict_to_selected_nodes;
+            armPreserveRestoredRenderState();
+        }
+        void armPreserveRestoredRenderState() {
+            preserve_restored_render_state_ = true;
+        }
 
     protected:
         void onEnabledChanged(bool enabled) override;
@@ -61,6 +82,8 @@ namespace lfs::vis::tools {
 
         // Crop filter
         bool crop_filter_enabled_ = false;
+        bool restrict_to_selected_nodes_ = true;
+        bool preserve_restored_render_state_ = false;
 
         static constexpr float DEPTH_MIN = 0.01f;
         static constexpr float DEPTH_MAX = 1000.0f;

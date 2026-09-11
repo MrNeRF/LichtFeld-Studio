@@ -4,9 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <functional>
@@ -14,19 +17,26 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
 namespace lfs::core {
 
+    class GlobalArenaManager;
+    LFS_CORE_API GlobalArenaManager& global_arena_manager();
+    LFS_CORE_API void shutdown_global_arena_manager();
+    LFS_CORE_API void log_arena_failure_vram_snapshot(
+        std::string_view label, size_t committed_bytes, size_t frame_peak_bytes);
+
     class RasterizerMemoryArena {
     public:
         struct Config {
             size_t virtual_size = 32ULL << 30; // 32GB virtual address space (free!)
-            size_t initial_commit = 128 << 20; // 128MB initial physical memory
             size_t max_physical = 8ULL << 30;  // 8GB max physical memory
             size_t granularity = 2 << 20;      // 2MB allocation granularity
             size_t alignment = 256;
+            bool enable_vmm = true; // Disable to use and validate the cudaMalloc fallback.
             bool enable_profiling = false;
             size_t log_interval = 1000; // Log every N frames
         };
@@ -58,6 +68,7 @@ namespace lfs::core {
 
         struct MemoryInfo {
             size_t arena_capacity = 0;
+            size_t required_bytes = 0;
             size_t current_usage = 0;
             size_t peak_usage = 0;
             size_t gpu_free = 0;
@@ -78,6 +89,16 @@ namespace lfs::core {
             // outgrows the current capacity. Optional; if unset the arena cannot
             // grow and an over-capacity request fails.
             std::function<size_t(size_t)> grow;
+            // Shrinks the committed physical prefix toward the requested size
+            // in place. The callback must decommit only whole VMM granules and
+            // return the resulting committed prefix, or 0 on failure. It runs
+            // after the arena has drained CUDA and any registered external
+            // release timeline. Importers of the backing must be retired by
+            // the callback before its physical handles are unmapped.
+            std::function<size_t(size_t)> shrink;
+            // Minimum prefix that must remain committed for a peer consumer
+            // (for example the viewer's shared-scratch high-water).
+            std::function<size_t()> minimum_size;
 
             [[nodiscard]] bool valid() const noexcept {
                 return device_ptr != nullptr && size > 0 && device >= 0 && static_cast<bool>(owner);
@@ -108,17 +129,43 @@ namespace lfs::core {
             std::shared_ptr<void> external_owner;
             std::string external_label;
             std::function<size_t(size_t)> external_grow;
+            std::function<size_t(size_t)> external_shrink;
+            std::function<size_t()> external_minimum_size;
             std::atomic<size_t> offset{0}; // Current allocation offset
             size_t capacity = 0;           // Same as committed_size for compatibility
             uint64_t generation = 0;
             int device = -1;
 
             // Statistics
+            // Logical high-water since the last explicit shrink/reset boundary.
             std::atomic<size_t> peak_usage{0};
+            // Lifetime high-water retained across boundary decommits so teardown
+            // diagnostics still report the work done before backing was released.
+            std::atomic<size_t> lifetime_peak_usage{0};
             std::atomic<size_t> peak_usage_period{0};
             std::atomic<size_t> total_allocated{0};
             std::atomic<size_t> realloc_count{0};
             std::chrono::steady_clock::time_point last_log_time;
+            // B1 hysteresis: avoid immediately undoing a recent recommit.
+            std::uint32_t boundaries_since_growth = 0;
+        };
+
+        struct GrowthTiming {
+            mutable std::mutex mutex;
+            uint64_t commit_attempts_warmup = 0;
+            uint64_t commit_attempts_steady = 0;
+            uint64_t commit_events_warmup = 0;
+            uint64_t commit_events_steady = 0;
+            uint64_t commit_time_us_warmup = 0;
+            uint64_t commit_time_us_steady = 0;
+            uint64_t growth_path_time_us_warmup = 0;
+            uint64_t growth_path_time_us_steady = 0;
+            uint64_t growth_sync_time_us_warmup = 0;
+            uint64_t growth_sync_time_us_steady = 0;
+            uint64_t b1_events = 0;
+            uint64_t b1_time_us = 0;
+            uint64_t b3_events = 0;
+            uint64_t b3_time_us = 0;
         };
 
         std::unordered_map<int, std::unique_ptr<Arena>> device_arenas_;
@@ -129,6 +176,7 @@ namespace lfs::core {
         mutable std::mutex frame_mutex_;
         std::atomic<uint64_t> frame_counter_{0};
         std::atomic<uint64_t> generation_counter_{0};
+        std::shared_ptr<GrowthTiming> growth_timing_ = std::make_shared<GrowthTiming>();
 
         // Performance tracking
         std::chrono::steady_clock::time_point creation_time_;
@@ -142,11 +190,12 @@ namespace lfs::core {
         uint64_t active_frames_ = 0;
         uint64_t pending_render_frames_ = 0;
         uint64_t active_training_frames_ = 0;
+        uint64_t last_handoff_frame_id_ = 0;
 
         // Completion event of the most recent stream-aware frame. Invalid when
         // the last frame was legacy (no stream) — the next begin then falls back
         // to a device sync. Guarded by last_frame_event_mutex_.
-        std::mutex last_frame_event_mutex_;
+        mutable std::mutex last_frame_event_mutex_;
         cudaEvent_t last_frame_event_ = nullptr;
         bool last_frame_event_valid_ = false;
 
@@ -174,7 +223,7 @@ namespace lfs::core {
         // a device-wide sync, and end_frame records the event on `stream` — which
         // must be the stream all of the frame's arena work was enqueued on. Frames
         // without a stream keep the legacy cudaDeviceSynchronize and invalidate
-        // the chain. LFS_ARENA_LEGACY_SYNC=1 forces the legacy sync everywhere.
+        // the chain.
         //
         // A tenant whose arena work runs on a VULKAN queue (the viewport) must
         // call note_external_release before ending its frame: neither the chain
@@ -184,6 +233,10 @@ namespace lfs::core {
         uint64_t begin_frame(cudaStream_t stream, bool from_rendering = false);
         std::optional<uint64_t> try_begin_frame(bool from_rendering = false) { return try_begin_frame(nullptr, from_rendering); }
         std::optional<uint64_t> try_begin_frame(cudaStream_t stream, bool from_rendering = false);
+        // Debug-only ownership assertion for the shared CUDA/Vulkan scratch
+        // epoch. The preceding frame's CUDA event or imported Vulkan timeline
+        // wait must have been installed before this frame can touch offset zero.
+        void assert_frame_handoff(uint64_t frame_id) const;
 
         // Bounded wait: with a render pending (set_rendering_active), the trainer
         // cannot START a new frame, so waiting out its current one takes ~one
@@ -221,27 +274,47 @@ namespace lfs::core {
             uint32_t previous_ = 0;
         };
 
-        std::function<char*(size_t)> get_allocator(uint64_t frame_id);
+        std::function<char*(size_t)> get_allocator(uint64_t frame_id,
+                                                   const char* label = nullptr);
         std::vector<BufferHandle> get_frame_buffers(uint64_t frame_id) const;
         void reset_frame(uint64_t frame_id); // Keeps allocation, resets offset
         void cleanup_frames(int keep_recent = 3);
+        // Named EXACT-3 boundaries only. Both methods globally gate begin_frame,
+        // require zero active training/render frames, and device-synchronize
+        // before changing physical mappings. B1 is non-blocking because its caller
+        // holds topology locks; B3 waits for an already-active frame to finish.
+        bool shrink_to_current_at_boundary();
+        bool release_at_boundary();
         void full_reset();
         bool install_external_backing(ExternalBacking backing);
-        bool try_install_external_backing(ExternalBacking backing);
+        // With a nonzero timeout, reserve the next idle window against new training
+        // frames. Zero keeps the try-only path used by callers that must not wait.
+        bool try_install_external_backing(ExternalBacking backing, uint32_t timeout_ms = 0);
         // Grows the committed size of an already-installed external backing whose
         // base pointer is `device_ptr` (which must stay constant). The arena
         // drains all frames and the device, then invokes `commit(new_size)` — which
         // performs the physical grow + Vulkan re-import — inside that safe window;
         // on success the arena's committed capacity is bumped to new_size.
+        // With a nonzero timeout, reserve the next idle window against new
+        // training frames. The wait is bounded because callers may hold model
+        // locks needed by an active training frame. Zero keeps the try-only path.
+        enum class ExternalGrowFailure { None,
+                                         Busy,
+                                         BackingMissing,
+                                         CudaFailure,
+                                         CommitFailure };
         bool grow_external_backing(const void* device_ptr, size_t new_size,
-                                   const std::function<bool(size_t)>& commit);
+                                   const std::function<bool(size_t)>& commit,
+                                   uint32_t timeout_ms = 0,
+                                   ExternalGrowFailure* failure = nullptr);
         void clear_external_backing(const void* device_ptr = nullptr);
-        [[nodiscard]] bool using_external_backing() const;
+        [[nodiscard]] bool using_external_backing(const void* device_ptr = nullptr) const;
 
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
         void dump_statistics() const;
         void log_memory_status(uint64_t frame_id, bool force = false);
+        [[nodiscard]] bool has_last_frame_event_for_testing() const;
 
         bool is_under_memory_pressure() const;
         float get_memory_pressure() const;
@@ -254,40 +327,58 @@ namespace lfs::core {
         // wait_timeout: nullopt = non-blocking try; 0 = wait forever; else bounded.
         std::optional<uint64_t> begin_frame_impl(cudaStream_t stream, bool from_rendering,
                                                  std::optional<uint32_t> wait_timeout_ms);
-        bool wait_for_previous_frame(cudaStream_t stream);
+        cudaError_t wait_for_previous_frame(cudaStream_t stream);
         // Host-blocks on a pending Vulkan release fence (note_external_release)
         // and clears it. Must run before any path that frees or replaces arena
         // backing — a device sync cannot observe the in-flight Vulkan batch.
         void drain_external_release();
-        bool install_external_backing_impl(ExternalBacking backing, bool wait);
-        char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id);
+        bool install_external_backing_impl(ExternalBacking backing, bool wait, uint32_t timeout_ms = 0);
+        char* allocate_internal(Arena& arena, size_t size, uint64_t frame_id,
+                                const char* label);
         void release_arena_storage(Arena& arena);
         bool grow_arena(Arena& arena, size_t required_size);
         size_t align_size(size_t size) const;
         void record_allocation(uint64_t frame_id, const BufferHandle& handle);
-        bool commit_more_memory(Arena& arena, size_t required_size);
-        void decommit_unused_memory(Arena& arena);
+        bool commit_more_memory(Arena& arena, size_t required_size, uint64_t frame_id);
+        void decommit_unused_memory(Arena& arena, bool release_all = false,
+                                    bool allow_reclaim = true);
+        bool shrink_at_boundary(bool release_all);
+        void record_commit_timing(uint64_t frame_id, uint64_t elapsed_us, bool committed);
+        void record_growth_path_timing(uint64_t frame_id, uint64_t elapsed_us,
+                                       uint64_t sync_elapsed_us);
+        void record_boundary_timing(bool release_all, uint64_t frame_count, uint64_t elapsed_us);
+        void dump_growth_timing() const;
         bool is_vmm_supported(int device) const;
         void empty_cuda_cache();
     };
 
     class GlobalArenaManager {
     public:
-        static GlobalArenaManager& instance();
+        static GlobalArenaManager& instance() { return global_arena_manager(); }
         RasterizerMemoryArena& get_arena();
         RasterizerMemoryArena* try_get_arena();
         bool install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
-        bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing);
+        bool try_install_external_backing(RasterizerMemoryArena::ExternalBacking backing,
+                                          uint32_t timeout_ms = 0);
         bool grow_external_backing(const void* device_ptr, size_t new_size,
-                                   const std::function<bool(size_t)>& commit);
+                                   const std::function<bool(size_t)>& commit,
+                                   uint32_t timeout_ms = 0,
+                                   RasterizerMemoryArena::ExternalGrowFailure* failure = nullptr);
         void clear_external_backing(const void* device_ptr = nullptr);
         void reset();
+        void shutdown() { shutdown_global_arena_manager(); }
+        /// Reconstructs the arena with a caller-supplied capacity for deterministic OOM tests.
+        void reconfigure_for_testing(RasterizerMemoryArena::Config config);
 
     private:
+        friend LFS_CORE_API GlobalArenaManager& global_arena_manager();
+        friend LFS_CORE_API void shutdown_global_arena_manager();
+
         GlobalArenaManager() = default;
         ~GlobalArenaManager() = default;
         std::unique_ptr<RasterizerMemoryArena> arena_;
         std::mutex init_mutex_;
+        bool shutdown_ = false;
     };
 
 } // namespace lfs::core

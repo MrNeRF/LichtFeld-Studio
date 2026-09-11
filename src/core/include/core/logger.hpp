@@ -4,18 +4,34 @@
 
 #pragma once
 #include "core/export.hpp"
+#include "core/source_site.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
-#include <source_location>
+#if defined(__CUDACC__)
+#include <cstdio>
+#else
+#include <format>
+#endif
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace lfs::core {
+
+    [[nodiscard]] LFS_LOGGER_API std::string truncate_log_tail(std::string_view text,
+                                                               std::size_t max_bytes);
+
+    // Resolve the current user's home directory without depending on lfs_core.
+    // This lives in the leaf lfs_logger library so startup code can use the same
+    // location as the durable logger before Logger::init().
+    [[nodiscard]] LFS_LOGGER_API std::filesystem::path lichtfeld_home_directory();
 
     enum class LogLevel : uint8_t {
         Trace = 0,
@@ -28,22 +44,8 @@ namespace lfs::core {
         Off = 7
     };
 
-    enum class LogModule : uint8_t {
-        Core = 0,
-        Rendering = 1,
-        Visualizer = 2,
-        Loader = 3,
-        Scene = 4,
-        Training = 5,
-        Input = 6,
-        GUI = 7,
-        Window = 8,
-        Memory = 9,
-        Unknown = 10,
-        Count = 11
-    };
-
     struct LFS_LOGGER_API LogEntrySnapshot {
+        uint64_t sequence = 0;
         std::chrono::system_clock::time_point timestamp{};
         LogLevel level = LogLevel::Info;
         std::string file;
@@ -51,33 +53,63 @@ namespace lfs::core {
         std::string message;
     };
 
-    using LogHandler = std::function<void(LogLevel level, const std::source_location& loc, std::string_view msg)>;
+    using LogHandler = std::function<void(LogLevel level, const SourceSite& loc, std::string_view msg)>;
     using LogHandlerToken = uint32_t;
 
     class LFS_LOGGER_API Logger {
     public:
         static Logger& get();
 
-        void init(LogLevel console_level = LogLevel::Info,
-                  const std::string& log_file = "",
-                  const std::string& filter_pattern = "",
-                  bool use_stderr = false);
+        void init();
+        void init(LogLevel console_level);
+        void init(LogLevel console_level, const std::string& log_file);
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern);
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern,
+                  bool use_stderr);
+        // default_log_dir_override replaces the resolved per-user LichtFeld root
+        // used to place the always-on durable log under its logs directory; empty means
+        // use the real per-user directory. Exists so tests can redirect it without a
+        // process-global env var.
+        void init(LogLevel console_level,
+                  const std::string& log_file,
+                  const std::string& filter_pattern,
+                  bool use_stderr,
+                  const std::string& default_log_dir_override);
+
+        // Resolves the durable default log file path (<user_dir>/logs/lichtfeld.log).
+        // user_dir_override replaces the per-user LichtFeld directory when non-empty.
+        [[nodiscard]] static std::string default_log_file_path(const std::string& user_dir_override = {});
+
+        // True once init() has installed a backing spdlog logger. ErrorReporter
+        // uses this to detect a not-yet-initialized Logger and fall back to a
+        // direct stderr report instead of silently dropping the message.
+        [[nodiscard]] bool is_ready() const noexcept;
+
+        // Test-only: returns the Logger singleton to its pre-init() state
+        // (is_ready() == false) without touching registered log handlers or
+        // the global level. Mirrors force_next_error_allocation_to_fail_for_testing
+        // and reset_failure_report_dedup_for_testing elsewhere in core.
+        void reset_for_testing() noexcept;
 
         LogHandlerToken add_log_handler(LogHandler handler);
         void remove_log_handler(LogHandlerToken handler_token);
 
         // Log a pre-formatted message (called by macros)
-        void log(LogLevel level, const std::source_location& loc, std::string_view msg);
+        void log(LogLevel level, const SourceSite& loc, std::string_view msg);
 
         // Module control
-        void enable_module(LogModule module, bool enabled = true);
-        void set_module_level(LogModule module, LogLevel level);
         void set_level(LogLevel level);
         void flush();
         [[nodiscard]] LogLevel level() const;
         [[nodiscard]] size_t buffered_log_count() const;
         [[nodiscard]] uint64_t buffered_log_generation() const;
         [[nodiscard]] std::vector<LogEntrySnapshot> buffered_logs() const;
+        [[nodiscard]] std::vector<LogEntrySnapshot>
+        buffered_logs_since(uint64_t generation, size_t max_count) const;
         [[nodiscard]] std::string buffered_logs_as_text() const;
 
         bool is_enabled(LogLevel level) const {
@@ -86,7 +118,7 @@ namespace lfs::core {
 
         // Runtime string logging - no format args, works for both CUDA and non-CUDA
         // Use this when you need to log a dynamically constructed string
-        void log_internal(LogLevel level, const std::source_location& loc, const std::string& msg) {
+        void log_internal(LogLevel level, const SourceSite& loc, const std::string& msg) {
             if (!should_emit(level))
                 return;
             log(level, loc, msg);
@@ -97,7 +129,7 @@ namespace lfs::core {
         // If the log level is below the global threshold, skip formatting entirely.
         // This reduces LOG_DEBUG overhead from ~1-5μs to <50ns when debug logging is disabled.
         template <typename... Args>
-        void log_internal(LogLevel level, const std::source_location& loc,
+        void log_internal(LogLevel level, const SourceSite& loc,
 #ifdef __CUDACC__
                           const char* fmt, Args&&... args) {
             // Fast path: skip formatting if the message would be dropped by all active sinks.
@@ -179,61 +211,66 @@ namespace lfs::core {
 
         std::atomic<uint8_t> global_level_{static_cast<uint8_t>(LogLevel::Info)};
         std::atomic<bool> capture_all_to_file_{false};
-        std::array<std::atomic<bool>, static_cast<size_t>(LogModule::Count)> module_enabled_{};
-        std::array<std::atomic<uint8_t>, static_cast<size_t>(LogModule::Count)> module_level_{};
     };
 
     // Scoped timer for performance measurement
     class LFS_LOGGER_API ScopedTimer {
     public:
-        explicit ScopedTimer(std::string name, LogLevel level = LogLevel::Performance,
-                             std::source_location loc = std::source_location::current());
-        ScopedTimer(std::string name, double min_log_ms,
-                    LogLevel level = LogLevel::Performance,
-                    std::source_location loc = std::source_location::current());
+        explicit ScopedTimer(std::string_view name, LogLevel level, SourceSite loc);
+        ScopedTimer(std::string_view name, double min_log_ms,
+                    LogLevel level, SourceSite loc);
         ~ScopedTimer();
 
     private:
-        std::chrono::high_resolution_clock::time_point start_;
+        std::chrono::high_resolution_clock::time_point start_{};
         std::string name_;
         double min_log_ms_ = 0.0;
         LogLevel level_;
-        std::source_location loc_;
+        SourceSite loc_;
         bool diagnostics_scope_active_ = false;
+        bool disabled_ = false;
     };
 
 } // namespace lfs::core
 
 // Global macros
 #define LOG_TRACE(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Trace, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Trace, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_DEBUG(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Debug, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Debug, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_INFO(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Info, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Info, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_PERF(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Performance, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_WARN(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Warn, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Warn, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_ERROR(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Error, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Error, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 #define LOG_CRITICAL(...) \
-    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, std::source_location::current(), __VA_ARGS__)
+    ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, LFS_SOURCE_SITE_CURRENT(), __VA_ARGS__)
 
 // Helper macros to force expansion of __COUNTER__ before concatenation
 #define _LOG_TIMER_CONCAT_IMPL(x, y)  x##y
 #define _LOG_TIMER_MACRO_CONCAT(x, y) _LOG_TIMER_CONCAT_IMPL(x, y)
 
-#define LOG_TIMER(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name)
-#define LOG_TIMER_THRESHOLD(name, min_log_ms) \
-    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, min_log_ms)
-#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Trace)
-#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Debug)
+#define LOG_TIMER(name)                                                     \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), ::lfs::core::LogLevel::Performance, LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_THRESHOLD(name, min_log_ms)                               \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), (min_log_ms), ::lfs::core::LogLevel::Performance,           \
+        LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_TRACE(name)                                               \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), ::lfs::core::LogLevel::Trace, LFS_SOURCE_SITE_CURRENT())
+#define LOG_TIMER_DEBUG(name)                                               \
+    ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)( \
+        (name), ::lfs::core::LogLevel::Debug, LFS_SOURCE_SITE_CURRENT())
 
 // Memory logging: use LOG_DEBUG("[MEM] ...") and filter with --log-filter "*MEM*"

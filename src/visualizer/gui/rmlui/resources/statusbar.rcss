@@ -6,17 +6,148 @@ body {
     font-family: Inter;
     font-size: 12dp;
     width: 100%;
-    display: flex;
-    flex-direction: row;
-    align-items: stretch;
+    height: 100%;
+    box-sizing: border-box;
+    position: relative;
     padding: 0;
     margin: 0;
     background-color: transparent;
+    white-space: nowrap;
     overflow: hidden;
 }
 
-#status-left {
+#status-row {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 22dp;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    padding: 0 6dp;
+}
+
+#safe-mode-badge {
+    margin-right: 10dp;
+    padding: 0 5dp;
+    border-radius: 2dp;
+    font-weight: bold;
+}
+
+#mcp-chip {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-right: 10dp;
+    height: 16dp;
+    padding: 0 7dp;
+    border-width: 1dp;
+    border-radius: 2dp;
+    cursor: pointer;
+}
+
+#mcp-popup {
+    position: absolute;
+    right: 0;
+    bottom: 20dp;
+    width: 300dp;
+    box-sizing: border-box;
+    padding: 9dp 10dp;
+    border-width: 1dp;
+    border-radius: 3dp;
+    white-space: normal;
+}
+
+#mcp-popup-header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: bold;
+    margin-bottom: 5dp;
+}
+
+#mcp-popup-title {
     flex: 1;
+}
+
+#mcp-details {
+    margin-bottom: 8dp;
+    white-space: pre-wrap;
+}
+
+#mcp-counters {
+    display: flex;
+    flex-direction: row;
+    margin-bottom: 8dp;
+}
+
+#mcp-counters > span {
+    margin-right: 8dp;
+}
+
+#mcp-toggle {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    width: 30dp;
+    height: 18dp;
+    padding: 0;
+    border-width: 0;
+    background-color: transparent;
+}
+
+#mcp-toggle.disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.mcp-switch-track {
+    display: block;
+    position: relative;
+    width: 22dp;
+    height: 10dp;
+    border-width: 1dp;
+    border-radius: 6dp;
+}
+
+.mcp-switch-knob {
+    display: block;
+    position: absolute;
+    left: 1dp;
+    top: 1dp;
+    width: 6dp;
+    height: 6dp;
+    border-radius: 4dp;
+}
+
+#mcp-toggle.is-on .mcp-switch-knob {
+    left: 13dp;
+}
+
+#mcp-actions {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+}
+
+.mcp-edit-button {
+    min-width: 54dp;
+    padding: 2dp 10dp;
+    border-width: 1dp;
+    border-radius: 2dp;
+}
+
+#status-left {
+    flex-grow: 1;
+    flex-shrink: 1;
+    flex-basis: 0;
+    min-width: 0;
     display: flex;
     flex-direction: row;
     align-items: center;
@@ -28,6 +159,21 @@ body {
     flex-direction: row;
     align-items: center;
     flex-shrink: 0;
+    margin-left: 12dp;
+}
+
+#mode-text,
+#status-left > div,
+#status-right > *,
+.status-item,
+.status-item > * {
+    flex-shrink: 0;
+}
+
+.status-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
 }
 
 #training-section,
@@ -52,13 +198,16 @@ body {
     display: none;
 }
 
-/* Within-training separators: 12dp each side */
+/* Within-training separators: 12dp each side. The shared components sheet styles .separator as a
+   1dp divider line; here it is a glyph, so the divider geometry has to be undone. */
 .separator {
     margin: 0 12dp;
+    height: auto;
+    background-color: transparent;
 }
 
 /* Section-level separator in training: 20dp left, 12dp right */
-#training-section > .separator:first-child {
+#training-section > .section-sep {
     margin-left: 20dp;
 }
 
@@ -82,10 +231,12 @@ body {
 
 #progress-container {
     position: relative;
-    width: 120dp;
+    width: 360dp;
     height: 16dp;
     overflow: hidden;
     border-radius: 2dp;
+    flex-shrink: 0;
+    cursor: pointer;
 }
 
 #progress-fill {
@@ -96,6 +247,92 @@ body {
     width: 0%;
 }
 
+#progress-wall,
+#progress-debris {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+#progress-debris {
+    z-index: 2;
+}
+
+.wall-block {
+    position: absolute;
+    top: 0;
+    width: 16dp;
+    height: 16dp;
+    pointer-events: none;
+}
+
+#progress-markers {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.progress-figure {
+    position: absolute;
+    top: 1dp;
+    width: 14dp;
+    height: 15dp;
+    margin-left: -4dp;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.progress-figure.smoke {
+    width: 18dp;
+}
+
+.mining-particle {
+    position: absolute;
+    pointer-events: none;
+}
+
+.progress-marker {
+    position: absolute;
+    top: 1dp;
+    bottom: 1dp;
+    width: 6dp;
+    margin-left: -3dp;
+    border-radius: 2dp;
+    cursor: pointer;
+}
+
+.progress-marker.is-hovered,
+.progress-marker.is-preview {
+    top: 0;
+    bottom: 0;
+    width: 8dp;
+    margin-left: -4dp;
+}
+
+#progress-container.miner .progress-marker {
+    top: 2dp;
+    width: 12dp;
+    height: 12dp;
+    margin-left: -6dp;
+    bottom: auto;
+    border-radius: 0;
+    background-color: transparent;
+}
+
+#progress-container.miner .progress-marker.is-hovered,
+#progress-container.miner .progress-marker.is-preview {
+    top: 1dp;
+    width: 14dp;
+    height: 14dp;
+    margin-left: -7dp;
+    bottom: auto;
+}
+
 #progress-text {
     position: absolute;
     left: 0;
@@ -104,6 +341,29 @@ body {
     height: 100%;
     text-align: center;
     line-height: 16dp;
+    z-index: 1;
+}
+
+#progress-text.progress-text--miner {
+    width: auto;
+    text-align: left;
+}
+
+#account-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 16dp;
+    margin-right: 12dp;
+    padding: 0 6dp;
+    border-width: 1dp;
+    border-radius: 8dp;
+    cursor: pointer;
+}
+
+#account-tier {
+    margin-left: 4dp;
+    font-size: 10dp;
 }
 
 #gpu-icon {
@@ -174,4 +434,98 @@ body {
 
 #split-detail {
     margin-left: 4dp;
+}
+
+/* Responsive fit levels. RmlStatusBar measures the laid-out bar and sets fit-1 .. fit-9 on the body
+   cumulatively, so level N carries every rule up to N. Each level must only ever remove width. */
+body.fit-1 #git-commit {
+    display: none;
+}
+
+body.fit-1 .separator {
+    margin: 0 6dp;
+}
+
+body.fit-1 .separator.thin {
+    margin: 0 2dp;
+}
+
+body.fit-1 #training-section > .section-sep,
+body.fit-1 #splat-section > .separator:first-child,
+body.fit-1 #split-section > .separator:first-child,
+body.fit-1 #wasd-section > .separator:first-child,
+body.fit-1 #zoom-section > .separator:first-child,
+body.fit-1 #status-message-section > .separator:first-child {
+    margin-left: 10dp;
+}
+
+body.fit-2 #gpu-model,
+body.fit-2 #account-tier {
+    display: none;
+}
+
+body.fit-3 #progress-container {
+    width: 220dp;
+}
+
+body.fit-3 #time-metric {
+    display: none;
+}
+
+body.fit-4 #eval-metric,
+body.fit-4 #fps-label,
+body.fit-4 #wasd-section,
+body.fit-4 #zoom-section {
+    display: none;
+}
+
+body.fit-5 #progress-container {
+    width: 140dp;
+}
+
+body.fit-5 .metric-label {
+    display: none;
+}
+
+body.fit-6 #progress-group,
+body.fit-6 #lfs-mem-group {
+    display: none;
+}
+
+body.fit-7 #loss-metric,
+body.fit-7 #split-detail {
+    display: none;
+}
+
+body.fit-8 #gaussians-metric,
+body.fit-8 #splat-section,
+body.fit-8 #split-section {
+    display: none;
+}
+
+body.fit-9 #mode-text,
+body.fit-9 #status-message {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+body.fit-9 #status-message-section {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+body.fit-9 #status-right {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+
+body.fit-9 #gpu-mem {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }

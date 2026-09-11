@@ -60,10 +60,43 @@ namespace lfs::rendering {
         float pixel_focal_x,
         float pixel_focal_y,
         bool orthographic,
+        float ortho_scale);
+    [[nodiscard]] Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        int width,
+        int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        float pixel_focal_x,
+        float pixel_focal_y,
+        bool orthographic,
         float ortho_scale,
-        const Tensor* model_transforms = nullptr,
-        const Tensor* transform_indices = nullptr,
-        const std::vector<bool>& node_visibility_mask = {});
+        const Tensor* model_transforms);
+    [[nodiscard]] Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        int width,
+        int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        float pixel_focal_x,
+        float pixel_focal_y,
+        bool orthographic,
+        float ortho_scale,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices);
+    [[nodiscard]] Tensor project_screen_positions_tensor(
+        const Tensor& means,
+        int width,
+        int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        float pixel_focal_x,
+        float pixel_focal_y,
+        bool orthographic,
+        float ortho_scale,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices,
+        const std::vector<bool>& node_visibility_mask);
     [[nodiscard]] int pick_projected_gaussian_tensor(
         const Tensor& screen_positions,
         float x,
@@ -89,16 +122,6 @@ namespace lfs::rendering {
         const Tensor& screen_positions,
         const Tensor& polygon_vertices,
         Tensor& selection_out);
-
-    void apply_selection_group_tensor(
-        const Tensor& cumulative_selection,
-        const Tensor& existing_mask,
-        Tensor& output_mask,
-        uint8_t group_id,
-        const uint32_t* locked_groups,
-        bool add_mode,
-        const Tensor* transform_indices = nullptr,
-        int target_node_index = -1);
 
     void apply_selection_group_tensor_mask(
         const Tensor& cumulative_selection,
@@ -127,7 +150,14 @@ namespace lfs::rendering {
     [[nodiscard]] std::array<size_t, 256> count_selection_groups(
         const Tensor& selection_mask,
         Tensor& counts_scratch);
-    void prepare_selection_group_counts_scratch(Tensor& counts_scratch);
+    // Queue the group histogram and, optionally, a pinned-host copy. Neither
+    // function waits for the CUDA stream; callers that need the values can
+    // poll/synchronize their own event later.
+    void count_selection_groups_async(const Tensor& selection_mask,
+                                      Tensor& counts_scratch);
+    void enqueue_selection_group_count_read(const Tensor& counts_scratch,
+                                            int* pinned_host_counts,
+                                            cudaEvent_t ready_event);
     [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
         const Tensor& counts_scratch);
     [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(
@@ -136,11 +166,6 @@ namespace lfs::rendering {
         const Tensor& counts_scratch);
 
     void merge_selection_mask_or(Tensor& accumulated_mask, const Tensor& delta_mask);
-
-    void filter_selection_by_node(
-        Tensor& selection,
-        const Tensor& transform_indices,
-        int target_node_index);
 
     void filter_selection_by_node_mask(
         Tensor& selection,

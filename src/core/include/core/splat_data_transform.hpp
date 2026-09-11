@@ -26,6 +26,11 @@ namespace lfs::core {
      */
     LFS_CORE_API SplatData& transform(SplatData& splat_data, const glm::mat4& transform_matrix);
 
+    LFS_CORE_API Tensor compute_cropbox_mask(const Tensor& means,
+                                             const glm::vec3& crop_min,
+                                             const glm::vec3& crop_max,
+                                             const glm::mat4& points_to_cropbox);
+
     /**
      * @brief Crop SplatData by a bounding box (creates new filtered copy)
      * @param splat_data The splat data to crop

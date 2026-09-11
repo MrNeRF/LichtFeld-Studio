@@ -16,6 +16,7 @@
 #include <cmath>
 #include <format>
 #include <shared_mutex>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -26,12 +27,12 @@ namespace lfs::vis {
         constexpr std::size_t kMaxNativePreviewPixelStateBytes =
             (std::size_t{4} << 30) - (std::size_t{64} << 20);
         constexpr float kMaxValidDepth = 1e9f;
-        // Upper bound on the synchronous capacity self-heal passes a one-shot
-        // preview/export capture will run before reading back (see
-        // renderPreviewImageToPreviewSlotWithState). Typical convergence is
-        // 2-4 passes; the cap only guards a pathological non-converging case.
-        constexpr int kMaxPreviewSettlePasses = 8;
+        constexpr int kMinPreviewSubdivisionHeight = 512;
 
+        [[nodiscard]] bool isTileInstanceOverflow(const std::string_view error) {
+            return error.find("tile-instance prefix sum overflowed signed 32-bit capacity") !=
+                   std::string_view::npos;
+        }
         [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
             const SceneManager* const scene_manager) {
             std::optional<std::shared_lock<std::shared_mutex>> lock;
@@ -280,12 +281,12 @@ namespace lfs::vis {
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::captureViewportImage() {
-        if (auto image = getViewportImageIfAvailable()) {
-            return image;
-        }
-
         if (viewport_artifact_service_.hasLazyCapture()) {
             return viewport_artifact_service_.resolveLazyCapture();
+        }
+
+        if (auto image = getViewportImageIfAvailable()) {
+            return image;
         }
 
         if (!engine_ || !viewport_artifact_service_.hasGpuFrame()) {
@@ -451,7 +452,7 @@ namespace lfs::vis {
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
-            std::move(scene_state),
+            scene_state,
             rotation,
             position,
             focal_length_mm,
@@ -577,8 +578,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            PreviewImageReadback::UInt8Rgb,
-            /*settle_capacity=*/true);
+            PreviewImageReadback::UInt8Rgb);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageRgba8(SceneManager* const scene_manager,
@@ -630,8 +630,7 @@ namespace lfs::vis {
             orthographic_override,
             ortho_scale_override,
             std::nullopt,
-            PreviewImageReadback::UInt8Rgba,
-            /*settle_capacity=*/true);
+            PreviewImageReadback::UInt8Rgba);
     }
 
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImage(const lfs::core::SplatData& model,
@@ -780,6 +779,67 @@ namespace lfs::vis {
         }
     }
 
+    std::expected<lfs::core::Tensor, std::string> RenderingManager::renderExportImage(
+        SceneManager* const scene_manager, const ExportImageRequest& request) {
+        if (request.width <= 0 || request.height <= 0) {
+            return std::unexpected("invalid export image dimensions");
+        }
+
+        const bool needs_alpha = request.mode != ExportPostProcessMode::Opaque;
+        const auto rendered =
+            needs_alpha
+                ? renderPreviewImageRgba8(scene_manager,
+                                          request.rotation,
+                                          request.translation,
+                                          request.focal_length_mm,
+                                          request.width,
+                                          request.height,
+                                          request.orthographic_override,
+                                          request.ortho_scale_override)
+                : renderPreviewImageRgb8(scene_manager,
+                                         request.rotation,
+                                         request.translation,
+                                         request.focal_length_mm,
+                                         request.width,
+                                         request.height,
+                                         std::nullopt,
+                                         request.orthographic_override,
+                                         request.ortho_scale_override);
+        if (last_vulkan_context_ &&
+            last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+            return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
+        }
+        releasePreviewImageResources();
+
+        lfs::core::Tensor image;
+        if (rendered && rendered->is_valid()) {
+            image = std::move(*rendered);
+        } else if (request.mode == ExportPostProcessMode::EnvironmentComposite) {
+            // No renderable Gaussians: export the environment background alone
+            // (zero alpha composites to pure environment), matching the video
+            // export path's empty-primary-frame behavior.
+            image = lfs::core::Tensor::zeros(
+                {static_cast<size_t>(request.height), static_cast<size_t>(request.width), size_t{4}},
+                lfs::core::Device::CPU,
+                lfs::core::DataType::UInt8);
+            if (!image.is_valid()) {
+                return std::unexpected("export failed to allocate the environment-only image");
+            }
+        } else {
+            return std::unexpected("export render produced no image");
+        }
+
+        const auto settings = getSettings();
+        const ExportPostProcessView view{
+            .rotation = request.rotation,
+            .focal_length_mm = request.focal_length_mm,
+            .equirectangular_view = settings.equirectangular,
+            .controller_predict_size = frame_lifecycle_service_.lastViewportSize(),
+        };
+        return applyExportPostProcess(
+            std::move(image), scene_manager, settings, getCurrentCameraId(), request.mode, view);
+    }
+
     std::shared_ptr<lfs::core::Tensor> RenderingManager::renderPreviewImageWithState(
         SceneManager* const scene_manager,
         const lfs::core::SplatData& model,
@@ -794,30 +854,45 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        const PreviewImageReadback readback,
-        const bool settle_capacity) {
+        const PreviewImageReadback readback) {
         const auto readback_config =
             previewImageReadbackConfig(readback, background_color_override.has_value());
 
         auto rendered = renderPreviewImageToPreviewSlotWithState(
             scene_manager,
             model,
-            std::move(scene_state),
+            scene_state,
             rotation,
             position,
             focal_length_mm,
             width,
             height,
             render_lock_held,
-            std::move(intrinsics_override),
+            intrinsics_override,
             {},
             {},
             orthographic_override,
             ortho_scale_override,
             background_color_override,
-            readback_config.transparent_background_override,
-            settle_capacity);
+            readback_config.transparent_background_override);
         if (!rendered) {
+            if (!intrinsics_override && isTileInstanceOverflow(rendered.error()) &&
+                height > kMinPreviewSubdivisionHeight) {
+                return renderPreviewImageTiledWithState(
+                    scene_manager,
+                    model,
+                    std::move(scene_state),
+                    rotation,
+                    position,
+                    focal_length_mm,
+                    width,
+                    height,
+                    render_lock_held,
+                    background_color_override,
+                    orthographic_override,
+                    ortho_scale_override,
+                    readback);
+            }
             LOG_ERROR("Gaussian preview image render failed: {}", rendered.error());
             return {};
         }
@@ -861,13 +936,15 @@ namespace lfs::vis {
         std::optional<bool> orthographic_override,
         std::optional<float> ortho_scale_override,
         std::optional<glm::vec3> background_color_override,
-        std::optional<bool> transparent_background_override,
-        const bool settle_capacity) {
+        std::optional<bool> transparent_background_override) {
         if (width <= 0 || height <= 0) {
             return std::unexpected("invalid preview render dimensions");
         }
         if (!last_vulkan_context_) {
             return std::unexpected("no Vulkan context is available");
+        }
+        if (last_vulkan_context_->rendererTerminalState() != RendererTerminalState::Running) {
+            return std::unexpected("renderer is unavailable after a GPU failure; restart LichtFeld Studio");
         }
         if (!hasRenderableGaussians(&model)) {
             return std::unexpected("no renderable Gaussian model is available");
@@ -932,34 +1009,17 @@ namespace lfs::vis {
             vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
         }
 
-        // One-shot preview/export captures read the image back immediately, so
-        // they cannot rely on the interactive viewport's one-frame capacity
-        // self-heal. The renderer sizes per-frame scratch (visible-primitive and
-        // tile-instance capacity) from deferred, one-frame-late high-water marks;
-        // the first render at a new viewpoint/resolution — e.g. a high-res export
-        // after the live viewport established marks at a smaller size — can clamp
-        // the depth/tile-ordered tail, dropping content along an irregular edge.
-        // Re-render the Preview slot until the renderer confirms the previous
-        // pass produced complete, unclamped content (each pass grows the marks
-        // via the deferred readback). The pass >= 1 guard ensures the settle
-        // signal reflects this exact view (critical for the tiled path, where
-        // each tile is a different sub-view); max_passes bounds a pathological
-        // case. Non-settling callers (e.g. depth capture) render exactly once.
-        const int max_passes = settle_capacity ? kMaxPreviewSettlePasses : 1;
-        for (int pass = 0; pass < max_passes; ++pass) {
-            auto render_result = vksplat_viewport_renderer_->render(
-                *last_vulkan_context_,
-                model,
-                request,
-                false,
-                VksplatViewportRenderer::OutputSlot::Preview,
-                false);
-            if (!render_result) {
-                return std::unexpected(render_result.error());
-            }
-            if (pass >= 1 && vksplat_viewport_renderer_->previewCaptureSettled()) {
-                break;
-            }
+        // Preview/export uses the renderer's exact two-batch count gate; one
+        // render is complete for this view and can be read back immediately.
+        auto render_result = vksplat_viewport_renderer_->render(
+            *last_vulkan_context_,
+            model,
+            request,
+            false,
+            VksplatViewportRenderer::OutputSlot::Preview,
+            false);
+        if (!render_result) {
+            return std::unexpected(render_result.error());
         }
         return {};
     }
@@ -1007,48 +1067,88 @@ namespace lfs::vis {
             return {};
         }
 
-        for (int tile_y = 0; tile_y < height; tile_y += tile_height_limit) {
-            const int tile_height = std::min(tile_height_limit, height - tile_y);
+        int band_height_limit = tile_height_limit;
+        // #1574 1-deep export pipelining: submit ticket for band N, render band N+1,
+        // then wait ticket N (memcpy on deliver), submit N+1, ... At most one outstanding
+        // export ticket. With the 3-deep OutputSlotRing + cell pin, Preview reuse of the
+        // sourced ring cell blocks until that ticket retires — so a second outstanding
+        // export ticket is unnecessary for source-image safety.
+        std::optional<std::uint64_t> outstanding_export_ticket;
+        for (int tile_y = 0; tile_y < height;) {
+            int tile_height = std::min(band_height_limit, height - tile_y);
             const auto intrinsics = previewTileIntrinsics(
                 width,
                 height,
                 focal_length_mm);
-            auto rendered = renderPreviewImageToPreviewSlotWithState(
-                scene_manager,
-                model,
-                scene_state,
-                rotation,
-                position,
-                focal_length_mm,
-                tile_width,
-                tile_height,
-                render_lock_held,
-                intrinsics,
-                {0, tile_y},
-                {width, height},
-                orthographic_override,
-                ortho_scale_override,
-                background_color_override,
-                readback_config.transparent_background_override,
-                /*settle_capacity=*/true);
-            if (!rendered) {
-                LOG_TRACE("Gaussian preview tiled render failed at tile y={} height={}: {}",
-                          tile_y,
-                          tile_height,
-                          rendered.error());
-                return {};
+            while (true) {
+                auto rendered = renderPreviewImageToPreviewSlotWithState(
+                    scene_manager,
+                    model,
+                    scene_state,
+                    rotation,
+                    position,
+                    focal_length_mm,
+                    tile_width,
+                    tile_height,
+                    render_lock_held,
+                    intrinsics,
+                    {0, tile_y},
+                    {width, height},
+                    orthographic_override,
+                    ortho_scale_override,
+                    background_color_override,
+                    readback_config.transparent_background_override);
+                if (rendered) {
+                    break;
+                }
+                if (!isTileInstanceOverflow(rendered.error()) ||
+                    tile_height <= kMinPreviewSubdivisionHeight) {
+                    LOG_TRACE("Gaussian preview tiled render failed at tile y={} height={}: {}",
+                              tile_y,
+                              tile_height,
+                              rendered.error());
+                    if (outstanding_export_ticket) {
+                        (void)vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                    }
+                    return {};
+                }
+                tile_height = std::max(kMinPreviewSubdivisionHeight, tile_height / 2);
+                band_height_limit = tile_height;
+                LOG_WARN("Gaussian preview band overflow at y={}; retrying with height={}",
+                         tile_y,
+                         tile_height);
             }
-            auto copied = vksplat_viewport_renderer_->readOutputImageIntoCpuHwc(
+            // After render of band N: wait prior band's copy (if any), then submit band N.
+            if (outstanding_export_ticket) {
+                auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+                if (!waited) {
+                    LOG_TRACE("Gaussian preview tiled prior-band readback failed at tile y={}: {}",
+                              tile_y,
+                              waited.error());
+                    return {};
+                }
+                outstanding_export_ticket.reset();
+            }
+            auto ticket = vksplat_viewport_renderer_->submitReadOutputImageIntoCpuHwcTicket(
                 *last_vulkan_context_,
                 VksplatViewportRenderer::OutputSlot::Preview,
                 output,
                 0,
                 tile_y);
-            if (!copied) {
-                LOG_TRACE("Gaussian preview tiled readback failed at tile y={} height={}: {}",
+            if (!ticket) {
+                LOG_TRACE("Gaussian preview tiled readback submit failed at tile y={} height={}: {}",
                           tile_y,
                           tile_height,
-                          copied.error());
+                          ticket.error());
+                return {};
+            }
+            outstanding_export_ticket = *ticket;
+            tile_y += tile_height;
+        }
+        if (outstanding_export_ticket) {
+            auto waited = vksplat_viewport_renderer_->waitReadbackTicket(*outstanding_export_ticket);
+            if (!waited) {
+                LOG_TRACE("Gaussian preview tiled final-band readback failed: {}", waited.error());
                 return {};
             }
         }
@@ -1062,7 +1162,6 @@ namespace lfs::vis {
             x,
             y,
             frame_lifecycle_service_.lastViewportSize(),
-            engine_.get(),
             panel);
         if (cached_depth > 0.0f) {
             return cached_depth;
@@ -1159,9 +1258,7 @@ namespace lfs::vis {
         if (!scene_manager || render_size.x <= 0 || render_size.y <= 0 ||
             x < 0 || x >= render_size.x || y < 0 || y >= render_size.y ||
             node_visibility_mask.empty() ||
-            !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) {
-                return enabled;
-            })) {
+            !std::any_of(node_visibility_mask.begin(), node_visibility_mask.end(), [](const bool enabled) { return enabled; })) {
             return -1.0f;
         }
         auto render_lock = acquireLiveModelRenderLock(scene_manager);
@@ -1209,7 +1306,7 @@ namespace lfs::vis {
 
         ViewportArtifactService artifacts;
         artifacts.updateFromImageOutput({}, metadata, render_size, true);
-        return artifacts.sampleLinearDepthAt(x, y, render_size, engine_.get(), std::nullopt);
+        return artifacts.sampleLinearDepthAt(x, y, render_size, std::nullopt);
     }
 
 } // namespace lfs::vis

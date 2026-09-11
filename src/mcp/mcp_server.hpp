@@ -26,15 +26,15 @@ namespace lfs::mcp {
         McpServer(const McpServer&) = delete;
         McpServer& operator=(const McpServer&) = delete;
 
-        JsonRpcResponse handle_request(const JsonRpcRequest& req);
+        JsonRpcResponse handle_request(const JsonRpcRequest& req, lfs::OperationId operation_id = {});
 
     private:
         JsonRpcResponse handle_initialize(const JsonRpcRequest& req);
         JsonRpcResponse handle_initialized(const JsonRpcRequest& req);
         JsonRpcResponse handle_tools_list(const JsonRpcRequest& req);
-        JsonRpcResponse handle_tools_call(const JsonRpcRequest& req);
+        JsonRpcResponse handle_tools_call(const JsonRpcRequest& req, lfs::OperationId operation_id);
         JsonRpcResponse handle_resources_list(const JsonRpcRequest& req);
-        JsonRpcResponse handle_resources_read(const JsonRpcRequest& req);
+        JsonRpcResponse handle_resources_read(const JsonRpcRequest& req, lfs::OperationId operation_id);
         JsonRpcResponse handle_ping(const JsonRpcRequest& req);
 
         std::atomic<bool> initialized_{false};

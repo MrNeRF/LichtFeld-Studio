@@ -47,10 +47,9 @@ if(WITH_DYNAMIC_NVTIFF)
         OUTPUT ${NVTIFF_GENERATED_STUB}
         COMMAND ${PYTHON_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/stub_generator/stub_codegen.py --unique_prefix=Nvtiff --
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/stub_generator/nvtiff.json" ${NVTIFF_GENERATED_STUB}
-        "${NVTIFF_INCLUDE}/nvtiff.h" "-I${NVTIFF_INCLUDE}" "-I${CUDA_MAIN_INCLUDE_DIR}"
+        "${NVTIFF_INCLUDE}/nvtiff.h" "-I${NVTIFF_INCLUDE}" "-I${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}"
         # for some reason QNX fails with 'too many errors emitted' is this is not set
         "-ferror-limit=0"
-        ${DEFAULT_COMPILER_INCLUDE}
         DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../../tools/stub_generator/stub_codegen.py
         "${NVTIFF_INCLUDE}/nvtiff.h"
         "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/stub_generator/nvtiff.json"

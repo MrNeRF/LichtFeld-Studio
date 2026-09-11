@@ -78,6 +78,7 @@ namespace lfs::core {
                 submeshes = std::move(o.submeshes);
                 texture_images = std::move(o.texture_images);
                 generation_.store(o.generation_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                id_ = next_id();
             }
             return *this;
         }
@@ -98,6 +99,11 @@ namespace lfs::core {
         uint32_t generation() const { return generation_.load(std::memory_order_relaxed); }
         void mark_dirty() { generation_.fetch_add(1, std::memory_order_relaxed); }
 
+        // Process-unique and never reused, so renderer-side GPU caches cannot mistake a
+        // freshly allocated mesh for a destroyed one that happened to land on the same
+        // heap address. generation() only tracks in-place edits of one mesh.
+        uint64_t id() const { return id_; }
+
         MeshData to(Device device) const {
             MeshData m;
             m.vertices = vertices.is_valid() ? vertices.to(device) : vertices;
@@ -114,6 +120,11 @@ namespace lfs::core {
         }
 
         void compute_normals();
+
+    private:
+        static uint64_t next_id();
+
+        uint64_t id_ = next_id();
     };
 
 } // namespace lfs::core

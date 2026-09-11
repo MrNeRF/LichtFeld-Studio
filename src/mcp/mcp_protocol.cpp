@@ -3,9 +3,43 @@
 
 #include "mcp_protocol.hpp"
 
+#include <algorithm>
 #include <cassert>
+#include <type_traits>
 
 namespace lfs::mcp {
+
+    std::string normalize_tool_name(std::string name) {
+        std::replace(name.begin(), name.end(), '.', '_');
+        return name;
+    }
+
+    RequestId RequestId::from_json(const json& request_object) {
+        if (!request_object.contains("id")) {
+            return RequestId{};
+        }
+
+        const auto& id = request_object["id"];
+        if (id.is_number_integer()) {
+            return RequestId{id.get<std::int64_t>()};
+        }
+        if (id.is_string()) {
+            return RequestId{id.get<std::string>()};
+        }
+        return RequestId{nullptr};
+    }
+
+    std::optional<json> RequestId::to_json() const {
+        return std::visit(
+            []<typename T>(const T& value) -> std::optional<json> {
+                if constexpr (std::is_same_v<T, std::monostate>) {
+                    return std::nullopt;
+                } else {
+                    return json(value);
+                }
+            },
+            value_);
+    }
 
     JsonRpcRequest parse_request(const std::string& input) {
         JsonRpcRequest req;
@@ -13,15 +47,7 @@ namespace lfs::mcp {
         auto j = json::parse(input);
 
         req.jsonrpc = j.value("jsonrpc", "2.0");
-
-        if (j.contains("id")) {
-            if (j["id"].is_number_integer()) {
-                req.id = j["id"].get<int64_t>();
-            } else if (j["id"].is_string()) {
-                req.id = j["id"].get<std::string>();
-            }
-        }
-
+        req.id = RequestId::from_json(j);
         req.method = j.value("method", "");
 
         if (j.contains("params")) {
@@ -35,7 +61,9 @@ namespace lfs::mcp {
         json j;
         j["jsonrpc"] = response.jsonrpc;
 
-        std::visit([&j](const auto& id) { j["id"] = id; }, response.id);
+        if (const auto id = response.id.to_json()) {
+            j["id"] = *id;
+        }
 
         if (response.result) {
             j["result"] = *response.result;
@@ -51,7 +79,7 @@ namespace lfs::mcp {
             j["error"] = err;
         }
 
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     std::string serialize_notification(const std::string& method, const json& params) {
@@ -59,17 +87,19 @@ namespace lfs::mcp {
         j["jsonrpc"] = "2.0";
         j["method"] = method;
         j["params"] = params;
-        return j.dump();
+        return j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     }
 
     json tool_to_json(const McpTool& tool) {
         json j;
-        j["name"] = tool.name;
+        j["name"] = normalize_tool_name(tool.name);
         j["description"] = tool.description;
 
         json schema;
         schema["type"] = tool.input_schema.type;
-        schema["properties"] = tool.input_schema.properties;
+        schema["properties"] = tool.input_schema.properties.is_object()
+                                   ? tool.input_schema.properties
+                                   : json::object();
         if (!tool.input_schema.required.empty()) {
             schema["required"] = tool.input_schema.required;
         }
@@ -79,16 +109,20 @@ namespace lfs::mcp {
             {"readOnlyHint", tool.metadata.kind == "query"},
             {"destructiveHint", tool.metadata.destructive},
             {"idempotentHint", tool.metadata.kind == "query"},
-            {"x-lfs-category", tool.metadata.category},
-            {"x-lfs-kind", tool.metadata.kind},
-            {"x-lfs-runtime", tool.metadata.runtime},
-            {"x-lfs-thread-affinity", tool.metadata.thread_affinity},
-            {"x-lfs-user-visible", tool.metadata.user_visible},
+        };
+        j["annotations"] = std::move(annotations);
+
+        json meta{
+            {"app.lichtfeld/category", tool.metadata.category},
+            {"app.lichtfeld/kind", tool.metadata.kind},
+            {"app.lichtfeld/runtime", tool.metadata.runtime},
+            {"app.lichtfeld/thread_affinity", tool.metadata.thread_affinity},
+            {"app.lichtfeld/user_visible", tool.metadata.user_visible},
         };
         if (tool.metadata.long_running) {
-            annotations["x-lfs-long-running"] = true;
+            meta["app.lichtfeld/long_running"] = true;
         }
-        j["annotations"] = std::move(annotations);
+        j["_meta"] = std::move(meta);
 
         return j;
     }
@@ -135,7 +169,7 @@ namespace lfs::mcp {
     }
 
     JsonRpcResponse make_error_response(
-        const std::variant<int64_t, std::string>& id,
+        const RequestId& id,
         int code,
         const std::string& message,
         const std::optional<json>& data) {
@@ -147,7 +181,7 @@ namespace lfs::mcp {
     }
 
     JsonRpcResponse make_success_response(
-        const std::variant<int64_t, std::string>& id,
+        const RequestId& id,
         const json& result) {
 
         JsonRpcResponse resp;

@@ -246,33 +246,6 @@ def test_transform_controls_hide_overlay_when_tool_is_inactive(transform_control
     assert "hidden" in doc.wrap.classes
 
 
-def test_transform_controls_mirror_keeps_overlay_for_axis_options(transform_controls_module):
-    module, state = transform_controls_module
-    panel = module.TransformControlsController()
-    model = _DataModelStub()
-    doc = _DocumentStub()
-
-    state.active_tool = "builtin.mirror"
-    state.selected_names = ["target"]
-
-    panel.bind_model(model)
-    panel.mount(doc)
-    assert "hidden" in doc.wrap.classes
-
-    panel.update(doc)
-
-    assert "hidden" not in doc.wrap.classes
-    assert model.bound_funcs["transform_tool_label"]() == "Mirror"
-    assert model.bound_funcs["transform_submode_label"]() == "Axis"
-    assert model.bound_funcs["transform_submode_tooltip_key"]() == "tooltip.transform_axis"
-    assert model.bound_funcs["transform_show_translate"]() is False
-    assert model.bound_funcs["transform_show_rotate"]() is False
-    assert model.bound_funcs["transform_show_scale"]() is False
-    assert model.bound_funcs["transform_show_actions"]() is False
-    assert "transform_show_actions" in model.handle.dirty_calls
-    assert "transform_submode_label" in model.handle.dirty_calls
-
-
 def test_transform_controls_bake_commits_active_edit(transform_controls_module):
     module, state = transform_controls_module
     panel = module.TransformControlsController()

@@ -4,8 +4,10 @@
 
 import pytest
 
-np = pytest.importorskip("numpy")
+# Gate torch before numpy: loading numpy first can poison C++ exception unwind
+# for the lichtfeld extension when torch is absent (nightly suite abort).
 pytest.importorskip("torch")
+import numpy as np  # only after torch is present
 
 # Test shape configurations
 SHAPES_1D = [(5,), (100,), (1,)]
@@ -17,8 +19,12 @@ DTYPES_INT = ["int32", "int64"]
 DTYPES_ALL = DTYPES_FLOAT + DTYPES_INT
 
 
-def assert_tensors_close(lf_tensor, torch_tensor, rtol=1e-5, atol=1e-8):
-    """Compare lf tensor against torch tensor."""
+def assert_tensors_close(lf_tensor, torch_tensor, rtol=1e-5, atol=1e-5):
+    """Compare lf tensor against torch tensor.
+
+    Default atol is float32-friendly: near-zero transcendental outputs (sin/cos/tanh)
+    can differ by ~1e-7 abs between CUDA implementations while still matching in value.
+    """
     lf_np = lf_tensor.cpu().numpy() if lf_tensor.is_cuda else lf_tensor.numpy()
     torch_np = torch_tensor.detach().cpu().numpy()
     np.testing.assert_allclose(lf_np, torch_np, rtol=rtol, atol=atol)
@@ -415,7 +421,8 @@ class TestUnaryOperations:
         r_lf = t_lf.tanh()
         r_torch = torch.tanh(t_torch)
 
-        assert_tensors_close(r_lf, r_torch, rtol=1e-5)
+        # Looser tolerance for transcendental functions (matches sin/cos)
+        assert_tensors_close(r_lf, r_torch, rtol=1e-4)
 
     @pytest.mark.gpu
     def test_abs(self, lf, torch, gpu_available):

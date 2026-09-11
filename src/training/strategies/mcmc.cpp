@@ -4,19 +4,39 @@
 
 #include "mcmc.hpp"
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/sh_value_quant.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
+#include "lfs/training/morton_reorder.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
-#include <chrono>
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
 
     namespace {
+        [[nodiscard]] std::uint64_t deterministic_mcmc_seed(const int iteration,
+                                                            const std::uint64_t stream) {
+            // Derive each stochastic operation from the absolute training
+            // iteration.  A resumed trainer therefore emits the same MCMC
+            // mutations as an uninterrupted run without serializing a CUDA
+            // generator's opaque state.
+            std::uint64_t value = static_cast<std::uint64_t>(std::max(iteration, 0));
+            value ^= 0x9e3779b97f4a7c15ULL + stream + (value << 6) + (value >> 2);
+            value += 0x9e3779b97f4a7c15ULL;
+            value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+            return value ^ (value >> 31);
+        }
+
         [[nodiscard]] inline bool has_zero_dimension(const lfs::core::TensorShape& shape) {
             for (size_t i = 0; i < shape.rank(); ++i) {
                 if (shape[i] == 0) {
@@ -56,19 +76,31 @@ namespace lfs::training {
                               ? lfs::core::Tensor::ones_bool({static_cast<size_t>(indices.numel())}, indices.device())
                               : lfs::core::Tensor::zeros_bool({static_cast<size_t>(indices.numel())}, indices.device());
             splat_data.deleted().index_put_(indices, values);
+            splat_data.notify_deleted_mask_changed();
         }
 
-        void append_live_deleted_rows(lfs::core::SplatData& splat_data, const size_t n_rows) {
-            if (n_rows == 0 || !splat_data.has_deleted_mask()) {
+        void append_live_deleted_rows(lfs::core::SplatData& splat_data) {
+            // keep deleted.numel() == size() after densify grow.
+            if (!splat_data.has_deleted_mask()) {
                 return;
             }
-
+            const size_t target_size = static_cast<size_t>(splat_data.size());
             auto& deleted = splat_data.deleted();
-            const size_t desired_capacity = std::max(
-                deleted_mask_capacity(splat_data),
-                static_cast<size_t>(deleted.numel()) + n_rows);
-            deleted.reserve(desired_capacity);
-            deleted.append_zeros(n_rows);
+            const size_t cur = static_cast<size_t>(deleted.numel());
+            if (cur == target_size) {
+                return;
+            }
+            if (cur < target_size) {
+                const size_t pad = target_size - cur;
+                const size_t desired_capacity = std::max(
+                    deleted_mask_capacity(splat_data),
+                    target_size);
+                deleted.reserve(desired_capacity);
+                deleted.append_zeros(pad);
+                splat_data.notify_deleted_mask_changed();
+                return;
+            }
+            splat_data.reconcile_deleted_mask();
         }
 
         void zero_optimizer_state(
@@ -84,15 +116,22 @@ namespace lfs::training {
                 return;
             }
 
-            // Quantised moments: zero the per-primitive scales (a zero scale dequantises every
-            // moment of that primitive to zero) — correct for both contiguous and swizzled shN.
-            if (!state->exp_avg_scale.is_valid() || state->exp_avg_scale.numel() == 0) {
-                return;
+            if (state->is_joint()) {
+                // Joint codec: encode true zeros under current bounds via optimizer API.
+                auto idx_cpu = indices.cpu();
+                std::vector<int64_t> host_idx;
+                host_idx.reserve(indices.numel());
+                if (idx_cpu.dtype() == lfs::core::DataType::Int64) {
+                    const auto* p = idx_cpu.ptr<int64_t>();
+                    host_idx.assign(p, p + indices.numel());
+                } else if (idx_cpu.dtype() == lfs::core::DataType::Int32) {
+                    const auto* p = idx_cpu.ptr<int32_t>();
+                    for (size_t i = 0; i < indices.numel(); ++i)
+                        host_idx.push_back(static_cast<int64_t>(p[i]));
+                }
+                if (!host_idx.empty())
+                    optimizer.reset_state_at_indices(param_type, host_idx);
             }
-            auto scale_zeros = lfs::core::Tensor::zeros(
-                lfs::core::TensorShape({indices.numel()}), state->exp_avg_scale.device());
-            state->exp_avg_scale.index_put_(indices, scale_zeros);
-            state->exp_avg_sq_scale.index_put_(indices, scale_zeros);
 
             // grad is transient (re-zeroed each step); only the contiguous case is handled here.
             if (param_type != ParamType::ShN && state->grad.is_valid() && state->grad.numel() > 0) {
@@ -122,7 +161,7 @@ namespace lfs::training {
         const lfs::core::Tensor& dead_indices,
         ParamType param_type) {
 
-        // Reset optimizer state (exp_avg and exp_avg_sq) for rows whose params changed.
+        // Reset optimizer moment state for rows whose params changed.
         // Source rows get adjusted opacity/scaling; destination rows receive fresh params.
         _optimizer->relocate_params_at_indices_gpu(
             param_type,
@@ -136,20 +175,20 @@ namespace lfs::training {
 
     void MCMC::ensure_densification_info_shape() {
         const size_t n = static_cast<size_t>(_splat_data->size());
-        const auto& info = _splat_data->_densification_info;
-        if (!info.is_valid() ||
-            info.ndim() != 2 ||
-            info.shape()[0] < 2 ||
-            info.shape()[1] != n) {
-            _splat_data->_densification_info =
-                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
-            _splat_data->_densification_info.set_name("splat.densification_info");
+        // reuse densification_info / score buffers in place when possible.
+        const size_t reserve =
+            (_params && _params->max_cap > 0) ? static_cast<size_t>(_params->max_cap) : 0;
+        ensure_densification_info_shape_inplace(
+            _splat_data->_densification_info, n, _splat_data->means().device());
+        if (_params) {
+            ensure_max_screen_share_shape(*_splat_data, n, reserve);
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
         }
 
-        if (!_error_score_max.is_valid() ||
-            _error_score_max.ndim() != 1 ||
-            _error_score_max.numel() != n) {
-            _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+        const size_t prev_n = _error_score_max.is_valid() ? _error_score_max.numel() : 0;
+        ensure_score_buffer_inplace(
+            _error_score_max, n, _splat_data->means().device(), reserve);
+        if (prev_n != n) {
             _error_score_max.set_name("mcmc.error_score_max");
             _error_score_windows = 0;
         }
@@ -159,20 +198,34 @@ namespace lfs::training {
         using namespace lfs::core;
 
         const size_t n = static_cast<size_t>(_splat_data->size());
+        Tensor weights;
         if (!_error_score_max.is_valid() ||
             _error_score_max.ndim() != 1 ||
             _error_score_max.numel() != n) {
-            return zero_frozen_scores(
+            weights = zero_frozen_scores(
                 *_splat_data,
                 Tensor::ones({n}, _splat_data->means().device()));
+        } else {
+            weights = zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
         }
+        return apply_crop_damping_to_scores(*_optimizer, weights);
+    }
 
-        return zero_frozen_scores(*_splat_data, _error_score_max.clamp_min(1e-12f));
+    void MCMC::ensure_ratio_workspace_size(const size_t required) {
+        if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
+            _ones_int32 = lfs::core::Tensor::ones(
+                {required}, _splat_data->means().device(), lfs::core::DataType::Int32);
+        }
     }
 
     int MCMC::relocate_gs() {
         LOG_TIMER("MCMC::relocate_gs");
         LFS_TRACE("kernel.mcmc.relocate");
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "MCMC::relocate_gs");
         using namespace lfs::core;
 
         // Get opacities (handle both [N] and [N, 1] shapes)
@@ -231,8 +284,7 @@ namespace lfs::training {
             sampled_opacities = Tensor::empty({n_dead}, Device::CUDA, DataType::Float32);
             sampled_scales = Tensor::empty({n_dead, 3}, Device::CUDA, DataType::Float32);
 
-            static thread_local uint64_t seed_counter = 0;
-            const uint64_t seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) + seed_counter++;
+            const uint64_t seed = deterministic_mcmc_seed(_current_iteration, 0x52454c4f43415445ULL);
 
             // does multinomial sampling + gathering in one pass
             mcmc::launch_multinomial_sample_and_gather(
@@ -253,6 +305,7 @@ namespace lfs::training {
         Tensor ratios;
         {
             LOG_TIMER("relocate_count_occurrences");
+            ensure_ratio_workspace_size(opacities.numel());
             auto ones_N = _ones_int32.slice(0, 0, opacities.numel()).clone();
             ratios = ones_N.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
             ratios = ratios.index_select(0, sampled_idxs).contiguous();
@@ -273,6 +326,7 @@ namespace lfs::training {
                 sampled_opacities.ptr<float>(),
                 sampled_scales.ptr<float>(),
                 ratios.ptr<int32_t>(),
+                _params->min_opacity,
                 new_opacities.ptr<float>(),
                 new_scales.ptr<float>(),
                 sampled_opacities.numel());
@@ -327,9 +381,8 @@ namespace lfs::training {
                 opacity_dim,
                 N);
 
-            // Swizzled shN gather: at each dst primitive (dead_indices[i]) write the
-            // shN slot of src primitive (sampled_idxs[i]). Use in-swizzled-domain copies
-            // so _shN's reserved capacity is preserved (no realloc).
+            // Copy sampled shN onto dead slots. q16 stays packed: gather-decode
+            // the source rows and re-encode only the dest 256-splat blocks.
             if (_splat_data->shN().is_valid() && _splat_data->shN().numel() > 0 &&
                 _splat_data->max_sh_coeffs_rest() > 0 && dead_indices.numel() > 0) {
                 using namespace lfs::core;
@@ -337,19 +390,10 @@ namespace lfs::training {
                 const size_t n_pairs = dead_indices.numel();
                 Tensor staged = Tensor::empty({n_pairs, static_cast<size_t>(layout_rest), 3},
                                               _splat_data->shN().device());
-                shN_swizzled_gather_to_linear_i64(
-                    _splat_data->shN().ptr<float>(),
-                    sampled_idxs.ptr<int64_t>(),
-                    staged.ptr<float>(),
-                    n_pairs,
-                    layout_rest,
-                    layout_rest);
-                auto dead_i32 = dead_indices.dtype() == DataType::Int32
-                                    ? dead_indices
-                                    : dead_indices.to(DataType::Int32);
-                shN_swizzled_scatter_linear(
-                    _splat_data->shN().ptr<float>(), dead_i32.ptr<int>(),
-                    staged.ptr<float>(), n_pairs, layout_rest, layout_rest);
+                lfs::training::sh_value::gather_shN_to_canonical(
+                    *_splat_data, sampled_idxs, staged);
+                lfs::training::sh_value::scatter_canonical_into_shN(
+                    *_splat_data, dead_indices, staged);
             }
         }
 
@@ -375,6 +419,11 @@ namespace lfs::training {
         LOG_TIMER("MCMC::add_new_gs");
         LFS_TRACE("kernel.densify.duplicate");
         using namespace lfs::core;
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "MCMC::add_new_gs");
 
         if (!_optimizer) {
             LOG_ERROR("MCMC::add_new_gs: optimizer not initialized");
@@ -420,7 +469,7 @@ namespace lfs::training {
             sampled_scales = Tensor::empty({n_new, 3}, Device::CUDA, DataType::Float32);
 
             // Generate random seed
-            auto seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+            const auto seed = deterministic_mcmc_seed(_current_iteration, 0x4144445f4e4557ULL);
 
             // Call fused CUDA kernel
             mcmc::launch_multinomial_sample_all(
@@ -439,6 +488,7 @@ namespace lfs::training {
         Tensor ratios;
         {
             LOG_TIMER("add_new_count_occurrences");
+            ensure_ratio_workspace_size(opacities.numel());
             ratios = _ones_int32.slice(0, 0, opacities.numel()).clone();
             ratios = ratios.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
             ratios = ratios.index_select(0, sampled_idxs);
@@ -460,6 +510,7 @@ namespace lfs::training {
                 sampled_opacities.ptr<float>(),
                 sampled_scales.ptr<float>(),
                 ratios.ptr<int32_t>(),
+                _params->min_opacity,
                 new_opacities.ptr<float>(),
                 new_scales.ptr<float>(),
                 sampled_opacities.numel());
@@ -476,6 +527,16 @@ namespace lfs::training {
             if (_splat_data->opacity_raw().ndim() == 2) {
                 new_opacity_raw = new_opacity_raw.unsqueeze(-1);
             }
+        }
+
+        // preflight exportable capacity BEFORE parent-row
+        // relocate writes or multi-param gather grow (no torn model on failure).
+        if (!_optimizer->preflight_grow_capacity(static_cast<size_t>(n_new))) {
+            LOG_ERROR(
+                "MCMC densify aborted: capacity-ensure failed for +{} rows "
+                "(no params mutated)",
+                n_new);
+            return 0;
         }
 
         // Update existing Gaussians first (before concatenation)
@@ -508,7 +569,10 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs);
         }
 
-        append_live_deleted_rows(*_splat_data, n_new);
+        append_live_deleted_rows(*_splat_data);
+        if (_splat_data->has_frozen_ranges()) {
+            apply_frozen_ranges_to_optimizer(*_splat_data, *_optimizer);
+        }
 
         return n_new;
     }
@@ -517,6 +581,11 @@ namespace lfs::training {
     int MCMC::add_new_gs_with_indices_test(const lfs::core::Tensor& sampled_idxs) {
         LOG_TIMER("MCMC::add_new_gs_with_indices_test");
         using namespace lfs::core;
+        const bool shN_expanded =
+            !_splat_data->shN_value_quantized() &&
+            lfs::training::sh_value::ensure_shN_fp32_for_mutation(*_splat_data);
+        lfs::training::sh_value::ShNCommitGuard shn_guard(
+            *_splat_data, shN_expanded, "MCMC::add_new_gs_with_indices_test");
 
         if (!_optimizer) {
             LOG_ERROR("add_new_gs_with_indices_test called but optimizer not initialized");
@@ -530,7 +599,7 @@ namespace lfs::training {
         if (auto frozen_mask = make_frozen_mask(*_splat_data, required, sampled_idxs_i64.device());
             frozen_mask.is_valid()) {
             auto trainable = frozen_mask.index_select(0, sampled_idxs_i64).logical_not();
-            sampled_idxs_i64 = sampled_idxs_i64.masked_select(trainable);
+            sampled_idxs_i64 = sampled_idxs_i64.index_select(0, trainable.nonzero().squeeze(-1));
         }
 
         const int n_new = sampled_idxs_i64.numel();
@@ -544,10 +613,7 @@ namespace lfs::training {
         auto sampled_opacities = opacities.index_select(0, sampled_idxs_i64);
         auto sampled_scales = _splat_data->get_scaling().index_select(0, sampled_idxs_i64);
 
-        // Ensure cached ones buffer covers current model size
-        if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
-            _ones_int32 = Tensor::ones({required}, Device::CUDA, DataType::Int32);
-        }
+        ensure_ratio_workspace_size(required);
 
         // Count occurrences in int32 and keep +1 baseline.
         auto ratios = _ones_int32.slice(0, 0, required).clone();
@@ -570,6 +636,7 @@ namespace lfs::training {
                 sampled_opacities.ptr<float>(),
                 sampled_scales.ptr<float>(),
                 ratios.ptr<int32_t>(),
+                _params->min_opacity,
                 new_opacities.ptr<float>(),
                 new_scales.ptr<float>(),
                 sampled_opacities.numel());
@@ -586,6 +653,13 @@ namespace lfs::training {
             if (_splat_data->opacity_raw().ndim() == 2) {
                 new_opacity_raw = new_opacity_raw.unsqueeze(-1);
             }
+        }
+
+        if (!_optimizer->preflight_grow_capacity(static_cast<size_t>(n_new))) {
+            LOG_ERROR(
+                "MCMC densify (test path) aborted: capacity-ensure failed for +{} rows",
+                n_new);
+            return 0;
         }
 
         // Update existing Gaussians first
@@ -618,7 +692,7 @@ namespace lfs::training {
             _optimizer->add_new_params_gather(ParamType::Scaling, sampled_idxs_i64);
         }
 
-        append_live_deleted_rows(*_splat_data, static_cast<size_t>(n_new));
+        append_live_deleted_rows(*_splat_data);
 
         return n_new;
     }
@@ -630,41 +704,29 @@ namespace lfs::training {
 
         // Get current learning rate from optimizer (after scheduler has updated it)
         const float current_lr = _optimizer->get_lr() * NOISE_LR;
-
-        // Generate noise in pre-allocated buffer
-        {
-            LOG_TIMER("inject_noise_generate");
-            if (_noise_buffer.is_valid() && _noise_buffer.capacity() > 0) {
-                // Fill pre-allocated buffer with random values (kernel will use first size() elements)
-                _noise_buffer.normal_(0.0f, 1.0f);
-            } else {
-                // Fallback for non-capacity mode
-                _noise_buffer = Tensor::randn(_splat_data->means().shape(), Device::CUDA, DataType::Float32);
-            }
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        if (n == 0) {
+            return;
         }
 
-        // Call CUDA add_noise kernel (uses first size() elements of buffer)
-        {
-            LOG_TIMER("inject_noise_cuda_kernel");
-            const auto frozen_mask = make_frozen_mask(
-                *_splat_data,
-                static_cast<size_t>(_splat_data->size()),
-                Device::CUDA);
-            mcmc::launch_add_noise_kernel(
-                _splat_data->opacity_raw().ptr<float>(),
-                _splat_data->scaling_raw().ptr<float>(),
-                _splat_data->rotation_raw().ptr<float>(),
-                _noise_buffer.ptr<float>(),
-                _splat_data->means().ptr<float>(),
-                frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
-                frozen_mask.is_valid() ? frozen_mask.numel() : 0,
-                current_lr,
-                _splat_data->size());
-        }
+        // one fused kernel (curand + cov transform + add); no noise buffer.
+        const auto frozen_mask = make_frozen_mask(*_splat_data, n, Device::CUDA);
+        const auto seed = deterministic_mcmc_seed(_current_iteration, 0x494e4a454354ULL);
+        mcmc::launch_inject_noise_kernel(
+            _splat_data->opacity_raw().ptr<float>(),
+            _splat_data->scaling_raw().ptr<float>(),
+            _splat_data->rotation_raw().ptr<float>(),
+            _splat_data->means().ptr<float>(),
+            frozen_mask.is_valid() ? frozen_mask.ptr<bool>() : nullptr,
+            frozen_mask.is_valid() ? frozen_mask.numel() : 0,
+            current_lr,
+            n,
+            seed);
     }
 
     void MCMC::post_backward(int iter, RenderOutput& render_output) {
         LOG_TIMER("MCMC::post_backward");
+        _current_iteration = iter;
 
         // Increment SH degree every sh_degree_interval iterations
         if (iter % _params->sh_degree_interval == 0) {
@@ -673,6 +735,10 @@ namespace lfs::training {
 
         if (iter == _params->stop_refine) {
             _splat_data->_densification_info = lfs::core::Tensor::empty({0});
+            _splat_data->_max_screen_share = lfs::core::Tensor::empty({0});
+            if (_params) {
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            }
             _error_score_max = lfs::core::Tensor::empty({0});
             _error_score_windows = 0;
         }
@@ -687,19 +753,46 @@ namespace lfs::training {
                 info.ndim() == 2 &&
                 info.shape()[0] >= 2 &&
                 info.shape()[1] == _error_score_max.numel()) {
-                const float* error_row = info.ptr<float>() + info.shape()[1];
-                lfs::training::mcmc::launch_elementwise_max_inplace(
+                lfs::training::mcmc::launch_max_error_and_zero_densification(
                     _error_score_max.ptr<float>(),
-                    error_row,
+                    _splat_data->_densification_info.ptr<float>(),
                     _error_score_max.numel());
+            } else if (info.is_valid() && info.numel() > 0) {
+                _splat_data->_densification_info.zero_();
             }
-
-            // Clear per-view accumulators; they are rebuilt by the next backward pass.
-            _splat_data->_densification_info.zero_();
         }
 
         // Refine Gaussians
         if (is_refining(iter)) {
+            if (_splat_data->_max_screen_share.is_valid() &&
+                _splat_data->_max_screen_share.numel() > 0) {
+                LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),
+                                   "wait fused adam before screen-share mutate");
+            }
+            const size_t n_clip = static_cast<size_t>(_splat_data->size());
+            if (_params && screen_share_cap_active(_params->max_screen_share) &&
+                _splat_data->_max_screen_share.is_valid() &&
+                _splat_data->_max_screen_share.numel() == n_clip) {
+                auto& log_scales = _splat_data->scaling_raw();
+                assert(log_scales.shape()[0] == n_clip && log_scales.shape()[1] == 3);
+                const bool* frozen = nullptr;
+                size_t frozen_n = 0;
+                if (_optimizer) {
+                    const auto& mask = _optimizer->frozen_mask();
+                    if (mask.is_valid()) {
+                        frozen = mask.ptr<bool>();
+                        frozen_n = mask.numel();
+                    }
+                }
+                kernels::launch_clip_log_scale_by_screen_share(
+                    log_scales.ptr<float>(),
+                    _splat_data->_max_screen_share.ptr<float>(),
+                    frozen,
+                    frozen_n,
+                    _params->max_screen_share,
+                    n_clip);
+            }
+
             const int n_relocated = relocate_gs();
             if (n_relocated > 0) {
                 LOG_DEBUG("MCMC: Relocated {} dead Gaussians at iteration {}", n_relocated, iter);
@@ -718,23 +811,29 @@ namespace lfs::training {
             LFS_GAUGE("model.gaussians.live", n);
             LFS_GAUGE("model.gaussians.capacity", deleted_mask_capacity(*_splat_data));
 
-            if (_error_score_max.numel() < n) {
-                const size_t n_new = n - _error_score_max.numel();
-                _error_score_max = _error_score_max.cat(
-                    lfs::core::Tensor::zeros({n_new}, _splat_data->means().device()),
-                    0);
-            }
+            ensure_score_buffer_inplace(
+                _error_score_max, n, _splat_data->means().device(),
+                _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
 
             ++_error_score_windows;
             if (_error_score_windows >= 2) {
-                _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+                ensure_score_buffer_inplace(
+                    _error_score_max, n, _splat_data->means().device(),
+                    _params && _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
+                _error_score_max.zero_();
                 _error_score_max.set_name("mcmc.error_score_max");
                 _error_score_windows = 0;
             }
 
-            _splat_data->_densification_info =
-                lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
-            _splat_data->_densification_info.set_name("splat.densification_info");
+            ensure_densification_info_shape_inplace(
+                _splat_data->_densification_info, n, _splat_data->means().device());
+            _splat_data->_densification_info.zero_();
+            if (_params) {
+                const size_t cap = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0;
+                ensure_max_screen_share_shape(*_splat_data, n, cap);
+                _splat_data->_max_screen_share.zero_();
+                publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+            }
         }
 
         // Inject noise to positions every iteration
@@ -807,6 +906,13 @@ namespace lfs::training {
         LOG_DEBUG("MCMC: soft-deleted {} Gaussians (rotation and optimizer state zeroed)", n_remove);
     }
 
+    void MCMC::set_optimization_params(const lfs::core::param::OptimizationParameters& params) {
+        _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
+        if (_splat_data) {
+            publish_screen_share_cap(_optimizer.get(), *_splat_data, *_params);
+        }
+    }
+
     void MCMC::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         using namespace lfs::core;
 
@@ -829,24 +935,39 @@ namespace lfs::training {
                 // releases the freed chunk — so only replace if the param's capacity is actually
                 // below the target.
                 auto ensure_capacity_direct = [capacity](Tensor& param) {
+                    LFS_ASSERT_MSG(param.dtype() == DataType::Float32,
+                                   "MCMC training parameter must be Float32");
                     if (param.capacity() >= capacity)
+                        return;
+                    // GUI exportable tensors grow with live N.
+                    if (param.is_external_storage())
                         return;
                     auto new_param = Tensor::zeros_direct(param.shape(), capacity);
                     cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
                                param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
-                    param = new_param;
+                    param = std::move(new_param);
                 };
 
-                // shN is 1D swizzled — its capacity must be in FLOATS, not row count.
                 const auto layout_rest = static_cast<uint32_t>(_splat_data->max_sh_coeffs_rest());
-                auto ensure_shN_capacity_direct = [capacity, layout_rest](Tensor& param) {
-                    const size_t cap_floats = lfs::core::sh_swizzled_float_count(capacity, layout_rest);
-                    if (param.capacity() >= cap_floats)
+                const bool shN_quantized = _splat_data->shN_value_quantized();
+                auto ensure_shN_capacity_direct = [capacity, layout_rest, shN_quantized](Tensor& param) {
+                    const auto expected_dtype = shN_quantized ? DataType::Float16 : DataType::Float32;
+                    LFS_ASSERT_MSG(param.dtype() == expected_dtype,
+                                   "MCMC shN dtype does not match its storage representation");
+                    const size_t required_capacity =
+                        shN_quantized
+                            ? lfs::core::sh_value_quant::sh_value_u16_count(capacity, layout_rest)
+                            : lfs::core::sh_swizzled_float_count(capacity, layout_rest);
+                    if (param.capacity() >= required_capacity)
                         return;
-                    auto new_param = Tensor::zeros_direct(param.shape(), cap_floats);
-                    cudaMemcpy(new_param.ptr<float>(), param.ptr<float>(),
-                               param.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
-                    param = new_param;
+                    if (param.is_external_storage())
+                        return;
+                    auto new_param = Tensor::zeros_direct(
+                        param.shape(), required_capacity, Device::CUDA, param.dtype());
+                    cudaMemcpy(new_param.data_ptr(), param.data_ptr(),
+                               param.numel() * dtype_size(param.dtype()),
+                               cudaMemcpyDeviceToDevice);
+                    param = std::move(new_param);
                 };
 
                 ensure_capacity_direct(_splat_data->means());
@@ -858,8 +979,7 @@ namespace lfs::training {
                 ensure_capacity_direct(_splat_data->rotation_raw());
                 ensure_capacity_direct(_splat_data->opacity_raw());
 
-                // Pre-allocate noise buffer [max_cap, 3]
-                _noise_buffer = Tensor::zeros_direct(TensorShape({capacity, 3}), capacity);
+                // noise is generated inside inject_noise_kernel (no buffer).
 
                 LOG_INFO("Pre-allocated capacity: {}/{} Gaussians ({:.1f}%)",
                          current_size, capacity, 100.0f * current_size / capacity);
@@ -867,6 +987,9 @@ namespace lfs::training {
                 LOG_WARN("Failed to pre-allocate capacity: {}. Continuing without pre-allocation.", e.what());
             }
         }
+
+        // Convert shN to pad-dropped u16 after reserving float capacity.
+        lfs::training::sh_value::apply_shN_value_quant(*_splat_data);
 
         _n_max = 51;
         mcmc::init_relocation_coefficients(_n_max);
@@ -886,6 +1009,10 @@ namespace lfs::training {
         _error_score_windows = 0;
 
         LOG_INFO("MCMC strategy initialized with {} Gaussians", _splat_data->size());
+    }
+
+    void MCMC::permute_gaussian_rows(const lfs::core::Tensor& perm) {
+        morton::permute_row_tensor(_error_score_max, perm);
     }
 
     bool MCMC::is_refining(int iter) const {
@@ -929,9 +1056,9 @@ namespace lfs::training {
     }
 
     void MCMC::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "MCMC magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "MCMC version");
 
         if (magic != MCMC_MAGIC) {
             throw std::runtime_error("Invalid MCMC checkpoint: wrong magic");
@@ -941,20 +1068,46 @@ namespace lfs::training {
         }
 
         // Deserialize optimizer state
-        uint8_t has_optimizer;
-        is.read(reinterpret_cast<char*>(&has_optimizer), sizeof(has_optimizer));
-        if (has_optimizer && _optimizer) {
+        uint8_t has_optimizer = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_optimizer, sizeof(has_optimizer), "MCMC optimizer flag");
+        if (has_optimizer > 1 || (has_optimizer && !_optimizer))
+            throw std::runtime_error("Invalid MCMC checkpoint: optimizer flag/state mismatch");
+        if (has_optimizer) {
             _optimizer->deserialize(is);
         }
 
         // Deserialize scheduler state
-        uint8_t has_scheduler;
-        is.read(reinterpret_cast<char*>(&has_scheduler), sizeof(has_scheduler));
-        if (has_scheduler && _scheduler) {
+        uint8_t has_scheduler = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &has_scheduler, sizeof(has_scheduler), "MCMC scheduler flag");
+        if (has_scheduler > 1 || (has_scheduler && !_scheduler))
+            throw std::runtime_error("Invalid MCMC checkpoint: scheduler flag/state mismatch");
+        if (has_scheduler) {
             _scheduler->deserialize(is);
         }
 
         LOG_DEBUG("Deserialized MCMC strategy");
+    }
+
+    bool MCMC::can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept {
+        const auto* source = dynamic_cast<const MCMC*>(&loaded);
+        return source && static_cast<bool>(_optimizer) == static_cast<bool>(source->_optimizer) &&
+               static_cast<bool>(_scheduler) == static_cast<bool>(source->_scheduler);
+    }
+
+    void MCMC::adopt_checkpoint_state(IStrategy& loaded) noexcept {
+        auto& source = checked_checkpoint_source<MCMC>(loaded);
+        if (_optimizer)
+            _optimizer->adopt_checkpoint_state(*source._optimizer);
+        if (_scheduler)
+            _scheduler->adopt_checkpoint_state(*source._scheduler);
+        _params.swap(source._params);
+        std::swap(_n_max, source._n_max);
+
+        std::swap(_ones_int32, source._ones_int32);
+        std::swap(_error_score_max, source._error_score_max);
+        std::swap(_error_score_windows, source._error_score_windows);
     }
 
     void MCMC::reserve_optimizer_capacity(size_t capacity) {

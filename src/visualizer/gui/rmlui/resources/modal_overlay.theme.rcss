@@ -42,3 +42,8 @@
 .modal-dialog.style-error {
     border-color: @{error};
 }
+
+.details-block {
+    background-color: @{alpha(border,0.25)};
+    color: @{text_dim};
+}

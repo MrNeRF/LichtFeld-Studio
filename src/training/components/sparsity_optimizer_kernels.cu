@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 
@@ -62,6 +63,7 @@ namespace lfs::training {
 
         admm_backward_fused_kernel<<<blocks, threads>>>(
             grad_opacities, opa_sigmoid, z, u, rho, grad_loss, n, accumulate);
+        LFS_CUDA_LAUNCH_CHECK(nullptr, "training.sparsity.admm_backward_fused");
     }
 
 } // namespace lfs::training

@@ -1,0 +1,216 @@
+.panel-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.hidden {
+    display: none;
+}
+
+.bugreport-auth,
+.bugreport-success,
+.bugreport-form {
+    display: block;
+    margin-top: 4dp;
+}
+
+.bugreport-auth.hidden,
+.bugreport-success.hidden,
+.bugreport-form.hidden,
+.bugreport-table.hidden,
+.bugreport-log-section.hidden,
+.bugreport-checkbox.hidden,
+.bugreport-error.hidden,
+.bugreport-error-detail.hidden {
+    display: none;
+}
+
+.bugreport-heading {
+    display: block;
+    margin-bottom: 6dp;
+    font-size: 14dp;
+    font-weight: bold;
+}
+
+.bugreport-subheading,
+.bugreport-field-label {
+    display: block;
+    margin: 7dp 0 3dp;
+    font-weight: bold;
+}
+
+.bugreport-auth .btn,
+.bugreport-success .btn {
+    margin-top: 10dp;
+}
+
+.bugreport-url {
+    display: block;
+    margin-top: 6dp;
+    word-break: break-word;
+    opacity: 0.8;
+}
+
+.bugreport-problems {
+    display: block;
+    margin-top: 9dp;
+}
+
+.bugreport-problems.hidden {
+    display: none;
+}
+
+.bugreport-problem {
+    display: block;
+    margin-top: 2dp;
+}
+
+.bugreport-category-group {
+    display: block;
+    margin-bottom: 7dp;
+}
+
+.bugreport-radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: 3dp;
+}
+
+.bugreport-radio-option {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    min-height: 20dp;
+    padding: 2dp 5dp;
+    border-radius: 3dp;
+    cursor: pointer;
+}
+
+.bugreport-radio-option:hover {
+    background-color: rgba(137, 180, 250, 24);
+}
+
+.bugreport-radio-option span {
+    flex: 1;
+}
+
+.bugreport-radio-option input[type="radio"] {
+    pointer-events: none;
+}
+
+.bugreport-field {
+    display: block;
+}
+
+.bugreport-field input,
+.bugreport-field textarea,
+.bugreport-field select,
+.bugreport-form > input,
+.bugreport-log-section textarea {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 4dp;
+}
+
+.bugreport-description-field textarea {
+    min-height: 60dp;
+    height: 60dp;
+}
+
+.bugreport-two-column {
+    display: flex;
+    flex-direction: row;
+    gap: 8dp;
+    margin-top: 3dp;
+    margin-bottom: 4dp;
+}
+
+.bugreport-two-column .bugreport-field {
+    flex: 1;
+}
+
+.bugreport-section-toggle {
+    width: 100%;
+    margin-top: 7dp;
+    padding: 5dp;
+    text-align: left;
+}
+
+.bugreport-section-toggle span:first-child {
+    width: 14dp;
+}
+
+.bugreport-table {
+    display: block;
+    padding: 4dp 7dp;
+}
+
+.bugreport-row {
+    display: flex;
+    flex-direction: row;
+    padding: 2dp 0;
+}
+
+.bugreport-row span:first-child {
+    width: 150dp;
+    opacity: 0.75;
+}
+
+.bugreport-row span:last-child {
+    flex: 1;
+    word-break: break-word;
+}
+
+.bugreport-log-section {
+    display: block;
+    padding-top: 5dp;
+}
+
+.bugreport-counter {
+    display: block;
+    text-align: right;
+    font-size: 10dp;
+    opacity: 0.75;
+}
+
+.bugreport-counter.over-limit,
+.bugreport-error,
+.bugreport-error-detail {
+    color: #e06c75;
+}
+
+.bugreport-checkbox {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    margin-top: 6dp;
+}
+
+.bugreport-checkbox input {
+    margin: 1dp 5dp 0 0;
+}
+
+.bugreport-checkbox span {
+    flex: 1;
+}
+
+.bugreport-error,
+.bugreport-error-detail,
+.bugreport-hint {
+    display: block;
+    margin-top: 7dp;
+}
+
+.bugreport-error-detail {
+    white-space: pre-wrap;
+}
+
+.bugreport-hint {
+    opacity: 0.75;
+}
+
+.bugreport-submit {
+    margin-top: 8dp;
+}

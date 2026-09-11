@@ -7,6 +7,7 @@
 #include <torch/torch.h>
 
 #include "core/camera.hpp"
+#include "core/error_bus.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/control_boundary.hpp"
 #include "core/logger.hpp"
@@ -24,6 +25,7 @@
 
 #include <array>
 #include <atomic>
+#include <barrier>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -50,7 +52,7 @@ protected:
         const auto module_dir = findPythonModuleDir();
         ASSERT_FALSE(module_dir.empty()) << "Could not locate built lichtfeld module for Python tests";
         prependPythonPath(module_dir);
-        lfs::python::ensure_initialized();
+        (void)lfs::python::ensure_initialized();
     }
 
     std::filesystem::path createTempScript(const std::string& content) {
@@ -153,9 +155,48 @@ namespace {
         std::expected<void, std::string> startTraining() override {
             return std::unexpected("not implemented");
         }
-        std::expected<std::filesystem::path, std::string> saveCheckpoint(
-            const std::optional<std::filesystem::path>&) override {
-            return std::unexpected("not implemented");
+        lfs::Result<void> projectSave(bool) override {
+            return {};
+        }
+        lfs::Result<void> projectSaveAs(
+            const std::filesystem::path&, bool) override {
+            return {};
+        }
+        lfs::Result<void> projectCreateAt(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return {};
+        }
+        lfs::Result<lfs::vis::ProjectOpenOutcome> projectOpen(
+            const std::filesystem::path&,
+            lfs::vis::ProjectSwitchDisposition) override {
+            return project_open_outcome;
+        }
+        lfs::Result<void> projectCompact() override {
+            return {};
+        }
+        lfs::Result<bool> projectIsDirty() override {
+            return false;
+        }
+        lfs::Result<bool> projectHasPath() override {
+            return false;
+        }
+        lfs::Result<lfs::vis::ProjectInfo>
+        projectGetInfo() override {
+            return lfs::vis::ProjectInfo{};
+        }
+        lfs::Result<std::optional<lfs::io::project::ProjectLicense>>
+        projectGetLicense() override {
+            return project_license_;
+        }
+        lfs::Result<void> projectSetLicense(
+            const lfs::io::project::ProjectLicense& license) override {
+            project_license_ = license;
+            return {};
+        }
+        lfs::Result<void> projectClearLicense() override {
+            project_license_.reset();
+            return {};
         }
 
         [[nodiscard]] bool waitForQueuedWork(const std::chrono::milliseconds timeout) {
@@ -183,9 +224,13 @@ namespace {
         bool accepts_posted_work = true;
         bool queue_posted_work = false;
         int post_work_calls = 0;
+        lfs::vis::ProjectOpenOutcome
+            project_open_outcome =
+                lfs::vis::ProjectOpenOutcome::Opened;
 
     private:
         lfs::core::Scene scene_;
+        std::optional<lfs::io::project::ProjectLicense> project_license_;
         std::mutex queued_work_mutex;
         std::condition_variable queued_work_cv;
         std::deque<WorkItem> queued_work;
@@ -215,9 +260,9 @@ namespace {
         constexpr size_t width = 2;
         constexpr size_t height = 2;
 
-        // Simulate raw bottom-left-origin readback: the logical bottom row is bright.
+        // Simulate raw bottom-left-origin readback: the logical top row is stored last.
         for (size_t col = 0; col < width; ++col) {
-            ptr[0 * height * width + col * height + 0] = 10.0f;
+            ptr[0 * height * width + (height - 1) * width + col] = 10.0f;
         }
 
         return std::make_shared<lfs::core::Tensor>(std::move(image));
@@ -453,7 +498,68 @@ namespace {
 
 TEST_F(PythonIntegrationTest, InitializationSucceeds) {
     // Just verify that initialization doesn't throw
-    EXPECT_NO_THROW(lfs::python::ensure_initialized());
+    EXPECT_NO_THROW((void)lfs::python::ensure_initialized());
+}
+
+TEST_F(PythonIntegrationTest, SceneTimeCallbackSupportsSetTickClearAndUnsetTick) {
+    struct SceneTimeCallbackReset {
+        ~SceneTimeCallbackReset() { lfs::python::clear_scene_time_callback(); }
+    } reset;
+
+    lfs::python::clear_scene_time_callback();
+    EXPECT_FALSE(lfs::python::has_scene_time_callback());
+    EXPECT_NO_THROW(lfs::python::tick_scene_time_callback(-1.0f));
+
+    std::vector<float> clip_times;
+    lfs::python::set_scene_time_callback(
+        [&clip_times](const float clip_time) { clip_times.push_back(clip_time); });
+    EXPECT_TRUE(lfs::python::has_scene_time_callback());
+
+    lfs::python::tick_scene_time_callback(0.0f);
+    lfs::python::tick_scene_time_callback(1.25f);
+    EXPECT_EQ(clip_times, (std::vector<float>{0.0f, 1.25f}));
+
+    lfs::python::clear_scene_time_callback();
+    EXPECT_FALSE(lfs::python::has_scene_time_callback());
+    EXPECT_NO_THROW(lfs::python::tick_scene_time_callback(2.0f));
+    EXPECT_EQ(clip_times, (std::vector<float>{0.0f, 1.25f}));
+}
+
+TEST_F(PythonIntegrationTest, ForcedInitFailureLatchesQueryableError) {
+    // The forced-failure latch is terminal; the RAII guard restores the real
+    // (Ready) latch even if an ASSERT below returns early, so sibling tests in
+    // the shuffle are unaffected.
+    struct InitLatchResetGuard {
+        ~InitLatchResetGuard() {
+            lfs::python::force_python_init_failure_for_testing(false);
+            lfs::python::reset_python_init_state_for_testing();
+        }
+    } reset_guard;
+
+    lfs::python::reset_python_init_state_for_testing();
+
+    lfs::python::force_python_init_failure_for_testing(true);
+    const lfs::Status first = lfs::python::ensure_initialized();
+    ASSERT_FALSE(first.has_value());
+    EXPECT_EQ(first.error().code(), lfs::ErrorCode::Unavailable);
+    EXPECT_EQ(first.error().domain(), lfs::ErrorDomain::Python);
+
+    const auto latched = lfs::python::init_state();
+    EXPECT_EQ(latched.state, lfs::python::PyInitState::Failed);
+    ASSERT_TRUE(latched.error.has_value());
+    EXPECT_EQ(latched.error->code(), lfs::ErrorCode::Unavailable);
+
+    // Idempotent: a second call re-returns the same latched failure.
+    const lfs::Status second = lfs::python::ensure_initialized();
+    ASSERT_FALSE(second.has_value());
+    EXPECT_EQ(second.error().code(), lfs::ErrorCode::Unavailable);
+    EXPECT_EQ(second.error().domain(), lfs::ErrorDomain::Python);
+}
+
+TEST_F(PythonIntegrationTest, ReadyStateAfterSuccessfulInit) {
+    lfs::python::reset_python_init_state_for_testing();
+    EXPECT_TRUE(lfs::python::ensure_initialized().has_value());
+    EXPECT_EQ(lfs::python::init_state().state, lfs::python::PyInitState::Ready);
 }
 
 TEST_F(PythonIntegrationTest, OutputCallbackCanBeSet) {
@@ -819,6 +925,47 @@ result_values = [float(viewport.image.cpu().sum().item())]
     EXPECT_EQ(viewer.post_work_calls, 1);
 }
 
+TEST_F(PythonIntegrationTest,
+       ProjectOpenSurfacesRecoveryPromptPendingOutcome) {
+    TestVisualizer viewer;
+    viewer.project_open_outcome =
+        lfs::vis::ProjectOpenOutcome::
+            RecoveryPromptPending;
+    const ScopedVisualizer scoped_viewer(&viewer);
+
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+outcome = lf.project_open("pending.licht", discard_changes=True)
+result_shape = (1,)
+result_values = [1.0 if outcome is lf.ProjectOpenOutcome.RECOVERY_PROMPT_PENDING else 0.0]
+)PY");
+
+    ASSERT_EQ(result.values.size(), 1u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_EQ(viewer.post_work_calls, 1);
+}
+
+TEST_F(PythonIntegrationTest, ProjectLicenseRoundTripsThroughBinding) {
+    TestVisualizer viewer;
+    const ScopedVisualizer scoped_viewer(&viewer);
+
+    const auto result = runPythonTensorSnippet(R"PY(
+import lichtfeld as lf
+assert lf.project_get_license() is None
+lf.project_set_license("CC BY-NC", "Use with attribution")
+license = lf.project_get_license()
+set_ok = license == {"identifier": "CC BY-NC", "notice": "Use with attribution"}
+lf.project_clear_license()
+clear_ok = lf.project_get_license() is None
+result_shape = (2,)
+result_values = [1.0 if set_ok else 0.0, 1.0 if clear_ok else 0.0]
+)PY");
+
+    ASSERT_EQ(result.values.size(), 2u);
+    EXPECT_FLOAT_EQ(result.values[0], 1.0F);
+    EXPECT_FLOAT_EQ(result.values[1], 1.0F);
+}
+
 TEST_F(PythonIntegrationTest, CaptureViewportReleasesGilWhileWaitingForViewerThread) {
     using namespace std::chrono_literals;
 
@@ -887,8 +1034,9 @@ TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
 
     auto loader = lfs::io::Loader::create();
     lfs::io::LoadOptions options;
-    options.resize_factor = 8;
-    options.images_folder = "images_8";
+    // The committed masks are quarter-resolution and intentionally pair with images_4.
+    options.resize_factor = 4;
+    options.images_folder = "images_4";
 
     auto load_result = loader->load(dataset_dir, options);
     ASSERT_TRUE(load_result.has_value()) << "Failed to load dataset: " << load_result.error().format();
@@ -916,7 +1064,7 @@ TEST_F(PythonIntegrationTest, SceneCameraExposesVisualizerRenderContract) {
 import lichtfeld as lf
 import warnings
 result = lf.io.load(r")PY") +
-                        dataset_dir.string() + R"PY(", resize_factor=8, images_folder="images_8")
+                        dataset_dir.string() + R"PY(", resize_factor=4, images_folder="images_4")
 camera = result.cameras[0]
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always", DeprecationWarning)
@@ -1109,6 +1257,62 @@ handler.on_post_step(_hook)
     EXPECT_EQ(result[3], static_cast<long long>(live_callback.num_gaussians));
     EXPECT_EQ(result[4], live_callback.iteration);
     EXPECT_EQ(result[5], static_cast<long long>(live_callback.num_gaussians));
+}
+
+namespace {
+    class CountingPythonInitConsumer final : public lfs::NativeErrorConsumer {
+    public:
+        void on_error(const lfs::ErrorNotification& notification,
+                      const lfs::ErrorDeliveryInfo&) noexcept override {
+            if (notification.error.domain() == lfs::ErrorDomain::Python &&
+                notification.error.code() == lfs::ErrorCode::Unavailable)
+                count.fetch_add(1, std::memory_order_relaxed);
+        }
+        std::atomic<int> count{0};
+    };
+} // namespace
+
+TEST_F(PythonIntegrationTest, ConcurrentEnsureInitializedLatchesOnceUnderRace) {
+    struct InitLatchResetGuard {
+        ~InitLatchResetGuard() {
+            lfs::python::force_python_init_failure_for_testing(false);
+            lfs::python::reset_python_init_state_for_testing();
+        }
+    } reset_guard;
+
+    lfs::python::reset_python_init_state_for_testing();
+
+    CountingPythonInitConsumer consumer;
+    auto subscription = lfs::ErrorBus::instance().subscribe(consumer);
+
+    lfs::python::force_python_init_failure_for_testing(true);
+
+    constexpr int kThreads = 8;
+    std::vector<lfs::Status> results(kThreads);
+    std::barrier start(kThreads);
+    {
+        std::vector<std::jthread> threads;
+        threads.reserve(kThreads);
+        for (int i = 0; i < kThreads; ++i) {
+            threads.emplace_back([&, i] {
+                start.arrive_and_wait();
+                results[i] = lfs::python::ensure_initialized();
+            });
+        }
+    }
+
+    for (const lfs::Status& result : results) {
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error().code(), lfs::ErrorCode::Unavailable);
+        EXPECT_EQ(result.error().domain(), lfs::ErrorDomain::Python);
+    }
+    EXPECT_EQ(lfs::python::init_state().state, lfs::python::PyInitState::Failed);
+    // The race-safety invariant: 8 concurrent callers never double-publish the
+    // failure (the duplicate-toast hazard). Exact-once liveness depends on a
+    // fresh process-global publish latch, which the test-only reset seam cannot
+    // guarantee against sibling tests in a shared process; it is covered by the
+    // single-threaded forced-failure path instead.
+    EXPECT_LE(consumer.count.load(), 1);
 }
 
 // NOTE: Tests that actually execute Python scripts require the lichtfeld module

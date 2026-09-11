@@ -47,6 +47,25 @@
     margin: 2dp 0;
 }
 
+.im-plot {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin: 4dp 0;
+}
+
+.im-plot-label {
+    font-size: 12dp;
+    padding: 0 0 3dp 2dp;
+}
+
+.im-plot-graph {
+    width: 100%;
+    min-height: 48dp;
+    border-width: 1dp;
+    border-radius: 3dp;
+}
+
 .im-label {
     font-size: 12dp;
     padding: 0 0 0 2dp;
@@ -141,6 +160,126 @@
     padding: 0;
 }
 
+/* Images */
+
+.im-image-frame,
+.im-image-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    min-width: 24dp;
+    min-height: 24dp;
+}
+
+.im-image-frame {
+    border-width: 1dp;
+    border-radius: 3dp;
+}
+
+.im-image-button {
+    padding: 2dp;
+}
+
+.im-image-frame > img,
+.im-image-button > img {
+    width: 100%;
+    height: 100%;
+}
+
+.im-image-placeholder {
+    display: none;
+    font-size: 10dp;
+    padding: 2dp 4dp;
+    text-align: center;
+}
+
+.im-image-missing > img {
+    display: none;
+}
+
+.im-image-missing > .im-image-placeholder {
+    display: block;
+}
+
+.im-toolbar-button {
+    min-width: 24dp;
+    min-height: 24dp;
+}
+
+.im-invisible-button {
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 1dp;
+    min-height: 1dp;
+}
+
+/* Menus */
+
+.im-menu-bar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4dp;
+    width: 100%;
+    min-height: 24dp;
+    padding: 2dp 0;
+}
+
+.im-menu {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+.im-menu-trigger {
+    min-height: 22dp;
+    padding: 3dp 8dp;
+}
+
+.im-menu-panel {
+    display: none;
+    position: absolute;
+    top: 24dp;
+    left: 0;
+    z-index: 80;
+    min-width: 160dp;
+    border-width: 1dp;
+    border-radius: 3dp;
+    padding: 4dp;
+}
+
+.im-menu-panel.open {
+    display: flex;
+    flex-direction: column;
+}
+
+.im-menu-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    min-height: 22dp;
+    padding: 3dp 8dp;
+    gap: 16dp;
+    text-align: left;
+}
+
+.im-menu-item.selected {
+    font-weight: bold;
+}
+
+.im-menu-label {
+    flex: 1;
+}
+
+.im-menu-shortcut {
+    opacity: 0.75;
+}
+
 /* Tooltip */
 
 .im-tooltip {
@@ -173,6 +312,48 @@
     display: flex;
     flex-direction: column;
     width: 100%;
+}
+
+.im-split {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-split > * {
+    width: auto;
+    min-width: 0;
+    flex-grow: 0;
+    /* RmlUi 6.2 shrinks the percentage bases over the width left after the gap. */
+    flex-shrink: 1;
+}
+
+.im-grid-flow {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    column-gap: 0;
+    row-gap: 4dp;
+    width: 100%;
+}
+
+.im-grid-flow > * {
+    width: auto;
+    min-width: 0;
+    flex-grow: 1;
+    flex-shrink: 1;
+}
+
+.im-box {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    border-width: 1dp;
+    border-radius: 3dp;
+    padding: 4dp;
 }
 
 /* Child containers */
@@ -226,4 +407,9 @@
     padding-bottom: 8dp;
     border-bottom-width: 1dp;
     margin-bottom: 8dp;
+}
+
+.im-popup-body {
+    display: flex;
+    flex-direction: column;
 }

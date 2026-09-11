@@ -3,14 +3,21 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/cuda/sh_layout.cuh"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
 #include "kmeans.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <mma.h>
 #include <numeric>
+#include <optional>
 #include <random>
+#include <thrust/binary_search.h>
 #include <thrust/device_ptr.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/scan.h>
 #include <thrust/sequence.h>
 #include <thrust/sort.h>
 #include <unordered_map>
@@ -23,8 +30,116 @@ namespace lfs::io {
 
     namespace {
 
-        constexpr int CHUNK_SIZE = 128;
         constexpr int BLOCK_SIZE = 256;
+        constexpr int ASSIGN_POINT_TILE = 128;
+        constexpr int ASSIGN_CENTROID_TILE = 32;
+        constexpr int ASSIGN_POINTS_PER_THREAD = 2;
+        constexpr int ASSIGN_CENTROIDS_PER_THREAD = 8;
+        constexpr int ASSIGN_CENTROID_GROUPS = 4;
+        // The extra four floats make rows advance through banks instead of
+        // mapping the same dimension of every row to one bank.
+        constexpr int ASSIGN_SHARED_K_STRIDE = 49;
+
+        struct CudaTimingState {
+            bool enabled = false;
+        };
+
+        class CudaEventTimer {
+        public:
+            explicit CudaEventTimer(CudaTimingState& state)
+                : state_(&state) {
+                if (!state_->enabled) {
+                    return;
+                }
+
+                const auto start_status = cudaEventCreate(&start_);
+                if (start_status != cudaSuccess) {
+                    disable("cudaEventCreate(start)", start_status);
+                    return;
+                }
+
+                const auto stop_status = cudaEventCreate(&stop_);
+                if (stop_status != cudaSuccess) {
+                    disable("cudaEventCreate(stop)", stop_status);
+                }
+            }
+
+            ~CudaEventTimer() {
+                destroy(start_, "cudaEventDestroy(start)");
+                destroy(stop_, "cudaEventDestroy(stop)");
+            }
+
+            CudaEventTimer(const CudaEventTimer&) = delete;
+            CudaEventTimer& operator=(const CudaEventTimer&) = delete;
+
+            CudaEventTimer(CudaEventTimer&& other) noexcept
+                : state_(other.state_), start_(other.start_), stop_(other.stop_) {
+                other.state_ = nullptr;
+                other.start_ = nullptr;
+                other.stop_ = nullptr;
+            }
+
+            void record_start() {
+                record(start_, "cudaEventRecord(start)");
+            }
+
+            void record_stop() {
+                record(stop_, "cudaEventRecord(stop)");
+            }
+
+            bool elapsed_ms(float& milliseconds) {
+                if (!active()) {
+                    return false;
+                }
+                const auto status = cudaEventElapsedTime(&milliseconds, start_, stop_);
+                if (status != cudaSuccess) {
+                    disable("cudaEventElapsedTime", status);
+                    return false;
+                }
+                return true;
+            }
+
+        private:
+            bool active() const {
+                return state_ && state_->enabled && start_ && stop_;
+            }
+
+            void record(cudaEvent_t event, const char* operation) {
+                if (!active()) {
+                    return;
+                }
+                const auto status = cudaEventRecord(event, nullptr);
+                if (status != cudaSuccess) {
+                    disable(operation, status);
+                }
+            }
+
+            void disable(const char* operation, const cudaError_t status) {
+                LOG_DEBUG("SOG k-means timing disabled after {} failed: {}",
+                          operation, cudaGetErrorString(status));
+                if (state_) {
+                    state_->enabled = false;
+                }
+                destroy(start_, "cudaEventDestroy(start)");
+                destroy(stop_, "cudaEventDestroy(stop)");
+            }
+
+            static void destroy(cudaEvent_t& event, const char* operation) noexcept {
+                if (!event) {
+                    return;
+                }
+                const auto status = cudaEventDestroy(event);
+                event = nullptr;
+                if (status != cudaSuccess) {
+                    LOG_DEBUG("SOG k-means timing cleanup {} failed: {}",
+                              operation, cudaGetErrorString(status));
+                }
+            }
+
+            CudaTimingState* state_ = nullptr;
+            cudaEvent_t start_ = nullptr;
+            cudaEvent_t stop_ = nullptr;
+        };
 
         // Tensor::cuda() deep-copies CUDA tensors in this codebase; borrow when possible.
         Tensor as_cuda_contiguous(const Tensor& data) {
@@ -66,6 +181,13 @@ namespace lfs::io {
             const std::uint32_t slot = dim / 4u;
             const std::uint32_t component = dim % 4u;
             return float4_component(shN[shAt_device(primitive_idx, slot, slots_per_primitive)], component);
+        }
+
+        template <int N_DIMS>
+        __device__ __forceinline__ float read_swizzled_sh_slot(
+            const float4* __restrict__ point_slots,
+            const std::uint32_t dim) {
+            return float4_component(point_slots[dim / 4u], dim % 4u);
         }
 
         template <int N_DIMS>
@@ -137,208 +259,410 @@ namespace lfs::io {
             auto cluster_keys = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
             auto sorted_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
 
-            cudaMemcpy(cluster_keys.ptr<int>(), d_membership, k * sizeof(int), cudaMemcpyDeviceToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(cluster_keys.ptr<int>(), d_membership,
+                                      k * sizeof(int), cudaMemcpyDeviceToDevice));
             thrust::device_ptr<int> indices_ptr(sorted_indices.ptr<int>());
             thrust::sequence(indices_ptr, indices_ptr + k);
 
             thrust::device_ptr<int> keys_ptr(cluster_keys.ptr<int>());
             thrust::sort_by_key(keys_ptr, keys_ptr + k, indices_ptr);
 
-            cudaMemcpy(d_indices, sorted_indices.ptr<int>(), k * sizeof(int), cudaMemcpyDeviceToDevice);
+            LFS_CUDA_CHECK(cudaMemcpy(d_indices, sorted_indices.ptr<int>(),
+                                      k * sizeof(int), cudaMemcpyDeviceToDevice));
 
-            auto h_membership = std::vector<int>(k);
-            cudaMemcpy(h_membership.data(), d_membership, k * sizeof(int), cudaMemcpyDeviceToHost);
-
-            std::vector<int> counts_vec(num_clusters + 1, 0);
-            for (int i = 0; i < k; ++i) {
-                counts_vec[h_membership[i] + 1]++;
-            }
-
-            for (int i = 1; i <= num_clusters; ++i) {
-                counts_vec[i] += counts_vec[i - 1];
-            }
-
-            cudaMemcpy(d_offsets, counts_vec.data(), (num_clusters + 1) * sizeof(int), cudaMemcpyHostToDevice);
+            thrust::device_ptr<int> offsets_ptr(d_offsets);
+            thrust::lower_bound(
+                keys_ptr, keys_ptr + k,
+                thrust::counting_iterator<int>(0),
+                thrust::counting_iterator<int>(num_clusters + 1),
+                offsets_ptr);
         }
 
         template <int N_DIMS>
-        __global__ void assign_nearest_bruteforce_kernel(
-            const float* __restrict__ data,
+        __global__ void compute_centroid_norms_kernel(
             const float* __restrict__ centroids,
-            int* __restrict__ labels,
-            const int n_points,
+            float* __restrict__ norms,
             const int k) {
-            __shared__ float shared_centroids[CHUNK_SIZE * N_DIMS];
-
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-            float point[N_DIMS];
-            if (tid < n_points) {
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = data[tid * N_DIMS + d];
-                }
+            const int cid = blockIdx.x * blockDim.x + threadIdx.x;
+            if (cid >= k) {
+                return;
             }
 
-            float min_dist = 1e30f;
-            int min_idx = 0;
-
-            const int num_chunks = (k + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-            for (int chunk = 0; chunk < num_chunks; ++chunk) {
-                const int chunk_start = chunk * CHUNK_SIZE;
-                const int chunk_end = min(chunk_start + CHUNK_SIZE, k);
-                const int chunk_size = chunk_end - chunk_start;
-
-                for (int i = threadIdx.x; i < chunk_size * N_DIMS; i += blockDim.x) {
-                    int centroid_idx = chunk_start + i / N_DIMS;
-                    int dim = i % N_DIMS;
-                    if (centroid_idx < k) {
-                        shared_centroids[i] = centroids[centroid_idx * N_DIMS + dim];
-                    }
-                }
-
-                __syncthreads();
-
-                if (tid < n_points) {
-                    for (int c = 0; c < chunk_size; ++c) {
-                        float dist = 0.0f;
+            float norm = 0.0f;
 #pragma unroll
-                        for (int d = 0; d < N_DIMS; ++d) {
-                            float diff = point[d] - shared_centroids[c * N_DIMS + d];
-                            dist += diff * diff;
-                        }
-
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_idx = chunk_start + c;
-                        }
-                    }
-                }
-
-                __syncthreads();
+            for (int d = 0; d < N_DIMS; ++d) {
+                const float value = centroids[static_cast<long long>(cid) * N_DIMS + d];
+                norm = fmaf(value, value, norm);
             }
-
-            if (tid < n_points) {
-                labels[tid] = min_idx;
-            }
+            norms[cid] = norm;
         }
 
-        __global__ void assign_nearest_bruteforce_3d_kernel(
-            const float* __restrict__ data,
-            const float* __restrict__ centroids,
-            int* __restrict__ labels,
-            const int n_points,
-            const int k) {
-            __shared__ float shared_centroids[CHUNK_SIZE * 3];
-
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-            float px, py, pz;
-            if (tid < n_points) {
-                px = data[tid * 3 + 0];
-                py = data[tid * 3 + 1];
-                pz = data[tid * 3 + 2];
-            }
-
-            float min_dist = 1e30f;
-            int min_idx = 0;
-
-            const int num_chunks = (k + CHUNK_SIZE - 1) / CHUNK_SIZE;
-
-            for (int chunk = 0; chunk < num_chunks; ++chunk) {
-                const int chunk_start = chunk * CHUNK_SIZE;
-                const int chunk_end = min(chunk_start + CHUNK_SIZE, k);
-                const int chunk_size = chunk_end - chunk_start;
-
-                for (int i = threadIdx.x; i < chunk_size * 3; i += blockDim.x) {
-                    int idx = chunk_start * 3 + i;
-                    if (idx < k * 3) {
-                        shared_centroids[i] = centroids[idx];
-                    }
-                }
-
-                __syncthreads();
-
-                if (tid < n_points) {
-                    for (int c = 0; c < chunk_size; ++c) {
-                        float dx = px - shared_centroids[c * 3 + 0];
-                        float dy = py - shared_centroids[c * 3 + 1];
-                        float dz = pz - shared_centroids[c * 3 + 2];
-                        float dist = dx * dx + dy * dy + dz * dz;
-
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_idx = chunk_start + c;
-                        }
-                    }
-                }
-
-                __syncthreads();
-            }
-
-            if (tid < n_points) {
-                labels[tid] = min_idx;
-            }
-        }
-
+        // Tiled assignment compares squared distances as ||c||^2 - 2*dot(x, c):
+        // ||x||^2 is common to every centroid for one point and can be omitted.
+        // Equal distances choose the lowest centroid index. In the grouped
+        // hierarchy, each point group searches the members of the four nearest
+        // supers to its assigned super; the final assignment searches all k
+        // centroids exactly.
         template <int N_DIMS>
-        __global__ void assign_nearest_swizzled_bruteforce_kernel(
-            const float4* __restrict__ shN,
-            const float* __restrict__ centroids,
-            int* __restrict__ labels,
-            const int n_points,
-            const int k) {
-            __shared__ float shared_centroids[CHUNK_SIZE * N_DIMS];
+        __global__ void __launch_bounds__(BLOCK_SIZE, 3)
+            assign_nearest_bruteforce_kernel(
+                const float* __restrict__ data,
+                const float* __restrict__ centroids,
+                const float* __restrict__ centroid_norms,
+                int* __restrict__ labels,
+                const int n_points,
+                const int k) {
+            __shared__ float shared_points[ASSIGN_POINT_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroids[ASSIGN_CENTROID_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroid_norms[ASSIGN_CENTROID_TILE];
 
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
+            const int tid = threadIdx.x;
+            const int point_row = (tid / ASSIGN_CENTROID_GROUPS) * ASSIGN_POINTS_PER_THREAD;
+            const int centroid_col = (tid % ASSIGN_CENTROID_GROUPS) * ASSIGN_CENTROIDS_PER_THREAD;
+            const int point_start = blockIdx.x * ASSIGN_POINT_TILE;
 
-            float point[N_DIMS];
-            if (tid < n_points) {
+            for (int i = tid; i < ASSIGN_POINT_TILE * N_DIMS; i += BLOCK_SIZE) {
+                const int point = i / N_DIMS;
+                const int dim = i % N_DIMS;
+                const int global_point = point_start + point;
+                shared_points[point][dim] = global_point < n_points
+                                                ? data[static_cast<long long>(global_point) * N_DIMS + dim]
+                                                : 0.0f;
+            }
+            __syncthreads();
+
+            float best_dist[ASSIGN_POINTS_PER_THREAD];
+            int best_idx[ASSIGN_POINTS_PER_THREAD];
 #pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
-                }
+            for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+                best_dist[p] = 1e30f;
+                best_idx[p] = k;
             }
 
-            float min_dist = 1e30f;
-            int min_idx = 0;
-
-            const int num_chunks = (k + CHUNK_SIZE - 1) / CHUNK_SIZE;
-            for (int chunk = 0; chunk < num_chunks; ++chunk) {
-                const int chunk_start = chunk * CHUNK_SIZE;
-                const int chunk_end = min(chunk_start + CHUNK_SIZE, k);
-                const int chunk_size = chunk_end - chunk_start;
-
-                for (int i = threadIdx.x; i < chunk_size * N_DIMS; i += blockDim.x) {
-                    const int centroid_idx = chunk_start + i / N_DIMS;
+            const int num_tiles = (k + ASSIGN_CENTROID_TILE - 1) / ASSIGN_CENTROID_TILE;
+            for (int tile = 0; tile < num_tiles; ++tile) {
+                const int centroid_start = tile * ASSIGN_CENTROID_TILE;
+                for (int i = tid; i < ASSIGN_CENTROID_TILE * N_DIMS; i += BLOCK_SIZE) {
+                    const int centroid = i / N_DIMS;
                     const int dim = i % N_DIMS;
-                    if (centroid_idx < k) {
-                        shared_centroids[i] = centroids[centroid_idx * N_DIMS + dim];
-                    }
+                    const int global_centroid = centroid_start + centroid;
+                    shared_centroids[centroid][dim] = global_centroid < k
+                                                          ? centroids[static_cast<long long>(global_centroid) * N_DIMS + dim]
+                                                          : 0.0f;
                 }
-
+                for (int i = tid; i < ASSIGN_CENTROID_TILE; i += BLOCK_SIZE) {
+                    const int global_centroid = centroid_start + i;
+                    shared_centroid_norms[i] = global_centroid < k ? centroid_norms[global_centroid] : 0.0f;
+                }
                 __syncthreads();
 
-                if (tid < n_points) {
-                    for (int c = 0; c < chunk_size; ++c) {
-                        float dist = 0.0f;
+                float dots[ASSIGN_POINTS_PER_THREAD][ASSIGN_CENTROIDS_PER_THREAD] = {};
 #pragma unroll
-                        for (int d = 0; d < N_DIMS; ++d) {
-                            const float diff = point[d] - shared_centroids[c * N_DIMS + d];
-                            dist += diff * diff;
-                        }
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_idx = chunk_start + c;
+                for (int d = 0; d < N_DIMS; ++d) {
+                    float point_values[ASSIGN_POINTS_PER_THREAD];
+                    float centroid_values[ASSIGN_CENTROIDS_PER_THREAD];
+#pragma unroll
+                    for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+                        point_values[p] = shared_points[point_row + p][d];
+                    }
+#pragma unroll
+                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                        centroid_values[c] = shared_centroids[centroid_col + c][d];
+                    }
+#pragma unroll
+                    for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+#pragma unroll
+                        for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                            dots[p][c] = fmaf(point_values[p], centroid_values[c], dots[p][c]);
                         }
                     }
                 }
 
+#pragma unroll
+                for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+#pragma unroll
+                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                        const int global_centroid = centroid_start + centroid_col + c;
+                        if (global_centroid < k) {
+                            const float dist = fmaf(-2.0f, dots[p][c],
+                                                    shared_centroid_norms[centroid_col + c]);
+                            if (dist < best_dist[p] ||
+                                (dist == best_dist[p] && global_centroid < best_idx[p])) {
+                                best_dist[p] = dist;
+                                best_idx[p] = global_centroid;
+                            }
+                        }
+                    }
+                }
                 __syncthreads();
             }
 
-            if (tid < n_points) {
-                labels[tid] = min_idx;
+            const unsigned group_mask = 0xffffffffu;
+            const int group_lane = tid % ASSIGN_CENTROID_GROUPS;
+#pragma unroll
+            for (int p = 0; p < ASSIGN_POINTS_PER_THREAD; ++p) {
+                for (int offset = ASSIGN_CENTROID_GROUPS / 2; offset > 0; offset >>= 1) {
+                    const float other_dist = __shfl_down_sync(
+                        group_mask, best_dist[p], offset, ASSIGN_CENTROID_GROUPS);
+                    const int other_idx = __shfl_down_sync(
+                        group_mask, best_idx[p], offset, ASSIGN_CENTROID_GROUPS);
+                    if (other_dist < best_dist[p] ||
+                        (other_dist == best_dist[p] && other_idx < best_idx[p])) {
+                        best_dist[p] = other_dist;
+                        best_idx[p] = other_idx;
+                    }
+                }
+                if (group_lane == 0) {
+                    const int global_point = point_start + point_row + p;
+                    if (global_point < n_points) {
+                        labels[global_point] = best_idx[p];
+                    }
+                }
+            }
+        }
+
+        __global__ void prepare_half_sh_kernel(const float4* sh, const float* centroids, half* points, half* palette, int n, int k) {
+            const int i = blockIdx.x * blockDim.x + threadIdx.x;
+            const int row = i / 48, d = i % 48;
+            const int np = (n + 127) / 128 * 128, kp = (k + 31) / 32 * 32;
+            if (row < np) {
+                float v = 0;
+                if (row < n && d < 45) {
+                    const auto slot = sh[shAt_device(row, d / 4, 12)];
+                    v = reinterpret_cast<const float*>(&slot)[d % 4];
+                }
+                points[i] = __float2half_rn(v);
+            }
+            if (row < kp)
+                palette[i] = __float2half_rn(row < k && d < 45 ? centroids[row * 45 + d] : 0);
+        }
+
+        // Half-precision products only reject distant candidates. Every possible
+        // winner is evaluated with the reference FP32 FMA sequence and tie rule.
+        __global__ void assign_sh3_screened_kernel(
+            const float4* __restrict__ shN, const float* __restrict__ centroids,
+            const float* __restrict__ centroid_norms, int* __restrict__ labels,
+            const int n, const int k, const half* half_points, const half* half_centroids, bool have_labels) {
+            constexpr int P = 128, C = 32, D = 48;
+            __shared__ float points[P][49];
+            // Four lanes consume each row; padding avoids eight-way bank
+            // conflicts between the eight different rows read by a warp.
+            __shared__ __align__(32) float approx[P][C + 4];
+            __shared__ float point_norm[P], norms[C];
+            __shared__ int point_safe[P];
+            const int tid = threadIdx.x;
+            const int row = tid / 4, lane = tid % 4;
+            const int start = blockIdx.x * P;
+            for (int i = tid; i < P * D; i += 512) {
+                const int p = i / D, d = i % D;
+                float v = 0;
+                if (start + p < n && d < 45) {
+                    const auto slot = shN[shAt_device(start + p, d / 4, 12)];
+                    v = reinterpret_cast<const float*>(&slot)[d % 4];
+                }
+                points[p][d] = v;
+            }
+            __syncthreads();
+            if (tid < P) {
+                float norm = 0;
+                int safe = 1;
+                for (int d = 0; d < 45; ++d) {
+                    const float v = points[tid][d];
+                    norm = fmaf(v, v, norm);
+                    safe &= isfinite(v) && fabsf(v) <= 65000;
+                }
+                point_norm[tid] = norm;
+                point_safe[tid] = safe;
+            }
+            float best = 1e30f;
+            int best_id = k;
+            if (have_labels && start + row < n) {
+                const int seed = labels[start + row];
+                if (seed >= 0 && seed < k) {
+                    float dot = 0;
+#pragma unroll
+                    for (int d = 0; d < 45; ++d)
+                        dot = fmaf(points[row][d], centroids[seed * 45 + d], dot);
+                    const float dist = fmaf(-2.0f, dot, centroid_norms[seed]);
+                    if (dist <= best) {
+                        best = dist;
+                        best_id = seed;
+                    }
+                }
+            }
+            __syncthreads();
+            const int warp = tid / 32;
+            nvcuda::wmma::fragment<nvcuda::wmma::matrix_a, 16, 16, 16, half, nvcuda::wmma::row_major> a[3];
+            for (int d = 0; d < D; d += 16)
+                nvcuda::wmma::load_matrix_sync(a[d / 16], half_points + (start + (warp / 2) * 16) * D + d, D);
+            for (int base = 0; base < k; base += C) {
+                if (tid < C)
+                    norms[tid] = base + tid < k ? centroid_norms[base + tid] : 0;
+                nvcuda::wmma::fragment<nvcuda::wmma::matrix_b, 16, 16, 16, half, nvcuda::wmma::col_major> b;
+                nvcuda::wmma::fragment<nvcuda::wmma::accumulator, 16, 16, 16, float> acc;
+                nvcuda::wmma::fill_fragment(acc, 0.0f);
+                for (int d = 0; d < D; d += 16) {
+                    nvcuda::wmma::load_matrix_sync(b, half_centroids + (base + (warp % 2) * 16) * D + d, D);
+                    nvcuda::wmma::mma_sync(acc, a[d / 16], b, acc);
+                }
+                nvcuda::wmma::store_matrix_sync(&approx[(warp / 2) * 16][(warp % 2) * 16], acc, C + 4, nvcuda::wmma::mem_row_major);
+                __syncthreads();
+                for (int c = lane; c < C && base + c < k; c += 4) {
+                    const float estimate = fmaf(-2.0f, approx[row][c], norms[c]);
+                    // Half rounding contributes at most (2*u+u*u)*(||x||^2+
+                    // ||c||^2), u=2^-11, to the score. The remaining relative
+                    // allowance and 1e-8 cover half subnormals and FP32
+                    // accumulation/norm/score rounding (45 coefficients).
+                    // Out-of-range values always take the reference path.
+                    const float margin = 0.0011f * (point_norm[row] + norms[c]) + 1e-8f;
+                    if (!point_safe[row] || !(norms[c] >= 0 && norms[c] < 4.0e9f) || !isfinite(estimate) || estimate <= best + margin) {
+                        float dot = 0;
+#pragma unroll
+                        for (int d = 0; d < 45; ++d)
+                            dot = fmaf(points[row][d], centroids[(base + c) * 45 + d], dot);
+                        const float dist = fmaf(-2.0f, dot, norms[c]);
+                        const int id = base + c;
+                        if (dist < best || (dist == best && id < best_id)) {
+                            best = dist;
+                            best_id = id;
+                        }
+                    }
+                }
+                for (int delta = 2; delta > 0; delta /= 2) {
+                    const float other = __shfl_xor_sync(0xffffffffu, best, delta, 4);
+                    const int id = __shfl_xor_sync(0xffffffffu, best_id, delta, 4);
+                    if (other < best || (other == best && id < best_id)) {
+                        best = other;
+                        best_id = id;
+                    }
+                }
+                __syncthreads();
+            }
+            if (lane == 0 && start + row < n)
+                labels[start + row] = best_id;
+        }
+
+        template <int N_DIMS, int POINTS_PER_THREAD = ASSIGN_POINTS_PER_THREAD, int THREAD_COUNT = BLOCK_SIZE>
+        __global__ void __launch_bounds__(THREAD_COUNT, 3)
+            assign_nearest_swizzled_bruteforce_kernel(
+                const float4* __restrict__ shN,
+                const float* __restrict__ centroids,
+                const float* __restrict__ centroid_norms,
+                int* __restrict__ labels,
+                const int n_points,
+                const int k) {
+            constexpr int POINT_TILE = THREAD_COUNT / ASSIGN_CENTROID_GROUPS * POINTS_PER_THREAD;
+            __shared__ float shared_points[POINT_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroids[ASSIGN_CENTROID_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroid_norms[ASSIGN_CENTROID_TILE];
+
+            const int tid = threadIdx.x;
+            const int point_row = (tid / ASSIGN_CENTROID_GROUPS) * POINTS_PER_THREAD;
+            const int centroid_col = (tid % ASSIGN_CENTROID_GROUPS) * ASSIGN_CENTROIDS_PER_THREAD;
+            const int point_start = blockIdx.x * POINT_TILE;
+            constexpr int point_slots_count = (N_DIMS + 3) / 4;
+            for (int i = tid; i < POINT_TILE * point_slots_count; i += THREAD_COUNT) {
+                const int point = i / point_slots_count;
+                const int slot = i % point_slots_count;
+                const int global_point = point_start + point;
+                const float4 values = global_point < n_points
+                                          ? shN[shAt_device(static_cast<std::uint32_t>(global_point),
+                                                            static_cast<std::uint32_t>(slot), point_slots_count)]
+                                          : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                shared_points[point][slot * 4 + 0] = values.x;
+                shared_points[point][slot * 4 + 1] = values.y;
+                shared_points[point][slot * 4 + 2] = values.z;
+                shared_points[point][slot * 4 + 3] = values.w;
+            }
+            __syncthreads();
+
+            float best_dist[POINTS_PER_THREAD];
+            int best_idx[POINTS_PER_THREAD];
+#pragma unroll
+            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+                best_dist[p] = 1e30f;
+                best_idx[p] = k;
+            }
+
+            const int num_tiles = (k + ASSIGN_CENTROID_TILE - 1) / ASSIGN_CENTROID_TILE;
+            for (int tile = 0; tile < num_tiles; ++tile) {
+                const int centroid_start = tile * ASSIGN_CENTROID_TILE;
+                for (int i = tid; i < ASSIGN_CENTROID_TILE * N_DIMS; i += THREAD_COUNT) {
+                    const int centroid = i / N_DIMS;
+                    const int dim = i % N_DIMS;
+                    const int global_centroid = centroid_start + centroid;
+                    shared_centroids[centroid][dim] = global_centroid < k
+                                                          ? centroids[static_cast<long long>(global_centroid) * N_DIMS + dim]
+                                                          : 0.0f;
+                }
+                for (int i = tid; i < ASSIGN_CENTROID_TILE; i += THREAD_COUNT) {
+                    const int global_centroid = centroid_start + i;
+                    shared_centroid_norms[i] = global_centroid < k ? centroid_norms[global_centroid] : 0.0f;
+                }
+                __syncthreads();
+
+                float dots[POINTS_PER_THREAD][ASSIGN_CENTROIDS_PER_THREAD] = {};
+#pragma unroll
+                for (int d = 0; d < N_DIMS; ++d) {
+                    float point_values[POINTS_PER_THREAD];
+                    float centroid_values[ASSIGN_CENTROIDS_PER_THREAD];
+#pragma unroll
+                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+                        point_values[p] = shared_points[point_row + p][d];
+                    }
+#pragma unroll
+                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                        centroid_values[c] = shared_centroids[centroid_col + c][d];
+                    }
+#pragma unroll
+                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+#pragma unroll
+                        for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                            dots[p][c] = fmaf(point_values[p], centroid_values[c], dots[p][c]);
+                        }
+                    }
+                }
+
+#pragma unroll
+                for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+#pragma unroll
+                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                        const int global_centroid = centroid_start + centroid_col + c;
+                        if (global_centroid < k) {
+                            const float dist = fmaf(-2.0f, dots[p][c],
+                                                    shared_centroid_norms[centroid_col + c]);
+                            if (dist < best_dist[p] ||
+                                (dist == best_dist[p] && global_centroid < best_idx[p])) {
+                                best_dist[p] = dist;
+                                best_idx[p] = global_centroid;
+                            }
+                        }
+                    }
+                }
+                __syncthreads();
+            }
+
+            const unsigned group_mask = 0xffffffffu;
+            const int group_lane = tid % ASSIGN_CENTROID_GROUPS;
+#pragma unroll
+            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+                for (int offset = ASSIGN_CENTROID_GROUPS / 2; offset > 0; offset >>= 1) {
+                    const float other_dist = __shfl_down_sync(
+                        group_mask, best_dist[p], offset, ASSIGN_CENTROID_GROUPS);
+                    const int other_idx = __shfl_down_sync(
+                        group_mask, best_idx[p], offset, ASSIGN_CENTROID_GROUPS);
+                    if (other_dist < best_dist[p] ||
+                        (other_dist == best_dist[p] && other_idx < best_idx[p])) {
+                        best_dist[p] = other_dist;
+                        best_idx[p] = other_idx;
+                    }
+                }
+                if (group_lane == 0) {
+                    const int global_point = point_start + point_row + p;
+                    if (global_point < n_points) {
+                        labels[global_point] = best_idx[p];
+                    }
+                }
             }
         }
 
@@ -373,10 +697,17 @@ namespace lfs::io {
                 return;
 
             const int label = labels[tid];
+            constexpr int point_slots_count = (N_DIMS + 3) / 4;
+            float4 point_slots[point_slots_count];
+#pragma unroll
+            for (int slot = 0; slot < point_slots_count; ++slot) {
+                point_slots[slot] = shN[shAt_device(
+                    static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(slot), point_slots_count)];
+            }
 #pragma unroll
             for (int d = 0; d < N_DIMS; ++d) {
                 atomicAdd(&centroid_sums[label * N_DIMS + d],
-                          read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d)));
+                          read_swizzled_sh_slot<N_DIMS>(point_slots, static_cast<std::uint32_t>(d)));
             }
             atomicAdd(&counts[label], 1);
         }
@@ -442,70 +773,6 @@ namespace lfs::io {
         }
 
         template <int N_DIMS>
-        std::tuple<Tensor, Tensor> kmeans_gpu_bruteforce_impl(
-            const Tensor& data,
-            int k,
-            int iterations) {
-            const int n = data.shape()[0];
-
-            if (n <= k) {
-                auto centroids = data.clone();
-                auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
-                return {centroids, labels};
-            }
-
-            auto data_gpu = as_cuda_contiguous(data);
-            const float* d_data = data_gpu.ptr<float>();
-
-            auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                           Device::CUDA, DataType::Float32);
-            float* d_centroids = centroids.ptr<float>();
-
-            {
-                std::random_device rd;
-                auto perm = sample_unique_indices_gpu(n, k, rd());
-
-                const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
-                gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                    d_data, perm.ptr<int>(), d_centroids, k);
-            }
-
-            auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
-            int* d_labels = labels.ptr<int>();
-
-            auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                               Device::CUDA, DataType::Float32);
-            auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-
-            const int grid_size_points = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            const int grid_size_centroids = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-            for (int iter = 0; iter < iterations; ++iter) {
-                if constexpr (N_DIMS == 3) {
-                    assign_nearest_bruteforce_3d_kernel<<<grid_size_points, BLOCK_SIZE>>>(
-                        d_data, d_centroids, d_labels, n, k);
-                } else {
-                    assign_nearest_bruteforce_kernel<N_DIMS><<<grid_size_points, BLOCK_SIZE>>>(
-                        d_data, d_centroids, d_labels, n, k);
-                }
-
-                centroid_sums.zero_();
-                counts.zero_();
-
-                accumulate_centroids_kernel<N_DIMS><<<grid_size_points, BLOCK_SIZE>>>(
-                    d_data, d_labels, centroid_sums.ptr<float>(), counts.ptr<int>(), n);
-
-                unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
-                finalize_centroids_kernel<N_DIMS><<<grid_size_centroids, BLOCK_SIZE>>>(
-                    d_centroids, centroid_sums.ptr<float>(), counts.ptr<int>(),
-                    d_data, k, n, seed);
-            }
-
-            cudaDeviceSynchronize();
-            return {centroids, labels};
-        }
-
-        template <int N_DIMS>
         std::tuple<Tensor, Tensor> kmeans_swizzled_bruteforce_impl(
             const Tensor& shN_swizzled,
             const int n,
@@ -519,9 +786,12 @@ namespace lfs::io {
                                                Device::CUDA, DataType::Float32);
                 auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                    /*stream=*/nullptr, "io.kmeans.swizzled_gather_points");
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroids.ptr<float>(), n);
-                cudaDeviceSynchronize();
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
+                LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_gather_points_sync");
                 return {centroids, labels};
             }
 
@@ -536,266 +806,275 @@ namespace lfs::io {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_shN, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
             }
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
                                                Device::CUDA, DataType::Float32);
             auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
+            auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            const int grid_n_assign = (n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
             const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
+            const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                /*stream=*/nullptr, "io.kmeans.swizzled_bruteforce_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
-                assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                    d_shN, d_centroids, labels.ptr<int>(), n, k);
+                compute_centroid_norms_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
+                    d_centroids, centroid_norms.ptr<float>(), k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.compute_centroid_norms");
+                assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n_assign, BLOCK_SIZE>>>(
+                    d_shN, d_centroids, centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_swizzled");
 
                 centroid_sums.zero_();
                 counts.zero_();
 
                 accumulate_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroid_sums.ptr<float>(), counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_swizzled_centroids");
 
                 const unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), counts.ptr<int>(),
                     d_shN, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_swizzled_centroids");
             }
 
-            cudaDeviceSynchronize();
+            LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_bruteforce_iteration_sync");
             return {centroids, labels};
-        }
-
-        // Binary search for 1D k-means
-        __global__ void binary_search_1d_kernel(
-            const float* __restrict__ data,
-            const float* __restrict__ sorted_centroids,
-            int* __restrict__ labels,
-            const int n_points,
-            const int k) {
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-            if (tid >= n_points)
-                return;
-
-            const float val = data[tid];
-
-            int lo = 0, hi = k - 1;
-            while (lo < hi) {
-                int mid = (lo + hi) / 2;
-                if (sorted_centroids[mid] < val) {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
-                }
-            }
-
-            int best = lo;
-            float best_dist = fabsf(val - sorted_centroids[lo]);
-
-            if (lo > 0) {
-                float dist_prev = fabsf(val - sorted_centroids[lo - 1]);
-                if (dist_prev < best_dist) {
-                    best = lo - 1;
-                    best_dist = dist_prev;
-                }
-            }
-            if (lo < k - 1) {
-                float dist_next = fabsf(val - sorted_centroids[lo + 1]);
-                if (dist_next < best_dist) {
-                    best = lo + 1;
-                }
-            }
-
-            labels[tid] = best;
-        }
-
-        __global__ void update_centroids_atomic_1d_kernel(
-            const float* __restrict__ data,
-            const int* __restrict__ labels,
-            float* __restrict__ centroid_sums,
-            int* __restrict__ counts,
-            const int n_points) {
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-            if (tid >= n_points)
-                return;
-
-            const int label = labels[tid];
-            atomicAdd(&centroid_sums[label], data[tid]);
-            atomicAdd(&counts[label], 1);
         }
 
         // Hierarchical K-Means for large k
         constexpr int NUM_SUPER_CLUSTERS = 256;
         constexpr int NUM_NEAREST_SUPERS = 4;
-        constexpr int SUPER_CHUNK_SIZE = 64;
 
         template <int N_DIMS>
-        __global__ void hierarchical_search_fused_kernel(
-            const float* __restrict__ data,
-            const float* __restrict__ centroids,
-            const float* __restrict__ super_centroids,
-            const int* __restrict__ super_offsets,
-            const int* __restrict__ super_indices,
-            int* __restrict__ labels,
-            const int n_points) {
-            __shared__ float shared_supers[SUPER_CHUNK_SIZE * N_DIMS];
+        __global__ void __launch_bounds__(BLOCK_SIZE, 4)
+            assign_nearest_top_supers_kernel(
+                const float* __restrict__ data,
+                const float* __restrict__ centroids,
+                const float* __restrict__ centroid_norms,
+                int* __restrict__ nearest_supers,
+                const int n_points,
+                const int k) {
+            __shared__ float shared_centroids[ASSIGN_CENTROID_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroid_norms[ASSIGN_CENTROID_TILE];
 
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-            float point[N_DIMS];
-            if (tid < n_points) {
-#pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = data[tid * N_DIMS + d];
-                }
-            }
-
+            const int point = blockIdx.x * blockDim.x + threadIdx.x;
             float best_dists[NUM_NEAREST_SUPERS];
             int best_idxs[NUM_NEAREST_SUPERS];
 #pragma unroll
             for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
                 best_dists[i] = 1e30f;
-                best_idxs[i] = 0;
+                best_idxs[i] = k;
             }
 
-            const int num_chunks = (NUM_SUPER_CLUSTERS + SUPER_CHUNK_SIZE - 1) / SUPER_CHUNK_SIZE;
-
-            for (int chunk = 0; chunk < num_chunks; ++chunk) {
-                const int chunk_start = chunk * SUPER_CHUNK_SIZE;
-                const int chunk_end = min(chunk_start + SUPER_CHUNK_SIZE, NUM_SUPER_CLUSTERS);
-                const int chunk_size = chunk_end - chunk_start;
-
-                for (int i = threadIdx.x; i < chunk_size * N_DIMS; i += blockDim.x) {
-                    int sc_idx = chunk_start + i / N_DIMS;
-                    int dim = i % N_DIMS;
-                    if (sc_idx < NUM_SUPER_CLUSTERS) {
-                        shared_supers[i] = super_centroids[sc_idx * N_DIMS + dim];
-                    }
-                }
-                __syncthreads();
-
-                if (tid < n_points) {
-                    for (int sc = 0; sc < chunk_size; ++sc) {
-                        float dist = 0.0f;
-#pragma unroll
-                        for (int d = 0; d < N_DIMS; ++d) {
-                            float diff = point[d] - shared_supers[sc * N_DIMS + d];
-                            dist += diff * diff;
-                        }
-
-                        int sc_global = chunk_start + sc;
-                        if (dist < best_dists[NUM_NEAREST_SUPERS - 1]) {
-                            for (int i = NUM_NEAREST_SUPERS - 1; i >= 0; --i) {
-                                if (i == 0 || dist >= best_dists[i - 1]) {
-                                    for (int j = NUM_NEAREST_SUPERS - 1; j > i; --j) {
-                                        best_dists[j] = best_dists[j - 1];
-                                        best_idxs[j] = best_idxs[j - 1];
-                                    }
-                                    best_dists[i] = dist;
-                                    best_idxs[i] = sc_global;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                __syncthreads();
-            }
-
-            if (tid < n_points) {
-                float min_dist = 1e30f;
-                int min_idx = 0;
-
-                for (int si = 0; si < NUM_NEAREST_SUPERS; ++si) {
-                    const int super_idx = best_idxs[si];
-                    const int start = super_offsets[super_idx];
-                    const int end = super_offsets[super_idx + 1];
-
-                    for (int c = start; c < end; ++c) {
-                        int centroid_idx = super_indices[c];
-                        float dist = 0.0f;
-#pragma unroll
-                        for (int d = 0; d < N_DIMS; ++d) {
-                            float diff = point[d] - centroids[centroid_idx * N_DIMS + d];
-                            dist += diff * diff;
-                        }
-
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_idx = centroid_idx;
-                        }
-                    }
-                }
-
-                labels[tid] = min_idx;
-            }
-        }
-
-        template <int N_DIMS>
-        __global__ void hierarchical_search_swizzled_fused_kernel(
-            const float4* __restrict__ shN,
-            const float* __restrict__ centroids,
-            const float* __restrict__ super_centroids,
-            const int* __restrict__ super_offsets,
-            const int* __restrict__ super_indices,
-            int* __restrict__ labels,
-            const int n_points) {
-            __shared__ float shared_supers[SUPER_CHUNK_SIZE * N_DIMS];
-
-            const int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-            float point[N_DIMS];
-            if (tid < n_points) {
-#pragma unroll
-                for (int d = 0; d < N_DIMS; ++d) {
-                    point[d] = read_swizzled_sh_dim<N_DIMS>(shN, static_cast<std::uint32_t>(tid), static_cast<std::uint32_t>(d));
-                }
-            }
-
-            float best_dists[NUM_NEAREST_SUPERS];
-            int best_idxs[NUM_NEAREST_SUPERS];
-#pragma unroll
-            for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
-                best_dists[i] = 1e30f;
-                best_idxs[i] = 0;
-            }
-
-            const int num_chunks = (NUM_SUPER_CLUSTERS + SUPER_CHUNK_SIZE - 1) / SUPER_CHUNK_SIZE;
-            for (int chunk = 0; chunk < num_chunks; ++chunk) {
-                const int chunk_start = chunk * SUPER_CHUNK_SIZE;
-                const int chunk_end = min(chunk_start + SUPER_CHUNK_SIZE, NUM_SUPER_CLUSTERS);
-                const int chunk_size = chunk_end - chunk_start;
-
-                for (int i = threadIdx.x; i < chunk_size * N_DIMS; i += blockDim.x) {
-                    const int sc_idx = chunk_start + i / N_DIMS;
+            const int num_tiles = (k + ASSIGN_CENTROID_TILE - 1) / ASSIGN_CENTROID_TILE;
+            for (int tile = 0; tile < num_tiles; ++tile) {
+                const int centroid_start = tile * ASSIGN_CENTROID_TILE;
+                for (int i = threadIdx.x; i < ASSIGN_CENTROID_TILE * N_DIMS; i += BLOCK_SIZE) {
+                    const int centroid = i / N_DIMS;
                     const int dim = i % N_DIMS;
-                    if (sc_idx < NUM_SUPER_CLUSTERS) {
-                        shared_supers[i] = super_centroids[sc_idx * N_DIMS + dim];
+                    const int global_centroid = centroid_start + centroid;
+                    shared_centroids[centroid][dim] = global_centroid < k
+                                                          ? centroids[static_cast<long long>(global_centroid) * N_DIMS + dim]
+                                                          : 0.0f;
+                }
+                for (int i = threadIdx.x; i < ASSIGN_CENTROID_TILE; i += BLOCK_SIZE) {
+                    const int global_centroid = centroid_start + i;
+                    shared_centroid_norms[i] = global_centroid < k ? centroid_norms[global_centroid] : 0.0f;
+                }
+                __syncthreads();
+
+                if (point < n_points) {
+                    const float* point_values = data + static_cast<long long>(point) * N_DIMS;
+                    for (int c = 0; c < ASSIGN_CENTROID_TILE; ++c) {
+                        const int global_centroid = centroid_start + c;
+                        if (global_centroid >= k) {
+                            continue;
+                        }
+                        float dot = 0.0f;
+#pragma unroll
+                        for (int d = 0; d < N_DIMS; ++d) {
+                            dot = fmaf(point_values[d], shared_centroids[c][d], dot);
+                        }
+                        const float dist = fmaf(-2.0f, dot, shared_centroid_norms[c]);
+                        int insert = NUM_NEAREST_SUPERS;
+                        for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
+                            if (dist < best_dists[i] ||
+                                (dist == best_dists[i] && global_centroid < best_idxs[i])) {
+                                insert = i;
+                                break;
+                            }
+                        }
+                        if (insert < NUM_NEAREST_SUPERS) {
+                            for (int i = NUM_NEAREST_SUPERS - 1; i > insert; --i) {
+                                best_dists[i] = best_dists[i - 1];
+                                best_idxs[i] = best_idxs[i - 1];
+                            }
+                            best_dists[insert] = dist;
+                            best_idxs[insert] = global_centroid;
+                        }
+                    }
+                }
+                __syncthreads();
+            }
+
+            if (point < n_points) {
+#pragma unroll
+                for (int i = 0; i < NUM_NEAREST_SUPERS; ++i) {
+                    nearest_supers[point * NUM_NEAREST_SUPERS + i] = best_idxs[i];
+                }
+            }
+        }
+
+        template <int N_DIMS, int POINTS_PER_THREAD = ASSIGN_POINTS_PER_THREAD, int THREAD_COUNT = BLOCK_SIZE>
+        __global__ void __launch_bounds__(THREAD_COUNT, 3)
+            assign_grouped_swizzled_kernel(
+                const float4* __restrict__ shN,
+                const float* __restrict__ centroids,
+                const float* __restrict__ centroid_norms,
+                const int* __restrict__ sorted_point_idx,
+                const int* __restrict__ group_offsets,
+                const int* __restrict__ group_task_offsets,
+                const int* __restrict__ group_candidate_offsets,
+                const int* __restrict__ group_candidate_supers,
+                const int* __restrict__ super_offsets,
+                const int* __restrict__ super_indices,
+                int* __restrict__ labels,
+                const int n_points,
+                const int k) {
+            static_assert(THREAD_COUNT / ASSIGN_CENTROID_GROUPS * POINTS_PER_THREAD == ASSIGN_POINT_TILE);
+            __shared__ float shared_points[ASSIGN_POINT_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroids[ASSIGN_CENTROID_TILE][ASSIGN_SHARED_K_STRIDE];
+            __shared__ float shared_centroid_norms[ASSIGN_CENTROID_TILE];
+            __shared__ int shared_candidate_ids[ASSIGN_CENTROID_TILE];
+
+            const int task = blockIdx.x;
+            int group_lo = 0;
+            int group_hi = NUM_SUPER_CLUSTERS;
+            while (group_lo + 1 < group_hi) {
+                const int mid = (group_lo + group_hi) / 2;
+                if (group_task_offsets[mid] <= task) {
+                    group_lo = mid;
+                } else {
+                    group_hi = mid;
+                }
+            }
+            const int group = group_lo;
+            const int point_start = group_offsets[group] +
+                                    (task - group_task_offsets[group]) * ASSIGN_POINT_TILE;
+            const int point_end = group_offsets[group + 1];
+            const int point_count = min(ASSIGN_POINT_TILE, point_end - point_start);
+            if (point_start >= n_points || point_count <= 0) {
+                return;
+            }
+
+            const int tid = threadIdx.x;
+            const int point_row = (tid / ASSIGN_CENTROID_GROUPS) * POINTS_PER_THREAD;
+            const int centroid_col = (tid % ASSIGN_CENTROID_GROUPS) * ASSIGN_CENTROIDS_PER_THREAD;
+            constexpr int point_slots_count = (N_DIMS + 3) / 4;
+            for (int i = tid; i < ASSIGN_POINT_TILE * point_slots_count; i += THREAD_COUNT) {
+                const int point = i / point_slots_count;
+                const int slot = i % point_slots_count;
+                const bool valid = point < point_count;
+                const int original_point = valid ? sorted_point_idx[point_start + point] : 0;
+                const float4 values = valid
+                                          ? shN[shAt_device(static_cast<std::uint32_t>(original_point),
+                                                            static_cast<std::uint32_t>(slot), point_slots_count)]
+                                          : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+                shared_points[point][slot * 4 + 0] = values.x;
+                shared_points[point][slot * 4 + 1] = values.y;
+                shared_points[point][slot * 4 + 2] = values.z;
+                shared_points[point][slot * 4 + 3] = values.w;
+            }
+            __syncthreads();
+
+            float best_dist[POINTS_PER_THREAD];
+            int best_idx[POINTS_PER_THREAD];
+#pragma unroll
+            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+                best_dist[p] = 1e30f;
+                best_idx[p] = k;
+            }
+
+            const int candidate_start = group_candidate_offsets[group];
+            const int candidate_count = group_candidate_offsets[group + 1] - candidate_start;
+            const int num_tiles = (candidate_count + ASSIGN_CENTROID_TILE - 1) /
+                                  ASSIGN_CENTROID_TILE;
+            for (int tile = 0; tile < num_tiles; ++tile) {
+                const int tile_start = tile * ASSIGN_CENTROID_TILE;
+                for (int i = tid; i < ASSIGN_CENTROID_TILE; i += THREAD_COUNT) {
+                    const int candidate_pos = tile_start + i;
+                    int candidate_idx = -1;
+                    if (candidate_pos < candidate_count) {
+                        int member_offset = candidate_pos;
+#pragma unroll
+                        for (int rank = 0; rank < NUM_NEAREST_SUPERS; ++rank) {
+                            const int super_idx = group_candidate_supers[group * NUM_NEAREST_SUPERS + rank];
+                            const int member_count = super_offsets[super_idx + 1] - super_offsets[super_idx];
+                            if (member_offset < member_count) {
+                                candidate_idx = super_indices[super_offsets[super_idx] + member_offset];
+                                break;
+                            }
+                            member_offset -= member_count;
+                        }
+                    }
+                    shared_candidate_ids[i] = candidate_idx;
+                    if (candidate_idx >= 0) {
+#pragma unroll
+                        for (int d = 0; d < N_DIMS; ++d) {
+                            shared_centroids[i][d] =
+                                centroids[static_cast<long long>(candidate_idx) * N_DIMS + d];
+                        }
+                        shared_centroid_norms[i] = centroid_norms[candidate_idx];
+                    } else {
+#pragma unroll
+                        for (int d = 0; d < N_DIMS; ++d) {
+                            shared_centroids[i][d] = 0.0f;
+                        }
+                        shared_centroid_norms[i] = 0.0f;
                     }
                 }
                 __syncthreads();
 
-                if (tid < n_points) {
-                    for (int sc = 0; sc < chunk_size; ++sc) {
-                        float dist = 0.0f;
+                float dots[POINTS_PER_THREAD][ASSIGN_CENTROIDS_PER_THREAD] = {};
 #pragma unroll
-                        for (int d = 0; d < N_DIMS; ++d) {
-                            const float diff = point[d] - shared_supers[sc * N_DIMS + d];
-                            dist += diff * diff;
+                for (int d = 0; d < N_DIMS; ++d) {
+                    float point_values[POINTS_PER_THREAD];
+                    float centroid_values[ASSIGN_CENTROIDS_PER_THREAD];
+#pragma unroll
+                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+                        point_values[p] = shared_points[point_row + p][d];
+                    }
+#pragma unroll
+                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                        centroid_values[c] = shared_centroids[centroid_col + c][d];
+                    }
+#pragma unroll
+                    for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+#pragma unroll
+                        for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                            dots[p][c] = fmaf(point_values[p], centroid_values[c], dots[p][c]);
                         }
+                    }
+                }
 
-                        const int sc_global = chunk_start + sc;
-                        if (dist < best_dists[NUM_NEAREST_SUPERS - 1]) {
-                            for (int i = NUM_NEAREST_SUPERS - 1; i >= 0; --i) {
-                                if (i == 0 || dist >= best_dists[i - 1]) {
-                                    for (int j = NUM_NEAREST_SUPERS - 1; j > i; --j) {
-                                        best_dists[j] = best_dists[j - 1];
-                                        best_idxs[j] = best_idxs[j - 1];
-                                    }
-                                    best_dists[i] = dist;
-                                    best_idxs[i] = sc_global;
-                                    break;
-                                }
+#pragma unroll
+                for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+#pragma unroll
+                    for (int c = 0; c < ASSIGN_CENTROIDS_PER_THREAD; ++c) {
+                        const int candidate_idx = shared_candidate_ids[centroid_col + c];
+                        if (candidate_idx >= 0) {
+                            const float dist = fmaf(-2.0f, dots[p][c],
+                                                    shared_centroid_norms[centroid_col + c]);
+                            if (dist < best_dist[p] ||
+                                (dist == best_dist[p] && candidate_idx < best_idx[p])) {
+                                best_dist[p] = dist;
+                                best_idx[p] = candidate_idx;
                             }
                         }
                     }
@@ -803,154 +1082,133 @@ namespace lfs::io {
                 __syncthreads();
             }
 
-            if (tid < n_points) {
-                float min_dist = 1e30f;
-                int min_idx = 0;
-                for (int si = 0; si < NUM_NEAREST_SUPERS; ++si) {
-                    const int super_idx = best_idxs[si];
-                    const int start = super_offsets[super_idx];
-                    const int end = super_offsets[super_idx + 1];
-                    for (int c = start; c < end; ++c) {
-                        const int centroid_idx = super_indices[c];
-                        float dist = 0.0f;
+            const unsigned group_mask = 0xffffffffu;
+            const int group_lane = tid % ASSIGN_CENTROID_GROUPS;
 #pragma unroll
-                        for (int d = 0; d < N_DIMS; ++d) {
-                            const float diff = point[d] - centroids[centroid_idx * N_DIMS + d];
-                            dist += diff * diff;
-                        }
-                        if (dist < min_dist) {
-                            min_dist = dist;
-                            min_idx = centroid_idx;
-                        }
+            for (int p = 0; p < POINTS_PER_THREAD; ++p) {
+                for (int offset = ASSIGN_CENTROID_GROUPS / 2; offset > 0; offset >>= 1) {
+                    const float other_dist = __shfl_down_sync(
+                        group_mask, best_dist[p], offset, ASSIGN_CENTROID_GROUPS);
+                    const int other_idx = __shfl_down_sync(
+                        group_mask, best_idx[p], offset, ASSIGN_CENTROID_GROUPS);
+                    if (other_dist < best_dist[p] ||
+                        (other_dist == best_dist[p] && other_idx < best_idx[p])) {
+                        best_dist[p] = other_dist;
+                        best_idx[p] = other_idx;
                     }
                 }
-                labels[tid] = min_idx;
+                if (group_lane == 0) {
+                    const int sorted_position = point_start + point_row + p;
+                    if (sorted_position < point_end && sorted_position < point_start + point_count) {
+                        const int original_point = sorted_point_idx[sorted_position];
+                        labels[original_point] = best_idx[p];
+                    }
+                }
             }
         }
 
+        __global__ void build_group_tile_counts_kernel(
+            const int* __restrict__ group_offsets,
+            int* __restrict__ group_tile_counts) {
+            const int group = blockIdx.x * blockDim.x + threadIdx.x;
+            if (group < NUM_SUPER_CLUSTERS) {
+                const int count = group_offsets[group + 1] - group_offsets[group];
+                group_tile_counts[group] = (count + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
+            }
+        }
+
+        void build_grouped_point_order_gpu(
+            const int* d_membership,
+            const int n_points,
+            Tensor& sorted_point_idx,
+            Tensor& group_offsets,
+            Tensor& group_task_offsets,
+            int& num_tasks) {
+            auto group_keys = Tensor::zeros({static_cast<size_t>(n_points)}, Device::CUDA, DataType::Int32);
+            LFS_CUDA_CHECK(cudaMemcpy(group_keys.ptr<int>(), d_membership,
+                                      static_cast<size_t>(n_points) * sizeof(int), cudaMemcpyDeviceToDevice));
+
+            thrust::device_ptr<int> sorted_ptr(sorted_point_idx.ptr<int>());
+            thrust::sequence(sorted_ptr, sorted_ptr + n_points);
+            thrust::device_ptr<int> keys_ptr(group_keys.ptr<int>());
+            thrust::stable_sort_by_key(keys_ptr, keys_ptr + n_points, sorted_ptr);
+
+            thrust::device_ptr<int> offsets_ptr(group_offsets.ptr<int>());
+            thrust::lower_bound(
+                keys_ptr, keys_ptr + n_points,
+                thrust::counting_iterator<int>(0),
+                thrust::counting_iterator<int>(NUM_SUPER_CLUSTERS + 1),
+                offsets_ptr);
+
+            auto group_tile_counts = Tensor::zeros(
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Int32);
+            build_group_tile_counts_kernel<<<1, BLOCK_SIZE>>>(
+                group_offsets.ptr<int>(), group_tile_counts.ptr<int>());
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.build_group_tile_counts");
+
+            thrust::device_ptr<int> tile_counts_ptr(group_tile_counts.ptr<int>());
+            thrust::device_ptr<int> task_offsets_ptr(group_task_offsets.ptr<int>());
+            thrust::inclusive_scan(tile_counts_ptr, tile_counts_ptr + NUM_SUPER_CLUSTERS,
+                                   task_offsets_ptr + 1);
+            LFS_CUDA_CHECK(cudaMemset(group_task_offsets.ptr<int>(), 0, sizeof(int)));
+            LFS_CUDA_CHECK(cudaMemcpy(&num_tasks, group_task_offsets.ptr<int>() + NUM_SUPER_CLUSTERS,
+                                      sizeof(int), cudaMemcpyDeviceToHost));
+        }
+
         template <int N_DIMS>
-        std::tuple<Tensor, Tensor> kmeans_hierarchical_impl(
-            const Tensor& data,
-            int k,
-            int iterations) {
-            const int n = static_cast<int>(data.shape()[0]);
+        void build_group_candidate_supers_gpu(
+            const float* d_super_centroids,
+            const float* d_super_norms,
+            const int* d_super_offsets,
+            Tensor& nearest_supers,
+            Tensor& group_candidate_offsets,
+            Tensor& group_candidate_supers) {
+            assign_nearest_top_supers_kernel<N_DIMS><<<1, BLOCK_SIZE>>>(
+                d_super_centroids, d_super_centroids, d_super_norms,
+                nearest_supers.ptr<int>(), NUM_SUPER_CLUSTERS, NUM_SUPER_CLUSTERS);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest_super_neighbors");
 
-            if (n <= k) {
-                auto centroids = data.clone();
-                auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
-                return {centroids, labels};
+            std::vector<int> h_super_offsets(NUM_SUPER_CLUSTERS + 1);
+            std::vector<int> h_nearest_supers(NUM_SUPER_CLUSTERS * NUM_NEAREST_SUPERS);
+            LFS_CUDA_CHECK(cudaMemcpy(h_super_offsets.data(), d_super_offsets,
+                                      h_super_offsets.size() * sizeof(int), cudaMemcpyDeviceToHost));
+            LFS_CUDA_CHECK(cudaMemcpy(h_nearest_supers.data(), nearest_supers.ptr<int>(),
+                                      h_nearest_supers.size() * sizeof(int), cudaMemcpyDeviceToHost));
+
+            int first_nonempty_super = 0;
+            while (first_nonempty_super < NUM_SUPER_CLUSTERS &&
+                   h_super_offsets[first_nonempty_super] == h_super_offsets[first_nonempty_super + 1]) {
+                ++first_nonempty_super;
             }
 
-            auto data_gpu = as_cuda_contiguous(data);
-            const float* d_data = data_gpu.ptr<float>();
-
-            auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                           Device::CUDA, DataType::Float32);
-            float* d_centroids = centroids.ptr<float>();
-
-            {
-                std::random_device rd;
-                auto perm = sample_unique_indices_gpu(n, k, rd());
-
-                const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
-                gather_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                    d_data, perm.ptr<int>(), d_centroids, k);
-            }
-
-            auto super_centroids = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
-                                                 Device::CUDA, DataType::Float32);
-            auto super_membership = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-
-            {
-                std::random_device rd;
-                auto perm = sample_unique_indices_gpu(k, NUM_SUPER_CLUSTERS, rd());
-
-                const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
-                gather_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
-                    d_centroids, perm.ptr<int>(), super_centroids.ptr<float>(), NUM_SUPER_CLUSTERS);
-            }
-
-            auto super_sums = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
-                                            Device::CUDA, DataType::Float32);
-            auto super_counts = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Int32);
-
-            const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
-            const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-            for (int iter = 0; iter < 5; ++iter) {
-                assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                    d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
-
-                super_sums.zero_();
-                super_counts.zero_();
-
-                accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                    d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
-
-                unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
-                finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
-                    super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
-                    d_centroids, NUM_SUPER_CLUSTERS, k, seed);
-            }
-
-            assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
-
-            auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
-            auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-            build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
-                                  super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
-
-            auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
-            auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
-                                               Device::CUDA, DataType::Float32);
-            auto centroid_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-
-            const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-            for (int iter = 0; iter < iterations; ++iter) {
-                if (iter > 0) {
-                    assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                        d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
-
-                    super_sums.zero_();
-                    super_counts.zero_();
-                    accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                        d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
-                    finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
-                        super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
-                        d_centroids, NUM_SUPER_CLUSTERS, k, iter * 111);
-
-                    build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
-                                          super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            std::vector<int> h_candidate_offsets(NUM_SUPER_CLUSTERS + 1, 0);
+            std::vector<int> h_candidate_supers(
+                NUM_SUPER_CLUSTERS * NUM_NEAREST_SUPERS, first_nonempty_super);
+            for (int group = 0; group < NUM_SUPER_CLUSTERS; ++group) {
+                int candidate_count = 0;
+                for (int rank = 0; rank < NUM_NEAREST_SUPERS; ++rank) {
+                    const int super_idx = h_nearest_supers[group * NUM_NEAREST_SUPERS + rank];
+                    h_candidate_supers[group * NUM_NEAREST_SUPERS + rank] = super_idx;
+                    candidate_count += h_super_offsets[super_idx + 1] - h_super_offsets[super_idx];
                 }
-
-                const bool use_exact = (iter == iterations - 1);
-
-                if (use_exact) {
-                    assign_nearest_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                        d_data, d_centroids, labels.ptr<int>(), n, k);
-                } else {
-                    hierarchical_search_fused_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                        d_data, d_centroids, super_centroids.ptr<float>(),
-                        super_offsets.ptr<int>(), super_indices.ptr<int>(),
-                        labels.ptr<int>(), n);
+                if (candidate_count == 0) {
+                    h_candidate_supers[group * NUM_NEAREST_SUPERS + NUM_NEAREST_SUPERS - 1] =
+                        first_nonempty_super;
+                    candidate_count = h_super_offsets[first_nonempty_super + 1] -
+                                      h_super_offsets[first_nonempty_super];
                 }
-
-                centroid_sums.zero_();
-                centroid_counts.zero_();
-
-                accumulate_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                    d_data, labels.ptr<int>(), centroid_sums.ptr<float>(), centroid_counts.ptr<int>(), n);
-
-                unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
-                finalize_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                    d_centroids, centroid_sums.ptr<float>(), centroid_counts.ptr<int>(),
-                    d_data, k, n, seed);
+                h_candidate_offsets[group + 1] = h_candidate_offsets[group] + candidate_count;
             }
 
-            cudaDeviceSynchronize();
-            return {centroids, labels};
+            const int candidate_count = h_candidate_offsets.back();
+            if (candidate_count > 0) {
+                // The four super ids are the compact per-group candidate index list. The
+                // grouped kernel expands each list through the super CSR ranges per tile.
+                LFS_CUDA_CHECK(cudaMemcpy(group_candidate_offsets.ptr<int>(), h_candidate_offsets.data(),
+                                          h_candidate_offsets.size() * sizeof(int), cudaMemcpyHostToDevice));
+                LFS_CUDA_CHECK(cudaMemcpy(group_candidate_supers.ptr<int>(), h_candidate_supers.data(),
+                                          h_candidate_supers.size() * sizeof(int), cudaMemcpyHostToDevice));
+            }
         }
 
         template <int N_DIMS>
@@ -958,7 +1216,7 @@ namespace lfs::io {
             const Tensor& shN_swizzled,
             const int n,
             const int k,
-            const int iterations) {
+            const int iterations, const bool fast_assignment) {
             auto shN_gpu = as_cuda_contiguous(shN_swizzled);
             const auto* d_shN = reinterpret_cast<const float4*>(shN_gpu.ptr<float>());
 
@@ -967,10 +1225,21 @@ namespace lfs::io {
                                                Device::CUDA, DataType::Float32);
                 auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
                 const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+                const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                    /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_gather");
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroids.ptr<float>(), n);
-                cudaDeviceSynchronize();
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
+                LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_gather_sync");
                 return {centroids, labels};
+            }
+
+            CudaTimingState timing_state{
+                lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug)};
+            std::optional<CudaEventTimer> init_sampling_timer;
+            if (timing_state.enabled) {
+                init_sampling_timer.emplace(timing_state);
+                init_sampling_timer->record_start();
             }
 
             auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
@@ -984,11 +1253,13 @@ namespace lfs::io {
                 const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_shN, perm.ptr<int>(), d_centroids, k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_swizzled_centroids");
             }
 
             auto super_centroids = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
                                                  Device::CUDA, DataType::Float32);
             auto super_membership = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
+            auto super_norms = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Float32);
 
             {
                 std::random_device rd;
@@ -997,6 +1268,7 @@ namespace lfs::io {
                 const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
                 gather_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     d_centroids, perm.ptr<int>(), super_centroids.ptr<float>(), NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.gather_centroids");
             }
 
             auto super_sums = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(N_DIMS)},
@@ -1004,136 +1276,263 @@ namespace lfs::io {
             auto super_counts = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS)}, Device::CUDA, DataType::Int32);
 
             const int grid_k = (k + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            const int grid_k_assign = (k + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
             const int grid_super = (NUM_SUPER_CLUSTERS + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
             for (int iter = 0; iter < 5; ++iter) {
-                assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                    d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                compute_centroid_norms_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
+                    super_centroids.ptr<float>(), super_norms.ptr<float>(), NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.compute_super_norms");
+                assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k_assign, BLOCK_SIZE>>>(
+                    d_centroids, super_centroids.ptr<float>(), super_norms.ptr<float>(),
+                    super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
                 super_sums.zero_();
                 super_counts.zero_();
 
                 accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
 
                 const unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                     super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                     d_centroids, NUM_SUPER_CLUSTERS, k, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
             }
 
-            assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            compute_centroid_norms_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
+                super_centroids.ptr<float>(), super_norms.ptr<float>(), NUM_SUPER_CLUSTERS);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.compute_super_norms");
+            assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k_assign, BLOCK_SIZE>>>(
+                d_centroids, super_centroids.ptr<float>(), super_norms.ptr<float>(),
+                super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
             auto super_offsets = Tensor::zeros({static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
             auto super_indices = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
             build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                   super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+            if (init_sampling_timer) {
+                init_sampling_timer->record_stop();
+            }
 
             auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+            auto point_super_membership = Tensor::zeros(
+                {static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+            auto sorted_point_idx = Tensor::zeros(
+                {static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
+            auto group_offsets = Tensor::zeros(
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
+            auto group_task_offsets = Tensor::zeros(
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
+            auto nearest_supers = Tensor::zeros(
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS), static_cast<size_t>(NUM_NEAREST_SUPERS)},
+                Device::CUDA, DataType::Int32);
+            auto group_candidate_offsets = Tensor::zeros(
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS + 1)}, Device::CUDA, DataType::Int32);
+            auto group_candidate_supers = Tensor::zeros(
+                {static_cast<size_t>(NUM_SUPER_CLUSTERS * NUM_NEAREST_SUPERS)},
+                Device::CUDA, DataType::Int32);
             auto centroid_sums = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(N_DIMS)},
                                                Device::CUDA, DataType::Float32);
             auto centroid_counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
+            auto centroid_norms = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
 
             const int grid_n = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
+            const int grid_n_super_assign = (n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE;
 
+            const int timed_iterations = std::max(0, iterations);
+            std::vector<CudaEventTimer> assign_timers;
+            std::vector<CudaEventTimer> supers_timers;
+            std::vector<CudaEventTimer> group_timers;
+            std::vector<CudaEventTimer> members_timers;
+            std::vector<CudaEventTimer> accumulate_finalize_timers;
+            assign_timers.reserve(static_cast<size_t>(timed_iterations));
+            supers_timers.reserve(static_cast<size_t>(timed_iterations));
+            group_timers.reserve(static_cast<size_t>(timed_iterations));
+            members_timers.reserve(static_cast<size_t>(timed_iterations));
+            accumulate_finalize_timers.reserve(static_cast<size_t>(timed_iterations));
+            for (int iter = 0; iter < timed_iterations; ++iter) {
+                assign_timers.emplace_back(timing_state);
+                supers_timers.emplace_back(timing_state);
+                group_timers.emplace_back(timing_state);
+                members_timers.emplace_back(timing_state);
+                accumulate_finalize_timers.emplace_back(timing_state);
+            }
+
+            const auto kmeans_ticket = ::lfs::core::cuda_record_range(
+                /*stream=*/nullptr, "io.kmeans.swizzled_hierarchical_iteration");
             for (int iter = 0; iter < iterations; ++iter) {
                 if (iter > 0) {
-                    assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
-                        d_centroids, super_centroids.ptr<float>(), super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                    compute_centroid_norms_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
+                        super_centroids.ptr<float>(), super_norms.ptr<float>(), NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.compute_super_norms");
+                    assign_nearest_bruteforce_kernel<N_DIMS><<<grid_k_assign, BLOCK_SIZE>>>(
+                        d_centroids, super_centroids.ptr<float>(), super_norms.ptr<float>(),
+                        super_membership.ptr<int>(), k, NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_nearest");
 
                     super_sums.zero_();
                     super_counts.zero_();
                     accumulate_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                         d_centroids, super_membership.ptr<int>(), super_sums.ptr<float>(), super_counts.ptr<int>(), k);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_centroids");
                     finalize_centroids_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
                         super_centroids.ptr<float>(), super_sums.ptr<float>(), super_counts.ptr<int>(),
                         d_centroids, NUM_SUPER_CLUSTERS, k, iter * 111);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_centroids");
 
                     build_csr_offsets_gpu(super_membership.ptr<int>(), super_offsets.ptr<int>(),
                                           super_indices.ptr<int>(), k, NUM_SUPER_CLUSTERS);
                 }
 
                 const bool use_exact = (iter == iterations - 1);
+                compute_centroid_norms_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
+                    d_centroids, centroid_norms.ptr<float>(), k);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.compute_centroid_norms");
+                assign_timers[static_cast<size_t>(iter)].record_start();
 
                 if (use_exact) {
-                    assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                        d_shN, d_centroids, labels.ptr<int>(), n, k);
+                    assign_sh3_labels(shN_gpu, centroids, centroid_norms, labels, fast_assignment, iterations > 1);
                 } else {
-                    hierarchical_search_swizzled_fused_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
-                        d_shN, d_centroids, super_centroids.ptr<float>(),
-                        super_offsets.ptr<int>(), super_indices.ptr<int>(),
-                        labels.ptr<int>(), n);
-                }
+                    supers_timers[static_cast<size_t>(iter)].record_start();
+                    compute_centroid_norms_kernel<N_DIMS><<<grid_super, BLOCK_SIZE>>>(
+                        super_centroids.ptr<float>(), super_norms.ptr<float>(), NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.compute_super_norms");
+                    // The refinement needs only the nearest super id per point. The
+                    // four-neighbor list is computed once per super below, not per point.
+                    assign_nearest_swizzled_bruteforce_kernel<N_DIMS><<<grid_n_super_assign, BLOCK_SIZE>>>(
+                        d_shN, super_centroids.ptr<float>(), super_norms.ptr<float>(),
+                        point_super_membership.ptr<int>(), n, NUM_SUPER_CLUSTERS);
+                    LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_points_to_supers");
+                    supers_timers[static_cast<size_t>(iter)].record_stop();
 
+                    group_timers[static_cast<size_t>(iter)].record_start();
+                    int num_group_tasks = 0;
+                    build_grouped_point_order_gpu(
+                        point_super_membership.ptr<int>(), n, sorted_point_idx,
+                        group_offsets, group_task_offsets, num_group_tasks);
+                    group_timers[static_cast<size_t>(iter)].record_stop();
+
+                    members_timers[static_cast<size_t>(iter)].record_start();
+                    build_group_candidate_supers_gpu<N_DIMS>(
+                        super_centroids.ptr<float>(), super_norms.ptr<float>(), super_offsets.ptr<int>(),
+                        nearest_supers, group_candidate_offsets, group_candidate_supers);
+                    members_timers[static_cast<size_t>(iter)].record_stop();
+
+                    if (num_group_tasks > 0) {
+                        // Refinement is approximate: each point is searched only in the
+                        // union of the four supers nearest to its assigned super. The
+                        // final iteration below remains an exact argmin over all k.
+                        if (fast_assignment) {
+                            assign_grouped_swizzled_kernel<N_DIMS, 4, 128><<<num_group_tasks, 128>>>(
+                                d_shN, d_centroids, centroid_norms.ptr<float>(),
+                                sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
+                                group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
+                                group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
+                                super_indices.ptr<int>(), labels.ptr<int>(), n, k);
+                            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_grouped_candidates");
+                        } else {
+                            assign_grouped_swizzled_kernel<N_DIMS><<<num_group_tasks, BLOCK_SIZE>>>(
+                                d_shN, d_centroids, centroid_norms.ptr<float>(),
+                                sorted_point_idx.ptr<int>(), group_offsets.ptr<int>(),
+                                group_task_offsets.ptr<int>(), group_candidate_offsets.ptr<int>(),
+                                group_candidate_supers.ptr<int>(), super_offsets.ptr<int>(),
+                                super_indices.ptr<int>(), labels.ptr<int>(), n, k);
+                            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_grouped_candidates");
+                        }
+                    }
+                }
+                assign_timers[static_cast<size_t>(iter)].record_stop();
+
+                accumulate_finalize_timers[static_cast<size_t>(iter)].record_start();
                 centroid_sums.zero_();
                 centroid_counts.zero_();
 
                 accumulate_swizzled_centroids_kernel<N_DIMS><<<grid_n, BLOCK_SIZE>>>(
                     d_shN, labels.ptr<int>(), centroid_sums.ptr<float>(), centroid_counts.ptr<int>(), n);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.accumulate_swizzled_centroids");
 
                 const unsigned int seed = static_cast<unsigned int>(iter * 12345 + 67890);
                 finalize_swizzled_centroids_kernel<N_DIMS><<<grid_k, BLOCK_SIZE>>>(
                     d_centroids, centroid_sums.ptr<float>(), centroid_counts.ptr<int>(),
                     d_shN, k, n, seed);
+                LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.finalize_swizzled_centroids");
+                accumulate_finalize_timers[static_cast<size_t>(iter)].record_stop();
             }
 
-            cudaDeviceSynchronize();
+            LFS_CUDA_AWAIT(kmeans_ticket, cudaDeviceSynchronize(), "io.kmeans.swizzled_hierarchical_iteration_sync");
+
+            if (timing_state.enabled && init_sampling_timer) {
+                float init_sampling_ms = 0.0f;
+                float hierarchical_assign_ms = 0.0f;
+                float supers_ms = 0.0f;
+                float group_ms = 0.0f;
+                float members_ms = 0.0f;
+                float final_exact_assign_ms = 0.0f;
+                float accumulate_finalize_ms = 0.0f;
+                bool timings_valid = init_sampling_timer->elapsed_ms(init_sampling_ms);
+                for (int iter = 0; iter < iterations; ++iter) {
+                    float assign_ms = 0.0f;
+                    float accumulate_finalize_iter_ms = 0.0f;
+                    timings_valid = assign_timers[static_cast<size_t>(iter)].elapsed_ms(assign_ms) &&
+                                    accumulate_finalize_timers[static_cast<size_t>(iter)].elapsed_ms(
+                                        accumulate_finalize_iter_ms) &&
+                                    timings_valid;
+                    if (iter == iterations - 1) {
+                        final_exact_assign_ms = assign_ms;
+                    } else {
+                        hierarchical_assign_ms += assign_ms;
+                        float supers_iter_ms = 0.0f;
+                        float group_iter_ms = 0.0f;
+                        float members_iter_ms = 0.0f;
+                        timings_valid = supers_timers[static_cast<size_t>(iter)].elapsed_ms(supers_iter_ms) &&
+                                        group_timers[static_cast<size_t>(iter)].elapsed_ms(group_iter_ms) &&
+                                        members_timers[static_cast<size_t>(iter)].elapsed_ms(members_iter_ms) &&
+                                        timings_valid;
+                        supers_ms += supers_iter_ms;
+                        group_ms += group_iter_ms;
+                        members_ms += members_iter_ms;
+                    }
+                    accumulate_finalize_ms += accumulate_finalize_iter_ms;
+                }
+                if (timings_valid && timing_state.enabled) {
+                    LOG_DEBUG(
+                        "SH k-means CUDA stages: init_sampling_ms=%0.3f hierarchical_assign_ms=%0.3f "
+                        "supers_ms=%0.3f group_ms=%0.3f members_ms=%0.3f "
+                        "final_exact_assign_ms=%0.3f accumulate_finalize_ms=%0.3f",
+                        init_sampling_ms, hierarchical_assign_ms, supers_ms, group_ms, members_ms,
+                        final_exact_assign_ms, accumulate_finalize_ms);
+                }
+            }
             return {centroids, labels};
         }
 
     } // anonymous namespace
 
-    std::tuple<Tensor, Tensor> kmeans_1d(
-        const Tensor& data,
-        int k,
-        int iterations);
-
-    std::tuple<Tensor, Tensor> kmeans(
-        const Tensor& data,
-        int k,
-        int iterations,
-        float tolerance) {
-        (void)tolerance;
-
-        if (data.ndim() != 2) {
-            LOG_ERROR("kmeans expects 2D input [n_points, n_dims]");
-            return {Tensor(), Tensor()};
-        }
-
-        const int n_dims = static_cast<int>(data.shape()[1]);
-
-        switch (n_dims) {
-        case 1:
-            return kmeans_1d(data, k, iterations);
-        case 2:
-            return kmeans_gpu_bruteforce_impl<2>(data, k, iterations);
-        case 3:
-            return kmeans_gpu_bruteforce_impl<3>(data, k, iterations);
-        case 4:
-            return kmeans_gpu_bruteforce_impl<4>(data, k, iterations);
-        case 9:
-            return kmeans_gpu_bruteforce_impl<9>(data, k, iterations);
-        case 12:
-            return kmeans_gpu_bruteforce_impl<12>(data, k, iterations);
-        case 15:
-            return kmeans_gpu_bruteforce_impl<15>(data, k, iterations);
-        case 24:
-            return kmeans_gpu_bruteforce_impl<24>(data, k, iterations);
-        case 27:
-            return kmeans_gpu_bruteforce_impl<27>(data, k, iterations);
-        case 45:
-            if (k >= 4096) {
-                return kmeans_hierarchical_impl<45>(data, k, iterations);
-            }
-            return kmeans_gpu_bruteforce_impl<45>(data, k, iterations);
-        case 48:
-            return kmeans_gpu_bruteforce_impl<48>(data, k, iterations);
-        default:
-            LOG_ERROR("kmeans: unsupported dimension {}. "
-                      "Supported: 1, 2, 3, 4, 9, 12, 15, 24, 27, 45, 48",
-                      n_dims);
-            return {Tensor(), Tensor()};
+    void assign_sh3_labels(const Tensor& shN_swizzled, const Tensor& centroids,
+                           const Tensor& centroid_norms, Tensor& labels, bool fast, bool have_labels) {
+        const int n = static_cast<int>(labels.numel());
+        const int k = static_cast<int>(centroids.size(0));
+        const auto* sh = reinterpret_cast<const float4*>(shN_swizzled.ptr<float>());
+        if (fast) {
+            // Half products screen distant candidates only. Possible winners
+            // retain the ordinary FP32 dot-product order and lowest-index tie.
+            const size_t np = (n + 127) / 128 * 128, kp = (k + 31) / 32 * 32;
+            auto half_storage = Tensor::empty({(np + kp) * 24}, Device::CUDA, DataType::Float32);
+            auto* half_points = reinterpret_cast<half*>(half_storage.ptr<float>());
+            auto* half_centroids = half_points + np * 48;
+            prepare_half_sh_kernel<<<(std::max(np, kp) * 48 + 255) / 256, 256>>>(sh, centroids.ptr<float>(), half_points, half_centroids, n, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.prepare_half_sh");
+            assign_sh3_screened_kernel<<<(n + 127) / 128, 512>>>(
+                sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k, half_points, half_centroids, have_labels);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
+        } else {
+            assign_nearest_swizzled_bruteforce_kernel<45><<<(n + ASSIGN_POINT_TILE - 1) / ASSIGN_POINT_TILE, BLOCK_SIZE>>>(
+                sh, centroids.ptr<float>(), centroid_norms.ptr<float>(), labels.ptr<int>(), n, k);
+            LFS_CUDA_LAUNCH_CHECK(nullptr, "io.kmeans.assign_sh3_labels");
         }
     }
 
@@ -1142,7 +1541,7 @@ namespace lfs::io {
         const int n_points,
         const int sh_coeffs,
         const int k,
-        const int iterations) {
+        const int iterations, const bool fast_assignment) {
         if (!shN_swizzled.is_valid() || shN_swizzled.ndim() != 1 ||
             shN_swizzled.dtype() != DataType::Float32) {
             LOG_ERROR("kmeans_sh_swizzled expects a 1D float32 swizzled shN tensor");
@@ -1169,7 +1568,7 @@ namespace lfs::io {
             return kmeans_swizzled_bruteforce_impl<24>(shN_swizzled, n_points, k, iterations);
         case 45:
             if (k >= 4096) {
-                return kmeans_swizzled_hierarchical_impl<45>(shN_swizzled, n_points, k, iterations);
+                return kmeans_swizzled_hierarchical_impl<45>(shN_swizzled, n_points, k, iterations, fast_assignment);
             }
             return kmeans_swizzled_bruteforce_impl<45>(shN_swizzled, n_points, k, iterations);
         default:
@@ -1177,98 +1576,6 @@ namespace lfs::io {
                       sh_coeffs, n_dims);
             return {Tensor(), Tensor()};
         }
-    }
-
-    std::tuple<Tensor, Tensor> kmeans_1d(
-        const Tensor& data,
-        int k,
-        int iterations) {
-        Tensor data_2d;
-        if (data.ndim() == 1) {
-            data_2d = data.unsqueeze(1);
-        } else if (data.ndim() == 2 && data.shape()[1] == 1) {
-            data_2d = data;
-        } else {
-            LOG_ERROR("kmeans_1d expects 1D data");
-            return {Tensor(), Tensor()};
-        }
-
-        auto data_gpu = as_cuda_contiguous(data_2d);
-        const int n = data_gpu.shape()[0];
-
-        if (n <= k) {
-            auto sorted = std::get<0>(data_gpu.sort(0));
-            auto labels = Tensor::arange(n).to(DataType::Int32).cuda();
-            return {sorted, labels};
-        }
-
-        float min_val = data_gpu.min().item();
-        float max_val = data_gpu.max().item();
-
-        std::vector<float> centroid_vals(k);
-        float step = (k > 1) ? (max_val - min_val) / (k - 1) : 0.0f;
-        for (int i = 0; i < k; ++i) {
-            centroid_vals[i] = min_val + i * step;
-        }
-        auto centroids = Tensor::from_vector(centroid_vals, {static_cast<size_t>(k), 1}, Device::CUDA);
-        auto labels = Tensor::zeros({static_cast<size_t>(n)}, Device::CUDA, DataType::Int32);
-
-        auto centroid_sums = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Float32);
-        auto counts = Tensor::zeros({static_cast<size_t>(k)}, Device::CUDA, DataType::Int32);
-
-        const int grid_size = (n + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-        for (int iter = 0; iter < iterations; ++iter) {
-            auto centroids_1d = centroids.squeeze();
-            auto [sorted_centroids, sort_idx] = centroids_1d.sort(0);
-
-            binary_search_1d_kernel<<<grid_size, BLOCK_SIZE>>>(
-                data_gpu.ptr<float>(),
-                sorted_centroids.ptr<float>(),
-                labels.ptr<int>(),
-                n, k);
-
-            centroid_sums.zero_();
-            counts.zero_();
-
-            update_centroids_atomic_1d_kernel<<<grid_size, BLOCK_SIZE>>>(
-                data_gpu.ptr<float>(),
-                labels.ptr<int>(),
-                centroid_sums.ptr<float>(),
-                counts.ptr<int>(),
-                n);
-
-            auto counts_cpu = counts.cpu();
-            auto sums_cpu = centroid_sums.cpu();
-            const int* cnt = counts_cpu.ptr<int>();
-            const float* sum = sums_cpu.ptr<float>();
-
-            for (int c = 0; c < k; ++c) {
-                if (cnt[c] > 0) {
-                    centroid_vals[c] = sum[c] / cnt[c];
-                }
-            }
-
-            centroids = Tensor::from_vector(centroid_vals, {static_cast<size_t>(k), 1}, Device::CUDA);
-        }
-
-        cudaDeviceSynchronize();
-
-        auto centroids_1d = centroids.squeeze();
-        auto [final_sorted, final_idx] = centroids_1d.sort(0);
-        centroids = final_sorted.unsqueeze(1);
-
-        auto inv_map = Tensor::zeros({static_cast<size_t>(k)}, Device::CPU, DataType::Int32);
-        auto idx_cpu = final_idx.to(DataType::Int32).cpu();
-        int* inv_ptr = inv_map.ptr<int>();
-        const int* idx_ptr = idx_cpu.ptr<int>();
-        for (int i = 0; i < k; ++i) {
-            inv_ptr[idx_ptr[i]] = i;
-        }
-
-        auto remapped = inv_map.cuda().index_select(0, labels);
-
-        return {centroids, remapped};
     }
 
 } // namespace lfs::io

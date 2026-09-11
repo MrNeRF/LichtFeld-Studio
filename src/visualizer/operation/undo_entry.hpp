@@ -53,6 +53,35 @@ namespace lfs::vis::op {
         using std::runtime_error::runtime_error;
     };
 
+    struct SceneTopologyNodeProof {
+        lfs::core::Uuid uuid;
+        lfs::core::Uuid parent_uuid;
+        lfs::core::NodeType type =
+            lfs::core::NodeType::GROUP;
+        std::size_t primary_extent = 0;
+        std::size_t secondary_extent = 0;
+        std::vector<lfs::core::Uuid> children;
+
+        friend bool operator==(
+            const SceneTopologyNodeProof&,
+            const SceneTopologyNodeProof&) =
+            default;
+    };
+
+    struct SceneTopologyProof {
+        std::vector<lfs::core::Uuid> roots;
+        std::vector<SceneTopologyNodeProof> nodes;
+        lfs::core::Uuid training_model_uuid;
+        bool consolidated = false;
+        std::size_t consolidated_extent = 0;
+        bool scoped = false;
+
+        friend bool operator==(
+            const SceneTopologyProof&,
+            const SceneTopologyProof&) =
+            default;
+    };
+
     class LFS_VIS_API UndoEntry {
     public:
         virtual ~UndoEntry() = default;
@@ -118,6 +147,7 @@ namespace lfs::vis::op {
         lfs::core::DataType dtype = lfs::core::DataType::UInt8;
         bool before_present = false;
         bool after_present = false;
+        std::optional<size_t> max_index;
 
         [[nodiscard]] bool hasChanges() const {
             switch (mode) {
@@ -165,6 +195,9 @@ namespace lfs::vis::op {
                                                    const std::vector<glm::mat4>& transforms);
         void captureTopology();
         void captureAfter();
+        void captureAfterSelection(std::shared_ptr<lfs::core::Tensor> mask,
+                                   lfs::core::Scene::SelectionStateMetadata metadata);
+        void completePendingSelectionCounts();
 
         void undo() override;
         void redo() override;
@@ -187,18 +220,22 @@ namespace lfs::vis::op {
         bool selection_changed_ = false;
         bool prefer_dense_selection_storage_ = false;
 
-        std::unordered_map<std::string, glm::mat4> transforms_before_;
-        std::unordered_map<std::string, glm::mat4> transforms_after_;
+        std::unordered_map<lfs::core::Uuid, glm::mat4> transforms_before_;
+        std::unordered_map<lfs::core::Uuid, glm::mat4> transforms_after_;
 
-        std::unordered_map<std::string, TensorPresenceSnapshot> deleted_masks_before_;
-        std::unordered_map<std::string, TensorSwapStorage> deleted_mask_storage_;
+        std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot> deleted_masks_before_;
+        std::unordered_map<lfs::core::Uuid, TensorSwapStorage> deleted_mask_storage_;
+        std::unordered_map<lfs::core::Uuid, bool> payload_diverged_before_;
+        std::unordered_map<lfs::core::Uuid, bool> payload_diverged_after_;
         std::optional<TensorPresenceSnapshot> combined_deleted_before_;
         TensorSwapStorage combined_deleted_storage_;
 
         ModifiesFlag captured_ = ModifiesFlag::NONE;
+        SceneTopologyProof topology_before_;
+        SceneTopologyProof expected_topology_;
 
-        void captureDeletedMasks(std::unordered_map<std::string, TensorPresenceSnapshot>& target);
-        void compactSelection();
+        void captureDeletedMasks(std::unordered_map<lfs::core::Uuid, TensorPresenceSnapshot>& target);
+        void compactSelection(const std::shared_ptr<lfs::core::Tensor>& after_mask = nullptr);
         void compactTopology();
         void applySelection(bool undo_direction);
         void applyTopology(bool undo_direction);
@@ -217,7 +254,8 @@ namespace lfs::vis::op {
                         UndoMetadata metadata,
                         std::string target_name,
                         lfs::core::Tensor before,
-                        TensorAccessor accessor);
+                        TensorAccessor accessor,
+                        SceneManager* scene = nullptr);
 
         void captureAfter();
         [[nodiscard]] bool hasChanges() const;
@@ -245,6 +283,44 @@ namespace lfs::vis::op {
         size_t element_count_ = 0;
         lfs::core::DataType dtype_ = lfs::core::DataType::Float32;
         bool captured_after_ = false;
+        SceneManager* scene_ = nullptr;
+        std::optional<SceneTopologyProof>
+            expected_topology_;
+    };
+
+    class LFS_VIS_API ShNCanonicalRowsUndoEntry : public UndoEntry {
+    public:
+        ShNCanonicalRowsUndoEntry(std::string name,
+                                  UndoMetadata metadata,
+                                  std::string node_name,
+                                  lfs::core::Tensor indices,
+                                  lfs::core::Tensor before_rows,
+                                  lfs::core::Tensor after_rows,
+                                  SceneManager* scene);
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] std::string name() const override { return name_; }
+        [[nodiscard]] UndoMetadata metadata() const override { return metadata_; }
+        [[nodiscard]] size_t estimatedBytes() const override;
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
+        void offloadToCPU() override;
+        void restoreToPreferredDevice() override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
+
+    private:
+        void apply(const lfs::core::Tensor& rows);
+
+        std::string name_;
+        UndoMetadata metadata_;
+        std::string node_name_;
+        SceneManager* scene_ = nullptr;
+        lfs::core::Tensor indices_;
+        lfs::core::Tensor before_rows_;
+        lfs::core::Tensor after_rows_;
+        lfs::core::Device preferred_device_ = lfs::core::Device::CUDA;
+        std::optional<size_t> max_index_;
+        std::optional<SceneTopologyProof> expected_topology_;
     };
 
     class LFS_VIS_API CropBoxUndoEntry : public UndoEntry {
@@ -271,6 +347,8 @@ namespace lfs::vis::op {
         SceneManager& scene_;
         RenderingManager* rendering_manager_ = nullptr;
         std::string node_name_;
+        lfs::core::Uuid node_uuid_;
+        SceneTopologyProof expected_topology_;
         lfs::core::CropBoxData before_;
         lfs::core::CropBoxData after_;
         glm::mat4 transform_before_;
@@ -305,6 +383,8 @@ namespace lfs::vis::op {
         SceneManager& scene_;
         RenderingManager* rendering_manager_ = nullptr;
         std::string node_name_;
+        lfs::core::Uuid node_uuid_;
+        SceneTopologyProof expected_topology_;
         lfs::core::EllipsoidData before_;
         lfs::core::EllipsoidData after_;
         glm::mat4 transform_before_;
@@ -320,7 +400,8 @@ namespace lfs::vis::op {
         PropertyChangeUndoEntry(std::string property_path,
                                 std::any before,
                                 std::any after,
-                                std::function<void(const std::any&)> applier);
+                                std::function<void(const std::any&)> applier,
+                                SceneManager* scene = nullptr);
 
         void undo() override;
         void redo() override;
@@ -338,17 +419,24 @@ namespace lfs::vis::op {
         std::function<void(const std::any&)> applier_;
         size_t estimated_bytes_ = 0;
         std::chrono::steady_clock::time_point updated_at_;
+        SceneManager* scene_ = nullptr;
+        std::optional<SceneTopologyProof>
+            expected_topology_;
     };
 
     enum class SceneGraphCaptureMode : uint8_t {
         FULL,
-        METADATA_ONLY,
     };
 
     struct SceneGraphCaptureOptions {
         SceneGraphCaptureMode mode = SceneGraphCaptureMode::FULL;
         bool include_selected_nodes = true;
         bool include_scene_context = true;
+        bool preserve_node_ids = false;
+        bool scoped_topology = false;
+        // A missing allowlist preserves the legacy FULL capture behavior. An
+        // engaged allowlist captures payloads only for these node UUIDs.
+        std::optional<std::vector<lfs::core::Uuid>> payload_uuids;
     };
 
     struct SceneGraphCameraSnapshot {
@@ -383,6 +471,9 @@ namespace lfs::vis::op {
         SceneGraphNodeSnapshot& operator=(SceneGraphNodeSnapshot&& other) noexcept;
         ~SceneGraphNodeSnapshot();
 
+        lfs::core::Uuid uuid;
+        lfs::core::NodeId id = lfs::core::NULL_NODE;
+        lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
         lfs::core::NodeType type = lfs::core::NodeType::SPLAT;
@@ -390,11 +481,16 @@ namespace lfs::vis::op {
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
+        bool payload_diverged = false;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
+        int order_index = -1;
         lfs::core::Device payload_device = lfs::core::Device::CUDA;
+        lfs::core::Device selection_slice_device = lfs::core::Device::CUDA;
         std::optional<std::filesystem::path> source_path;
+        std::shared_ptr<lfs::core::Tensor> selection_slice;
         std::unique_ptr<lfs::core::SplatData> model;
+        std::shared_ptr<const lfs::core::SplatData> shared_model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::unique_ptr<lfs::core::CropBoxData> cropbox;
@@ -407,22 +503,30 @@ namespace lfs::vis::op {
     struct SceneGraphContextSnapshot {
         int content_type = 0;
         std::filesystem::path dataset_path;
+        lfs::core::Uuid training_model_uuid;
         std::string training_model_node_name;
     };
 
     struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
+        bool preserve_node_ids = false;
+        bool complete_root_order = false;
+        bool scoped_topology = false;
+        std::optional<std::vector<lfs::core::Uuid>> selected_node_uuids;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;
     };
 
     struct LFS_VIS_API SceneGraphNodeMetadataSnapshot {
+        lfs::core::Uuid uuid;
+        lfs::core::Uuid parent_uuid;
         std::string name;
         std::string parent_name;
         glm::mat4 local_transform{1.0f};
         bool visible = true;
         bool locked = false;
         bool training_enabled = true;
+        bool payload_diverged = false;
         std::optional<std::filesystem::path> source_path;
         int order_index = -1;
     };
@@ -456,6 +560,7 @@ namespace lfs::vis::op {
         std::string name_;
         std::vector<SceneGraphNodeMetadataDiff> diffs_;
         std::chrono::steady_clock::time_point updated_at_;
+        SceneTopologyProof expected_topology_;
     };
 
     class LFS_VIS_API SceneGraphPatchEntry : public UndoEntry {
@@ -463,6 +568,9 @@ namespace lfs::vis::op {
         static SceneGraphStateSnapshot captureState(const SceneManager& scene,
                                                     const std::vector<std::string>& root_names,
                                                     SceneGraphCaptureOptions options = {});
+        static SceneGraphStateSnapshot captureStateByIds(const SceneManager& scene,
+                                                         const std::vector<lfs::core::NodeId>& root_ids,
+                                                         SceneGraphCaptureOptions options = {});
 
         SceneGraphPatchEntry(SceneManager& scene,
                              std::string name,
@@ -487,6 +595,7 @@ namespace lfs::vis::op {
         std::string name_;
         SceneGraphStateSnapshot before_;
         SceneGraphStateSnapshot after_;
+        SceneTopologyProof expected_topology_;
     };
 
 } // namespace lfs::vis::op

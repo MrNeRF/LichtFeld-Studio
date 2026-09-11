@@ -295,6 +295,27 @@ TEST_F(TensorInplaceCapacityTest, AppendGather_PreservesCapacity) {
     EXPECT_EQ(tensor_2d_.shape()[0], old_size + 5);
 }
 
+TEST_F(TensorInplaceCapacityTest, AppendGatherCopiesSelectedRowsExactly) {
+    auto tensor = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f,
+                           4.0f, 5.0f, 6.0f},
+        {2, 3}, Device::CUDA);
+    tensor.reserve(8);
+    const auto indices = Tensor::from_vector(
+                             std::vector<int>{0, 1, 0}, {3}, Device::CUDA)
+                             .to(DataType::Int32);
+
+    tensor.append_gather(indices);
+
+    EXPECT_EQ(tensor.shape(), TensorShape({5, 3}));
+    EXPECT_EQ(tensor.cpu().to_vector(),
+              (std::vector<float>{1.0f, 2.0f, 3.0f,
+                                  4.0f, 5.0f, 6.0f,
+                                  1.0f, 2.0f, 3.0f,
+                                  4.0f, 5.0f, 6.0f,
+                                  1.0f, 2.0f, 3.0f}));
+}
+
 TEST_F(TensorInplaceCapacityTest, AppendZeros_PreservesCapacity) {
     size_t old_size = tensor_2d_.shape()[0];
     tensor_2d_.append_zeros(10);

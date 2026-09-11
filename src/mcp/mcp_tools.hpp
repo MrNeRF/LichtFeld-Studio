@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "mcp_protocol.hpp"
 #include "training/control/command_api.hpp"
@@ -21,18 +22,22 @@ namespace lfs::mcp {
     public:
         using ToolHandler = std::function<json(const json& params)>;
 
+        ToolRegistry() = default;
+
         static ToolRegistry& instance();
 
         void register_tool(McpTool tool, ToolHandler handler);
         void unregister_tool(const std::string& name);
 
         std::vector<McpTool> list_tools() const;
-        json call_tool(const std::string& name, const json& arguments);
+        json call_tool(const std::string& name, const json& arguments,
+                       lfs::OperationId operation_id = {});
 
         void generate_from_command_center();
+        void set_lazy_initializer(std::function<void()> initializer);
 
     private:
-        ToolRegistry() = default;
+        void ensure_initialized() const;
 
         McpTool operation_to_tool(const training::OperationInfo& op) const;
         json arg_type_to_json_schema(training::ArgType type) const;
@@ -49,6 +54,8 @@ namespace lfs::mcp {
 
         std::unordered_map<std::string, RegisteredTool> tools_;
         mutable std::mutex mutex_;
+        mutable std::once_flag initialization_once_;
+        std::function<void()> lazy_initializer_;
     };
 
     class LFS_MCP_API ResourceRegistry {
@@ -59,16 +66,17 @@ namespace lfs::mcp {
         static ResourceRegistry& instance();
 
         void register_resource(McpResource resource, ResourceHandler handler);
-        void unregister_resource(const std::string& uri);
-
         void register_resource_prefix(std::string uri_prefix, ResourceHandler handler);
         void unregister_resource_prefix(const std::string& uri_prefix);
 
         std::vector<McpResource> list_resources() const;
         std::expected<std::vector<McpResourceContent>, std::string> read_resource(const std::string& uri) const;
+        void set_lazy_initializer(std::function<void()> initializer);
 
     private:
         ResourceRegistry() = default;
+
+        void ensure_initialized() const;
 
         struct RegisteredResource {
             McpResource resource;
@@ -78,10 +86,10 @@ namespace lfs::mcp {
         std::unordered_map<std::string, RegisteredResource> resources_;
         std::unordered_map<std::string, ResourceHandler> prefix_handlers_;
         mutable std::mutex mutex_;
+        mutable std::once_flag initialization_once_;
+        std::function<void()> lazy_initializer_;
     };
 
     LFS_MCP_API void register_core_tools();
     LFS_MCP_API void register_core_resources();
-    LFS_MCP_API void register_builtin_tools();
-
 } // namespace lfs::mcp

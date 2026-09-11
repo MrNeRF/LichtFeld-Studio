@@ -5,6 +5,7 @@
 
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -25,6 +26,7 @@ namespace lfs::event {
     }
 
     bool LocalizationManager::initialize(const std::string& locales_dir) {
+        const std::lock_guard lock(mutex_);
         locales_dir_ = locales_dir;
 
         std::error_code ec;
@@ -35,29 +37,35 @@ namespace lfs::event {
 
         available_languages_.clear();
         language_names_.clear();
+        fallback_strings_.clear();
+        warned_missing_keys_.clear();
 
-        for (fs::directory_iterator it(locales_dir_, fs::directory_options::skip_permission_denied, ec), end;
-             !ec && it != end; it.increment(ec)) {
-            std::error_code entry_ec;
-            const auto& entry = *it;
-            if (!entry.is_regular_file(entry_ec) || entry_ec || entry.path().extension() != ".json")
-                continue;
-
-            const std::string lang_code = entry.path().stem().string();
-            std::unordered_map<std::string, std::string> test_strings;
-
-            if (!parseLocaleFile(lfs::core::path_to_utf8(entry.path()), test_strings))
-                continue;
-
-            available_languages_.push_back(lang_code);
-
-            const auto name_it = test_strings.find(LANGUAGE_NAME_KEY);
-            language_names_[lang_code] = (name_it != test_strings.end()) ? name_it->second : lang_code;
-        }
-        if (ec) {
-            LOG_ERROR("Failed to scan locales directory '{}': {}", locales_dir_, ec.message());
+        const fs::path index_path = fs::path(locales_dir_).parent_path() / "locale_index.json";
+        std::ifstream index_file;
+        if (!lfs::core::open_file_for_read(index_path, index_file)) {
+            LOG_ERROR("Locale index not found: {}", lfs::core::path_to_utf8(index_path));
             return false;
         }
+
+        try {
+            json index;
+            index_file >> index;
+            const auto languages = index.at("languages");
+            if (!languages.is_array())
+                throw std::runtime_error("languages is not an array");
+            for (const auto& entry : languages) {
+                const std::string code = entry.at("code").get<std::string>();
+                available_languages_.push_back(code);
+                language_names_[code] = entry.value("name", code);
+            }
+        } catch (const std::exception& error) {
+            LOG_ERROR("Invalid locale index '{}': {}", lfs::core::path_to_utf8(index_path), error.what());
+            return false;
+        }
+
+        const fs::path fallback_path = fs::path(locales_dir_) / (std::string(DEFAULT_LANGUAGE) + ".json");
+        if (!parseLocaleFile(lfs::core::path_to_utf8(fallback_path), fallback_strings_))
+            return false;
 
         if (available_languages_.empty()) {
             LOG_ERROR("No valid locale files found in: {}", locales_dir_);
@@ -69,46 +77,115 @@ namespace lfs::event {
         const bool has_default = std::find(available_languages_.begin(),
                                            available_languages_.end(),
                                            DEFAULT_LANGUAGE) != available_languages_.end();
-        return setLanguage(has_default ? DEFAULT_LANGUAGE : available_languages_[0]);
+        const std::string initial_language = has_default ? DEFAULT_LANGUAGE : available_languages_[0];
+        if (!loadLanguage(initial_language))
+            return false;
+
+        current_language_ = initial_language;
+        language_generation_.fetch_add(1, std::memory_order_release);
+        LOG_INFO("Language set to: {}", initial_language);
+        return true;
+    }
+
+    void LocalizationManager::reset() {
+        const std::lock_guard lock(mutex_);
+        locales_dir_.clear();
+        current_language_.clear();
+        current_strings_.clear();
+        fallback_strings_.clear();
+        warned_missing_keys_.clear();
+        available_languages_.clear();
+        language_names_.clear();
+        overrides_.clear();
+        language_generation_.fetch_add(1, std::memory_order_release);
     }
 
     const char* LocalizationManager::get(std::string_view key) const {
+        thread_local std::array<std::string, 8> result_buffers;
+        thread_local size_t next_result_buffer = 0;
+        std::string& result = result_buffers[next_result_buffer++ % result_buffers.size()];
+
+        const std::lock_guard lock(mutex_);
         const std::string key_str(key);
 
         const auto override_it = overrides_.find(key_str);
         if (override_it != overrides_.end()) {
-            return override_it->second.c_str();
+            result = override_it->second;
+            return result.c_str();
         }
 
         const auto it = current_strings_.find(key_str);
         if (it != current_strings_.end()) {
-            return it->second.c_str();
+            result = it->second;
+            return result.c_str();
         }
-        LOG_WARN("Missing localization key: {}", key_str);
-        return key.data();
+
+        const auto fallback_it = fallback_strings_.find(key_str);
+        if (fallback_it != fallback_strings_.end()) {
+            if (current_language_ != DEFAULT_LANGUAGE && warned_missing_keys_.insert(key_str).second)
+                LOG_WARN("Missing localization key '{}' in '{}'; using English fallback",
+                         key_str, current_language_);
+            result = fallback_it->second;
+            return result.c_str();
+        }
+
+        if (warned_missing_keys_.insert(key_str).second)
+            LOG_WARN("Missing localization key: {}", key_str);
+        result.assign(key);
+        return result.c_str();
+    }
+
+    bool LocalizationManager::hasKey(std::string_view key) const {
+        const std::lock_guard lock(mutex_);
+        const std::string key_str(key);
+        return overrides_.find(key_str) != overrides_.end() ||
+               current_strings_.find(key_str) != current_strings_.end() ||
+               fallback_strings_.find(key_str) != fallback_strings_.end();
+    }
+
+    const char* LocalizationManager::getEnglishFallback(std::string_view key) const {
+        thread_local std::array<std::string, 8> result_buffers;
+        thread_local size_t next_result_buffer = 0;
+        std::string& result = result_buffers[next_result_buffer++ % result_buffers.size()];
+
+        const std::lock_guard lock(mutex_);
+        const auto fallback_it = fallback_strings_.find(std::string(key));
+        if (fallback_it != fallback_strings_.end()) {
+            result = fallback_it->second;
+            return result.c_str();
+        }
+
+        result.assign(key);
+        return result.c_str();
     }
 
     void LocalizationManager::setOverride(const std::string& key, const std::string& value) {
+        const std::lock_guard lock(mutex_);
         overrides_[key] = value;
     }
 
     void LocalizationManager::clearOverride(const std::string& key) {
+        const std::lock_guard lock(mutex_);
         overrides_.erase(key);
     }
 
     void LocalizationManager::clearAllOverrides() {
+        const std::lock_guard lock(mutex_);
         overrides_.clear();
     }
 
     bool LocalizationManager::hasOverride(const std::string& key) const {
+        const std::lock_guard lock(mutex_);
         return overrides_.find(key) != overrides_.end();
     }
 
     std::vector<std::string> LocalizationManager::getAvailableLanguages() const {
+        const std::lock_guard lock(mutex_);
         return available_languages_;
     }
 
     std::vector<std::string> LocalizationManager::getAvailableLanguageNames() const {
+        const std::lock_guard lock(mutex_);
         std::vector<std::string> names;
         names.reserve(available_languages_.size());
         for (const auto& lang : available_languages_) {
@@ -119,6 +196,7 @@ namespace lfs::event {
     }
 
     bool LocalizationManager::setLanguage(const std::string& language_code) {
+        const std::lock_guard lock(mutex_);
         const bool available = std::find(available_languages_.begin(),
                                          available_languages_.end(),
                                          language_code) != available_languages_.end();
@@ -131,20 +209,34 @@ namespace lfs::event {
             return false;
 
         current_language_ = language_code;
+        language_generation_.fetch_add(1, std::memory_order_release);
         LOG_INFO("Language set to: {}", language_code);
         return true;
     }
 
     std::string LocalizationManager::getCurrentLanguageName() const {
+        const std::lock_guard lock(mutex_);
         const auto it = language_names_.find(current_language_);
         return (it != language_names_.end()) ? it->second : current_language_;
     }
 
+    std::string LocalizationManager::getCurrentLanguage() const {
+        const std::lock_guard lock(mutex_);
+        return current_language_;
+    }
+
     bool LocalizationManager::reload() {
-        return !current_language_.empty() && loadLanguage(current_language_);
+        const std::string language_code = getCurrentLanguage();
+        return !language_code.empty() && setLanguage(language_code);
     }
 
     bool LocalizationManager::loadLanguage(const std::string& language_code) {
+        if (language_code == DEFAULT_LANGUAGE && !fallback_strings_.empty()) {
+            current_strings_.clear();
+            LOG_INFO("Loaded {} strings for language: {}", fallback_strings_.size(), language_code);
+            return true;
+        }
+
         const std::string filepath = locales_dir_ + "/" + language_code + ".json";
 
         std::error_code ec;

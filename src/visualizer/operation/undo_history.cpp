@@ -8,6 +8,7 @@
 #include "operator/operator_registry.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include <algorithm>
 #include <cctype>
 #include <string_view>
@@ -368,14 +369,16 @@ namespace lfs::vis::op {
     }
 
     void UndoHistory::refreshResidencyLocked() {
-        const auto refresh_stack = [](std::deque<UndoEntryPtr>& stack) {
+        const auto refresh_stack = [this](std::deque<UndoEntryPtr>& stack) {
             const size_t hot_start = stack.size() > HOT_ENTRIES ? stack.size() - HOT_ENTRIES : 0;
             for (size_t index = 0; index < stack.size(); ++index) {
                 auto& entry = stack[index];
                 if (!entry) {
                     continue;
                 }
-                if (index < hot_start) {
+                // Keep an oversized final entry for undo semantics, but never let
+                // the count-based hot set override the GPU-residency byte ceiling.
+                if (entryBytes(entry) > max_bytes_ || index < hot_start) {
                     entry->offloadToCPU();
                 } else {
                     entry->restoreToPreferredDevice();
@@ -446,6 +449,10 @@ namespace lfs::vis::op {
     void UndoHistory::push(UndoEntryPtr entry) {
         if (!entry) {
             return;
+        }
+
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            scene_manager->completePendingSelectionCounts();
         }
 
         const size_t entry_bytes = entryBytes(entry);
@@ -520,6 +527,31 @@ namespace lfs::vis::op {
                 .steps_performed = 0,
                 .error = {},
             };
+        }
+
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            try {
+                scene_manager->completePendingSelectionCounts();
+            } catch (const std::exception& e) {
+                LOG_ERROR("{} preflight failed: {}",
+                          undo_direction ? "Undo" : "Redo",
+                          e.what());
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = e.what(),
+                };
+            } catch (...) {
+                LOG_ERROR("{} preflight failed: unknown exception",
+                          undo_direction ? "Undo" : "Redo");
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = "unknown exception",
+                };
+            }
         }
 
         std::unique_lock playback_lock(playback_mutex_, std::try_to_lock);
@@ -1052,6 +1084,10 @@ namespace lfs::vis::op {
         return totalMemoryLocked();
     }
 
+    bool UndoHistory::isPlaybackActive() const {
+        std::lock_guard lock(mutex_);
+        return playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id();
+    }
     bool UndoHistory::hasActiveTransaction() const {
         std::lock_guard lock(mutex_);
         return !transactions_.empty();

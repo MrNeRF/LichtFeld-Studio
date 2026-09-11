@@ -1,0 +1,814 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "preferences.hpp"
+
+#include "core/environment.hpp"
+#include "core/error.hpp"
+#include "core/logger.hpp"
+#include "core/path_utils.hpp"
+#include "core/user_paths.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <mutex>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace lfs::vis {
+    namespace {
+        using json = nlohmann::json;
+
+        [[nodiscard]] bool disabled() {
+            return lfs::core::environment::flag("LFS_SAFE_MODE", false);
+        }
+
+        [[nodiscard]] bool knownCameraMode(const std::string& mode) {
+            return mode == "orbit" || mode == "trackball" || mode == "fpv" || mode == "drone";
+        }
+
+        [[nodiscard]] bool knownProgressBarStyle(std::string_view style) {
+            return style == "classic" || style == "miner";
+        }
+
+        [[nodiscard]] bool knownViewportChromeStyle(std::string_view style) {
+            return style == "solid" || style == "translucent" || style == "frosted";
+        }
+
+        [[nodiscard]] bool knownViewportToolbarPosition(std::string_view position) {
+            return position == "top" || position == "centered" || position == "free";
+        }
+
+        constexpr float kDefaultZoomSpeed = 11.0f;
+        constexpr float kDefaultNavigationSpeed = 8.0f;
+        constexpr float kMinNavigationSpeed = 1.0f;
+        constexpr float kMaxNavigationSpeed = 100.0f;
+
+        [[nodiscard]] float clampNavigationSpeed(const float value, const float fallback) {
+            return std::isfinite(value)
+                       ? std::clamp(value, kMinNavigationSpeed, kMaxNavigationSpeed)
+                       : fallback;
+        }
+
+        [[nodiscard]] lfs::Error preferencePathError(
+            const lfs::ErrorCode code,
+            std::string user_message,
+            std::string detail,
+            const std::filesystem::path& path = {}) {
+            lfs::SmallFields fields;
+            if (!path.empty())
+                fields.add("path", lfs::core::path_to_utf8(path));
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::IO,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .user_message = std::move(user_message),
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = std::move(fields),
+            });
+        }
+
+        [[nodiscard]] std::optional<std::filesystem::path> preferenceHomeDirectory() {
+#ifdef _WIN32
+            if (const auto value = lfs::core::environment::value("USERPROFILE"))
+                return lfs::core::utf8_to_path(std::string(*value));
+            if (const auto value = lfs::core::environment::value("HOME"))
+                return lfs::core::utf8_to_path(std::string(*value));
+#else
+            if (const auto value = lfs::core::environment::value("HOME"))
+                return lfs::core::utf8_to_path(std::string(*value));
+#endif
+            return std::nullopt;
+        }
+
+        [[nodiscard]] std::filesystem::path expandLeadingTilde(
+            const std::filesystem::path& candidate) {
+            const auto text = lfs::core::path_to_utf8(candidate);
+            const bool tilde_home =
+                text == "~" || (text.size() >= 2 && text.front() == '~' &&
+                                (text[1] == '/' || text[1] == '\\'));
+            if (!tilde_home)
+                return candidate;
+            const auto home = preferenceHomeDirectory();
+            if (!home || home->empty())
+                return candidate;
+            if (text.size() <= 2)
+                return *home;
+            return *home / lfs::core::utf8_to_path(text.substr(2));
+        }
+
+        [[nodiscard]] lfs::Result<std::filesystem::path> validateWritableDirectory(
+            const std::filesystem::path& candidate,
+            const std::string& preference_key,
+            const std::string& display_name,
+            const std::string& probe_prefix) {
+            if (candidate.empty()) {
+                return preferencePathError(
+                    lfs::ErrorCode::InvalidArgument,
+                    display_name + " path is empty.",
+                    preference_key + " is empty");
+            }
+            const auto expanded = expandLeadingTilde(candidate);
+            if (!expanded.is_absolute()) {
+                return preferencePathError(
+                    lfs::ErrorCode::InvalidArgument,
+                    display_name + " path must be absolute.",
+                    preference_key + " is not an absolute path",
+                    candidate);
+            }
+            std::error_code error;
+            auto absolute = std::filesystem::absolute(expanded, error);
+            if (error || absolute.empty()) {
+                return preferencePathError(
+                    lfs::ErrorCode::InvalidArgument,
+                    display_name + " path could not be resolved to an absolute path.",
+                    error ? error.message() : "absolute() returned an empty path",
+                    expanded);
+            }
+            absolute = absolute.lexically_normal();
+            std::filesystem::create_directories(absolute, error);
+            if (error) {
+                return preferencePathError(
+                    lfs::ErrorCode::PermissionDenied,
+                    display_name + " could not be created.",
+                    error.message(),
+                    absolute);
+            }
+            if (!std::filesystem::is_directory(absolute, error) || error) {
+                return preferencePathError(
+                    lfs::ErrorCode::InvalidArgument,
+                    display_name + " path is not a directory.",
+                    error ? error.message() : "path exists but is not a directory",
+                    absolute);
+            }
+#ifdef _WIN32
+            const auto pid = static_cast<std::uint64_t>(_getpid());
+#else
+            const auto pid = static_cast<std::uint64_t>(::getpid());
+#endif
+            const auto probe =
+                absolute /
+                (probe_prefix + std::to_string(pid) + "-" +
+                 std::to_string(
+                     std::chrono::steady_clock::now().time_since_epoch().count()));
+            {
+                std::ofstream output(probe, std::ios::binary | std::ios::trunc);
+                if (!output) {
+                    return preferencePathError(
+                        lfs::ErrorCode::PermissionDenied,
+                        display_name + " is not writable.",
+                        "write probe could not be created",
+                        absolute);
+                }
+                output.put('x');
+                output.flush();
+                if (!output) {
+                    std::error_code ignored;
+                    std::filesystem::remove(probe, ignored);
+                    return preferencePathError(
+                        lfs::ErrorCode::PermissionDenied,
+                        display_name + " is not writable.",
+                        "write probe could not be written",
+                        absolute);
+                }
+            }
+            std::filesystem::remove(probe, error);
+            if (error) {
+                return preferencePathError(
+                    lfs::ErrorCode::PermissionDenied,
+                    display_name + " is not writable.",
+                    error.message(),
+                    absolute);
+            }
+            return absolute;
+        }
+
+        [[nodiscard]] std::filesystem::path defaultProjectLocationPath() {
+            const auto resolved = lfs::core::UserPaths::resolve();
+            if (!resolved)
+                return {};
+            return resolved->rootDir() / "projects";
+        }
+
+        [[nodiscard]] bool containsLichtProject(const std::filesystem::path& directory) {
+            std::error_code error;
+            if (!std::filesystem::is_directory(directory, error) || error)
+                return false;
+
+            constexpr int max_depth = 4;
+            std::filesystem::recursive_directory_iterator iterator(
+                directory,
+                std::filesystem::directory_options::skip_permission_denied,
+                error);
+            const std::filesystem::recursive_directory_iterator end;
+            while (iterator != end) {
+                if (error) {
+                    error.clear();
+                    iterator.increment(error);
+                    continue;
+                }
+                const auto name = iterator->path().filename().string();
+                if (iterator->is_directory(error)) {
+                    if (name.starts_with('.') || iterator.depth() >= max_depth)
+                        iterator.disable_recursion_pending();
+                } else if (!error && iterator->is_regular_file(error) &&
+                           iterator->path().extension() == ".licht") {
+                    return true;
+                }
+                error.clear();
+                iterator.increment(error);
+            }
+            return false;
+        }
+    } // namespace
+
+    struct UserPreferences::Impl {
+        std::mutex mutex;
+        json values = json::object();
+        std::optional<lfs::core::UserPaths> paths;
+        std::filesystem::path loaded_path;
+        bool loaded = false;
+        bool writable = true;
+        bool warned = false;
+
+        void saveValuesLocked() {
+            if (!paths || !writable)
+                return;
+            values["schema_version"] = 1;
+            if (const auto result = paths->writePreferencesAtomically(values.dump(2) + '\n'); !result)
+                LOG_WARN("Unable to save user preferences: {}",
+                         lfs::format_for_developer(result.error()));
+        }
+
+        void migrateProjectLocationLocked() {
+            if (!paths || !writable)
+                return;
+
+            const auto working = values.find("working_directory");
+            if (working != values.end() && working->is_string() &&
+                !working->get<std::string>().empty() &&
+                values.find("legacy_working_directory") == values.end()) {
+                values["legacy_working_directory"] = working->get<std::string>();
+            }
+            const auto project = values.find("project_location");
+            bool changed = false;
+            if (project != values.end() && project->is_string()) {
+                changed = values.erase("working_directory") > 0;
+                changed = values.erase("asset_manager_directory") > 0 || changed;
+            } else {
+                std::string selected;
+                const auto asset = values.find("asset_manager_directory");
+                if (asset != values.end() && asset->is_string() && !asset->get<std::string>().empty()) {
+                    selected = asset->get<std::string>();
+                } else {
+                    const auto root = paths->rootDir().lexically_normal();
+                    if (working != values.end() && working->is_string() && !working->get<std::string>().empty()) {
+                        const auto working_path = lfs::core::utf8_to_path(working->get<std::string>());
+                        if (working_path.lexically_normal() != root)
+                            selected = working->get<std::string>();
+                    }
+                    if (selected.empty() && containsLichtProject(paths->rootDir() / "assets"))
+                        selected = lfs::core::path_to_utf8(paths->rootDir() / "assets");
+                }
+                values["project_location"] = selected;
+                changed = true;
+                changed = values.erase("working_directory") > 0 || changed;
+                changed = values.erase("asset_manager_directory") > 0 || changed;
+            }
+            if (changed)
+                saveValuesLocked();
+        }
+
+        void loadLocked() {
+            if (disabled()) {
+                values = json::object();
+                paths.reset();
+                loaded_path.clear();
+                loaded = true;
+                writable = false;
+                return;
+            }
+
+            auto resolved = lfs::core::UserPaths::resolve();
+            if (!resolved) {
+                if (!warned) {
+                    LOG_WARN("Unable to resolve user preferences path: {}",
+                             lfs::format_for_developer(resolved.error()));
+                    warned = true;
+                }
+                values = json::object();
+                paths.reset();
+                loaded = true;
+                writable = false;
+                return;
+            }
+
+            const auto path = resolved->preferencesFile();
+            if (loaded && paths && loaded_path == path)
+                return;
+
+            paths = *resolved;
+            loaded_path = path;
+            loaded = true;
+            writable = true;
+            warned = false;
+            values = json::object();
+
+            std::ifstream input(path);
+            if (!input)
+                return;
+
+            try {
+                auto parsed = json::parse(input);
+                if (!parsed.is_object())
+                    throw std::runtime_error("root value is not an object");
+                values = std::move(parsed);
+                input.close();
+                migrateProjectLocationLocked();
+            } catch (const std::exception& error) {
+                // Windows does not allow the malformed file to be moved while
+                // this reader still holds it open.
+                input.close();
+                const auto backup = paths->backupCorruptPreferences();
+                if (!backup) {
+                    writable = false;
+                    LOG_WARN("Invalid preferences were not replaced because their backup failed: {}",
+                             lfs::format_for_developer(backup.error()));
+                } else {
+                    const std::string backup_path = *backup
+                                                        ? (*backup)->string()
+                                                        : std::string("<no source file>");
+                    LOG_WARN("Invalid preferences were backed up to '{}'; defaults will be used: {}",
+                             backup_path, error.what());
+                }
+                warned = true;
+            }
+        }
+
+        void saveLocked() {
+            loadLocked();
+            saveValuesLocked();
+        }
+    };
+
+    UserPreferences& UserPreferences::instance() {
+        static UserPreferences preferences;
+        return preferences;
+    }
+
+    UserPreferences::UserPreferences() : impl_(std::make_unique<Impl>()) {}
+    UserPreferences::~UserPreferences() = default;
+
+    void UserPreferences::setThemeName(const std::string& value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["theme"] = value;
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::themeName() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return impl_->values.value("theme", std::string{});
+    }
+    void UserPreferences::setUiScale(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["ui_scale"] = value <= 0.0f ? json("auto") : json(value);
+        impl_->saveLocked();
+    }
+    float UserPreferences::uiScale() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("ui_scale");
+        if (it == impl_->values.end())
+            return 0.0f;
+        if (it->is_string() && it->get<std::string>() == "auto")
+            return 0.0f;
+        if (it->is_number()) {
+            const float scale = it->get<float>();
+            if (std::isfinite(scale) && scale >= 1.0f && scale <= 4.0f)
+                return scale;
+        }
+        return 0.0f;
+    }
+    void UserPreferences::setZoomSpeed(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["zoom_speed"] = clampNavigationSpeed(value, kDefaultZoomSpeed);
+        impl_->saveLocked();
+    }
+    float UserPreferences::zoomSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("zoom_speed");
+        if (it != impl_->values.end() && it->is_number())
+            return clampNavigationSpeed(it->get<float>(), kDefaultZoomSpeed);
+        return kDefaultZoomSpeed;
+    }
+    void UserPreferences::setNavigationSpeed(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["navigation_speed"] = clampNavigationSpeed(value, kDefaultNavigationSpeed);
+        impl_->saveLocked();
+    }
+    float UserPreferences::navigationSpeed() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("navigation_speed");
+        if (it != impl_->values.end() && it->is_number())
+            return clampNavigationSpeed(it->get<float>(), kDefaultNavigationSpeed);
+        return kDefaultNavigationSpeed;
+    }
+    void UserPreferences::setLanguage(const std::string& value) {
+        if (value.empty())
+            return;
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["language"] = value;
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::language() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("language");
+        return it != impl_->values.end() && it->is_string() ? it->get<std::string>() : std::string{};
+    }
+    void UserPreferences::clearLanguage() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("language");
+        impl_->saveLocked();
+    }
+    void UserPreferences::setCameraNavigation(const std::string& value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        if (!impl_->values.value("remember_camera_navigation", false))
+            return;
+        impl_->values["camera_navigation_mode"] = knownCameraMode(value) ? value : "orbit";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::cameraNavigation() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        if (!impl_->values.value("remember_camera_navigation", false))
+            return "orbit";
+        const std::string mode = impl_->values.value("camera_navigation_mode", "orbit");
+        return knownCameraMode(mode) ? mode : "orbit";
+    }
+    void UserPreferences::setRememberCameraNavigation(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["remember_camera_navigation"] = enabled;
+        if (!enabled)
+            impl_->values.erase("camera_navigation_mode");
+        impl_->saveLocked();
+    }
+    bool UserPreferences::rememberCameraNavigation() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return impl_->values.value("remember_camera_navigation", false);
+    }
+    void UserPreferences::setCameraViewSnap(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        if (!impl_->values.value("remember_camera_view_snap", false))
+            return;
+        impl_->values["camera_view_snap"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::cameraViewSnap() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        if (!impl_->values.value("remember_camera_view_snap", false))
+            return false;
+        return impl_->values.value("camera_view_snap", false);
+    }
+    void UserPreferences::setRememberCameraViewSnap(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["remember_camera_view_snap"] = enabled;
+        if (!enabled)
+            impl_->values.erase("camera_view_snap");
+        impl_->saveLocked();
+    }
+    bool UserPreferences::rememberCameraViewSnap() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return impl_->values.value("remember_camera_view_snap", false);
+    }
+    void UserPreferences::setSceneGraphSelectionMarkers(const bool enabled) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["scene_graph_selection_markers"] = enabled;
+        impl_->saveLocked();
+    }
+    bool UserPreferences::sceneGraphSelectionMarkers() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        return impl_->values.value("scene_graph_selection_markers", false);
+    }
+    void UserPreferences::setProgressBarStyle(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["status_bar_progress_style"] =
+            knownProgressBarStyle(value) ? std::string(value) : "classic";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::progressBarStyle() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("status_bar_progress_style");
+        if (it == impl_->values.end() || !it->is_string())
+            return "classic";
+        const std::string style = it->get<std::string>();
+        return knownProgressBarStyle(style) ? style : "classic";
+    }
+    void UserPreferences::setViewportChromeStyle(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_chrome_style"] =
+            knownViewportChromeStyle(value) ? std::string(value) : "translucent";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportChromeStyle() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_chrome_style");
+        if (it == impl_->values.end() || !it->is_string())
+            return "translucent";
+        const std::string style = it->get<std::string>();
+        return knownViewportChromeStyle(style) ? style : "translucent";
+    }
+    void UserPreferences::setViewportToolbarPosition(const std::string_view value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_position"] =
+            knownViewportToolbarPosition(value) ? std::string(value) : "centered";
+        impl_->saveLocked();
+    }
+    std::string UserPreferences::viewportToolbarPosition() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_position");
+        if (it == impl_->values.end() || !it->is_string())
+            return "centered";
+        const std::string position = it->get<std::string>();
+        return knownViewportToolbarPosition(position) ? position : "centered";
+    }
+    void UserPreferences::setViewportToolbarFreeY(const float value) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["viewport_toolbar_free_y"] =
+            std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+        impl_->saveLocked();
+    }
+    float UserPreferences::viewportToolbarFreeY() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("viewport_toolbar_free_y");
+        if (it == impl_->values.end() || !it->is_number())
+            return 0.5f;
+        const float value = it->get<float>();
+        return std::clamp(std::isfinite(value) ? value : 0.5f, 0.0f, 1.0f);
+    }
+
+    void UserPreferences::setMcp(const McpPreferenceState& state) {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["mcp"] = {
+            {"enabled", state.enabled},
+            {"expose_network", state.expose_network},
+            {"port", std::clamp(state.port, 1, 65535)},
+            {"request_logging", state.request_logging},
+        };
+        impl_->saveLocked();
+    }
+
+    McpPreferenceState UserPreferences::mcp() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        McpPreferenceState result;
+        const auto it = impl_->values.find("mcp");
+        if (it == impl_->values.end() || !it->is_object())
+            return result;
+        if (const auto enabled = it->find("enabled");
+            enabled != it->end() && enabled->is_boolean())
+            result.enabled = enabled->get<bool>();
+        if (const auto expose = it->find("expose_network");
+            expose != it->end() && expose->is_boolean())
+            result.expose_network = expose->get<bool>();
+        if (const auto port = it->find("port");
+            port != it->end() && port->is_number_integer()) {
+            const auto value = port->get<std::int64_t>();
+            if (value >= 1 && value <= 65535)
+                result.port = static_cast<int>(value);
+        }
+        if (const auto logging = it->find("request_logging");
+            logging != it->end() && logging->is_boolean())
+            result.request_logging = logging->get<bool>();
+        return result;
+    }
+
+    void UserPreferences::setSceneUpscaler(const std::string& backend_id,
+                                           const std::string& preset_id) {
+        const auto backend = sceneUpscalerBackendFromId(backend_id)
+                                 .value_or(SceneUpscalerBackend::Native);
+        const auto preset = lfs::vis::sceneUpscalerPreset(backend, preset_id)
+                                .value_or(defaultSceneUpscalerPreset(backend));
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["scene_upscaler"] = std::string(sceneUpscalerBackendId(backend));
+        auto& presets = impl_->values["scene_upscaler_presets"];
+        if (!presets.is_object())
+            presets = json::object();
+        presets[std::string(sceneUpscalerBackendId(backend))] = std::string(preset.id);
+        impl_->saveLocked();
+    }
+
+    void UserPreferences::clearSceneUpscaler() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values.erase("scene_upscaler");
+        impl_->values.erase("scene_upscaler_presets");
+        impl_->saveLocked();
+    }
+
+    std::string UserPreferences::sceneUpscaler() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("scene_upscaler");
+        if (it == impl_->values.end() || !it->is_string())
+            return "native";
+        const std::string id = it->get<std::string>();
+        return sceneUpscalerBackendFromId(id).has_value() ? id : "native";
+    }
+
+    std::string UserPreferences::sceneUpscalerPreset(const std::string& backend_id) {
+        const auto backend = sceneUpscalerBackendFromId(backend_id)
+                                 .value_or(SceneUpscalerBackend::Native);
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto presets = impl_->values.find("scene_upscaler_presets");
+        if (presets != impl_->values.end() && presets->is_object()) {
+            const auto preset = presets->find(std::string(sceneUpscalerBackendId(backend)));
+            if (preset != presets->end() && preset->is_string()) {
+                const std::string id = preset->get<std::string>();
+                if (lfs::vis::sceneUpscalerPreset(backend, id).has_value())
+                    return id;
+            }
+        }
+        return std::string(defaultSceneUpscalerPreset(backend).id);
+    }
+
+    void saveLanguagePreference(const std::string& value) { UserPreferences::instance().setLanguage(value); }
+    std::string loadLanguagePreference() { return UserPreferences::instance().language(); }
+    void clearLanguagePreference() { UserPreferences::instance().clearLanguage(); }
+    void saveCameraNavigationPreference(const std::string& value) { UserPreferences::instance().setCameraNavigation(value); }
+    std::string loadCameraNavigationPreference() { return UserPreferences::instance().cameraNavigation(); }
+    void saveZoomSpeedPreference(const float speed) { UserPreferences::instance().setZoomSpeed(speed); }
+    float loadZoomSpeedPreference() { return UserPreferences::instance().zoomSpeed(); }
+    void saveNavigationSpeedPreference(const float speed) { UserPreferences::instance().setNavigationSpeed(speed); }
+    float loadNavigationSpeedPreference() { return UserPreferences::instance().navigationSpeed(); }
+    void setRememberCameraNavigationPreference(const bool enabled) { UserPreferences::instance().setRememberCameraNavigation(enabled); }
+    bool rememberCameraNavigationPreference() { return UserPreferences::instance().rememberCameraNavigation(); }
+    void saveCameraViewSnapPreference(const bool enabled) { UserPreferences::instance().setCameraViewSnap(enabled); }
+    bool loadCameraViewSnapPreference() { return UserPreferences::instance().cameraViewSnap(); }
+    void setRememberCameraViewSnapPreference(const bool enabled) { UserPreferences::instance().setRememberCameraViewSnap(enabled); }
+    bool rememberCameraViewSnapPreference() { return UserPreferences::instance().rememberCameraViewSnap(); }
+    void saveSceneGraphSelectionMarkersPreference(const bool enabled) {
+        UserPreferences::instance().setSceneGraphSelectionMarkers(enabled);
+    }
+    bool loadSceneGraphSelectionMarkersPreference() {
+        return UserPreferences::instance().sceneGraphSelectionMarkers();
+    }
+    void saveProgressBarStylePreference(const std::string_view style) {
+        UserPreferences::instance().setProgressBarStyle(style);
+    }
+    std::string loadProgressBarStylePreference() {
+        return UserPreferences::instance().progressBarStyle();
+    }
+    void saveViewportChromeStylePreference(const std::string_view style) {
+        UserPreferences::instance().setViewportChromeStyle(style);
+    }
+    std::string loadViewportChromeStylePreference() {
+        return UserPreferences::instance().viewportChromeStyle();
+    }
+    void saveViewportToolbarPositionPreference(const std::string_view position) {
+        UserPreferences::instance().setViewportToolbarPosition(position);
+    }
+    std::string loadViewportToolbarPositionPreference() {
+        return UserPreferences::instance().viewportToolbarPosition();
+    }
+    void saveViewportToolbarFreeYPreference(const float value) {
+        UserPreferences::instance().setViewportToolbarFreeY(value);
+    }
+    float loadViewportToolbarFreeYPreference() {
+        return UserPreferences::instance().viewportToolbarFreeY();
+    }
+    void saveMcpPreferences(const McpPreferenceState& state) { UserPreferences::instance().setMcp(state); }
+    McpPreferenceState loadMcpPreferences() { return UserPreferences::instance().mcp(); }
+    void saveSceneUpscalerPreference(const std::string& backend_id,
+                                     const std::string& preset_id) {
+        UserPreferences::instance().setSceneUpscaler(backend_id, preset_id);
+    }
+    void clearSceneUpscalerPreference() { UserPreferences::instance().clearSceneUpscaler(); }
+    std::string loadSceneUpscalerPreference() {
+        return UserPreferences::instance().sceneUpscaler();
+    }
+    std::string loadSceneUpscalerPresetPreference(const std::string& backend_id) {
+        return UserPreferences::instance().sceneUpscalerPreset(backend_id);
+    }
+
+    lfs::Status UserPreferences::setProjectLocation(
+        const std::filesystem::path& path) {
+        auto resolved = validateWritableDirectory(
+            path, "project_location", "The project location",
+            ".lfs-project-write-probe-");
+        if (!resolved)
+            return lfs::Status::failure(std::move(resolved).error());
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["project_location"] =
+            lfs::core::path_to_utf8(*resolved);
+        impl_->saveLocked();
+        return {};
+    }
+
+    std::filesystem::path UserPreferences::projectLocation() {
+        const auto raw = projectLocationPreference();
+        return raw.empty() ? defaultProjectLocationPath() : raw;
+    }
+
+    std::filesystem::path UserPreferences::projectLocationPreference() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        const auto it = impl_->values.find("project_location");
+        if (it == impl_->values.end() || !it->is_string())
+            return {};
+        const std::string stored = it->get<std::string>();
+        return stored.empty() ? std::filesystem::path{}
+                              : lfs::core::utf8_to_path(stored);
+    }
+
+    void UserPreferences::clearProjectLocation() {
+        std::scoped_lock lock(impl_->mutex);
+        impl_->loadLocked();
+        impl_->values["project_location"] = "";
+        impl_->saveLocked();
+    }
+
+    std::filesystem::path workingDirectoryPreferenceRaw() {
+        if (disabled())
+            return {};
+        const auto resolved = lfs::core::UserPaths::resolve();
+        if (!resolved)
+            return {};
+        std::ifstream input(resolved->preferencesFile());
+        if (!input)
+            return {};
+        try {
+            const auto values = json::parse(input);
+            auto it = values.find("legacy_working_directory");
+            if (it == values.end())
+                it = values.find("working_directory");
+            if (it == values.end() || !it->is_string() || it->get<std::string>().empty())
+                return {};
+            return lfs::core::utf8_to_path(it->get<std::string>());
+        } catch (const std::exception&) {
+            // LFS-CENSUS-OK(empty-catch): malformed legacy preferences are ignored by startup scanning.
+            return {};
+        }
+    }
+    lfs::Status setProjectLocationPreference(
+        const std::filesystem::path& path) {
+        return UserPreferences::instance().setProjectLocation(path);
+    }
+    std::filesystem::path loadProjectLocationPreference() {
+        return UserPreferences::instance().projectLocation();
+    }
+    std::filesystem::path projectLocationPreferenceRaw() {
+        return UserPreferences::instance().projectLocationPreference();
+    }
+    void clearProjectLocationPreference() {
+        UserPreferences::instance().clearProjectLocation();
+    }
+    std::filesystem::path defaultProjectLocation() {
+        return defaultProjectLocationPath();
+    }
+} // namespace lfs::vis

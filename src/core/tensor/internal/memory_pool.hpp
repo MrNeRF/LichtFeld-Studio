@@ -4,21 +4,28 @@
 #pragma once
 
 #include "allocation_profiler.hpp"
+#include "core/alloc_counter.hpp"
+#include "core/cuda_error.hpp"
 #include "core/export.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/training_churn_metrics.hpp"
 #include "cuda_event_pool.hpp"
-#include "deferred_free_queue.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
+#include "stream_lifetime.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cuda_runtime.h>
 #include <iomanip>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -31,7 +38,32 @@ namespace lfs::core {
                                        Async,
                                        Direct };
 
+    enum class CudaStorageMode : uint8_t {
+        Pooled,
+        ExactAsync,
+        Direct,
+    };
+
+    LFS_CORE_API void* allocate_cuda_storage(
+        size_t bytes,
+        cudaStream_t stream = nullptr,
+        CudaStorageMode mode = CudaStorageMode::Pooled,
+        const char* label = "tensor.storage",
+        const char* operation = "tensor.allocate");
+
     // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
+    class LFS_CORE_API CudaMemoryPool;
+
+    // pool-liveness-aware free for Tensor storage deleters.
+    // Returns the live pool pointer while CudaMemoryPool is constructed and
+    // has not yet published shutdown to the process-wide atomic; nullptr after
+    // Tensor::shutdown_memory_pool() clears that pointer. Prefer
+    // safe_cuda_pool_deallocate in shared_ptr deleters so static/TLS Tensor
+    // destruction after ordered teardown is a no-op instead of re-entering a
+    // destroyed Meyers singleton (SIGSEGV / exit 139).
+    [[nodiscard]] LFS_CORE_API CudaMemoryPool* try_live_cuda_memory_pool() noexcept;
+    LFS_CORE_API void safe_cuda_pool_deallocate(void* ptr, cudaStream_t stream = nullptr) noexcept;
+
     class LFS_CORE_API CudaMemoryPool {
     public:
         static CudaMemoryPool& instance();
@@ -52,25 +84,73 @@ namespace lfs::core {
 
         static std::string_view current_label() noexcept;
 
+        void suspend_deallocations_for_process_exit() {
+            suspend_deallocations_.store(true, std::memory_order_release);
+        }
+
         void shutdown() {
             bool expected = false;
             if (!shutdown_.compare_exchange_strong(expected, true))
                 return;
             LOG_INFO("Shutting down CudaMemoryPool...");
-            DeferredFreeQueue::instance().shutdown();
+            if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                return;
+            }
+            // Cached async allocations remember the stream that ordered their
+            // final use. Some short-lived decoder/upload lanes are already
+            // retired by process shutdown, so those handles cannot be passed to
+            // cudaFreeAsync. First establish device-wide completion, then make
+            // every cache entry stream-independent before releasing storage.
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status == cudaSuccess) {
+                GPUSlabAllocator::instance().merge_all_streams_into_virgin();
+                SizeBucketedPool::instance().retag_all_streams(nullptr);
+            } else {
+                ensure_cuda_success(
+                    sync_status, "cudaDeviceSynchronize(memory-pool shutdown)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
             SizeBucketedPool::instance().shutdown();
             GPUSlabAllocator::instance().shutdown();
             CudaEventPool::instance().shutdown();
         }
 
         void* allocate(size_t bytes, cudaStream_t stream = nullptr) {
+            unretire_stream(stream);
+            return allocate_cuda_storage(bytes, stream);
+        }
+
+        void* try_allocate(size_t bytes,
+                           cudaStream_t stream = nullptr,
+                           cudaError_t* failure_status = nullptr) {
+            unretire_stream(stream);
+            LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate", stream);
+            if (failure_status) {
+                *failure_status = cudaSuccess;
+            }
             if (bytes == 0)
                 return nullptr;
 
             if (shutdown_.load(std::memory_order_acquire)) {
                 LOG_ERROR("Attempted to allocate CUDA memory after shutdown!");
+                if (failure_status) {
+                    *failure_status = cudaErrorUnknown;
+                }
                 return nullptr;
             }
+            if (cuda_is_unavailable()) [[unlikely]] {
+                if (failure_status) {
+                    *failure_status = cudaErrorInitializationError;
+                }
+                return nullptr;
+            }
+
+            // release_stream() must see a reusable block either in its cache or
+            // in allocation_map_. Cover cache removal, any cross-stream bridge,
+            // and allocation tracking as one stream-routing operation; otherwise
+            // a concurrent stream retirement can miss the block in transit and
+            // destroy the stream that remains recorded as its home.
+            std::shared_lock stream_routing_lock(stream_routing_mutex_);
 
             void* ptr = nullptr;
 
@@ -81,7 +161,7 @@ namespace lfs::core {
                     stats_.slab_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Slab, stream);
 
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
@@ -94,7 +174,7 @@ namespace lfs::core {
                     stats_.bucket_cache_hits.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Bucketed, stream);
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
@@ -103,61 +183,140 @@ namespace lfs::core {
                 const size_t bucket_size = SizeBucketedPool::get_bucket_size(bytes);
 
 #if CUDART_VERSION >= 12080
+                const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bucket_size, stream);
                 if (err == cudaSuccess) {
+                    SizeBucketedPool::instance().account_live_allocation(bytes);
+                    alloc_counter::record_site(alloc_counter::Site::PoolBucket);
                     stats_.bucket_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     stats_.bucket_waste.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Bucketed, stream);
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
-                    }
-                    if ((stats_.bucket_allocs.load(std::memory_order_relaxed) +
-                         stats_.async_allocs.load(std::memory_order_relaxed)) %
-                            100 ==
-                        0) {
-                        DeferredFreeQueue::instance().process();
                     }
                     log_stats_periodically();
                     return ptr;
                 }
-                LOG_WARN("cudaMallocAsync failed for bucket " + std::to_string(bucket_size) + ": " + cudaGetErrorString(err));
+                ensure_cuda_success(err, pre_call_state, "cudaMallocAsync(bucket)",
+                                    ::lfs::core::detail::format_cuda_safe("bucket_bytes={}", bucket_size),
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
 #endif
             }
 
 #if CUDART_VERSION >= 12080
             {
+                const auto pre_call_state = sample_cuda_pre_call_state(stream);
                 cudaError_t err = cudaMallocAsync(&ptr, bytes, stream);
                 if (err == cudaSuccess) {
+                    alloc_counter::record_site(alloc_counter::Site::PoolAsync);
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Async, stream);
-                    if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                    if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
                 }
+                ensure_cuda_success(err, pre_call_state, "cudaMallocAsync(direct async tier)",
+                                    ::lfs::core::detail::format_cuda_safe("requested_bytes={}", bytes),
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
             }
 #endif
 
-            return allocate_direct(bytes);
+            return try_allocate_direct(bytes, failure_status);
+        }
+
+        // Exact cudaMallocAsync tier: bypasses slab and size-bucket rounding,
+        // but remains tracked by the pool so release is stream ordered and
+        // teardown-safe. Intended for measured, privately retained workspaces.
+        void* try_allocate_exact_async(size_t bytes,
+                                       cudaStream_t stream = nullptr,
+                                       cudaError_t* failure_status = nullptr) {
+            unretire_stream(stream);
+            LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.allocate_exact_async", stream);
+            if (failure_status) {
+                *failure_status = cudaSuccess;
+            }
+            if (bytes == 0) {
+                return nullptr;
+            }
+            if (shutdown_.load(std::memory_order_acquire)) {
+                LOG_ERROR("Attempted to allocate exact CUDA storage after shutdown!");
+                if (failure_status) {
+                    *failure_status = cudaErrorUnknown;
+                }
+                return nullptr;
+            }
+            if (cuda_is_unavailable()) [[unlikely]] {
+                if (failure_status) {
+                    *failure_status = cudaErrorInitializationError;
+                }
+                return nullptr;
+            }
+
+            std::shared_lock stream_routing_lock(stream_routing_mutex_);
+#if CUDART_VERSION >= 12080
+            void* ptr = nullptr;
+            const auto pre_call_state = sample_cuda_pre_call_state(stream);
+            const cudaError_t err = cudaMallocAsync(&ptr, bytes, stream);
+            if (err == cudaSuccess) {
+                alloc_counter::record_site(alloc_counter::Site::PoolAsync);
+                stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
+                stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
+                track_allocation(ptr, bytes, AllocMethod::Async, stream);
+                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
+                    AllocationProfiler::instance().record_allocation(bytes, 3);
+                }
+                return ptr;
+            }
+            if (failure_status) {
+                *failure_status = err;
+            }
+            ensure_cuda_success(
+                err, pre_call_state, "cudaMallocAsync(exact tier)",
+                ::lfs::core::detail::format_cuda_safe("requested_bytes={}", bytes),
+                LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            return nullptr;
+#else
+            // Compatibility builds without the async pool still bypass bucket
+            // quantization and preserve exact byte sizing.
+            return try_allocate_direct(bytes, failure_status);
+#endif
         }
 
         // Marks `ptr` as used by `stream` beyond its home stream. The free will
         // bridge that use back into the home stream before the block is recycled.
         void record_stream(void* ptr, cudaStream_t stream) {
+            unretire_stream(stream);
             if (!ptr)
                 return;
-            std::lock_guard<std::mutex> lock(map_mutex_);
-            auto it = allocation_map_.find(ptr);
-            if (it == allocation_map_.end())
-                return;
-            AllocationInfo& info = it->second;
-            if (stream == info.home_stream)
-                return;
-            if (std::find(info.extra_streams.begin(), info.extra_streams.end(), stream) ==
-                info.extra_streams.end()) {
-                info.extra_streams.push_back(stream);
+            bool map_miss = false;
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                auto it = allocation_map_.find(ptr);
+                if (it == allocation_map_.end()) {
+                    map_miss = true;
+                } else {
+                    AllocationInfo& info = it->second;
+                    if (stream == info.home_stream)
+                        return;
+                    if (std::find(info.extra_streams.begin(), info.extra_streams.end(), stream) ==
+                        info.extra_streams.end()) {
+                        info.extra_streams.push_back(stream);
+                    }
+                    return;
+                }
+            }
+            if (map_miss) {
+                static std::atomic<bool> warned{false};
+                if (!warned.exchange(true, std::memory_order_relaxed)) {
+                    LOG_WARN("CUDA memory-pool record_stream missed allocation "
+                             "(ptr={}, stream={})",
+                             ptr, static_cast<const void*>(stream));
+                }
             }
         }
 
@@ -170,10 +329,22 @@ namespace lfs::core {
         void release_stream(cudaStream_t stream) {
             if (!stream)
                 return;
-            cudaStreamSynchronize(stream);
+
+            // A deallocation removes its allocation-map entry before routing the
+            // block into a suballocator. Keep that entire transition atomic with
+            // respect to stream retirement; otherwise a late free can repopulate
+            // a cache with the stream after the cache has already been retagged.
+            std::unique_lock stream_routing_lock(stream_routing_mutex_);
+            ensure_cuda_success(
+                cudaStreamSynchronize(stream), "cudaStreamSynchronize(stream)",
+                ::lfs::core::detail::format_cuda_safe("releasing CUDA memory-pool stream={}",
+                                                      static_cast<void*>(stream)),
+                LFS_SOURCE_SITE_CURRENT(),
+                CudaFailureDisposition::LogOnly);
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
-                for (auto& [ptr, info] : allocation_map_) {
+                for (auto& entry : allocation_map_) {
+                    auto& info = entry.second;
                     std::erase(info.extra_streams, stream);
                     if (info.home_stream == stream) {
                         info.home_stream = nullptr;
@@ -183,35 +354,64 @@ namespace lfs::core {
             GPUSlabAllocator::instance().merge_stream_into_virgin(stream);
             SizeBucketedPool::instance().retag_stream(stream, nullptr);
             PinnedMemoryAllocator::instance().release_stream(stream);
+            // The teardown calls above log-and-continue on CUDA errors; drop any
+            // latched error so LFS_CUDA_LAUNCH_CHECK does not blame a later launch.
+            (void)cudaGetLastError();
+            retire_stream(stream);
         }
 
         // Moves `ptr`'s home to `stream` (declarative re-homing for tensors whose
         // future writes happen there). The old home becomes a recorded use.
         void rehome_stream(void* ptr, cudaStream_t stream) {
+            unretire_stream(stream);
             if (!ptr)
                 return;
-            std::lock_guard<std::mutex> lock(map_mutex_);
-            auto it = allocation_map_.find(ptr);
-            if (it == allocation_map_.end())
-                return;
-            AllocationInfo& info = it->second;
-            if (stream == info.home_stream)
-                return;
-            if (std::find(info.extra_streams.begin(), info.extra_streams.end(), info.home_stream) ==
-                info.extra_streams.end()) {
-                info.extra_streams.push_back(info.home_stream);
+            bool map_miss = false;
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                auto it = allocation_map_.find(ptr);
+                if (it == allocation_map_.end()) {
+                    map_miss = true;
+                } else {
+                    AllocationInfo& info = it->second;
+                    if (stream == info.home_stream)
+                        return;
+                    if (std::find(info.extra_streams.begin(), info.extra_streams.end(), info.home_stream) ==
+                        info.extra_streams.end()) {
+                        info.extra_streams.push_back(info.home_stream);
+                    }
+                    std::erase(info.extra_streams, stream);
+                    info.home_stream = stream;
+                    return;
+                }
             }
-            std::erase(info.extra_streams, stream);
-            info.home_stream = stream;
+            if (map_miss) {
+                static std::atomic<bool> warned{false};
+                if (!warned.exchange(true, std::memory_order_relaxed)) {
+                    LOG_WARN("CUDA memory-pool rehome_stream missed allocation "
+                             "(ptr={}, stream={})",
+                             ptr, static_cast<const void*>(stream));
+                }
+            }
         }
 
         void deallocate(void* ptr, cudaStream_t stream = nullptr) {
+            LFS_CUDA_BREADCRUMB_STREAM("tensor.pool.free", stream);
             if (!ptr)
                 return;
             if (shutdown_.load(std::memory_order_acquire))
                 return;
 
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            // release_stream() must see this block either in allocation_map_ or
+            // in its destination suballocator, never in transit between them.
+            std::shared_lock stream_routing_lock(stream_routing_mutex_);
+            if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                AllocationInfo info;
+                take_allocation(ptr, info);
+                return;
+            }
+
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().record_deallocation(ptr);
             }
 
@@ -222,10 +422,16 @@ namespace lfs::core {
             }
 
 #if CUDART_VERSION >= 12080
-            cudaFreeAsync(ptr, stream);
+            const cudaError_t free_status = cudaFreeAsync(ptr, stream);
 #else
-            cudaFree(ptr);
+            const cudaError_t free_status = cudaFree(ptr);
 #endif
+            if (free_status != cudaSuccess) {
+                ensure_cuda_success(
+                    free_status, "CUDA memory-pool untracked free",
+                    ::lfs::core::detail::format_cuda_safe("ptr={}, stream={}", ptr, static_cast<void*>(stream)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+            }
         }
 
         void deallocate(void* ptr, size_t /*bytes*/, cudaStream_t stream = nullptr) {
@@ -233,30 +439,37 @@ namespace lfs::core {
         }
 
         void set_iteration(int iteration) {
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().set_iteration(iteration);
             }
         }
 
         void record_tensor(void* ptr, const std::vector<size_t>& shape, size_t bytes, const std::string& dtype) {
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().record_tensor_allocation(ptr, shape, bytes, dtype, 3);
             }
         }
 
         void configure() {
 #if CUDART_VERSION >= 12080
+            const auto pre_call_state = sample_cuda_pre_call_state();
             int device;
             cudaError_t err = cudaGetDevice(&device);
             if (err != cudaSuccess) {
-                LOG_ERROR(std::string("cudaGetDevice failed: ") + cudaGetErrorString(err));
+                ensure_cuda_success(err, pre_call_state, "cudaGetDevice(memory pool configuration)", {},
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
                 return;
             }
 
             cudaMemPool_t pool;
             err = cudaDeviceGetDefaultMemPool(&pool, device);
             if (err != cudaSuccess) {
-                LOG_ERROR(std::string("cudaDeviceGetDefaultMemPool failed: ") + cudaGetErrorString(err));
+                ensure_cuda_success(err, pre_call_state,
+                                    "cudaDeviceGetDefaultMemPool(memory pool configuration)",
+                                    ::lfs::core::detail::format_cuda_safe("device={}", device),
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
                 return;
             }
 
@@ -265,7 +478,16 @@ namespace lfs::core {
             // densification spikes. UINT64_MAX hoards indefinitely and inflates
             // cuda.pool.overhead at higher gaussian counts.
             uint64_t threshold = std::uint64_t(64) << 20;
-            cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
+            const cudaError_t attribute_status =
+                cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
+            if (attribute_status != cudaSuccess) {
+                ensure_cuda_success(attribute_status, pre_call_state,
+                                    "cudaMemPoolSetAttribute(release threshold)",
+                                    ::lfs::core::detail::format_cuda_safe("device={}, threshold_bytes={}", device, threshold),
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
+                return;
+            }
 
             LOG_DEBUG("CUDA memory pool configured for device " + std::to_string(device) + " (CUDA " + std::to_string(CUDART_VERSION) + ")");
 #else
@@ -292,17 +514,36 @@ namespace lfs::core {
                 << (stats_.direct_bytes.load() / 1024.0 / 1024.0) << " MB)\n";
 
 #if CUDART_VERSION >= 12080
-            int device;
-            cudaGetDevice(&device);
-            cudaMemPool_t pool;
-            cudaDeviceGetDefaultMemPool(&pool, device);
-
-            uint64_t used = 0, reserved = 0;
-            cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used);
-            cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved);
-
-            oss << "  CUDA Pool: " << (used / 1024.0 / 1024.0) << " / "
-                << (reserved / 1024.0 / 1024.0) << " MB used/reserved\n";
+            int device = -1;
+            cudaMemPool_t pool = nullptr;
+            if (try_get_default_pool(device, pool, "memory-pool statistics")) {
+                uint64_t used = 0;
+                uint64_t reserved = 0;
+                const cudaError_t used_status =
+                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used);
+                if (used_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        used_status, "cudaMemPoolGetAttribute(used memory)",
+                        ::lfs::core::detail::format_cuda_safe("device={}, context=memory-pool statistics", device),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    oss << "  CUDA Pool: unavailable\n";
+                } else {
+                    const cudaError_t reserved_status =
+                        cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved);
+                    if (reserved_status != cudaSuccess) {
+                        ensure_cuda_success(
+                            reserved_status, "cudaMemPoolGetAttribute(reserved memory)",
+                            ::lfs::core::detail::format_cuda_safe("device={}, context=memory-pool statistics", device),
+                            LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                        oss << "  CUDA Pool: unavailable\n";
+                    } else {
+                        oss << "  CUDA Pool: " << (used / 1024.0 / 1024.0) << " / "
+                            << (reserved / 1024.0 / 1024.0) << " MB used/reserved\n";
+                    }
+                }
+            } else {
+                oss << "  CUDA Pool: unavailable\n";
+            }
 #endif
             return oss.str();
         }
@@ -310,40 +551,74 @@ namespace lfs::core {
         void trim() {
             SizeBucketedPool::instance().trim_cache();
 #if CUDART_VERSION >= 12080
-            int device;
-            cudaGetDevice(&device);
-            cudaMemPool_t pool;
-            cudaDeviceGetDefaultMemPool(&pool, device);
-            cudaMemPoolTrimTo(pool, 0);
+            trim_default_pool("memory-pool trim");
 #endif
         }
 
         void trim_cached_memory() {
-            cudaDeviceSynchronize();
-            DeferredFreeQueue::instance().flush();
+            const auto trim_start = std::chrono::steady_clock::now();
+            const auto record_trim = [&trim_start]() noexcept {
+                TrainingChurnMetrics::instance().record_trim(static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - trim_start)
+                        .count()));
+            };
+            if (suspend_deallocations_.load(std::memory_order_acquire)) {
+                record_trim();
+                return;
+            }
+            const cudaError_t sync_status = cudaDeviceSynchronize();
+            if (sync_status != cudaSuccess) {
+                ensure_cuda_success(
+                    sync_status, "cudaDeviceSynchronize(memory-pool trim)", {},
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                record_trim();
+                return;
+            }
             {
                 std::lock_guard<std::mutex> lock(map_mutex_);
-                for (auto& [ptr, info] : allocation_map_) {
+                for (auto& entry : allocation_map_) {
+                    auto& info = entry.second;
                     info.extra_streams.clear();
                 }
             }
             GPUSlabAllocator::instance().merge_all_streams_into_virgin();
+            // Return fully-empty slabs to the driver (steady-state VRAM hygiene).
+            // Device is synchronized above; free lists are stream-merged into virgin.
+            GPUSlabAllocator::instance().reclaim_empty_slabs();
+            SizeBucketedPool::instance().retag_all_streams(nullptr);
             SizeBucketedPool::instance().trim_cache();
 
 #if CUDART_VERSION >= 12080
-            int device;
-            cudaGetDevice(&device);
-            cudaMemPool_t pool;
-            if (cudaDeviceGetDefaultMemPool(&pool, device) == cudaSuccess) {
-                cudaMemPoolTrimTo(pool, 0);
-            }
+            trim_default_pool("cached-memory trim");
 #endif
+            record_trim();
         }
 
-        void print_stats() const {
-            LOG_DEBUG(get_stats());
-            GPUSlabAllocator::instance().print_stats();
-            SizeBucketedPool::instance().print_stats();
+        // Used by the Morton reorder path: preserve the post-reorder trim when
+        // the CUDA pool has meaningful reclaimable slack, but avoid a device
+        // sync for small transient fluctuations.
+        void trim_cached_memory_if_reserved_unused_exceeds(const size_t threshold_bytes) {
+#if CUDART_VERSION >= 12080
+            int device = -1;
+            cudaMemPool_t pool = nullptr;
+            if (!try_get_default_pool(device, pool, "conditional memory-pool trim")) {
+                return;
+            }
+            uint64_t used = 0;
+            uint64_t reserved = 0;
+            const cudaError_t used_status = cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrUsedMemCurrent, &used);
+            const cudaError_t reserved_status = cudaMemPoolGetAttribute(
+                pool, cudaMemPoolAttrReservedMemCurrent, &reserved);
+            if (used_status != cudaSuccess || reserved_status != cudaSuccess ||
+                reserved <= used || reserved - used <= threshold_bytes) {
+                return;
+            }
+#else
+            (void)threshold_bytes;
+#endif
+            trim_cached_memory();
         }
 
         CudaMemoryPool(const CudaMemoryPool&) = delete;
@@ -378,36 +653,30 @@ namespace lfs::core {
             shutdown();
         }
 
-        void* allocate_direct(size_t bytes) {
+        void* try_allocate_direct(size_t bytes, cudaError_t* failure_status) {
             void* ptr = nullptr;
 
-            cudaError_t err = cudaMalloc(&ptr, bytes);
+            const auto pre_call_state = sample_cuda_pre_call_state();
+            const cudaError_t err = cudaMalloc(&ptr, bytes);
             if (err != cudaSuccess) {
-                LOG_WARN(std::string("[MEM] cudaMalloc failed: ") + cudaGetErrorString(err) + ", trimming...");
-                cudaDeviceSynchronize();
-                SizeBucketedPool::instance().trim_cache();
-#if CUDART_VERSION >= 12080
-                int device;
-                cudaGetDevice(&device);
-                cudaMemPool_t pool;
-                cudaDeviceGetDefaultMemPool(&pool, device);
-                cudaMemPoolTrimTo(pool, 0);
-#endif
-                err = cudaMalloc(&ptr, bytes);
-                if (err != cudaSuccess) {
-                    LOG_ERROR(std::string("[MEM] cudaMalloc retry failed: ") + cudaGetErrorString(err));
-                    cudaGetLastError(); // Clear sticky error state for clean recovery
-                    return nullptr;
+                if (failure_status) {
+                    *failure_status = err;
                 }
+                ensure_cuda_success(err, pre_call_state, "cudaMalloc(direct tier)",
+                                    ::lfs::core::detail::format_cuda_safe("requested_bytes={}", bytes),
+                                    LFS_SOURCE_SITE_CURRENT(),
+                                    CudaFailureDisposition::LogOnly);
+                return nullptr;
             }
 
+            alloc_counter::record_site(alloc_counter::Site::PoolDirect);
             stats_.direct_allocs.fetch_add(1, std::memory_order_relaxed);
             stats_.direct_bytes.fetch_add(bytes, std::memory_order_relaxed);
             direct_alloc_count_.fetch_add(1, std::memory_order_release);
 
             track_allocation(ptr, bytes, AllocMethod::Direct);
 
-            if constexpr (ENABLE_ALLOCATION_PROFILING) {
+            if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                 AllocationProfiler::instance().record_allocation(bytes, 3);
             }
 
@@ -445,6 +714,11 @@ namespace lfs::core {
         // the edges — no host sync, no deferred retention.
         void free_routed(void* ptr, const AllocationInfo& info) {
             for (cudaStream_t extra : info.extra_streams) {
+                // Skip null / home-equal extras. Bridging a destroyed capture stream
+                // can SIGSEGV inside the driver — callers should rehome first,
+                // but free must stay best-effort.
+                if (extra == nullptr || extra == info.home_stream || is_stream_retired(extra))
+                    continue;
                 bridgeStreams(extra, info.home_stream);
             }
 
@@ -456,7 +730,12 @@ namespace lfs::core {
                 SizeBucketedPool::instance().deallocate(ptr, info.size, info.home_stream);
                 return;
             case AllocMethod::Direct:
-                cudaFree(ptr);
+                if (const cudaError_t status = cudaFree(ptr); status != cudaSuccess) {
+                    ensure_cuda_success(
+                        status, "cudaFree(memory-pool direct tier)",
+                        ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}", ptr, info.size),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+                }
                 direct_alloc_count_.fetch_sub(1, std::memory_order_release);
                 return;
             case AllocMethod::Async:
@@ -464,10 +743,17 @@ namespace lfs::core {
             }
 
 #if CUDART_VERSION >= 12080
-            cudaFreeAsync(ptr, info.home_stream);
+            const cudaError_t free_status = cudaFreeAsync(ptr, info.home_stream);
 #else
-            cudaFree(ptr);
+            const cudaError_t free_status = cudaFree(ptr);
 #endif
+            if (free_status != cudaSuccess) {
+                ensure_cuda_success(
+                    free_status, "CUDA memory-pool async-tier free",
+                    ::lfs::core::detail::format_cuda_safe("ptr={}, bytes={}, stream={}", ptr, info.size,
+                                                          static_cast<void*>(info.home_stream)),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnlyNoLatch);
+            }
         }
 
         static lfs::diagnostics::VramAllocationMethod to_vram_method(AllocMethod method) {
@@ -483,21 +769,39 @@ namespace lfs::core {
         void log_stats_periodically() {
             static std::atomic<int> log_counter{0};
             if (++log_counter % 2000 == 0) {
-                if constexpr (ENABLE_ALLOCATION_PROFILING) {
+                if constexpr (LFS_ALLOCATION_PROFILING_ENABLED) {
                     AllocationProfiler::instance().print_top_allocators(30);
                     AllocationProfiler::instance().print_active_allocations(30);
                     AllocationProfiler::instance().print_tensor_allocations(30);
                 }
 
 #if CUDART_VERSION >= 12080
-                int device;
-                cudaGetDevice(&device);
-                cudaMemPool_t pool;
-                cudaDeviceGetDefaultMemPool(&pool, device);
+                int device = -1;
+                cudaMemPool_t pool = nullptr;
+                if (!try_get_default_pool(device, pool, "periodic memory-pool statistics")) {
+                    return;
+                }
 
-                uint64_t pool_used = 0, pool_reserved = 0;
-                cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &pool_used);
-                cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &pool_reserved);
+                uint64_t pool_used = 0;
+                uint64_t pool_reserved = 0;
+                const cudaError_t used_status =
+                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &pool_used);
+                if (used_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        used_status, "cudaMemPoolGetAttribute(used memory)",
+                        ::lfs::core::detail::format_cuda_safe("device={}, context=periodic memory-pool statistics", device),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    return;
+                }
+                const cudaError_t reserved_status =
+                    cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &pool_reserved);
+                if (reserved_status != cudaSuccess) {
+                    ensure_cuda_success(
+                        reserved_status, "cudaMemPoolGetAttribute(reserved memory)",
+                        ::lfs::core::detail::format_cuda_safe("device={}, context=periodic memory-pool statistics", device),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                    return;
+                }
 
                 constexpr double GB = 1024.0 * 1024.0 * 1024.0;
                 std::ostringstream oss;
@@ -512,11 +816,53 @@ namespace lfs::core {
             }
         }
 
+#if CUDART_VERSION >= 12080
+        static bool try_get_default_pool(int& device,
+                                         cudaMemPool_t& pool,
+                                         const std::string_view context) {
+            const cudaError_t device_status = cudaGetDevice(&device);
+            if (device_status != cudaSuccess) {
+                ensure_cuda_success(
+                    device_status, "cudaGetDevice(default memory pool)",
+                    ::lfs::core::detail::format_cuda_safe("context={}", context), LFS_SOURCE_SITE_CURRENT(),
+                    CudaFailureDisposition::LogOnly);
+                return false;
+            }
+
+            const cudaError_t pool_status = cudaDeviceGetDefaultMemPool(&pool, device);
+            if (pool_status != cudaSuccess) {
+                ensure_cuda_success(
+                    pool_status, "cudaDeviceGetDefaultMemPool",
+                    ::lfs::core::detail::format_cuda_safe("device={}, context={}", device, context),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+                return false;
+            }
+            return true;
+        }
+
+        static void trim_default_pool(const std::string_view context) {
+            int device = -1;
+            cudaMemPool_t pool = nullptr;
+            if (!try_get_default_pool(device, pool, context)) {
+                return;
+            }
+            const cudaError_t trim_status = cudaMemPoolTrimTo(pool, 0);
+            if (trim_status != cudaSuccess) {
+                ensure_cuda_success(
+                    trim_status, "cudaMemPoolTrimTo",
+                    ::lfs::core::detail::format_cuda_safe("device={}, context={}", device, context),
+                    LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
+            }
+        }
+#endif
+
         std::unordered_map<void*, AllocationInfo> allocation_map_;
-        std::mutex map_mutex_;
+        mutable std::mutex map_mutex_;
+        std::shared_mutex stream_routing_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};
         std::atomic<bool> shutdown_{false};
+        std::atomic<bool> suspend_deallocations_{false};
         Stats stats_;
     };
 

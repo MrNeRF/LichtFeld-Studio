@@ -73,18 +73,5 @@ namespace lfs {
             return y;
         }
 
-        float geometric_mad(std::span<const glm::vec3> points, const glm::vec3& median) {
-            if (points.empty())
-                return 0.0f;
-
-            std::vector<float> distances(points.size());
-            for (size_t i = 0; i < points.size(); ++i)
-                distances[i] = glm::distance(points[i], median);
-
-            auto mid = distances.begin() + static_cast<ptrdiff_t>(distances.size() / 2);
-            std::nth_element(distances.begin(), mid, distances.end());
-            return *mid;
-        }
-
     } // namespace geometry
 } // namespace lfs

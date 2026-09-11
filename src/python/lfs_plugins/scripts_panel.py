@@ -7,24 +7,16 @@ from pathlib import Path
 import lichtfeld as lf
 from . import rml_widgets
 from .types import Panel
+from .panels import panel_class
 from .ui import RuntimeState
 
 __lfs_panel_classes__ = ["ScriptsPanel"]
 __lfs_panel_ids__ = ["lfs.scripts"]
 
 
+@panel_class("scripts")
 class ScriptsPanel(Panel):
     """Floating window for managing loaded Python scripts."""
-
-    id = "lfs.scripts"
-    label = "Python Scripts"
-    space = lf.ui.PanelSpace.FLOATING
-    order = 200
-    options = {lf.ui.PanelOption.DEFAULT_CLOSED}
-    template = "rmlui/scripts_panel.rml"
-    height_mode = lf.ui.PanelHeightMode.CONTENT
-    size = (520, 0)
-    update_policy = "dirty"
 
     def __init__(self):
         self._handle = None
@@ -37,7 +29,7 @@ class ScriptsPanel(Panel):
         if model is None:
             return
 
-        model.bind_func("panel_label", lambda: self.label)
+        model.bind_func("panel_label", lambda: lf.ui.tr("scripts_panel.title"))
         model.bind_func("show_empty_state", lambda: not self._has_scripts)
         model.bind_func("show_script_list", lambda: self._has_scripts)
         model.bind_func("has_scripts", lambda: self._has_scripts)

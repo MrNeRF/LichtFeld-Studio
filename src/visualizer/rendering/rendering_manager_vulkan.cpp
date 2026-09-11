@@ -2,15 +2,24 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
+#include "core/cuda/memory_arena.hpp"
 #include "core/cuda/undistort/undistort.hpp"
+#include "core/image_loader.hpp"
 #include "core/logger.hpp"
+#include "core/memory_pressure.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
+#include "diagnostics/vram_profiler.hpp"
+#include "gt_comparison_cache_utils.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include "model_renderability.hpp"
 #include "point_cloud_vulkan_renderer.hpp"
 #include "rendering/image_layout.hpp"
 #include "rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene_upscaler_registry.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
 #include "viewport_appearance_correction.hpp"
@@ -19,26 +28,29 @@
 #include "vksplat_viewport_renderer.hpp"
 #include "vulkan_external_tensor.hpp"
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <expected>
+#include <filesystem>
 #include <format>
 #include <optional>
 #include <shared_mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 namespace lfs::vis {
 
     namespace {
-        constexpr auto kVulkanViewportResizeTrainingPauseWait = std::chrono::milliseconds(300);
-        constexpr bool kEnableLodTransitionWeights = true;
         constexpr double kGpuLodRenderCapacityOverhead = 1.20;
         constexpr float kInteractiveResizeRenderScale = 0.33f;
+        constexpr auto kTrainingOutputResizeStableDelay = std::chrono::milliseconds(500);
 
         struct LodObjectFrame {
             glm::mat4 object_to_view{1.0f};
@@ -97,47 +109,62 @@ namespace lfs::vis {
             return state;
         }
 
-        class ScopedTemporaryTrainingPause {
-        public:
-            ScopedTemporaryTrainingPause(TrainerManager* const trainer_manager,
-                                         const std::chrono::milliseconds timeout)
-                : trainer_manager_(trainer_manager) {
-                if (!trainer_manager_ || !trainer_manager_->isRunning()) {
-                    return;
-                }
-
-                const auto pause_result = trainer_manager_->pauseTrainingTemporaryAndWait(timeout);
-                synchronized_ = pause_result.synchronized;
-                resume_required_ = pause_result.resume_required;
-            }
-
-            ScopedTemporaryTrainingPause(const ScopedTemporaryTrainingPause&) = delete;
-            ScopedTemporaryTrainingPause& operator=(const ScopedTemporaryTrainingPause&) = delete;
-
-            ~ScopedTemporaryTrainingPause() {
-                if (resume_required_ && trainer_manager_ && trainer_manager_->isRunning()) {
-                    trainer_manager_->resumeTrainingTemporary();
-                    LOG_TRACE("Training resumed after Vulkan viewport resize");
+        struct LiveModelLockBundle {
+            std::shared_lock<std::shared_mutex> lock;
+            const lfs::core::Scene* scene = nullptr;
+            LiveModelLockBundle() = default;
+            LiveModelLockBundle(std::shared_lock<std::shared_mutex>&& l, const lfs::core::Scene* s)
+                : lock(std::move(l)),
+                  scene(s) {
+                if (scene && lock.owns_lock()) {
+                    scene->noteLiveModelLockAcquired();
                 }
             }
-
-            [[nodiscard]] bool synchronized() const { return synchronized_; }
-
-        private:
-            TrainerManager* trainer_manager_ = nullptr;
-            bool synchronized_ = false;
-            bool resume_required_ = false;
+            LiveModelLockBundle(LiveModelLockBundle&& other) noexcept
+                : lock(std::move(other.lock)),
+                  scene(other.scene) {
+                other.scene = nullptr;
+            }
+            LiveModelLockBundle& operator=(LiveModelLockBundle&& other) noexcept {
+                if (this != &other) {
+                    if (scene && lock.owns_lock()) {
+                        scene->noteLiveModelLockReleased();
+                    }
+                    lock = std::move(other.lock);
+                    scene = other.scene;
+                    other.scene = nullptr;
+                }
+                return *this;
+            }
+            ~LiveModelLockBundle() {
+                if (scene && lock.owns_lock()) {
+                    scene->noteLiveModelLockReleased();
+                }
+            }
+            LiveModelLockBundle(const LiveModelLockBundle&) = delete;
+            LiveModelLockBundle& operator=(const LiveModelLockBundle&) = delete;
+            [[nodiscard]] bool owns_lock() const { return lock.owns_lock(); }
         };
 
-        [[nodiscard]] std::optional<std::shared_lock<std::shared_mutex>> acquireLiveModelRenderLock(
-            const SceneManager* const scene_manager) {
-            std::optional<std::shared_lock<std::shared_mutex>> lock;
+        [[nodiscard]] std::optional<LiveModelLockBundle> acquireLiveModelRenderLock(
+            const SceneManager* const scene_manager,
+            const bool try_lock = false) {
             if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
                 if (const auto* trainer = tm->getTrainer()) {
-                    lock.emplace(trainer->getRenderMutex());
+                    const lfs::core::Scene* scene = trainer->getScene();
+                    if (try_lock) {
+                        std::shared_lock<std::shared_mutex> candidate(
+                            trainer->getRenderMutex(), std::try_to_lock);
+                        if (!candidate.owns_lock()) {
+                            return std::nullopt;
+                        }
+                        return LiveModelLockBundle(std::move(candidate), scene);
+                    }
+                    return LiveModelLockBundle(
+                        std::shared_lock<std::shared_mutex>(trainer->getRenderMutex()), scene);
                 }
             }
-            return lock;
+            return std::nullopt;
         }
 
         [[nodiscard]] bool isRetryableSharedScratchUnavailable(const std::string_view error) {
@@ -146,19 +173,413 @@ namespace lfs::vis {
                     error.find("capacity insufficient") != std::string_view::npos);
         }
 
-        [[nodiscard]] bool isRetryableVksplatOutputResizeWait(const std::string_view error) {
-            return error.find("VkSplat output resize wait failed") != std::string_view::npos &&
-                   error.find("VK_ERROR_DEVICE_LOST") == std::string_view::npos &&
-                   (error.find("VK_TIMEOUT") != std::string_view::npos ||
-                    error.find("vkWaitForFences") != std::string_view::npos);
-        }
-
         [[nodiscard]] DirtyMask vksplatOutputResizeRetryDirty(const DirtyMask frame_dirty) {
             return frame_dirty != 0 ? frame_dirty : DirtyFlag::VIEWPORT | DirtyFlag::CAMERA;
         }
 
         [[nodiscard]] DirtyMask vksplatSharedScratchRetryDirty(const DirtyMask frame_dirty) {
             return frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS;
+        }
+
+        [[nodiscard]] std::pair<float, float> robustDepthDisplayRange(const float* src, std::size_t count) {
+            std::vector<float> valid;
+            valid.reserve(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const float d = src[i];
+                if (std::isfinite(d) && d > 0.0f && d < 1.0e9f) {
+                    valid.push_back(d);
+                }
+            }
+            if (valid.size() < 2) {
+                return {0.0f, 0.0f};
+            }
+
+            constexpr float kLoQuantile = 0.02f;
+            constexpr float kHiQuantile = 0.98f;
+            const auto quantile = [&](float q) {
+                const auto n = static_cast<std::size_t>(q * static_cast<float>(valid.size() - 1));
+                std::nth_element(valid.begin(), valid.begin() + n, valid.end());
+                return valid[n];
+            };
+            return {quantile(kLoQuantile), quantile(kHiQuantile)};
+        }
+
+        [[nodiscard]] glm::vec3 depthPaletteForDisplay(float near_t) {
+            near_t = std::clamp(near_t, 0.0f, 1.0f);
+            const glm::vec3 far_0(0.050f, 0.040f, 0.150f);
+            const glm::vec3 far_1(0.060f, 0.195f, 0.500f);
+            const glm::vec3 mid_0(0.000f, 0.500f, 0.650f);
+            const glm::vec3 mid_1(0.360f, 0.735f, 0.410f);
+            const glm::vec3 near_0(0.965f, 0.820f, 0.300f);
+            const glm::vec3 near_1(0.985f, 0.430f, 0.125f);
+
+            if (near_t < 0.20f) {
+                return glm::mix(far_0, far_1, glm::smoothstep(0.00f, 0.20f, near_t));
+            }
+            if (near_t < 0.43f) {
+                return glm::mix(far_1, mid_0, glm::smoothstep(0.20f, 0.43f, near_t));
+            }
+            if (near_t < 0.67f) {
+                return glm::mix(mid_0, mid_1, glm::smoothstep(0.43f, 0.67f, near_t));
+            }
+            if (near_t < 0.86f) {
+                return glm::mix(mid_1, near_0, glm::smoothstep(0.67f, 0.86f, near_t));
+            }
+            return glm::mix(near_0, near_1, glm::smoothstep(0.86f, 1.00f, near_t));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeDepthDisplayTensor(
+            const lfs::core::Tensor& depth,
+            const lfs::rendering::DepthVisualizationMode depth_visualization_mode,
+            const glm::vec3& background_color) {
+            if (!depth.is_valid() || depth.ndim() != 2) {
+                return {};
+            }
+
+            auto depth_cpu = depth.cpu().contiguous();
+            const int height = static_cast<int>(depth_cpu.size(0));
+            const int width = static_cast<int>(depth_cpu.size(1));
+            if (width <= 0 || height <= 0) {
+                return {};
+            }
+
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.0f);
+            const float* const src = depth_cpu.ptr<float>();
+            if (!src) {
+                return {};
+            }
+
+            const auto [range_lo, range_hi] = robustDepthDisplayRange(src, pixel_count);
+            const float range_span = range_hi - range_lo;
+
+            const bool grayscale =
+                depth_visualization_mode == lfs::rendering::DepthVisualizationMode::Grayscale;
+            for (std::size_t idx = 0; idx < pixel_count; ++idx) {
+                const float d = src[idx];
+                glm::vec3 color = background_color;
+                if (std::isfinite(d) && d > 0.0f && d < 1.0e9f && range_span > 1.0e-6f) {
+                    const float depth_t = std::clamp((d - range_lo) / range_span, 0.0f, 1.0f);
+                    const float near_t = 1.0f - depth_t;
+                    color = grayscale ? glm::vec3(near_t) : depthPaletteForDisplay(near_t);
+                }
+                output[idx] = color.r;
+                output[pixel_count + idx] = color.g;
+                output[2 * pixel_count + idx] = color.b;
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeDepthDisplayTensor(
+            const lfs::core::Tensor& depth,
+            const RenderSettings& settings) {
+            return makeDepthDisplayTensor(
+                depth, settings.depth_visualization_mode, settings.background_color);
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeNormalDisplayTensor(
+            const lfs::core::Tensor& normal) {
+            if (!normal.is_valid() || normal.ndim() != 3) {
+                return {};
+            }
+            const auto layout = lfs::rendering::detectImageLayout(normal);
+            if (layout == lfs::rendering::ImageLayout::Unknown ||
+                lfs::rendering::imageChannels(normal, layout) < 3) {
+                return {};
+            }
+
+            auto normal_cpu = normal.cpu().contiguous();
+            if (layout == lfs::rendering::ImageLayout::HWC) {
+                normal_cpu = normal_cpu.permute({2, 0, 1}).contiguous();
+            }
+
+            const int height = static_cast<int>(normal_cpu.size(1));
+            const int width = static_cast<int>(normal_cpu.size(2));
+            if (width <= 0 || height <= 0) {
+                return {};
+            }
+
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.5f);
+            const float* const src = normal_cpu.ptr<float>();
+            if (!src) {
+                return {};
+            }
+
+            for (std::size_t idx = 0; idx < pixel_count; ++idx) {
+                glm::vec3 n(src[idx], src[pixel_count + idx], src[2 * pixel_count + idx]);
+                const float len = glm::length(n);
+                if (std::isfinite(len) && len > 1.0e-6f) {
+                    n /= len;
+                    const glm::vec3 color = glm::clamp(n * 0.5f + glm::vec3(0.5f),
+                                                       glm::vec3(0.0f),
+                                                       glm::vec3(1.0f));
+                    output[idx] = color.r;
+                    output[pixel_count + idx] = color.g;
+                    output[2 * pixel_count + idx] = color.b;
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeNormalDisplayFromDepthTensor(
+            const lfs::core::Tensor& depth,
+            const lfs::rendering::CameraIntrinsics& intrinsics) {
+            if (!depth.is_valid() || depth.ndim() != 2 ||
+                intrinsics.focal_x <= 0.0f || intrinsics.focal_y <= 0.0f) {
+                return {};
+            }
+
+            auto depth_cpu = depth.cpu().contiguous();
+            const int height = static_cast<int>(depth_cpu.size(0));
+            const int width = static_cast<int>(depth_cpu.size(1));
+            if (width <= 2 || height <= 2) {
+                return {};
+            }
+
+            constexpr float kMinExpectedDepth = 1.0e-6f;
+            constexpr float kMaxRelativeDepthJump = 0.05f;
+            constexpr float kMinCrossNormSq = 1.0e-24f;
+            const std::size_t pixel_count = static_cast<std::size_t>(width) * height;
+            std::vector<float> output(3 * pixel_count, 0.5f);
+            const float* const src = depth_cpu.ptr<float>();
+            if (!src) {
+                return {};
+            }
+
+            const auto valid_depth = [](const float d) {
+                return std::isfinite(d) && d >= kMinExpectedDepth && d < 1.0e9f;
+            };
+            const auto ray = [&](const int x, const int y) {
+                return glm::vec3(
+                    (static_cast<float>(x) + 0.5f - intrinsics.center_x) / intrinsics.focal_x,
+                    (static_cast<float>(y) + 0.5f - intrinsics.center_y) / intrinsics.focal_y,
+                    1.0f);
+            };
+
+            for (int y = 1; y < height - 1; ++y) {
+                for (int x = 1; x < width - 1; ++x) {
+                    const std::size_t idx = static_cast<std::size_t>(y) * width + x;
+                    const float center = src[idx];
+                    if (!valid_depth(center)) {
+                        continue;
+                    }
+
+                    const float dxp = src[idx + 1];
+                    const float dxm = src[idx - 1];
+                    const float dyp = src[idx + width];
+                    const float dym = src[idx - width];
+                    const float jump_limit = kMaxRelativeDepthJump * center;
+                    if (!valid_depth(dxp) || !valid_depth(dxm) ||
+                        !valid_depth(dyp) || !valid_depth(dym) ||
+                        std::abs(dxp - center) > jump_limit ||
+                        std::abs(dxm - center) > jump_limit ||
+                        std::abs(dyp - center) > jump_limit ||
+                        std::abs(dym - center) > jump_limit) {
+                        continue;
+                    }
+
+                    const glm::vec3 tx = dxp * ray(x + 1, y) - dxm * ray(x - 1, y);
+                    const glm::vec3 ty = dyp * ray(x, y + 1) - dym * ray(x, y - 1);
+                    glm::vec3 n = glm::cross(tx, ty);
+                    const float norm_sq = glm::dot(n, n);
+                    if (!std::isfinite(norm_sq) || norm_sq < kMinCrossNormSq) {
+                        continue;
+                    }
+
+                    if (glm::dot(n, ray(x, y)) > 0.0f) {
+                        n = -n;
+                    }
+                    n = glm::normalize(n);
+                    const glm::vec3 color = glm::clamp(n * 0.5f + glm::vec3(0.5f),
+                                                       glm::vec3(0.0f),
+                                                       glm::vec3(1.0f));
+                    output[idx] = color.r;
+                    output[pixel_count + idx] = color.g;
+                    output[2 * pixel_count + idx] = color.b;
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(height), static_cast<std::size_t>(width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] glm::ivec2 gtComparisonPreviewSize(
+            const lfs::core::Camera& camera,
+            const glm::ivec2 viewport_size) {
+            int base_width = camera.camera_width();
+            int base_height = camera.camera_height();
+            if (base_width <= 0 || base_height <= 0) {
+                base_width = camera.image_width();
+                base_height = camera.image_height();
+            }
+            if (camera.camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                camera.is_undistort_precomputed()) {
+                const auto& undistort = camera.undistort_params();
+                base_width = undistort.dst_width;
+                base_height = undistort.dst_height;
+            }
+
+            base_width = std::max(base_width, 1);
+            base_height = std::max(base_height, 1);
+            const int bound_width = std::max(viewport_size.x, 1);
+            const int bound_height = std::max(viewport_size.y, 1);
+            const bool width_limited = static_cast<std::int64_t>(base_width) * bound_height >=
+                                       static_cast<std::int64_t>(base_height) * bound_width;
+            const int max_dimension = std::max(width_limited ? bound_width : bound_height, 1);
+            if (base_width <= max_dimension && base_height <= max_dimension) {
+                return {base_width, base_height};
+            }
+            if (base_width >= base_height) {
+                return {max_dimension,
+                        std::max(static_cast<int>(static_cast<std::int64_t>(max_dimension) * base_height /
+                                                  base_width),
+                                 1)};
+            }
+            return {std::max(static_cast<int>(static_cast<std::int64_t>(max_dimension) * base_width / base_height), 1),
+                    max_dimension};
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> resizeChwDisplayTensor(
+            const std::shared_ptr<lfs::core::Tensor>& image,
+            const glm::ivec2 target_size) {
+            if (!image || !image->is_valid() || image->ndim() != 3 ||
+                target_size.x <= 0 || target_size.y <= 0) {
+                return {};
+            }
+            const auto layout = lfs::rendering::detectImageLayout(*image);
+            if (layout == lfs::rendering::ImageLayout::Unknown) {
+                return {};
+            }
+
+            lfs::core::Tensor src = *image;
+            if (src.dtype() == lfs::core::DataType::UInt8) {
+                src = src.to(lfs::core::DataType::Float32) / 255.0f;
+            } else if (src.dtype() != lfs::core::DataType::Float32) {
+                src = src.to(lfs::core::DataType::Float32);
+            }
+            if (layout == lfs::rendering::ImageLayout::HWC) {
+                src = src.permute({2, 0, 1}).contiguous();
+            }
+            src = src.cpu().contiguous();
+
+            const int src_channels = static_cast<int>(src.size(0));
+            const int src_height = static_cast<int>(src.size(1));
+            const int src_width = static_cast<int>(src.size(2));
+            if (src_channels <= 0 || src_width <= 0 || src_height <= 0) {
+                return {};
+            }
+            if (src_width == target_size.x && src_height == target_size.y &&
+                src_channels >= 3) {
+                return std::make_shared<lfs::core::Tensor>(std::move(src));
+            }
+
+            const int dst_width = target_size.x;
+            const int dst_height = target_size.y;
+            const std::size_t dst_pixel_count =
+                static_cast<std::size_t>(dst_width) * static_cast<std::size_t>(dst_height);
+            std::vector<float> output(3 * dst_pixel_count, 0.0f);
+            const float* const src_data = src.ptr<float>();
+            if (!src_data) {
+                return {};
+            }
+
+            const auto sample = [&](const int channel, const int x, const int y) {
+                const int c = std::clamp(channel, 0, src_channels - 1);
+                return src_data[(static_cast<std::size_t>(c) * src_height + y) * src_width + x];
+            };
+
+            const float scale_x = static_cast<float>(src_width) / static_cast<float>(dst_width);
+            const float scale_y = static_cast<float>(src_height) / static_cast<float>(dst_height);
+            for (int y = 0; y < dst_height; ++y) {
+                float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
+                int y0 = static_cast<int>(std::floor(src_y));
+                float wy = src_y - static_cast<float>(y0);
+                if (y0 < 0) {
+                    y0 = 0;
+                    wy = 0.0f;
+                }
+                int y1 = y0 + 1;
+                if (y1 >= src_height) {
+                    y1 = y0 = src_height - 1;
+                    wy = 0.0f;
+                }
+
+                for (int x = 0; x < dst_width; ++x) {
+                    float src_x = (static_cast<float>(x) + 0.5f) * scale_x - 0.5f;
+                    int x0 = static_cast<int>(std::floor(src_x));
+                    float wx = src_x - static_cast<float>(x0);
+                    if (x0 < 0) {
+                        x0 = 0;
+                        wx = 0.0f;
+                    }
+                    int x1 = x0 + 1;
+                    if (x1 >= src_width) {
+                        x1 = x0 = src_width - 1;
+                        wx = 0.0f;
+                    }
+
+                    const std::size_t dst_idx = static_cast<std::size_t>(y) * dst_width + x;
+                    for (int c = 0; c < 3; ++c) {
+                        const float top =
+                            glm::mix(sample(c, x0, y0), sample(c, x1, y0), wx);
+                        const float bottom =
+                            glm::mix(sample(c, x0, y1), sample(c, x1, y1), wx);
+                        output[static_cast<std::size_t>(c) * dst_pixel_count + dst_idx] =
+                            glm::mix(top, bottom, wy);
+                    }
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3},
+                 static_cast<std::size_t>(dst_height),
+                 static_cast<std::size_t>(dst_width)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeGTComparePlaceholderTensor(
+            glm::ivec2 size,
+            const glm::vec3 tint) {
+            size.x = std::max(size.x, 1);
+            size.y = std::max(size.y, 1);
+            const std::size_t pixel_count =
+                static_cast<std::size_t>(size.x) * static_cast<std::size_t>(size.y);
+            std::vector<float> output(3 * pixel_count, 0.0f);
+            for (int y = 0; y < size.y; ++y) {
+                for (int x = 0; x < size.x; ++x) {
+                    const bool stripe = ((x / 18) + (y / 18)) % 2 == 0;
+                    const glm::vec3 color = glm::clamp(
+                        tint + glm::vec3(stripe ? 0.045f : 0.0f),
+                        glm::vec3(0.0f),
+                        glm::vec3(1.0f));
+                    const std::size_t idx = static_cast<std::size_t>(y) * size.x + x;
+                    output[idx] = color.r;
+                    output[pixel_count + idx] = color.g;
+                    output[2 * pixel_count + idx] = color.b;
+                }
+            }
+
+            auto tensor = lfs::core::Tensor::from_vector(
+                output,
+                {std::size_t{3}, static_cast<std::size_t>(size.y), static_cast<std::size_t>(size.x)},
+                lfs::core::Device::CPU);
+            return std::make_shared<lfs::core::Tensor>(std::move(tensor));
         }
 
         [[nodiscard]] std::optional<std::pair<size_t, size_t>>
@@ -274,6 +695,23 @@ namespace lfs::vis {
                 return {};
             }
 
+            // CPU readback tensors are tight (exactly valid-size). Panel
+            // uv_scale/uv_clamp_max were authored for padded GPU pool textures
+            // and would crop/zoom any panel whose size is not a 64-px bucket.
+            VulkanSplitViewPanel left_panel = params.left;
+            VulkanSplitViewPanel right_panel = params.right;
+            const auto apply_tight_cpu_uv = [](VulkanSplitViewPanel& panel, const int w, const int h) {
+                const int tex_w = std::max(w, 1);
+                const int tex_h = std::max(h, 1);
+                panel.uv_scale = {1.0f, 1.0f};
+                panel.uv_clamp_max = {
+                    (static_cast<float>(tex_w) - 0.5f) / static_cast<float>(tex_w),
+                    (static_cast<float>(tex_h) - 0.5f) / static_cast<float>(tex_h),
+                };
+            };
+            apply_tight_cpu_uv(left_panel, std::get<1>(*left_data), std::get<2>(*left_data));
+            apply_tight_cpu_uv(right_panel, std::get<1>(*right_data), std::get<2>(*right_data));
+
             const int width = output_size.x;
             const int height = output_size.y;
             if (width <= 0 || height <= 0) {
@@ -287,16 +725,26 @@ namespace lfs::vis {
                 output[2 * pixel_count + i] = params.background.b;
             }
 
-            const auto sample = [](const lfs::core::Tensor& tensor, int w, int h,
-                                   float u, float v, int channel) {
-                const int x = std::clamp(static_cast<int>(std::lround(std::clamp(u, 0.0f, 1.0f) *
-                                                                      static_cast<float>(w - 1))),
-                                         0, w - 1);
-                const int y = std::clamp(static_cast<int>(std::lround(std::clamp(v, 0.0f, 1.0f) *
-                                                                      static_cast<float>(h - 1))),
-                                         0, h - 1);
+            const auto sample = [](const lfs::core::Tensor& tensor, const int w, const int h,
+                                   const float u, const float v, const int channel) {
+                // Match texture(...): normalized coordinates address texel centers and use the
+                // Vulkan sampler's linear filtering, with edge samples clamped to the texture.
+                const float sample_x = std::clamp(u, 0.0f, 1.0f) * static_cast<float>(w) - 0.5f;
+                const float sample_y = std::clamp(v, 0.0f, 1.0f) * static_cast<float>(h) - 0.5f;
+                const int x0_unclamped = static_cast<int>(std::floor(sample_x));
+                const int y0_unclamped = static_cast<int>(std::floor(sample_y));
+                const int x0 = std::clamp(x0_unclamped, 0, w - 1);
+                const int y0 = std::clamp(y0_unclamped, 0, h - 1);
+                const int x1 = std::clamp(x0_unclamped + 1, 0, w - 1);
+                const int y1 = std::clamp(y0_unclamped + 1, 0, h - 1);
+                const float tx = sample_x - static_cast<float>(x0_unclamped);
+                const float ty = sample_y - static_cast<float>(y0_unclamped);
                 const float* data = tensor.ptr<float>();
-                return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                const auto at = [data, w, h, channel](const int x, const int y) {
+                    return data[(static_cast<std::size_t>(channel) * h + y) * w + x];
+                };
+                return std::lerp(std::lerp(at(x0, y0), at(x1, y0), tx),
+                                 std::lerp(at(x0, y1), at(x1, y1), tx), ty);
             };
 
             const int rect_x = params.content_rect.x;
@@ -327,14 +775,16 @@ namespace lfs::vis {
 
             for (int y = rect_y; y < rect_y + rect_h; ++y) {
                 const float v = rect_h > 1
-                                    ? static_cast<float>(y - rect_y) / static_cast<float>(rect_h - 1)
+                                    ? (static_cast<float>(y) + 0.5f - static_cast<float>(rect_y)) /
+                                          static_cast<float>(rect_h - 1)
                                     : 0.0f;
                 for (int x = rect_x; x < rect_x + rect_w; ++x) {
                     const float u = rect_w > 1
-                                        ? static_cast<float>(x - rect_x) / static_cast<float>(rect_w - 1)
+                                        ? (static_cast<float>(x) + 0.5f - static_cast<float>(rect_x)) /
+                                              static_cast<float>(rect_w - 1)
                                         : 0.0f;
                     const bool use_left = x < divider;
-                    const auto& panel = use_left ? params.left : params.right;
+                    const auto& panel = use_left ? left_panel : right_panel;
                     const auto& data = use_left ? *left_data : *right_data;
                     float panel_u = u;
                     if (panel.normalize_x_to_panel) {
@@ -342,14 +792,41 @@ namespace lfs::vis {
                         panel_u = (u - panel.start_position) / span;
                     }
                     const float panel_v = panel.flip_y ? 1.0f - v : v;
+                    const glm::vec2 clamp_max = glm::clamp(panel.uv_clamp_max,
+                                                           glm::vec2(0.0f), glm::vec2(1.0f));
+                    const glm::vec2 texture_uv = glm::min(
+                        (glm::vec2(panel_u, panel_v) * panel.texcoord_scale + panel.texcoord_offset) *
+                            panel.uv_scale,
+                        clamp_max);
                     const std::size_t idx = static_cast<std::size_t>(y) * width + x;
-                    write(idx,
-                          {sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 0),
-                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 1),
-                           sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
-                                  panel_u, panel_v, 2)});
+                    const auto sample_color = [&](const glm::vec2 sample_uv) {
+                        return glm::vec3{
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_uv.x, sample_uv.y, 0),
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_uv.x, sample_uv.y, 1),
+                            sample(std::get<0>(data), std::get<1>(data), std::get<2>(data),
+                                   sample_uv.x, sample_uv.y, 2)};
+                    };
+                    glm::vec3 color = sample_color(texture_uv);
+                    if (panel.spatial_filter) {
+                        constexpr float kSpatialSharpenStrength = 0.18f;
+                        const float texel_x = 1.0f / static_cast<float>(std::max(std::get<1>(data), 1));
+                        const float texel_y = 1.0f / static_cast<float>(std::max(std::get<2>(data), 1));
+                        const auto clamp_uv = [&clamp_max](const glm::vec2 uv) {
+                            return glm::clamp(uv, glm::vec2(0.0f), clamp_max);
+                        };
+                        const glm::vec3 left = sample_color(clamp_uv(texture_uv - glm::vec2(texel_x, 0.0f)));
+                        const glm::vec3 right = sample_color(clamp_uv(texture_uv + glm::vec2(texel_x, 0.0f)));
+                        const glm::vec3 up = sample_color(clamp_uv(texture_uv - glm::vec2(0.0f, texel_y)));
+                        const glm::vec3 down = sample_color(clamp_uv(texture_uv + glm::vec2(0.0f, texel_y)));
+                        const glm::vec3 sharpened = color * (1.0f + 4.0f * kSpatialSharpenStrength) -
+                                                    (left + right + up + down) * kSpatialSharpenStrength;
+                        color = glm::clamp(sharpened,
+                                           glm::min(color, glm::min(glm::min(left, right), glm::min(up, down))),
+                                           glm::max(color, glm::max(glm::max(left, right), glm::max(up, down))));
+                    }
+                    write(idx, color);
 
                     const float dist_from_split = std::abs(static_cast<float>(x) + 0.5f - split_x);
                     if (dist_from_split < kMinBarWidthPx * 0.5f) {
@@ -391,6 +868,19 @@ namespace lfs::vis {
                  static_cast<std::size_t>(width)},
                 lfs::core::Device::CPU);
             return std::make_shared<lfs::core::Tensor>(std::move(tensor));
+        }
+
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> makeViewportCaptureImageHwc(
+            lfs::core::Tensor image) {
+            if (!image.is_valid() || image.ndim() != 3) {
+                return std::make_shared<lfs::core::Tensor>(std::move(image));
+            }
+
+            const auto layout = lfs::rendering::detectImageLayout(image);
+            if (layout == lfs::rendering::ImageLayout::CHW) {
+                image = image.permute({1, 2, 0});
+            }
+            return std::make_shared<lfs::core::Tensor>(image.cpu().contiguous());
         }
 
         struct SplitCompositeContentRect {
@@ -537,6 +1027,548 @@ namespace lfs::vis {
         }
     } // namespace
 
+    bool RenderingManager::gtRequestMatches(const GTComparisonImageJobRequest& lhs,
+                                            const GTComparisonImageJobRequest& rhs) {
+        return lhs.camera_uid == rhs.camera_uid &&
+               lhs.mode == rhs.mode &&
+               lhs.image_path == rhs.image_path &&
+               lhs.image_size == rhs.image_size &&
+               lhs.undistort_requested == rhs.undistort_requested &&
+               lhs.depth_visualization_mode == rhs.depth_visualization_mode &&
+               lhs.background_color == rhs.background_color;
+    }
+
+    bool RenderingManager::gtCacheEntryMatches(const GTComparisonImageCacheEntry& entry,
+                                               const GTComparisonImageJobRequest& request) {
+        return entry.camera_uid == request.camera_uid &&
+               entry.mode == request.mode &&
+               entry.image_path == request.image_path &&
+               entry.image_size == request.image_size &&
+               entry.undistort_requested == request.undistort_requested &&
+               entry.depth_visualization_mode == request.depth_visualization_mode &&
+               entry.background_color == request.background_color;
+    }
+
+    void RenderingManager::insertGTComparisonImageCacheEntry(
+        const GTComparisonImageJobRequest& request,
+        std::shared_ptr<lfs::core::Tensor> image,
+        std::string error,
+        const std::chrono::steady_clock::time_point now) {
+        const auto same_key = [&request](const GTComparisonImageCacheEntry& entry) {
+            return gtCacheEntryMatches(entry, request);
+        };
+        const bool image_valid = image && image->is_valid();
+        assert(!image_valid || image->device() == lfs::core::Device::CPU);
+        const std::size_t image_bytes = image_valid ? image->bytes() : 0;
+        auto entry = std::find_if(gt_comparison_image_cache_.begin(),
+                                  gt_comparison_image_cache_.end(),
+                                  same_key);
+        if (entry != gt_comparison_image_cache_.end()) {
+            gt_comparison_image_cache_bytes_ -= entry->image && entry->image->is_valid()
+                                                    ? entry->image->bytes()
+                                                    : 0;
+            *entry = {
+                .camera_uid = request.camera_uid,
+                .mode = request.mode,
+                .undistort_requested = request.undistort_requested,
+                .image_path = request.image_path,
+                .image_size = request.image_size,
+                .depth_visualization_mode = request.depth_visualization_mode,
+                .background_color = request.background_color,
+                .image = std::move(image),
+                .error = std::move(error),
+                .failure_time = image_valid ? std::chrono::steady_clock::time_point{} : now,
+                .last_used = now};
+        } else {
+            gt_comparison_image_cache_.push_back({.camera_uid = request.camera_uid,
+                                                  .mode = request.mode,
+                                                  .undistort_requested = request.undistort_requested,
+                                                  .image_path = request.image_path,
+                                                  .image_size = request.image_size,
+                                                  .depth_visualization_mode = request.depth_visualization_mode,
+                                                  .background_color = request.background_color,
+                                                  .image = std::move(image),
+                                                  .error = std::move(error),
+                                                  .failure_time = image_valid ? std::chrono::steady_clock::time_point{} : now,
+                                                  .last_used = now});
+        }
+        gt_comparison_image_cache_bytes_ += image_bytes;
+
+        while (gt_comparison_image_cache_.size() > GT_COMPARISON_IMAGE_CACHE_MAX_ENTRIES ||
+               gt_comparison_image_cache_bytes_ > GT_COMPARISON_IMAGE_CACHE_MAX_BYTES) {
+            const auto lru = std::min_element(
+                gt_comparison_image_cache_.begin(),
+                gt_comparison_image_cache_.end(),
+                [](const auto& lhs, const auto& rhs) { return lhs.last_used < rhs.last_used; });
+            gt_comparison_image_cache_bytes_ -= lru->image && lru->image->is_valid()
+                                                    ? lru->image->bytes()
+                                                    : 0;
+            gt_comparison_image_cache_.erase(lru);
+        }
+    }
+
+    RenderingManager::GTComparisonImageLookup RenderingManager::getOrQueueGTComparisonImage(
+        GTComparisonImageJobRequest request) {
+        const auto request_matches = [](const GTComparisonImageJobRequest& lhs,
+                                        const GTComparisonImageJobRequest& rhs) {
+            return gtRequestMatches(lhs, rhs);
+        };
+        const auto cache_matches = [&request](const GTComparisonImageCacheEntry& entry) {
+            return gtCacheEntryMatches(entry, request);
+        };
+
+        bool queued = false;
+        GTComparisonImageLookup result;
+        const auto now = std::chrono::steady_clock::now();
+        // Capture the camera identity before `request` can be moved into the
+        // pending/active slots; the stale-image fallback below needs it to
+        // avoid showing a different camera's reference while reloading.
+        const int request_camera_uid = request.camera_uid;
+        const std::filesystem::path request_image_path = request.image_path;
+        {
+            std::lock_guard lock(gt_comparison_image_mutex_);
+            auto cache_entry = std::find_if(gt_comparison_image_cache_.begin(),
+                                            gt_comparison_image_cache_.end(),
+                                            cache_matches);
+            const bool cache_hit = cache_entry != gt_comparison_image_cache_.end();
+            if (cache_hit) {
+                cache_entry->last_used = now;
+            }
+
+            const bool same_as_pending =
+                pending_gt_comparison_image_request_ &&
+                request_matches(*pending_gt_comparison_image_request_, request);
+            const bool same_as_active =
+                active_gt_comparison_image_request_ &&
+                request_matches(*active_gt_comparison_image_request_, request);
+            if (same_as_active && active_gt_comparison_image_is_prefetch_) {
+                active_gt_comparison_image_is_prefetch_ = false;
+                active_gt_comparison_image_request_->generation =
+                    ++gt_comparison_image_request_generation_;
+                pending_gt_comparison_image_request_.reset();
+            } else if (same_as_active && active_gt_comparison_image_request_->generation !=
+                                             gt_comparison_image_request_generation_) {
+                active_gt_comparison_image_request_->generation =
+                    ++gt_comparison_image_request_generation_;
+                pending_gt_comparison_image_request_.reset();
+            }
+
+            const bool current_request_pending = pending_gt_comparison_image_request_.has_value();
+            const bool current_request_active =
+                active_gt_comparison_image_request_ && !active_gt_comparison_image_is_prefetch_ &&
+                active_gt_comparison_image_request_->generation ==
+                    gt_comparison_image_request_generation_;
+            const bool retry_failed =
+                cache_hit && (!cache_entry->image || !cache_entry->image->is_valid()) &&
+                cache_entry->failure_time.time_since_epoch().count() != 0 &&
+                now - cache_entry->failure_time >= GT_COMPARISON_IMAGE_RETRY_COOLDOWN;
+
+            if (cache_hit && !retry_failed) {
+                if (current_request_pending || current_request_active) {
+                    ++gt_comparison_image_request_generation_;
+                    pending_gt_comparison_image_request_.reset();
+                }
+                result.image = cache_entry->image;
+                result.error = cache_entry->error;
+                result.status = result.image && result.image->is_valid()
+                                    ? GTComparisonImageStatus::Ready
+                                    : GTComparisonImageStatus::Failed;
+                return result;
+            }
+
+            if (retry_failed && (same_as_pending || current_request_active)) {
+                result.error = cache_entry->error;
+                result.status = GTComparisonImageStatus::Failed;
+                return result;
+            }
+
+            if (retry_failed) {
+                request.generation = ++gt_comparison_image_request_generation_;
+                request.queued_at = now;
+                pending_gt_comparison_image_request_ = std::move(request);
+                result.error = cache_entry->error;
+                result.status = GTComparisonImageStatus::Failed;
+                queued = true;
+            } else if (!same_as_pending && !current_request_active) {
+                auto prefetch = std::find_if(prefetch_gt_comparison_image_requests_.begin(),
+                                             prefetch_gt_comparison_image_requests_.end(),
+                                             [&request_matches, &request](const auto& candidate) {
+                                                 return request_matches(candidate, request);
+                                             });
+                if (prefetch != prefetch_gt_comparison_image_requests_.end()) {
+                    request = std::move(*prefetch);
+                    prefetch_gt_comparison_image_requests_.erase(prefetch);
+                }
+                request.generation = ++gt_comparison_image_request_generation_;
+                if (request.queued_at.time_since_epoch().count() == 0) {
+                    request.queued_at = now;
+                }
+                pending_gt_comparison_image_request_ = std::move(request);
+                queued = true;
+            }
+
+            if (!retry_failed) {
+                const auto* in_flight =
+                    pending_gt_comparison_image_request_ &&
+                            (queued ||
+                             request_matches(*pending_gt_comparison_image_request_, request))
+                        ? &*pending_gt_comparison_image_request_
+                    : current_request_active &&
+                            request_matches(*active_gt_comparison_image_request_, request)
+                        ? &*active_gt_comparison_image_request_
+                        : nullptr;
+                result.status = GTComparisonImageStatus::Loading;
+                if (!cache_hit) {
+                    // Prefer the previous image of the SAME camera at any
+                    // resolution so a transient re-decode never flashes a
+                    // different camera's ground truth while the request is in
+                    // flight; otherwise fall back to the most recently used
+                    // valid image across the cache.
+                    const auto is_same_camera = [request_camera_uid, request_image_path](
+                                                    const GTComparisonImageCacheEntry& entry) {
+                        return entry.camera_uid == request_camera_uid &&
+                               entry.image_path == request_image_path;
+                    };
+                    const auto stale = std::max_element(
+                        gt_comparison_image_cache_.begin(),
+                        gt_comparison_image_cache_.end(),
+                        [&](const GTComparisonImageCacheEntry& lhs,
+                            const GTComparisonImageCacheEntry& rhs) {
+                            const auto rank = [&](const GTComparisonImageCacheEntry& entry) {
+                                if (!entry.image || !entry.image->is_valid()) {
+                                    return 0;
+                                }
+                                return is_same_camera(entry) ? 2 : 1;
+                            };
+                            const int lhs_rank = rank(lhs);
+                            const int rhs_rank = rank(rhs);
+                            if (lhs_rank != rhs_rank) {
+                                return lhs_rank < rhs_rank;
+                            }
+                            return lhs.last_used < rhs.last_used;
+                        });
+                    if (stale != gt_comparison_image_cache_.end() && stale->image &&
+                        stale->image->is_valid()) {
+                        result.stale_image = stale->image;
+                    }
+                }
+                result.grace_elapsed = !in_flight ||
+                                       in_flight->queued_at.time_since_epoch().count() == 0 ||
+                                       now - in_flight->queued_at >= GT_COMPARISON_IMAGE_GRACE_PERIOD;
+            }
+        }
+
+        if (queued) {
+            gt_comparison_image_cv_.notify_one();
+        }
+        return result;
+    }
+
+    void RenderingManager::queueGTComparisonImagePrefetch(GTComparisonImageJobRequest request) {
+        const auto request_matches = [](const GTComparisonImageJobRequest& lhs,
+                                        const GTComparisonImageJobRequest& rhs) {
+            return gtRequestMatches(lhs, rhs);
+        };
+        const auto now = std::chrono::steady_clock::now();
+        bool queued = false;
+        {
+            std::lock_guard lock(gt_comparison_image_mutex_);
+            if (request.image_size.x <= 0 || request.image_size.y <= 0) {
+                return;
+            }
+            const std::size_t request_bytes = gt_comparison_detail::previewBytes(request.image_size);
+            // Keep at least the current request and one neighbor resident. A pending
+            // current request is not in the cache yet, so reserve its final uint8 size
+            // while deciding whether to enqueue this prefetch.
+            std::size_t reserved_current_bytes = 0;
+            if (pending_gt_comparison_image_request_) {
+                const auto& current = *pending_gt_comparison_image_request_;
+                reserved_current_bytes = gt_comparison_detail::previewBytes(current.image_size);
+            }
+            if (!gt_comparison_detail::prefetchFits(gt_comparison_image_cache_bytes_,
+                                                    reserved_current_bytes,
+                                                    request_bytes,
+                                                    GT_COMPARISON_IMAGE_CACHE_MAX_BYTES)) {
+                return;
+            }
+            const auto cache_hit = std::find_if(
+                gt_comparison_image_cache_.begin(),
+                gt_comparison_image_cache_.end(),
+                [&request](const auto& entry) {
+                    return gtCacheEntryMatches(entry, request);
+                });
+            const bool in_cache = cache_hit != gt_comparison_image_cache_.end();
+            const bool same_as_pending =
+                pending_gt_comparison_image_request_ &&
+                request_matches(*pending_gt_comparison_image_request_, request);
+            const bool same_as_active =
+                active_gt_comparison_image_request_ &&
+                request_matches(*active_gt_comparison_image_request_, request);
+            const bool same_as_prefetch = std::any_of(
+                prefetch_gt_comparison_image_requests_.begin(),
+                prefetch_gt_comparison_image_requests_.end(),
+                [&request_matches, &request](const auto& candidate) {
+                    return request_matches(candidate, request);
+                });
+            if (!in_cache && !same_as_pending && !same_as_active && !same_as_prefetch) {
+                request.queued_at = now;
+                if (prefetch_gt_comparison_image_requests_.size() >=
+                    GT_COMPARISON_IMAGE_PREFETCH_MAX_ENTRIES) {
+                    prefetch_gt_comparison_image_requests_.pop_front();
+                }
+                prefetch_gt_comparison_image_requests_.push_back(std::move(request));
+                queued = true;
+            }
+        }
+        if (queued) {
+            gt_comparison_image_cv_.notify_one();
+        }
+    }
+
+    void RenderingManager::invalidateGTComparisonImageCache() {
+        std::lock_guard lock(gt_comparison_image_mutex_);
+        ++gt_comparison_image_request_generation_;
+        gt_comparison_image_cache_.clear();
+        gt_comparison_image_cache_bytes_ = 0;
+        pending_gt_comparison_image_request_.reset();
+        active_gt_comparison_image_request_.reset();
+        active_gt_comparison_image_is_prefetch_ = false;
+        prefetch_gt_comparison_image_requests_.clear();
+        gt_comparison_cuda_image_.reset();
+        gt_comparison_cuda_source_ = nullptr;
+        gt_comparison_cuda_generation_ = 0;
+        gt_comparison_cuda_camera_uid_ = -1;
+        gt_comparison_cuda_size_ = {0, 0};
+        gt_comparison_cuda_undistorted_ = false;
+        split_left_source_ = nullptr;
+        split_left_source_size_ = {0, 0};
+        split_left_source_camera_uid_ = -1;
+        split_left_source_undistorted_ = false;
+        split_left_image_generation_ = 0;
+        split_right_source_size_ = {0, 0};
+        split_right_image_generation_ = 0;
+        gt_comparison_loading_placeholder_.reset();
+        gt_comparison_failed_placeholder_.reset();
+    }
+
+    void RenderingManager::gtComparisonImageWorkerLoop(const std::stop_token stop_token) {
+        if (const cudaError_t err = cudaStreamCreateWithFlags(
+                &gt_comparison_worker_stream_, cudaStreamNonBlocking);
+            err != cudaSuccess) {
+            LOG_ERROR("GT comparison worker stream creation failed ({}); GT image worker disabled",
+                      cudaGetErrorString(err));
+            return;
+        }
+        const cudaStream_t worker_stream = gt_comparison_worker_stream_;
+        std::optional<lfs::core::CUDAStreamGuard> worker_stream_guard;
+        if (worker_stream) {
+            worker_stream_guard.emplace(worker_stream);
+        }
+        const auto release_worker_stream = [this]() {
+            if (gt_comparison_worker_stream_) {
+                (void)cudaStreamSynchronize(gt_comparison_worker_stream_);
+                lfs::core::CudaMemoryPool::instance().release_stream(gt_comparison_worker_stream_);
+                (void)cudaStreamDestroy(gt_comparison_worker_stream_);
+                gt_comparison_worker_stream_ = nullptr;
+            }
+        };
+        while (true) {
+            GTComparisonImageJobRequest request;
+            bool is_prefetch = false;
+            {
+                std::unique_lock lock(gt_comparison_image_mutex_);
+                gt_comparison_image_cv_.wait(lock, stop_token, [this] {
+                    return pending_gt_comparison_image_request_.has_value() ||
+                           !prefetch_gt_comparison_image_requests_.empty();
+                });
+                if (stop_token.stop_requested()) {
+                    pending_gt_comparison_image_request_.reset();
+                    prefetch_gt_comparison_image_requests_.clear();
+                    active_gt_comparison_image_request_.reset();
+                    active_gt_comparison_image_is_prefetch_ = false;
+                    worker_stream_guard.reset();
+                    release_worker_stream();
+                    return;
+                }
+
+                if (pending_gt_comparison_image_request_) {
+                    request = std::move(*pending_gt_comparison_image_request_);
+                    pending_gt_comparison_image_request_.reset();
+                } else {
+                    request = std::move(prefetch_gt_comparison_image_requests_.back());
+                    prefetch_gt_comparison_image_requests_.pop_back();
+                    is_prefetch = true;
+                }
+                active_gt_comparison_image_request_ = request;
+                active_gt_comparison_image_is_prefetch_ = is_prefetch;
+            }
+
+            std::shared_ptr<lfs::core::Tensor> image;
+            std::string error;
+            try {
+                lfs::core::Tensor gt_tensor;
+                if (request.mode == GTComparisonMode::RGB) {
+                    if (request.image_loader) {
+                        // The training loader's byte cache is bounded and keyed by plain
+                        // path (original bytes training reuses), so writing it is fine;
+                        // skip_blob_cache below guards only CacheLoader's unbounded
+                        // per-preview-size re-encode caches.
+                        lfs::io::LoadParams params;
+                        params.resize_factor = -1;
+                        params.max_width = request.preview_max_dimension;
+                        params.cuda_stream = worker_stream;
+                        params.output_uint8 = true;
+                        gt_tensor = request.image_loader->load_image_immediate(request.image_path, params);
+                    } else {
+                        gt_tensor = lfs::core::load_image_cached({.path = request.image_path,
+                                                                  .resize_factor = -1,
+                                                                  .max_width = request.preview_max_dimension,
+                                                                  .stream = worker_stream,
+                                                                  .output_uint8 = true,
+                                                                  .skip_blob_cache = true});
+                    }
+                }
+                if (request.mode == GTComparisonMode::RGB) {
+                    if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
+                        const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
+                        if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
+                            const bool undistort_gt =
+                                gt_layout == lfs::rendering::ImageLayout::CHW &&
+                                request.undistort_requested;
+                            if (undistort_gt) {
+                                if (gt_tensor.device() != lfs::core::Device::CUDA) {
+                                    gt_tensor = gt_tensor.to(lfs::core::Device::CUDA, worker_stream);
+                                }
+                                if (gt_tensor.dtype() == lfs::core::DataType::UInt8) {
+                                    gt_tensor = gt_tensor.to(lfs::core::DataType::Float32) / 255.0f;
+                                    if (worker_stream) {
+                                        gt_tensor.set_stream(worker_stream);
+                                    }
+                                }
+                                const auto scaled = lfs::core::scale_undistort_params(
+                                    request.undistort_params,
+                                    lfs::rendering::imageWidth(gt_tensor, gt_layout),
+                                    lfs::rendering::imageHeight(gt_tensor, gt_layout));
+                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, worker_stream);
+                            }
+                            gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
+                            // Static GT display images must be decoupled from the CUDA pool
+                            // while training can recycle device buffers mid-frame.
+                            gt_tensor = gt_tensor.cpu();
+                            image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
+                            image = resizeChwDisplayTensor(image, request.image_size);
+                        }
+                    }
+                } else if (request.camera) {
+                    if (request.mode == GTComparisonMode::Depth) {
+                        auto depth = request.camera->load_and_get_depth(
+                            -1, request.preview_max_dimension);
+                        if (depth.is_valid() && depth.ndim() == 2) {
+                            if (request.undistort_requested) {
+                                const auto scaled = lfs::core::scale_undistort_params(
+                                    request.undistort_params,
+                                    static_cast<int>(depth.shape()[1]),
+                                    static_cast<int>(depth.shape()[0]));
+                                depth = lfs::core::undistort_mask(depth, scaled, worker_stream);
+                            }
+                            image = makeDepthDisplayTensor(
+                                depth, request.depth_visualization_mode, request.background_color);
+                            image = resizeChwDisplayTensor(image, request.image_size);
+                            if (image) {
+                                auto flipped = lfs::rendering::flipImageVertical(
+                                    *image, lfs::rendering::ImageLayout::CHW);
+                                image = std::make_shared<lfs::core::Tensor>(std::move(flipped));
+                            }
+                        }
+                    } else {
+                        auto normal = request.camera->load_and_get_normal(
+                            -1, request.preview_max_dimension, lfs::core::Camera::NormalPriorDecode{});
+                        if (normal.is_valid() && normal.ndim() == 3) {
+                            const auto normal_layout = lfs::rendering::detectImageLayout(normal);
+                            if (request.undistort_requested &&
+                                normal_layout != lfs::rendering::ImageLayout::Unknown) {
+                                const auto scaled = lfs::core::scale_undistort_params(
+                                    request.undistort_params,
+                                    lfs::rendering::imageWidth(normal, normal_layout),
+                                    lfs::rendering::imageHeight(normal, normal_layout));
+                                normal = lfs::core::undistort_image(normal, scaled, worker_stream);
+                            }
+                            image = makeNormalDisplayTensor(normal);
+                            image = resizeChwDisplayTensor(image, request.image_size);
+                            if (image) {
+                                auto flipped = lfs::rendering::flipImageVertical(
+                                    *image, lfs::rendering::ImageLayout::CHW);
+                                image = std::make_shared<lfs::core::Tensor>(std::move(flipped));
+                            }
+                        }
+                    }
+                }
+                if (worker_stream) {
+                    if (const cudaError_t err = cudaStreamSynchronize(worker_stream);
+                        err != cudaSuccess) {
+                        throw std::runtime_error(
+                            std::string("GT comparison worker CUDA sync failed: ") +
+                            cudaGetErrorString(err));
+                    }
+                }
+                image = gt_comparison_detail::convertDisplayTensorToUInt8(image);
+                if (!image || !image->is_valid()) {
+                    image.reset();
+                    error = request.mode == GTComparisonMode::RGB
+                                ? "RGB GT comparison could not load the source image"
+                            : request.mode == GTComparisonMode::Depth
+                                ? "Depth GT comparison could not load the camera depth map"
+                                : "Normal GT comparison could not load the camera normal map";
+                }
+            } catch (const std::exception& e) {
+                image.reset();
+                error = std::format("RGB GT comparison image load failed: {}", e.what());
+                LOG_WARN("{}", error);
+            } catch (...) {
+                image.reset();
+                error = "RGB GT comparison image load failed with an unknown error";
+                LOG_WARN("{}", error);
+            }
+
+            bool applied = false;
+            {
+                std::lock_guard lock(gt_comparison_image_mutex_);
+                const auto request_matches = [](const GTComparisonImageJobRequest& lhs,
+                                                const GTComparisonImageJobRequest& rhs) {
+                    return gtRequestMatches(lhs, rhs);
+                };
+                const bool active_request_matches =
+                    active_gt_comparison_image_request_ &&
+                    request_matches(*active_gt_comparison_image_request_, request);
+                const bool completed_as_prefetch = active_gt_comparison_image_is_prefetch_;
+                const bool current_request_is_valid =
+                    active_request_matches && !completed_as_prefetch &&
+                    active_gt_comparison_image_request_->generation ==
+                        gt_comparison_image_request_generation_;
+                if (!stop_token.stop_requested() && active_request_matches &&
+                    (completed_as_prefetch || current_request_is_valid)) {
+                    insertGTComparisonImageCacheEntry(
+                        request, std::move(image), std::move(error), std::chrono::steady_clock::now());
+                    if (completed_as_prefetch && pending_gt_comparison_image_request_ &&
+                        request_matches(*pending_gt_comparison_image_request_, request)) {
+                        pending_gt_comparison_image_request_.reset();
+                        applied = true;
+                    } else if (!completed_as_prefetch) {
+                        applied = true;
+                    }
+                }
+                if (active_request_matches) {
+                    active_gt_comparison_image_request_.reset();
+                    active_gt_comparison_image_is_prefetch_ = false;
+                }
+            }
+
+            if (applied) {
+                markDirty(DirtyFlag::SPLIT_VIEW);
+            }
+        }
+    }
+
     std::expected<lfs::core::Tensor, std::string> RenderingManager::buildVksplatSelectionMask(
         SceneManager& scene_manager,
         const lfs::rendering::FrameView& frame_view,
@@ -593,10 +1625,6 @@ namespace lfs::vis {
             return VksplatViewportRenderer::SelectionMaskShape::Brush;
         };
 
-        const bool is_training = scene_manager.hasDataset() &&
-                                 scene_manager.getTrainerManager() &&
-                                 scene_manager.getTrainerManager()->isRunning();
-
         VksplatViewportRenderer::SelectionMaskRequest request{
             .frame_view = frame_view,
             .scene =
@@ -610,7 +1638,6 @@ namespace lfs::vis {
             .equirectangular = equirectangular,
             .mip_filter = settings.mip_filter,
             .ring_width = settings.ring_width,
-            .synchronize_input_upload = is_training,
             .picked_ring_id_out = picked_ring_id_out,
         };
 
@@ -622,18 +1649,67 @@ namespace lfs::vis {
 
     RenderingManager::VulkanFrameResult RenderingManager::renderVulkanFrame(const RenderContext& context) {
         LOG_TIMER("renderVulkanFrame");
+        if (vksplat_stale_frame_guard_.takeRecoveryRequest() && vksplat_viewport_renderer_) {
+            // clear_external_backing waits for the arena to be idle. Do this
+            // before taking either trainer lock, after the failed frame's borrow
+            // publisher has run, so training can finish its active frame. Detach
+            // first, outside releaseScratchOnIdle's readback mutex: the arena's
+            // shrink callback takes that mutex while holding the arena gate.
+            lfs::core::GlobalArenaManager::instance().clear_external_backing();
+            vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+        }
+        const RenderSettings frame_settings = [this] {
+            std::lock_guard lock(settings_mutex_);
+            return settings_;
+        }();
         SceneManager* const scene_manager = context.scene_manager;
+        auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
+        const bool is_training = scene_manager && scene_manager->hasDataset() &&
+                                 trainer_manager && trainer_manager->isTrainingActive();
+        const bool training_initializing = trainer_manager &&
+                                           trainer_manager->getState() == TrainingState::Starting;
+        if (!is_training && vksplat_viewport_renderer_) {
+            // Clear a callback capturing the previous trainer before any cached or
+            // minimized-frame early return can leave it reachable by an auxiliary submit.
+            vksplat_viewport_renderer_->setLiveSubmitCallback({});
+        }
         if (context.vulkan_context) {
             last_vulkan_context_ = context.vulkan_context;
+        }
+        if (!is_training && vksplat_viewport_renderer_ &&
+            vksplat_terminal_release_pending_.exchange(false, std::memory_order_acq_rel)) {
+            // TrainingCompleted is posted by the training side, but Vulkan
+            // resources must be released on this render thread. The event is
+            // emitted only after the trainer's B3 cleanup has detached its
+            // arena backing, so this also drops the viewer's final import.
+            vksplat_viewport_renderer_->releaseScratchOnIdle(true);
+            vksplat_idle_frame_count_ = 0;
         }
 
         const auto framebuffer_region =
             resolveFramebufferViewportRegion(context.viewport, context.logical_screen_size, context.viewport_region);
+        if (framebuffer_region.valid()) {
+            // resolveFramebufferViewportRegion reports a GL bottom-left origin; window
+            // readbacks are top-left, so store the flipped form callers actually crop with.
+            framebuffer_viewport_rect_ = {
+                .top_left = {framebuffer_region.gl_pos.x,
+                             context.viewport.frameBufferSize.y - framebuffer_region.gl_pos.y - framebuffer_region.size.y},
+                .size = framebuffer_region.size};
+        }
         glm::ivec2 current_size = context.viewport.frameBufferSize;
         if (context.viewport_region) {
             current_size = framebuffer_region.size;
         }
+        // Minimized / zero-extent: no presentable viewport work. Never hold a
+        // resize training pause, never start model reads, and never publish
+        // new viewer borrows — the trainer continues headless on the existing
+        // handshake fences only. Restore re-enters the normal frame path
+        // (first frame may block once for a stable model, same as cold start).
         if (current_size.x <= 0 || current_size.y <= 0) {
+            if (vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_->setLiveSubmitCallback({});
+            }
+            releaseResizeTrainingPause();
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};
@@ -641,7 +1717,10 @@ namespace lfs::vis {
         initialized_ = true;
 
         std::optional<lfs::core::CUDAStreamGuard> frame_stream_guard;
-        const auto cached_frame_result = [this]() -> VulkanFrameResult {
+        const auto cached_frame_result = [this, current_size]() -> VulkanFrameResult {
+            if (!vksplat_stale_frame_guard_.canUseCachedFrame()) {
+                return {};
+            }
             if (vulkan_external_viewport_image_ != VK_NULL_HANDLE) {
                 return {.image = {},
                         .external_image = vulkan_external_viewport_image_,
@@ -650,31 +1729,61 @@ namespace lfs::vis {
                         .external_image_generation = vulkan_external_viewport_image_generation_,
                         .image_generation = vulkan_viewport_image_generation_,
                         .size = vulkan_viewport_image_size_,
-                        .flip_y = vulkan_viewport_image_flip_y_};
+                        .alloc_size = vulkan_viewport_image_alloc_size_,
+                        .flip_y = vulkan_viewport_image_flip_y_,
+                        .matches_viewport_extent =
+                            vulkan_viewport_coordinate_size_ == current_size};
             }
             if (!vulkan_viewport_image_) {
                 return {.image = {},
                         .image_generation = split_view_image_generation_,
                         .size = vulkan_viewport_image_size_,
-                        .flip_y = vulkan_viewport_image_flip_y_};
+                        .alloc_size = vulkan_viewport_image_alloc_size_,
+                        .flip_y = vulkan_viewport_image_flip_y_,
+                        .matches_viewport_extent =
+                            vulkan_viewport_coordinate_size_ == current_size};
             }
             return {.image = vulkan_viewport_image_,
                     .image_generation = vulkan_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
-                    .flip_y = vulkan_viewport_image_flip_y_};
+                    .alloc_size = vulkan_viewport_image_alloc_size_,
+                    .flip_y = vulkan_viewport_image_flip_y_,
+                    .matches_viewport_extent =
+                        vulkan_viewport_coordinate_size_ == current_size};
         };
-        const auto update_cached_split_position = [this](const bool require_position_change) -> bool {
-            if (!split_view_service_.isActive(settings_)) {
+        const auto defer_shared_scratch = [this](const std::string& reason) {
+            if (vksplat_stale_frame_guard_.onDeferral()) {
+                LOG_WARN("VkSplat shared scratch deferred {} viewport attempts; dropping stale viewport and resetting scratch before the next attempt: {}",
+                         StaleFrameGuard::kMaxCachedDeferrals, reason);
+                // Reset alone still needs arena access on the next render.
+                // Hide the old publication until fresh output is available;
+                // the renderer retains its output allocations and GPU fences.
+                clearVulkanViewportImageState();
+                clearVulkanMeshFrame();
+                viewport_artifact_service_.clearViewportOutput();
+            }
+        };
+        const auto update_cached_split_position = [this, &frame_settings](const bool require_position_change) -> bool {
+            if (!split_view_service_.isActive(frame_settings)) {
                 return false;
             }
 
-            const float split_position = std::clamp(settings_.split_position, 0.0f, 1.0f);
+            const float split_position = std::clamp(frame_settings.split_position, 0.0f, 1.0f);
             std::lock_guard lock(vulkan_mesh_frame_mutex_);
             if (!vulkan_mesh_frame_.split_view.enabled) {
                 return false;
             }
 
             auto& split = vulkan_mesh_frame_.split_view;
+            // PLY panels are rendered with a 12.5%-viewport-width overlap around
+            // the cached splitter. A drag inside that overlap only changes the
+            // composite divider; leaving it is the point where panel renders must
+            // be refreshed at the new widths/origins.
+            if (splitViewUsesPLYComparison(frame_settings.split_view_mode) &&
+                (split_position < split.right.start_position ||
+                 split_position > split.left.end_position)) {
+                return false;
+            }
             const bool split_position_changed =
                 split.split_position != split_position ||
                 split.left.end_position != split_position ||
@@ -687,12 +1796,15 @@ namespace lfs::vis {
             }
 
             split.split_position = split_position;
-            split.left.start_position = 0.0f;
-            split.left.end_position = split_position;
-            split.right.start_position = split_position;
-            split.right.end_position = 1.0f;
+            if (!splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
+                split.left.start_position = 0.0f;
+                split.left.end_position = split_position;
+                split.right.start_position = split_position;
+                split.right.end_position = 1.0f;
+            }
 
-            if (vulkan_mesh_frame_.panels.size() == 2) {
+            if (vulkan_mesh_frame_.panels.size() == 2 &&
+                !splitViewUsesPLYComparison(frame_settings.split_view_mode)) {
                 vulkan_mesh_frame_.panels[0].start_position = 0.0f;
                 vulkan_mesh_frame_.panels[0].end_position = split_position;
                 vulkan_mesh_frame_.panels[1].start_position = split_position;
@@ -733,7 +1845,7 @@ namespace lfs::vis {
         const auto interaction_panels = buildVulkanInteractionPanels(
             context.viewport,
             split_view_service_,
-            settings_,
+            frame_settings,
             screen_viewport_pos,
             screen_viewport_size);
         viewport_interaction_context_.updatePickContext(interaction_panels);
@@ -743,18 +1855,56 @@ namespace lfs::vis {
             markDirty(resize_result.dirty);
         }
         const bool resize_deferring = frame_lifecycle_service_.isResizeDeferring();
-        float scale = std::clamp(settings_.render_scale, 0.25f, 1.0f);
-        if (resize_result.render_interactive_frame) {
+        const auto requested_upscaler = sceneUpscalerBackendFromId(frame_settings.scene_upscaler)
+                                            .value_or(SceneUpscalerBackend::Native);
+        const auto reported_upscaler = sceneUpscalerRuntimeSelection();
+        const bool spatial_runtime_ready =
+            reported_upscaler.requested == requested_upscaler &&
+            reported_upscaler.effective == SceneUpscalerBackend::Spatial &&
+            !reported_upscaler.fellBack();
+        float scale = effectiveSceneRenderScale(
+            frame_settings.render_scale,
+            frame_settings.scene_upscaler_scale,
+            spatial_runtime_ready);
+        if (resize_result.use_interactive_render_scale) {
             scale = std::min(scale, kInteractiveResizeRenderScale);
+        }
+        // Under an active VRAM pressure lease, halve the viewer render resolution
+        // to shrink per-frame output allocation. Restored automatically once the
+        // coordinator observes sustained headroom. Does not affect training.
+        if (lfs::core::MemoryPressureCoordinator::instance().pressure_active()) {
+            scale = std::clamp(scale * 0.5f, 0.25f, 1.0f);
         }
         glm::ivec2 render_size(
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * scale)), 1),
             std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * scale)), 1));
-
+        // Ground-truth comparison is a stable reference readout. Its preview
+        // resolution follows only the viewport size and the base render scale;
+        // scene reconstruction, interactive-resize, and memory-pressure
+        // reductions must not re-size it, otherwise toggling the reconstruction
+        // setting re-decodes the reference image and briefly flashes a stale
+        // cache entry (possibly from a different camera).
+        const float gt_comparison_scale =
+            effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false);
+        const glm::ivec2 gt_comparison_size(
+            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.x) * gt_comparison_scale)), 1),
+            std::max(static_cast<int>(std::lround(static_cast<float>(current_size.y) * gt_comparison_scale)), 1));
+        auto& resolution_profiler = lfs::diagnostics::VramProfiler::instance();
+        resolution_profiler.setGauge("viewer.resolution.scene.base_scale",
+                                     effectiveSceneRenderScale(frame_settings.render_scale, 1.0f, false));
+        resolution_profiler.setGauge(
+            "viewer.resolution.scene.reconstruction_scale",
+            !spatial_runtime_ready
+                ? 1.0
+                : frame_settings.scene_upscaler_scale);
+        resolution_profiler.setGauge("viewer.resolution.scene.effective_scale", scale);
         const DirtyMask pending_dirty = dirty_mask_.load(std::memory_order_relaxed);
         const bool only_split_position_pending =
             (pending_dirty & ~DirtyFlag::SPLIT_POSITION) == 0;
+        const bool split_position_requires_panel_rerender =
+            split_view_service_.isIndependentDualActive(frame_settings);
         if ((pending_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+            !split_position_requires_panel_rerender &&
             vulkan_viewport_image_size_ == render_size &&
             has_cached_split_view_output() &&
             update_cached_split_position(!only_split_position_pending)) {
@@ -763,56 +1913,106 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
-        auto* const trainer_manager = scene_manager ? scene_manager->getTrainerManager() : nullptr;
-        const bool is_training = scene_manager && scene_manager->hasDataset() &&
-                                 trainer_manager && trainer_manager->isRunning();
+        // Window resize/minimize must never alter the training schedule. Viewer
+        // work quiesces itself (cached frames while deferring; output-ring
+        // recreate waits ring watermarks only). pauseTrainingTemporary is not
+        // used on this path — other interactive wait sites keep it.
 
-        auto render_lock = acquireLiveModelRenderLock(scene_manager);
+        // Training previews never wait for a step-boundary read, including
+        // discrete layout resizes. On contention, retain the previous matching
+        // frame and retry on the next cadence tick; the GUI commits a staged
+        // layout only after matches_viewport_extent reports a fresh output.
+        // First frame / no cache still falls back to one blocking acquire below.
+        const bool training_try_lock = is_training;
+        auto render_lock = acquireLiveModelRenderLock(scene_manager, training_try_lock);
+        bool render_lock_contended = training_try_lock && !render_lock.has_value() &&
+                                     scene_manager && scene_manager->getTrainerManager() &&
+                                     scene_manager->getTrainerManager()->getTrainer();
 
-        const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
+        const lfs::core::SplatData* model = nullptr;
         SceneRenderState scene_state;
-        if (scene_manager) {
-            LOG_TIMER("renderVulkanFrame.buildRenderState");
-            scene_state = scene_manager->buildRenderState();
+        auto sample_model_under_lock = [&]() {
+            model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
+            scene_state = {};
+            if (scene_manager) {
+                LOG_TIMER("renderVulkanFrame.buildRenderState");
+                scene_state = scene_manager->buildRenderState();
+            }
+        };
+        if (!render_lock_contended) {
+            sample_model_under_lock();
         }
-        const bool has_renderable_model = hasRenderableGaussians(model);
-        const bool has_visible_gaussian_model =
-            has_renderable_model && scene_state.visible_splat_count > 0;
-        const bool has_point_cloud =
-            scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
-        const bool has_meshes = std::any_of(scene_state.meshes.begin(),
-                                            scene_state.meshes.end(),
-                                            [](const auto& mesh) { return mesh.mesh != nullptr; });
-        const bool has_environment = environmentBackgroundEnabled(settings_);
-        const bool has_render_content = has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
-        const size_t model_ptr = reinterpret_cast<size_t>(model);
+        bool has_renderable_model = false;
+        bool has_visible_gaussian_model = false;
+        bool has_point_cloud = false;
+        bool has_meshes = false;
+        bool has_environment = false;
+        bool has_render_content = false;
+        auto refresh_content_flags = [&]() {
+            has_renderable_model = hasRenderableGaussians(model);
+            has_visible_gaussian_model =
+                has_renderable_model && scene_state.visible_splat_count > 0;
+            has_point_cloud =
+                scene_state.point_cloud != nullptr && scene_state.point_cloud->size() > 0;
+            has_meshes = std::any_of(scene_state.meshes.begin(),
+                                     scene_state.meshes.end(),
+                                     [](const auto& mesh) { return mesh.mesh != nullptr; });
+            has_environment = environmentBackgroundEnabled(frame_settings);
+            has_render_content =
+                has_visible_gaussian_model || has_point_cloud || has_meshes || has_environment;
+        };
+        refresh_content_flags();
+        size_t model_ptr = reinterpret_cast<size_t>(model);
+        // Edit-mode handoff moves the same SplatData into a scene node. Its
+        // address does not change, but the trainer's GPU handshake is gone.
+        // Use dataset ownership, not Running/Paused, so completion alone does
+        // not reset the renderer while the trainer still owns its fences.
+        const auto model_source = scene_manager && scene_manager->hasDataset()
+                                      ? ViewportFrameLifecycleService::ModelSource::Training
+                                      : ViewportFrameLifecycleService::ModelSource::Scene;
 
-        if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_);
-            model_change.changed) {
-            vulkan_viewport_image_.reset();
-            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            vulkan_external_viewport_image_generation_ = 0;
-            vulkan_viewport_image_size_ = {0, 0};
-            vulkan_viewport_image_flip_y_ = false;
-            if (vksplat_viewport_renderer_) {
-                // The trainer must drop the fence handle before reset destroys
-                // the CUDA import it points at.
-                if (trainer_manager) {
-                    if (auto* trainer = trainer_manager->getTrainer()) {
-                        trainer->setViewerReleaseFence(nullptr);
+        // Skip model-change tracking while the step-boundary lock is contended:
+        // model_ptr is null only because densify holds exclusive, not because the
+        // scene dropped the model. Treating it as a change would wipe the retained
+        // last splat image (the whole point of the cadence path).
+        if (!render_lock_contended) {
+            if (const auto model_change = frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
+                model_change.changed) {
+                invalidateGTComparisonImageCache();
+                clearVulkanViewportImageState();
+                last_logged_vksplat_render_error_.clear();
+                if (vksplat_viewport_renderer_) {
+                    if (is_training && lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
+                        LOG_DEBUG("Preserving VkSplat renderer across training model change");
+                    } else {
+                        // The trainer must drop the fence handle before reset destroys
+                        // the CUDA import it points at.
+                        if (trainer_manager) {
+                            if (auto* trainer = trainer_manager->getTrainer()) {
+                                trainer->setViewerReleaseFence(nullptr);
+                            }
+                        }
+                        // reset() destroys render_stream_; drop it from the TLS current
+                        // stream first so the rest of the frame doesn't enqueue work on a
+                        // stale handle. Re-installed after the handshake re-init below.
+                        frame_stream_guard.reset();
+                        vksplat_viewport_renderer_->reset();
+                        // Clear GT async ticket host state after ring teardown.
+                        gt_async_depth_ticket_ = 0;
+                        gt_async_depth_dest_ = {};
+                        gt_async_ticket_mode_ = GTComparisonMode::RGB;
+                        gt_async_ticket_intrinsics_.reset();
+                        gt_async_ticket_flip_y_ = false;
+                        gt_async_ticket_metadata_ = {};
+                        gt_async_held_display_.reset();
+                        gt_async_held_flip_y_ = false;
+                        gt_async_held_metadata_ = {};
                     }
                 }
-                // reset() destroys render_stream_; drop it from the TLS current
-                // stream first so the rest of the frame doesn't enqueue work on a
-                // stale handle. Re-installed after the handshake re-init below.
-                frame_stream_guard.reset();
-                vksplat_viewport_renderer_->reset();
+                viewport_artifact_service_.clearViewportOutput();
+                markDirty(DirtyFlag::ALL);
             }
-            viewport_artifact_service_.clearViewportOutput();
-            markDirty(DirtyFlag::ALL);
-        }
+        } // !render_lock_contended model-change tracking
 
         const bool synchronize_vksplat_input_upload = is_training;
         if (const DirtyMask training_dirty = frame_lifecycle_service_.handleTrainingRefresh(
@@ -821,84 +2021,6 @@ namespace lfs::vis {
             training_dirty) {
             markDirty(training_dirty);
         }
-
-        // Trainer↔viewer GPU handshake, forward edge: order this frame's model
-        // reads (render-stream packing and Vulkan zero-copy) after the
-        // trainer's last consistent parameter state. The reverse edge — the
-        // trainer waiting on this frame's completion before its next in-place
-        // writes — is published after the frame's submits.
-        //
-        // Initialize the renderer (its render stream + completion fence) before
-        // installing the handshake so the first live frame after a start, scene
-        // switch, or reset() is covered too — otherwise that frame submits with
-        // no borrow fence and the trainer can write while Vulkan still reads.
-        if (is_training && context.vulkan_context &&
-            lfs::rendering::isVkSplatBackend(settings_.raster_backend)) {
-            if (!vksplat_viewport_renderer_) {
-                vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
-            }
-            if (const auto ok = vksplat_viewport_renderer_->ensureHandshakeReady(*context.vulkan_context); !ok) {
-                LOG_WARN("VkSplat handshake pre-init skipped: {}", ok.error());
-            }
-        }
-        // ensureHandshakeReady() may have reset()/recreated render_stream_ — on a
-        // model change above, or on a VulkanContext switch inside ensureInitialized
-        // — invalidating any handle installed earlier this frame. Re-sync the guard
-        // unconditionally to the renderer's current stream (not only when empty).
-        frame_stream_guard.reset();
-        if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
-            frame_stream_guard.emplace(vksplat_viewport_renderer_->renderStream());
-        }
-        lfs::training::Trainer* live_trainer = nullptr;
-        if (is_training && trainer_manager && vksplat_viewport_renderer_ &&
-            vksplat_viewport_renderer_->renderStream() &&
-            vksplat_viewport_renderer_->renderCompleteFence()) {
-            // Gate on a live release fence too: a failed/partial ensureHandshakeReady
-            // leaves render_stream_ created but render_complete_cuda_ uninitialized,
-            // and installing that null fence would silently drop the trainer's borrow
-            // wait (racing any in-flight Vulkan read). render() also fails without it,
-            // so skipping the handshake this frame is correct.
-            live_trainer = trainer_manager->getTrainer();
-        }
-        // Held shared for the whole frame so the trainer's non-refining optimizer
-        // step (which takes it exclusive) cannot mutate the live model while this
-        // frame is reading it. Released at function exit (after the readback).
-        std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
-        if (live_trainer && lfs::training::Trainer::modelAccessLockEnabled()) {
-            model_read_lock.emplace(live_trainer->getModelAccessMutex());
-        }
-        if (live_trainer) {
-            live_trainer->setViewerReleaseFence(vksplat_viewport_renderer_->renderCompleteFence());
-            live_trainer->beginModelRead(vksplat_viewport_renderer_->renderStream());
-            // Prompt publish: the renderer invokes this right after each
-            // submit, before its shared arena frame releases — the trainer's
-            // borrow wait must cover the in-flight batch before the trainer
-            // can reacquire the arena.
-            lfs::training::Trainer* const trainer = live_trainer;
-            vksplat_viewport_renderer_->setLiveSubmitCallback(
-                [trainer](const std::uint64_t value) { trainer->publishViewerBorrow(value); });
-        } else if (vksplat_viewport_renderer_) {
-            vksplat_viewport_renderer_->setLiveSubmitCallback({});
-        }
-        // Belt-and-suspenders: also publish the frame's final completion value
-        // at scope exit (all return paths), while the shared render lock is
-        // still held. publishViewerBorrow is monotonic, so this can't regress
-        // the prompt publishes.
-        struct ViewerBorrowPublisher {
-            lfs::training::Trainer* trainer;
-            VksplatViewportRenderer* renderer;
-            ~ViewerBorrowPublisher() {
-                if (trainer && renderer) {
-                    // Reverse edge that also covers early exits: even when no new
-                    // batch advanced the completion value (validation/setup error
-                    // after prepareInputs enqueued render-stream model copies),
-                    // record a reader-done edge on the render stream so the next
-                    // training step waits for those reads before writing.
-                    trainer->endModelRead(renderer->renderStream());
-                    trainer->publishViewerBorrow(renderer->renderCompleteValue());
-                }
-            }
-        } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
         const bool has_cached_gpu_only_frame = [&]() {
             if (vulkan_viewport_image_size_.x <= 0 || vulkan_viewport_image_size_.y <= 0) {
@@ -913,9 +2035,10 @@ namespace lfs::vis {
             vulkan_viewport_image_ != nullptr ||
             vulkan_external_viewport_image_ != VK_NULL_HANDLE ||
             has_cached_gpu_only_frame;
-        LOG_PERF("renderVulkanFrame.resize deferring={} render={} completed={} render_scale={:.2f} render_size={}x{} current_size={}x{}",
+        LOG_PERF("renderVulkanFrame.resize deferring={} render={} interactive_scale={} completed={} render_scale={:.2f} render_size={}x{} current_size={}x{}",
                  resize_deferring,
-                 resize_result.render_interactive_frame,
+                 resize_result.render_resized_frame,
+                 resize_result.use_interactive_render_scale,
                  resize_result.completed,
                  scale,
                  render_size.x,
@@ -926,7 +2049,7 @@ namespace lfs::vis {
         if (const DirtyMask required_dirty = frame_lifecycle_service_.requiredDirtyMask(
                 has_cached_viewport_output,
                 has_render_content,
-                settings_.split_view_mode);
+                frame_settings.split_view_mode);
             required_dirty) {
             dirty_mask_.fetch_or(required_dirty, std::memory_order_relaxed);
         }
@@ -946,24 +2069,54 @@ namespace lfs::vis {
                 ++viewport_projection_generation_;
             }
         }
-        LOG_PERF("renderVulkanFrame.frame_dirty=0x{:x} model={} pc={} mesh={} env={}",
-                 frame_dirty, has_renderable_model, has_point_cloud, has_meshes, has_environment);
+        LOG_PERF("renderVulkanFrame.frame_dirty=0x{:x} model={} pc={} mesh={} env={} lock_contended={}",
+                 frame_dirty,
+                 has_renderable_model,
+                 has_point_cloud,
+                 has_meshes,
+                 has_environment,
+                 render_lock_contended);
+        // Step-boundary contention during densify: retain last splat image, re-queue
+        // dirty so the next cadence tick retries after the exclusive lock drops.
+        if (render_lock_contended && (has_cached_viewport_output || training_initializing)) {
+            if (frame_dirty != 0) {
+                dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+            }
+            LOG_PERF("renderVulkanFrame: {} lock contended (retaining cached splat)",
+                     training_initializing ? "training initialization" : "step-boundary");
+            render_lock.reset();
+            return cached_frame_result();
+        }
+        if (render_lock_contended && !has_cached_viewport_output) {
+            // A normal running-training cold start may block once for a stable
+            // first frame. Starting is handled above and never waits for the
+            // initialization worker, even when no previous frame exists.
+            render_lock = acquireLiveModelRenderLock(scene_manager, /*try_lock=*/false);
+            render_lock_contended = !render_lock.has_value();
+            if (render_lock) {
+                sample_model_under_lock();
+                refresh_content_flags();
+                model_ptr = reinterpret_cast<size_t>(model);
+                (void)frame_lifecycle_service_.handleModelChange(model_ptr, viewport_artifact_service_, model_source);
+            }
+        }
+        // Scene state is authoritative here (contended frames returned above): nothing
+        // visible must clear the viewport even when a cached frame exists — a consolidated
+        // multi-splat scene keeps the same combined-model pointer when every node is
+        // hidden, so model-change tracking never clears the stale image.
         if (!has_render_content) {
-            vulkan_viewport_image_.reset();
-            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            vulkan_external_viewport_image_generation_ = 0;
-            vulkan_viewport_image_size_ = {0, 0};
-            vulkan_viewport_image_flip_y_ = false;
+            clearVulkanViewportImageState();
+            vulkan_viewport_coordinate_size_ = current_size;
+            last_logged_vksplat_render_error_.clear();
             viewport_artifact_service_.clearViewportOutput();
             clearVulkanMeshFrame();
             render_lock.reset();
-            return {};
+            return {.matches_viewport_extent = true};
         }
 
         const DirtyMask split_deferred_dirty = frame_dirty & ~DirtyFlag::SPLIT_POSITION;
         if ((frame_dirty & DirtyFlag::SPLIT_POSITION) != 0 &&
+            !split_position_requires_panel_rerender &&
             has_cached_viewport_output &&
             update_cached_split_position(split_deferred_dirty != 0)) {
             const DirtyMask deferred_dirty = split_deferred_dirty;
@@ -978,8 +2131,10 @@ namespace lfs::vis {
 
         if (resize_deferring &&
             has_cached_viewport_output &&
-            !resize_result.render_interactive_frame) {
-            update_cached_split_position(false);
+            !resize_result.render_resized_frame) {
+            if (!splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
+                update_cached_split_position(false);
+            }
             constexpr DirtyMask resize_defer_consumed_dirty =
                 DirtyFlag::CAMERA | DirtyFlag::VIEWPORT | DirtyFlag::OVERLAY;
             const DirtyMask deferred_dirty = frame_dirty & ~resize_defer_consumed_dirty;
@@ -991,13 +2146,6 @@ namespace lfs::vis {
             return cached_frame_result();
         }
 
-        if (frame_dirty == 0 && has_cached_viewport_output) {
-            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
-            render_lock.reset();
-            return cached_frame_result();
-        }
-
-        std::optional<ScopedTemporaryTrainingPause> viewport_resize_training_pause;
         const bool vksplat_viewport_resize =
             is_training &&
             context.vulkan_context != nullptr &&
@@ -1005,21 +2153,130 @@ namespace lfs::vis {
             vksplat_viewport_renderer_->nextOutputImagesNeedResize(
                 render_size,
                 VksplatViewportRenderer::OutputSlot::Main) &&
-            lfs::rendering::isVkSplatBackend(settings_.raster_backend);
+            lfs::rendering::isVkSplatBackend(frame_settings.raster_backend);
         if (vksplat_viewport_resize) {
-            viewport_resize_training_pause.emplace(trainer_manager,
-                                                   kVulkanViewportResizeTrainingPauseWait);
-            if (!viewport_resize_training_pause->synchronized()) {
+            // While the viewport size is moving, return cached frames without
+            // starting model reads or publishing viewer borrows. Once it is
+            // stable, ensureOutputImages retires prior rings through the
+            // producer/consumer watermarks; the viewport-independent exportable
+            // model import is retained. A normal live submit then re-arms the
+            // handshake.
+            if (!resize_result.require_immediate_output_resize &&
+                has_cached_viewport_output &&
+                frame_lifecycle_service_.resizeRecentlyChanged(kTrainingOutputResizeStableDelay)) {
                 dirty_mask_.fetch_or(vksplatOutputResizeRetryDirty(frame_dirty),
                                      std::memory_order_relaxed);
-                LOG_WARN("Skipping Vulkan viewport resize because training did not pause in time");
+                if (vksplat_viewport_renderer_) {
+                    vksplat_viewport_renderer_->setLiveSubmitCallback({});
+                }
                 render_lock.reset();
                 return cached_frame_result();
             }
-            LOG_DEBUG("Training paused around VkSplat output resize to {}x{}",
+            // Drain in-flight viewer CUDA work before output-ring recreate so
+            // the trainer's waitForModelReaders has at most one residual frame.
+            if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
+                const cudaError_t drain =
+                    cudaStreamSynchronize(vksplat_viewport_renderer_->renderStream());
+                if (drain != cudaSuccess) {
+                    LOG_WARN("Viewer resize quiesce: render-stream sync failed: {} ({})",
+                             cudaGetErrorName(drain),
+                             cudaGetErrorString(drain));
+                }
+            }
+            LOG_DEBUG("VkSplat output resize to {}x{} (viewer-side quiesce; training continues)",
                       render_size.x,
                       render_size.y);
         }
+
+        // Camera thumbnails are uploaded and composited by the GUI viewport
+        // pass. Reuse the cached splat image for an overlay-only refresh; a
+        // thumbnail must never turn a stream-in update into a full splat pass.
+        if (!vksplat_viewport_resize &&
+            (frame_dirty == 0 || frame_dirty == DirtyFlag::OVERLAY) &&
+            has_cached_viewport_output) {
+            LOG_PERF("renderVulkanFrame: cache HIT (returning cached image)");
+            render_lock.reset();
+            return cached_frame_result();
+        }
+
+        // Only a frame that will perform renderer work may join the trainer's
+        // read epoch. Cached frames must not enqueue a legacy-stream wait or
+        // publish a reader edge that serializes the next training step.
+        if (is_training && context.vulkan_context &&
+            lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
+            if (!vksplat_viewport_renderer_) {
+                vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+            }
+            if (const auto ok = vksplat_viewport_renderer_->ensureHandshakeReady(*context.vulkan_context); !ok) {
+                LOG_WARN("VkSplat handshake pre-init skipped: {}", ok.error());
+            }
+        }
+        // ensureHandshakeReady() may recreate render_stream_. Install the current
+        // stream before any frame preparation can enqueue CUDA work.
+        frame_stream_guard.reset();
+        if (vksplat_viewport_renderer_ && vksplat_viewport_renderer_->renderStream()) {
+            frame_stream_guard.emplace(vksplat_viewport_renderer_->renderStream());
+        }
+        lfs::training::Trainer* live_trainer = nullptr;
+        if (is_training && trainer_manager && vksplat_viewport_renderer_ &&
+            vksplat_viewport_renderer_->renderStream() &&
+            vksplat_viewport_renderer_->renderCompleteFence()) {
+            // A live stream without its release fence is a partial initialization;
+            // render() will fail too, so never install a handshake missing the
+            // trainer's reverse dependency.
+            live_trainer = trainer_manager->getTrainer();
+        }
+        // Held shared until all CPU/GPU frame preparation and readback paths exit.
+        // Passive preview: try_to_lock so a mid-step optimizer exclusive does not stall
+        // the UI; retain last splat image and retry on the next cadence tick.
+        std::optional<std::shared_lock<std::shared_mutex>> model_read_lock;
+        if (live_trainer) {
+            std::shared_lock<std::shared_mutex> candidate(
+                live_trainer->getModelAccessMutex(), std::try_to_lock);
+            if (!candidate.owns_lock()) {
+                if (has_cached_viewport_output) {
+                    if (frame_dirty != 0) {
+                        dirty_mask_.fetch_or(frame_dirty, std::memory_order_relaxed);
+                    }
+                    LOG_PERF("renderVulkanFrame: model-access lock contended (retaining cached splat)");
+                    render_lock.reset();
+                    return cached_frame_result();
+                }
+                // No cache yet — block once for the first published frame.
+                candidate = std::shared_lock<std::shared_mutex>(live_trainer->getModelAccessMutex());
+            }
+            model_read_lock.emplace(std::move(candidate));
+        }
+        if (live_trainer) {
+            live_trainer->setViewerReleaseFence(vksplat_viewport_renderer_->renderCompleteFence());
+            live_trainer->beginModelRead(vksplat_viewport_renderer_->renderStream());
+            lfs::training::Trainer* const trainer = live_trainer;
+            vksplat_viewport_renderer_->setLiveSubmitCallback(
+                [trainer](const std::uint64_t value) { trainer->publishViewerBorrow(value); });
+        } else if (vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_->setLiveSubmitCallback({});
+        }
+        // Prompt callbacks publish after each submit. This scope-exit edge also
+        // covers preparation errors after CUDA model reads but before a submit.
+        struct ViewerBorrowPublisher {
+            lfs::training::Trainer* trainer;
+            VksplatViewportRenderer* renderer;
+            ~ViewerBorrowPublisher() {
+                if (trainer && renderer) {
+                    try {
+                        trainer->endModelRead(renderer->renderStream());
+                        trainer->publishViewerBorrow(renderer->renderCompleteValue());
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "
+                                  "during frame teardown: {}",
+                                  e.what());
+                    } catch (...) {
+                        LOG_ERROR("ViewerBorrowPublisher: endModelRead/publishViewerBorrow failed "
+                                  "during frame teardown with an unknown error");
+                    }
+                }
+            }
+        } viewer_borrow_publisher{live_trainer, vksplat_viewport_renderer_.get()};
 
         framerate_controller_.beginFrame();
 
@@ -1030,7 +2287,7 @@ namespace lfs::vis {
             .scene_manager = scene_manager,
             .model = model,
             .scene_state = std::move(scene_state),
-            .settings = settings_,
+            .settings = frame_settings,
             .render_size = render_size,
             .viewport_pos = {0, 0},
             .frame_dirty = frame_dirty,
@@ -1050,14 +2307,19 @@ namespace lfs::vis {
         glm::ivec2 rendered_gt_content_size{0, 0};
         std::optional<SplitViewInfo> rendered_split_info;
         VulkanSplitViewParams pending_split_view{};
+        const auto release_inactive_split_outputs = [&] {
+            if (vksplat_viewport_renderer_ && !split_view_service_.isActive(frame_settings)) {
+                vksplat_viewport_renderer_->releaseSplitOutputResources();
+            }
+        };
 
         const auto populate_independent_split_mesh_panels =
             [&](VulkanMeshFrame& frame) {
                 if (!pending_split_view.enabled ||
-                    !splitViewUsesIndependentPanels(settings_.split_view_mode)) {
+                    !splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
                     return;
                 }
-                const auto layouts = split_view_service_.panelLayouts(settings_, render_size.x);
+                const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
                 if (!layouts || render_size.y <= 0) {
                     return;
                 }
@@ -1083,6 +2345,71 @@ namespace lfs::vis {
             VkImageView external_image_view = VK_NULL_HANDLE;
             std::uint64_t external_image_generation = 0;
             bool flip_y = false;
+            glm::ivec2 size{0, 0};
+            glm::ivec2 alloc_size{0, 0};
+        };
+
+        const auto ensure_cuda_viewport_image =
+            [](std::shared_ptr<lfs::core::Tensor> image,
+               const std::string_view label) -> std::shared_ptr<lfs::core::Tensor> {
+            if (!image || !image->is_valid()) {
+                return {};
+            }
+            if (image->device() == lfs::core::Device::CUDA) {
+                return image;
+            }
+            auto cuda_image = image->cuda();
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+                LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
+                return {};
+            }
+            return std::make_shared<lfs::core::Tensor>(std::move(cuda_image));
+        };
+        const auto ensure_cuda_gt_viewport_image =
+            [this](std::shared_ptr<lfs::core::Tensor> image,
+                   const int camera_uid,
+                   const glm::ivec2 size,
+                   const bool undistorted,
+                   const std::string_view label) -> std::shared_ptr<lfs::core::Tensor> {
+            if (!image || !image->is_valid()) {
+                return {};
+            }
+            if (image->device() == lfs::core::Device::CPU &&
+                (image.get() != split_left_source_ || size != split_left_source_size_ ||
+                 camera_uid != split_left_source_camera_uid_ ||
+                 undistorted != split_left_source_undistorted_)) {
+                split_left_source_ = image.get();
+                split_left_source_size_ = size;
+                split_left_source_camera_uid_ = camera_uid;
+                split_left_source_undistorted_ = undistorted;
+                // High bit keeps this counter disjoint from the per-frame
+                // split_view_image_generation_ space so slot-side comparisons
+                // can never collide across the two counters.
+                split_left_image_generation_ =
+                    (split_left_image_generation_ + 1) | SPLIT_LEFT_GENERATION_BIT;
+            }
+            if (image->device() == lfs::core::Device::CUDA) {
+                return image;
+            }
+            if (gt_comparison_cuda_image_ && gt_comparison_cuda_source_ == image.get() &&
+                gt_comparison_cuda_generation_ == split_left_image_generation_ &&
+                gt_comparison_cuda_camera_uid_ == camera_uid && gt_comparison_cuda_size_ == size &&
+                gt_comparison_cuda_undistorted_ == undistorted) {
+                return gt_comparison_cuda_image_;
+            }
+            auto cuda_image = image->cuda();
+            if (!cuda_image.is_valid() || cuda_image.device() != lfs::core::Device::CUDA) {
+                LOG_WARN("{} produced a non-CUDA tensor; falling back to the external image path", label);
+                return {};
+            }
+            gt_comparison_cuda_source_ = image.get();
+            gt_comparison_cuda_generation_ = split_left_image_generation_;
+            gt_comparison_cuda_camera_uid_ = camera_uid;
+            gt_comparison_cuda_size_ = size;
+            gt_comparison_cuda_undistorted_ = undistorted;
+            gt_comparison_cuda_image_ =
+                std::make_shared<lfs::core::Tensor>(std::move(cuda_image));
+            return gt_comparison_cuda_image_;
         };
 
         VkSemaphore latest_vksplat_completion_semaphore = VK_NULL_HANDLE;
@@ -1097,6 +2424,12 @@ namespace lfs::vis {
                       lod_controller_page_map_generation_);
             notifyAsyncLodResultsReady();
         };
+        const auto note_vksplat_render_progress =
+            [&](const VksplatViewportRenderer::RenderResult& result) {
+                if (result.lod_streaming_active) {
+                    requestRenderFollowUp();
+                }
+            };
         const auto render_panel_image =
             [&](const Viewport& source_viewport,
                 const glm::ivec2 panel_size,
@@ -1115,7 +2448,7 @@ namespace lfs::vis {
                 return std::unexpected("Invalid split-view panel size");
             }
 
-            if ((settings_.point_cloud_mode || !panel_has_visible_gaussian_model) && has_point_cloud && !panel_model) {
+            if ((frame_settings.point_cloud_mode || !panel_has_visible_gaussian_model) && has_point_cloud && !panel_model) {
                 const std::vector<glm::mat4> point_cloud_transforms = {frame_ctx.scene_state.point_cloud_transform};
                 const auto state = buildSplitViewPointCloudPanelRenderState(frame_ctx, panel_size, &source_viewport);
                 lfs::rendering::PointCloudRenderRequest request{
@@ -1127,7 +2460,7 @@ namespace lfs::vis {
                          .node_visibility_mask = {}},
                     .filters = state.filters,
                     .overlay = state.overlay,
-                    .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
+                    .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(frame_settings)};
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
                     return std::unexpected(auxiliary_engine.error());
@@ -1137,7 +2470,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Raw point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -1147,7 +2480,7 @@ namespace lfs::vis {
                 return std::unexpected("No renderable model for split-view panel");
             }
 
-            if (settings_.point_cloud_mode) {
+            if (frame_settings.point_cloud_mode) {
                 const auto state = buildSplitViewPointCloudPanelRenderState(frame_ctx, panel_size, &source_viewport);
                 std::vector<glm::mat4> transforms_storage;
                 auto scene = state.scene;
@@ -1166,7 +2499,7 @@ namespace lfs::vis {
                     .scene = scene,
                     .filters = state.filters,
                     .overlay = state.overlay,
-                    .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(settings_)};
+                    .transparent_background = environmentBackgroundUsesTransparentViewerCompositing(frame_settings)};
                 auto auxiliary_engine = ensure_auxiliary_rendering_engine();
                 if (!auxiliary_engine) {
                     return std::unexpected(auxiliary_engine.error());
@@ -1176,7 +2509,7 @@ namespace lfs::vis {
                     return std::unexpected(result ? "Point-cloud panel render returned no image"
                                                   : result.error());
                 }
-                const bool flip_y = !result->metadata.flip_y;
+                const bool flip_y = result->metadata.flip_y;
                 return RenderedPanel{.image = std::move(result->image),
                                      .metadata = std::move(result->metadata),
                                      .flip_y = flip_y};
@@ -1184,7 +2517,26 @@ namespace lfs::vis {
 
             auto request = request_override
                                ? *request_override
-                               : buildViewportRenderRequest(frame_ctx, panel_size, &source_viewport, panel_id);
+                               : [&] {
+                                     if (frame_settings.split_view_mode == SplitViewMode::PLYComparison &&
+                                         node_visibility_override && panel_id) {
+                                         const auto layouts = makePlyComparisonPanelLayouts(
+                                             render_size.x, frame_settings.split_position);
+                                         const auto& layout = layouts[splitViewPanelIndex(*panel_id)];
+                                         // Keep the projection in full-viewport coordinates while the
+                                         // raster target is clipped; VkSplat subtracts this origin from
+                                         // projected pixels after applying the full camera intrinsics.
+                                         return buildViewportRenderRequest(
+                                             frame_ctx,
+                                             panel_size,
+                                             &source_viewport,
+                                             panel_id,
+                                             {layout.panel.x, 0},
+                                             render_size);
+                                     }
+                                     return buildViewportRenderRequest(
+                                         frame_ctx, panel_size, &source_viewport, panel_id);
+                                 }();
             std::vector<std::uint32_t> lod_touched_chunks;
             if (lod_controller_ && lod_controller_->hasTree()) {
                 lod_controller_->advanceTransition();
@@ -1192,29 +2544,27 @@ namespace lfs::vis {
                 if (lod_transition_active) {
                     notifyAsyncLodResultsReady();
                 }
-                const auto& selected = settings_.lod_enabled
+                const auto& selected = frame_settings.lod_enabled
                                            ? lod_controller_->selectedIndices()
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
-                    if (kEnableLodTransitionWeights &&
-                        settings_.lod_enabled &&
-                        lod_transition_active) {
+                    if (frame_settings.lod_enabled && lod_transition_active) {
                         const auto& weights = lod_controller_->selectedWeights();
                         if (weights.size() == selected.size()) {
                             request.lod_weights = weights.data();
                         }
                     }
                     if (lod_controller_->pageMappingActive()) {
-                        const auto& logical = settings_.lod_enabled
+                        const auto& logical = frame_settings.lod_enabled
                                                   ? lod_controller_->selectedLogicalIndices()
                                                   : lod_controller_->fullQualityLogicalIndices();
                         if (logical.size() == selected.size()) {
                             request.lod_logical_indices = logical.data();
                         }
                     }
-                    if (settings_.lod_debug_colors) {
-                        const auto& levels = settings_.lod_enabled
+                    if (frame_settings.lod_debug_colors) {
+                        const auto& levels = frame_settings.lod_enabled
                                                  ? lod_controller_->selectedLevels()
                                                  : lod_controller_->fullQualityLevels();
                         if (levels.size() == selected.size()) {
@@ -1227,7 +2577,7 @@ namespace lfs::vis {
                     lod_touched_chunks = lod_controller_->touchedChunks();
                     request.lod_touched_chunks = lod_touched_chunks.data();
                     request.lod_touched_chunk_count = lod_touched_chunks.size();
-                    request.lod_debug_mode = settings_.lod_debug_colors;
+                    request.lod_debug_mode = frame_settings.lod_debug_colors;
                 }
             }
             std::vector<glm::mat4> transforms_storage;
@@ -1267,9 +2617,7 @@ namespace lfs::vis {
                         vksplat_inputs_forced_this_frame = true;
                     }
                     note_lod_page_generation(result->lod_page_generation);
-                    if (result->lod_streaming_active) {
-                        notifyAsyncLodResultsReady();
-                    }
+                    note_vksplat_render_progress(*result);
                     latest_vksplat_completion_semaphore = result->completion_semaphore;
                     latest_vksplat_completion_value = result->completion_value;
                     lfs::rendering::FrameMetadata metadata{};
@@ -1279,7 +2627,9 @@ namespace lfs::vis {
                                          .metadata = std::move(metadata),
                                          .external_image_view = result->image_view,
                                          .external_image_generation = result->generation,
-                                         .flip_y = result->flip_y};
+                                         .flip_y = result->flip_y,
+                                         .size = result->size,
+                                         .alloc_size = result->alloc_size};
                 }
                 return std::unexpected(result.error());
             }
@@ -1295,6 +2645,9 @@ namespace lfs::vis {
                const float start,
                const float end,
                const bool normalize_x_to_panel) {
+                const glm::ivec2 valid = panel.size;
+                const glm::ivec2 alloc =
+                    panel.alloc_size.x > 0 && panel.alloc_size.y > 0 ? panel.alloc_size : valid;
                 return VulkanSplitViewPanel{
                     .image = panel.image,
                     .start_position = start,
@@ -1303,23 +2656,47 @@ namespace lfs::vis {
                     .flip_y = panel.flip_y,
                     .external_image_view = panel.external_image_view,
                     .external_image_generation = panel.external_image_generation,
+                    .uv_scale = outputUvScale(valid, alloc),
+                    .uv_clamp_max = outputUvClampMax(valid, alloc),
+                    .texcoord_scale = {1.0f, 1.0f},
+                    .texcoord_offset = {0.0f, 0.0f},
+                };
+            };
+        const auto make_placeholder_panel =
+            [](const glm::ivec2 size, const glm::vec3 tint) {
+                lfs::rendering::FrameMetadata metadata{};
+                metadata.valid = true;
+                metadata.flip_y = false;
+                return RenderedPanel{
+                    .image = makeGTComparePlaceholderTensor(size, tint),
+                    .metadata = std::move(metadata),
+                    .flip_y = false,
                 };
             };
 
-        if (splitViewUsesGTComparison(settings_.split_view_mode) && scene_manager &&
+        if (splitViewUsesGTComparison(frame_settings.split_view_mode) && scene_manager &&
             (has_visible_gaussian_model || has_point_cloud)) {
+            auto& scene = scene_manager->getScene();
             std::shared_ptr<lfs::core::Camera> camera;
-            const auto cameras = scene_manager->getScene().getAllCameras();
             if (frame_ctx.current_camera_id >= 0) {
-                for (const auto& candidate : cameras) {
-                    if (candidate && candidate->uid() == frame_ctx.current_camera_id) {
-                        camera = candidate;
-                        break;
+                camera = scene.getCameraByUid(frame_ctx.current_camera_id);
+            }
+            if (scene.cameraListGeneration() != gt_camera_index_generation_ ||
+                gt_camera_index_scene_ != &scene) {
+                gt_camera_index_cameras_ = scene.getAllCameras();
+                gt_camera_index_by_uid_.clear();
+                gt_camera_index_by_uid_.reserve(gt_camera_index_cameras_.size());
+                for (std::size_t index = 0; index < gt_camera_index_cameras_.size(); ++index) {
+                    if (gt_camera_index_cameras_[index]) {
+                        gt_camera_index_by_uid_.emplace(
+                            gt_camera_index_cameras_[index]->uid(), index);
                     }
                 }
+                gt_camera_index_scene_ = &scene;
+                gt_camera_index_generation_ = scene.cameraListGeneration();
             }
-            if (!camera && !cameras.empty()) {
-                for (const auto& candidate : cameras) {
+            if (!camera && !gt_camera_index_cameras_.empty()) {
+                for (const auto& candidate : gt_camera_index_cameras_) {
                     if (candidate) {
                         camera = candidate;
                         break;
@@ -1327,44 +2704,212 @@ namespace lfs::vis {
                 }
             }
 
-            if (camera && !camera->image_path().empty()) {
+            if (camera) {
                 try {
-                    // GT comparison loads a viewport-scaled preview. Do not publish that
-                    // transient size on the shared camera; training uses image dimensions
-                    // as its raster target and may be running concurrently.
-                    auto gt_tensor = camera->load_and_get_image(
-                        -1, render_size.x, false, false);
-                    if (gt_tensor.is_valid() && gt_tensor.ndim() == 3) {
-                        const auto gt_layout = lfs::rendering::detectImageLayout(gt_tensor);
-                        if (gt_layout != lfs::rendering::ImageLayout::Unknown) {
-                            const bool undistort_gt =
-                                gt_layout == lfs::rendering::ImageLayout::CHW &&
+                    const GTComparisonMode gt_mode = frame_settings.gt_comparison_mode;
+                    const glm::ivec2 preview_gt_size = gtComparisonPreviewSize(*camera, gt_comparison_size);
+                    const int preview_max_dimension = std::max(preview_gt_size.x, preview_gt_size.y);
+                    std::shared_ptr<lfs::core::Tensor> gt_image;
+                    std::string gt_error;
+                    bool gt_loading = false;
+
+                    if (gt_mode == GTComparisonMode::RGB) {
+                        if (camera->image_path().empty() || !camera->has_image()) {
+                            gt_error = "RGB GT comparison requires a source image";
+                        } else {
+                            const bool undistort_requested =
                                 camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
                                 camera->is_undistort_precomputed();
-                            if (undistort_gt) {
-                                const auto scaled = lfs::core::scale_undistort_params(
-                                    camera->undistort_params(),
-                                    lfs::rendering::imageWidth(gt_tensor, gt_layout),
-                                    lfs::rendering::imageHeight(gt_tensor, gt_layout));
-                                gt_tensor = lfs::core::undistort_image(gt_tensor, scaled, nullptr);
+                            std::shared_ptr<lfs::io::PipelinedImageLoader> image_loader;
+                            if (trainer_manager) {
+                                if (const auto* trainer = trainer_manager->getTrainer()) {
+                                    image_loader = trainer->getActiveImageLoader();
+                                }
                             }
-                            // The GT photo is a static display image, but on the device its buffer
-                            // belongs to the shared training memory pool, which recycles it and
-                            // overwrites the pixels mid-display (the panel blacks out during
-                            // training). Copy to host now, while the data is valid, so the panel is
-                            // decoupled from device-side churn; the split-view pack reads it back on
-                            // the CPU anyway.
-                            gt_tensor = gt_tensor.cpu();
-                            gt_tensor = lfs::rendering::flipImageVertical(gt_tensor, gt_layout);
-                            const glm::ivec2 gt_size{
-                                lfs::rendering::imageWidth(gt_tensor, gt_layout),
-                                lfs::rendering::imageHeight(gt_tensor, gt_layout)};
+                            // GT comparison loads a viewport-scaled preview. Do not publish that
+                            // transient size on the shared camera; training uses image dimensions
+                            // as its raster target and may be running concurrently.
+                            const auto lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
+                                                                             .mode = gt_mode,
+                                                                             .image_path = camera->image_path(),
+                                                                             .preview_max_dimension = preview_max_dimension,
+                                                                             .image_size = preview_gt_size,
+                                                                             .undistort_requested = undistort_requested,
+                                                                             .undistort_params = undistort_requested
+                                                                                                     ? camera->undistort_params()
+                                                                                                     : lfs::core::UndistortParams{},
+                                                                             .depth_visualization_mode = frame_settings.depth_visualization_mode,
+                                                                             .background_color = frame_settings.background_color,
+                                                                             .camera = camera,
+                                                                             .image_loader = image_loader});
+                            gt_image = lookup.image;
+                            if (lookup.status == GTComparisonImageStatus::Loading) {
+                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                if (lookup.stale_image && !lookup.grace_elapsed) {
+                                    gt_image = lookup.stale_image;
+                                } else {
+                                    gt_loading = true;
+                                }
+                            } else if (lookup.status == GTComparisonImageStatus::Failed) {
+                                gt_error = lookup.error.empty()
+                                               ? "RGB GT comparison could not load the source image"
+                                               : lookup.error;
+                            }
 
-                            auto request = buildViewportRenderRequest(frame_ctx, gt_size);
+                            const auto current_camera_it = gt_camera_index_by_uid_.find(camera->uid());
+                            if (current_camera_it != gt_camera_index_by_uid_.end() &&
+                                !gt_camera_index_cameras_.empty()) {
+                                const auto current_index = current_camera_it->second;
+                                const auto queue_neighbor = [&](const int direction) {
+                                    for (std::size_t offset = 1;
+                                         offset <= gt_camera_index_cameras_.size();
+                                         ++offset) {
+                                        const auto delta = direction * static_cast<int>(offset);
+                                        const auto index = static_cast<std::size_t>(
+                                            (static_cast<int>(current_index) + delta +
+                                             static_cast<int>(gt_camera_index_cameras_.size()) * 2) %
+                                            static_cast<int>(gt_camera_index_cameras_.size()));
+                                        const auto& neighbor = gt_camera_index_cameras_[index];
+                                        if (!neighbor || neighbor->uid() == camera->uid() ||
+                                            neighbor->image_path().empty()) {
+                                            continue;
+                                        }
+                                        const glm::ivec2 neighbor_size =
+                                            gtComparisonPreviewSize(*neighbor, gt_comparison_size);
+                                        const bool neighbor_undistort =
+                                            neighbor->camera_model_type() !=
+                                                lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                            neighbor->is_undistort_precomputed();
+                                        queueGTComparisonImagePrefetch({.camera_uid = neighbor->uid(),
+                                                                        .mode = gt_mode,
+                                                                        .image_path = neighbor->image_path(),
+                                                                        .preview_max_dimension =
+                                                                            std::max(neighbor_size.x, neighbor_size.y),
+                                                                        .image_size = neighbor_size,
+                                                                        .undistort_requested = neighbor_undistort,
+                                                                        .undistort_params = neighbor_undistort
+                                                                                                ? neighbor->undistort_params()
+                                                                                                : lfs::core::UndistortParams{},
+                                                                        .depth_visualization_mode = frame_settings.depth_visualization_mode,
+                                                                        .background_color = frame_settings.background_color,
+                                                                        .camera = neighbor,
+                                                                        .image_loader = image_loader});
+                                        break;
+                                    }
+                                };
+                                queue_neighbor(-1);
+                                queue_neighbor(1);
+                            }
+                        }
+                    } else if (gt_mode == GTComparisonMode::Depth) {
+                        if (!camera->has_depth()) {
+                            gt_error = "Depth GT comparison requires a depth map for the selected camera";
+                        } else {
+                            const bool undistort_requested =
+                                camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                camera->is_undistort_precomputed() && !camera->is_undistort_prepared();
+                            const auto lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
+                                                                             .mode = gt_mode,
+                                                                             .image_path = camera->depth_path(),
+                                                                             .preview_max_dimension = preview_max_dimension,
+                                                                             .image_size = preview_gt_size,
+                                                                             .undistort_requested = undistort_requested,
+                                                                             .undistort_params = undistort_requested
+                                                                                                     ? camera->undistort_params()
+                                                                                                     : lfs::core::UndistortParams{},
+                                                                             .depth_visualization_mode = frame_settings.depth_visualization_mode,
+                                                                             .background_color = frame_settings.background_color,
+                                                                             .camera = camera,
+                                                                             .image_loader = {}});
+                            gt_image = lookup.image;
+                            if (lookup.status == GTComparisonImageStatus::Loading) {
+                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                gt_loading = true;
+                                if (lookup.stale_image && !lookup.grace_elapsed) {
+                                    gt_image = lookup.stale_image;
+                                    gt_loading = false;
+                                }
+                            } else if (lookup.status == GTComparisonImageStatus::Failed) {
+                                gt_error = lookup.error.empty()
+                                               ? "Depth GT comparison could not load the camera depth map"
+                                               : lookup.error;
+                            }
+                        }
+                    } else {
+                        if (!camera->has_normal()) {
+                            gt_error = "Normal GT comparison requires a normal map for the selected camera";
+                        } else {
+                            const bool undistort_requested =
+                                camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                camera->is_undistort_precomputed() && !camera->is_undistort_prepared();
+                            const auto lookup = getOrQueueGTComparisonImage({.camera_uid = camera->uid(),
+                                                                             .mode = gt_mode,
+                                                                             .image_path = camera->normal_path(),
+                                                                             .preview_max_dimension = preview_max_dimension,
+                                                                             .image_size = preview_gt_size,
+                                                                             .undistort_requested = undistort_requested,
+                                                                             .undistort_params = undistort_requested
+                                                                                                     ? camera->undistort_params()
+                                                                                                     : lfs::core::UndistortParams{},
+                                                                             .camera = camera,
+                                                                             .image_loader = {}});
+                            gt_image = lookup.image;
+                            if (lookup.status == GTComparisonImageStatus::Loading) {
+                                markDirty(DirtyFlag::SPLIT_VIEW);
+                                gt_loading = true;
+                                if (lookup.stale_image && !lookup.grace_elapsed) {
+                                    gt_image = lookup.stale_image;
+                                    gt_loading = false;
+                                }
+                            } else if (lookup.status == GTComparisonImageStatus::Failed) {
+                                gt_error = lookup.error.empty()
+                                               ? "Normal GT comparison could not load the camera normal map"
+                                               : lookup.error;
+                            }
+                        }
+                    }
+
+                    if (!gt_image || !gt_image->is_valid()) {
+                        if (!gt_loading) {
+                            LOG_DEBUG("{}",
+                                      gt_error.empty() ? "GT comparison could not load ground-truth data" : gt_error);
+                        }
+                        const glm::vec3 placeholder_color =
+                            gt_loading ? glm::vec3(0.09f) : glm::vec3(0.16f, 0.035f, 0.050f);
+                        auto& placeholder = gt_loading ? gt_comparison_loading_placeholder_
+                                                       : gt_comparison_failed_placeholder_;
+                        auto& placeholder_size = gt_loading ? gt_comparison_loading_placeholder_size_
+                                                            : gt_comparison_failed_placeholder_size_;
+                        if (!placeholder || placeholder_size != preview_gt_size) {
+                            placeholder = makeGTComparePlaceholderTensor(preview_gt_size, placeholder_color);
+                            placeholder_size = preview_gt_size;
+                        }
+                        gt_image = placeholder;
+                    }
+
+                    if (gt_image && gt_image->is_valid()) {
+                        const auto gt_layout = lfs::rendering::detectImageLayout(*gt_image);
+                        if (gt_layout == lfs::rendering::ImageLayout::Unknown) {
+                            render_error = "GT comparison produced an unsupported ground-truth image layout";
+                        } else {
+                            const glm::ivec2 gt_size{
+                                lfs::rendering::imageWidth(*gt_image, gt_layout),
+                                lfs::rendering::imageHeight(*gt_image, gt_layout)};
+                            const glm::ivec2 render_gt_size{
+                                std::max(static_cast<int>(std::lround(
+                                             static_cast<float>(gt_size.x) * scale /
+                                             std::max(gt_comparison_scale, 1.0e-6f))),
+                                         1),
+                                std::max(static_cast<int>(std::lround(
+                                             static_cast<float>(gt_size.y) * scale /
+                                             std::max(gt_comparison_scale, 1.0e-6f))),
+                                         1)};
+
+                            auto request = buildViewportRenderRequest(frame_ctx, render_gt_size);
                             const glm::mat4 scene_transform =
                                 detail::currentSceneTransform(scene_manager, camera->uid());
                             const auto render_camera =
-                                detail::buildGTRenderCamera(*camera, gt_size, scene_transform);
+                                detail::buildGTRenderCamera(*camera, render_gt_size, scene_transform);
                             if (render_camera) {
                                 request.frame_view.rotation = render_camera->rotation;
                                 request.frame_view.translation = render_camera->translation;
@@ -1377,92 +2922,372 @@ namespace lfs::vis {
                             RenderedPanel compare_panel{};
                             std::string compare_error;
 
-                            const bool use_point_cloud_compare =
-                                settings_.point_cloud_mode || !has_visible_gaussian_model;
-                            if (use_point_cloud_compare && has_visible_gaussian_model) {
-                                auto point_request = buildPointCloudRenderRequest(
-                                    frame_ctx, gt_size, frame_ctx.scene_state.model_transforms);
-                                point_request.frame_view = request.frame_view;
-                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
-                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
-                                    if (rendered && rendered->image) {
-                                        const bool flip_y = !rendered->metadata.flip_y;
-                                        compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                      .metadata = std::move(rendered->metadata),
-                                                                      .flip_y = flip_y};
-                                    } else {
-                                        compare_error = rendered ? "Point-cloud GT comparison render returned no image"
-                                                                 : rendered.error();
+                            if (gt_mode != GTComparisonMode::RGB) {
+                                // #1574 hold-then-swap: never host-wait the GT depth ticket on the
+                                // render thread. Poll any outstanding ticket; swap into the held
+                                // display when Ready; submit at most one new ticket when free. The
+                                // panel keeps the previous display until the new one is ready.
+                                const auto clear_gt_async_ticket = [this]() {
+                                    // Detach dest under the ring lock before freeing host
+                                    // storage; markFailed keeps pins until timeline reclaim.
+                                    if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                        vksplat_viewport_renderer_->abandonReadbackTicket(
+                                            gt_async_depth_ticket_);
                                     }
-                                } else {
-                                    compare_error = auxiliary_engine.error();
-                                }
-                            } else if (use_point_cloud_compare && has_point_cloud) {
-                                const std::vector<glm::mat4> point_cloud_transforms = {
-                                    frame_ctx.scene_state.point_cloud_transform};
-                                auto point_request = buildPointCloudRenderRequest(
-                                    frame_ctx, gt_size, point_cloud_transforms);
-                                point_request.frame_view = request.frame_view;
-                                if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
-                                    auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
-                                    if (rendered && rendered->image) {
-                                        const bool flip_y = !rendered->metadata.flip_y;
-                                        compare_panel = RenderedPanel{.image = std::move(rendered->image),
-                                                                      .metadata = std::move(rendered->metadata),
-                                                                      .flip_y = flip_y};
-                                    } else {
-                                        compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
-                                                                 : rendered.error();
+                                    gt_async_depth_ticket_ = 0;
+                                    gt_async_depth_dest_ = {};
+                                    gt_async_ticket_mode_ = GTComparisonMode::RGB;
+                                    gt_async_ticket_intrinsics_.reset();
+                                    gt_async_ticket_flip_y_ = false;
+                                    gt_async_ticket_metadata_ = {};
+                                };
+                                const auto apply_gt_async_ready =
+                                    [this, &frame_settings, &clear_gt_async_ticket]()
+                                    -> std::expected<void, std::string> {
+                                    if (gt_async_depth_ticket_ == 0 || !vksplat_viewport_renderer_) {
+                                        return {};
                                     }
+                                    const auto polled =
+                                        vksplat_viewport_renderer_->pollReadbackTicket(gt_async_depth_ticket_);
+                                    if (!polled) {
+                                        const std::string err = polled.error();
+                                        clear_gt_async_ticket();
+                                        return std::unexpected(err);
+                                    }
+                                    if (*polled == VksplatViewportRenderer::ReadbackTicketStatus::NotReady) {
+                                        return {};
+                                    }
+                                    if (*polled != VksplatViewportRenderer::ReadbackTicketStatus::Ready) {
+                                        clear_gt_async_ticket();
+                                        return std::unexpected("GT depth ticket finished without Ready delivery");
+                                    }
+                                    auto display = gt_async_ticket_mode_ == GTComparisonMode::Depth
+                                                       ? makeDepthDisplayTensor(gt_async_depth_dest_, frame_settings)
+                                                       : (gt_async_ticket_intrinsics_.has_value()
+                                                              ? makeNormalDisplayFromDepthTensor(
+                                                                    gt_async_depth_dest_,
+                                                                    *gt_async_ticket_intrinsics_)
+                                                              : std::shared_ptr<lfs::core::Tensor>{});
+                                    if (!display || !display->is_valid()) {
+                                        clear_gt_async_ticket();
+                                        return std::unexpected(
+                                            gt_async_ticket_mode_ == GTComparisonMode::Depth
+                                                ? "Depth GT comparison could not visualize rendered depth"
+                                                : "Normal GT comparison could not derive rendered normals");
+                                    }
+                                    gt_async_held_display_ = std::move(display);
+                                    split_right_image_generation_ =
+                                        (split_right_image_generation_ + 1) |
+                                        gt_comparison_detail::SPLIT_RIGHT_GENERATION_BIT;
+                                    gt_async_held_flip_y_ = gt_async_ticket_flip_y_;
+                                    gt_async_held_metadata_ = gt_async_ticket_metadata_;
+                                    clear_gt_async_ticket();
+                                    return {};
+                                };
+
+                                if (!has_visible_gaussian_model || frame_settings.point_cloud_mode) {
+                                    compare_error =
+                                        "Normal/depth GT comparison requires a visible Gaussian model in splat mode";
+                                    if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                        (void)vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                        clear_gt_async_ticket();
+                                    }
+                                    gt_async_held_display_.reset();
+                                } else if (!context.vulkan_context) {
+                                    compare_error = "Normal/depth GT comparison requires an active Vulkan context";
+                                } else if (!render_camera) {
+                                    compare_error = "Normal/depth GT comparison could not build the GT render camera";
+                                } else if (gt_mode == GTComparisonMode::Normal &&
+                                           !request.frame_view.intrinsics_override.has_value()) {
+                                    compare_error = "Normal GT comparison requires pinhole camera intrinsics";
                                 } else {
-                                    compare_error = auxiliary_engine.error();
-                                }
-                            } else if (has_visible_gaussian_model) {
-                                auto rendered = render_panel_image(
-                                    context.viewport,
-                                    gt_size,
-                                    std::nullopt,
-                                    std::nullopt,
-                                    nullptr,
-                                    nullptr,
-                                    VksplatViewportRenderer::OutputSlot::SplitRight,
-                                    &request);
-                                if (rendered) {
-                                    compare_panel = std::move(*rendered);
-                                } else {
-                                    compare_error = rendered.error();
+                                    if (!vksplat_viewport_renderer_) {
+                                        vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+                                    }
+                                    if (const auto ready = apply_gt_async_ready(); !ready) {
+                                        compare_error = ready.error();
+                                    }
+
+                                    // Size/mode change while a ticket is in flight: bounded-wait it
+                                    // (wait delivers into dest), then promote to held and re-submit.
+                                    if (compare_error.empty() && gt_async_depth_ticket_ != 0 &&
+                                        (gt_async_ticket_mode_ != gt_mode ||
+                                         !gt_async_depth_dest_.is_valid() ||
+                                         static_cast<int>(gt_async_depth_dest_.size(0)) != render_gt_size.y ||
+                                         static_cast<int>(gt_async_depth_dest_.size(1)) != render_gt_size.x)) {
+                                        if (const auto waited =
+                                                vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                            !waited) {
+                                            compare_error = waited.error();
+                                            clear_gt_async_ticket();
+                                        } else {
+                                            // waitReadbackTicket already delivered into dest.
+                                            const bool dest_matches_panel =
+                                                gt_async_depth_dest_.is_valid() &&
+                                                static_cast<int>(gt_async_depth_dest_.size(0)) == render_gt_size.y &&
+                                                static_cast<int>(gt_async_depth_dest_.size(1)) == render_gt_size.x;
+                                            if (dest_matches_panel) {
+                                                auto display =
+                                                    gt_async_ticket_mode_ == GTComparisonMode::Depth
+                                                        ? makeDepthDisplayTensor(gt_async_depth_dest_, frame_settings)
+                                                        : (gt_async_ticket_intrinsics_.has_value()
+                                                               ? makeNormalDisplayFromDepthTensor(
+                                                                     gt_async_depth_dest_,
+                                                                     *gt_async_ticket_intrinsics_)
+                                                               : std::shared_ptr<lfs::core::Tensor>{});
+                                                if (display && display->is_valid()) {
+                                                    gt_async_held_display_ = std::move(display);
+                                                    split_right_image_generation_ =
+                                                        (split_right_image_generation_ + 1) |
+                                                        gt_comparison_detail::SPLIT_RIGHT_GENERATION_BIT;
+                                                    gt_async_held_flip_y_ = gt_async_ticket_flip_y_;
+                                                    gt_async_held_metadata_ = gt_async_ticket_metadata_;
+                                                }
+                                            } else {
+                                                gt_async_held_display_.reset();
+                                            }
+                                            clear_gt_async_ticket();
+                                        }
+                                    }
+
+                                    if (compare_error.empty() && gt_async_depth_ticket_ == 0) {
+                                        request.depth_view = false;
+                                        vksplat_viewport_renderer_->setDepthCaptureMode(true, true);
+                                        struct DepthCaptureModeGuard {
+                                            VksplatViewportRenderer* renderer = nullptr;
+                                            ~DepthCaptureModeGuard() {
+                                                if (renderer) {
+                                                    renderer->setDepthCaptureMode(false);
+                                                }
+                                            }
+                                        } depth_capture_guard{vksplat_viewport_renderer_.get()};
+
+                                        auto rendered = render_panel_image(
+                                            context.viewport,
+                                            render_gt_size,
+                                            std::nullopt,
+                                            std::nullopt,
+                                            nullptr,
+                                            nullptr,
+                                            VksplatViewportRenderer::OutputSlot::Preview,
+                                            &request);
+                                        if (!rendered) {
+                                            compare_error = rendered.error();
+                                        } else {
+                                            gt_async_depth_dest_ = lfs::core::Tensor::empty(
+                                                {static_cast<std::size_t>(render_gt_size.y),
+                                                 static_cast<std::size_t>(render_gt_size.x)},
+                                                lfs::core::Device::CPU,
+                                                lfs::core::DataType::Float32);
+                                            if (!gt_async_depth_dest_.is_valid()) {
+                                                compare_error =
+                                                    "VkSplat GT comparison failed to allocate depth destination";
+                                            } else {
+                                                auto ticket =
+                                                    vksplat_viewport_renderer_->submitReadOutputDepthImageTicket(
+                                                        *context.vulkan_context,
+                                                        VksplatViewportRenderer::OutputSlot::Preview,
+                                                        gt_async_depth_dest_);
+                                                if (!ticket) {
+                                                    compare_error = ticket.error();
+                                                    gt_async_depth_dest_ = {};
+                                                } else {
+                                                    gt_async_depth_ticket_ = *ticket;
+                                                    gt_async_ticket_mode_ = gt_mode;
+                                                    gt_async_ticket_intrinsics_ =
+                                                        request.frame_view.intrinsics_override;
+                                                    gt_async_ticket_flip_y_ = rendered->flip_y;
+                                                    gt_async_ticket_metadata_ = rendered->metadata;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (gt_async_held_display_ && gt_async_held_display_->is_valid()) {
+                                        compare_panel.image = gt_async_held_display_;
+                                        compare_panel.metadata = gt_async_held_metadata_;
+                                        compare_panel.flip_y = gt_async_held_flip_y_;
+                                        compare_panel.external_image_view = VK_NULL_HANDLE;
+                                        compare_panel.external_image_generation = 0;
+                                        compare_panel.size = render_gt_size;
+                                    }
+
+                                    LOG_PERF(
+                                        "vksplat.readback.gt_compare outstanding_tickets={} "
+                                        "ring_full_waits={} cell_pin_waits={} has_held={}",
+                                        vksplat_viewport_renderer_->outstandingReadbackTickets(),
+                                        vksplat_viewport_renderer_->readbackRingFullWaitCount(),
+                                        vksplat_viewport_renderer_->readbackCellPinWaitCount(),
+                                        gt_async_held_display_ && gt_async_held_display_->is_valid());
                                 }
                             } else {
-                                compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
+                                // Leaving depth/normal: drain any outstanding async GT ticket.
+                                if (gt_async_depth_ticket_ != 0 && vksplat_viewport_renderer_) {
+                                    (void)vksplat_viewport_renderer_->waitReadbackTicket(gt_async_depth_ticket_);
+                                    vksplat_viewport_renderer_->abandonReadbackTicket(gt_async_depth_ticket_);
+                                    gt_async_depth_ticket_ = 0;
+                                    gt_async_depth_dest_ = {};
+                                }
+                                gt_async_held_display_.reset();
+                                const bool use_point_cloud_compare =
+                                    frame_settings.point_cloud_mode || !has_visible_gaussian_model;
+                                if (use_point_cloud_compare && has_visible_gaussian_model) {
+                                    auto point_request = buildPointCloudRenderRequest(
+                                        frame_ctx, render_gt_size, frame_ctx.scene_state.model_transforms);
+                                    point_request.frame_view = request.frame_view;
+                                    if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                        auto rendered = (*auxiliary_engine)->renderPointCloudImage(*model, point_request);
+                                        if (rendered && rendered->image) {
+                                            const bool flip_y = rendered->metadata.flip_y;
+                                            compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                          .metadata = std::move(rendered->metadata),
+                                                                          .flip_y = flip_y};
+                                        } else {
+                                            compare_error = rendered ? "Point-cloud GT comparison render returned no image"
+                                                                     : rendered.error();
+                                        }
+                                    } else {
+                                        compare_error = auxiliary_engine.error();
+                                    }
+                                } else if (use_point_cloud_compare && has_point_cloud) {
+                                    const std::vector<glm::mat4> point_cloud_transforms = {
+                                        frame_ctx.scene_state.point_cloud_transform};
+                                    auto point_request = buildPointCloudRenderRequest(
+                                        frame_ctx, render_gt_size, point_cloud_transforms);
+                                    point_request.frame_view = request.frame_view;
+                                    if (auto auxiliary_engine = ensure_auxiliary_rendering_engine(); auxiliary_engine) {
+                                        auto rendered = (*auxiliary_engine)->renderPointCloudImage(*frame_ctx.scene_state.point_cloud, point_request);
+                                        if (rendered && rendered->image) {
+                                            const bool flip_y = rendered->metadata.flip_y;
+                                            compare_panel = RenderedPanel{.image = std::move(rendered->image),
+                                                                          .metadata = std::move(rendered->metadata),
+                                                                          .flip_y = flip_y};
+                                        } else {
+                                            compare_error = rendered ? "Raw point-cloud GT comparison render returned no image"
+                                                                     : rendered.error();
+                                        }
+                                    } else {
+                                        compare_error = auxiliary_engine.error();
+                                    }
+                                } else if (has_visible_gaussian_model) {
+                                    auto rendered = render_panel_image(
+                                        context.viewport,
+                                        render_gt_size,
+                                        std::nullopt,
+                                        std::nullopt,
+                                        nullptr,
+                                        nullptr,
+                                        VksplatViewportRenderer::OutputSlot::SplitRight,
+                                        &request);
+                                    if (rendered) {
+                                        compare_panel = std::move(*rendered);
+                                    } else {
+                                        compare_error = rendered.error();
+                                    }
+                                } else {
+                                    compare_error = "GT comparison requires a renderable Gaussian model or point cloud";
+                                }
+                            }
+
+                            if (!compare_panel.image && compare_panel.external_image_view == VK_NULL_HANDLE &&
+                                !compare_error.empty() &&
+                                !(gt_mode == GTComparisonMode::RGB &&
+                                  isRetryableSharedScratchUnavailable(compare_error))) {
+                                LOG_WARN("GT comparison using placeholder rendered panel: {}", compare_error);
+                                compare_panel = make_placeholder_panel(gt_size, glm::vec3(0.035f, 0.045f, 0.070f));
                             }
 
                             if (compare_panel.image || compare_panel.external_image_view != VK_NULL_HANDLE) {
-                                if (compare_panel.image) {
-                                    compare_panel.image = applyViewportAppearanceCorrection(
-                                        std::move(compare_panel.image),
-                                        scene_manager,
-                                        settings_,
-                                        camera->uid());
+                                if (gt_mode == GTComparisonMode::RGB) {
+                                    bool compare_panel_ppisp_applied = false;
+                                    if (!compare_panel.image &&
+                                        compare_panel.external_image_view != VK_NULL_HANDLE &&
+                                        frame_settings.apply_appearance_correction &&
+                                        vksplat_viewport_renderer_ &&
+                                        context.vulkan_context) {
+                                        auto image = vksplat_viewport_renderer_->readOutputImage(
+                                            *context.vulkan_context,
+                                            VksplatViewportRenderer::OutputSlot::SplitRight);
+                                        if (image && *image) {
+                                            compare_panel.image = applyViewportAppearanceCorrection(
+                                                std::move(*image),
+                                                scene_manager,
+                                                frame_settings,
+                                                camera->uid());
+                                            compare_panel.image = ensure_cuda_viewport_image(
+                                                std::move(compare_panel.image),
+                                                "VkSplat GT comparison PPISP correction");
+                                            if (compare_panel.image && compare_panel.image->is_valid()) {
+                                                compare_panel.flip_y = compare_panel.metadata.flip_y;
+                                                compare_panel.external_image_view = VK_NULL_HANDLE;
+                                                compare_panel.external_image_generation = 0;
+                                                compare_panel_ppisp_applied = true;
+                                            }
+                                        } else {
+                                            LOG_WARN("VkSplat GT comparison PPISP readback failed: {}",
+                                                     image ? "missing image payload" : image.error());
+                                        }
+                                    }
+                                    if (compare_panel.image && !compare_panel_ppisp_applied) {
+                                        compare_panel.image = applyViewportAppearanceCorrection(
+                                            std::move(compare_panel.image),
+                                            scene_manager,
+                                            frame_settings,
+                                            camera->uid());
+                                    }
                                 }
-                                auto gt_image = std::make_shared<lfs::core::Tensor>(std::move(gt_tensor));
+
+                                if (gt_image) {
+                                    const bool gt_undistorted =
+                                        camera->camera_model_type() != lfs::core::CameraModelType::EQUIRECTANGULAR &&
+                                        camera->is_undistort_precomputed();
+                                    if (auto cuda_gt = ensure_cuda_gt_viewport_image(
+                                            gt_image,
+                                            camera->uid(),
+                                            preview_gt_size,
+                                            gt_undistorted,
+                                            "GT comparison ground-truth display")) {
+                                        gt_image = std::move(cuda_gt);
+                                    }
+                                }
+                                if (compare_panel.image) {
+                                    if (auto cuda_compare = ensure_cuda_viewport_image(
+                                            compare_panel.image,
+                                            "GT comparison rendered display")) {
+                                        compare_panel.image = std::move(cuda_compare);
+                                    }
+                                }
+
                                 const SplitCompositeContentRect rect =
                                     resolveSplitCompositeContentRect(render_size, true, gt_size);
                                 pending_split_view.enabled = true;
-                                pending_split_view.split_position = settings_.split_position;
-                                pending_split_view.background = settings_.background_color;
+                                pending_split_view.split_position = frame_settings.split_position;
+                                pending_split_view.background = frame_settings.background_color;
                                 pending_split_view.content_rect = {rect.x, rect.y, rect.width, rect.height};
-                                pending_split_view.left = {std::move(gt_image), 0.0f, settings_.split_position, false, true};
+                                pending_split_view.left = {std::move(gt_image), 0.0f, frame_settings.split_position, false, true};
                                 pending_split_view.right =
-                                    make_split_panel(compare_panel, settings_.split_position, 1.0f, false);
+                                    make_split_panel(compare_panel, frame_settings.split_position, 1.0f, false);
                                 rendered_metadata = compare_panel.metadata;
                                 rendered_image_contains_ground_truth = true;
                                 rendered_gt_content_size = gt_size;
+                                const char* mode_label = "GT Compare";
+                                const char* left_name = "Ground Truth";
+                                const char* right_name = "Rendered";
+                                if (gt_mode == GTComparisonMode::Depth) {
+                                    mode_label = "GT Depth Compare";
+                                    left_name = "GT Depth";
+                                    right_name = "Rendered Depth";
+                                } else if (gt_mode == GTComparisonMode::Normal) {
+                                    mode_label = "GT Normal Compare";
+                                    left_name = "GT Normal";
+                                    right_name = "Rendered Normal";
+                                }
                                 rendered_split_info = SplitViewInfo{
                                     .enabled = true,
-                                    .mode_label = "GT Compare",
+                                    .mode_label = mode_label,
                                     .detail_label = camera->image_name(),
-                                    .left_name = "Ground Truth",
-                                    .right_name = "Rendered"};
+                                    .left_name = left_name,
+                                    .right_name = right_name};
                             } else {
                                 render_error = compare_error;
                             }
@@ -1470,10 +3295,11 @@ namespace lfs::vis {
                     }
                 } catch (const std::exception& e) {
                     render_error = std::format("GT comparison failed: {}", e.what());
+                    LOG_WARN("{}", render_error);
                 }
             }
-        } else if (splitViewUsesIndependentPanels(settings_.split_view_mode)) {
-            if (const auto layouts = split_view_service_.panelLayouts(settings_, render_size.x);
+        } else if (splitViewUsesIndependentPanels(frame_settings.split_view_mode)) {
+            if (const auto layouts = split_view_service_.panelLayouts(frame_settings, render_size.x);
                 layouts && render_size.x > 1) {
                 auto left = render_panel_image(
                     context.viewport,
@@ -1493,14 +3319,14 @@ namespace lfs::vis {
                     VksplatViewportRenderer::OutputSlot::SplitRight);
                 if (left && right) {
                     pending_split_view.enabled = true;
-                    pending_split_view.split_position = settings_.split_position;
-                    pending_split_view.background = settings_.background_color;
+                    pending_split_view.split_position = frame_settings.split_position;
+                    pending_split_view.background = frame_settings.background_color;
                     pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
                     pending_split_view.left = make_split_panel(
                         *left, (*layouts)[0].start_position, (*layouts)[0].end_position, true);
                     pending_split_view.right = make_split_panel(
                         *right, (*layouts)[1].start_position, (*layouts)[1].end_position, true);
-                    rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
+                    rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position);
                     rendered_split_info = SplitViewInfo{
                         .enabled = true,
                         .mode_label = "Split View",
@@ -1511,9 +3337,9 @@ namespace lfs::vis {
                     render_error = left ? right.error() : left.error();
                 }
             }
-        } else if (splitViewUsesPLYComparison(settings_.split_view_mode) && scene_manager && has_visible_gaussian_model) {
+        } else if (splitViewUsesPLYComparison(frame_settings.split_view_mode) && scene_manager && has_visible_gaussian_model) {
             const auto visible_nodes = scene_manager->getScene().getVisibleSplatNodeSlots();
-            const auto pair = plyComparisonPairForOffset(visible_nodes.size(), settings_.split_view_offset);
+            const auto pair = plyComparisonPairForOffset(visible_nodes.size(), frame_settings.split_view_offset);
             if (pair) {
                 const auto& left_node = visible_nodes[pair->first];
                 const auto& right_node = visible_nodes[pair->second];
@@ -1529,30 +3355,41 @@ namespace lfs::vis {
                     left_mask[left_node.slot_index] = true;
                     right_mask[right_node.slot_index] = true;
 
+                    const auto ply_layouts = makePlyComparisonPanelLayouts(
+                        render_size.x, frame_settings.split_position);
+                    const auto& left_layout = ply_layouts[0];
+                    const auto& right_layout = ply_layouts[1];
+
                     auto left = render_panel_image(
                         context.viewport,
-                        render_size,
-                        std::nullopt,
+                        {std::max(left_layout.panel.width, 1), render_size.y},
+                        SplitViewPanelId::Left,
                         std::optional<std::vector<bool>>(left_mask),
                         nullptr,
                         nullptr,
                         VksplatViewportRenderer::OutputSlot::SplitLeft);
                     auto right = render_panel_image(
                         context.viewport,
-                        render_size,
-                        std::nullopt,
+                        {std::max(right_layout.panel.width, 1), render_size.y},
+                        SplitViewPanelId::Right,
                         std::optional<std::vector<bool>>(right_mask),
                         nullptr,
                         nullptr,
                         VksplatViewportRenderer::OutputSlot::SplitRight);
                     if (left && right) {
                         pending_split_view.enabled = true;
-                        pending_split_view.split_position = settings_.split_position;
-                        pending_split_view.background = settings_.background_color;
+                        pending_split_view.split_position = frame_settings.split_position;
+                        pending_split_view.background = frame_settings.background_color;
                         pending_split_view.content_rect = {0, 0, render_size.x, render_size.y};
-                        pending_split_view.left = make_split_panel(*left, 0.0f, settings_.split_position, false);
-                        pending_split_view.right = make_split_panel(*right, settings_.split_position, 1.0f, false);
-                        rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, settings_.split_position);
+                        pending_split_view.left = make_split_panel(
+                            *left, left_layout.panel.start_position, left_layout.panel.end_position, false);
+                        pending_split_view.right = make_split_panel(
+                            *right, right_layout.panel.start_position, right_layout.panel.end_position, false);
+                        pending_split_view.left.texcoord_scale = left_layout.texcoord_scale;
+                        pending_split_view.left.texcoord_offset = left_layout.texcoord_offset;
+                        pending_split_view.right.texcoord_scale = right_layout.texcoord_scale;
+                        pending_split_view.right.texcoord_offset = right_layout.texcoord_offset;
+                        rendered_metadata = makeSplitMetadata(left->metadata, right->metadata, frame_settings.split_position);
                         rendered_split_info = SplitViewInfo{
                             .enabled = true,
                             .mode_label = "Split View",
@@ -1574,25 +3411,37 @@ namespace lfs::vis {
         // drop the ground-truth panel for as long as the arena stays contended.
         // Keep the last good split frame instead, mirroring the single-view path,
         // and retry next frame once the arena frees.
-        if (split_view_service_.isActive(settings_) && !pending_split_view.enabled &&
+        if (split_view_service_.isActive(frame_settings) && !pending_split_view.enabled &&
             synchronize_vksplat_input_upload && has_cached_viewport_output &&
             isRetryableSharedScratchUnavailable(render_error)) {
             dirty_mask_.fetch_or(frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS,
                                  std::memory_order_relaxed);
+            defer_shared_scratch(render_error);
             render_lock.reset();
             LOG_DEBUG("Split-view shared scratch unavailable ({}); returning cached split image",
                       render_error);
             return cached_frame_result();
         }
 
-        const bool render_point_cloud = settings_.point_cloud_mode || !has_visible_gaussian_model;
+        if (pending_split_view.enabled) {
+            // Ground-truth comparisons deliberately preserve the reference image.
+            // Other split panels use the reconstruction filter only after the
+            // presentation pass confirmed that spatial reconstruction is active.
+            const bool filter_reconstructed_panels =
+                spatial_runtime_ready && !rendered_image_contains_ground_truth;
+            pending_split_view.left.spatial_filter = filter_reconstructed_panels;
+            pending_split_view.right.spatial_filter = filter_reconstructed_panels;
+            pending_split_view.coordinate_extent = render_size;
+        }
+
+        const bool render_point_cloud = frame_settings.point_cloud_mode || !has_visible_gaussian_model;
 
         if (rendered_image || pending_split_view.enabled) {
             // Split-view paths populate pending_split_view directly; skip the
             // full-viewport fallback that would set rendered_image to a wrong-
             // sized tensor and squash the left panel through the scene interop.
         } else if (render_point_cloud &&
-                   ((settings_.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
+                   ((frame_settings.point_cloud_mode && has_visible_gaussian_model) || has_point_cloud)) {
             // Brush edits mutate sh0 in place — same tensor pointer but new
             // contents. Invalidate the derived-colors cache so the next frame
             // re-derives + re-uploads.
@@ -1604,7 +3453,7 @@ namespace lfs::vis {
             }
             std::vector<glm::mat4> point_cloud_transforms_storage;
             const std::vector<glm::mat4>* transforms_for_request = nullptr;
-            if (settings_.point_cloud_mode && has_visible_gaussian_model) {
+            if (frame_settings.point_cloud_mode && has_visible_gaussian_model) {
                 transforms_for_request = &frame_ctx.scene_state.model_transforms;
             } else {
                 point_cloud_transforms_storage = {frame_ctx.scene_state.point_cloud_transform};
@@ -1629,7 +3478,7 @@ namespace lfs::vis {
                 lfs::core::Tensor splat_positions;
                 const lfs::core::Tensor* positions_ptr = nullptr;
                 const lfs::core::Tensor* colors_ptr = nullptr;
-                if (settings_.point_cloud_mode && has_visible_gaussian_model) {
+                if (frame_settings.point_cloud_mode && has_visible_gaussian_model) {
                     constexpr float SH_C0 = 0.28209479177387814f;
                     const auto& sh0 = model->sh0_raw();
                     const void* sh0_key = sh0.is_valid() ? sh0.ptr<float>() : nullptr;
@@ -1684,10 +3533,13 @@ namespace lfs::vis {
                 vk_req.model_transforms = pc_request.scene.model_transforms;
                 vk_req.transform_indices = pc_request.scene.transform_indices.get();
                 vk_req.node_visibility_mask = &pc_request.scene.node_visibility_mask;
-                if (settings_.point_cloud_mode && has_visible_gaussian_model &&
-                    model->has_deleted_mask()) {
+                if (frame_settings.point_cloud_mode && has_visible_gaussian_model &&
+                    model->has_deleted_mask() && model->deleted_mask_matches_size()) {
                     vk_req.deleted_mask = &model->deleted();
-                    vk_req.deleted_mask_revision = point_cloud_data_revision_;
+                    // Content revision for the soft-delete mask itself (not the
+                    // point-cloud positions revision). Stale wiring here caused
+                    // silent cache reuse after densify/compact.
+                    vk_req.deleted_mask_revision = model->deleted_mask_version();
                 }
                 vk_req.selection_mask = pc_request.overlay.selection_mask.get();
                 vk_req.preview_selection_mask = pc_request.overlay.transient_mask.mask;
@@ -1703,6 +3555,13 @@ namespace lfs::vis {
                     crop.inverse = pc_request.filters.crop_inverse;
                     crop.desaturate = pc_request.filters.crop_desaturate;
                     vk_req.crop = crop;
+                } else if (pc_request.filters.crop_ellipsoid.has_value()) {
+                    PointCloudVulkanRenderer::CropEllipsoid crop{};
+                    crop.to_local = pc_request.filters.crop_ellipsoid->transform;
+                    crop.radii = pc_request.filters.crop_ellipsoid->radii;
+                    crop.inverse = pc_request.filters.crop_inverse;
+                    crop.desaturate = pc_request.filters.crop_desaturate;
+                    vk_req.crop_ellipsoid = crop;
                 }
                 vk_req.view = view;
                 vk_req.view_projection = view_proj;
@@ -1714,10 +3573,10 @@ namespace lfs::vis {
                 vk_req.focal_y = focal_y;
                 vk_req.voxel_size = pc_request.render.voxel_size;
                 vk_req.scaling_modifier = pc_request.render.scaling_modifier;
-                vk_req.depth_view = settings_.depth_view;
-                vk_req.depth_view_min = settings_.depth_view_min;
-                vk_req.depth_view_max = settings_.depth_view_max;
-                vk_req.depth_visualization_mode = settings_.depth_visualization_mode;
+                vk_req.depth_view = frame_settings.depth_view;
+                vk_req.depth_view_min = frame_settings.depth_view_min;
+                vk_req.depth_view_max = frame_settings.depth_view_max;
+                vk_req.depth_visualization_mode = frame_settings.depth_visualization_mode;
 
                 LOG_TIMER("renderVulkanFrame.point_cloud_vulkan");
                 auto render_result = point_cloud_vulkan_renderer_->render(
@@ -1728,14 +3587,12 @@ namespace lfs::vis {
                 }
 
                 render_lock.reset();
-                vulkan_viewport_image_.reset();
+                vksplat_stale_frame_guard_.onSuccess();
+                clearVulkanViewportImageState(render_result->size, render_result->flip_y);
                 vulkan_external_viewport_image_ = render_result->image;
                 vulkan_external_viewport_image_view_ = render_result->image_view;
                 vulkan_external_viewport_image_layout_ = render_result->image_layout;
                 vulkan_external_viewport_image_generation_ = render_result->generation;
-                vulkan_viewport_image_size_ = render_result->size;
-                vulkan_viewport_image_flip_y_ = render_result->flip_y;
-                vulkan_gt_comparison_content_size_ = {0, 0};
 
                 lfs::rendering::FrameMetadata metadata{};
                 metadata.valid = true;
@@ -1760,7 +3617,6 @@ namespace lfs::vis {
                     render_result->size);
 
                 if (resize_result.completed) {
-                    frame_lifecycle_service_.noteResizeCompleted();
                     lfs::core::Tensor::trim_memory_pool();
                 }
                 queueCameraMetricsRefreshIfStale(scene_manager);
@@ -1768,8 +3624,8 @@ namespace lfs::vis {
                 split_view_service_.updateInfo(FrameResources{});
 
                 if (!frame_ctx.scene_state.meshes.empty() ||
-                    environmentBackgroundEnabled(settings_)) {
-                    auto mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
+                    environmentBackgroundEnabled(frame_settings)) {
+                    auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
                     populate_independent_split_mesh_panels(mesh_frame);
                     if (render_result->depth_image_view != VK_NULL_HANDLE) {
                         // Hardware depth attachment stores Vulkan-native NDC z; the
@@ -1784,6 +3640,7 @@ namespace lfs::vis {
                     clearVulkanMeshFrame();
                 }
 
+                vulkan_viewport_coordinate_size_ = current_size;
                 return VulkanFrameResult{
                     .image = {},
                     .external_image = vulkan_external_viewport_image_,
@@ -1791,7 +3648,8 @@ namespace lfs::vis {
                     .external_image_layout = vulkan_external_viewport_image_layout_,
                     .external_image_generation = vulkan_external_viewport_image_generation_,
                     .size = vulkan_viewport_image_size_,
-                    .flip_y = vulkan_viewport_image_flip_y_};
+                    .flip_y = vulkan_viewport_image_flip_y_,
+                    .matches_viewport_extent = true};
             };
             if (auto vk_result = try_vulkan(); vk_result) {
                 return *vk_result;
@@ -1819,7 +3677,7 @@ namespace lfs::vis {
                 // Debug colors stay on the GPU path: the selector emits
                 // per-node levels alongside indices.
                 const bool prefer_gpu_lod =
-                    settings_.lod_enabled &&
+                    frame_settings.lod_enabled &&
                     lfs::rendering::isVkSplatBackend(request.raster_backend);
                 const auto create_lod_controller = [this]() {
                     auto controller = std::make_unique<SparkLodController>();
@@ -1844,19 +3702,19 @@ namespace lfs::vis {
                 const std::size_t effective_lod_budget = std::max<std::size_t>(
                     1,
                     static_cast<std::size_t>(
-                        std::llround(static_cast<double>(settings_.lod_max_splats) *
-                                     std::max(settings_.lod_render_scale, 0.1f))));
+                        std::llround(static_cast<double>(frame_settings.lod_max_splats) *
+                                     std::max(frame_settings.lod_render_scale, 0.1f))));
                 if (vksplat_viewport_renderer_) {
                     // Bounded page pool only matters while a LoD cut is rendered;
                     // with LoD off the full-quality reference needs every page.
                     std::size_t pool_budget_splats = 0;
-                    if (settings_.lod_enabled) {
+                    if (frame_settings.lod_enabled) {
                         constexpr std::size_t kAutoPoolFactor = 4;
                         const std::size_t floor_splats =
                             2 * effective_lod_budget + lfs::core::SplatLodTree::kChunkSplats;
                         pool_budget_splats =
-                            settings_.lod_page_pool_splats > 0
-                                ? settings_.lod_page_pool_splats
+                            frame_settings.lod_page_pool_splats > 0
+                                ? frame_settings.lod_page_pool_splats
                                 : kAutoPoolFactor * effective_lod_budget;
                         if (pool_budget_splats < floor_splats) {
                             static std::size_t last_warned_budget = 0;
@@ -1870,9 +3728,9 @@ namespace lfs::vis {
                         }
                     }
                     vksplat_viewport_renderer_->setLodPagePoolBudget(pool_budget_splats);
-                    vksplat_viewport_renderer_->setLodPoolVramFraction(settings_.lod_pool_vram_fraction);
+                    vksplat_viewport_renderer_->setLodPoolVramFraction(frame_settings.lod_pool_vram_fraction);
                     vksplat_viewport_renderer_->setLodFadeFrames(
-                        static_cast<std::uint32_t>(std::max(settings_.lod_fade_frames, 0)));
+                        static_cast<std::uint32_t>(std::max(frame_settings.lod_fade_frames, 0)));
                     if (auto page_snapshot = vksplat_viewport_renderer_->ensureLodPageCacheSnapshot(*model);
                         page_snapshot &&
                         page_snapshot->generation != lod_controller_page_map_generation_) {
@@ -1885,14 +3743,14 @@ namespace lfs::vis {
                 }
 
                 std::optional<lfs::rendering::GaussianLodGpuTraversalState> lod_gpu_traversal;
-                if (settings_.lod_enabled) {
+                if (frame_settings.lod_enabled) {
                     SparkLodController::LodParameters params;
                     params.max_splats = effective_lod_budget;
-                    params.lod_render_scale = settings_.lod_render_scale;
-                    params.behind_camera_penalty = settings_.lod_behind_camera_penalty;
-                    params.cone_foveation = settings_.lod_cone_foveation;
-                    params.cone_inner_degrees = settings_.lod_cone_inner_degrees;
-                    params.cone_outer_degrees = settings_.lod_cone_outer_degrees;
+                    params.lod_render_scale = frame_settings.lod_render_scale;
+                    params.behind_camera_penalty = frame_settings.lod_behind_camera_penalty;
+                    params.cone_foveation = frame_settings.lod_cone_foveation;
+                    params.cone_inner_degrees = frame_settings.lod_cone_inner_degrees;
+                    params.cone_outer_degrees = frame_settings.lod_cone_outer_degrees;
                     const LodObjectFrame lod_frame = makeLodObjectFrame(request.frame_view, request.scene);
                     params.object_scale = lod_frame.object_scale;
 
@@ -1966,29 +3824,27 @@ namespace lfs::vis {
                 if (lod_transition_active) {
                     notifyAsyncLodResultsReady();
                 }
-                const auto& selected = settings_.lod_enabled
+                const auto& selected = frame_settings.lod_enabled
                                            ? lod_controller_->selectedIndices()
                                            : lod_controller_->fullQualityIndices();
                 if (!selected.empty()) {
                     request.lod_indices = selected.data();
-                    if (kEnableLodTransitionWeights &&
-                        settings_.lod_enabled &&
-                        lod_transition_active) {
+                    if (frame_settings.lod_enabled && lod_transition_active) {
                         const auto& weights = lod_controller_->selectedWeights();
                         if (weights.size() == selected.size()) {
                             request.lod_weights = weights.data();
                         }
                     }
                     if (lod_controller_->pageMappingActive()) {
-                        const auto& logical = settings_.lod_enabled
+                        const auto& logical = frame_settings.lod_enabled
                                                   ? lod_controller_->selectedLogicalIndices()
                                                   : lod_controller_->fullQualityLogicalIndices();
                         if (logical.size() == selected.size()) {
                             request.lod_logical_indices = logical.data();
                         }
                     }
-                    if (settings_.lod_debug_colors) {
-                        const auto& levels = settings_.lod_enabled
+                    if (frame_settings.lod_debug_colors) {
+                        const auto& levels = frame_settings.lod_enabled
                                                  ? lod_controller_->selectedLevels()
                                                  : lod_controller_->fullQualityLevels();
                         if (levels.size() == selected.size()) {
@@ -2009,7 +3865,7 @@ namespace lfs::vis {
                         request.lod_touched_chunk_count = lod_touched_chunks.size();
                     }
                 }
-                request.lod_debug_mode = settings_.lod_debug_colors;
+                request.lod_debug_mode = frame_settings.lod_debug_colors;
             } else {
                 lod_controller_.reset();
                 lod_controller_model_ = nullptr;
@@ -2025,35 +3881,220 @@ namespace lfs::vis {
                         vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
                     }
                     const auto publish_vksplat_result = [&](const VksplatViewportRenderer::RenderResult& render_result) -> VulkanFrameResult {
+                        vksplat_stale_frame_guard_.onSuccess();
                         render_lock.reset();
                         note_lod_page_generation(render_result.lod_page_generation);
-                        if (render_result.lod_streaming_active) {
-                            // Page decodes/uploads still in flight: keep frames
-                            // coming so streaming converges while the camera idles.
-                            notifyAsyncLodResultsReady();
+                        note_vksplat_render_progress(render_result);
+                        const bool transparent_viewer_compositing =
+                            environmentBackgroundUsesTransparentViewerCompositing(frame_settings);
+                        lfs::rendering::FrameMetadata metadata{};
+                        metadata.valid = true;
+                        metadata.flip_y = render_result.flip_y;
+
+                        const auto publish_mesh_frame_for_vksplat = [&]() {
+                            // VkSplat returns before the shared mesh-frame setup below.
+                            // Republish here so overlays and mesh/environment passes see
+                            // the current camera and splat depth view.
+                            const bool publish_mesh_frame =
+                                !frame_ctx.scene_state.meshes.empty() ||
+                                environmentBackgroundEnabled(frame_settings) ||
+                                render_result.depth_image_view != VK_NULL_HANDLE;
+                            if (publish_mesh_frame) {
+                                auto mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
+                                populate_independent_split_mesh_panels(mesh_frame);
+                                if (render_result.depth_image_view != VK_NULL_HANDLE) {
+                                    mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
+                                    mesh_frame.depth_blit.external_image_generation = render_result.depth_generation;
+                                    mesh_frame.depth_blit.depth_is_ndc = false;
+                                    mesh_frame.depth_blit.flip_y = render_result.flip_y;
+                                    mesh_frame.depth_blit.near_plane = request.frame_view.near_plane > 0.0f
+                                                                           ? request.frame_view.near_plane
+                                                                           : 0.1f;
+                                    mesh_frame.depth_blit.far_plane = request.frame_view.far_plane > 0.0f
+                                                                          ? request.frame_view.far_plane
+                                                                          : 1000.0f;
+                                    const glm::ivec2 depth_valid = render_result.size;
+                                    const glm::ivec2 depth_alloc =
+                                        render_result.alloc_size.x > 0 && render_result.alloc_size.y > 0
+                                            ? render_result.alloc_size
+                                            : depth_valid;
+                                    mesh_frame.depth_blit.uv_scale = outputUvScale(depth_valid, depth_alloc);
+                                    mesh_frame.depth_blit.uv_clamp_max =
+                                        outputUvClampMax(depth_valid, depth_alloc);
+                                }
+                                setVulkanMeshFrame(std::move(mesh_frame));
+                            } else {
+                                clearVulkanMeshFrame();
+                            }
+                        };
+
+                        const lfs::rendering::FrameView capture_frame_view = request.frame_view;
+                        const auto make_capture_composite_request =
+                            [&]() -> lfs::rendering::VideoCompositeFrameRequest {
+                            return {
+                                .viewport =
+                                    {.rotation = capture_frame_view.rotation,
+                                     .translation = capture_frame_view.translation,
+                                     .size = capture_frame_view.size,
+                                     .focal_length_mm = capture_frame_view.focal_length_mm,
+                                     .orthographic = capture_frame_view.orthographic,
+                                     .ortho_scale = capture_frame_view.ortho_scale},
+                                .frame_view = capture_frame_view,
+                                .background_color = frame_settings.background_color,
+                                .environment =
+                                    {.enabled = transparent_viewer_compositing,
+                                     .map_path = transparent_viewer_compositing
+                                                     ? std::filesystem::path(frame_settings.environment_map_path)
+                                                     : std::filesystem::path{},
+                                     .exposure = frame_settings.environment_exposure,
+                                     .rotation_degrees = frame_settings.environment_rotation_degrees,
+                                     .equirectangular = frame_settings.equirectangular},
+                            };
+                        };
+
+                        if (frame_settings.apply_appearance_correction) {
+                            auto image = transparent_viewer_compositing
+                                             ? vksplat_viewport_renderer_->readOutputImageRgba(
+                                                   *context.vulkan_context,
+                                                   VksplatViewportRenderer::OutputSlot::Main)
+                                             : vksplat_viewport_renderer_->readOutputImage(
+                                                   *context.vulkan_context,
+                                                   VksplatViewportRenderer::OutputSlot::Main);
+                            if (image && *image) {
+                                auto corrected_image = applyViewportAppearanceCorrection(
+                                    std::move(*image),
+                                    scene_manager,
+                                    frame_settings,
+                                    frame_ctx.current_camera_id);
+                                corrected_image = ensure_cuda_viewport_image(
+                                    std::move(corrected_image),
+                                    "VkSplat viewport PPISP correction");
+                                if (corrected_image && corrected_image->is_valid()) {
+                                    vulkan_viewport_image_ = corrected_image;
+                                    ++vulkan_viewport_image_generation_;
+                                    if (vulkan_viewport_image_generation_ == 0) {
+                                        ++vulkan_viewport_image_generation_;
+                                    }
+                                    vulkan_external_viewport_image_ = VK_NULL_HANDLE;
+                                    vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
+                                    vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
+                                    vulkan_external_viewport_image_generation_ = 0;
+                                    vulkan_viewport_image_size_ = render_result.size;
+                                    vulkan_viewport_image_alloc_size_ = render_result.size;
+                                    vulkan_viewport_image_flip_y_ = render_result.flip_y;
+                                    vulkan_gt_comparison_content_size_ = {0, 0};
+                                    viewport_artifact_service_.updateFromImageOutput(
+                                        corrected_image, metadata, render_result.size, true);
+                                    if (transparent_viewer_compositing) {
+                                        const auto capture_composite_request = make_capture_composite_request();
+                                        viewport_artifact_service_.setLazyCaptureForCurrentOutput(
+                                            [this,
+                                             capture_composite_request,
+                                             metadata,
+                                             render_size = render_result.size,
+                                             corrected_capture_image = corrected_image]()
+                                                -> std::shared_ptr<lfs::core::Tensor> {
+                                                auto* const engine = getRenderingEngine();
+                                                if (!engine) {
+                                                    LOG_ERROR("Failed to composite VkSplat viewport capture: rendering engine unavailable");
+                                                    return {};
+                                                }
+                                                auto materialized = engine->materializeGpuFrame(
+                                                    corrected_capture_image,
+                                                    metadata,
+                                                    render_size);
+                                                if (!materialized || !materialized->valid()) {
+                                                    LOG_ERROR("Failed to materialize corrected VkSplat viewport capture for environment composite: {}",
+                                                              materialized ? "invalid frame" : materialized.error());
+                                                    return corrected_capture_image;
+                                                }
+                                                auto composited = engine->renderVideoCompositeFrame(
+                                                    *materialized,
+                                                    capture_composite_request);
+                                                if (!composited) {
+                                                    LOG_ERROR("Failed to composite environment into corrected VkSplat viewport capture: {}",
+                                                              composited.error());
+                                                    return corrected_capture_image;
+                                                }
+                                                return makeViewportCaptureImageHwc(std::move(*composited));
+                                            },
+                                            metadata,
+                                            render_result.size);
+                                    }
+
+                                    if (resize_result.completed) {
+                                        lfs::core::Tensor::trim_memory_pool();
+                                    }
+                                    queueCameraMetricsRefreshIfStale(scene_manager);
+                                    viewport_interaction_context_.scene_manager = scene_manager;
+                                    split_view_service_.updateInfo(FrameResources{});
+                                    publish_mesh_frame_for_vksplat();
+                                    release_inactive_split_outputs();
+
+                                    vulkan_viewport_coordinate_size_ = current_size;
+                                    return {.image = vulkan_viewport_image_,
+                                            .image_generation = vulkan_viewport_image_generation_,
+                                            .size = vulkan_viewport_image_size_,
+                                            .flip_y = vulkan_viewport_image_flip_y_,
+                                            .matches_viewport_extent = true};
+                                }
+                                LOG_WARN("VkSplat PPISP correction produced no valid viewport image; falling back to uncorrected external image");
+                            } else {
+                                LOG_WARN("VkSplat PPISP readback failed: {}",
+                                         image ? "missing image payload" : image.error());
+                            }
                         }
-                        vulkan_viewport_image_.reset();
+
+                        clearVulkanViewportImageState(render_result.size,
+                                                      render_result.flip_y,
+                                                      render_result.alloc_size);
                         vulkan_external_viewport_image_ = render_result.image;
                         vulkan_external_viewport_image_view_ = render_result.image_view;
                         vulkan_external_viewport_image_layout_ = render_result.image_layout;
                         vulkan_external_viewport_image_generation_ = render_result.generation;
-                        vulkan_viewport_image_size_ = render_result.size;
-                        vulkan_viewport_image_flip_y_ = render_result.flip_y;
-                        vulkan_gt_comparison_content_size_ = {0, 0};
-                        lfs::rendering::FrameMetadata metadata{};
-                        metadata.valid = true;
-                        metadata.flip_y = render_result.flip_y;
+                        const auto capture_composite_request = make_capture_composite_request();
                         viewport_artifact_service_.setLazyCapture(
-                            [this]() -> std::shared_ptr<lfs::core::Tensor> {
+                            [this, transparent_viewer_compositing, capture_composite_request, metadata, render_size = render_result.size]()
+                                -> std::shared_ptr<lfs::core::Tensor> {
                                 if (!vksplat_viewport_renderer_ || !last_vulkan_context_) {
                                     return {};
                                 }
-                                auto image = vksplat_viewport_renderer_->readOutputImage(
-                                    *last_vulkan_context_,
-                                    VksplatViewportRenderer::OutputSlot::Main);
+                                auto image = transparent_viewer_compositing
+                                                 ? vksplat_viewport_renderer_->readOutputImageRgba(
+                                                       *last_vulkan_context_,
+                                                       VksplatViewportRenderer::OutputSlot::Main)
+                                                 : vksplat_viewport_renderer_->readOutputImage(
+                                                       *last_vulkan_context_,
+                                                       VksplatViewportRenderer::OutputSlot::Main);
                                 if (!image) {
                                     LOG_ERROR("Failed to capture VkSplat viewport image: {}", image.error());
                                     return {};
+                                }
+                                if (transparent_viewer_compositing) {
+                                    auto* const engine = getRenderingEngine();
+                                    if (!engine) {
+                                        LOG_ERROR("Failed to composite VkSplat viewport capture: rendering engine unavailable");
+                                        return {};
+                                    }
+                                    auto frame_image = std::move(*image);
+                                    auto materialized = engine->materializeGpuFrame(
+                                        frame_image,
+                                        metadata,
+                                        render_size);
+                                    if (!materialized || !materialized->valid()) {
+                                        LOG_ERROR("Failed to materialize VkSplat viewport capture for environment composite: {}",
+                                                  materialized ? "invalid frame" : materialized.error());
+                                        return frame_image;
+                                    }
+                                    auto composited = engine->renderVideoCompositeFrame(
+                                        *materialized,
+                                        capture_composite_request);
+                                    if (!composited) {
+                                        LOG_ERROR("Failed to composite environment into VkSplat viewport capture: {}",
+                                                  composited.error());
+                                        return frame_image;
+                                    }
+                                    return makeViewportCaptureImageHwc(std::move(*composited));
                                 }
                                 return std::move(*image);
                             },
@@ -2061,43 +4102,16 @@ namespace lfs::vis {
                             render_result.size);
 
                         if (resize_result.completed) {
-                            frame_lifecycle_service_.noteResizeCompleted();
                             lfs::core::Tensor::trim_memory_pool();
                         }
                         queueCameraMetricsRefreshIfStale(scene_manager);
                         viewport_interaction_context_.scene_manager = scene_manager;
                         split_view_service_.updateInfo(FrameResources{});
 
-                        // VkSplat returns early before the shared mesh-frame
-                        // setup below. Republish here so the viewport pass sees
-                        // the current camera; also forwards the splat depth view
-                        // used by shape_overlay / textured_overlay for world-
-                        // space overlay depth fading, so publish whenever depth
-                        // is available even without meshes or environment bg.
-                        const bool publish_mesh_frame =
-                            !frame_ctx.scene_state.meshes.empty() ||
-                            environmentBackgroundEnabled(settings_) ||
-                            render_result.depth_image_view != VK_NULL_HANDLE;
-                        if (publish_mesh_frame) {
-                            auto mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
-                            populate_independent_split_mesh_panels(mesh_frame);
-                            if (render_result.depth_image_view != VK_NULL_HANDLE) {
-                                mesh_frame.depth_blit.external_image_view = render_result.depth_image_view;
-                                mesh_frame.depth_blit.external_image_generation = render_result.depth_generation;
-                                mesh_frame.depth_blit.depth_is_ndc = false;
-                                mesh_frame.depth_blit.flip_y = render_result.flip_y;
-                                mesh_frame.depth_blit.near_plane = request.frame_view.near_plane > 0.0f
-                                                                       ? request.frame_view.near_plane
-                                                                       : 0.1f;
-                                mesh_frame.depth_blit.far_plane = request.frame_view.far_plane > 0.0f
-                                                                      ? request.frame_view.far_plane
-                                                                      : 1000.0f;
-                            }
-                            setVulkanMeshFrame(std::move(mesh_frame));
-                        } else {
-                            clearVulkanMeshFrame();
-                        }
+                        publish_mesh_frame_for_vksplat();
+                        release_inactive_split_outputs();
 
+                        vulkan_viewport_coordinate_size_ = current_size;
                         return {.image = {},
                                 .external_image = vulkan_external_viewport_image_,
                                 .external_image_view = vulkan_external_viewport_image_view_,
@@ -2106,7 +4120,9 @@ namespace lfs::vis {
                                 .completion_semaphore = render_result.completion_semaphore,
                                 .completion_value = render_result.completion_value,
                                 .size = vulkan_viewport_image_size_,
-                                .flip_y = vulkan_viewport_image_flip_y_};
+                                .alloc_size = vulkan_viewport_image_alloc_size_,
+                                .flip_y = vulkan_viewport_image_flip_y_,
+                                .matches_viewport_extent = true};
                     };
 
                     const DirtyMask non_overlay_dirty = frame_dirty & ~DirtyFlag::SELECTION;
@@ -2116,7 +4132,7 @@ namespace lfs::vis {
                          (is_training && (non_overlay_dirty & ~DirtyFlag::SPLATS) == 0)) &&
                         vulkan_external_viewport_image_ != VK_NULL_HANDLE &&
                         vulkan_viewport_image_size_ == render_size &&
-                        !split_view_service_.isActive(settings_);
+                        !split_view_service_.isActive(frame_settings);
                     if (can_rerender_selection_overlay) {
                         LOG_TIMER("vksplat.selection_overlay");
                         std::expected<VksplatViewportRenderer::RenderResult, std::string> overlay_result =
@@ -2160,26 +4176,20 @@ namespace lfs::vis {
                         lfs::core::Tensor::trim_memory_pool();
                     }
                     if (render_result) {
+                        last_logged_vksplat_render_error_.clear();
                         return publish_vksplat_result(*render_result);
                     }
                     const bool shared_scratch_retryable =
                         isRetryableSharedScratchUnavailable(render_result.error());
-                    const bool output_resize_wait_retryable =
-                        isRetryableVksplatOutputResizeWait(render_result.error());
                     if (synchronize_vksplat_input_upload &&
                         has_cached_viewport_output &&
-                        (shared_scratch_retryable || output_resize_wait_retryable)) {
-                        const DirtyMask retry_dirty =
-                            output_resize_wait_retryable
-                                ? vksplatOutputResizeRetryDirty(frame_dirty)
-                                : vksplatSharedScratchRetryDirty(frame_dirty);
+                        shared_scratch_retryable) {
+                        const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
                         dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
                         const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                         if (vksplat_viewport_resize || !cached_size_matches) {
                             LOG_DEBUG("{} ({}); skipping cached viewport image, retry_dirty=0x{:x}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
-                                      output_resize_wait_retryable
-                                          ? "VkSplat output resize wait is still pending"
-                                          : "VkSplat shared scratch unavailable",
+                                      "VkSplat shared scratch unavailable",
                                       render_result.error(),
                                       retry_dirty,
                                       vksplat_viewport_resize,
@@ -2191,11 +4201,10 @@ namespace lfs::vis {
                             return {};
                         }
                         LOG_DEBUG("{} ({}); returning cached viewport image, retry_dirty=0x{:x}",
-                                  output_resize_wait_retryable
-                                      ? "VkSplat output resize wait is still pending"
-                                      : "VkSplat shared scratch unavailable",
+                                  "VkSplat shared scratch unavailable",
                                   render_result.error(),
                                   retry_dirty);
+                        defer_shared_scratch(render_result.error());
                         render_lock.reset();
                         return cached_frame_result();
                     }
@@ -2210,7 +4219,7 @@ namespace lfs::vis {
             rendered_image = applyViewportAppearanceCorrection(
                 std::move(rendered_image),
                 scene_manager,
-                settings_,
+                frame_settings,
                 frame_ctx.current_camera_id);
         }
 
@@ -2219,9 +4228,9 @@ namespace lfs::vis {
         }
 
         if ((rendered_image || render_error.empty() || pending_split_view.enabled) &&
-            (environmentBackgroundEnabled(settings_) || !frame_ctx.scene_state.meshes.empty() ||
+            (environmentBackgroundEnabled(frame_settings) || !frame_ctx.scene_state.meshes.empty() ||
              pending_split_view.enabled)) {
-            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, settings_, pending_split_view);
+            VulkanMeshFrame gpu_mesh_frame = populateMeshFrame(frame_ctx, frame_settings, pending_split_view);
             populate_independent_split_mesh_panels(gpu_mesh_frame);
 
             // Splat depth -> mesh-pass z-test source. Only meaningful when the
@@ -2249,17 +4258,14 @@ namespace lfs::vis {
 
         const bool has_gpu_only_pass =
             !frame_ctx.scene_state.meshes.empty() ||
-            environmentBackgroundEnabled(settings_) ||
+            environmentBackgroundEnabled(frame_settings) ||
             pending_split_view.enabled;
 
         if (!rendered_image && has_gpu_only_pass) {
-            vulkan_viewport_image_.reset();
-            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            vulkan_external_viewport_image_generation_ = 0;
-            vulkan_viewport_image_size_ = render_size;
-            vulkan_viewport_image_flip_y_ = false;
+            if (pending_split_view.enabled || render_error.empty()) {
+                vksplat_stale_frame_guard_.onSuccess();
+            }
+            clearVulkanViewportImageState(render_size, false);
             vulkan_gt_comparison_content_size_ =
                 rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
             FrameResources split_info_resources;
@@ -2271,7 +4277,7 @@ namespace lfs::vis {
 
             if (pending_split_view.enabled) {
                 viewport_artifact_service_.setLazyCapture(
-                    [this, params = pending_split_view, render_size]()
+                    [this, params = pending_split_view, current_size]()
                         -> std::shared_ptr<lfs::core::Tensor> {
                         VulkanSplitViewParams capture_params = params;
                         {
@@ -2307,10 +4313,37 @@ namespace lfs::vis {
                         if (!capture_params.left.image || !capture_params.right.image) {
                             return {};
                         }
-                        return composeSplitViewCpu(capture_params, render_size);
+                        // content_rect is authored in coordinate_extent (render_size)
+                        // space; the capture tensor is current_size. Match
+                        // recordScenePass: per-edge rounding into output pixels.
+                        // Capture has no on-screen viewport offset.
+                        if (capture_params.coordinate_extent.x > 0 &&
+                            capture_params.coordinate_extent.y > 0 &&
+                            capture_params.coordinate_extent != current_size) {
+                            const float scale_x =
+                                static_cast<float>(current_size.x) /
+                                static_cast<float>(capture_params.coordinate_extent.x);
+                            const float scale_y =
+                                static_cast<float>(current_size.y) /
+                                static_cast<float>(capture_params.coordinate_extent.y);
+                            const int left = static_cast<int>(
+                                std::lround(capture_params.content_rect.x * scale_x));
+                            const int top = static_cast<int>(
+                                std::lround(capture_params.content_rect.y * scale_y));
+                            const int right = static_cast<int>(std::lround(
+                                (capture_params.content_rect.x + capture_params.content_rect.z) *
+                                scale_x));
+                            const int bottom = static_cast<int>(std::lround(
+                                (capture_params.content_rect.y + capture_params.content_rect.w) *
+                                scale_y));
+                            capture_params.content_rect = {
+                                left, top, std::max(right - left, 1), std::max(bottom - top, 1)};
+                            capture_params.coordinate_extent = current_size;
+                        }
+                        return composeSplitViewCpu(capture_params, current_size);
                     },
                     rendered_metadata,
-                    render_size);
+                    current_size);
             } else {
                 viewport_artifact_service_.clearViewportOutput();
             }
@@ -2324,10 +4357,18 @@ namespace lfs::vis {
             if (result.image_generation == 0) {
                 result.image_generation = ++split_view_image_generation_;
             }
-            result.completion_semaphore = latest_vksplat_completion_semaphore;
-            result.completion_value = latest_vksplat_completion_value;
+            const bool split_uses_external_image =
+                pending_split_view.enabled &&
+                (pending_split_view.left.external_image_view != VK_NULL_HANDLE ||
+                 pending_split_view.right.external_image_view != VK_NULL_HANDLE);
+            if (split_uses_external_image) {
+                result.completion_semaphore = latest_vksplat_completion_semaphore;
+                result.completion_value = latest_vksplat_completion_value;
+            }
             result.size = vulkan_viewport_image_size_;
             result.flip_y = vulkan_viewport_image_flip_y_;
+            result.matches_viewport_extent = true;
+            vulkan_viewport_coordinate_size_ = current_size;
 
             const auto tensor_size = [](const lfs::core::Tensor& t) -> glm::ivec2 {
                 const auto layout = lfs::rendering::detectImageLayout(t);
@@ -2341,16 +4382,42 @@ namespace lfs::vis {
             if (pending_split_view.enabled) {
                 if (auto left_tensor = pending_split_view.left.image) {
                     const auto sz = tensor_size(*left_tensor);
+                    result.split_left_image_generation =
+                        gt_comparison_cuda_image_ && gt_comparison_cuda_image_.get() == left_tensor.get()
+                            ? split_left_image_generation_
+                            : result.image_generation;
                     result.image = std::move(left_tensor);
                     result.size = sz;
                     result.flip_y = pending_split_view.left.flip_y;
                 }
                 if (auto right_tensor = pending_split_view.right.image) {
                     const auto sz = tensor_size(*right_tensor);
+                    gt_comparison_detail::updateSplitImageGeneration(
+                        right_tensor.get(),
+                        sz,
+                        gt_async_held_display_.get(),
+                        split_right_source_size_,
+                        result.image_generation,
+                        split_right_image_generation_);
+                    split_right_source_size_ = sz;
                     result.split_right_image = std::move(right_tensor);
+                    result.split_right_image_generation = split_right_image_generation_;
                     result.split_right_size = sz;
                     result.split_right_flip_y = pending_split_view.right.flip_y;
+                } else {
+                    gt_comparison_detail::updateSplitImageGeneration(
+                        nullptr,
+                        {0, 0},
+                        gt_async_held_display_.get(),
+                        split_right_source_size_,
+                        result.image_generation,
+                        split_right_image_generation_);
+                    split_right_source_size_ = {0, 0};
+                    result.split_right_image_generation = split_right_image_generation_;
                 }
+            }
+            if (!pending_split_view.enabled) {
+                release_inactive_split_outputs();
             }
             return result;
         }
@@ -2359,31 +4426,23 @@ namespace lfs::vis {
             const bool shared_scratch_retryable =
                 synchronize_vksplat_input_upload &&
                 isRetryableSharedScratchUnavailable(render_error);
-            const bool output_resize_wait_retryable =
-                isRetryableVksplatOutputResizeWait(render_error);
-            if (shared_scratch_retryable || output_resize_wait_retryable) {
-                const DirtyMask retry_dirty =
-                    output_resize_wait_retryable
-                        ? vksplatOutputResizeRetryDirty(frame_dirty)
-                        : vksplatSharedScratchRetryDirty(frame_dirty);
+            if (shared_scratch_retryable) {
+                const DirtyMask retry_dirty = vksplatSharedScratchRetryDirty(frame_dirty);
                 dirty_mask_.fetch_or(retry_dirty,
                                      std::memory_order_relaxed);
                 render_lock.reset();
                 const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
                 if (has_cached_viewport_output && !vksplat_viewport_resize && cached_size_matches) {
                     LOG_DEBUG("{} ({}); returning cached viewport image, retry_dirty=0x{:x}",
-                              output_resize_wait_retryable
-                                  ? "VkSplat output resize wait is still pending"
-                                  : "VkSplat shared scratch unavailable",
+                              "VkSplat shared scratch unavailable",
                               render_error,
                               retry_dirty);
+                    defer_shared_scratch(render_error);
                     return cached_frame_result();
                 }
 
                 LOG_DEBUG("{} ({}); skipping viewport frame, retry_dirty=0x{:x}, cached_output={}, vksplat_resize={}, cached_size={}x{}, render_size={}x{}",
-                          output_resize_wait_retryable
-                              ? "VkSplat output resize wait is still pending"
-                              : "VkSplat shared scratch unavailable",
+                          "VkSplat shared scratch unavailable",
                           render_error,
                           retry_dirty,
                           has_cached_viewport_output,
@@ -2395,20 +4454,37 @@ namespace lfs::vis {
                 return {};
             }
 
-            vulkan_gt_comparison_content_size_ = {0, 0};
+            if (has_visible_gaussian_model &&
+                lfs::rendering::isVkSplatBackend(frame_settings.raster_backend)) {
+                const std::string degraded_error =
+                    render_error.empty() ? "missing image payload" : render_error;
+                if (last_logged_vksplat_render_error_ != degraded_error) {
+                    last_logged_vksplat_render_error_ = degraded_error;
+                    LOG_ERROR("VkSplat entered degraded mode; retaining the last good viewport image: {}",
+                              degraded_error);
+                }
+
+                // A failed attempt never publishes its candidate completion
+                // value. Retry next frame, but keep presenting the previous
+                // image when its dimensions still match.
+                const DirtyMask retry_dirty = frame_dirty != 0 ? frame_dirty : DirtyFlag::SPLATS;
+                dirty_mask_.fetch_or(retry_dirty, std::memory_order_relaxed);
+                render_lock.reset();
+                const bool cached_size_matches = vulkan_viewport_image_size_ == render_size;
+                if (has_cached_viewport_output && !vksplat_viewport_resize && cached_size_matches) {
+                    return cached_frame_result();
+                }
+                return {};
+            }
+
             LOG_ERROR("Failed to render Vulkan viewport image: {}",
                       render_error.empty() ? "missing image payload" : render_error);
-            vulkan_viewport_image_.reset();
-            vulkan_external_viewport_image_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_view_ = VK_NULL_HANDLE;
-            vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
-            vulkan_external_viewport_image_generation_ = 0;
-            vulkan_viewport_image_size_ = {0, 0};
-            vulkan_viewport_image_flip_y_ = false;
+            clearVulkanViewportImageState();
             return {};
         }
 
         auto viewport_image = std::move(rendered_image);
+        vksplat_stale_frame_guard_.onSuccess();
         vulkan_viewport_image_ = viewport_image;
         ++vulkan_viewport_image_generation_;
         if (vulkan_viewport_image_generation_ == 0)
@@ -2418,14 +4494,16 @@ namespace lfs::vis {
         vulkan_external_viewport_image_layout_ = VK_IMAGE_LAYOUT_UNDEFINED;
         vulkan_external_viewport_image_generation_ = 0;
         vulkan_viewport_image_size_ = render_size;
+        vulkan_viewport_image_alloc_size_ = render_size;
+        vulkan_viewport_coordinate_size_ = current_size;
         vulkan_viewport_image_flip_y_ = !rendered_metadata.flip_y;
         vulkan_gt_comparison_content_size_ =
             rendered_image_contains_ground_truth ? rendered_gt_content_size : glm::ivec2{0, 0};
         viewport_artifact_service_.updateFromImageOutput(
             std::move(viewport_image), rendered_metadata, render_size, true);
+        release_inactive_split_outputs();
 
         if (resize_result.completed) {
-            frame_lifecycle_service_.noteResizeCompleted();
             lfs::core::Tensor::trim_memory_pool();
         }
 
@@ -2441,7 +4519,34 @@ namespace lfs::vis {
         return {.image = vulkan_viewport_image_,
                 .image_generation = vulkan_viewport_image_generation_,
                 .size = vulkan_viewport_image_size_,
-                .flip_y = vulkan_viewport_image_flip_y_};
+                .flip_y = vulkan_viewport_image_flip_y_,
+                .matches_viewport_extent = true};
+    }
+
+    std::expected<void, std::string> RenderingManager::ensureVksplatTrainingSharedScratchReady(
+        VulkanContext& context,
+        const lfs::core::SplatData& model,
+        glm::ivec2 viewport_size) {
+        const RenderSettings settings = getSettings();
+        if (!lfs::rendering::isVkSplatBackend(settings.raster_backend) || model.size() <= 0) {
+            return {};
+        }
+        if (viewport_size.x <= 0 || viewport_size.y <= 0) {
+            viewport_size = getRenderedSize();
+        }
+        if (viewport_size.x <= 0 || viewport_size.y <= 0) {
+            viewport_size = {1280, 720};
+        }
+        if (!vksplat_viewport_renderer_) {
+            vksplat_viewport_renderer_ = std::make_unique<VksplatViewportRenderer>();
+        }
+        if (auto ok = vksplat_viewport_renderer_->ensureHandshakeReady(context); !ok) {
+            return std::unexpected(ok.error());
+        }
+        return vksplat_viewport_renderer_->ensureTrainingSharedScratchReady(
+            context,
+            static_cast<std::size_t>(model.size()),
+            viewport_size);
     }
 
     lfs::io::SplatTensorAllocator RenderingManager::makeSplatTensorAllocator() const {
@@ -2458,9 +4563,7 @@ namespace lfs::vis {
                 std::move(shape),
                 dtype,
                 capacity,
-                debug_name.c_str(),
-                nullptr,
-                false);
+                debug_name.c_str());
             if (!tensor) {
                 throw lfs::core::TensorError(std::format(
                     "Vulkan-external thumbnail splat tensor allocation failed for '{}': {}",

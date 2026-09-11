@@ -293,16 +293,19 @@ class TestSignalMemory:
     def test_callback_exception_handled(self):
         """Signal should handle callback exceptions gracefully."""
         s = Signal(0)
+        received = []
 
         def bad_callback(v):
             raise ValueError("Oops")
 
         def good_callback(v):
-            pass
+            received.append(v)
 
         s.subscribe(bad_callback)
         s.subscribe(good_callback)
         s.value = 1
+
+        assert received == [1]
 
 
 if __name__ == "__main__":

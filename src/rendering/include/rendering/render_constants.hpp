@@ -91,10 +91,6 @@ namespace lfs::rendering {
         return glm::degrees(focalLengthToVFovRad(focal_mm));
     }
 
-    inline float focalLengthToHFov(const float focal_mm) {
-        return glm::degrees(2.0f * std::atan(SENSOR_WIDTH_35MM / (2.0f * focal_mm)));
-    }
-
     inline float vFovToFocalLength(const float vfov_degrees) {
         return SENSOR_HEIGHT_35MM / (2.0f * std::tan(glm::radians(vfov_degrees) * 0.5f));
     }
@@ -118,23 +114,6 @@ namespace lfs::rendering {
                                                      const float far_plane = DEFAULT_FAR_PLANE) {
         const float vfov = focalLengthToVFov(focal_length_mm);
         return createProjectionMatrix(viewport_size, vfov, orthographic, ortho_scale, near_plane, far_plane);
-    }
-
-    inline glm::mat4 createProjectionMatrixFromIntrinsics(const glm::ivec2& viewport_size,
-                                                          const CameraIntrinsics& intrinsics,
-                                                          const float near_plane = DEFAULT_NEAR_PLANE,
-                                                          const float far_plane = DEFAULT_FAR_PLANE) {
-        // This produces an image-space frustum with window-space Y increasing downward.
-        const float width = static_cast<float>(viewport_size.x);
-        const float height = static_cast<float>(viewport_size.y);
-        const float fx = std::max(intrinsics.focal_x, 1e-6f);
-        const float fy = std::max(intrinsics.focal_y, 1e-6f);
-
-        const float left = -intrinsics.center_x * near_plane / fx;
-        const float right = (width - intrinsics.center_x) * near_plane / fx;
-        const float top = (height - intrinsics.center_y) * near_plane / fy;
-        const float bottom = -intrinsics.center_y * near_plane / fy;
-        return glm::frustum(left, right, bottom, top, near_plane, far_plane);
     }
 
 } // namespace lfs::rendering

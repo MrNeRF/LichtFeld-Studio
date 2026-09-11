@@ -6,23 +6,28 @@
 
 #include "visualizer/gui_capabilities.hpp"
 
+#include "core/cuda/sh_layout.cuh"
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data_transform.hpp"
+#include "lfs/training/live_model_mutation_guard.hpp"
+#include "lfs/training/sh_value_storage.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-
 #include <algorithm>
 #include <cmath>
+#include <format>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtx/euler_angles.hpp>
 #include <limits>
 #include <memory>
+#include <unordered_set>
 
 namespace lfs::vis::cap {
 
@@ -46,6 +51,12 @@ namespace lfs::vis::cap {
         };
 
         constexpr float kTransformEpsilon = 1e-6f;
+        constexpr float kCropVolumeMinExtent = 1e-4f;
+
+        enum class CropVolumeShape {
+            Box,
+            Ellipsoid,
+        };
 
         [[nodiscard]] bool is_identity_transform(const glm::mat4& transform) {
             const glm::mat4 identity(1.0f);
@@ -74,6 +85,156 @@ namespace lfs::vis::cap {
                    std::abs(q.x) > kTransformEpsilon ||
                    std::abs(q.y) > kTransformEpsilon ||
                    std::abs(q.z) > kTransformEpsilon;
+        }
+
+        [[nodiscard]] std::string crop_volume_shape_label(const CropVolumeShape shape) {
+            return shape == CropVolumeShape::Box ? "Crop Box" : "Ellipsoid";
+        }
+
+        [[nodiscard]] std::string crop_volume_conversion_label(const CropVolumeShape shape) {
+            return "Convert to " + crop_volume_shape_label(shape);
+        }
+
+        [[nodiscard]] vis::op::SceneGraphCaptureOptions crop_volume_history_options() {
+            return vis::op::SceneGraphCaptureOptions{
+                .mode = vis::op::SceneGraphCaptureMode::FULL,
+                .include_selected_nodes = true,
+                .include_scene_context = false,
+            };
+        }
+
+        void sync_crop_volume_render_settings(RenderingManager* rendering_manager,
+                                              const core::SceneNode& node,
+                                              const CropVolumeShape shape) {
+            if (!rendering_manager)
+                return;
+
+            auto settings = rendering_manager->getSettings();
+            if (shape == CropVolumeShape::Box) {
+                settings.show_crop_box = node.visible.get();
+                settings.use_crop_box = node.cropbox ? node.cropbox->enabled : false;
+                settings.show_ellipsoid = false;
+                settings.use_ellipsoid = false;
+            } else {
+                settings.show_ellipsoid = node.visible.get();
+                settings.use_ellipsoid = node.ellipsoid ? node.ellipsoid->enabled : false;
+                settings.show_crop_box = false;
+                settings.use_crop_box = false;
+            }
+            rendering_manager->updateSettings(settings, DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        }
+
+        std::expected<core::NodeId, std::string> convert_crop_volume_in_place(
+            SceneManager& scene_manager,
+            RenderingManager* rendering_manager,
+            const core::NodeId node_id,
+            const CropVolumeShape target_shape) {
+            auto& scene = scene_manager.getScene();
+            auto* node = scene.getNodeById(node_id);
+            if (!node)
+                return std::unexpected("Crop volume node not found");
+
+            if (target_shape == CropVolumeShape::Box && node->type == core::NodeType::CROPBOX && node->cropbox) {
+                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+                return node_id;
+            }
+            if (target_shape == CropVolumeShape::Ellipsoid && node->type == core::NodeType::ELLIPSOID && node->ellipsoid) {
+                sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+                return node_id;
+            }
+
+            if (target_shape == CropVolumeShape::Box && (!node->ellipsoid || node->type != core::NodeType::ELLIPSOID))
+                return std::unexpected("Invalid ellipsoid target");
+            if (target_shape == CropVolumeShape::Ellipsoid && (!node->cropbox || node->type != core::NodeType::CROPBOX))
+                return std::unexpected("Invalid crop box target");
+
+            const auto node_name = node->name;
+            const auto history_options = crop_volume_history_options();
+            auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {node_name}, history_options);
+
+            if (target_shape == CropVolumeShape::Box) {
+                const auto source = *node->ellipsoid;
+                auto data = std::make_unique<core::CropBoxData>();
+                const glm::vec3 radii = glm::max(source.radii, glm::vec3(kCropVolumeMinExtent));
+                data->min = -radii;
+                data->max = radii;
+                data->inverse = source.inverse;
+                data->enabled = source.enabled;
+                data->color = source.color;
+                data->line_width = source.line_width;
+                data->flash_intensity = source.flash_intensity;
+                node->type = core::NodeType::CROPBOX;
+                node->ellipsoid.reset();
+                node->cropbox = std::move(data);
+            } else {
+                const auto source = *node->cropbox;
+                auto data = std::make_unique<core::EllipsoidData>();
+                const glm::vec3 local_center = (source.min + source.max) * 0.5f;
+                const glm::vec3 half_extents = glm::max((source.max - source.min) * 0.5f, glm::vec3(kCropVolumeMinExtent));
+                if (glm::length(local_center) > kCropVolumeMinExtent) {
+                    scene.setNodeTransform(node_name, scene.getNodeTransform(node_name) * glm::translate(glm::mat4(1.0f), local_center));
+                    node = scene.getNodeById(node_id);
+                    if (!node)
+                        return std::unexpected("Crop volume node not found after normalization");
+                }
+                data->radii = half_extents;
+                data->inverse = source.inverse;
+                data->enabled = source.enabled;
+                data->color = source.color;
+                data->line_width = source.line_width;
+                data->flash_intensity = source.flash_intensity;
+                node->type = core::NodeType::ELLIPSOID;
+                node->cropbox.reset();
+                node->ellipsoid = std::move(data);
+            }
+
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+            sync_crop_volume_render_settings(rendering_manager, *node, target_shape);
+
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                scene_manager,
+                crop_volume_conversion_label(target_shape),
+                std::move(history_before),
+                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {node_name}, history_options)));
+
+            return node_id;
+        }
+
+        void remove_opposite_crop_volume_if_present(SceneManager& scene_manager,
+                                                    RenderingManager* rendering_manager,
+                                                    const core::NodeId keep_id,
+                                                    const core::NodeId remove_id,
+                                                    const CropVolumeShape keep_shape) {
+            if (remove_id == core::NULL_NODE || remove_id == keep_id)
+                return;
+
+            auto& scene = scene_manager.getScene();
+            const auto* const keep_node = scene.getNodeById(keep_id);
+            const auto* const remove_node = scene.getNodeById(remove_id);
+            if (!keep_node || !remove_node)
+                return;
+
+            const auto keep_name = keep_node->name;
+            const auto remove_name = remove_node->name;
+            const auto history_options = crop_volume_history_options();
+            auto history_before =
+                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name, remove_name}, history_options);
+
+            scene.removeNode(remove_name, false);
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+
+            if (const auto* const updated_keep = scene.getNodeById(keep_id))
+                sync_crop_volume_render_settings(rendering_manager, *updated_keep, keep_shape);
+
+            vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+                scene_manager,
+                "Remove Duplicate Crop Volume",
+                std::move(history_before),
+                vis::op::SceneGraphPatchEntry::captureState(scene_manager, {keep_name}, history_options)));
         }
 
         [[nodiscard]] bool is_float_nx3(const core::Tensor& tensor) {
@@ -148,51 +309,29 @@ namespace lfs::vis::cap {
             mesh.mark_dirty();
         }
 
-        [[nodiscard]] std::expected<void, std::string> copy_tensor_preserving_storage(core::Tensor& dst,
-                                                                                      const core::Tensor& src,
-                                                                                      const std::string_view name) {
+        lfs::Error bake_error(const lfs::ErrorCode code, std::string message) {
+            return lfs::make_error(lfs::ErrorInit{
+                .code = code,
+                .domain = lfs::ErrorDomain::App,
+                .severity = lfs::Severity::Error,
+                .retryability = lfs::Retryability::NotRetryable,
+                .operation_id = {},
+                .user_message = message,
+                .detail = std::move(message),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+                .fields = {},
+                .native = std::nullopt,
+            });
+        }
+
+        [[nodiscard]] lfs::Result<void> copy_tensor_preserving_storage(core::Tensor& dst,
+                                                                       const core::Tensor& src,
+                                                                       const std::string_view name) {
             if (dst.shape() != src.shape()) {
-                return std::unexpected("Bake produced incompatible " + std::string(name) + " tensor shape");
+                return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::Internal, "Bake produced incompatible " + std::string(name) + " tensor shape"));
             }
 
             dst.copy_from(src);
-            return {};
-        }
-
-        [[nodiscard]] std::expected<void, std::string> bake_splat_transform_preserving_storage(
-            core::SplatData& model,
-            const glm::mat4& transform) {
-            try {
-                core::SplatData transformed(
-                    model.get_max_sh_degree(),
-                    model.means_raw().clone(),
-                    model.sh0_raw().clone(),
-                    model.shN_raw().is_valid() ? model.shN_raw().clone() : core::Tensor{},
-                    model.scaling_raw().clone(),
-                    model.rotation_raw().clone(),
-                    model.opacity_raw().clone(),
-                    model.get_scene_scale(),
-                    core::SplatData::ShNLayout::Swizzled);
-                transformed.set_active_sh_degree(model.get_active_sh_degree());
-
-                core::transform(transformed, transform);
-
-                if (auto result = copy_tensor_preserving_storage(model.means_raw(), transformed.means_raw(), "means"); !result)
-                    return result;
-                if (auto result = copy_tensor_preserving_storage(model.scaling_raw(), transformed.scaling_raw(), "scaling"); !result)
-                    return result;
-                if (auto result = copy_tensor_preserving_storage(model.rotation_raw(), transformed.rotation_raw(), "rotation"); !result)
-                    return result;
-                if (model.shN_raw().is_valid() && transformed.shN_raw().is_valid()) {
-                    if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
-                        return result;
-                }
-
-                model.set_scene_scale(transformed.get_scene_scale());
-            } catch (const std::exception& exc) {
-                return std::unexpected(std::string("Failed to bake splat transform: ") + exc.what());
-            }
-
             return {};
         }
 
@@ -265,6 +404,49 @@ namespace lfs::vis::cap {
             for (size_t axis = 1; axis < dims.size(); ++axis)
                 row_width *= dims[axis];
             return row_width;
+        }
+
+        std::expected<void, std::string> validate_gaussian_field_values(
+            const std::string_view canonical_field_name,
+            const std::vector<float>& values,
+            const size_t row_width) {
+            float absolute_limit = 1.0e6f;
+            if (canonical_field_name == "means") {
+                absolute_limit = 1.0e12f;
+            } else if (canonical_field_name == "scaling_raw" ||
+                       canonical_field_name == "opacity_raw") {
+                // exp()/sigmoid() consume these raw parameters. Keep edits in a range
+                // where the downstream transform remains numerically meaningful.
+                absolute_limit = 80.0f;
+            }
+
+            for (const float value : values) {
+                if (!std::isfinite(value))
+                    return std::unexpected("Gaussian field values must be finite");
+                if (std::abs(value) > absolute_limit) {
+                    return std::unexpected(
+                        "Gaussian field value exceeds the safe range for " +
+                        std::string(canonical_field_name));
+                }
+            }
+
+            if (canonical_field_name == "rotation_raw") {
+                if (row_width != 4)
+                    return std::unexpected("Rotation tensor rows must contain four values");
+                for (size_t offset = 0; offset < values.size(); offset += row_width) {
+                    double norm_squared = 0.0;
+                    for (size_t component = 0; component < row_width; ++component) {
+                        const double value = values[offset + component];
+                        norm_squared += value * value;
+                    }
+                    // Raw training quaternions need not be unit length because readers
+                    // normalize them, but a zero row has no defined orientation.
+                    if (norm_squared < 1.0e-24)
+                        return std::unexpected("Rotation quaternion must be non-zero");
+                }
+            }
+
+            return {};
         }
 
         bool normalize_rotation_basis(glm::vec3& col0,
@@ -415,7 +597,8 @@ namespace lfs::vis::cap {
             if (!local_transform)
                 return std::unexpected("Node not found: " + name);
 
-            scene_manager.setNodeTransform(name, *local_transform);
+            if (!scene_manager.setNodeTransform(name, *local_transform))
+                return std::unexpected("Cannot transform '" + name + "': node is locked");
             return {};
         }
 
@@ -439,6 +622,65 @@ namespace lfs::vis::cap {
         }
 
     } // namespace
+
+    lfs::Result<void> bakeSplatTransformPreservingStorage(
+        core::SplatData& model,
+        const glm::mat4& transform) {
+        try {
+            const bool sh_f16_storage = model.shN_raw().is_valid() &&
+                                        model.shN_raw().dtype() == core::DataType::Float16; // q16 or IEEE-f16
+            const bool rotates_sh = has_significant_rotation(transform);
+
+            core::SplatData transformed(
+                model.get_max_sh_degree(),
+                model.means_raw().clone(),
+                model.sh0_raw().clone(),
+                sh_f16_storage
+                    ? (rotates_sh ? model.shN_canonical() : core::Tensor{})
+                    : (model.shN_raw().is_valid() ? model.shN_raw().clone() : core::Tensor{}),
+                model.scaling_raw().clone(),
+                model.rotation_raw().clone(),
+                model.opacity_raw().clone(),
+                model.get_scene_scale(),
+                (sh_f16_storage && rotates_sh)
+                    ? core::SplatData::ShNLayout::Canonical
+                    : core::SplatData::ShNLayout::Swizzled);
+            transformed.set_active_sh_degree(model.get_active_sh_degree());
+
+            core::transform(transformed, transform);
+
+            if (auto result = copy_tensor_preserving_storage(model.means_raw(), transformed.means_raw(), "means"); !result)
+                return result;
+            if (auto result = copy_tensor_preserving_storage(model.scaling_raw(), transformed.scaling_raw(), "scaling"); !result)
+                return result;
+            if (auto result = copy_tensor_preserving_storage(model.rotation_raw(), transformed.rotation_raw(), "rotation"); !result)
+                return result;
+            if (sh_f16_storage && rotates_sh) {
+                lfs::training::LiveModelMutationGuard mutation_scope("transform.bake");
+                const bool expanded = lfs::training::sh_value::ensure_shN_fp32_for_mutation(model);
+                lfs::training::sh_value::ShNCommitGuard commit_guard(model, expanded, "transform.bake");
+                if (!expanded)
+                    return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::FailedPrecondition, "Bake could not expand quantized shN for mutation"));
+                if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
+                    return result;
+                lfs::training::sh_value::commit_shN_after_mutation(model);
+                if (model.has_tensor_allocator() && !lfs::io::splatTensorsRendererReady(model)) {
+                    LOG_WARN("transform.bake: shN storage left renderer-degraded after bake");
+                }
+            } else if (!sh_f16_storage && model.shN_raw().is_valid() &&
+                       transformed.shN_raw().is_valid()) {
+                if (auto result = copy_tensor_preserving_storage(model.shN_raw(), transformed.shN_raw(), "shN"); !result)
+                    return result;
+            }
+
+            model.set_scene_scale(transformed.get_scene_scale());
+        } catch (const std::exception& exc) {
+            // LFS-CENSUS-OK(empty-catch): bake exceptions are converted to a typed error.
+            return lfs::Result<void>::failure(bake_error(lfs::ErrorCode::Internal, std::string("Failed to bake splat transform: ") + exc.what()));
+        }
+
+        return {};
+    }
 
     TransformComponents decomposeTransform(const glm::mat4& matrix) {
         TransformComponents result;
@@ -624,8 +866,18 @@ namespace lfs::vis::cap {
         auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
         entry->captureTransforms(targets);
 
-        for (const auto& name : targets)
-            scene_manager.setNodeTransform(name, transform);
+        for (const auto& name : targets) {
+            const auto* node = scene_manager.getScene().getNode(name);
+            if (!node)
+                return std::unexpected(std::format("Cannot transform '{}': node not found", name));
+            if (static_cast<bool>(node->locked))
+                return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+        }
+
+        for (const auto& name : targets) {
+            if (!scene_manager.setNodeTransform(name, transform))
+                return std::unexpected(std::format("Cannot transform '{}': node is locked", name));
+        }
 
         entry->captureAfter();
         vis::op::pushSceneSnapshotIfChanged(std::move(entry));
@@ -760,8 +1012,8 @@ namespace lfs::vis::cap {
 
             const glm::mat4 local_transform = node->local_transform.get();
             if (node->model) {
-                if (auto result = bake_splat_transform_preserving_storage(*node->model, local_transform); !result)
-                    return std::unexpected(result.error());
+                if (auto result = bakeSplatTransformPreservingStorage(*node->model, local_transform); !result)
+                    return std::unexpected(std::string(result.error().user_message()));
             } else if (node->point_cloud) {
                 bake_point_cloud_transform(*node->point_cloud, local_transform);
             } else if (node->mesh) {
@@ -769,6 +1021,7 @@ namespace lfs::vis::cap {
             } else {
                 continue;
             }
+            scene.markPayloadDiverged(node->id);
 
             preserve_child_world_transforms(scene_manager, *node, local_transform);
             scene_manager.setNodeTransform(name, glm::mat4(1.0f));
@@ -805,55 +1058,100 @@ namespace lfs::vis::cap {
             if (index < 0 || static_cast<size_t>(index) >= node->model->size())
                 return std::unexpected("Gaussian index out of range: " + std::to_string(index));
         }
+        if (indices.empty())
+            return std::unexpected("At least one Gaussian index is required");
+        std::unordered_set<int> unique_indices;
+        unique_indices.reserve(indices.size());
+        for (const int index : indices) {
+            if (!unique_indices.insert(index).second)
+                return std::unexpected("Gaussian indices must not contain duplicates");
+        }
 
         // shN is stored swizzled; the API contract here is canonical [N, K, 3] writes.
-        // Deswizzle into a working buffer, apply the index_copy_, then reswizzle.
         const bool is_shN = (canonical_field_name == "shN");
-        core::Tensor shN_canon;
-        core::Tensor* field = nullptr;
+        core::Tensor* field = resolve_gaussian_field(*node->model, canonical_field_name);
         if (is_shN) {
             if (!node->model->shN_raw().is_valid() || node->model->shN_raw().numel() == 0 ||
                 node->model->max_sh_coeffs_rest() == 0) {
                 return std::unexpected("shN storage is not allocated (max sh-degree 0)");
             }
-            shN_canon = node->model->shN_canonical();
-            field = &shN_canon;
-        } else {
-            field = resolve_gaussian_field(*node->model, field_name);
-            if (!field)
-                return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
         }
+        if (!field)
+            return std::unexpected("Unsupported gaussian field: " + std::string(field_name));
 
-        const auto field_shape = field->shape();
-        if (field_shape.rank() == 0)
+        if (field->shape().rank() == 0)
             return std::unexpected("Gaussian tensor field has invalid rank");
 
-        const size_t row_width = gaussian_field_row_width(*field);
+        const size_t row_width = is_shN
+                                     ? node->model->max_sh_coeffs_rest() * size_t{3}
+                                     : gaussian_field_row_width(*field);
+        if (row_width == 0 || indices.size() > std::numeric_limits<size_t>::max() / row_width)
+            return std::unexpected("Gaussian field slice size exceeds the supported range");
         const size_t expected_values = row_width * indices.size();
         if (values.size() != expected_values) {
             return std::unexpected(
                 "Field slice expects " + std::to_string(expected_values) +
                 " values but received " + std::to_string(values.size()));
         }
+        if (auto validation = validate_gaussian_field_values(
+                canonical_field_name, values, row_width);
+            !validation) {
+            return validation;
+        }
 
-        auto shape_dims = field_shape.dims();
-        shape_dims[0] = indices.size();
-        // Capture undo state: for shN, snapshot the swizzled storage bytes (cheaper than
-        // recomputing canonical); resolve_gaussian_field returns the swizzled raw which
-        // is what we'll reswizzle into after the write.
-        const auto before =
-            is_shN ? node->model->shN_raw().clone() : field->clone();
+        auto shape_dims = field->shape().dims();
+        if (is_shN) {
+            shape_dims = {indices.size(), node->model->max_sh_coeffs_rest(), size_t{3}};
+        } else {
+            shape_dims[0] = indices.size();
+        }
+
+        if (is_shN && field->dtype() != core::DataType::Float32) {
+            core::Tensor canon = node->model->shN_canonical();
+            const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, canon.device());
+            const auto src_tensor = core::Tensor::from_vector(
+                values, core::TensorShape(shape_dims), canon.device());
+            core::Tensor before_rows = canon.index_select(0, index_tensor).contiguous();
+            canon.index_copy_(0, index_tensor, src_tensor);
+            node->model->shN_set_from_canonical(canon, node->model->means().capacity());
+            scene.markPayloadDiverged(node->id);
+
+            scene_manager.completePendingSelectionCounts();
+            vis::op::undoHistory().push(std::make_unique<vis::op::ShNCanonicalRowsUndoEntry>(
+                "gaussians.write",
+                vis::op::UndoMetadata{
+                    .id = "tensor.shN",
+                    .label = gaussian_field_label(canonical_field_name),
+                    .source = "mcp",
+                    .scope = "tensor",
+                },
+                node_name,
+                index_tensor.clone(),
+                std::move(before_rows),
+                src_tensor.clone(),
+                &scene_manager));
+
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+            if (rendering_manager)
+                rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            return {};
+        }
+
+        const auto before = field->clone();
 
         const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
         const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
-        field->index_copy_(0, index_tensor, src_tensor);
-
-        // Reswizzle the mutated canonical view back into model.shN_raw().
         if (is_shN) {
-            const size_t cap_rows = std::max<size_t>(node->model->means().capacity(),
-                                                     node->model->size());
-            node->model->shN_set_from_canonical(shN_canon, cap_rows);
+            core::shN_swizzled_scatter_linear(
+                field->ptr<float>(),
+                index_tensor.ptr<int>(),
+                src_tensor.ptr<float>(),
+                indices.size(),
+                static_cast<uint32_t>(node->model->max_sh_coeffs_rest()));
+        } else {
+            field->index_copy_(0, index_tensor, src_tensor);
         }
+        scene.markPayloadDiverged(node->id);
 
         auto entry = std::make_unique<vis::op::TensorUndoEntry>(
             "gaussians.write",
@@ -870,7 +1168,8 @@ namespace lfs::vis::cap {
                 if (!current_node || !current_node->model)
                     return nullptr;
                 return resolve_gaussian_field(*current_node->model, canonical_field_name);
-            });
+            },
+            &scene_manager);
         entry->captureAfter();
         if (entry->hasChanges())
             vis::op::undoHistory().push(std::move(entry));
@@ -884,14 +1183,37 @@ namespace lfs::vis::cap {
     std::expected<core::NodeId, std::string> resolveCropBoxParentId(const SceneManager& scene_manager,
                                                                     const std::optional<std::string>& requested_node) {
         const auto& scene = scene_manager.getScene();
-        const auto resolve = [&scene](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
+        const auto find_child_target = [&scene](const core::SceneNode& node,
+                                                const auto& self) -> core::NodeId {
+            for (const core::NodeId child_id : node.children) {
+                const auto* child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
+                    return child->id;
+                }
+                if (const core::NodeId nested = self(*child, self); nested != core::NULL_NODE) {
+                    return nested;
+                }
+            }
+            return core::NULL_NODE;
+        };
+
+        const auto resolve = [&scene, &find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
-            if (node->type == core::NodeType::CROPBOX)
+            if (node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
-            return std::unexpected("Crop boxes can only target splat or pointcloud nodes");
+            if (node->type == core::NodeType::DATASET) {
+                if (const core::NodeId child_target = find_child_target(*node, find_child_target);
+                    child_target != core::NULL_NODE) {
+                    return child_target;
+                }
+            }
+            return std::unexpected("Crop boxes can only target splat, pointcloud, or dataset nodes with a model");
         };
 
         if (requested_node)
@@ -946,12 +1268,24 @@ namespace lfs::vis::cap {
             return std::unexpected("Crop boxes can only be attached to splat or pointcloud nodes");
 
         if (const core::NodeId existing = scene.getCropBoxForSplat(parent_id); existing != core::NULL_NODE) {
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing, scene.getEllipsoidForSplat(parent_id), CropVolumeShape::Box);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
-                settings.show_crop_box = true;
+                if (const auto* node = scene.getNodeById(existing)) {
+                    settings.show_crop_box = node->visible.get();
+                    settings.use_crop_box = node->cropbox ? node->cropbox->enabled : false;
+                    settings.show_ellipsoid = false;
+                    settings.use_ellipsoid = false;
+                }
                 rendering_manager->updateSettings(settings);
             }
             return existing;
+        }
+
+        if (const core::NodeId existing_ellipsoid = scene.getEllipsoidForSplat(parent_id);
+            existing_ellipsoid != core::NULL_NODE) {
+            return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_ellipsoid, CropVolumeShape::Box);
         }
 
         const vis::op::SceneGraphCaptureOptions history_options{
@@ -968,10 +1302,8 @@ namespace lfs::vis::cap {
         const std::string created_cropbox_name = cropbox_node ? cropbox_node->name : cropbox_name;
 
         core::CropBoxData data;
-        glm::vec3 min_bounds, max_bounds;
-        if (scene.getNodeBounds(parent_id, min_bounds, max_bounds)) {
-            data.min = min_bounds;
-            data.max = max_bounds;
+        if (const auto* current_data = scene.getCropBoxData(cropbox_id)) {
+            data = *current_data;
         }
         data.enabled = true;
         scene.setCropBoxData(cropbox_id, data);
@@ -979,6 +1311,7 @@ namespace lfs::vis::cap {
         if (cropbox_node) {
             core::events::state::PLYAdded{
                 .name = cropbox_node->name,
+                .uuid = cropbox_node->uuid,
                 .node_gaussians = 0,
                 .total_gaussians = scene.getTotalGaussianCount(),
                 .is_visible = cropbox_node->visible,
@@ -991,6 +1324,9 @@ namespace lfs::vis::cap {
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
             settings.show_crop_box = true;
+            settings.use_crop_box = data.enabled;
+            settings.show_ellipsoid = false;
+            settings.use_ellipsoid = false;
             rendering_manager->updateSettings(settings);
         }
 
@@ -1014,13 +1350,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *cropbox_node->cropbox;
         const auto before_transform = scene_manager.getNodeTransform(cropbox_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_crop_box;
-            use_before = settings.use_crop_box;
-        }
+        bool show_before = cropbox_node->visible;
+        bool use_before = cropbox_node->cropbox->enabled;
 
         auto updated_data = before_data;
         auto updated_components = decomposeTransform(before_transform);
@@ -1044,6 +1375,10 @@ namespace lfs::vis::cap {
             updated_data.enabled = update.enabled;
             cropbox_changed = true;
         }
+        if (update.has_use) {
+            updated_data.enabled = update.use;
+            cropbox_changed = true;
+        }
         if (update.translation) {
             updated_components.translation = *update.translation;
             transform_changed = true;
@@ -1065,6 +1400,12 @@ namespace lfs::vis::cap {
         if (rendering_manager && (cropbox_changed || transform_changed))
             rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
 
+        bool visibility_changed = false;
+        if (update.has_show && cropbox_node->visible != update.show) {
+            scene_manager.setNodeVisibility(cropbox_id, update.show);
+            visibility_changed = true;
+        }
+
         if (rendering_manager && (update.has_show || update.has_use)) {
             auto settings = rendering_manager->getSettings();
             if (update.has_show)
@@ -1074,7 +1415,7 @@ namespace lfs::vis::cap {
             rendering_manager->updateSettings(settings);
         }
 
-        if (cropbox_changed || transform_changed) {
+        if (cropbox_changed || transform_changed || visibility_changed) {
             auto entry = std::make_unique<vis::op::CropBoxUndoEntry>(
                 scene_manager, rendering_manager, cropbox_node->name, before_data, before_transform,
                 show_before, use_before);
@@ -1111,13 +1452,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *cropbox_node->cropbox;
         const auto before_transform = scene_manager.getNodeTransform(cropbox_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_crop_box;
-            use_before = settings.use_crop_box;
-        }
+        bool show_before = cropbox_node->visible;
+        bool use_before = cropbox_node->cropbox->enabled;
 
         const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
         const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
@@ -1128,8 +1464,11 @@ namespace lfs::vis::cap {
         scene.setCropBoxData(cropbox_id, updated_data);
         scene.setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), center));
 
-        if (rendering_manager)
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        if (rendering_manager) {
+            auto settings = rendering_manager->getSettings();
+            settings.use_crop_box = updated_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        }
 
         auto entry = std::make_unique<vis::op::CropBoxUndoEntry>(
             scene_manager, rendering_manager, cropbox_node->name, before_data, before_transform,
@@ -1150,26 +1489,21 @@ namespace lfs::vis::cap {
 
         const auto before_data = *cropbox_node->cropbox;
         const auto before_transform = scene_manager.getNodeTransform(cropbox_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_crop_box;
-            use_before = settings.use_crop_box;
-        }
+        bool show_before = cropbox_node->visible;
+        bool use_before = cropbox_node->cropbox->enabled;
 
         auto reset_data = before_data;
         reset_data.min = glm::vec3(-1.0f);
         reset_data.max = glm::vec3(1.0f);
         reset_data.inverse = false;
+        reset_data.enabled = before_data.enabled;
         scene.setCropBoxData(cropbox_id, reset_data);
         scene.setNodeTransform(cropbox_node->name, glm::mat4(1.0f));
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
-            settings.use_crop_box = false;
-            rendering_manager->updateSettings(settings);
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            settings.use_crop_box = reset_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
         auto entry = std::make_unique<vis::op::CropBoxUndoEntry>(
@@ -1184,14 +1518,37 @@ namespace lfs::vis::cap {
     std::expected<core::NodeId, std::string> resolveEllipsoidParentId(const SceneManager& scene_manager,
                                                                       const std::optional<std::string>& requested_node) {
         const auto& scene = scene_manager.getScene();
-        const auto resolve = [&scene](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
+        const auto find_child_target = [&scene](const core::SceneNode& node,
+                                                const auto& self) -> core::NodeId {
+            for (const core::NodeId child_id : node.children) {
+                const auto* child = scene.getNodeById(child_id);
+                if (!child) {
+                    continue;
+                }
+                if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
+                    return child->id;
+                }
+                if (const core::NodeId nested = self(*child, self); nested != core::NULL_NODE) {
+                    return nested;
+                }
+            }
+            return core::NULL_NODE;
+        };
+
+        const auto resolve = [&find_child_target](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
             if (!node)
                 return std::unexpected("Node not found");
-            if (node->type == core::NodeType::ELLIPSOID)
+            if (node->type == core::NodeType::ELLIPSOID || node->type == core::NodeType::CROPBOX)
                 return node->parent_id;
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
                 return node->id;
-            return std::unexpected("Ellipsoids can only target splat or pointcloud nodes");
+            if (node->type == core::NodeType::DATASET) {
+                if (const core::NodeId child_target = find_child_target(*node, find_child_target);
+                    child_target != core::NULL_NODE) {
+                    return child_target;
+                }
+            }
+            return std::unexpected("Ellipsoids can only target splat, pointcloud, or dataset nodes with a model");
         };
 
         if (requested_node)
@@ -1249,12 +1606,24 @@ namespace lfs::vis::cap {
             return std::unexpected("Ellipsoids can only be attached to splat or pointcloud nodes");
 
         if (const core::NodeId existing = scene.getEllipsoidForSplat(parent_id); existing != core::NULL_NODE) {
+            remove_opposite_crop_volume_if_present(
+                scene_manager, rendering_manager, existing, scene.getCropBoxForSplat(parent_id), CropVolumeShape::Ellipsoid);
             if (rendering_manager) {
                 auto settings = rendering_manager->getSettings();
-                settings.show_ellipsoid = true;
+                if (const auto* node = scene.getNodeById(existing)) {
+                    settings.show_ellipsoid = node->visible.get();
+                    settings.use_ellipsoid = node->ellipsoid ? node->ellipsoid->enabled : false;
+                    settings.show_crop_box = false;
+                    settings.use_crop_box = false;
+                }
                 rendering_manager->updateSettings(settings);
             }
             return existing;
+        }
+
+        if (const core::NodeId existing_cropbox = scene.getCropBoxForSplat(parent_id);
+            existing_cropbox != core::NULL_NODE) {
+            return convert_crop_volume_in_place(scene_manager, rendering_manager, existing_cropbox, CropVolumeShape::Ellipsoid);
         }
 
         const vis::op::SceneGraphCaptureOptions history_options{
@@ -1284,6 +1653,7 @@ namespace lfs::vis::cap {
         if (ellipsoid_node) {
             core::events::state::PLYAdded{
                 .name = ellipsoid_node->name,
+                .uuid = ellipsoid_node->uuid,
                 .node_gaussians = 0,
                 .total_gaussians = scene.getTotalGaussianCount(),
                 .is_visible = ellipsoid_node->visible,
@@ -1296,6 +1666,9 @@ namespace lfs::vis::cap {
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
             settings.show_ellipsoid = true;
+            settings.use_ellipsoid = data.enabled;
+            settings.show_crop_box = false;
+            settings.use_crop_box = false;
             rendering_manager->updateSettings(settings);
         }
 
@@ -1319,13 +1692,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *ellipsoid_node->ellipsoid;
         const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_ellipsoid;
-            use_before = settings.use_ellipsoid;
-        }
+        bool show_before = ellipsoid_node->visible;
+        bool use_before = ellipsoid_node->ellipsoid->enabled;
 
         auto updated_data = before_data;
         auto updated_components = decomposeTransform(before_transform);
@@ -1343,6 +1711,10 @@ namespace lfs::vis::cap {
         }
         if (update.has_enabled) {
             updated_data.enabled = update.enabled;
+            ellipsoid_changed = true;
+        }
+        if (update.has_use) {
+            updated_data.enabled = update.use;
             ellipsoid_changed = true;
         }
         if (update.translation) {
@@ -1366,6 +1738,12 @@ namespace lfs::vis::cap {
         if (rendering_manager && (ellipsoid_changed || transform_changed))
             rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
 
+        bool visibility_changed = false;
+        if (update.has_show && ellipsoid_node->visible != update.show) {
+            scene_manager.setNodeVisibility(ellipsoid_id, update.show);
+            visibility_changed = true;
+        }
+
         if (rendering_manager && (update.has_show || update.has_use)) {
             auto settings = rendering_manager->getSettings();
             if (update.has_show)
@@ -1378,7 +1756,7 @@ namespace lfs::vis::cap {
         if (ellipsoid_changed)
             scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
-        if (ellipsoid_changed || transform_changed) {
+        if (ellipsoid_changed || transform_changed || visibility_changed) {
             auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
                 scene_manager, rendering_manager, ellipsoid_node->name, before_data, before_transform,
                 show_before, use_before);
@@ -1417,13 +1795,8 @@ namespace lfs::vis::cap {
 
         const auto before_data = *ellipsoid_node->ellipsoid;
         const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_ellipsoid;
-            use_before = settings.use_ellipsoid;
-        }
+        bool show_before = ellipsoid_node->visible;
+        bool use_before = ellipsoid_node->ellipsoid->enabled;
 
         auto updated_data = before_data;
         updated_data.radii = glm::max((max_bounds - min_bounds) * 0.5f * CIRCUMSCRIBE_FACTOR, glm::vec3(1e-4f));
@@ -1432,8 +1805,11 @@ namespace lfs::vis::cap {
             ellipsoid_node->name,
             glm::translate(glm::mat4(1.0f), (min_bounds + max_bounds) * 0.5f));
 
-        if (rendering_manager)
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        if (rendering_manager) {
+            auto settings = rendering_manager->getSettings();
+            settings.use_ellipsoid = updated_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        }
 
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
 
@@ -1456,25 +1832,20 @@ namespace lfs::vis::cap {
 
         const auto before_data = *ellipsoid_node->ellipsoid;
         const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
-        bool show_before = false;
-        bool use_before = false;
-        if (rendering_manager) {
-            const auto settings = rendering_manager->getSettings();
-            show_before = settings.show_ellipsoid;
-            use_before = settings.use_ellipsoid;
-        }
+        bool show_before = ellipsoid_node->visible;
+        bool use_before = ellipsoid_node->ellipsoid->enabled;
 
         auto reset_data = before_data;
         reset_data.radii = glm::vec3(1.0f);
         reset_data.inverse = false;
+        reset_data.enabled = before_data.enabled;
         scene.setEllipsoidData(ellipsoid_id, reset_data);
         scene_manager.setNodeTransform(ellipsoid_node->name, glm::mat4(1.0f));
 
         if (rendering_manager) {
             auto settings = rendering_manager->getSettings();
-            settings.use_ellipsoid = false;
-            rendering_manager->updateSettings(settings);
-            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+            settings.use_ellipsoid = reset_data.enabled;
+            rendering_manager->updateSettings(settings, vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
         }
 
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);

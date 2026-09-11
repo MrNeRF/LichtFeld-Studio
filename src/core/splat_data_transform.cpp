@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_transform.hpp"
+#include "core/assert.hpp"
 #include "core/cuda/sh_layout.cuh"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
+#include "core/sh_value_quant.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/bounding_box.hpp"
 
@@ -348,40 +350,33 @@ namespace lfs::core {
         return splat_data;
     }
 
-    // Helper: compute inside-cropbox mask for given means and bounding box
-    static Tensor compute_cropbox_mask(const Tensor& means,
-                                       const lfs::geometry::BoundingBox& bounding_box) {
-        const auto bbox_min = bounding_box.getMinBounds();
-        const auto bbox_max = bounding_box.getMaxBounds();
+    Tensor compute_cropbox_mask(const Tensor& means,
+                                const glm::vec3& crop_min,
+                                const glm::vec3& crop_max,
+                                const glm::mat4& points_to_cropbox) {
+        LFS_ASSERT_MSG(means.is_valid(), "crop box means must be valid");
+        LFS_ASSERT_MSG(means.dtype() == DataType::Float32, "crop box means must be Float32");
+        LFS_ASSERT_MSG(means.ndim() == 2, "crop box means must be a 2D tensor");
+        LFS_ASSERT_MSG(means.size(1) >= 3, "crop box means must have at least three columns");
 
-        const int num_points = means.size(0);
-
-        // Use full mat4 if available (preserves scale), otherwise fall back to EuclideanTransform
-        const glm::mat4 world_to_bbox_matrix = bounding_box.hasFullTransform()
-                                                   ? bounding_box.getworld2BBoxMat4()
-                                                   : bounding_box.getworld2BBox().toMat4();
-
-        const std::vector<float> transform_data = {
-            world_to_bbox_matrix[0][0], world_to_bbox_matrix[1][0], world_to_bbox_matrix[2][0], world_to_bbox_matrix[3][0],
-            world_to_bbox_matrix[0][1], world_to_bbox_matrix[1][1], world_to_bbox_matrix[2][1], world_to_bbox_matrix[3][1],
-            world_to_bbox_matrix[0][2], world_to_bbox_matrix[1][2], world_to_bbox_matrix[2][2], world_to_bbox_matrix[3][2],
-            world_to_bbox_matrix[0][3], world_to_bbox_matrix[1][3], world_to_bbox_matrix[2][3], world_to_bbox_matrix[3][3]};
-        auto transform_tensor = Tensor::from_vector(
-            transform_data,
-            TensorShape({4, 4}),
+        const auto rotation = Tensor::from_vector(
+            {points_to_cropbox[0][0], points_to_cropbox[1][0], points_to_cropbox[2][0],
+             points_to_cropbox[0][1], points_to_cropbox[1][1], points_to_cropbox[2][1],
+             points_to_cropbox[0][2], points_to_cropbox[1][2], points_to_cropbox[2][2]},
+            {3, 3},
+            means.device());
+        const auto translation = Tensor::from_vector(
+            {points_to_cropbox[3][0], points_to_cropbox[3][1], points_to_cropbox[3][2]},
+            {1, 3},
             means.device());
 
-        auto ones = Tensor::ones({static_cast<size_t>(num_points), 1}, means.device());
-        auto means_homo = means.cat(ones, 1);
+        const auto xyz_means = means.slice(1, 0, 3);
+        const auto local_points = xyz_means.mm(rotation.t()).add(translation);
 
-        const auto transformed_points = transform_tensor.mm(means_homo.t()).t();
-        const auto local_points = transformed_points.slice(1, 0, 3);
-
-        const std::vector<float> bbox_min_data = {bbox_min.x, bbox_min.y, bbox_min.z};
-        const std::vector<float> bbox_max_data = {bbox_max.x, bbox_max.y, bbox_max.z};
-
-        auto bbox_min_tensor = Tensor::from_vector(bbox_min_data, TensorShape({3}), means.device());
-        auto bbox_max_tensor = Tensor::from_vector(bbox_max_data, TensorShape({3}), means.device());
+        auto bbox_min_tensor = Tensor::from_vector(
+            {crop_min.x, crop_min.y, crop_min.z}, {3}, means.device());
+        auto bbox_max_tensor = Tensor::from_vector(
+            {crop_max.x, crop_max.y, crop_max.z}, {3}, means.device());
 
         auto inside_min = local_points.ge(bbox_min_tensor.unsqueeze(0));
         auto inside_max = local_points.le(bbox_max_tensor.unsqueeze(0));
@@ -389,6 +384,18 @@ namespace lfs::core {
         auto inside_both = inside_min && inside_max;
         std::vector<int> reduce_dims = {1};
         return inside_both.all(std::span<const int>(reduce_dims), false);
+    }
+
+    static Tensor compute_cropbox_mask(const Tensor& means,
+                                       const lfs::geometry::BoundingBox& bounding_box) {
+        const glm::mat4 points_to_cropbox = bounding_box.hasFullTransform()
+                                                ? bounding_box.getworld2BBoxMat4()
+                                                : bounding_box.getworld2BBox().toMat4();
+        return compute_cropbox_mask(
+            means,
+            bounding_box.getMinBounds(),
+            bounding_box.getMaxBounds(),
+            points_to_cropbox);
     }
 
     SplatData crop_by_cropbox(const SplatData& splat_data,
@@ -423,7 +430,23 @@ namespace lfs::core {
         auto cropped_sh0 = splat_data._sh0.index_select(0, indices).contiguous();
         Tensor cropped_shN;
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
+        const bool use_canonical_shN =
+            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
+            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
+             splat_data.shN_ieee_f16());
+        if (use_canonical_shN) {
+            // q16 / IEEE-f16: dequant to [N,K,3] then index_select (no ptr<float> on codes).
+            Tensor canon = splat_data.shN_canonical();
+            if (canon.device() != splat_data._means.device()) {
+                canon = canon.to(splat_data._means.device());
+            }
+            auto indices_for_select = indices;
+            if (indices_for_select.dtype() != DataType::Int32 &&
+                indices_for_select.dtype() != DataType::Int64) {
+                indices_for_select = indices_for_select.to(DataType::Int32);
+            }
+            cropped_shN = canon.index_select(0, indices_for_select).contiguous();
+        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
             cropped_shN = Tensor::empty({static_cast<size_t>(points_selected), layout_rest, 3},
                                         splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
@@ -476,6 +499,14 @@ namespace lfs::core {
             cropped_splat._densification_info =
                 splat_data._densification_info.index_select(0, indices).contiguous();
         }
+        if (splat_data._max_screen_share.is_valid() &&
+            splat_data._max_screen_share.ndim() == 1 &&
+            splat_data._max_screen_share.size(0) == num_points) {
+            cropped_splat._max_screen_share =
+                splat_data._max_screen_share.index_select(0, indices).contiguous();
+        }
+
+        (void)cropped_splat.apply_shN_value_quant();
 
         LOG_DEBUG("Cropped SplatData: {} -> {} points (inverse={})", num_points, points_selected, inverse);
         return cropped_splat;
@@ -568,6 +599,9 @@ namespace lfs::core {
 
         LOG_DEBUG("Randomly selecting {} points from {} total points (seed: {})",
                   num_required_splat, num_points, seed);
+        const size_t old_capacity = splat_data._means.is_valid()
+                                        ? splat_data._means.capacity()
+                                        : static_cast<size_t>(num_points);
 
         std::vector<int> all_indices(num_points);
         std::iota(all_indices.begin(), all_indices.end(), 0);
@@ -626,9 +660,20 @@ namespace lfs::core {
             splat_data._means.device());
 
         Tensor shN_selected_swizzled;
+        Tensor shN_selected_canonical;
         const auto layout_rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
-            layout_rest > 0) {
+        const bool q16_or_f16 =
+            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
+            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
+             splat_data.shN_ieee_f16());
+        if (q16_or_f16) {
+            Tensor canon = splat_data.shN_canonical();
+            if (canon.device() != splat_data._means.device()) {
+                canon = canon.to(splat_data._means.device());
+            }
+            shN_selected_canonical = canon.index_select(0, indices_tensor).contiguous();
+        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 &&
+                   layout_rest > 0) {
             shN_selected_swizzled = Tensor::zeros_direct(
                 {sh_swizzled_float_count(static_cast<size_t>(num_required_splat), layout_rest)},
                 sh_swizzled_float_count(static_cast<size_t>(num_required_splat), layout_rest),
@@ -647,20 +692,88 @@ namespace lfs::core {
 
         splat_data._means = splat_data._means.index_select(0, indices_tensor).contiguous();
         splat_data._sh0 = splat_data._sh0.index_select(0, indices_tensor).contiguous();
-        if (shN_selected_swizzled.is_valid() && shN_selected_swizzled.numel() > 0) {
+        if (shN_selected_canonical.is_valid() && shN_selected_canonical.numel() > 0) {
+            splat_data._shN_value_bounds = Tensor{};
+            splat_data.shN_set_from_canonical(shN_selected_canonical,
+                                              static_cast<size_t>(num_required_splat));
+        } else if (shN_selected_swizzled.is_valid() && shN_selected_swizzled.numel() > 0) {
             splat_data._shN = std::move(shN_selected_swizzled);
         }
+        (void)splat_data.apply_shN_value_quant();
         splat_data._scaling = splat_data._scaling.index_select(0, indices_tensor).contiguous();
         splat_data._rotation = splat_data._rotation.index_select(0, indices_tensor).contiguous();
         splat_data._opacity = splat_data._opacity.index_select(0, indices_tensor).contiguous();
+        if (splat_data._tensor_allocator) {
+            const size_t dest_cap = std::max(static_cast<size_t>(num_required_splat), old_capacity);
+            const auto home = [&](Tensor& tensor, std::string_view name) {
+                if (!tensor.is_valid()) {
+                    return;
+                }
+                Tensor dest = splat_data.allocate_named_param(
+                    tensor.shape(), dest_cap, tensor.dtype(), name);
+                dest.copy_from(tensor);
+                tensor = std::move(dest);
+            };
+            home(splat_data._means, "SplatData.means");
+            home(splat_data._sh0, "SplatData.sh0");
+            home(splat_data._scaling, "SplatData.scaling");
+            home(splat_data._rotation, "SplatData.rotation");
+            home(splat_data._opacity, "SplatData.opacity");
+            if (!sh_value_quant::enabled() && splat_data._shN.is_valid() &&
+                splat_data._shN.dtype() == DataType::Float32) {
+                const auto rest = static_cast<uint32_t>(splat_data.max_sh_coeffs_rest());
+                Tensor dest = splat_data.allocate_named_param(
+                    splat_data._shN.shape(),
+                    sh_swizzled_float_count(dest_cap, rest),
+                    DataType::Float32,
+                    "SplatData.shN");
+                dest.copy_from(splat_data._shN);
+                splat_data._shN = std::move(dest);
+            }
+        }
         if (!splat_data._frozen_ranges.empty()) {
             splat_data.remap_frozen_ranges_after_keep(
                 static_cast<size_t>(num_points),
                 selected_indices);
         }
 
-        if (splat_data._densification_info.is_valid() && splat_data._densification_info.size(0) == num_points) {
-            splat_data._densification_info = splat_data._densification_info.index_select(0, indices_tensor).contiguous();
+        if (splat_data._densification_info.is_valid()) {
+            if (splat_data._densification_info.ndim() == 1 &&
+                splat_data._densification_info.size(0) == num_points) {
+                splat_data._densification_info =
+                    splat_data._densification_info.index_select(0, indices_tensor).contiguous();
+            } else if (splat_data._densification_info.ndim() == 2 &&
+                       splat_data._densification_info.size(1) == num_points) {
+                splat_data._densification_info =
+                    splat_data._densification_info.index_select(1, indices_tensor).contiguous();
+            }
+        }
+        if (splat_data._max_screen_share.is_valid() &&
+            splat_data._max_screen_share.ndim() == 1 &&
+            splat_data._max_screen_share.size(0) == num_points) {
+            splat_data._max_screen_share =
+                splat_data._max_screen_share.index_select(0, indices_tensor).contiguous();
+        }
+
+        // keep deleted mask sized to the new N (or invalidate).
+        if (splat_data.has_deleted_mask()) {
+            if (static_cast<size_t>(splat_data.deleted().numel()) == static_cast<size_t>(num_points)) {
+                Tensor gathered = splat_data.deleted()
+                                      .index_select(0, indices_tensor)
+                                      .contiguous();
+                if (gathered.dtype() != DataType::Bool) {
+                    gathered = gathered.to(DataType::Bool);
+                }
+                if (gathered.device() != Device::CUDA) {
+                    gathered = gathered.cuda();
+                }
+                gathered.set_name("splat.deleted_mask");
+                splat_data.deleted() = std::move(gathered);
+                splat_data.refresh_deleted_count();
+                splat_data.notify_deleted_mask_changed();
+            } else {
+                splat_data.reconcile_deleted_mask();
+            }
         }
 
         Tensor scene_center = splat_data._means.mean({0}, false);
@@ -774,7 +887,22 @@ namespace lfs::core {
 
         Tensor shN_selected;
         const size_t layout_rest = splat_data.max_sh_coeffs_rest();
-        if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
+        const bool use_canonical_shN =
+            splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0 &&
+            (splat_data._shN.dtype() != DataType::Float32 || splat_data.shN_value_quantized() ||
+             splat_data.shN_ieee_f16());
+        if (use_canonical_shN) {
+            Tensor canon = splat_data.shN_canonical();
+            if (canon.device() != splat_data._means.device()) {
+                canon = canon.to(splat_data._means.device());
+            }
+            auto indices_for_select = indices;
+            if (indices_for_select.dtype() != DataType::Int32 &&
+                indices_for_select.dtype() != DataType::Int64) {
+                indices_for_select = indices_for_select.to(DataType::Int32);
+            }
+            shN_selected = canon.index_select(0, indices_for_select).contiguous();
+        } else if (splat_data._shN.is_valid() && splat_data._shN.numel() > 0 && layout_rest > 0) {
             shN_selected = Tensor::empty({static_cast<size_t>(count), layout_rest, 3},
                                          splat_data._shN.device());
             if (indices.dtype() == DataType::Int64) {
@@ -815,6 +943,7 @@ namespace lfs::core {
             result.lod_tree = std::make_unique<lfs::core::SplatLodTree>(*splat_data.lod_tree);
         }
 
+        (void)result.apply_shN_value_quant();
         return result;
     }
 

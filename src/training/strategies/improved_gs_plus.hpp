@@ -6,15 +6,24 @@
 
 #include "istrategy.hpp"
 
+#include "lfs/training/refine_scratch.hpp"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include "strategy_utils.hpp"
 #include "trainer.hpp"
 
+#include <cassert>
 #include <vector>
+
+namespace lfs::training::sh_value {
+    class ShNMutationBatch;
+}
+
+class CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
 
 namespace lfs::training {
 
-    class ImprovedGSPlus : public IStrategy {
+    class ImprovedGSPlus : public IStrategy, public ICheckpointStateAdopter {
     public:
         ImprovedGSPlus() = delete;
 
@@ -38,20 +47,29 @@ namespace lfs::training {
 
         bool is_refining(int iter) const override;
 
+        void permute_gaussian_rows(const lfs::core::Tensor& perm) override;
+
         lfs::core::SplatData& get_model() override { return *_splat_data; }
         const lfs::core::SplatData& get_model() const override { return *_splat_data; }
 
         void remove_gaussians(const lfs::core::Tensor& mask) override;
 
         // IStrategy interface - optimizer access
-        AdamOptimizer& get_optimizer() override { return *_optimizer; }
-        const AdamOptimizer& get_optimizer() const override { return *_optimizer; }
-        ExponentialLR* get_scheduler() { return _scheduler.get(); }
-        const ExponentialLR* get_scheduler() const { return _scheduler.get(); }
+        AdamOptimizer& get_optimizer() override {
+            assert(_optimizer);
+            return *_optimizer;
+        }
+        const AdamOptimizer& get_optimizer() const override {
+            assert(_optimizer);
+            return *_optimizer;
+        }
 
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
+        bool has_checkpoint_runtime_state() const noexcept override { return static_cast<bool>(_optimizer); }
+        bool can_adopt_checkpoint_state(const IStrategy& loaded) const noexcept override;
+        void adopt_checkpoint_state(IStrategy& loaded) noexcept override;
         const char* strategy_type() const override { return "igs+"; }
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
@@ -60,9 +78,8 @@ namespace lfs::training {
             _params = std::make_unique<const lfs::core::param::OptimizationParameters>(params);
         }
 
-        void set_training_dataset(std::shared_ptr<CameraDataset> views) override { _views = std::move(views); }
-
-        void set_image_loader(lfs::io::PipelinedImageLoader* loader) override { _image_loader = loader; }
+        lfs::core::Tensor edge_score_scratch(int iter) override;
+        void on_edge_score_accumulated(int iter) override;
 
         // Get count of active (non-free) Gaussians
         size_t active_count() const;
@@ -73,21 +90,25 @@ namespace lfs::training {
         // Get indices of active (non-free) Gaussians for export
         lfs::core::Tensor get_active_indices() const;
 
+        // Test hook for densification with quantization.
+        void densify_for_test(const lfs::core::Tensor& scores, const int64_t allocation_budget) {
+            LAS_densify(scores, allocation_budget);
+        }
+
     private:
+        friend class ::CropDampingStrategyTest_IgsPlusRejectedRowsAreNeverSampledAtZeroScale_Test;
+
         // Helper Functions
         inline const int64_t get_current_budget() const noexcept { return _budget_schedule[_current_step + 1]; }
-        inline const unsigned global_seed() const noexcept { return _current_step; } // for camera sampling
-        std::vector<int> random_cam_indices(const int N = 10) const;                 // N minimum
-
         std::vector<int64_t> get_count_array();
 
-        const lfs::core::Tensor compute_gaussian_score();
         void ensure_error_score_shape();
+        [[nodiscard]] lfs::core::Tensor damp_densification_scores(
+            const lfs::core::Tensor& scores) const;
         void densify_with_score(const lfs::core::Tensor& edge_scores, const lfs::core::Tensor& error_scores, const int64_t budget);
         void LAS_densify(const lfs::core::Tensor& scores, const int64_t allocation_budget);
 
         void reset_opacity();
-        void prune_post_reset();
         void opacity_prune(const int iter);
         void remove(const lfs::core::Tensor& is_prune);
         void mark_as_free(const lfs::core::Tensor& indices);
@@ -99,7 +120,8 @@ namespace lfs::training {
             const lfs::core::Tensor& sh0,
             const lfs::core::Tensor& shN,
             const lfs::core::Tensor& opacities,
-            int64_t count);
+            int64_t count,
+            lfs::training::sh_value::ShNMutationBatch* shn_batch = nullptr);
 
         struct PendingFailureSnapshot {
             bool valid = false;
@@ -128,10 +150,6 @@ namespace lfs::training {
 
         std::vector<int64_t> _budget_schedule;
 
-        // Pointers to external data
-        std::shared_ptr<CameraDataset> _views;
-        lfs::io::PipelinedImageLoader* _image_loader = nullptr;
-
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;
         std::unique_ptr<ExponentialLR> _scheduler;
@@ -140,11 +158,17 @@ namespace lfs::training {
 
         // Pre-computed edge scores for non-blocking densification
         lfs::core::Tensor _precomputed_scores;
+        lfs::core::Tensor _edge_score_sum;
+        lfs::core::Tensor _edge_view_scores;
+        int _edge_sample_count = 0;
+        PositiveMedianScratch _edge_median_scratch;
         lfs::core::Tensor _error_score_max;
         bool _precompute_valid = false;
 
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse
         lfs::core::Tensor _free_mask;
         PendingFailureSnapshot _pending_failure_snapshot;
+
+        DensifyChildWorkspace _densify_ws;
     };
 } // namespace lfs::training

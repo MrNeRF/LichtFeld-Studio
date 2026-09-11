@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 namespace lfs::vis::gui {
 
     struct GuiFocusState {
@@ -20,9 +22,6 @@ namespace lfs::vis::gui {
         }
     };
 
-    inline GuiFocusState& guiFocusState() {
-        static GuiFocusState state;
-        return state;
-    }
+    LFS_VIS_API GuiFocusState& guiFocusState();
 
 } // namespace lfs::vis::gui

@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/modal_request.hpp"
+#include "core/source_site.hpp"
 #include "core/splat_simplify_types.hpp"
 #include "visualizer/gui/panel_height_mode.hpp"
 #include "visualizer/gui/panel_space.hpp"
@@ -14,6 +16,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -33,6 +36,10 @@ namespace lfs::core {
     struct MeshData;
     class Scene;
 } // namespace lfs::core
+
+namespace lfs::rendering {
+    class ScreenOverlayRenderer;
+}
 
 namespace lfs::vis {
     class Visualizer;
@@ -73,6 +80,7 @@ namespace lfs::python {
         int selection_submode = 0;
         int pivot_mode = 0;
         int transform_space = 0;
+        int multi_transform_mode = 0;
 
         // Viewport (set before UI drawing)
         float vp_x = 0, vp_y = 0, vp_w = 0, vp_h = 0;
@@ -88,13 +96,36 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API const PyContext& context();
 
     // UI redraw request mechanism
+    // request_redraw / request_redraw_after: "render a GUI frame no later than now + delay"
+    // (delay 0 = immediate). Multiple scheduled deadlines keep the earliest.
     LFS_PYTHON_RUNTIME_API void request_redraw();
+    LFS_PYTHON_RUNTIME_API void request_redraw_after(double delay_seconds);
+    LFS_PYTHON_RUNTIME_API bool has_redraw_request();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
+    // Remaining seconds until a future scheduled redraw; nullopt if none or already due.
+    LFS_PYTHON_RUNTIME_API std::optional<double> seconds_until_scheduled_redraw();
     LFS_PYTHON_RUNTIME_API uint64_t redraw_request_generation();
     LFS_PYTHON_RUNTIME_API void request_pre_scene_panel_sync();
     LFS_PYTHON_RUNTIME_API uint64_t pre_scene_panel_sync_generation();
     using MainLoopWakeCallback = void (*)();
     LFS_PYTHON_RUNTIME_API void set_main_loop_wake_callback(MainLoopWakeCallback cb);
+
+    struct StartupPluginLoadStatus {
+        std::string state = "not_started";
+        std::string phase = "idle";
+        std::string plugin;
+        std::string detail;
+        std::size_t attempted = 0;
+        std::size_t total = 0;
+        std::size_t failed = 0;
+        float progress = 0.0f;
+        bool active = false;
+        std::uint64_t revision = 0;
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_startup_plugin_load_status(
+        const StartupPluginLoadStatus& status);
+    LFS_PYTHON_RUNTIME_API StartupPluginLoadStatus get_startup_plugin_load_status();
 
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();
@@ -129,15 +160,30 @@ namespace lfs::python {
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
+    // Typed Python-error extraction requires the GIL and
+    // AND PyErr_Occurred(). Consumes and clears the pending Python error. Never
+    // throws; never leaves a Python error pending. The returned Error owns a
+    // formatted traceback string only (in detail()); no PyObject is retained, so
+    // it is safe to outlive interpreter finalization. The raised Python type maps
+    // to an ErrorCode via a closed table; a re-raised lichtfeld.Error round-trips
+    // its own .code/.domain. Formats via CPython calls directly (never
+    // nb::python_error::what(), per the Windows-crash history above).
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::Error
+    error_from_python(lfs::core::SourceSite site, lfs::OperationId op = {}) noexcept;
+
+    // Reverse of lfs::to_string(ErrorCode/ErrorDomain). Unknown tokens map to
+    // ErrorCode::Internal / ErrorDomain::Python. Used by error_from_python's
+    // lichtfeld.Error round-trip and by the _testing bindings.
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::ErrorCode error_code_from_string(std::string_view token) noexcept;
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API lfs::ErrorDomain error_domain_from_string(std::string_view token) noexcept;
+
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
     LFS_PYTHON_RUNTIME_API void shutdown_python_ui_resources();
 
     // Menu interface for C++ code
     LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
-    LFS_PYTHON_RUNTIME_API bool has_python_menu_items(MenuLocation location);
 
     // Menu bar entry interface for C++ UI code (Python-driven menu bar)
-    LFS_PYTHON_RUNTIME_API bool has_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API std::vector<MenuBarEntry> get_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API void draw_menu_bar_entry(const std::string& idname);
 
@@ -146,6 +192,7 @@ namespace lfs::python {
         const char* label;
         const char* operator_id;
         const char* shortcut;
+        const char* tooltip = nullptr;
         bool enabled;
         bool selected;
         int callback_index;
@@ -178,16 +225,21 @@ namespace lfs::python {
     using ExportCallback = void (*)(int format, const char* path, const char** node_names,
                                     int node_count, int sh_degree,
                                     bool rad_flip_y,
-                                    bool rad_streamable);
+                                    bool rad_streamable,
+                                    int spz_version,
+                                    bool include_provenance,
+                                    int lod_levels, float lod_ratio, int chunk_count_k, float chunk_extent, int chunk_min_k, int kmeans_iterations);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
     LFS_PYTHON_RUNTIME_API void invoke_export(int format, const std::string& path,
                                               const std::vector<std::string>& node_names, int sh_degree,
                                               bool rad_flip_y = false,
-                                              bool rad_streamable = true);
+                                              bool rad_streamable = true,
+                                              int spz_version = 4,
+                                              bool include_provenance = true,
+                                              int lod_levels = 4, float lod_ratio = 0.5f, int chunk_count_k = 512,
+                                              float chunk_extent = 16.0f, int chunk_min_k = 8, int kmeans_iterations = 10);
 
     using HasToolbarCallback = bool (*)();
-
-    LFS_PYTHON_RUNTIME_API bool has_python_toolbar();
 
     // Operator callbacks
     using CancelActiveOperatorCallback = void (*)();
@@ -196,7 +248,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void cancel_active_operator();
     LFS_PYTHON_RUNTIME_API bool invoke_operator(const std::string& operator_id);
 
-    // Selection sub-mode (mirrors panels::SelectionSubMode for Python access)
+    // Selection sub-mode (mirrors vis::SelectionSubMode for Python access)
     LFS_PYTHON_RUNTIME_API void set_selection_submode(int mode);
     LFS_PYTHON_RUNTIME_API int get_selection_submode();
 
@@ -238,7 +290,7 @@ namespace lfs::python {
         // Scroll
         double scroll_x, scroll_y;
 
-        // GUI state - true if mouse is over ImGui window
+        // GUI state - true if mouse is over an application UI surface
         bool over_gui = false;
     };
 
@@ -251,7 +303,6 @@ namespace lfs::python {
     using MenuBarEntryVisitor = void (*)(const char* idname, const char* label, int order, void* user_data);
 
     // Menu bar entry callbacks
-    using HasMenuBarEntriesCallback = bool (*)();
     using GetMenuBarEntriesCallback = void (*)(MenuBarEntryVisitor, void* user_data);
     using DrawMenuBarEntryCallback = void (*)(const char* idname);
 
@@ -261,7 +312,6 @@ namespace lfs::python {
         bool (*has_menus)(MenuLocation) = nullptr;
 
         // Menu bar entries (Python-driven top-level menus)
-        bool (*has_menu_bar_entries)() = nullptr;
         void (*get_menu_bar_entries)(MenuBarEntryVisitor, void*) = nullptr;
         void (*draw_menu_bar_entry)(const char*) = nullptr;
         void (*collect_menu_content)(const char*, MenuItemVisitor, void*) = nullptr;
@@ -272,10 +322,10 @@ namespace lfs::python {
         bool (*has_modals)() = nullptr;
 
         // Toolbar
-        bool (*has_toolbar)() = nullptr;
 
         // Lifecycle
         void (*cleanup)() = nullptr;
+        void (*begin_ui_frame)() = nullptr;
         void (*prepare_ui)() = nullptr;
         void (*shutdown_ui_resources)() = nullptr;
     };
@@ -368,6 +418,7 @@ namespace lfs::python {
         bool active = false;
         float progress = 0.0f;
         std::string stage;
+        std::string outcome{"idle"};
         std::string format;
     };
 
@@ -440,11 +491,8 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_playback_speed(float speed);
 
     // Menu bar UI callbacks (for Python-driven menus)
-    using ShowInputSettingsCallback = void (*)();
     using ShowPythonConsoleCallback = void (*)();
-    LFS_PYTHON_RUNTIME_API void set_show_input_settings_callback(ShowInputSettingsCallback cb);
     LFS_PYTHON_RUNTIME_API void set_show_python_console_callback(ShowPythonConsoleCallback cb);
-    LFS_PYTHON_RUNTIME_API void show_input_settings();
     LFS_PYTHON_RUNTIME_API void show_python_console();
 
     // Section drawing callbacks (for Python-first UI)
@@ -502,13 +550,16 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API int get_transform_space();
     LFS_PYTHON_RUNTIME_API void set_transform_space(int space);
 
+    // Multi-transform mode (selection/individual for transform gizmos)
+    using GetMultiTransformModeCallback = int (*)();
+    using SetMultiTransformModeCallback = void (*)(int);
+    LFS_PYTHON_RUNTIME_API void set_multi_transform_mode_callbacks(GetMultiTransformModeCallback get_cb,
+                                                                   SetMultiTransformModeCallback set_cb);
+    LFS_PYTHON_RUNTIME_API int get_multi_transform_mode();
+    LFS_PYTHON_RUNTIME_API void set_multi_transform_mode(int mode);
+
     LFS_PYTHON_RUNTIME_API void set_scene_manager(vis::SceneManager* sm);
     LFS_PYTHON_RUNTIME_API vis::SceneManager* get_scene_manager();
-
-    // Asset Manager save callback
-    using SaveAssetCallback = void (*)(const char* node_name);
-    LFS_PYTHON_RUNTIME_API void set_save_asset_callback(SaveAssetCallback save_cb);
-    LFS_PYTHON_RUNTIME_API void invoke_save_asset(const std::string& node_name);
 
     LFS_PYTHON_RUNTIME_API void set_selection_service(vis::SelectionService* ss);
     LFS_PYTHON_RUNTIME_API vis::SelectionService* get_selection_service();
@@ -517,6 +568,30 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_viewport_bounds(float x, float y, float w, float h);
     LFS_PYTHON_RUNTIME_API void get_viewport_bounds(float& x, float& y, float& w, float& h);
     LFS_PYTHON_RUNTIME_API bool has_viewport_bounds();
+
+    struct OverlayDrawContext {
+        lfs::rendering::ScreenOverlayRenderer* renderer = nullptr;
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_overlay_draw_context(OverlayDrawContext context);
+    [[nodiscard]] LFS_PYTHON_RUNTIME_API OverlayDrawContext get_overlay_draw_context();
+
+    class ScopedOverlayDrawContext {
+    public:
+        explicit ScopedOverlayDrawContext(OverlayDrawContext context)
+            : previous_(get_overlay_draw_context()) {
+            set_overlay_draw_context(context);
+        }
+        ~ScopedOverlayDrawContext() { set_overlay_draw_context(previous_); }
+
+        ScopedOverlayDrawContext(const ScopedOverlayDrawContext&) = delete;
+        ScopedOverlayDrawContext& operator=(const ScopedOverlayDrawContext&) = delete;
+        ScopedOverlayDrawContext(ScopedOverlayDrawContext&&) = delete;
+        ScopedOverlayDrawContext& operator=(ScopedOverlayDrawContext&&) = delete;
+
+    private:
+        OverlayDrawContext previous_;
+    };
 
     // RAII guard for operation context (used for capability invocations)
     class SceneContextGuard {
@@ -576,7 +651,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API bool are_plugins_loaded();
 
     // UI texture service. The executable owns the graphics backend resources; Python
-    // receives opaque ImGui texture IDs.
+    // receives opaque UI texture IDs.
     struct TextureResult {
         uint64_t texture_id;
         int width;
@@ -589,18 +664,10 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_ui_texture_service(CreateTextureFn create, DeleteTextureFn del,
                                                        MaxTextureSizeFn max_size);
+    LFS_PYTHON_RUNTIME_API void require_ui_texture_creation_thread();
     LFS_PYTHON_RUNTIME_API TextureResult create_ui_texture(const unsigned char* data, int w, int h, int channels);
     LFS_PYTHON_RUNTIME_API void delete_ui_texture(uint64_t texture_id);
     LFS_PYTHON_RUNTIME_API int get_max_texture_size();
-
-    // ImGui state sharing across DLL boundaries (void* to avoid imgui.h dependency)
-    LFS_PYTHON_RUNTIME_API void set_imgui_context(void* ctx);
-    LFS_PYTHON_RUNTIME_API void* get_imgui_context();
-    LFS_PYTHON_RUNTIME_API void set_imgui_allocator_functions(void* alloc_func, void* free_func, void* user_data);
-    LFS_PYTHON_RUNTIME_API void get_imgui_allocator_functions(void** alloc_func, void** free_func, void** user_data);
-
-    LFS_PYTHON_RUNTIME_API void set_implot_context(void* ctx);
-    LFS_PYTHON_RUNTIME_API void* get_implot_context();
 
     LFS_PYTHON_RUNTIME_API void set_view_context_state(void* state);
     LFS_PYTHON_RUNTIME_API void* get_view_context_state();
@@ -636,11 +703,17 @@ namespace lfs::python {
         bool (*reload_document)(void* host);
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
+        void (*set_floating)(void* host, bool floating);
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);
         void (*set_forced_height)(void* host, float h);
         bool (*needs_animation)(void* host);
+        bool (*needs_immediate_animation)(void* host);
+        std::string (*animation_demand_description)(void* host);
+        // Returns true and writes delay when the host has a finite scheduled
+        // update delay > 0 seconds; false for continuous demand or idle.
+        bool (*next_scheduled_update_delay)(void* host, double* out_seconds);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);
@@ -676,7 +749,6 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_invalidate_poll_cache_callback(InvalidatePollCacheCallback cb);
     LFS_PYTHON_RUNTIME_API void invalidate_poll_caches(uint8_t dependency = 7);
 
-    // Signal bridge callbacks - registered by Python module, called by visualizer
     using SignalFlushCallback = void (*)();
     using TrainingProgressCallback = void (*)(int iteration, float loss, std::size_t num_gaussians);
     using TrainingStateCallback = void (*)(bool is_training, const char* state);
@@ -697,7 +769,6 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_signal_bridge_callbacks(const SignalBridgeCallbacks& callbacks);
 
-    // Signal update functions - called by visualizer, dispatch to Python via callbacks
     LFS_PYTHON_RUNTIME_API void update_training_progress(int iteration, float loss, std::size_t num_gaussians);
     LFS_PYTHON_RUNTIME_API void update_training_state(bool is_training, const char* state);
     LFS_PYTHON_RUNTIME_API void update_trainer_loaded(bool has_trainer, int max_iterations, int initial_iteration = 0);
@@ -708,24 +779,27 @@ namespace lfs::python {
 
     // Viewport draw overlay - bridge from visualizer to Python draw handlers
     // view_matrix/proj_matrix: column-major 4x4, others: float arrays
-    // draw_list: opaque pointer to ImDrawList (cast by implementation)
     using HasViewportDrawHandlersCallback = bool (*)();
     using SyncViewportOverlayDocumentCallback = bool (*)(void* document);
     // overlay_renderer: opaque pointer to lfs::rendering::ScreenOverlayRenderer (used for the
-    // queued 2D draw commands). draw_list: ImDrawList* used only for the python transform-gizmo
-    // path (still ImGui-rendered).
+    // queued 2D draw commands). draw_list is retained as an opaque legacy slot.
     using InvokeViewportOverlayCallback = void (*)(const float* view_matrix, const float* proj_matrix,
                                                    const float* vp_pos, const float* vp_size,
                                                    const float* cam_pos, const float* cam_fwd,
                                                    void* overlay_renderer,
                                                    void* draw_list);
 
+    using ViewportOverlayDocumentUnloadCallback = void (*)();
+
     LFS_PYTHON_RUNTIME_API void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,
                                                                InvokeViewportOverlayCallback invoke_cb);
     LFS_PYTHON_RUNTIME_API void set_viewport_overlay_document_sync_callback(
         SyncViewportOverlayDocumentCallback sync_cb);
+    LFS_PYTHON_RUNTIME_API void set_viewport_overlay_document_unload_callback(
+        ViewportOverlayDocumentUnloadCallback unload_cb);
     LFS_PYTHON_RUNTIME_API bool has_viewport_draw_handlers();
     LFS_PYTHON_RUNTIME_API bool sync_viewport_overlay_document(void* document);
+    LFS_PYTHON_RUNTIME_API void notify_viewport_overlay_document_unloaded();
     LFS_PYTHON_RUNTIME_API void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,
                                                         const float* vp_pos, const float* vp_size,
                                                         const float* cam_pos, const float* cam_fwd,

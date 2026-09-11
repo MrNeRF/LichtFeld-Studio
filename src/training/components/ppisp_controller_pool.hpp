@@ -6,6 +6,7 @@
 #include "core/tensor.hpp"
 #include <cstdint>
 #include <iosfwd>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -28,16 +29,22 @@ namespace lfs::training {
     public:
         using Config = PPISPControllerPoolConfig;
 
-        PPISPControllerPool(int num_cameras, int total_iterations, Config config = {});
+        PPISPControllerPool(int num_cameras, int total_iterations);
+        PPISPControllerPool(int num_cameras, int total_iterations, Config config);
         ~PPISPControllerPool() = default;
 
         PPISPControllerPool(const PPISPControllerPool&) = delete;
         PPISPControllerPool& operator=(const PPISPControllerPool&) = delete;
-        PPISPControllerPool(PPISPControllerPool&&) = default;
-        PPISPControllerPool& operator=(PPISPControllerPool&&) = default;
+        PPISPControllerPool(PPISPControllerPool&&) = delete;
+        PPISPControllerPool& operator=(PPISPControllerPool&&) = delete;
 
         /// Allocate shared buffers for the given max image size. Must be called before predict().
         void allocate_buffers(size_t max_h, size_t max_w);
+
+        /// Serializes predict()/backward() transactions: predict() fills shared forward
+        /// buffers (and the result aliases one of them) that backward() consumes, so a
+        /// concurrent viewport/export prediction would corrupt an in-flight training pair.
+        [[nodiscard]] std::mutex& predict_mutex() const { return predict_mutex_; }
 
         /// Forward pass for a specific camera.
         [[nodiscard]] lfs::core::Tensor predict(int camera_idx, const lfs::core::Tensor& rendered_rgb,
@@ -61,11 +68,20 @@ namespace lfs::training {
         /// Get number of cameras.
         [[nodiscard]] int num_cameras() const { return num_cameras_; }
 
+        [[nodiscard]] const Config& get_config() const { return config_; }
+
         /// Serialize all controller states.
         void serialize(std::ostream& os) const;
 
         /// Deserialize all controller states.
         void deserialize(std::istream& is);
+
+        /// Validate and consume a serialized controller state without retaining it.
+        static void consume_checkpoint(std::istream& is);
+
+        /// Transfer a fully validated persistent checkpoint state. Transient
+        /// inference buffers and the synchronization primitive stay owned here.
+        void adopt_checkpoint_state(PPISPControllerPool& loaded) noexcept;
 
         /// Serialize only weights for inference (no optimizer state).
         void serialize_inference(std::ostream& os) const;
@@ -80,6 +96,8 @@ namespace lfs::training {
             const std::vector<int>& source_camera_indices);
 
     private:
+        static void parse_checkpoint(std::istream& is, PPISPControllerPool* destination);
+
         void adam_update(lfs::core::Tensor& param, lfs::core::Tensor& exp_avg,
                          lfs::core::Tensor& exp_avg_sq, const lfs::core::Tensor& grad);
         void compute_bias_corrections(float& bc1_rcp, float& bc2_sqrt_rcp) const;
@@ -108,6 +126,7 @@ namespace lfs::training {
         lfs::core::Tensor buf_fc1_, buf_fc2_, buf_fc3_, buf_output_;
         lfs::core::Tensor fc_input_buffer_;
         lfs::core::Tensor cached_flat_;
+        mutable std::mutex predict_mutex_;
 
         // Shared backward buffers
         lfs::core::Tensor grad_fc3_out_, grad_fc2_out_, grad_fc1_out_;

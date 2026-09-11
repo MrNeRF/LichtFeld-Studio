@@ -30,13 +30,11 @@ namespace nvimgcodec {
         MemIoStream() = default;
         ~MemIoStream() = default;
         MemIoStream(T* mem, size_t bytes)
-            : start_{mem},
-              size_{bytes} {
+            : start_{mem}, size_{bytes} {
         }
 
         MemIoStream(void* ctx, std::function<unsigned char*(void* ctx, size_t)> resize_buffer_func)
-            : resize_buffer_ctx_(ctx),
-              resize_buffer_func_(resize_buffer_func) {
+            : resize_buffer_ctx_(ctx), resize_buffer_func_(resize_buffer_func) {
         }
 
         size_t read(void* buf, size_t bytes) override {

@@ -35,21 +35,16 @@ namespace lfs::vis::gui::panels {
         static PythonConsoleState& getInstance();
         static PythonConsoleState* tryGetInstance();
 
-        void addOutput(const std::string& text, uint32_t color = 0xFFFFFFFF);
         void addError(const std::string& text);
-        void addInput(const std::string& text);
         void addInfo(const std::string& text);
         void clear();
 
         void addToHistory(const std::string& cmd);
-        void resetHistoryIndex() { history_index_ = -1; }
-        void historyUp();
-        void historyDown();
-        int historyIndex() const { return history_index_; }
 
         terminal::TerminalWidget* getTerminal();
         terminal::TerminalWidget* getOutputTerminal();
         editor::PythonEditor* getEditor();
+        const editor::PythonEditor* getEditor() const;
         void setEditorText(const std::string& text);
         void focusEditor();
         [[nodiscard]] std::string getEditorText() const;
@@ -72,10 +67,13 @@ namespace lfs::vis::gui::panels {
 
         // Font scaling (steps match loaded monospace font sizes)
         float getFontScale() const { return font_scale_; }
-        void setFontScale(float scale) { font_scale_ = std::clamp(scale, FONT_STEPS[0], FONT_STEPS[FONT_STEP_COUNT - 1]); }
         void increaseFontScale();
         void decreaseFontScale();
         void resetFontScale() { font_scale_ = 1.0f; }
+        void setFontScale(float scale);
+
+        [[nodiscard]] static float splitterRatio();
+        static void setSplitterRatio(float ratio);
 
         // Script execution
         bool isScriptRunning() const { return script_running_.load(); }

@@ -19,10 +19,6 @@ namespace lfs::vis {
         std::array<SplitViewPanelPlan, 2> panels;
         lfs::rendering::SplitViewCompositeState composite;
         lfs::rendering::SplitViewPresentationState presentation;
-        bool prefer_batched_gaussian_render = false;
-
-        [[nodiscard]] lfs::rendering::SplitViewRequest toRequest() const;
-        [[nodiscard]] SplitViewInfo toInfo() const;
     };
 
     [[nodiscard]] LFS_VIS_API std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(

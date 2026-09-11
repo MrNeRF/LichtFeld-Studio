@@ -70,14 +70,18 @@ namespace lfs::python {
                 for (const auto& p : paths) {
                     fs_paths.emplace_back(lfs::core::utf8_to_path(p));
                 }
-                auto result = lfs::python::run_scripts(fs_paths);
+                lfs::Result<void> result;
+                {
+                    nb::gil_scoped_release release;
+                    result = lfs::python::run_scripts(fs_paths);
+                }
                 nb::dict ret;
                 if (result) {
                     ret["success"] = true;
                     ret["error"] = "";
                 } else {
                     ret["success"] = false;
-                    ret["error"] = result.error();
+                    ret["error"] = lfs::format_for_developer(result.error());
                 }
                 return ret;
             },

@@ -5,21 +5,26 @@
 #pragma once
 
 #include "core/events.hpp"
+#include "core/export.hpp"
 #include "core/parameters.hpp"
 #include <expected>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace lfs::vis {
     class SceneManager;
-}
+    class VisualizerImpl;
+} // namespace lfs::vis
 
 namespace lfs::vis {
 
-    class DataLoadingService {
+    class LFS_VIS_API DataLoadingService {
     public:
         explicit DataLoadingService(SceneManager* scene_manager);
         ~DataLoadingService();
+
+        void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }
 
         // Set parameters for dataset loading
         void setParameters(const lfs::core::param::TrainingParameters& params) { params_ = params; }
@@ -29,6 +34,8 @@ namespace lfs::vis {
         std::expected<void, std::string> loadPLY(const std::filesystem::path& path);
         std::expected<void, std::string> loadSOG(const std::filesystem::path& path);
         std::expected<void, std::string> loadSplatFile(const std::filesystem::path& path);
+        std::expected<void, std::string> loadSplatFiles(
+            const std::vector<std::filesystem::path>& paths);
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path);
         std::expected<void, std::string> loadCheckpointForTraining(
             const std::filesystem::path& checkpoint_path,
@@ -39,7 +46,7 @@ namespace lfs::vis {
 
     private:
         void setupEventHandlers();
-        void handleLoadFileCommand(bool is_dataset, const std::filesystem::path& path);
+        void handleLoadFileCommand(const lfs::core::events::cmd::LoadFile& cmd);
         void handleLoadCheckpointForTrainingCommand(
             const std::filesystem::path& checkpoint_path,
             const std::filesystem::path& dataset_path,
@@ -53,6 +60,7 @@ namespace lfs::vis {
         bool isCheckpointFile(const std::filesystem::path& path) const;
 
         SceneManager* scene_manager_;
+        VisualizerImpl* viewer_ = nullptr;
         lfs::core::param::TrainingParameters params_;
     };
 

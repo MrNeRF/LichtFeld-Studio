@@ -205,6 +205,8 @@ namespace nvimgcodec {
         const int in_c = NumberOfChannels(in_info);
         const auto out_format = out_info.sample_format;
         const auto in_format = in_info.sample_format;
+        const size_t out_bytes_per_sample = out_info.plane_info[0].sample_type >> 11;
+        const size_t in_bytes_per_sample = in_info.plane_info[0].sample_type >> 11;
         const int out_precision = out_info.plane_info[0].precision;
         const int in_precision = in_info.plane_info[0].precision;
         const auto out_dtype = out_info.plane_info[0].sample_type;
@@ -217,10 +219,10 @@ namespace nvimgcodec {
         in.size = {w, h};
         in.channels = in_c;
         if (IsPlanar(in_format)) {
-            in.strides = {1, w};
-            in.channel_stride = (size_t)w * (size_t)h;
+            in.strides = {1, in_info.plane_info[0].row_stride / in_bytes_per_sample};
+            in.channel_stride = in_info.plane_info[0].row_stride * h / in_bytes_per_sample;
         } else {
-            in.strides = {in_c, w * in_c};
+            in.strides = {in_c, in_info.plane_info[0].row_stride / in_bytes_per_sample};
             in.channel_stride = 1;
         }
 
@@ -229,10 +231,10 @@ namespace nvimgcodec {
         out.size = {w, h};
         out.channels = out_c;
         if (IsPlanar(out_format)) {
-            out.strides = {1, w};
-            out.channel_stride = w * h;
+            out.strides = {1, out_info.plane_info[0].row_stride / out_bytes_per_sample};
+            out.channel_stride = out_info.plane_info[0].row_stride * h / out_bytes_per_sample;
         } else {
-            out.strides = {out_c, w * out_c};
+            out.strides = {out_c, out_info.plane_info[0].row_stride / out_bytes_per_sample};
             out.channel_stride = 1;
         }
 

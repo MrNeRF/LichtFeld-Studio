@@ -6,8 +6,10 @@
 
 #include "stdio_process.hpp"
 
+#include <core/environment.hpp>
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
+#include <core/user_paths.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -159,11 +161,14 @@ namespace lfs::vis::editor {
                 absolute = absolute.lexically_normal();
             }
 
-            std::string utf8 = lfs::core::path_to_utf8(absolute);
+            std::string utf8 = lfs::core::path_to_generic_utf8(absolute);
 #ifdef _WIN32
-            return "file:///" + percent_encode(fs::path(utf8).generic_string());
+            std::ranges::replace(utf8, '\\', '/');
+#endif
+#ifdef _WIN32
+            return "file:///" + percent_encode(utf8);
 #else
-            return "file://" + percent_encode(fs::path(utf8).generic_string());
+            return "file://" + percent_encode(utf8);
 #endif
         }
 
@@ -197,7 +202,7 @@ namespace lfs::vis::editor {
                 return std::nullopt;
             }
 
-            const fs::path candidate(program);
+            const fs::path candidate = lfs::core::utf8_to_path(std::string(program));
             if (candidate.has_parent_path() || candidate.is_absolute()) {
                 if (!is_executable_file(candidate)) {
                     return std::nullopt;
@@ -206,30 +211,32 @@ namespace lfs::vis::editor {
             }
 
 #ifdef _WIN32
-            const DWORD buffer_size = SearchPathA(nullptr, std::string(program).c_str(), nullptr, 0, nullptr, nullptr);
+            const auto program_w = lfs::core::utf8_to_wstring(std::string(program));
+            const DWORD buffer_size = SearchPathW(nullptr, program_w.c_str(), nullptr, 0, nullptr, nullptr);
             if (buffer_size == 0) {
                 return std::nullopt;
             }
 
-            std::string buffer(static_cast<size_t>(buffer_size), '\0');
-            if (SearchPathA(nullptr, std::string(program).c_str(), nullptr, buffer_size, buffer.data(), nullptr) == 0) {
+            std::wstring buffer(static_cast<size_t>(buffer_size) + 1, L'\0');
+            const DWORD length = SearchPathW(nullptr, program_w.c_str(), nullptr,
+                                             static_cast<DWORD>(buffer.size()), buffer.data(), nullptr);
+            if (length == 0) {
                 return std::nullopt;
             }
-            if (!buffer.empty() && buffer.back() == '\0') {
-                buffer.pop_back();
-            }
-            return buffer;
+            buffer.resize(length);
+            return lfs::core::wstring_to_utf8(buffer);
 #else
-            const char* const path_env = std::getenv("PATH");
-            if (!path_env || !*path_env) {
+            const auto path_env = lfs::core::environment::value("PATH");
+            if (!path_env) {
                 return std::nullopt;
             }
 
-            std::string_view remaining(path_env);
+            std::string_view remaining(*path_env);
             while (true) {
                 const size_t separator = remaining.find(':');
                 const std::string_view entry = remaining.substr(0, separator);
-                const fs::path dir = entry.empty() ? fs::current_path() : fs::path(entry);
+                const fs::path dir = entry.empty() ? fs::current_path()
+                                                   : lfs::core::utf8_to_path(std::string(entry));
                 const fs::path resolved = dir / candidate;
                 if (is_executable_file(resolved)) {
                     return lfs::core::path_to_utf8(resolved);
@@ -249,10 +256,9 @@ namespace lfs::vis::editor {
             std::vector<ServerCommand> commands;
             std::unordered_set<std::string> seen;
 
-            if (const char* override_program = std::getenv("LFS_PYTHON_LSP");
-                override_program && *override_program) {
+            if (const auto override_program = lfs::core::environment::value("LFS_PYTHON_LSP")) {
                 append_candidate(commands, seen,
-                                 {.program = override_program,
+                                 {.program = std::string(*override_program),
                                   .args = {},
                                   .label = "custom Python language server"});
                 return commands;
@@ -334,17 +340,14 @@ namespace lfs::vis::editor {
         }
 
         fs::path get_lichtfeld_dir() {
-            if (const char* override_workspace = std::getenv("LFS_PYTHON_LSP_WORKSPACE");
-                override_workspace && *override_workspace) {
-                return fs::path(override_workspace);
+            if (const auto override_workspace =
+                    lfs::core::environment::value("LFS_PYTHON_LSP_WORKSPACE")) {
+                return lfs::core::utf8_to_path(*override_workspace);
             }
-#ifdef _WIN32
-            const char* const home = std::getenv("USERPROFILE");
-            return fs::path(home ? home : "C:\\") / ".lichtfeld";
-#else
-            const char* const home = std::getenv("HOME");
-            return fs::path(home ? home : "/tmp") / ".lichtfeld";
-#endif
+            const auto paths = lfs::core::UserPaths::resolve();
+            if (paths)
+                return paths->cacheDir();
+            return fs::temp_directory_path() / "lichtfeld";
         }
 
         json workspace_configuration_result_for_section(const std::string& section) {
@@ -585,11 +588,6 @@ namespace lfs::vis::editor {
         bool isAvailable() const {
             std::scoped_lock lock(mutex);
             return state != State::Failed;
-        }
-
-        std::string statusText() const {
-            std::scoped_lock lock(mutex);
-            return status;
         }
 
         std::chrono::milliseconds workerWaitDurationLocked() const {
@@ -1157,7 +1155,7 @@ namespace lfs::vis::editor {
                             const int delta_start = data[index + 1].get<int>();
                             const int length = data[index + 2].get<int>();
                             const int token_type_index = data[index + 3].get<int>();
-                            const uint32_t token_modifiers = data[index + 4].get<uint32_t>();
+                            const std::uint32_t token_modifiers = data[index + 4].get<std::uint32_t>();
 
                             line += delta_line;
                             start_character =
@@ -1355,10 +1353,6 @@ namespace lfs::vis::editor {
 
     bool PythonLspClient::isAvailable() const {
         return impl_->isAvailable();
-    }
-
-    std::string PythonLspClient::statusText() const {
-        return impl_->statusText();
     }
 
 } // namespace lfs::vis::editor

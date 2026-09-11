@@ -90,7 +90,7 @@ Typical tools:
 - `draw(self, ui)`
 - `button_styled()`
 - `row()`, `column()`, `box()`, `grid_flow()`
-- `push_style_var()` and `push_style_color()` for local widget overrides
+- `SubLayout.enabled`, `SubLayout.active`, and `SubLayout.alert` for local state styling
 
 ### 2. Mixed panel with inline RCSS
 

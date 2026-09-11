@@ -3,6 +3,7 @@
 """Plugin template generator for scaffolding new plugins."""
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -149,7 +150,7 @@ def create_plugin(name: str, target_dir: Optional[Path] = None) -> Path:
 
     Args:
         name: Plugin name (used for directory and module)
-        target_dir: Optional target directory (defaults to ~/.lichtfeld/plugins)
+        target_dir: Optional target directory (defaults to the resolved user plugin directory)
 
     Returns:
         Path to created plugin directory
@@ -158,7 +159,12 @@ def create_plugin(name: str, target_dir: Optional[Path] = None) -> Path:
         FileExistsError: If plugin directory already exists
     """
     if target_dir is None:
-        target_dir = Path.home() / ".lichtfeld" / "plugins"
+        target_dir = Path(
+            os.environ.get(
+                "LFS_RESOLVED_PLUGIN_DIR",
+                Path.home() / ".lichtfeld" / "plugins",
+            )
+        )
 
     plugin_dir = target_dir / name
     if plugin_dir.exists():
@@ -169,16 +175,20 @@ def create_plugin(name: str, target_dir: Optional[Path] = None) -> Path:
     plugin_dir.mkdir(parents=True, exist_ok=True)
     (plugin_dir / "panels").mkdir(exist_ok=True)
 
-    (plugin_dir / "pyproject.toml").write_text(PYPROJECT_TOML.format(name=name))
-    (plugin_dir / "__init__.py").write_text(INIT_PY.format(name=name))
-    (plugin_dir / "panels" / "__init__.py").write_text("")
+    (plugin_dir / "pyproject.toml").write_text(
+        PYPROJECT_TOML.format(name=name), encoding="utf-8"
+    )
+    (plugin_dir / "__init__.py").write_text(INIT_PY.format(name=name), encoding="utf-8")
+    (plugin_dir / "panels" / "__init__.py").write_text("", encoding="utf-8")
     (plugin_dir / "panels" / "main_panel.py").write_text(
-        MAIN_PANEL_PY.format(name=name, title=title)
+        MAIN_PANEL_PY.format(name=name, title=title), encoding="utf-8"
     )
     (plugin_dir / "panels" / "main_panel.rml").write_text(
-        MAIN_PANEL_RML.format(name=name, title=title)
+        MAIN_PANEL_RML.format(name=name, title=title), encoding="utf-8"
     )
-    (plugin_dir / "panels" / "main_panel.rcss").write_text(MAIN_PANEL_RCSS)
+    (plugin_dir / "panels" / "main_panel.rcss").write_text(
+        MAIN_PANEL_RCSS, encoding="utf-8"
+    )
 
     _log.info("Created plugin template at %s", plugin_dir)
     return plugin_dir

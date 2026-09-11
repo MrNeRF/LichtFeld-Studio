@@ -1,17 +1,24 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "io/video/video_export_options.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
+#include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
 #include "sequencer/timeline.hpp"
 #include "sequencer/timeline_view_math.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <gtest/gtest.h>
+#include <limits>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -49,6 +56,37 @@ namespace {
         }
     };
 
+    TEST(SequencerTimelineRegressionTest, ExportCameraPreservesScreenCornersAcrossPoses) {
+        // Independent screen-space oracle: right stays right, up maps to smaller
+        // image rows, and visible points have positive depth in a dataset Camera.
+        const std::array<glm::vec3, 4> eyes{{{0, 0, 5}, {2, 4, 1}, {-2, -4, 1}, {1, 2, 5}}};
+        const std::array<glm::vec3, 4> ups{{{0, 1, 0}, {0, 0, -1}, {0, 0, 1}, {1, 0, 0}}};
+        for (size_t pose = 0; pose < eyes.size(); ++pose) {
+            SCOPED_TRACE(pose);
+            const auto rotation = lfs::rendering::tryMakeVisualizerLookAtRotation(
+                eyes[pose], glm::vec3(0), ups[pose]);
+            ASSERT_TRUE(rotation.has_value());
+            Timeline timeline;
+            auto keyframe = makeKeyframe(0, eyes[pose]);
+            keyframe.rotation = glm::quat_cast(*rotation);
+            timeline.addKeyframe(keyframe);
+            const auto camera = timeline.evaluate(0);
+            const auto view = lfs::rendering::dataWorldToCameraFromVisualizerPose(
+                glm::mat3_cast(camera.rotation), camera.position);
+            for (const float x : {-1.0f, 1.0f}) {
+                for (const float y : {-1.0f, 1.0f}) {
+                    const auto visualizer_point = eyes[pose] + *rotation * glm::vec3(x, y, -3);
+                    // Raw PLY world uses the opposite Y/Z axes to the visualizer.
+                    const glm::vec3 data_point(visualizer_point.x, -visualizer_point.y, -visualizer_point.z);
+                    const auto projected = glm::vec3(view * glm::vec4(data_point, 1));
+                    EXPECT_NEAR(projected.x, x, 1e-5f);
+                    EXPECT_NEAR(projected.y, -y, 1e-5f);
+                    EXPECT_NEAR(projected.z, 3, 1e-5f);
+                }
+            }
+        }
+    }
+
     TEST(SequencerTimelineRegressionTest, SaveSkipsSyntheticLoopPoint) {
         Timeline timeline;
 
@@ -70,6 +108,83 @@ namespace {
         ASSERT_EQ(json["keyframes"].size(), 2u);
         EXPECT_FLOAT_EQ(json["keyframes"][0]["time"].get<float>(), 0.0f);
         EXPECT_FLOAT_EQ(json["keyframes"][1]["time"].get<float>(), 2.0f);
+
+        const std::string temp_prefix = file.path.filename().string() + ".";
+        for (const auto& entry : std::filesystem::directory_iterator(file.path.parent_path())) {
+            const std::string name = entry.path().filename().string();
+            EXPECT_FALSE(name.starts_with(temp_prefix) && name.ends_with(".tmp"));
+        }
+    }
+
+    TEST(SequencerTimelineRegressionTest, SavedTimelineLoadsBackFromTheSameFile) {
+        Timeline source;
+        source.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}, 35.0f));
+        source.addKeyframe(makeKeyframe(2.0f, {4.0f, 5.0f, 6.0f}, 50.0f));
+
+        TempJsonPath file;
+        ASSERT_TRUE(source.saveToJson(file.path.string()));
+
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(file.path.string()));
+        ASSERT_EQ(loaded.realKeyframeCount(), 2u);
+        ASSERT_NE(loaded.getKeyframe(0), nullptr);
+        ASSERT_NE(loaded.getKeyframe(1), nullptr);
+        expectVec3Eq(loaded.getKeyframe(0)->position, {1.0f, 2.0f, 3.0f});
+        expectVec3Eq(loaded.getKeyframe(1)->position, {4.0f, 5.0f, 6.0f});
+        EXPECT_FLOAT_EQ(loaded.getKeyframe(0)->focal_length_mm, 35.0f);
+        EXPECT_FLOAT_EQ(loaded.getKeyframe(1)->focal_length_mm, 50.0f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, LoadAcceptsCrlfAndBomTimelineFile) {
+        Timeline source;
+        source.addKeyframe(makeKeyframe(0.0f, {1.0f, 2.0f, 3.0f}));
+        source.addKeyframe(makeKeyframe(2.0f, {4.0f, 5.0f, 6.0f}));
+
+        TempJsonPath file;
+        ASSERT_TRUE(source.saveToJson(file.path.string()));
+
+        std::ifstream input(file.path, std::ios::binary);
+        ASSERT_TRUE(input.is_open());
+        const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        input.close();
+
+        std::string crlf_bom = "\xEF\xBB\xBF";
+        crlf_bom.reserve(saved.size() * 2 + 3);
+        for (const char ch : saved) {
+            if (ch == '\n')
+                crlf_bom += "\r\n";
+            else
+                crlf_bom += ch;
+        }
+
+        TempJsonPath crlf_file;
+        std::ofstream output(crlf_file.path, std::ios::binary);
+        ASSERT_TRUE(output.is_open());
+        output << crlf_bom;
+        output.close();
+
+        Timeline loaded;
+        ASSERT_TRUE(loaded.loadFromJson(crlf_file.path.string()));
+        ASSERT_EQ(loaded.realKeyframeCount(), 2u);
+        ASSERT_NE(loaded.getKeyframe(0), nullptr);
+        ASSERT_NE(loaded.getKeyframe(1), nullptr);
+        expectVec3Eq(loaded.getKeyframe(0)->position, {1.0f, 2.0f, 3.0f});
+        expectVec3Eq(loaded.getKeyframe(1)->position, {4.0f, 5.0f, 6.0f});
+    }
+
+    TEST(SequencerTimelineRegressionTest, SavedTimelineContainsNoCarriageReturns) {
+        Timeline timeline;
+        timeline.addKeyframe(makeKeyframe(0.0f));
+
+        TempJsonPath file;
+        ASSERT_TRUE(timeline.saveToJson(file.path.string()));
+
+        std::ifstream input(file.path, std::ios::binary);
+        ASSERT_TRUE(input.is_open());
+        const std::string saved((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+
+        EXPECT_EQ(saved.find('\r'), std::string::npos);
+        EXPECT_FALSE(saved.empty());
     }
 
     TEST(SequencerTimelineRegressionTest, LoadReplacesStateAndClearsAbsentClip) {
@@ -155,6 +270,125 @@ namespace {
         ASSERT_NE(clip.getTrackByPath("light.color"), nullptr);
         EXPECT_EQ(clip.getTrackByPath("camera.exposure")->id(), 7u);
         EXPECT_EQ(clip.getTrackByPath("light.color")->id(), 42u);
+    }
+
+    TEST(SequencerTimelineRegressionTest, LoadRejectsInvalidStateTransactionally) {
+        Timeline timeline;
+        timeline.addKeyframe(makeKeyframe(9.0f, {9.0f, 0.0f, 0.0f}));
+
+        nlohmann::json json = {
+            {"version", 4},
+            {"clip_duration", 10.0f},
+            {"keyframes", nlohmann::json::array({
+                              {
+                                  {"time", 1.0f},
+                                  {"position", {1.0f, 2.0f, 3.0f}},
+                                  {"rotation", {1.0f, 0.0f, 0.0f, 0.0f}},
+                                  {"focal_length_mm", 40.0f},
+                                  {"easing", 99},
+                              },
+                          })},
+        };
+
+        TempJsonPath file;
+        {
+            std::ofstream output(file.path);
+            ASSERT_TRUE(output.is_open());
+            output << json.dump();
+        }
+        EXPECT_FALSE(timeline.loadFromJson(file.path.string()));
+        ASSERT_EQ(timeline.realKeyframeCount(), 1u);
+        EXPECT_FLOAT_EQ(timeline.getKeyframe(0)->time, 9.0f);
+
+        json["keyframes"][0]["easing"] = static_cast<int>(EasingType::LINEAR);
+        json["keyframes"][0]["rotation"] = {0.0f, 0.0f, 0.0f, 0.0f};
+        {
+            std::ofstream output(file.path, std::ios::trunc);
+            ASSERT_TRUE(output.is_open());
+            output << json.dump();
+        }
+        EXPECT_FALSE(timeline.loadFromJson(file.path.string()));
+        ASSERT_EQ(timeline.realKeyframeCount(), 1u);
+        EXPECT_FLOAT_EQ(timeline.getKeyframe(0)->time, 9.0f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, LoadNormalizesCameraAndAnimationQuaternions) {
+        nlohmann::json json = {
+            {"version", 4},
+            {"keyframes", nlohmann::json::array({
+                              {
+                                  {"time", 1.0f},
+                                  {"position", {1.0f, 2.0f, 3.0f}},
+                                  {"rotation", {2.0f, 0.0f, 0.0f, 0.0f}},
+                                  {"focal_length_mm", 40.0f},
+                                  {"easing", static_cast<int>(EasingType::LINEAR)},
+                              },
+                          })},
+            {"animation_clip",
+             {
+                 {"tracks", nlohmann::json::array({
+                                {
+                                    {"id", 1u},
+                                    {"type", "quat"},
+                                    {"target", "node.rotation"},
+                                    {"keyframes", nlohmann::json::array({
+                                                      {{"time", 0.0f},
+                                                       {"value", {0.0f, 2.0f, 0.0f, 0.0f}},
+                                                       {"easing", "linear"}},
+                                                  })},
+                                },
+                            })},
+             }},
+        };
+
+        TempJsonPath file;
+        {
+            std::ofstream output(file.path);
+            ASSERT_TRUE(output.is_open());
+            output << json.dump();
+        }
+
+        Timeline timeline;
+        ASSERT_TRUE(timeline.loadFromJson(file.path.string()));
+        ASSERT_NE(timeline.getKeyframe(0), nullptr);
+        EXPECT_NEAR(glm::length(timeline.getKeyframe(0)->rotation), 1.0f, 1e-6f);
+        ASSERT_NE(timeline.animationClip(), nullptr);
+        const auto* track = timeline.animationClip()->getTrack(1u);
+        ASSERT_NE(track, nullptr);
+        const auto* rotation = std::get_if<glm::quat>(&track->keyframe(0).value);
+        ASSERT_NE(rotation, nullptr);
+        EXPECT_NEAR(glm::length(*rotation), 1.0f, 1e-6f);
+    }
+
+    TEST(SequencerTimelineRegressionTest, RejectsInvalidAndUnboundedPathRequests) {
+        Timeline timeline;
+        timeline.addKeyframe(makeKeyframe(0.0f));
+        timeline.addKeyframe(makeKeyframe(4.0f));
+
+        EXPECT_THROW(
+            (void)timeline.generatePathAtTimeStep(std::numeric_limits<float>::quiet_NaN()),
+            std::invalid_argument);
+        EXPECT_THROW(
+            (void)timeline.generatePathAtTimeStep(std::numeric_limits<float>::denorm_min()),
+            std::length_error);
+        EXPECT_THROW((void)timeline.generatePath(0), std::invalid_argument);
+    }
+
+    TEST(SequencerTimelineRegressionTest, AnimationClipRejectsUnknownTypesAndDuplicateTargets) {
+        nlohmann::json invalid_type = {
+            {"tracks", nlohmann::json::array({
+                           {{"id", 1u}, {"type", "opaque"}, {"target", "node.value"}},
+                       })},
+        };
+        EXPECT_THROW((void)AnimationClip::fromJson(invalid_type), std::runtime_error);
+
+        nlohmann::json duplicate_target = {
+            {"tracks", nlohmann::json::array({
+                           {{"id", 1u}, {"type", "float"}, {"target", "node.value"}},
+                           {{"id", 2u}, {"type", "float"}, {"target", "node.value"}},
+                       })},
+        };
+        EXPECT_THROW((void)AnimationClip::fromJson(duplicate_target), std::runtime_error);
     }
 
     TEST(SequencerControllerRegressionTest, SelectionTracksKeyframeIdentityAcrossResort) {
@@ -261,6 +495,49 @@ namespace {
         EXPECT_FLOAT_EQ(controller.playhead(), 2.0f);
     }
 
+    TEST(SequencerMappingRegressionTest, RulerMajorTicksAreExactMultiplesOfRoundIntervals) {
+        Timeline timeline;
+        ASSERT_FLOAT_EQ(timeline.clipDuration(), 30.0f);
+
+        constexpr float kRoundIntervals[] = {0.25f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f};
+        constexpr float kZooms[] = {1.0f, 2.0f, 3.0f, 4.0f};
+
+        for (const float zoom : kZooms) {
+            const float visible = lfs::vis::sequencer_ui::displayEndTime(timeline, zoom);
+            const float major = lfs::vis::sequencer_ui::rulerMajorInterval(visible);
+            const float minor = major / 4.0f;
+            ASSERT_GT(minor, 0.0f);
+
+            bool is_round = false;
+            for (const float interval : kRoundIntervals) {
+                if (std::abs(major - interval) < 1e-6f)
+                    is_round = true;
+            }
+            EXPECT_TRUE(is_round) << "zoom=" << zoom << " major=" << major;
+
+            int major_count = 0;
+            const int first_index = 0;
+            for (int i = 0;; ++i) {
+                const int index = first_index + i;
+                const float t = static_cast<float>(index) * minor;
+                if (t > visible)
+                    break;
+                if ((index % 4) != 0)
+                    continue;
+                ++major_count;
+                const float quotient = t / major;
+                EXPECT_NEAR(quotient, std::round(quotient), 1e-5f)
+                    << "zoom=" << zoom << " t=" << t << " major=" << major;
+            }
+            EXPECT_GT(major_count, 0) << "zoom=" << zoom;
+        }
+
+        // Zoom 3 on a 30s clip used to divide the 1s ladder by 3 again (ticks at 1/3 s).
+        EXPECT_FLOAT_EQ(lfs::vis::sequencer_ui::rulerMajorInterval(
+                            lfs::vis::sequencer_ui::displayEndTime(timeline, 3.0f)),
+                        1.0f);
+    }
+
     TEST(SequencerMappingRegressionTest, TimeScreenMappingRoundTripsWithZoomAndPan) {
         Timeline timeline;
         timeline.addKeyframe(makeKeyframe(0.0f));
@@ -352,6 +629,96 @@ namespace {
         expectVec3Eq(points[2], timeline.evaluate(2.0f).position);
         expectVec3Eq(points[3], timeline.evaluate(3.0f).position);
         expectVec3Eq(points[4], timeline.evaluate(4.0f).position);
+    }
+
+    [[nodiscard]] float clampCenteredSpan(const float center, const float extent, const float span) {
+        if (extent <= 0.0f)
+            return 0.0f;
+        const float half_span = std::max(span * 0.5f, 0.0f);
+        if (extent <= span)
+            return extent * 0.5f;
+        return std::clamp(center, half_span, extent - half_span);
+    }
+
+    TEST(SequencerTimelineRegressionTest, PlayheadDrawAndHitUseTheSameClampSpan) {
+        using lfs::vis::panel_config::PLAYHEAD_HANDLE_WIDTH;
+        using lfs::vis::panel_config::PLAYHEAD_HIT_RADIUS;
+
+        EXPECT_FLOAT_EQ(PLAYHEAD_HANDLE_WIDTH, 14.0f);
+        EXPECT_GE(PLAYHEAD_HIT_RADIUS, 8.0f);
+
+        constexpr float timeline_width = 200.0f;
+        constexpr float dp = 1.0f;
+        const float draw_span = PLAYHEAD_HANDLE_WIDTH * dp;
+        const float hit_span = PLAYHEAD_HANDLE_WIDTH * dp;
+        EXPECT_FLOAT_EQ(draw_span, hit_span);
+
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, draw_span), 7.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, hit_span), 7.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(timeline_width, timeline_width, draw_span), 193.0f);
+        EXPECT_FLOAT_EQ(clampCenteredSpan(timeline_width, timeline_width, hit_span), 193.0f);
+
+        // Old panel.cpp used an 8dp span while input.cpp used 14dp (~3dp edge mismatch).
+        EXPECT_FLOAT_EQ(clampCenteredSpan(0.0f, timeline_width, 8.0f), 4.0f);
+        EXPECT_NE(clampCenteredSpan(0.0f, timeline_width, draw_span),
+                  clampCenteredSpan(0.0f, timeline_width, 8.0f));
+    }
+
+    TEST(SequencerTimelineRegressionTest, ParseVideoResolutionAcceptsRejectsAndClamps) {
+        using lfs::io::video::parseVideoResolution;
+
+        {
+            const auto parsed = parseVideoResolution("1920x1080");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1920);
+            EXPECT_EQ(parsed->height, 1080);
+        }
+        {
+            const auto parsed = parseVideoResolution("1920 x 1080");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1920);
+            EXPECT_EQ(parsed->height, 1080);
+        }
+        {
+            const auto parsed = parseVideoResolution(" 1280X720 ");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1280);
+            EXPECT_EQ(parsed->height, 720);
+        }
+        {
+            const auto parsed = parseVideoResolution("1080x1920");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 1080);
+            EXPECT_EQ(parsed->height, 1920);
+        }
+        {
+            const auto parsed = parseVideoResolution("17x17");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 16);
+            EXPECT_EQ(parsed->height, 16);
+        }
+        {
+            const auto parsed = parseVideoResolution("1x99999");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 16);
+            EXPECT_EQ(parsed->height, 8192);
+        }
+        {
+            const auto parsed = parseVideoResolution("8193x16");
+            ASSERT_TRUE(parsed.has_value());
+            EXPECT_EQ(parsed->width, 8192);
+            EXPECT_EQ(parsed->height, 16);
+        }
+
+        EXPECT_FALSE(parseVideoResolution("").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920x").has_value());
+        EXPECT_FALSE(parseVideoResolution("x1080").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920x1080x30").has_value());
+        EXPECT_FALSE(parseVideoResolution("abc").has_value());
+        EXPECT_FALSE(parseVideoResolution("-1920x1080").has_value());
+        EXPECT_FALSE(parseVideoResolution("0x0").has_value());
+        EXPECT_FALSE(parseVideoResolution("1920 x").has_value());
     }
 
 } // namespace

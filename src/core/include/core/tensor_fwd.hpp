@@ -12,6 +12,8 @@ namespace lfs::core {
 
     class Tensor;
 
+    inline constexpr size_t MAX_TENSOR_RANK = 8;
+
     enum class Device : uint8_t {
         CPU = 0,
         CUDA = 1
@@ -23,7 +25,8 @@ namespace lfs::core {
         Int32 = 2,
         Int64 = 3,
         UInt8 = 4,
-        Bool = 5
+        Bool = 5,
+        UInt32 = 6
     };
 
     constexpr size_t dtype_size(DataType dtype) {
@@ -34,6 +37,7 @@ namespace lfs::core {
         case DataType::Int64: return 8;
         case DataType::UInt8: return 1;
         case DataType::Bool: return 1;
+        case DataType::UInt32: return 4;
         default: return 0;
         }
     }
@@ -46,6 +50,7 @@ namespace lfs::core {
         case DataType::Int64: return "int64";
         case DataType::UInt8: return "uint8";
         case DataType::Bool: return "bool";
+        case DataType::UInt32: return "uint32";
         default: return "unknown";
         }
     }
@@ -55,7 +60,11 @@ namespace lfs::core {
     }
 
     inline const char* device_name(Device device) {
-        return device == Device::CPU ? "cpu" : "cuda";
+        switch (device) {
+        case Device::CPU: return "cpu";
+        case Device::CUDA: return "cuda";
+        default: return "unknown";
+        }
     }
 
 } // namespace lfs::core

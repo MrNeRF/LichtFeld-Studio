@@ -1,6 +1,10 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "gs_renderer.h"
+#include <cassert>
+#include <limits>
+#include <map>
 #include <string>
+#include <utility>
 
 size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     size_t total = 0;
@@ -18,9 +22,9 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(shN);
     ADD_OWNED(scaling_raw);
     ADD_OWNED(opacity_raw);
+    ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
-    ADD_OWNED(radii);
     ADD_OWNED(xy_vs);
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
@@ -36,10 +40,14 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(lod_gpu_weights);
     ADD_OWNED(lod_gpu_counts);
     ADD_OWNED(lod_chunk_touch);
+    ADD_OWNED(lod_compact_counts);
+    ADD_OWNED(lod_compact_protected);
+    ADD_OWNED(lod_compact_misses);
     ADD_OWNED(lod_gpu_levels);
     ADD_OWNED(primitive_sort_indices);
     ADD_OWNED(tiles_touched_depth_ordered);
     ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_block_counts);
     ADD_OWNED(visible_prefix);
     ADD_OWNED(visible_count);
     ADD_OWNED(visible_sort_dispatch_args);
@@ -58,7 +66,8 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(sorting_gauss_idx_1);
     ADD_OWNED(sorting_gauss_idx_2);
     ADD_OWNED(tile_sort_count);
-    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(depth_wave_dispatch);
+    ADD_OWNED(wave_predicates);
     ADD_OWNED(tile_ranges);
     ADD_OWNED(tile_batch_counts);
     ADD_OWNED(tile_batch_offsets);
@@ -68,6 +77,7 @@ size_t VulkanGSPipelineBuffers::getTotalOwnedAllocSize() const {
     ADD_OWNED(tile_batch_n_contributors);
     ADD_OWNED(pixel_state);
     ADD_OWNED(pixel_depth);
+    ADD_OWNED(pixel_depth_weight);
     ADD_OWNED(n_contributors);
     ADD_OWNED(_cumsum_blockSums);
     ADD_OWNED(_cumsum_blockSums2);
@@ -94,9 +104,9 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(shN);
     ADD_OWNED(scaling_raw);
     ADD_OWNED(opacity_raw);
+    ADD_OWNED(page_frames);
     ADD_OWNED(tiles_touched);
     ADD_OWNED(rect_tile_space);
-    ADD_OWNED(radii);
     ADD_OWNED(xy_vs);
     ADD_OWNED(depths);
     ADD_OWNED(inv_cov_vs_opacity);
@@ -112,10 +122,14 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(lod_gpu_weights);
     ADD_OWNED(lod_gpu_counts);
     ADD_OWNED(lod_chunk_touch);
+    ADD_OWNED(lod_compact_counts);
+    ADD_OWNED(lod_compact_protected);
+    ADD_OWNED(lod_compact_misses);
     ADD_OWNED(lod_gpu_levels);
     ADD_OWNED(primitive_sort_indices);
     ADD_OWNED(tiles_touched_depth_ordered);
     ADD_OWNED(visible_flags);
+    ADD_OWNED(visible_block_counts);
     ADD_OWNED(visible_prefix);
     ADD_OWNED(visible_count);
     ADD_OWNED(visible_sort_dispatch_args);
@@ -134,7 +148,8 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(sorting_gauss_idx_1);
     ADD_OWNED(sorting_gauss_idx_2);
     ADD_OWNED(tile_sort_count);
-    ADD_OWNED(tile_sort_dispatch_args);
+    ADD_OWNED(depth_wave_dispatch);
+    ADD_OWNED(wave_predicates);
     ADD_OWNED(tile_ranges);
     ADD_OWNED(tile_batch_counts);
     ADD_OWNED(tile_batch_offsets);
@@ -144,6 +159,7 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     ADD_OWNED(tile_batch_n_contributors);
     ADD_OWNED(pixel_state);
     ADD_OWNED(pixel_depth);
+    ADD_OWNED(pixel_depth_weight);
     ADD_OWNED(n_contributors);
     ADD_OWNED(_cumsum_blockSums);
     ADD_OWNED(_cumsum_blockSums2);
@@ -154,46 +170,46 @@ std::map<std::string, size_t> VulkanGSPipelineBuffers::getOwnedVramBreakdown() c
     return breakdown;
 }
 
-void VulkanGSPipeline::allocStagingBuffer(size_t size) {
-    if (stager.buffer != VK_NULL_HANDLE && stager.allocSize >= size)
-        return;
-
-    std::lock_guard<std::mutex> lock(stager.mutex);
-
-    if (stager.allocSize < size) {
-        HOST_GUARD;
-        waitForPendingBatch();
-        if (stager.buffer != VK_NULL_HANDLE) {
-            vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
-        }
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        stager.allocSize = 0;
-    }
-
-    VkBufferCreateInfo staging_info = {};
-    staging_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    staging_info.size = size;
-    staging_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    staging_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VmaAllocationCreateInfo aci = {};
-    aci.usage = VMA_MEMORY_USAGE_AUTO;
-    aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-
-    if (vmaCreateBuffer(allocator, &staging_info, &aci, &stager.buffer, &stager.allocation, nullptr) != VK_SUCCESS) {
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        throw std::runtime_error("Failed to allocate staging buffer memory. You are likely running out of RAM.");
-    }
-
-    stager.allocSize = size;
-}
-
 void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
+    if (size == 0 || buffer.buffer != VK_NULL_HANDLE || buffer.allocation != VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "createBuffer requires a non-zero size and an empty destination (requested_bytes={}, existing_buffer={:#x}, existing_allocation={:#x}, label='{}')",
+                size,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.allocation),
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     buffer.allocSize = size;
+    buffer.capacity = size;
     buffer.size = size;
     buffer.offset = 0;
+
+    if (allocator == VK_NULL_HANDLE) {
+        // Scripted-test forge path (device without VMA). Mint unique non-null handles.
+        if (device == VK_NULL_HANDLE) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "createBuffer requires a VMA allocator or a forged test device (requested_bytes={}, label='{}')",
+                    size,
+                    buffer.label ? buffer.label : "<unlabeled>"),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const std::uintptr_t id = test_buffer_handle_counter_++;
+        buffer.buffer = reinterpret_cast<VkBuffer>(id);
+        buffer.allocation = reinterpret_cast<VmaAllocation>(id + 0x8000);
+        buffer.created_with_extra_usage = buffer.extra_usage;
+        current_vram += size;
+        if (current_vram > peak_vram)
+            peak_vram = current_vram;
+        barrier_planner_.track(buffer.buffer);
+        if (buffer.label) {
+            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
+                std::string("vksplat.") + buffer.label, "device_buffer", size);
+        }
+        return;
+    }
 
     VkBufferCreateInfo buffer_info = {};
     buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -201,19 +217,49 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                         VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+                        VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                        buffer.extra_usage;
     buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo aci = {};
     aci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
 
-    if (vmaCreateBuffer(allocator, &buffer_info, &aci, &buffer.buffer, &buffer.allocation, nullptr) != VK_SUCCESS) {
-        throw std::runtime_error("Failed to allocate buffer memory. You are likely running out of VRAM.");
+    const VkResult result =
+        vmaCreateBuffer(allocator, &buffer_info, &aci, &buffer.buffer, &buffer.allocation, nullptr);
+    if (result != VK_SUCCESS) {
+        buffer.buffer = VK_NULL_HANDLE;
+        buffer.allocation = VK_NULL_HANDLE;
+        buffer.allocSize = 0;
+        buffer.capacity = 0;
+        buffer.size = 0;
+        buffer.offset = 0;
+        lfs::rendering::throw_vk_result(
+            result,
+            "vmaCreateBuffer",
+            std::format(
+                "VkSplat device-buffer allocation failed (requested_bytes={}, allocator={:#x}, usage={:#x}, label='{}', result={}({}))",
+                size,
+                lfs::rendering::vkHandleValue(allocator),
+                static_cast<std::uint32_t>(buffer_info.usage),
+                buffer.label ? buffer.label : "<unlabeled>",
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    buffer.created_with_extra_usage = buffer.extra_usage;
+
+    if (buffer.label && debug_name_writer_.enabled()) {
+        setDebugObjectName(VK_OBJECT_TYPE_BUFFER,
+                           buffer.buffer,
+                           std::format("vksplat.buffer.{}", buffer.label));
     }
 
     current_vram += size;
     if (current_vram > peak_vram)
         peak_vram = current_vram;
+
+    // Epic #1496: owned allocations are tracked whole-buffer from create.
+    barrier_planner_.track(buffer.buffer);
 
     // Publish per-buffer live bytes so the HUD can split the Vulkan footprint into
     // named rows (xyz_ws / shN / sorting_keys / ...). nullptr label = no instrumentation.
@@ -223,14 +269,41 @@ void VulkanGSPipeline::createBuffer(size_t size, _VulkanBuffer& buffer) {
     }
 }
 
-void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
-    if (commandBatchInProgress)
-        _THROW_ERROR("destroyBuffer called when command batch in progress");
+void VulkanGSPipeline::destroyBufferImpl(_VulkanBuffer& buffer,
+                                         bool wait_for_pending_batch,
+                                         const char* caller_name) {
+    if (commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "{} cannot destroy an allocation referenced by an active command batch (batch_active={}, buffer={:#x}, allocation={:#x}, bytes={}, label='{}')",
+                caller_name,
+                commandBatchInProgress,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.allocation),
+                buffer.allocSize,
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     if (buffer.buffer != VK_NULL_HANDLE && buffer.allocation != VK_NULL_HANDLE) {
-        waitForPendingBatch();
-        vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
-        if (current_vram < buffer.allocSize)
-            _THROW_ERROR("Negative VRAM");
+        // Epic #1496: drop planner state before handle reuse can reappear.
+        barrier_planner_.forget(buffer.buffer);
+        if (wait_for_pending_batch) {
+            waitForPendingBatch();
+        }
+        // Scripted-test forge has a null allocator; skip VMA free for minted handles.
+        if (allocator != VK_NULL_HANDLE) {
+            vmaDestroyBuffer(allocator, buffer.buffer, buffer.allocation);
+        }
+        if (current_vram < buffer.allocSize) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat VRAM accounting underflowed while destroying a buffer (tracked_bytes={}, buffer_bytes={}, buffer={:#x}, label='{}')",
+                    current_vram,
+                    buffer.allocSize,
+                    lfs::rendering::vkHandleValue(buffer.buffer),
+                    buffer.label ? buffer.label : "<unlabeled>"),
+                LFS_SOURCE_SITE_CURRENT());
+        }
         current_vram -= buffer.allocSize;
         if (buffer.label) {
             lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
@@ -240,19 +313,161 @@ void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
     buffer.buffer = VK_NULL_HANDLE;
     buffer.allocation = VK_NULL_HANDLE;
     buffer.allocSize = 0;
+    buffer.capacity = 0;
     buffer.size = 0;
     buffer.offset = 0;
+    buffer.created_with_extra_usage = 0;
     // Keep buffer.label intact so a subsequent resize re-establishes the recording.
 }
 
+void VulkanGSPipeline::destroyBuffer(_VulkanBuffer& buffer) {
+    destroyBufferImpl(buffer, /*wait_for_pending_batch=*/true, "destroyBuffer");
+}
+
+void VulkanGSPipeline::destroyBufferRetired(_VulkanBuffer& buffer) {
+    // Caller must prove via timeline wait that no submitted batch still references the buffer.
+    destroyBufferImpl(buffer, /*wait_for_pending_batch=*/false, "destroyBufferRetired");
+}
+
+VulkanGSPipeline::GrowthBatchSplitGuard::GrowthBatchSplitGuard(VulkanGSPipeline* pipeline)
+    : pipeline_(pipeline),
+      uncaught_exceptions_(std::uncaught_exceptions()) {
+    was_active_ = pipeline_->isCommandBatchInProgress();
+    if (!was_active_) {
+        return;
+    }
+    if (pipeline_->buffer_retire_timeline_ == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            "GrowthBatchSplitGuard requires a buffer-retire timeline (mid-batch growth split)",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    const std::uint64_t signal_value = pipeline_->next_buffer_retire_value_++;
+    assert(signal_value != 0);
+    assert(signal_value < pipeline_->next_buffer_retire_value_);
+    pipeline_->endCommandBatch(/*use_fence=*/false,
+                               pipeline_->buffer_retire_timeline_,
+                               signal_value);
+}
+
+VulkanGSPipeline::GrowthBatchSplitGuard::~GrowthBatchSplitGuard() noexcept(false) {
+    if (std::uncaught_exceptions() > uncaught_exceptions_) {
+        pipeline_->cancelCommandBatch();
+        return;
+    }
+    if (was_active_) {
+        pipeline_->beginCommandBatch();
+    } else if (was_active_ != pipeline_->isCommandBatchInProgress()) {
+        pipeline_->cancelCommandBatch();
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "GrowthBatchSplitGuard batch lifecycle changed unexpectedly (batch_was_active={}, batch_is_active={}, guard_paused_batch={})",
+                was_active_,
+                pipeline_->isCommandBatchInProgress(),
+                was_active_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+}
+
+void VulkanGSPipeline::retireDeviceBufferForGrowth(_VulkanBuffer& deviceBuffer) {
+    if (deviceBuffer.buffer == VK_NULL_HANDLE && deviceBuffer.allocation == VK_NULL_HANDLE) {
+        deviceBuffer.allocSize = 0;
+        deviceBuffer.capacity = 0;
+        deviceBuffer.size = 0;
+        deviceBuffer.offset = 0;
+        deviceBuffer.created_with_extra_usage = 0;
+        return;
+    }
+
+    // Future batches never touch the old handle; VkBuffer bits cannot reuse until free.
+    if (deviceBuffer.buffer != VK_NULL_HANDLE) {
+        barrier_planner_.forget(deviceBuffer.buffer);
+    }
+
+    RetiredBufferShell entry;
+    entry.shell = deviceBuffer;
+    // Clear the live view exactly as destroyBufferImpl does (keep label).
+    deviceBuffer.buffer = VK_NULL_HANDLE;
+    deviceBuffer.allocation = VK_NULL_HANDLE;
+    deviceBuffer.allocSize = 0;
+    deviceBuffer.capacity = 0;
+    deviceBuffer.size = 0;
+    deviceBuffer.offset = 0;
+    deviceBuffer.created_with_extra_usage = 0;
+
+    // Fence-only submits are always host-waited inside endCommandBatch, so every
+    // in-flight GPU batch that could still reference this buffer has a timeline
+    // pending_signal on its command-batch slot (including a just-split growth batch).
+    entry.key_count = 0;
+    for (const CommandBatchSlot& slot : command_batch_slots_) {
+        if (slot.pending_signal != VK_NULL_HANDLE && slot.pending_signal_value != 0) {
+            assert(entry.key_count < kCommandBatchSlotCount);
+            entry.keys[entry.key_count++] =
+                BufferRetireKey{slot.pending_signal, slot.pending_signal_value};
+        }
+    }
+
+    if (entry.key_count == 0) {
+        // Immediate free: label policy depends on whether a live replacement with the
+        // same profiler label already exists (see call-site comments at resize*).
+        destroyBufferRetired(entry.shell);
+        return;
+    }
+
+    assert(entry.shell.buffer != VK_NULL_HANDLE || entry.shell.allocation != VK_NULL_HANDLE);
+    // Deferred free must not zero the live buffer's per-label recording.
+    entry.shell.label = nullptr;
+    retired_buffer_shells_.push_back(std::move(entry));
+}
+
+void VulkanGSPipeline::drainRetiredBufferShells(const bool force) {
+    if (retired_buffer_shells_.empty()) {
+        return;
+    }
+    for (auto it = retired_buffer_shells_.begin(); it != retired_buffer_shells_.end();) {
+        bool complete = force;
+        if (!complete) {
+            complete = true;
+            for (std::uint32_t i = 0; i < it->key_count; ++i) {
+                if (!timelineValueComplete(it->keys[i].semaphore, it->keys[i].value)) {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        if (complete) {
+            destroyBufferRetired(it->shell);
+            it = retired_buffer_shells_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t new_byte_size, bool no_shrink) {
-    if (deviceBuffer.allocSize < new_byte_size || (!no_shrink && deviceBuffer.allocSize > new_byte_size)) {
-        HOST_GUARD;
-        destroyBuffer(deviceBuffer);
+    if (deviceBuffer.buffer != VK_NULL_HANDLE &&
+        deviceBuffer.extra_usage != deviceBuffer.created_with_extra_usage) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "resizeDeviceBuffer cannot change extra VkBuffer usage after allocation (requested_usage={:#x}, created_with_usage={:#x}, buffer={:#x}, allocation={:#x}, label='{}')",
+                static_cast<uint32_t>(deviceBuffer.extra_usage),
+                static_cast<uint32_t>(deviceBuffer.created_with_extra_usage),
+                lfs::rendering::vkHandleValue(deviceBuffer.buffer),
+                lfs::rendering::vkHandleValue(deviceBuffer.allocation),
+                deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (deviceBuffer.capacity < new_byte_size || (!no_shrink && deviceBuffer.capacity > new_byte_size)) {
+        GrowthBatchSplitGuard split(this);
+        // Retire-before-create: immediate free may keep shell.label so destroy zeros the
+        // retiring allocation only; create then re-records the live label.
+        retireDeviceBufferForGrowth(deviceBuffer);
         try {
             createBuffer(new_byte_size, deviceBuffer);
-        } catch (const std::runtime_error& err) {
-            _THROW_ERROR(std::string(err.what()) + ". createBuffer failed inside resizeDeviceBuffer");
+        } catch (const lfs::Exception& ex) {
+            lfs::rendering::throw_vk_error(
+                lfs::Error{ex.error()}.with_context(
+                    "createBuffer failed inside resizeDeviceBuffer",
+                    LFS_SOURCE_SITE_CURRENT()));
         }
     }
     deviceBuffer.size = new_byte_size;
@@ -261,6 +476,16 @@ void VulkanGSPipeline::resizeDeviceBuffer(_VulkanBuffer& deviceBuffer, size_t ne
 template <typename T>
 _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<T>& buffer, size_t new_size, bool no_shrink) {
     auto& deviceBuffer = buffer.deviceBuffer;
+    if (new_size > std::numeric_limits<size_t>::max() / sizeof(T)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "resizeDeviceBuffer element count overflows byte sizing (elements={}, element_bytes={}, max_elements={}, label='{}')",
+                new_size,
+                sizeof(T),
+                std::numeric_limits<size_t>::max() / sizeof(T),
+                deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     size_t new_byte_size = new_size * sizeof(T);
     resizeDeviceBuffer(deviceBuffer, new_byte_size, no_shrink);
     return deviceBuffer;
@@ -272,7 +497,7 @@ _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new
     const size_t new_byte_size = new_size * sizeof(T);
     // Clearing is a GPU operation; changing the active view size must not force a
     // host-side submit/wait when the existing allocation is already large enough.
-    if (deviceBuffer.allocSize < new_byte_size) {
+    if (deviceBuffer.capacity < new_byte_size) {
         resizeDeviceBuffer(buffer, new_size, true);
     } else {
         deviceBuffer.size = new_byte_size;
@@ -283,7 +508,20 @@ _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<T>& buffer, size_t new
 
     {
         DEVICE_GUARD;
-        vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset, deviceBuffer.size, 0);
+        validateFillRange(deviceBuffer, 0, deviceBuffer.size, "clearDeviceBuffer");
+        // Epic #1496 §3.2 / §3.4.4: record TransferWrite before the fill.
+        const lfs::rendering::vulkan::DeclaredAccess fill_access{
+            .buffer = &deviceBuffer,
+            .use = lfs::rendering::vulkan::BufferUse::TransferWrite,
+        };
+        planTransfer(std::span{&fill_access, 1});
+        if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+            lfs::rendering::throw_renderer_contract(
+                "clearDeviceBuffer requires VulkanDispatch::cmd_fill_buffer",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        vulkan_dispatch_.cmd_fill_buffer(
+            command_buffer, deviceBuffer.buffer, deviceBuffer.offset, deviceBuffer.size, 0);
     }
 
     return deviceBuffer;
@@ -296,10 +534,20 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     bool clear) {
     auto& deviceBuffer = buffer.deviceBuffer;
 
+    if (new_size > std::numeric_limits<size_t>::max() / sizeof(T)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "resizeAndCopyDeviceBuffer element count overflows byte sizing (elements={}, element_bytes={}, max_elements={}, label='{}')",
+                new_size,
+                sizeof(T),
+                std::numeric_limits<size_t>::max() / sizeof(T),
+                deviceBuffer.label ? deviceBuffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     size_t new_byte_size = new_size * sizeof(T);
     size_t old_byte_size = deviceBuffer.size;
 
-    if (new_size <= deviceBuffer.allocSize / sizeof(T)) {
+    if (new_size <= deviceBuffer.capacity / sizeof(T)) {
         deviceBuffer.size = new_byte_size;
 
         if (clear && new_byte_size > old_byte_size) {
@@ -312,8 +560,20 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 offset = alignedOffset;
                 size -= prefix;
                 DEVICE_GUARD;
-                vkCmdFillBuffer(command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
-                HOST_GUARD; // will apply fence
+                validateFillRange(deviceBuffer, offset, size, "resizeAndCopyDeviceBuffer tail clear");
+                const lfs::rendering::vulkan::DeclaredAccess fill_access{
+                    .buffer = &deviceBuffer,
+                    .use = lfs::rendering::vulkan::BufferUse::TransferWrite,
+                };
+                planTransfer(std::span{&fill_access, 1});
+                if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+                    lfs::rendering::throw_renderer_contract(
+                        "resizeAndCopyDeviceBuffer requires VulkanDispatch::cmd_fill_buffer",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                vulkan_dispatch_.cmd_fill_buffer(
+                    command_buffer, deviceBuffer.buffer, deviceBuffer.offset + offset, size, 0u);
+                // Tail fill rides the open batch; no host-side read follows.
             }
         }
 
@@ -321,23 +581,39 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
     }
 
     _VulkanBuffer newBuffer;
+    newBuffer.label = deviceBuffer.label;
     try {
         createBuffer(new_byte_size, newBuffer);
-    } catch (const std::runtime_error& err) {
-        _THROW_ERROR(std::string(err.what()) +
-                     ". createBuffer failed inside resizeAndCopyDeviceBuffer");
+    } catch (const lfs::Exception& ex) {
+        lfs::rendering::throw_vk_error(
+            lfs::Error{ex.error()}.with_context(
+                "createBuffer failed inside resizeAndCopyDeviceBuffer",
+                LFS_SOURCE_SITE_CURRENT()));
     }
 
     {
         DEVICE_GUARD;
 
         if (deviceBuffer.buffer != VK_NULL_HANDLE && old_byte_size > 0) {
+            validateBufferRange(deviceBuffer, 0, old_byte_size, "resizeAndCopyDeviceBuffer source copy");
+            validateBufferRange(newBuffer, 0, old_byte_size, "resizeAndCopyDeviceBuffer destination copy");
             VkBufferCopy copyRegion{};
             copyRegion.srcOffset = deviceBuffer.offset;
             copyRegion.dstOffset = 0;
             copyRegion.size = old_byte_size;
 
-            vkCmdCopyBuffer(
+            const lfs::rendering::vulkan::DeclaredAccess copy_accesses[] = {
+                {.buffer = &deviceBuffer, .use = lfs::rendering::vulkan::BufferUse::TransferRead},
+                {.buffer = &newBuffer, .use = lfs::rendering::vulkan::BufferUse::TransferWrite},
+            };
+            planTransfer(std::span{copy_accesses});
+
+            if (vulkan_dispatch_.cmd_copy_buffer == nullptr) {
+                lfs::rendering::throw_renderer_contract(
+                    "resizeAndCopyDeviceBuffer requires VulkanDispatch::cmd_copy_buffer",
+                    LFS_SOURCE_SITE_CURRENT());
+            }
+            vulkan_dispatch_.cmd_copy_buffer(
                 command_buffer,
                 deviceBuffer.buffer,
                 newBuffer.buffer,
@@ -355,7 +631,18 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
                 offset = alignedOffset;
                 size -= prefix;
 
-                vkCmdFillBuffer(
+                validateFillRange(newBuffer, offset, size, "resizeAndCopyDeviceBuffer new tail clear");
+                const lfs::rendering::vulkan::DeclaredAccess fill_access{
+                    .buffer = &newBuffer,
+                    .use = lfs::rendering::vulkan::BufferUse::TransferWrite,
+                };
+                planTransfer(std::span{&fill_access, 1});
+                if (vulkan_dispatch_.cmd_fill_buffer == nullptr) {
+                    lfs::rendering::throw_renderer_contract(
+                        "resizeAndCopyDeviceBuffer requires VulkanDispatch::cmd_fill_buffer",
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+                vulkan_dispatch_.cmd_fill_buffer(
                     command_buffer,
                     newBuffer.buffer,
                     newBuffer.offset + offset,
@@ -365,56 +652,19 @@ _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(
         }
     }
 
-    HOST_GUARD;
-    destroyBuffer(deviceBuffer);
-    deviceBuffer = newBuffer;
-    deviceBuffer.size = new_byte_size;
-
-    return deviceBuffer;
-}
-
-template <typename T>
-T VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index) {
-
-    const size_t elementSize = sizeof(T);
-    const size_t offset = index * elementSize;
-
-    // Validate bounds
-    if (offset + elementSize > buffer.size)
-        _THROW_ERROR("Index out of bound while reading buffer element");
-
-    T outValue;
-
-    // Only need elementSize bytes; sizing the staging buffer to the full source buffer
-    // (num_splats * 4 in the hot readback path) wasted a one-time MB-scale allocation.
-    allocStagingBuffer(elementSize);
     {
-        // std::lock_guard<std::mutex> lock(stager.mutex);
-        {
-            DEVICE_GUARD;
-
-            // Copy only the specific element from device buffer to staging buffer.
-            VkBufferCopy copyRegion = {};
-            copyRegion.srcOffset = buffer.offset + offset;
-            copyRegion.dstOffset = 0;
-            copyRegion.size = elementSize;
-
-            vkCmdCopyBuffer(command_buffer, buffer.buffer, stager.buffer, 1, &copyRegion);
-        }
-        HOST_GUARD; // will apply fence
-
-        // Map the staging buffer and read the specific element
-        void* base;
-        if (vmaMapMemory(allocator, stager.allocation, &base) != VK_SUCCESS) {
-            _THROW_ERROR("Failed to map memory while reading buffer element");
-        }
-
-        memcpy(&outValue, base, elementSize);
-
-        vmaUnmapMemory(allocator, stager.allocation);
+        GrowthBatchSplitGuard split(this);
+        // Create before retiring: newBuffer already recorded VramProfiler for
+        // deviceBuffer.label. Null the outgoing label before retire so both the
+        // immediate-free and deferred-free paths skip zeroing the live replacement.
+        // (resizeDeviceBuffer retires before create and intentionally keeps the label.)
+        deviceBuffer.label = nullptr;
+        retireDeviceBufferForGrowth(deviceBuffer);
+        deviceBuffer = newBuffer;
+        deviceBuffer.size = new_byte_size;
     }
 
-    return outValue;
+    return deviceBuffer;
 }
 
 template <typename T>
@@ -443,6 +693,14 @@ void VulkanGSPipelineBuffers::reorderSH(Buffer<T>& coeffs) {
     // TODO: do this in O(1) additional memory
     std::vector<__m128> sh_copy(sh, sh + n);
     for (size_t i = 0; i < n; i++) {
+        LFS_VK_DEBUG_ASSERT(
+            forwardIndex(i) < n,
+            "SH reorder index must stay inside the packed coefficient array (source_index={}, destination_index={}, packed_count={}, sh_dimension={}, reorder_width={})",
+            i,
+            forwardIndex(i),
+            n,
+            SH_DIM,
+            SH_REORDER_SIZE);
         sh[forwardIndex(i)] = sh_copy[i];
     }
 }
@@ -473,6 +731,14 @@ void VulkanGSPipelineBuffers::undoReorderSH(Buffer<T>& coeffs, size_t num_splats
     // TODO: do this in O(1) additional memory
     std::vector<__m128> sh_copy(sh, sh + n);
     for (size_t i = 0; i < n; i++) {
+        LFS_VK_DEBUG_ASSERT(
+            forwardIndex(i) < n,
+            "SH inverse-reorder index must stay inside the packed coefficient array (destination_index={}, source_index={}, packed_count={}, sh_dimension={}, reorder_width={})",
+            i,
+            forwardIndex(i),
+            n,
+            SH_DIM,
+            SH_REORDER_SIZE);
         sh[i] = sh_copy[forwardIndex(i)];
     }
 
@@ -496,7 +762,6 @@ void VulkanGSPipelineBuffers::assignScalesOpacs(
     template _VulkanBuffer& VulkanGSPipeline::resizeDeviceBuffer(Buffer<dtype>& buffer, size_t new_size, bool no_shrink);    \
     template _VulkanBuffer& VulkanGSPipeline::clearDeviceBuffer(Buffer<dtype>& buffer, size_t new_size);                     \
     template _VulkanBuffer& VulkanGSPipeline::resizeAndCopyDeviceBuffer(Buffer<dtype>& buffer, size_t new_size, bool clear); \
-    template dtype VulkanGSPipeline::readElement(const _VulkanBuffer& buffer, size_t index);                                 \
     template void VulkanGSPipelineBuffers::reorderSH(Buffer<dtype>& coeffs);                                                 \
     template void VulkanGSPipelineBuffers::undoReorderSH(Buffer<dtype>& coeffs, size_t num_splats);
 

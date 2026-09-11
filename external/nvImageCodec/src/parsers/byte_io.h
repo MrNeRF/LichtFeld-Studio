@@ -25,6 +25,13 @@
 
 namespace nvimgcodec {
 
+    class UnexpectedEndOfStream : public std::runtime_error {
+    public:
+        UnexpectedEndOfStream()
+            : std::runtime_error("Unexpected end of stream") {
+        }
+    };
+
     namespace detail {
 
         template <int nbytes, bool is_little_endian, typename T>
@@ -62,9 +69,12 @@ namespace nvimgcodec {
         void ReadValueImpl(T& value, nvimgcodecIoStreamDesc_t* io_stream) {
             uint8_t data[nbytes]; // NOLINT [runtime/arrays]
             size_t read_nbytes = 0;
-            io_stream->read(io_stream->instance, &read_nbytes, data, nbytes);
+            auto status = io_stream->read(io_stream->instance, &read_nbytes, data, nbytes);
+            if (status != NVIMGCODEC_STATUS_SUCCESS) {
+                throw std::runtime_error("Failed to read");
+            }
             if (read_nbytes != nbytes) {
-                throw std::runtime_error("Unexpected end of stream");
+                throw UnexpectedEndOfStream();
             }
             return ReadValueImpl<nbytes, is_little_endian>(value, data);
         }
@@ -115,8 +125,11 @@ namespace nvimgcodec {
     T ReadValue(nvimgcodecIoStreamDesc_t* io_stream) {
         size_t read_nbytes = 0;
         T data;
-        if (NVIMGCODEC_STATUS_SUCCESS != io_stream->read(io_stream->instance, &read_nbytes, &data, sizeof(T)) || read_nbytes != sizeof(T))
+        auto status = io_stream->read(io_stream->instance, &read_nbytes, &data, sizeof(T));
+        if (status != NVIMGCODEC_STATUS_SUCCESS)
             throw std::runtime_error("Failed to read");
+        if (read_nbytes != sizeof(T))
+            throw UnexpectedEndOfStream();
         return data;
     }
 

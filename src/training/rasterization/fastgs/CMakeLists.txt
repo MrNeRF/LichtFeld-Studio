@@ -11,7 +11,7 @@ set(FASTLFS_SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/src/backward.cu
         # optimizer
         ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam_api.cu
-        ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam.cu
+        ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/src/adam_shN_joint.cu
 )
 
 # One unified library - renamed from fastgs_backend to fastlfs_backend
@@ -29,11 +29,13 @@ target_include_directories(fastlfs_backend
         ${CMAKE_CURRENT_SOURCE_DIR}/optimizer/include
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
         ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src/core/include
         ${CUDAToolkit_INCLUDE_DIRS}
         PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/training/include
 )
 
-# Pure CUDA libraries only
+# The arena singleton resolves from lfs_core when this static backend reaches its final link.
 target_link_libraries(fastlfs_backend
         PUBLIC
         CUDA::cudart
@@ -44,8 +46,12 @@ target_link_libraries(fastlfs_backend
 
 target_compile_options(fastlfs_backend PRIVATE
   # CUDA device code + MSVC host compiler flags (Windows only)
-  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g ${LFS_CUDA_DEVICE_DEBUG_FLAGS} -lineinfo -Xcompiler=/Od -Xcompiler=/Z7>
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Debug>>:-O0 -g -lineinfo -Xcompiler=/Od -Xcompiler=/Z7>
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>,$<CONFIG:Release>>:-O3 --use_fast_math --expt-relaxed-constexpr --diag-suppress=20012,186,221 -Xcompiler=/O2 -Xcompiler=/DNDEBUG>
+
+  # CUDA device code for non-Windows (same device flags as the MSVC branch)
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Debug>>:-O0 -g -lineinfo>
+  $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<NOT:$<CXX_COMPILER_ID:MSVC>>,$<CONFIG:Release>>:-O3 --use_fast_math --expt-relaxed-constexpr --diag-suppress=20012,186,221>
 
   # CUDA on Windows: Pass /utf-8 to MSVC when invoked by nvcc
   $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:
@@ -68,10 +74,4 @@ if(MSVC)
     target_compile_definitions(fastlfs_backend PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
-endif()
-
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    target_compile_definitions(fastlfs_backend PRIVATE _DEBUG DEBUG_BUILD)
-elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_definitions(fastlfs_backend PRIVATE RELEASE_BUILD)
 endif()

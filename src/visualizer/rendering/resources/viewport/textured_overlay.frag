@@ -14,6 +14,8 @@ layout(push_constant) uniform TexturedOverlayPush {
     // y: flip-y for depth UV (1.0 = flip),
     // z,w: unused.
     vec4 depth_params;
+    // Valid-region UV for padded splat depth: xy = scale, zw = clamp max.
+    vec4 uv_region;
 } u;
 
 void main() {
@@ -26,6 +28,7 @@ void main() {
         if (u.depth_params.y > 0.5) {
             uv.y = 1.0 - uv.y;
         }
+        uv = min(uv * u.uv_region.xy, u.uv_region.zw);
         float splat_depth = texture(u_splat_depth, uv).r;
         if (splat_depth > 0.0 && splat_depth < 1.0e9 && ViewDepth > splat_depth + 0.01) {
             discard;

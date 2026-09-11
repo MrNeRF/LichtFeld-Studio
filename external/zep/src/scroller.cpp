@@ -7,7 +7,7 @@
 #include <algorithm>
 
 // A scrollbar that is manually drawn and implemented.  This means it is independent of the backend and can be drawn the
-// same in Qt and ImGui
+// same in common immediate and retained UI backends
 namespace Zep {
 
     Scroller::Scroller(ZepEditor& editor, Region& parent, bool vertical)

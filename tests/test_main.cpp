@@ -1,71 +1,18 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
+#include "core/environment.hpp"
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#include "core/tensor.hpp"
-#include <c10/cuda/CUDACachingAllocator.h>
-#include <cstdlib>
-#include <cuda_runtime.h>
 #include <gtest/gtest.h>
-#include <torch/torch.h>
-
-// Custom event listener to clean GPU memory before AND after each test
-class MemoryCleanupListener : public ::testing::EmptyTestEventListener {
-private:
-    void aggressive_cleanup() {
-        cudaSetDevice(0);
-
-        // Synchronize and check for errors
-        cudaError_t sync_err = cudaDeviceSynchronize();
-        cudaError_t last_err = cudaGetLastError();
-
-        // If there are CUDA errors, log and clear them
-        if (sync_err != cudaSuccess || last_err != cudaSuccess) {
-            if (sync_err != cudaSuccess) {
-                std::cerr << "[CLEANUP] CUDA sync error: " << cudaGetErrorString(sync_err) << std::endl;
-            }
-            if (last_err != cudaSuccess) {
-                std::cerr << "[CLEANUP] CUDA error: " << cudaGetErrorString(last_err) << std::endl;
-            }
-            // Clear the error
-            cudaGetLastError();
-        }
-
-        // Empty PyTorch's cache
-        try {
-            c10::cuda::CUDACachingAllocator::emptyCache();
-        } catch (...) {
-            std::cerr << "[CLEANUP] Exception while emptying PyTorch cache" << std::endl;
-        }
-
-        // Trim custom CUDA memory pool
-        try {
-            lfs::core::Tensor::trim_memory_pool();
-        } catch (...) {
-            std::cerr << "[CLEANUP] Exception while trimming custom pool" << std::endl;
-        }
-
-        // Final sync
-        cudaDeviceSynchronize();
-        cudaGetLastError(); // Clear any remaining errors
-    }
-
-public:
-    void OnTestStart(const ::testing::TestInfo& /*test_info*/) override {
-        aggressive_cleanup();
-    }
-
-    void OnTestEnd(const ::testing::TestInfo& /*test_info*/) override {
-        aggressive_cleanup();
-    }
-};
+#include <string>
 
 int main(int argc, char** argv) {
-    // Initialize loggers - check LOG_LEVEL env var
+    // Initialize loggers
     auto log_level = lfs::core::LogLevel::Info;
-    if (const char* env = std::getenv("LOG_LEVEL")) {
-        std::string level(env);
+    if (const auto env = lfs::core::environment::value("LFS_LOG_LEVEL")) {
+        std::string level(*env);
         if (level == "trace")
             log_level = lfs::core::LogLevel::Trace;
         else if (level == "debug")
@@ -83,13 +30,18 @@ int main(int argc, char** argv) {
 
     ::testing::InitGoogleTest(&argc, argv);
 
-    // Add custom listener to clean memory before each test
-    ::testing::TestEventListeners& listeners = ::testing::UnitTest::GetInstance()->listeners();
-    listeners.Append(new MemoryCleanupListener);
-
     // Pre-warm pinned memory cache for fast CPU-GPU transfers
     // This eliminates cold-start penalties (e.g., 23.8ms for 4K allocations)
     lfs::core::PinnedMemoryAllocator::instance().prewarm();
 
-    return RUN_ALL_TESTS();
+    const int result = RUN_ALL_TESTS();
+
+    // ordered GPU release (TLS caches, PPISP statics, mirror mults, …)
+    // then pool/arena/pinned shutdown while CUDA is still healthy. After that,
+    // do NOT return into C++ static/TLS destruction — those dtors re-enter
+    // freed pool storage / half-dead CUDA and produce SIGSEGV (exit 139) or
+    // host double-free (exit 134). Same contract as the app binary: teardown
+    // then process-terminate without running remaining static destructors.
+    lfs::core::teardown_gpu_before_exit();
+    lfs::core::flush_and_exit(result);
 }

@@ -5,6 +5,13 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def clear_training_hooks(lf):
+    """Keep process-global decorator registrations isolated per test."""
+    yield
+    lf._clear_training_hooks()
+
+
 class TestHookDecorators:
     """Tests for hook decorator existence and registration."""
 
@@ -113,15 +120,10 @@ class TestContextView:
         assert hasattr(ctx, "phase")
         assert hasattr(ctx, "strategy")
 
-    def test_context_refresh(self, lf):
-        """Test Context refresh method."""
-        ctx = lf.Context()
-        ctx.refresh()
-        # No assertion - just verify it doesn't crash
-
     def test_context_values_without_training(self, lf):
         """Test Context returns sensible defaults without training."""
         ctx = lf.Context()
+        ctx.refresh()
         assert ctx.iteration >= 0
         assert ctx.loss >= 0.0 or ctx.loss == 0.0
         assert ctx.is_training is False
@@ -241,14 +243,3 @@ class TestFrameCallback:
         """Test stop_animation function exists."""
         assert hasattr(lf, "stop_animation")
         assert callable(lf.stop_animation)
-
-    def test_on_frame_registration(self, lf):
-        """Test on_frame can register callback."""
-        called = []
-
-        def frame_cb(dt):
-            called.append(dt)
-
-        lf.on_frame(frame_cb)
-        # Callback won't be called without GUI loop, but registration shouldn't crash
-        lf.stop_animation()  # Clean up

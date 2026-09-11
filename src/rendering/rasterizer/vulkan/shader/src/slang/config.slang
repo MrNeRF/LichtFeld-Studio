@@ -92,10 +92,6 @@
 #define SUBTILE_SIZE (SUBTILE_HEIGHT*SUBTILE_WIDTH)
 
 
-// optional, not in Inria or GSplat
-#define NORMALIZE_QUATS_IN_OPTIMIZER 0
-
-
 static const float M_PI = 3.14159265358979;
 
 #ifndef USE_EMULATED_INT64

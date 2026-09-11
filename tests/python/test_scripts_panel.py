@@ -189,7 +189,7 @@ def test_scripts_panel_builds_retained_records(scripts_panel_module):
 def test_scripts_panel_uses_dirty_update_policy(scripts_panel_module):
     module, _state = scripts_panel_module
     assert module.ScriptsPanel.update_policy == "dirty"
-    assert "update_interval_ms" not in module.ScriptsPanel.__dict__
+    assert module.ScriptsPanel.update_interval_ms == 100
 
 
 def test_scripts_panel_requests_update_from_script_generation(scripts_panel_module):

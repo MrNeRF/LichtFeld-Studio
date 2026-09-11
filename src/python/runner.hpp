@@ -4,22 +4,47 @@
 
 #pragma once
 
+#include "python_runtime.hpp"
+
+#include <core/error.hpp>
+
+#include <cstddef>
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 namespace lfs::python {
 
+    // Phase 9 Section 3.1: latched Python-init state. Terminal and monotone in
+    // production: Ready never becomes Failed and vice versa. Failed retains the
+    // Error (interpreter init OR the lichtfeld-bridge init failed). Pure C++
+    // (atomic + mutex + lfs::Error); readable/writable without the GIL.
+    enum class PyInitState : std::uint8_t { Uninitialized,
+                                            Initializing,
+                                            Ready,
+                                            Failed };
+
+    struct PyInitStatus {
+        PyInitState state = PyInitState::Uninitialized;
+        std::optional<lfs::Error> error; // engaged iff state == Failed
+    };
+
+    // Cheap, thread-safe query of the latched init state. Lock-free fast path;
+    // takes the error mutex only to copy the Error when Failed.
+    [[nodiscard]] PyInitStatus init_state() noexcept;
+
     /**
      * @brief Execute a list of Python script files. Each script is expected to import `lichtfeld`
      *        and register its callbacks (e.g., with register_opacity_scaler or Session hooks).
      *
-     * @return std::expected<void, std::string> error on failure (file missing, execution error,
-     *         or interpreter unavailable when bindings are disabled).
+     * @return lfs::Result<void>: the latched init failure, or a typed IO/Python error on a
+     *         missing script or execution failure. Success is a default Status.
      */
-    std::expected<void, std::string> run_scripts(const std::vector<std::filesystem::path>& scripts);
+    [[nodiscard]] lfs::Result<void> run_scripts(const std::vector<std::filesystem::path>& scripts);
 
     /**
      * @brief Set the callback for Python stdout/stderr capture.
@@ -33,9 +58,19 @@ namespace lfs::python {
     void write_output(const std::string& text, bool is_error = false);
 
     /**
-     * @brief Initialize Python interpreter if not already done.
+     * @brief Initialize the Python interpreter if not already done.
+     * @return the latched Status: success once Ready, or the same latched Error on
+     *         every call once Failed (interpreter or lichtfeld-bridge init failed).
+     *         Native application services must not wait for this state.
      */
-    void ensure_initialized();
+    [[nodiscard]] lfs::Status ensure_initialized();
+
+    // Test-only (process-isolated). While armed, ensure_initialized() latches the
+    // Failed state without touching the real interpreter or the init once-flag.
+    // reset restores the latch to its pre-forced value (Ready if a real init
+    // already succeeded, else Uninitialized) and disarms. Documented tests-only.
+    void force_python_init_failure_for_testing(bool should_fail) noexcept;
+    void reset_python_init_state_for_testing() noexcept;
 
     /**
      * @brief Register built-in Python UI once the retained GUI runtime is available.
@@ -43,20 +78,50 @@ namespace lfs::python {
     void ensure_builtin_ui_registered();
 
     /**
-     * @brief Load user plugins configured for startup.
-     *        This requires a ready Python runtime.
+     * @brief Allow or deny loading user plugins for this process.
+     *
+     * Safe mode sets this to false before the visualizer reaches its first
+     * frame. Built-in Python UI remains available in both modes.
      */
-    void ensure_plugins_loaded();
+    void set_user_plugin_loading_enabled(bool enabled) noexcept;
 
     /**
-     * @brief Schedule asynchronous plugin autoload after startup.
-     *        This keeps first-frame startup responsive.
+     * @brief Load user plugins configured for startup.
+     *        This requires a ready Python runtime.
+     * @param wait_for_completion Allow a headless caller to wait even when
+     *        the Python UI module identified the current thread as graphics.
+     */
+    [[nodiscard]] bool ensure_plugins_loaded(bool wait_for_completion = false);
+
+    // Invoked from finish_plugin_preload after load becomes terminal.
+    // Headless training reasserts SIGINT/SIGTERM here. nullptr clears.
+    void set_plugin_preload_completion_hook(void (*hook)());
+
+    /**
+     * @brief Schedule plugin autoload after startup.
+     *        The complete load pipeline runs on one owned background worker.
      */
     void preload_user_plugins_async();
 
     /**
-     * @brief Join the plugin preload thread if running.
-     *        Called from finalize() to ensure clean shutdown.
+     * @brief True while startup plugin preload is running.
+     *
+     * UI code uses this to avoid blocking Python calls while startup imports
+     * are in progress.
+     */
+    bool is_plugin_preload_running();
+
+    /// @brief True while startup plugin preload may block Python calls.
+    bool is_plugin_preload_blocking_python();
+
+    /**
+     * @brief Request cooperative cancellation of startup plugin loading.
+     *        Safe to call from the render thread without acquiring the GIL.
+     */
+    void request_plugin_preload_stop();
+
+    /**
+     * @brief Stop and join startup plugin loading before Python teardown.
      */
     void join_plugin_preload();
 
@@ -86,8 +151,6 @@ namespace lfs::python {
      * @brief Check if Python was used in this session.
      * @return true if Python scripts were executed.
      */
-    bool was_python_used();
-
     struct FormatResult {
         std::string code;
         std::string error;
@@ -129,6 +192,28 @@ namespace lfs::python {
      * @brief Check if a frame callback is set.
      */
     bool has_frame_callback();
+
+    /**
+     * @brief Set a callback evaluated at an absolute scene clip time.
+     * @param callback Function(clip_time) called with time in seconds.
+     */
+    void set_scene_time_callback(std::function<void(float)> callback);
+
+    /**
+     * @brief Clear the scene-time callback.
+     */
+    void clear_scene_time_callback();
+
+    /**
+     * @brief Call the scene-time callback if set.
+     * @param clip_time Absolute clip time in seconds.
+     */
+    void tick_scene_time_callback(float clip_time);
+
+    /**
+     * @brief Check if a scene-time callback is set.
+     */
+    bool has_scene_time_callback();
 
     std::filesystem::path get_user_packages_dir();
 

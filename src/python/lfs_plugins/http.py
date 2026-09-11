@@ -6,13 +6,21 @@ from __future__ import annotations
 
 import logging
 import os
-import ssl
-import urllib.error
-import urllib.request
 from functools import lru_cache
 from typing import Optional
 
 _log = logging.getLogger(__name__)
+
+
+def __getattr__(name):
+    """Keep the historical lazy ``http.urllib`` patch surface for callers."""
+    if name == "urllib":
+        import urllib
+        import urllib.error
+        import urllib.request
+
+        return urllib
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _load_ca_bundle_from_certifi() -> Optional[str]:
@@ -38,7 +46,9 @@ def _load_ca_bundle_from_certifi() -> Optional[str]:
 
 
 @lru_cache(maxsize=1)
-def _fallback_ssl_context() -> Optional[ssl.SSLContext]:
+def _fallback_ssl_context() -> Optional[object]:
+    import ssl
+
     cafile = _load_ca_bundle_from_certifi()
     if not cafile:
         return None
@@ -51,6 +61,9 @@ def _fallback_ssl_context() -> Optional[ssl.SSLContext]:
 
 
 def _is_cert_verify_error(exc: BaseException) -> bool:
+    import ssl
+    import urllib.error
+
     if isinstance(exc, ssl.SSLCertVerificationError):
         return True
 
@@ -68,6 +81,7 @@ def _is_cert_verify_error(exc: BaseException) -> bool:
 
 def urlopen(url, *, timeout: float, **kwargs):
     """Open a URL and retry certificate failures with a certifi CA bundle if available."""
+    import urllib.request
 
     try:
         return urllib.request.urlopen(url, timeout=timeout, **kwargs)

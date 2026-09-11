@@ -99843,9 +99843,10 @@ const initUI = (global) => {
         'buttonContainer',
         'play', 'pause',
         'settings', 'settingsPanel',
-        'orbitCamera', 'flyCamera',
+        'orbitCamera', 'flyCamera', 'orthoCamera',
         'hqCheck', 'hqOption', 'lqCheck', 'lqOption',
         'reset', 'frame',
+        'fovSlider', 'fovValue', 'fovReset',
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
         'tooltip'
@@ -100076,12 +100077,32 @@ const initUI = (global) => {
     dom.flyCamera.addEventListener('click', () => {
         state.cameraMode = 'fly';
     });
+    dom.orthoCamera.addEventListener('click', () => {
+        const cameraComponent = global.camera.camera;
+        cameraComponent.projection = cameraComponent.projection === PROJECTION_ORTHOGRAPHIC
+            ? PROJECTION_PERSPECTIVE
+            : PROJECTION_ORTHOGRAPHIC;
+        dom.orthoCamera.classList[cameraComponent.projection === PROJECTION_ORTHOGRAPHIC ? 'add' : 'remove']('active');
+    });
     dom.reset.addEventListener('click', (event) => {
         events.fire('inputEvent', 'reset', event);
     });
     dom.frame.addEventListener('click', (event) => {
         events.fire('inputEvent', 'frame', event);
     });
+    // FOV slider
+    const updateFovSlider = () => {
+        dom.fovSlider.value = state.fov;
+        dom.fovValue.textContent = `${state.fov}°`;
+    };
+    dom.fovSlider.addEventListener('input', () => {
+        state.fov = parseFloat(dom.fovSlider.value);
+    });
+    dom.fovReset.addEventListener('click', () => {
+        state.fov = state.defaultFov;
+    });
+    events.on('fov:changed', updateFovSlider);
+    updateFovSlider();
     // update UI based on touch joystick updates
     events.on('touchJoystickUpdate', (base, stick) => {
         if (base === null) {
@@ -100110,8 +100131,11 @@ const initUI = (global) => {
     tooltip.register(dom.pause, 'Pause', 'top');
     tooltip.register(dom.orbitCamera, 'Orbit Camera', 'top');
     tooltip.register(dom.flyCamera, 'Fly Camera', 'top');
+    tooltip.register(dom.orthoCamera, 'Orthographic Mode', 'top');
     tooltip.register(dom.reset, 'Reset Camera', 'bottom');
     tooltip.register(dom.frame, 'Frame Scene', 'bottom');
+    tooltip.register(dom.fovSlider, 'Camera Field of View', 'top');
+    tooltip.register(dom.fovReset, 'Reset FOV', 'bottom');
     tooltip.register(dom.settings, 'Settings', 'top');
     tooltip.register(dom.info, 'Help', 'top');
     tooltip.register(dom.arMode, 'Enter AR', 'top');
@@ -101647,9 +101671,20 @@ class Viewer {
         });
         const applyCamera = (camera) => {
             const cameraEntity = global.camera;
+            // use the user-adjusted fov unless an animation track is driving the camera
+            const fov = state.cameraMode === 'anim' ? camera.fov : state.fov;
             cameraEntity.setPosition(camera.position);
             cameraEntity.setEulerAngles(camera.angles);
-            cameraEntity.camera.fov = camera.fov;
+            cameraEntity.camera.fov = fov;
+            if (cameraEntity.camera.projection === PROJECTION_ORTHOGRAPHIC) {
+                // match the orthographic frustum size to the current view distance so
+                // wheel zoom and orbiting keep working in orthographic mode
+                let orthoHeight = camera.distance * Math.tan(0.5 * fov * Math.PI / 180);
+                if (cameraEntity.camera.horizontalFov) {
+                    orthoHeight /= cameraEntity.camera.aspectRatio;
+                }
+                cameraEntity.camera.orthoHeight = orthoHeight;
+            }
             // fit clipping planes to bounding box
             const boundRadius = sceneBound.halfExtents.length();
             // calculate the forward distance between the camera to the bound center
@@ -102433,6 +102468,8 @@ const loadSkybox = (app, url) => {
 };
 const main = (app, camera, settingsJson, config) => {
     const events = new EventHandler();
+    const settings = importSettings(settingsJson);
+    const initialFov = settings.cameras?.[0]?.initial?.fov || 65;
     const state = observe(events, {
         readyToRender: false,
         hqMode: true,
@@ -102446,11 +102483,13 @@ const main = (app, camera, settingsJson, config) => {
         hasAR: false,
         hasVR: false,
         isFullscreen: false,
-        controlsHidden: false
+        controlsHidden: false,
+        fov: initialFov,
+        defaultFov: initialFov
     });
     const global = {
         app,
-        settings: importSettings(settingsJson),
+        settings,
         config,
         state,
         events,

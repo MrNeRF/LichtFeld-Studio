@@ -8,10 +8,11 @@
 
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
-#include <optional>
-#include <string>
+#include <mutex>
 #include <string_view>
+#include <thread>
 
 namespace lfs::vis {
 
@@ -19,6 +20,7 @@ namespace lfs::vis {
     enum class TrainingState : uint8_t {
         Idle,     // No dataset loaded, no trainer
         Ready,    // Dataset loaded, trainer initialized, can start
+        Starting, // Training initialization is running off-thread
         Running,  // Training thread active
         Paused,   // Training paused, can resume or stop
         Stopping, // Stop requested, waiting for thread
@@ -36,7 +38,6 @@ namespace lfs::vis {
         Reset,
         ClearScene,
         DeleteTrainingNode,
-        SaveCheckpoint,
         COUNT
     };
 
@@ -48,30 +49,19 @@ namespace lfs::vis {
         Error        // Error occurred
     };
 
-    // Resources that need cleanup
-    struct TrainingResources {
-        bool has_trainer = false;
-        bool has_training_thread = false;
-        bool has_scene_data = false;
-        bool has_gpu_tensors = false;
-        std::string training_node_name;
-        std::string dataset_path;
-    };
-
     // State machine configuration
     class LFS_VIS_API TrainingStateMachine {
     public:
         // State transition callback signatures
         using StateChangeCallback = std::function<void(TrainingState old_state, TrainingState new_state)>;
-        using CleanupCallback = std::function<void(const TrainingResources& resources)>;
 
         TrainingStateMachine();
 
         // State queries
         [[nodiscard]] TrainingState getState() const { return state_.load(std::memory_order_acquire); }
         [[nodiscard]] bool isInState(TrainingState state) const { return getState() == state; }
-        [[nodiscard]] bool isActive() const; // Running or Paused
-        [[nodiscard]] FinishReason getFinishReason() const { return finish_reason_; }
+        [[nodiscard]] bool isActive() const; // Starting, Running, or Paused
+        [[nodiscard]] FinishReason getFinishReason() const;
 
         // Action permission checks - call BEFORE attempting action
         [[nodiscard]] bool canPerform(TrainingAction action) const;
@@ -81,14 +71,8 @@ namespace lfs::vis {
         [[nodiscard]] bool transitionTo(TrainingState new_state);
         [[nodiscard]] bool transitionToFinished(FinishReason reason);
 
-        // Resource tracking
-        void setResources(const TrainingResources& resources);
-        [[nodiscard]] const TrainingResources& getResources() const { return resources_; }
-        void clearResourceTracking();
-
         // Callbacks
-        void setStateChangeCallback(StateChangeCallback callback) { on_state_change_ = std::move(callback); }
-        void setCleanupCallback(CleanupCallback callback) { on_cleanup_ = std::move(callback); }
+        void setStateChangeCallback(StateChangeCallback callback);
 
         // Utility
         [[nodiscard]] static std::string_view stateName(TrainingState state);
@@ -96,38 +80,42 @@ namespace lfs::vis {
 
     private:
         [[nodiscard]] bool isValidTransition(TrainingState from, TrainingState to) const;
-        void executeExitActions(TrainingState old_state);
-        void executeEntryActions(TrainingState new_state);
+        [[nodiscard]] bool transitionToImpl(TrainingState new_state, FinishReason finish_reason);
+        void finishCallbackDispatch() noexcept;
 
         std::atomic<TrainingState> state_{TrainingState::Idle};
+        mutable std::mutex mutex_;
+        std::condition_variable callback_dispatch_idle_;
+        std::thread::id callback_dispatch_owner_;
+        bool callback_dispatch_active_ = false;
         FinishReason finish_reason_{FinishReason::None};
-        TrainingResources resources_;
 
         StateChangeCallback on_state_change_;
-        CleanupCallback on_cleanup_;
 
         // Transition table: [from][to] = allowed
-        static constexpr size_t STATE_COUNT = 6;
+        static constexpr size_t STATE_COUNT = 7;
         static constexpr std::array<std::array<bool, STATE_COUNT>, STATE_COUNT> TRANSITIONS = {{
-            // To:    Idle   Ready  Running Paused Stopping Finished
-            /* Idle */ {false, true, false, true, false, false}, // Paused: checkpoint load
-            /* Ready */ {true, false, true, false, false, false},
-            /* Running */ {false, false, false, true, true, false},
-            /* Paused */ {false, true, true, false, true, false},
-            /* Stopping */ {true, false, false, false, false, true},
-            /* Finished */ {true, true, false, false, false, false},
+            // To:    Idle   Ready  Starting Running Paused Stopping Finished
+            /* Idle */ {false, true, false, false, true, false, true}, // Paused/Finished: project CKPT
+            /* Ready */ {true, false, true, false, false, false, false},
+            /* Starting */ {true, false, false, true, false, true, true},
+            /* Running */ {false, false, false, false, true, true, false},
+            /* Paused */ {false, true, false, true, false, true, true}, // Finished: completed restore
+            /* Stopping */ {true, false, false, false, false, false, true},
+            /* Finished */ {true, true, false, false, false, false, false},
         }};
 
         // Action permission table: [state][action] = allowed
         static constexpr size_t ACTION_COUNT = static_cast<size_t>(TrainingAction::COUNT);
         static constexpr std::array<std::array<bool, ACTION_COUNT>, STATE_COUNT> PERMISSIONS = {{
-            //              Load   LoadCk Start  Pause  Resume Stop   Reset  Clear  DelNode SaveCk
-            /* Idle */ {true, true, false, false, false, false, false, true, true, false},
-            /* Ready */ {true, true, true, false, false, false, true, true, true, false},
-            /* Running */ {false, false, false, true, false, true, false, false, false, true},
-            /* Paused */ {true, true, false, false, true, true, true, true, false, true},
-            /* Stopping */ {false, false, false, false, false, false, false, false, false, false},
-            /* Finished */ {true, true, false, false, false, false, true, true, false, false},
+            //              Load   LoadCk Start  Pause  Resume Stop   Reset  Clear  DelNode
+            /* Idle */ {true, true, false, false, false, false, false, true, true},
+            /* Ready */ {true, true, true, false, false, false, true, true, true},
+            /* Starting */ {false, false, false, true, false, true, false, false, false},
+            /* Running */ {false, false, false, true, false, true, false, false, false},
+            /* Paused */ {true, true, false, false, true, true, true, true, false},
+            /* Stopping */ {false, false, false, false, false, false, false, false, false},
+            /* Finished */ {true, true, false, false, false, false, true, true, false},
         }};
     };
 

@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2023-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: Apache-2.0
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -23,28 +23,15 @@ namespace nvimgcodec {
     constexpr bool IsPlanar(nvimgcodecSampleFormat_t fmt) {
         switch (fmt) {
         case NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED:
+        case NVIMGCODEC_SAMPLEFORMAT_P_RGBA:
         case NVIMGCODEC_SAMPLEFORMAT_P_RGB:
         case NVIMGCODEC_SAMPLEFORMAT_P_BGR:
-        case NVIMGCODEC_SAMPLEFORMAT_P_Y:
         case NVIMGCODEC_SAMPLEFORMAT_P_YUV:
+        case NVIMGCODEC_SAMPLEFORMAT_P_YA:
+        case NVIMGCODEC_SAMPLEFORMAT_P_Y:
             return true;
         default:
             return false;
-        }
-    }
-
-    constexpr int DefaultNumberOfChannels(nvimgcodecSampleFormat_t fmt) {
-        switch (fmt) {
-        case NVIMGCODEC_SAMPLEFORMAT_P_RGB:
-        case NVIMGCODEC_SAMPLEFORMAT_I_RGB:
-        case NVIMGCODEC_SAMPLEFORMAT_P_BGR:
-        case NVIMGCODEC_SAMPLEFORMAT_I_BGR:
-        case NVIMGCODEC_SAMPLEFORMAT_P_YUV:
-            return 3;
-        case NVIMGCODEC_SAMPLEFORMAT_P_Y:
-            return 1;
-        default:
-            return 0;
         }
     }
 
@@ -71,6 +58,7 @@ namespace nvimgcodec {
     constexpr bool IsGray(nvimgcodecSampleFormat_t fmt) {
         switch (fmt) {
         case NVIMGCODEC_SAMPLEFORMAT_P_Y:
+        case NVIMGCODEC_SAMPLEFORMAT_I_Y:
             return true;
         default:
             return false;
@@ -79,6 +67,11 @@ namespace nvimgcodec {
 
     constexpr int NumberOfChannels(const nvimgcodecImageInfo_t& info) {
         return IsPlanar(info.sample_format) ? info.num_planes : info.plane_info[0].num_channels;
+    }
+
+    constexpr bool IsSampleFormatInterleaved(nvimgcodecSampleFormat_t sample_format) {
+        // First bit of sample format says if this is interleaved or not
+        return static_cast<int>(sample_format) % 2 == 0;
     }
 
 } // namespace nvimgcodec

@@ -1,0 +1,6 @@
+# POINT3D_ID X Y Z R G B ERROR TRACK[]
+1 1.5 -2.25 3.75 10 20 30 0.125 7 8 9 10
+
+# blank and comments should be ignored
+2 -4 5 6.5 255 128 0 2.0 11 12
+3 0 1 2 1 2 3 0.0 4 5

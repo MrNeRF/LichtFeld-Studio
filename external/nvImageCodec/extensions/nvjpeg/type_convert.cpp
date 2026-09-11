@@ -16,12 +16,18 @@
  */
 #include "type_convert.h"
 
-nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgcodec_format) {
+nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgcodec_format, nvimgcodecSampleDataType_t nvimgcodec_data_type) {
     switch (nvimgcodec_format) {
     case NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED:
         return NVJPEG_OUTPUT_UNCHANGED;
-    case NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED:
-        return NVJPEG_OUTPUT_RGBI;
+    case NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED: {
+        if (nvimgcodec_data_type == NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16) {
+            return NVJPEG_OUTPUT_UNCHANGEDI_U16;
+        } else {
+            return NVJPEG_OUTPUT_RGBI;
+        }
+    }
+
     case NVIMGCODEC_SAMPLEFORMAT_P_RGB:
         return NVJPEG_OUTPUT_RGB;
     case NVIMGCODEC_SAMPLEFORMAT_I_RGB:
@@ -30,9 +36,16 @@ nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgc
         return NVJPEG_OUTPUT_BGR;
     case NVIMGCODEC_SAMPLEFORMAT_I_BGR:
         return NVJPEG_OUTPUT_BGRI;
-    case NVIMGCODEC_SAMPLEFORMAT_P_Y:
-        return NVJPEG_OUTPUT_Y;
+    case NVIMGCODEC_SAMPLEFORMAT_I_Y:
+    case NVIMGCODEC_SAMPLEFORMAT_P_Y: {
+        if (nvimgcodec_data_type == NVIMGCODEC_SAMPLE_DATA_TYPE_UINT16) {
+            return NVJPEG_OUTPUT_UNCHANGEDI_U16;
+        } else {
+            return NVJPEG_OUTPUT_Y;
+        }
+    }
     case NVIMGCODEC_SAMPLEFORMAT_P_YUV:
+    case NVIMGCODEC_SAMPLEFORMAT_I_YUV:
         return NVJPEG_OUTPUT_YUV;
     default:
         return NVJPEG_OUTPUT_UNCHANGED;

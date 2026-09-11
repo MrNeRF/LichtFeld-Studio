@@ -7,6 +7,7 @@
 add_library(lfs_event_bridge SHARED
     event_bridge.cpp
     control_boundary.cpp
+    command_center.cpp
     command_center_bridge.cpp
     scoped_handler.cpp
     localization_manager.cpp
@@ -24,6 +25,7 @@ target_link_libraries(lfs_event_bridge
         CUDA::cudart
     PRIVATE
         lfs_logger
+        lfs_geometry
         spdlog::spdlog
         nlohmann_json::nlohmann_json
 )

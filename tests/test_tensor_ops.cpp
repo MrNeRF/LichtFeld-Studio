@@ -359,6 +359,15 @@ TEST_F(TensorOpsTest, Cos) {
     compare_tensors(custom_result, torch_result, 1e-5f, 1e-6f, "Cos");
 }
 
+TEST_F(TensorOpsTest, Tan) {
+    std::vector<float> data = {0.0f, M_PI / 6, M_PI / 4, M_PI / 3};
+
+    const auto custom_tensor = Tensor::from_vector(data, {4}, Device::CUDA);
+    const auto torch_tensor = torch::tensor(data, torch::TensorOptions().device(torch::kCUDA));
+
+    compare_tensors(custom_tensor.tan(), torch::tan(torch_tensor), 1e-5f, 1e-6f, "Tan");
+}
+
 TEST_F(TensorOpsTest, Floor) {
     std::vector<float> data = {1.2f, 2.7f, -1.3f, -2.8f, 0.5f};
 
@@ -1010,4 +1019,24 @@ TEST_F(TensorOpsTest, CPUOperations) {
     auto torch_result = (torch_tensor + 1.0f) * 2.0f;
 
     compare_tensors(custom_result, torch_result, 1e-6f, 1e-7f, "CPU_Ops");
+}
+
+TEST_F(TensorOpsTest, NormalizeProducesZeroMeanAndUnitDeviation) {
+    const auto tensor = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f}, {5}, Device::CUDA);
+    const auto normalized = tensor.normalize();
+
+    EXPECT_NEAR(normalized.mean_scalar(), 0.0f, 1e-5f);
+    EXPECT_NEAR(normalized.std_scalar(false), 1.0f, 1e-4f);
+}
+
+TEST_F(TensorOpsTest, Int32ScalarEqualityProducesExactBoolMask) {
+    const auto labels = Tensor::from_vector(
+        std::vector<int>{0, 1, 2, 1, 0, 2}, {6}, Device::CUDA);
+
+    const auto mask = labels.eq(1);
+
+    EXPECT_EQ(mask.dtype(), DataType::Bool);
+    EXPECT_EQ(mask.cpu().to_vector_bool(),
+              (std::vector<bool>{false, true, false, true, false, false}));
 }

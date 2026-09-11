@@ -26,7 +26,7 @@ namespace lfs::vis {
         [[nodiscard]] bool isNodeSelected(core::NodeId id) const;
         [[nodiscard]] size_t selectedNodeCount() const;
 
-        [[nodiscard]] const std::vector<bool>& getNodeMask(const core::Scene& scene) const;
+        [[nodiscard]] std::vector<bool> getNodeMask(const core::Scene& scene) const;
         void invalidateNodeMask();
 
         [[nodiscard]] uint32_t generation() const { return generation_.load(std::memory_order_acquire); }

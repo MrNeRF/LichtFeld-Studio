@@ -12,6 +12,7 @@
 
 namespace Rml {
     class Context;
+    class Element;
     class ElementDocument;
 } // namespace Rml
 
@@ -26,5 +27,6 @@ namespace lfs::vis::gui::rml_documents {
         const std::filesystem::path& document_path);
     LFS_VIS_API Rml::ElementDocument* loadDocument(Rml::Context* context,
                                                    const std::filesystem::path& document_path);
+    LFS_VIS_API bool refreshLocalizedContent(Rml::Element* root);
 
 } // namespace lfs::vis::gui::rml_documents

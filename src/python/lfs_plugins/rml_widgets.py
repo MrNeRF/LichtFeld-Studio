@@ -19,7 +19,87 @@ Usage in Panel.on_mount():
 """
 
 from dataclasses import dataclass
+import math
 from typing import Any, Callable
+
+
+def clamp_unit_channel(value):
+    try:
+        channel = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(channel):
+        return 0.0
+    return max(0.0, min(1.0, channel))
+
+
+def color_channel_byte(color, index):
+    try:
+        value = color[index]
+    except (IndexError, TypeError):
+        value = 0.0
+    return max(
+        0,
+        min(255, int(round(clamp_unit_channel(value) * 255.0))),
+    )
+
+
+def color_channel_text(color, index):
+    return str(color_channel_byte(color, index))
+
+
+def color_to_hex(color):
+    return (
+        f"#{color_channel_byte(color, 0):02x}"
+        f"{color_channel_byte(color, 1):02x}"
+        f"{color_channel_byte(color, 2):02x}"
+    )
+
+
+def hex_to_color(value):
+    text = str(value or "").strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return (
+            int(text[0:2], 16) / 255.0,
+            int(text[2:4], 16) / 255.0,
+            int(text[4:6], 16) / 255.0,
+        )
+    except ValueError:
+        return None
+
+
+def parse_color_channel(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if ":" in text:
+        text = text.split(":", 1)[1].strip()
+    try:
+        parsed = float(text)
+    except ValueError:
+        return None
+    if not math.isfinite(parsed):
+        return None
+    if "." in text and 0.0 <= parsed <= 1.0:
+        parsed *= 255.0
+    byte_value = max(0, min(255, int(round(parsed))))
+    return byte_value / 255.0
+
+
+def normalize_color(color):
+    channels = []
+    for index in range(3):
+        try:
+            channels.append(clamp_unit_channel(color[index]))
+        except (IndexError, TypeError):
+            channels.append(0.0)
+    return tuple(channels)
+
+
+def color_component_label(prefix, color, index):
+    return f"{prefix}:{color_channel_byte(color, index):>3d}"
 
 
 def find_ancestor_with_attribute(element, attribute, stop=None):

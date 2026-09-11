@@ -35,7 +35,6 @@ namespace lfs::vis::terminal {
         PtyProcess(PtyProcess&& other) noexcept;
         PtyProcess& operator=(PtyProcess&& other) noexcept;
 
-        bool spawn(const std::string& shell = "", int cols = DEFAULT_COLS, int rows = DEFAULT_ROWS);
         bool attach(int fd);
         void close();
         [[nodiscard]] bool is_running() const;
@@ -45,8 +44,6 @@ namespace lfs::vis::terminal {
 
         void resize(int cols, int rows);
         void interrupt();
-
-        [[nodiscard]] int fd() const;
 
 #ifdef _WIN32
         bool attachPipes(HANDLE read_handle, HANDLE write_handle);

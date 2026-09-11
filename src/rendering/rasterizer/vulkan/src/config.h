@@ -1,9 +1,7 @@
 #pragma once
 
-#include <cstdint>
-
-#define ENABLE_VULKAN_VALIDATION_LAYER 0
-#define ENABLE_ASSERTION               0
+#include "core/assert.hpp"
+#include "rendering/vulkan_result.hpp"
 
 #ifndef SUBGROUP_SIZE
 #define SUBGROUP_SIZE 32
@@ -34,48 +32,37 @@
 #define HIGS_RASTER_WAVE_BATCHES 16384
 #define HIGS_RASTER_MAX_WAVES    16
 
+// Fixed per-depth-wave tile-instance budget. Interactive recording arms the
+// capability-selected number of slots; exports record an exact upper bound.
+#define HIGS_DEPTH_WAVE_INSTANCES     4194304
+#define HIGS_DEPTH_MAX_WAVES          64
+#define HIGS_DEPTH_MAX_WAVES_FALLBACK 16
+
 // reordering for better memory colaescing
 // see config.slang for details
 #define SH_REORDER_SIZE SUBGROUP_SIZE
-// #define SH_REORDER_SIZE 1
 
 typedef int32_t sortingKey_t;
-// typedef int64_t sortingKey_t;
 
-#define RASTERIZE_BACKWARD_USE_SCHEDULING 1
-
-#include <cstdio>
-#define _DEBUG_PRINT                           \
-    do {                                       \
-        printf("%s %d\n", __FILE__, __LINE__); \
-        fflush(stdout);                        \
-    } while (0)
-// #define _DEBUG_PRINT ;
-#include <cassert>
-
-#include <stdexcept>
-
-#define _THROW_ERROR_ALWAYS(message)                                                          \
-    do {                                                                                      \
-        std::string msg = std::string(message) +                                              \
-                          ". From file `" + __FILE__ + "`, line " + std::to_string(__LINE__); \
-        printf("\033[91m%s\033[m\n", msg.c_str());                                            \
-        fflush(stdout);                                                                       \
-        throw std::runtime_error(msg);                                                        \
-    } while (0)
-
-#if ENABLE_ASSERTION
-#define _THROW_ERROR(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
+// Vulkan keeps its call-site idiom while sharing the core debug primitive.
+// In Release, neither the condition nor the formatting arguments are evaluated.
+#ifndef LFS_VK_DEBUG_ASSERT
+#if defined(NDEBUG)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) ((void)0)
+#elif defined(__CUDA_ARCH__)
+#define LFS_VK_DEBUG_ASSERT(condition, ...) assert(condition)
 #else
-#define _THROW_ERROR(...) \
-    do {                  \
-    } while (0)
+#define LFS_VK_DEBUG_ASSERT(condition, ...)                            \
+    do {                                                               \
+        if (!(condition)) [[unlikely]] {                               \
+            ::lfs::core::detail::assertion_failed(                     \
+                "LFS debug invariant", #condition,                     \
+                ::lfs::rendering::formatVulkanDiagnostic(__VA_ARGS__), \
+                LFS_SOURCE_SITE_CURRENT());                            \
+        }                                                              \
+    } while (false)
 #endif
-
-// Always-on guard, NOT compiled out in release. Use only for conditions that would
-// otherwise feed undefined behavior into the Vulkan driver (e.g. a VK_NULL_HANDLE
-// buffer reaching vkCmdDispatch). Logic-only invariants stay on _THROW_ERROR.
-#define _CHECK_FATAL(...) _THROW_ERROR_ALWAYS(__VA_ARGS__)
+#endif
 
 #define _CEIL_DIV(x, m)   (((x) + (m) - 1) / (m))
 #define _CEIL_ROUND(x, m) (_CEIL_DIV(x, m) * (m))

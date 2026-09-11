@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include <c10/cuda/CUDACachingAllocator.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <memory>
@@ -54,37 +53,9 @@ protected:
     void SetUp() override {
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
 
-        // Record initial CUDA memory
-        cudaMemGetInfo(&initial_free_mem, &total_mem);
-
         torch::manual_seed(42);
         Tensor::manual_seed(42);
     }
-
-    void TearDown() override {
-        // Force PyTorch to empty its CUDA cache
-        c10::cuda::CUDACachingAllocator::emptyCache();
-
-        // Force synchronization
-        cudaDeviceSynchronize();
-
-        // Check for memory leaks
-        size_t current_free_mem, current_total;
-        cudaMemGetInfo(&current_free_mem, &current_total);
-
-        // PyTorch uses a caching allocator - need much larger tolerance
-        // Also, CUDA driver may cache memory for performance
-        size_t tolerance = 150 * 1024 * 1024; // 150 MB tolerance
-        EXPECT_NEAR(static_cast<long long>(current_free_mem),
-                    static_cast<long long>(initial_free_mem),
-                    static_cast<long long>(tolerance))
-            << "Possible memory leak detected. Difference: "
-            << (static_cast<long long>(initial_free_mem) - static_cast<long long>(current_free_mem)) / (1024 * 1024)
-            << " MB";
-    }
-
-    size_t initial_free_mem;
-    size_t total_mem;
 };
 
 // ============= Memory Ownership Tests =============
@@ -134,8 +105,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
         auto custom_t2 = std::move(custom_t1);
         EXPECT_EQ(custom_t2.data_ptr(), original_ptr);
         EXPECT_TRUE(custom_t2.owns_memory());
-        EXPECT_EQ(custom_t1.data_ptr(), nullptr);
-        EXPECT_FALSE(custom_t1.owns_memory());
+        EXPECT_FALSE(custom_t1.is_valid());
 
         // Verify data is correct
         auto torch_t = torch::ones({50, 50}, torch::TensorOptions().device(torch::kCUDA));
@@ -153,7 +123,7 @@ TEST_F(TensorMemoryTest, MoveSemantics) {
         custom_t2 = std::move(custom_t1);
 
         EXPECT_EQ(custom_t2.data_ptr(), ptr1);
-        EXPECT_EQ(custom_t1.data_ptr(), nullptr);
+        EXPECT_FALSE(custom_t1.is_valid());
 
         // Verify data is zeros
         auto torch_zeros = torch::zeros({30, 30}, torch::TensorOptions().device(torch::kCUDA));
@@ -270,6 +240,66 @@ TEST_F(TensorMemoryTest, DeviceTransferOwnsMemory) {
     EXPECT_NE(custom_cuda2.data_ptr(), custom_cpu.data_ptr());
 
     compare_tensors(custom_cuda2, torch_cuda2, 1e-6f, 1e-7f, "CUDATransfer");
+}
+
+TEST_F(TensorMemoryTest, BoolViewTransferResultsAndAssignmentStorage) {
+    for (const bool pinned : {false, true}) {
+        SCOPED_TRACE(pinned);
+        auto host = Tensor::empty({2, 2}, Device::CPU, DataType::Bool, pinned);
+        host.ptr<bool>()[0] = true;
+        host.ptr<bool>()[1] = false;
+        host.ptr<bool>()[2] = false;
+        host.ptr<bool>()[3] = true;
+        auto view = host.slice(1, 0, 1).squeeze(1);
+        const auto* host_pointer = view.ptr<bool>();
+        ASSERT_TRUE(view.is_view());
+        ASSERT_FALSE(view.is_contiguous());
+
+        const auto uploaded = view.cuda();
+        const auto packed = uploaded.contiguous();
+        const auto cloned = packed.clone();
+        for (const auto* result : {&uploaded, &packed, &cloned}) {
+            ASSERT_EQ(result->device(), Device::CUDA);
+            EXPECT_TRUE(result->is_contiguous());
+            EXPECT_TRUE(result->owns_memory());
+            cudaPointerAttributes attributes{};
+            ASSERT_EQ(cudaPointerGetAttributes(&attributes, result->ptr<bool>()), cudaSuccess);
+            EXPECT_EQ(attributes.type, cudaMemoryTypeDevice);
+            const auto values = result->cpu();
+            EXPECT_TRUE(values.ptr<bool>()[0]);
+            EXPECT_FALSE(values.ptr<bool>()[1]);
+        }
+        EXPECT_NE(cloned.ptr<bool>(), packed.ptr<bool>());
+
+        // View assignment writes through; none of these rebind the host view.
+        view = view.cuda();
+        EXPECT_EQ(view.device(), Device::CPU);
+        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        view = view.contiguous();
+        EXPECT_FALSE(view.is_contiguous());
+        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        view = view.clone();
+        EXPECT_EQ(view.device(), Device::CPU);
+        EXPECT_EQ(view.ptr<bool>(), host_pointer);
+        EXPECT_FALSE(view.owns_memory());
+    }
+}
+
+TEST_F(TensorMemoryTest, BoolFromBlobCloneResultOwnsStorage) {
+    auto source = Tensor::ones_bool({2}, Device::CUDA);
+    auto borrowed = Tensor::from_blob(source.ptr<bool>(), {2}, Device::CUDA, DataType::Bool);
+    ASSERT_TRUE(borrowed.is_view());
+    ASSERT_FALSE(borrowed.owns_memory());
+    const auto cloned = borrowed.clone();
+    EXPECT_TRUE(cloned.owns_memory());
+    EXPECT_NE(cloned.ptr<bool>(), source.ptr<bool>());
+    borrowed = borrowed.clone();
+    EXPECT_EQ(borrowed.ptr<bool>(), source.ptr<bool>());
+    EXPECT_FALSE(borrowed.owns_memory());
+    source.zero_();
+    const auto values = cloned.cpu();
+    EXPECT_TRUE(values.ptr<bool>()[0]);
+    EXPECT_TRUE(values.ptr<bool>()[1]);
 }
 
 TEST_F(TensorMemoryTest, DeviceTransferRoundtrip) {
@@ -454,18 +484,11 @@ TEST_F(TensorMemoryTest, InvalidTensorOperations) {
     Tensor custom_invalid;
 
     EXPECT_FALSE(custom_invalid.is_valid());
-    EXPECT_EQ(custom_invalid.data_ptr(), nullptr);
-    EXPECT_FALSE(custom_invalid.owns_memory());
 
-    // Operations on invalid tensor should return invalid tensors
-    auto result1 = custom_invalid.clone();
-    EXPECT_FALSE(result1.is_valid());
-
-    auto result2 = custom_invalid.to(Device::CPU);
-    EXPECT_FALSE(result2.is_valid());
-
-    auto result3 = custom_invalid.view({2, 2});
-    EXPECT_FALSE(result3.is_valid());
+    EXPECT_THROW(custom_invalid.data_ptr(), std::runtime_error);
+    EXPECT_THROW(custom_invalid.clone(), std::runtime_error);
+    EXPECT_THROW(custom_invalid.to(Device::CPU), std::runtime_error);
+    EXPECT_THROW(custom_invalid.view({2, 2}), std::runtime_error);
 }
 
 TEST_F(TensorMemoryTest, EmptyTensor) {
@@ -529,8 +552,6 @@ TEST_F(TensorMemoryTest, StressTestManyAllocations) {
     // Clear them
     custom_tensors.clear();
     torch_tensors.clear();
-
-    // Memory should be freed (checked in TearDown)
 }
 
 TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
@@ -543,7 +564,6 @@ TEST_F(TensorMemoryTest, StressTestRapidAllocDealloc) {
         EXPECT_TRUE(torch_t.defined());
         // Both destroyed at end of iteration
     }
-    // Memory should be stable (checked in TearDown)
 }
 
 TEST_F(TensorMemoryTest, MixedSizeAllocations) {

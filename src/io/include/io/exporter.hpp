@@ -6,12 +6,15 @@
 
 #include "core/export.hpp"
 #include "core/point_cloud.hpp"
+#include "core/provenance.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -46,6 +49,7 @@ namespace lfs::io {
         ExportProgressCallback progress_callback = nullptr;
         // Additional per-vertex float properties appended after the built-in PLY schema.
         std::vector<PlyAttributeBlock> extra_attributes;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -56,7 +60,6 @@ namespace lfs::io {
     [[nodiscard]] LFS_IO_API Result<void> save_ply(const SplatData& splat_data, const PlySaveOptions& options);
     [[nodiscard]] LFS_IO_API Result<void> save_ply(const PointCloud& point_cloud, const PlySaveOptions& options);
 
-    LFS_IO_API PointCloud to_point_cloud(const SplatData& splat_data);
     LFS_IO_API std::vector<std::string> get_ply_attribute_names(const SplatData& splat_data);
 
     // ============================================================================
@@ -68,6 +71,33 @@ namespace lfs::io {
         int kmeans_iterations = 10;
         bool use_gpu = true;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
+    };
+
+    struct SsogSaveOptions {
+        std::filesystem::path output_path;
+        int lod_levels = 4;
+        float lod_ratio = 0.5f;
+        int chunk_count_k = 512;
+        float chunk_extent = 16.0f;
+        int chunk_min_k = 8;
+        int kmeans_iterations = 10;
+        bool use_gpu = true;
+        ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{};
+
+        [[nodiscard]] bool validate() const {
+            return lod_levels >= 1 && lod_levels <= 8 &&
+                   std::isfinite(lod_ratio) && lod_ratio > 0 && lod_ratio < 1 &&
+                   chunk_count_k > 0 && chunk_min_k >= 0 &&
+                   std::isfinite(chunk_extent) && chunk_extent > 0 && kmeans_iterations >= 1;
+        }
+    };
+
+    [[nodiscard]] LFS_IO_API Result<void> save_ssog(const SplatData&, const SsogSaveOptions&);
+
+    struct SsogLoadOptions {
+        int lod_level = 0; // Negative levels count from the coarsest (-1).
     };
 
     /**
@@ -84,6 +114,7 @@ namespace lfs::io {
         std::filesystem::path output_path;
         int kmeans_iterations = 10;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -96,9 +127,14 @@ namespace lfs::io {
     // SPZ Export (Niantic compressed format)
     // ============================================================================
 
+    inline constexpr int kSpzExportZstdLevel = 9;
+
     struct SpzSaveOptions {
         std::filesystem::path output_path;
+        int version = 4;                             // SPZ container version: 4 (zstd, current) or 3 (legacy gzip)
+        int compression_level = kSpzExportZstdLevel; // zstd compression level for SPZ v4
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -114,6 +150,7 @@ namespace lfs::io {
     struct UsdSaveOptions {
         std::filesystem::path output_path;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -129,6 +166,7 @@ namespace lfs::io {
     struct NurecUsdzSaveOptions {
         std::filesystem::path output_path;
         ExportProgressCallback progress_callback = nullptr;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**
@@ -151,6 +189,7 @@ namespace lfs::io {
         bool flip_y = false;                                  // Flip Y axis on export
         std::uint32_t chunk_size = kRadStreamableChunkSplats; // RAD splats per file chunk
         ExportProgressCallback progress_callback = nullptr;   // Progress callback
+        std::optional<core::ProvenanceStamp> provenance{};    // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
 
     /**

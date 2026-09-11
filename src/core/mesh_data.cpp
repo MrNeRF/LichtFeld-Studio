@@ -10,6 +10,11 @@ namespace lfs::core {
 
     using TriMesh = OpenMesh::TriMesh_ArrayKernelT<>;
 
+    uint64_t MeshData::next_id() {
+        static std::atomic<uint64_t> counter{0};
+        return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
     void MeshData::compute_normals() {
         assert(vertices.is_valid() && vertices.ndim() == 2 && vertices.shape()[1] == 3);
         assert(indices.is_valid() && indices.ndim() == 2 && indices.shape()[1] == 3);

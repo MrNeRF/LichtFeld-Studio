@@ -85,6 +85,14 @@
     decorator: none;
 }
 
+.histogram-history-icon {
+    image-color: @{text};
+}
+
+.histogram-history-btn:hover .histogram-history-icon {
+    image-color: @{primary};
+}
+
 .histogram-history-btn:disabled .histogram-history-icon {
     image-color: @{panel.histogram_history_icon_disabled};
 }

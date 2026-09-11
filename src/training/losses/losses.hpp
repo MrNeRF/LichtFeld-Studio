@@ -17,5 +17,6 @@
  * instead of torch::Tensor at the API level.
  */
 
+#include "mask_loss.hpp"
 #include "photometric_loss.hpp"
 #include "regularization.hpp"

@@ -642,6 +642,39 @@ CUresult cuMemsetD32Async(CUdeviceptr dstDevice, unsigned int ui, size_t N, CUst
     return func_ptr(dstDevice, ui, N, hStream);
 }
 
+CUresult CUDAAPI cuMemsetD2D8AsyncNotFound(CUdeviceptr, size_t, unsigned char, size_t, size_t, CUstream) {
+    return CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND;
+}
+
+CUresult cuMemsetD2D8Async(CUdeviceptr dstDevice, size_t dstPitch, unsigned char uc, size_t Width, size_t Height, CUstream hStream) {
+    using FuncPtr = CUresult (*)(CUdeviceptr, size_t, unsigned char, size_t, size_t, CUstream);
+
+    static auto func_ptr = reinterpret_cast<FuncPtr>(LOAD_SYMBOL_FUNC("cuMemsetD2D8Async")) ? reinterpret_cast<FuncPtr>(LOAD_SYMBOL_FUNC("cuMemsetD2D8Async")) : cuMemsetD2D8AsyncNotFound;
+    return func_ptr(dstDevice, dstPitch, uc, Width, Height, hStream);
+}
+
+CUresult CUDAAPI cuMemsetD2D16AsyncNotFound(CUdeviceptr, size_t, unsigned short, size_t, size_t, CUstream) {
+    return CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND;
+}
+
+CUresult cuMemsetD2D16Async(CUdeviceptr dstDevice, size_t dstPitch, unsigned short us, size_t Width, size_t Height, CUstream hStream) {
+    using FuncPtr = CUresult (*)(CUdeviceptr, size_t, unsigned short, size_t, size_t, CUstream);
+
+    static auto func_ptr = reinterpret_cast<FuncPtr>(LOAD_SYMBOL_FUNC("cuMemsetD2D16Async")) ? reinterpret_cast<FuncPtr>(LOAD_SYMBOL_FUNC("cuMemsetD2D16Async")) : cuMemsetD2D16AsyncNotFound;
+    return func_ptr(dstDevice, dstPitch, us, Width, Height, hStream);
+}
+
+CUresult CUDAAPI cuMemsetD2D32AsyncNotFound(CUdeviceptr, size_t, unsigned int, size_t, size_t, CUstream) {
+    return CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND;
+}
+
+CUresult cuMemsetD2D32Async(CUdeviceptr dstDevice, size_t dstPitch, unsigned int ui, size_t Width, size_t Height, CUstream hStream) {
+    using FuncPtr = CUresult (*)(CUdeviceptr, size_t, unsigned int, size_t, size_t, CUstream);
+
+    static auto func_ptr = reinterpret_cast<FuncPtr>(LOAD_SYMBOL_FUNC("cuMemsetD2D32Async")) ? reinterpret_cast<FuncPtr>(LOAD_SYMBOL_FUNC("cuMemsetD2D32Async")) : cuMemsetD2D32AsyncNotFound;
+    return func_ptr(dstDevice, dstPitch, ui, Width, Height, hStream);
+}
+
 CUresult CUDAAPI cuMemAddressReserveNotFound(CUdeviceptr*, size_t, size_t, CUdeviceptr, unsigned long long) {
     return CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND;
 }

@@ -11,6 +11,101 @@ from __future__ import annotations
 from .definition import ToolDef, SubmodeDef, PivotModeDef
 
 
+_CROP_VOLUME_TYPES = {"CROPBOX", "ELLIPSOID"}
+_CROPBOX_TARGET_TYPES = {"SPLAT", "POINTCLOUD"} | _CROP_VOLUME_TYPES
+
+
+def _poll_builtin_tool_available(tool_id: str) -> bool:
+    try:
+        import lichtfeld as lf
+
+        is_tool_available = getattr(getattr(lf, "ui", None), "is_tool_available", None)
+        return bool(is_tool_available(tool_id)) if callable(is_tool_available) else False
+    except Exception:
+        return False
+
+
+def _node_type_name(node) -> str:
+    try:
+        # nanobind enums: str() returns "NodeType.SPLAT", extract the suffix
+        return str(node.type).split(".")[-1]
+    except Exception:
+        return ""
+
+
+def _current_scene():
+    try:
+        import lichtfeld as lf
+
+        get_scene = getattr(lf, "get_scene", None)
+        return get_scene() if callable(get_scene) else None
+    except Exception:
+        return None
+
+
+def _node_contains_cropbox_target(scene, node) -> bool:
+    if node is None:
+        return False
+    if _node_type_name(node) in _CROPBOX_TARGET_TYPES:
+        return True
+    if _node_type_name(node) != "DATASET":
+        return False
+
+    def contains_model_target(candidate) -> bool:
+        if candidate is None:
+            return False
+        if _node_type_name(candidate) in {"SPLAT", "POINTCLOUD"}:
+            return True
+        for nested_id in getattr(candidate, "children", []) or []:
+            if contains_model_target(scene.get_node_by_id(nested_id)):
+                return True
+        return False
+
+    for child_id in getattr(node, "children", []) or []:
+        if contains_model_target(scene.get_node_by_id(child_id)):
+            return True
+    return False
+
+
+def _selected_node_types() -> tuple[str, ...]:
+    try:
+        import lichtfeld as lf
+
+        scene = _current_scene()
+        if scene is None:
+            return ()
+        selected_names = lf.get_selected_node_names() or []
+        node_types: list[str] = []
+        for name in selected_names:
+            node = scene.get_node(name)
+            node_type = _node_type_name(node)
+            if node_type:
+                node_types.append(node_type)
+        return tuple(node_types)
+    except Exception:
+        return ()
+
+
+def _selection_is_crop_volume() -> bool:
+    return any(node_type in _CROP_VOLUME_TYPES for node_type in _selected_node_types())
+
+
+def _selection_has_cropbox_target() -> bool:
+    try:
+        import lichtfeld as lf
+
+        scene = _current_scene()
+        if scene is None:
+            return False
+        selected_names = lf.get_selected_node_names() or []
+        return any(
+            _node_contains_cropbox_target(scene, scene.get_node(name))
+            for name in selected_names
+        )
+    except Exception:
+        return False
+
+
 def _poll_has_scene(context) -> bool:
     return getattr(context, "has_scene", False)
 
@@ -22,28 +117,58 @@ def _poll_has_gaussians(context) -> bool:
     )
 
 
+def _poll_can_select(context) -> bool:
+    return _poll_has_gaussians(context) and not _selection_is_crop_volume()
+
+
+def _poll_can_transform(context) -> bool:
+    return bool(getattr(context, "can_transform", False)) and not _selection_is_crop_volume()
+
+
+def _poll_can_mirror(_context) -> bool:
+    return _poll_builtin_tool_available("builtin.mirror") and not _selection_is_crop_volume()
+
+
+def _poll_can_align(_context) -> bool:
+    return _poll_builtin_tool_available("builtin.align") and not _selection_is_crop_volume()
+
+
+def _poll_can_cropbox(context) -> bool:
+    if not _poll_has_scene(context):
+        return False
+    if _selection_is_crop_volume():
+        return True
+    if _poll_can_transform(context):
+        return True
+    return _selection_has_cropbox_target()
+
+
 BUILTIN_TOOLS: tuple[ToolDef, ...] = (
     ToolDef(
         id="builtin.select",
         label="Select",
+        label_key="tool_defs.select",
         icon="selection",
         group="select",
         order=10,
         description="Select gaussians",
         shortcut="1",
         submodes=(
-            SubmodeDef("centers", "Centers", "circle-dot"),
+            SubmodeDef("centers", "Centers", "select-centers"),
             SubmodeDef("rectangle", "Rectangle", "rectangle"),
             SubmodeDef("polygon", "Polygon", "polygon"),
             SubmodeDef("lasso", "Lasso", "lasso"),
-            SubmodeDef("rings", "Rings", "ring"),
+            SubmodeDef("rings", "Rings", "select-rings"),
             SubmodeDef("color", "Color", "color-picker"),
+            SubmodeDef("box", "Box", "box"),
+            SubmodeDef("sphere", "Sphere", "sphere"),
         ),
-        poll=_poll_has_gaussians,
+        poll=_poll_can_select,
     ),
     ToolDef(
         id="builtin.translate",
         label="Move",
+        label_key="tool_defs.move",
         icon="translation",
         group="transform",
         order=20,
@@ -58,11 +183,12 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
             PivotModeDef("origin", "Origin", "circle-dot"),
             PivotModeDef("bounds", "Bounds", "box"),
         ),
-        poll=_poll_has_scene,
+        poll=_poll_can_transform,
     ),
     ToolDef(
         id="builtin.rotate",
         label="Rotate",
+        label_key="tool_defs.rotate",
         icon="rotation",
         group="transform",
         order=30,
@@ -77,11 +203,12 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
             PivotModeDef("origin", "Origin", "circle-dot"),
             PivotModeDef("bounds", "Bounds", "box"),
         ),
-        poll=_poll_has_scene,
+        poll=_poll_can_transform,
     ),
     ToolDef(
         id="builtin.scale",
         label="Scale",
+        label_key="tool_defs.scale",
         icon="scaling",
         group="transform",
         order=40,
@@ -96,11 +223,12 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
             PivotModeDef("origin", "Origin", "circle-dot"),
             PivotModeDef("bounds", "Bounds", "box"),
         ),
-        poll=_poll_has_scene,
+        poll=_poll_can_transform,
     ),
     ToolDef(
         id="builtin.mirror",
         label="Mirror",
+        label_key="tool_defs.mirror",
         icon="mirror",
         group="transform",
         order=50,
@@ -111,27 +239,29 @@ BUILTIN_TOOLS: tuple[ToolDef, ...] = (
             SubmodeDef("y", "Y Axis", "mirror-y"),
             SubmodeDef("z", "Z Axis", "mirror-z"),
         ),
-        poll=_poll_has_gaussians,
+        poll=_poll_can_mirror,
     ),
     ToolDef(
         id="builtin.cropbox",
         label="Crop",
+        label_key="tool_defs.crop",
         icon="cropbox",
         group="utility",
         order=70,
         description="Crop objects",
         gizmo="translate",
-        poll=_poll_has_scene,
+        poll=_poll_can_cropbox,
     ),
     ToolDef(
         id="builtin.align",
         label="Align",
+        label_key="tool_defs.align",
         icon="align",
         group="utility",
         order=80,
         description="Align to world axes",
         shortcut="6",
-        poll=_poll_has_scene,
+        poll=_poll_can_align,
     ),
 )
 

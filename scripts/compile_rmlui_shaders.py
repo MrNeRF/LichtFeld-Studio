@@ -132,7 +132,9 @@ def generate_header(kind: str, compiler: Path) -> str:
         "// RmlUi SPIR-V Vulkan shaders compiled using command: "
         "'python scripts/compile_rmlui_shaders.py'. Do not edit manually.\n\n"
         "#include <stdint.h>\n\n"
-        f"{body}\n"
+        "// clang-format off\n\n"
+        f"{body}\n\n"
+        "// clang-format on\n"
     )
 
 

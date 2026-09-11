@@ -222,6 +222,32 @@ namespace lfs::vis {
         // record so timeline values stay monotone in stream order across
         // workers.
         std::lock_guard lock(mutex_);
+        const auto guard_slot_reuse = [&]() -> std::string {
+            if (const cudaError_t status = cudaEventRecord(slot->last_use, stream_);
+                status == cudaSuccess) {
+                slot->used = true;
+                return {};
+            } else {
+                // A failed guard must not expose pinned host/device scratch to
+                // another decoder while the H2D copy or dequant kernel may
+                // still be using it. This is an error path, so draining the
+                // dedicated upload stream is preferable to corrupting a page.
+                const cudaError_t sync_status = cudaStreamSynchronize(stream_);
+                slot->used = false;
+                if (sync_status != cudaSuccess) {
+                    return std::format(
+                        "LOD staging-slot event record failed: {} ({}); stream sync also failed: "
+                        "{} ({})",
+                        cudaGetErrorName(status),
+                        cudaGetErrorString(status),
+                        cudaGetErrorName(sync_status),
+                        cudaGetErrorString(sync_status));
+                }
+                return std::format("LOD staging-slot event record failed: {} ({})",
+                                   cudaGetErrorName(status),
+                                   cudaGetErrorString(status));
+            }
+        };
         const auto submit = [&]() -> std::string {
             if (!layout_.valid() || stream_ == nullptr) {
                 return "LOD upload engine is not configured";
@@ -272,9 +298,17 @@ namespace lfs::vis {
                     launchLodPageDequant(slot->device_data, desc, view, page,
                                          static_cast<std::uint32_t>(kPageSplats), stream_);
                 status != cudaSuccess) {
-                return std::format("LOD page dequant kernel launch failed: {} ({})",
-                                   cudaGetErrorName(status),
-                                   cudaGetErrorString(status));
+                std::string error =
+                    std::format("LOD page dequant kernel launch failed: {} ({})",
+                                cudaGetErrorName(status),
+                                cudaGetErrorString(status));
+                if (const std::string guard_error = guard_slot_reuse(); !guard_error.empty()) {
+                    error += std::format("; {}", guard_error);
+                }
+                return error;
+            }
+            if (const std::string guard_error = guard_slot_reuse(); !guard_error.empty()) {
+                return guard_error;
             }
 
             const cudaEvent_t event = acquireEventLocked();
@@ -297,8 +331,6 @@ namespace lfs::vis {
                                    cudaGetErrorName(status),
                                    cudaGetErrorString(status));
             }
-            (void)cudaEventRecord(slot->last_use, stream_);
-            slot->used = true;
             job.event = event;
             job.signal_value = signal_value;
             return {};

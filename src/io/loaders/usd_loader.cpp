@@ -21,6 +21,13 @@ namespace lfs::io {
     using lfs::core::SplatData;
     using lfs::core::Tensor;
 
+    namespace {
+        std::string_view project_error_message(const lfs::Error& error) {
+            return error.user_message().empty() ? error.detail()
+                                                : error.user_message();
+        }
+    } // namespace
+
     Result<LoadResult> USDLoader::load(
         const std::filesystem::path& path,
         const LoadOptions& options) {
@@ -98,6 +105,7 @@ namespace lfs::io {
 
         std::string loader_used = name();
         std::expected<SplatData, std::string> splat_result = std::unexpected(std::string{"USD loader not initialized"});
+        std::optional<double> usd_meters_per_unit;
 
         if (extension == ".usdz") {
             const auto nurec_hint = is_nurec_usdz(path);
@@ -118,9 +126,10 @@ namespace lfs::io {
                     options.progress(50.0f, "Parsing OpenUSD data...");
                 }
 
-                auto openusd_result = load_usd(path);
+                auto openusd_result = load_usd_project_units(path);
                 if (openusd_result) {
-                    splat_result = std::move(openusd_result);
+                    usd_meters_per_unit = openusd_result->meters_per_unit;
+                    splat_result = std::move(openusd_result->data);
                 } else if (!nurec_hint) {
                     LOG_INFO("USDZ archive inspection failed for {}: {}. Trying NuRec fallback after OpenUSD failure.",
                              lfs::core::path_to_utf8(path), nurec_hint.error());
@@ -135,13 +144,14 @@ namespace lfs::io {
                     } else {
                         return make_error(ErrorCode::CORRUPTED_DATA,
                                           std::format("Failed to load USD gaussian file: OpenUSD: {}; NuRec USDZ: {}",
-                                                      openusd_result.error(),
+                                                      project_error_message(openusd_result.error()),
                                                       nurec_result.error()),
                                           path);
                     }
                 } else {
                     return make_error(ErrorCode::CORRUPTED_DATA,
-                                      std::format("Failed to load USD gaussian file: {}", openusd_result.error()),
+                                      std::format("Failed to load USD gaussian file: {}",
+                                                  project_error_message(openusd_result.error())),
                                       path);
                 }
             }
@@ -150,12 +160,15 @@ namespace lfs::io {
                 options.progress(50.0f, "Parsing OpenUSD ParticleField...");
             }
 
-            splat_result = load_usd(path);
-            if (!splat_result) {
+            auto openusd_result = load_usd_project_units(path);
+            if (!openusd_result) {
                 return make_error(ErrorCode::CORRUPTED_DATA,
-                                  std::format("Failed to load USD gaussian file: {}", splat_result.error()),
+                                  std::format("Failed to load USD gaussian file: {}",
+                                              project_error_message(openusd_result.error())),
                                   path);
             }
+            usd_meters_per_unit = openusd_result->meters_per_unit;
+            splat_result = std::move(openusd_result->data);
         }
 
         if (options.progress) {
@@ -170,7 +183,18 @@ namespace lfs::io {
             .scene_center = Tensor::zeros({3}, Device::CPU),
             .loader_used = loader_used,
             .load_time = load_time,
-            .warnings = {}};
+            .warnings = {},
+            .georeference =
+                usd_meters_per_unit
+                    ? std::optional<ImportGeoreference>(
+                          ImportGeoreference{
+                              .crs = std::nullopt,
+                              .world_origin = {},
+                              .world_unit_scale = *usd_meters_per_unit,
+                              .world_origin_provenance =
+                                  ImportWorldOriginProvenance::Import,
+                          })
+                    : std::nullopt};
 
         LOG_INFO("USD gaussian file loaded successfully in {}ms", load_time.count());
         return result;

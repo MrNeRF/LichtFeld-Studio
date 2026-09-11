@@ -20,18 +20,28 @@
 #include <memory>
 #include <nvimgcodec.h>
 
+#include "imgproc/device_buffer.h" // for DeleterStrategy
+
 namespace nvimgcodec {
 
     struct PinnedBuffer {
-        explicit PinnedBuffer(const nvimgcodecExecutionParams_t* exec_params = nullptr);
+        explicit PinnedBuffer(nvimgcodecPinnedAllocator_t* pinned_allocator = nullptr);
         void resize(size_t new_size, cudaStream_t new_stream);
         void alloc_impl(size_t new_size, cudaStream_t new_stream);
+
+        // Rebind the buffer's deleter so that it no longer references the stream
+        // this buffer was allocated on. After this call returns, the caller may
+        // destroy the original `cuda_stream` at any time without affecting correct
+        // cleanup of this buffer. Safe and idempotent.
+        void detach_from_stream() noexcept;
+
         nvimgcodecPinnedAllocator_t* allocator;
         std::shared_ptr<void> d_ptr;
         void* data = nullptr;
         size_t capacity = 0;
         size_t size = 0;
         cudaStream_t stream = 0;
+        std::shared_ptr<DeleterStrategy> deleter_strategy;
     };
 
 } // namespace nvimgcodec

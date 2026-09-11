@@ -4,39 +4,31 @@
 
 #include "app/application.hpp"
 #include "app/converter.hpp"
+#include "core/abi.hpp"
 #include "core/argument_parser.hpp"
+#include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
+#include "core/environment.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/session_breadcrumb.hpp"
+#include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
-#include "gui/gpu_memory_query.hpp"
+#include "lfs_core_abi_stamp.h"
+#include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
 
 #include <cstdlib>
 #include <cuda_runtime.h>
-#include <curand.h>
 #include <filesystem>
 #include <print>
-
-// pxr/base/tf/hashset.h pulls in the deprecated <ext/hash_set> GNU extension.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcpp"
-#endif
-#include <pxr/base/plug/registry.h>
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
+#include <string>
+#include <vector>
 
 namespace {
-    // Per-process GPU memory query. NVML on Linux / DXGI on Windows. Returns 0 if the
-    // query fails or no GPU activity is yet attributed to this PID.
-    std::size_t process_used_now() {
-        return lfs::vis::gui::queryGpuMemory().process_used;
-    }
-
     // Apply CUDA driver-level VRAM-reduction knobs BEFORE the primary context exists.
     // Setting these after cudaFree(nullptr) is too late — the driver has already
     // committed defaults (1 KiB/thread stack reserve × SMs × max-threads = ~192 MiB on
@@ -49,14 +41,40 @@ namespace {
 #endif
     }
 
+    void publishResolvedUserPaths() {
+        // Publish canonical paths for Python plugins; native code calls UserPaths directly.
+        const auto paths = lfs::core::UserPaths::resolve();
+        if (!paths)
+            return;
+        const auto publish = [](const char* const name,
+                                const std::filesystem::path& path) {
+            const auto value = lfs::core::path_to_utf8(path);
+            (void)lfs::core::environment::set_value(name, value);
+        };
+        publish("LFS_RESOLVED_CONFIG_DIR", paths->configDir());
+        publish("LFS_RESOLVED_DATA_DIR", paths->dataDir());
+        publish("LFS_RESOLVED_CACHE_DIR", paths->cacheDir());
+        publish("LFS_RESOLVED_LOG_DIR", paths->logDir());
+        publish("LFS_RESOLVED_PLUGIN_DIR", paths->pluginDir());
+        publish("LFS_RESOLVED_VENV_DIR", paths->venvDir());
+        publish("LFS_RESOLVED_ASSET_LIBRARY_DIR", paths->assetLibraryDir());
+    }
+
+    // Every mode that touches CUDA gates here, before the primary context exists: with
+    // CUDA_MODULE_LOADING=EAGER pre-set in the environment, context creation itself loads
+    // modules the card cannot run, which would beat the check to the crash.
+    void preflightGpuOrExit(const bool show_dialog) {
+        if (!lfs::app::preflightGpu(show_dialog)) {
+            lfs::core::teardown_gpu_before_exit();
+            lfs::core::flush_and_exit(1);
+        }
+    }
+
     // Probe what the CUDA driver allocates during context creation, *attributed to this
     // process* (NVML per-PID, not device-wide cudaMemGetInfo). Each phase is the delta
     // against the previous probe so the sum reconstructs the total context cost.
     void analyzeCudaContextDistribution() {
         auto& p = lfs::diagnostics::VramProfiler::instance();
-
-        // Phase 0: pre-context. Should be 0 — no CUDA calls have run.
-        const std::size_t before_context = process_used_now();
 
         // Phase 1: primary context creation. cudaFree(nullptr) is a documented idiom that
         // forces the primary context to exist on device 0.
@@ -68,10 +86,6 @@ namespace {
         // accepts the request post-context but applies it on the *next* launch — well
         // before any real kernel runs.
         cudaDeviceSetLimit(cudaLimitStackSize, 256);
-        const std::size_t after_context = process_used_now();
-        const std::size_t primary_context =
-            after_context > before_context ? after_context - before_context : after_context;
-        p.recordCudaPhaseBytes("primary_context", primary_context);
 
         // Phase 2: default cudaMallocAsync pool. Query its initial backing reservation.
         std::size_t pool_reserved = 0;
@@ -110,85 +124,97 @@ namespace {
         p.recordCudaPhaseBytes("stack_reserve", stack_total);
         p.recordCudaPhaseBytes("malloc_heap", malloc_heap);
 
-        // Phase 4: libcurand context. Create + destroy a generator so the library code
-        // is loaded into the process; the residual delta is the library overhead.
-        const std::size_t before_curand = process_used_now();
-        curandGenerator_t gen = nullptr;
-        if (curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT) == CURAND_STATUS_SUCCESS) {
-            curandDestroyGenerator(gen);
-        }
-        const std::size_t after_curand = process_used_now();
-        const std::size_t curand_load =
-            after_curand > before_curand ? after_curand - before_curand : 0;
-        p.recordCudaPhaseBytes("curand_load", curand_load);
-
-        // The per-PID baseline = current NVML reading. Used as the breakdown's anchor
-        // so cuda.context.residual = baseline − Σphases.
-        p.setCudaContextBaselineBytes(process_used_now());
-
-        // Device-wide (cudaMemGetInfo) baseline captured at the same point, so the
-        // later kernel-warmup delta is measured against a matching metric instead of
-        // the NVML per-PID anchor.
+        // Device-wide baseline is cheap and does not load NVML. The per-process
+        // measurements and libcurand probe are completed by the warmup worker.
         p.captureCudaDeviceBaseline();
     }
 
-    // Register OpenUSD plugin resources deployed beside the executable.
-    // On Windows: <exe_dir>/usd/ — keeps relative LibraryPaths correct.
-    // On Linux:   <exe_dir>/../lib/usd/ — conventional layout.
-    // Must be called before any USD API usage (stage creation, schema lookup).
-    // The env-var approach (PXR_PLUGINPATH_NAME) does not work reliably on
-    // Windows because USD DLLs may initialise before main() runs.
-    void configure_usd_plugins() {
-        std::filesystem::path exe_dir;
-        try {
-            exe_dir = lfs::core::getExecutableDir();
-        } catch (...) {
-            return;
-        }
+    int run_mode(lfs::core::args::ParsedArgs args) {
+        return std::visit([](auto&& mode) -> int {
+            using T = std::decay_t<decltype(mode)>;
 
-        std::error_code ec;
+            if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
+                return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::VersionMode>) {
+                std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
+                return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
+                applyCudaContextTuning();
+                preflightGpuOrExit(false);
+                analyzeCudaContextDistribution();
+                return 0;
+            } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
+                preflightGpuOrExit(false);
+                return lfs::app::run_converter(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
+                preflightGpuOrExit(false);
+                return lfs::app::run_mesh2splat(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::PreprocessMode>) {
+                preflightGpuOrExit(false);
+                return lfs::preprocessing::run_preprocess(mode.params);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
+                return lfs::python::run_plugin_command(mode);
+            } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
+                LOG_INFO("LichtFeld Studio");
+                LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
 
-        // On Windows, plugins sit next to the exe at <exe_dir>/usd/ so that
-        // relative LibraryPath entries (e.g. "../../usd_ar.dll") resolve to
-        // the DLL copies that are already loaded by Windows at startup.
-        // On Linux they follow the conventional <exe_dir>/../lib/usd/ layout.
-#ifdef _WIN32
-        auto usd_dir = exe_dir / "usd";
-#else
-        auto usd_dir = exe_dir / ".." / "lib" / "usd";
-#endif
-        usd_dir = std::filesystem::canonical(usd_dir, ec);
-        if (ec || !std::filesystem::is_directory(usd_dir, ec)) {
-            LOG_ERROR("[USD] plugin directory not found ({})",
-                      ec ? ec.message() : "not a directory");
-            return;
-        }
+                // Driver-level tuning must precede *any* CUDA call, including the pre-flight
+                // gate and the cudaFree(nullptr) inside analyzeCudaContextDistribution.
+                applyCudaContextTuning();
 
-        const std::string path_utf8 = lfs::core::path_to_utf8(usd_dir);
+                const bool interactive =
+                    !mode.params->optimization.headless && !mode.params->render_path;
+                preflightGpuOrExit(interactive);
 
-        // Also set the env var for any code that reads it directly.
-#ifdef _WIN32
-        _putenv_s("PXR_PLUGINPATH_NAME", path_utf8.c_str());
-#else
-        setenv("PXR_PLUGINPATH_NAME", path_utf8.c_str(), /*overwrite=*/0);
-#endif
+                // Probe and decompose the CUDA driver's context-creation cost only for the
+                // GPU app path. CLI-only modes such as --help, convert, preprocess,
+                // plugin, and mesh2splat must not create a CUDA primary context just
+                // for HUD metrics.
+                analyzeCudaContextDistribution();
+                if (mode.params->optimization.debug_python) {
+                    lfs::python::start_debugpy(mode.params->optimization.debug_python_port);
+                }
 
-        // Programmatically register plugins so the Plug system finds them
-        // regardless of compiled-in search paths or env var timing.
-        pxr::PlugRegistry::GetInstance().RegisterPlugins(path_utf8);
+                lfs::app::Application app;
+                return app.run(std::move(mode.params));
+            }
+        },
+                          std::move(args));
     }
+
 } // namespace
 
-int main(int argc, char* argv[]) {
-    // Driver-level tuning must precede *any* CUDA call, including the cudaFree(nullptr)
-    // inside analyzeCudaContextDistribution. Lazy module loading defers kernel cubin
-    // upload until first use, dropping the eager-load slice of cuda.primary_context.
-    applyCudaContextTuning();
+#ifdef _WIN32
+int wmain(int argc, wchar_t* wide_argv[]) {
+    // The parser expects UTF-8. Narrow CRT argv uses the Windows ANSI code page,
+    // which can lose characters in paths opened from Explorer or the command line.
+    std::vector<std::string> utf8_args;
+    utf8_args.reserve(argc);
+    for (int i = 0; i < argc; ++i)
+        utf8_args.push_back(lfs::core::wstring_to_utf8(wide_argv[i]));
 
-    // Probe and decompose the CUDA driver's context-creation cost before any other
-    // code touches the device. Surfaces per-phase byte values into the HUD breakdown.
-    analyzeCudaContextDistribution();
-    configure_usd_plugins();
+    std::vector<const char*> utf8_argv;
+    utf8_argv.reserve(argc + 1);
+    for (const auto& arg : utf8_args)
+        utf8_argv.push_back(arg.c_str());
+    utf8_argv.push_back(nullptr);
+    const auto* argv = utf8_argv.data();
+#else
+int main(int argc, char* argv[]) {
+#endif
+    const char* const loaded_core_stamp = lfs_core_abi_stamp();
+    if (loaded_core_stamp == nullptr || !lfs_core_abi_matches(LFS_CORE_ABI_STAMP)) {
+        std::println(stderr,
+                     "Fatal: lfs_core ABI mismatch. The application expects '{}' but loaded '{}'. "
+                     "Remove stale binaries and rebuild LichtFeld Studio.",
+                     LFS_CORE_ABI_STAMP,
+                     loaded_core_stamp != nullptr ? loaded_core_stamp : "<null>");
+        return 2;
+    }
+
+    lfs::core::install_crash_handlers();
+    lfs::core::record_session_start();
+    lfs::core::initialize_cuda_diagnostics();
 
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {
@@ -196,38 +222,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    return std::visit([](auto&& mode) -> int {
-        using T = std::decay_t<decltype(mode)>;
+    publishResolvedUserPaths();
 
-        if constexpr (std::is_same_v<T, lfs::core::args::HelpMode>) {
-            return 0;
-        } else if constexpr (std::is_same_v<T, lfs::core::args::VersionMode>) {
-            std::println("LichtFeld Studio {} ({})", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
-            return 0;
-        } else if constexpr (std::is_same_v<T, lfs::core::args::WarmupMode>) {
-            return 0;
-        } else if constexpr (std::is_same_v<T, lfs::core::args::ConvertMode>) {
-            return lfs::app::run_converter(mode.params);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::Mesh2SplatMode>) {
-            return lfs::app::run_mesh2splat(mode.params);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::PluginMode>) {
-            return lfs::python::run_plugin_command(mode);
-        } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
-            LOG_INFO("LichtFeld Studio");
-            LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
-
-            // Probe and decompose the CUDA driver's context-creation cost only for the
-            // GPU app path. CLI-only modes such as --help, convert, plugin, and
-            // mesh2splat must not create a CUDA primary context just for HUD metrics.
-            analyzeCudaContextDistribution();
-
-            if (mode.params->optimization.debug_python) {
-                lfs::python::start_debugpy(mode.params->optimization.debug_python_port);
-            }
-
-            lfs::app::Application app;
-            return app.run(std::move(mode.params));
-        }
-    },
-                      std::move(*result));
+    return lfs::core::run_with_exception_firewall(
+        [&result] { return run_mode(std::move(*result)); });
 }

@@ -10,6 +10,8 @@
 #include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
 #include "diagnostics/vram_profiler.hpp"
+#include "rendering/vulkan_result.hpp"
+#include "rendering/vulkan_wait.hpp"
 
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
@@ -18,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -28,7 +31,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -460,6 +463,26 @@ void main() {
             return std::format("{} failed: {}", op, vkResultName(result));
         }
 
+        [[nodiscard]] const char* waitOutcomeLabel(
+            const lfs::rendering::WaitOutcome outcome) noexcept {
+            using lfs::rendering::WaitOutcome;
+            switch (outcome) {
+            case WaitOutcome::Ready: return "Ready";
+            case WaitOutcome::Cancelled: return "Cancelled";
+            case WaitOutcome::Shutdown: return "Shutdown";
+            case WaitOutcome::Quarantined: return "Quarantined";
+            }
+            return "Unknown";
+        }
+
+        [[nodiscard]] std::string formatWaitFailure(
+            const lfs::Result<lfs::rendering::WaitOutcome>& outcome) {
+            if (outcome.has_value()) {
+                return waitOutcomeLabel(*outcome);
+            }
+            return std::string(outcome.error().detail());
+        }
+
         [[nodiscard]] glm::vec3 compute_face_normal(const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2) {
             const glm::vec3 n = glm::cross(v1 - v0, v2 - v0);
             const float len = glm::length(n);
@@ -484,50 +507,99 @@ void main() {
             return glm::vec4(glm::normalize((dv1 * duv2.y - dv2 * duv1.y) * r), 1.0f);
         }
 
-        [[nodiscard]] std::vector<SubmeshGeometry> extract_geometry(const MeshData& mesh) {
-            assert(mesh.vertices.is_valid());
-            assert(mesh.indices.is_valid());
-            assert(mesh.vertices.dtype() == DataType::Float32);
-            assert(mesh.indices.dtype() == DataType::Int32);
+        [[nodiscard]] std::expected<std::vector<SubmeshGeometry>, std::string> extract_geometry(const MeshData& mesh) {
+            if (!mesh.vertices.is_valid() || mesh.vertices.ndim() != 2 ||
+                mesh.vertices.shape()[1] != 3 || mesh.vertices.dtype() != DataType::Float32) {
+                return std::unexpected("Mesh vertices must be a Float32 [V, 3] tensor");
+            }
+            if (!mesh.indices.is_valid() || mesh.indices.ndim() != 2 ||
+                mesh.indices.shape()[1] != 3 || mesh.indices.dtype() != DataType::Int32) {
+                return std::unexpected("Mesh indices must be an Int32 [F, 3] tensor");
+            }
+            if (mesh.vertices.shape()[0] == 0) {
+                return std::unexpected("Mesh has no vertices");
+            }
+            if (mesh.indices.shape()[0] == 0) {
+                return std::unexpected("Mesh has no faces");
+            }
 
-            auto verts_cpu = mesh.vertices.device() == Device::CPU ? mesh.vertices : mesh.vertices.to(Device::CPU);
-            auto idx_cpu = mesh.indices.device() == Device::CPU ? mesh.indices : mesh.indices.to(Device::CPU);
+            const auto V = static_cast<int64_t>(mesh.vertices.shape()[0]);
+            const auto validate_attribute = [V](const Tensor& tensor,
+                                                const int64_t width,
+                                                const char* const label) -> std::optional<std::string> {
+                if (!tensor.is_valid() || tensor.numel() == 0) {
+                    return std::nullopt;
+                }
+                if (tensor.dtype() != DataType::Float32 || tensor.ndim() != 2 ||
+                    tensor.shape()[0] != V || tensor.shape()[1] != width) {
+                    return std::format("Mesh {} must be a Float32 [V, {}] tensor", label, width);
+                }
+                return std::nullopt;
+            };
+            if (auto error = validate_attribute(mesh.normals, 3, "normals")) {
+                return std::unexpected(*error);
+            }
+            if (auto error = validate_attribute(mesh.tangents, 4, "tangents")) {
+                return std::unexpected(*error);
+            }
+            if (auto error = validate_attribute(mesh.texcoords, 2, "texture coordinates")) {
+                return std::unexpected(*error);
+            }
+            if (auto error = validate_attribute(mesh.colors, 4, "colors")) {
+                return std::unexpected(*error);
+            }
+
+            auto verts_cpu = (mesh.vertices.device() == Device::CPU
+                                  ? mesh.vertices
+                                  : mesh.vertices.to(Device::CPU))
+                                 .contiguous();
+            auto idx_cpu = (mesh.indices.device() == Device::CPU
+                                ? mesh.indices
+                                : mesh.indices.to(Device::CPU))
+                               .contiguous();
 
             const float* verts_ptr = verts_cpu.ptr<float>();
             const int32_t* idx_ptr = idx_cpu.ptr<int32_t>();
-            const auto V = static_cast<int64_t>(verts_cpu.shape()[0]);
             const auto F = static_cast<int64_t>(idx_cpu.shape()[0]);
 
             const float* normals_ptr = nullptr;
             Tensor normals_cpu;
             if (mesh.has_normals()) {
-                normals_cpu = mesh.normals.device() == Device::CPU ? mesh.normals : mesh.normals.to(Device::CPU);
+                normals_cpu = (mesh.normals.device() == Device::CPU
+                                   ? mesh.normals
+                                   : mesh.normals.to(Device::CPU))
+                                  .contiguous();
                 normals_ptr = normals_cpu.ptr<float>();
-                assert(normals_cpu.shape()[0] == verts_cpu.shape()[0]);
             }
 
             const float* tangents_ptr = nullptr;
             Tensor tangents_cpu;
             if (mesh.has_tangents()) {
-                tangents_cpu = mesh.tangents.device() == Device::CPU ? mesh.tangents : mesh.tangents.to(Device::CPU);
+                tangents_cpu = (mesh.tangents.device() == Device::CPU
+                                    ? mesh.tangents
+                                    : mesh.tangents.to(Device::CPU))
+                                   .contiguous();
                 tangents_ptr = tangents_cpu.ptr<float>();
-                assert(tangents_cpu.shape()[0] == verts_cpu.shape()[0]);
             }
 
             const float* texcoords_ptr = nullptr;
             Tensor texcoords_cpu;
             if (mesh.has_texcoords()) {
-                texcoords_cpu = mesh.texcoords.device() == Device::CPU ? mesh.texcoords : mesh.texcoords.to(Device::CPU);
+                texcoords_cpu = (mesh.texcoords.device() == Device::CPU
+                                     ? mesh.texcoords
+                                     : mesh.texcoords.to(Device::CPU))
+                                    .contiguous();
                 texcoords_ptr = texcoords_cpu.ptr<float>();
-                assert(texcoords_cpu.shape()[0] == verts_cpu.shape()[0]);
             }
 
             const float* colors_ptr = nullptr;
             Tensor colors_cpu;
             if (mesh.has_colors()) {
-                colors_cpu = mesh.colors.device() == Device::CPU ? mesh.colors : mesh.colors.to(Device::CPU);
+                colors_cpu = (mesh.colors.device() == Device::CPU
+                                  ? mesh.colors
+                                  : mesh.colors.to(Device::CPU))
+                                 .contiguous();
                 colors_ptr = colors_cpu.ptr<float>();
-                assert(colors_cpu.shape()[0] == verts_cpu.shape()[0]);
             }
 
             std::vector<Submesh> submeshes;
@@ -539,20 +611,30 @@ void main() {
 
             std::vector<SubmeshGeometry> result;
             result.reserve(submeshes.size());
+            size_t skipped_degenerate_faces = 0;
+            const size_t total_index_count = idx_cpu.numel();
 
             for (const auto& sub : submeshes) {
+                if (sub.index_count % 3 != 0) {
+                    return std::unexpected("Mesh submesh index count is not divisible by three");
+                }
+                if (sub.start_index > total_index_count ||
+                    sub.index_count > total_index_count - sub.start_index) {
+                    return std::unexpected("Mesh submesh index range exceeds the index tensor");
+                }
                 SubmeshGeometry geo;
                 geo.material_index = sub.material_index;
-                assert(sub.index_count % 3 == 0);
                 const size_t face_count = sub.index_count / 3;
                 geo.vertices.reserve(sub.index_count);
 
                 for (size_t f = 0; f < face_count; ++f) {
                     const size_t base = sub.start_index + f * 3;
                     const int32_t indices[3] = {idx_ptr[base + 0], idx_ptr[base + 1], idx_ptr[base + 2]};
-                    assert(indices[0] >= 0 && indices[0] < V);
-                    assert(indices[1] >= 0 && indices[1] < V);
-                    assert(indices[2] >= 0 && indices[2] < V);
+                    if (indices[0] < 0 || indices[0] >= V ||
+                        indices[1] < 0 || indices[1] >= V ||
+                        indices[2] < 0 || indices[2] >= V) {
+                        return std::unexpected("Mesh face contains an out-of-range vertex index");
+                    }
 
                     glm::vec3 pos[3];
                     glm::vec3 nrm[3];
@@ -563,6 +645,26 @@ void main() {
                     for (int k = 0; k < 3; ++k) {
                         const int32_t vi = indices[k];
                         pos[k] = {verts_ptr[vi * 3 + 0], verts_ptr[vi * 3 + 1], verts_ptr[vi * 3 + 2]};
+                        if (!std::isfinite(pos[k].x) || !std::isfinite(pos[k].y) || !std::isfinite(pos[k].z)) {
+                            return std::unexpected("Mesh contains a non-finite vertex position");
+                        }
+                    }
+
+                    const glm::dvec3 edge01 = glm::dvec3(pos[1]) - glm::dvec3(pos[0]);
+                    const glm::dvec3 edge02 = glm::dvec3(pos[2]) - glm::dvec3(pos[0]);
+                    const glm::dvec3 edge12 = glm::dvec3(pos[2]) - glm::dvec3(pos[1]);
+                    const double max_edge_sq = std::max({glm::dot(edge01, edge01),
+                                                         glm::dot(edge02, edge02),
+                                                         glm::dot(edge12, edge12)});
+                    const glm::dvec3 area = glm::cross(edge01, edge02);
+                    const double area_sq = glm::dot(area, area);
+                    if (max_edge_sq == 0.0 || area_sq <= max_edge_sq * max_edge_sq * 1e-12) {
+                        ++skipped_degenerate_faces;
+                        continue;
+                    }
+
+                    for (int k = 0; k < 3; ++k) {
+                        const int32_t vi = indices[k];
                         geo.bbox_min = glm::min(geo.bbox_min, pos[k]);
                         geo.bbox_max = glm::max(geo.bbox_max, pos[k]);
 
@@ -573,15 +675,38 @@ void main() {
                             tan[k] = {tangents_ptr[vi * 4 + 0], tangents_ptr[vi * 4 + 1], tangents_ptr[vi * 4 + 2], tangents_ptr[vi * 4 + 3]};
                         if (colors_ptr)
                             col[k] = {colors_ptr[vi * 4 + 0], colors_ptr[vi * 4 + 1], colors_ptr[vi * 4 + 2], colors_ptr[vi * 4 + 3]};
+                        if ((texcoords_ptr && (!std::isfinite(uv[k].x) || !std::isfinite(uv[k].y))) ||
+                            (normals_ptr && (!std::isfinite(nrm[k].x) || !std::isfinite(nrm[k].y) || !std::isfinite(nrm[k].z))) ||
+                            (tangents_ptr && (!std::isfinite(tan[k].x) || !std::isfinite(tan[k].y) ||
+                                              !std::isfinite(tan[k].z) || !std::isfinite(tan[k].w))) ||
+                            (colors_ptr && (!std::isfinite(col[k].x) || !std::isfinite(col[k].y) ||
+                                            !std::isfinite(col[k].z) || !std::isfinite(col[k].w)))) {
+                            return std::unexpected("Mesh contains non-finite vertex attributes");
+                        }
                     }
 
+                    const glm::vec3 face_normal = compute_face_normal(pos[0], pos[1], pos[2]);
                     if (!normals_ptr) {
-                        const glm::vec3 fn = compute_face_normal(pos[0], pos[1], pos[2]);
-                        nrm[0] = nrm[1] = nrm[2] = fn;
+                        nrm[0] = nrm[1] = nrm[2] = face_normal;
+                    } else {
+                        for (int k = 0; k < 3; ++k) {
+                            if (glm::dot(nrm[k], nrm[k]) <= 1e-20f) {
+                                nrm[k] = face_normal;
+                            }
+                        }
                     }
                     if (!tangents_ptr) {
                         const glm::vec4 ft = compute_face_tangent(pos[0], pos[1], pos[2], uv[0], uv[1], uv[2]);
                         tan[0] = tan[1] = tan[2] = ft;
+                    } else {
+                        const glm::vec4 face_tangent = compute_face_tangent(
+                            pos[0], pos[1], pos[2], uv[0], uv[1], uv[2]);
+                        for (int k = 0; k < 3; ++k) {
+                            const glm::vec3 tangent(tan[k]);
+                            if (glm::dot(tangent, tangent) <= 1e-20f) {
+                                tan[k] = face_tangent;
+                            }
+                        }
                     }
 
                     for (int k = 0; k < 3; ++k) {
@@ -593,6 +718,9 @@ void main() {
                     result.push_back(std::move(geo));
             }
 
+            if (skipped_degenerate_faces > 0) {
+                LOG_WARN("mesh2splat: skipped {} degenerate mesh faces", skipped_degenerate_faces);
+            }
             return result;
         }
 
@@ -762,19 +890,55 @@ void main() {
             }
         };
 
+        struct ConversionPipelineResources {
+            VkDevice device = VK_NULL_HANDLE;
+            VkRenderPass render_pass = VK_NULL_HANDLE;
+            VkFramebuffer framebuffer = VK_NULL_HANDLE;
+            VkDescriptorSetLayout descriptor_layout = VK_NULL_HANDLE;
+            VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+            VkPipeline pipeline = VK_NULL_HANDLE;
+            VkSampler sampler = VK_NULL_HANDLE;
+            VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+
+            ~ConversionPipelineResources() {
+                if (descriptor_pool)
+                    vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
+                if (sampler)
+                    vkDestroySampler(device, sampler, nullptr);
+                if (pipeline)
+                    vkDestroyPipeline(device, pipeline, nullptr);
+                if (pipeline_layout)
+                    vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
+                if (descriptor_layout)
+                    vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
+                if (framebuffer)
+                    vkDestroyFramebuffer(device, framebuffer, nullptr);
+                if (render_pass)
+                    vkDestroyRenderPass(device, render_pass, nullptr);
+            }
+
+            ConversionPipelineResources() = default;
+            ConversionPipelineResources(const ConversionPipelineResources&) = delete;
+            ConversionPipelineResources& operator=(const ConversionPipelineResources&) = delete;
+        };
+
         class VulkanMesh2SplatContext {
         public:
             ~VulkanMesh2SplatContext() { shutdown(); }
 
             [[nodiscard]] bool ensure(std::string& error) {
-                if (device_)
+                if (device_ && command_pool_)
                     return true;
-                return createInstance(error) && pickPhysicalDevice(error) && createDevice(error) && createCommandPool(error);
+                shutdown();
+                if (!createInstance(error) || !pickPhysicalDevice(error) ||
+                    !createDevice(error) || !createCommandPool(error)) {
+                    shutdown();
+                    return false;
+                }
+                return true;
             }
 
             [[nodiscard]] VkDevice device() const { return device_; }
-            [[nodiscard]] VkPhysicalDevice physicalDevice() const { return physical_device_; }
-            [[nodiscard]] VkQueue queue() const { return queue_; }
 
             [[nodiscard]] uint32_t findMemoryType(uint32_t type_filter,
                                                   VkMemoryPropertyFlags properties,
@@ -917,6 +1081,9 @@ void main() {
                 return cmd;
             }
 
+            // Phase 7C-P3 C9 + §1.D: bounded wait; retain fence+CB on
+            // Quarantined/non-Ready (AMB-4). Destroy only after Ready, or on
+            // submit-never-accepted, or after DeviceWaitIdle in shutdown.
             [[nodiscard]] std::optional<std::string> submitAndWait(VkCommandBuffer cmd) const {
                 VkResult result = vkEndCommandBuffer(cmd);
                 if (result != VK_SUCCESS) {
@@ -933,14 +1100,45 @@ void main() {
                 VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
                 submit.commandBufferCount = 1;
                 submit.pCommandBuffers = &cmd;
-                result = vkQueueSubmit(queue_, 1, &submit, fence);
-                if (result == VK_SUCCESS)
-                    result = vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
-                vkDestroyFence(device_, fence, nullptr);
-                vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
-                if (result != VK_SUCCESS)
-                    return vkError("vkQueueSubmit/vkWaitForFences", result);
-                return std::nullopt;
+                result = lfs::rendering::vk_queue_submit_synced(queue_, 1, &submit, fence);
+                if (result != VK_SUCCESS) {
+                    // Submit never accepted — fence is not in flight; free OK.
+                    vkDestroyFence(device_, fence, nullptr);
+                    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+                    return vkError("vkQueueSubmit", result);
+                }
+
+                lfs::rendering::WaitContext wait_ctx;
+                wait_ctx.fingerprint = "mesh2splat.submit_and_wait";
+                wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+                auto wait_outcome = lfs::rendering::wait_fence_bounded(
+                    device_,
+                    fence,
+                    std::stop_token{},
+                    lfs::rendering::VulkanWaitPolicy{},
+                    wait_ctx);
+                if (wait_outcome.has_value() &&
+                    *wait_outcome == lfs::rendering::WaitOutcome::Ready) {
+                    vkDestroyFence(device_, fence, nullptr);
+                    vkFreeCommandBuffers(device_, command_pool_, 1, &cmd);
+                    return std::nullopt;
+                }
+
+                // Non-Ready: retain fence + CB. shutdown() destroys retained
+                // fences only after DeviceWaitIdle (idempotent; list may grow).
+                retained_fences_.push_back(fence);
+                retained_command_buffers_.push_back(cmd);
+                LOG_ERROR(
+                    "Vulkan: Mesh2Splat submitAndWait did not reach Ready "
+                    "(device={:#x}, fence={:#x}, command_buffer={:#x}): {} — "
+                    "retaining fence and command buffer until process exit / context shutdown",
+                    lfs::rendering::vkHandleValue(device_),
+                    lfs::rendering::vkHandleValue(fence),
+                    lfs::rendering::vkHandleValue(cmd),
+                    formatWaitFailure(wait_outcome));
+                return std::format(
+                    "wait_fence_bounded(mesh2splat.submit_and_wait) did not reach Ready: {}",
+                    formatWaitFailure(wait_outcome));
             }
 
             [[nodiscard]] std::optional<std::string> uploadBuffer(const void* data, VkDeviceSize size, Buffer& dst) const {
@@ -1075,8 +1273,19 @@ void main() {
             }
 
             void shutdown() {
+                // Idempotent: second call is a no-op (handles already nulled).
+                // After DeviceWaitIdle, retained quarantine fences are safe to
+                // destroy (GPU has finished). CBs free with the command pool.
                 if (device_)
                     vkDeviceWaitIdle(device_);
+                for (VkFence fence : retained_fences_) {
+                    if (fence != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
+                        vkDestroyFence(device_, fence, nullptr);
+                    }
+                }
+                retained_fences_.clear();
+                // Retained CBs are pool-owned; destroyCommandPool frees them.
+                retained_command_buffers_.clear();
                 if (command_pool_)
                     vkDestroyCommandPool(device_, command_pool_, nullptr);
                 if (device_)
@@ -1085,8 +1294,11 @@ void main() {
                     vkDestroyInstance(instance_, nullptr);
                 command_pool_ = VK_NULL_HANDLE;
                 device_ = VK_NULL_HANDLE;
+                queue_ = VK_NULL_HANDLE;
                 physical_device_ = VK_NULL_HANDLE;
                 instance_ = VK_NULL_HANDLE;
+                graphics_family_ = 0;
+                gpu_wait_quarantined_.store(false, std::memory_order_relaxed);
             }
 
             VkInstance instance_ = VK_NULL_HANDLE;
@@ -1096,6 +1308,10 @@ void main() {
             VkCommandPool command_pool_ = VK_NULL_HANDLE;
             uint32_t graphics_family_ = 0;
             mutable std::uint64_t allocation_serial_ = 0;
+            // Phase 7C-P3: quarantine latch + retain lists for submitAndWait.
+            mutable std::atomic<bool> gpu_wait_quarantined_{false};
+            mutable std::vector<VkFence> retained_fences_{};
+            mutable std::vector<VkCommandBuffer> retained_command_buffers_{};
         };
 
         VulkanMesh2SplatContext& vulkan_context() {
@@ -1150,8 +1366,22 @@ void main() {
         [[nodiscard]] std::expected<Image, std::string> upload_texture(VulkanMesh2SplatContext& ctx,
                                                                        const TextureImage& img,
                                                                        bool srgb) {
-            if (img.width <= 0 || img.height <= 0 || img.pixels.empty())
+            if (img.width <= 0 || img.height <= 0 || img.channels <= 0 ||
+                img.channels > 4 || img.pixels.empty()) {
                 return std::unexpected("Invalid Mesh2Splat texture image");
+            }
+            const size_t width = static_cast<size_t>(img.width);
+            const size_t height = static_cast<size_t>(img.height);
+            const size_t channels = static_cast<size_t>(img.channels);
+            if (width > std::numeric_limits<size_t>::max() / height ||
+                width * height > std::numeric_limits<size_t>::max() / channels ||
+                width * height > std::numeric_limits<size_t>::max() / 4) {
+                return std::unexpected("Mesh2Splat texture dimensions overflow host storage");
+            }
+            const size_t required_bytes = width * height * channels;
+            if (img.pixels.size() < required_bytes) {
+                return std::unexpected("Mesh2Splat texture pixel storage is truncated");
+            }
 
             const VkFormat format = srgb && img.channels >= 3 ? kTextureFormatSrgb : kTextureFormatLinear;
             auto image = ctx.createImage(static_cast<uint32_t>(img.width),
@@ -1248,9 +1478,7 @@ void main() {
         };
 
         [[nodiscard]] std::expected<std::vector<MaterialTextures>, std::string> upload_material_textures(VulkanMesh2SplatContext& ctx,
-                                                                                                         const MeshData& mesh,
-                                                                                                         const Image& dummy) {
-            (void)dummy;
+                                                                                                         const MeshData& mesh) {
             std::vector<MaterialTextures> textures(mesh.materials.size());
             for (size_t i = 0; i < mesh.materials.size(); ++i) {
                 const auto& mat = mesh.materials[i];
@@ -1387,46 +1615,58 @@ void main() {
     mesh_to_splat(const MeshData& mesh,
                   const Mesh2SplatOptions& options,
                   Mesh2SplatProgressCallback progress) {
+        // The reusable context owns one queue and command pool. Public callers may
+        // arrive from the converter, Python, or the GUI task system concurrently.
+        static std::mutex conversion_mutex;
+        std::lock_guard conversion_lock(conversion_mutex);
+
         auto report = [&](float pct, const std::string& stage) -> bool {
             return progress ? progress(pct, stage) : true;
         };
 
-        if (!mesh.vertices.is_valid() || mesh.vertex_count() == 0)
-            return std::unexpected("Mesh has no vertices");
-        if (!mesh.indices.is_valid() || mesh.face_count() == 0)
-            return std::unexpected("Mesh has no faces");
         if (options.resolution_target < Mesh2SplatOptions::kMinResolution)
             return std::unexpected(std::format("Mesh2Splat resolution must be at least {}", Mesh2SplatOptions::kMinResolution));
-        if (options.sigma <= 0.0f)
+        if (!std::isfinite(options.sigma) || options.sigma <= 0.0f)
             return std::unexpected("Mesh2Splat sigma must be positive");
 
         if (!report(0.0f, "Preparing mesh data"))
             return std::unexpected("Cancelled");
 
-        auto submesh_geometries = extract_geometry(mesh);
+        auto extracted_geometry = extract_geometry(mesh);
+        if (!extracted_geometry)
+            return std::unexpected(extracted_geometry.error());
+        auto submesh_geometries = std::move(*extracted_geometry);
         if (submesh_geometries.empty())
             return std::unexpected("No geometry extracted");
+        if (submesh_geometries.size() > std::numeric_limits<uint32_t>::max() / 3ull)
+            return std::unexpected("Mesh2Splat submesh count exceeds Vulkan descriptor limits");
 
         glm::vec3 global_min(std::numeric_limits<float>::max());
         glm::vec3 global_max(std::numeric_limits<float>::lowest());
         size_t total_vertices = 0;
         for (const auto& geo : submesh_geometries) {
+            if (geo.vertices.size() > std::numeric_limits<uint32_t>::max())
+                return std::unexpected("Mesh2Splat submesh vertex count exceeds Vulkan draw limits");
             global_min = glm::min(global_min, geo.bbox_min);
             global_max = glm::max(global_max, geo.bbox_max);
+            if (geo.vertices.size() > std::numeric_limits<size_t>::max() - total_vertices)
+                return std::unexpected("Mesh2Splat triangle count exceeds host size range");
             total_vertices += geo.vertices.size();
         }
 
         const float scene_scale = glm::length(global_max - global_min) * 0.5f;
-        if (scene_scale <= 0.0f)
-            return std::unexpected("Degenerate mesh: zero bounding box extent");
+        if (!std::isfinite(scene_scale) || scene_scale <= 0.0f)
+            return std::unexpected("Degenerate mesh: invalid bounding box extent");
 
         const int res = options.resolution_target;
         const auto triangle_count = static_cast<uint64_t>(total_vertices / 3);
-        const uint64_t pixel_based = static_cast<uint64_t>(res) * static_cast<uint64_t>(res) * 6ull;
+        constexpr uint64_t max_entries = std::numeric_limits<uint32_t>::max();
+        const uint64_t res64 = static_cast<uint64_t>(res);
+        if (res64 > max_entries / 6ull / res64 || triangle_count > max_entries / 2ull)
+            return std::unexpected("Mesh2Splat output capacity exceeds Vulkan uint32 counter range");
+        const uint64_t pixel_based = res64 * res64 * 6ull;
         const uint64_t triangle_based = triangle_count * 2ull;
         const uint64_t ssbo_entries64 = std::max(pixel_based, triangle_based);
-        if (ssbo_entries64 > std::numeric_limits<uint32_t>::max())
-            return std::unexpected("Mesh2Splat output capacity exceeds Vulkan uint32 counter range");
         const uint32_t ssbo_entries = static_cast<uint32_t>(ssbo_entries64);
         const VkDeviceSize ssbo_size = static_cast<VkDeviceSize>(ssbo_entries64 * sizeof(GaussianVertex));
 
@@ -1478,12 +1718,15 @@ void main() {
         if (!framebuffer_image)
             return std::unexpected(framebuffer_image.error());
 
+        ConversionPipelineResources pipeline_resources;
+        pipeline_resources.device = device;
         auto render_pass_expected = create_render_pass(device);
         if (!render_pass_expected)
             return std::unexpected(render_pass_expected.error());
-        VkRenderPass render_pass = *render_pass_expected;
+        pipeline_resources.render_pass = *render_pass_expected;
+        VkRenderPass& render_pass = pipeline_resources.render_pass;
 
-        VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkFramebuffer& framebuffer = pipeline_resources.framebuffer;
         VkFramebufferCreateInfo fb_info{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         fb_info.renderPass = render_pass;
         fb_info.attachmentCount = 1;
@@ -1492,10 +1735,8 @@ void main() {
         fb_info.height = static_cast<uint32_t>(res);
         fb_info.layers = 1;
         VkResult result = vkCreateFramebuffer(device, &fb_info, nullptr, &framebuffer);
-        if (result != VK_SUCCESS) {
-            vkDestroyRenderPass(device, render_pass, nullptr);
+        if (result != VK_SUCCESS)
             return std::unexpected(vkError("vkCreateFramebuffer", result));
-        }
 
         VkDescriptorSetLayoutBinding bindings[5]{};
         bindings[0] = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -1506,13 +1747,10 @@ void main() {
         VkDescriptorSetLayoutCreateInfo dsl_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         dsl_info.bindingCount = static_cast<uint32_t>(std::size(bindings));
         dsl_info.pBindings = bindings;
-        VkDescriptorSetLayout descriptor_layout = VK_NULL_HANDLE;
+        VkDescriptorSetLayout& descriptor_layout = pipeline_resources.descriptor_layout;
         result = vkCreateDescriptorSetLayout(device, &dsl_info, nullptr, &descriptor_layout);
-        if (result != VK_SUCCESS) {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-            vkDestroyRenderPass(device, render_pass, nullptr);
+        if (result != VK_SUCCESS)
             return std::unexpected(vkError("vkCreateDescriptorSetLayout", result));
-        }
 
         VkPushConstantRange push_range{};
         push_range.stageFlags = VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -1523,14 +1761,10 @@ void main() {
         pipeline_layout_info.pSetLayouts = &descriptor_layout;
         pipeline_layout_info.pushConstantRangeCount = 1;
         pipeline_layout_info.pPushConstantRanges = &push_range;
-        VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+        VkPipelineLayout& pipeline_layout = pipeline_resources.pipeline_layout;
         result = vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &pipeline_layout);
-        if (result != VK_SUCCESS) {
-            vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-            vkDestroyRenderPass(device, render_pass, nullptr);
+        if (result != VK_SUCCESS)
             return std::unexpected(vkError("vkCreatePipelineLayout", result));
-        }
 
         VkPipelineShaderStageCreateInfo stages[3]{};
         stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vs->module, "main", nullptr};
@@ -1598,15 +1832,10 @@ void main() {
         pipeline_info.pColorBlendState = &blend;
         pipeline_info.layout = pipeline_layout;
         pipeline_info.renderPass = render_pass;
-        VkPipeline pipeline = VK_NULL_HANDLE;
+        VkPipeline& pipeline = pipeline_resources.pipeline;
         result = vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline);
-        if (result != VK_SUCCESS) {
-            vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
-            vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-            vkDestroyRenderPass(device, render_pass, nullptr);
+        if (result != VK_SUCCESS)
             return std::unexpected(vkError("vkCreateGraphicsPipelines", result));
-        }
 
         VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         sampler_info.magFilter = VK_FILTER_LINEAR;
@@ -1615,21 +1844,15 @@ void main() {
         sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
         sampler_info.maxLod = 1.0f;
-        VkSampler sampler = VK_NULL_HANDLE;
+        VkSampler& sampler = pipeline_resources.sampler;
         result = vkCreateSampler(device, &sampler_info, nullptr, &sampler);
-        if (result != VK_SUCCESS) {
-            vkDestroyPipeline(device, pipeline, nullptr);
-            vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
-            vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-            vkDestroyRenderPass(device, render_pass, nullptr);
+        if (result != VK_SUCCESS)
             return std::unexpected(vkError("vkCreateSampler", result));
-        }
 
         auto dummy_texture = create_dummy_texture(ctx);
         if (!dummy_texture)
             return std::unexpected(dummy_texture.error());
-        auto material_textures = upload_material_textures(ctx, mesh, *dummy_texture);
+        auto material_textures = upload_material_textures(ctx, mesh);
         if (!material_textures)
             return std::unexpected(material_textures.error());
 
@@ -1654,7 +1877,7 @@ void main() {
         pool_info.maxSets = static_cast<uint32_t>(submesh_geometries.size());
         pool_info.poolSizeCount = 2;
         pool_info.pPoolSizes = pool_sizes;
-        VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+        VkDescriptorPool& descriptor_pool = pipeline_resources.descriptor_pool;
         result = vkCreateDescriptorPool(device, &pool_info, nullptr, &descriptor_pool);
         if (result != VK_SUCCESS)
             return std::unexpected(vkError("vkCreateDescriptorPool", result));
@@ -1831,14 +2054,6 @@ void main() {
 
         LOG_INFO("mesh2splat: produced {} gaussians (resolution={})", num_gaussians, options.resolution_target);
         auto splat = build_splat_data(gpu_data, options.sigma / static_cast<float>(res), scene_scale);
-
-        vkDestroyDescriptorPool(device, descriptor_pool, nullptr);
-        vkDestroySampler(device, sampler, nullptr);
-        vkDestroyPipeline(device, pipeline, nullptr);
-        vkDestroyPipelineLayout(device, pipeline_layout, nullptr);
-        vkDestroyDescriptorSetLayout(device, descriptor_layout, nullptr);
-        vkDestroyFramebuffer(device, framebuffer, nullptr);
-        vkDestroyRenderPass(device, render_pass, nullptr);
 
         if (!report(1.0f, "Complete"))
             return std::unexpected("Cancelled");

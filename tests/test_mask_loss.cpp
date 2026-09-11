@@ -16,6 +16,8 @@
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "lfs/kernels/ssim.cuh"
+#include "mask_loss_reference.hpp"
+#include "training/losses/mask_loss.hpp"
 #include <cmath>
 #include <gtest/gtest.h>
 
@@ -103,6 +105,55 @@ TEST_F(MaskLossTest, OpacityPenaltyFormula) {
     // With power=2 on binary mask: (1-0)^2 = 1, (1-1)^2 = 0
     EXPECT_GT(penalty_val, 1.0f);  // Should be significant
     EXPECT_LT(penalty_val, 10.0f); // But bounded
+}
+
+TEST_F(MaskLossTest, UserMaskAndRoiWeightsComposeMultiplicatively) {
+    const auto user_mask = Tensor::from_vector(
+                               std::vector<float>{255.0f, 0.0f, 255.0f, 255.0f},
+                               {size_t{2}, size_t{2}},
+                               Device::CUDA)
+                               .to(DataType::UInt8);
+    const auto roi_weight = Tensor::from_vector(
+        std::vector<float>{1.0f, 0.5f, 0.25f, 0.0f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+
+    const auto composed = lfs::training::losses::test_reference::compose_pixel_loss_weights_reference(
+        user_mask, roi_weight);
+
+    EXPECT_EQ(
+        composed.to(Device::CPU).to_vector(),
+        (std::vector<float>{1.0f, 0.0f, 0.25f, 0.0f}));
+}
+
+TEST_F(MaskLossTest, RoiWeightedOpacityPenaltyKeepsGlobalPixelMean) {
+    const auto alpha = Tensor::from_vector(
+        std::vector<float>{0.2f, 0.4f, 0.6f, 0.8f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+    const auto penalty_weight = Tensor::from_vector(
+        std::vector<float>{1.0f, 0.5f, 0.25f, 0.0f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+    const auto roi_weight = Tensor::from_vector(
+        std::vector<float>{1.0f, 0.1f, 0.0f, 1.0f},
+        {size_t{2}, size_t{2}},
+        Device::CUDA);
+    constexpr float scale = 2.0f;
+
+    const auto result = lfs::training::losses::test_reference::compute_mask_opacity_penalty_reference(
+        alpha, penalty_weight, roi_weight, scale);
+
+    const float expected_loss =
+        (0.2f * 1.0f * 1.0f +
+         0.4f * 0.5f * 0.1f +
+         0.6f * 0.25f * 0.0f +
+         0.8f * 0.0f * 1.0f) /
+        4.0f * scale;
+    EXPECT_NEAR(result.loss.item<float>(), expected_loss, 1.0e-7f);
+    EXPECT_EQ(
+        result.grad_alpha.to(Device::CPU).to_vector(),
+        (std::vector<float>{0.5f, 0.025f, 0.0f, 0.0f}));
 }
 
 // Test that penalty is zero when mask covers everything
@@ -206,23 +257,19 @@ TEST_F(MaskLossTest, MaskedL1IgnoresBackgroundDifference) {
     constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
-    // Create identical images
-    auto rendered = Tensor::zeros({C, H, W}, Device::CUDA);
-    auto gt = Tensor::zeros({C, H, W}, Device::CUDA);
-
-    // Mask: only center is object
+    const auto gt = Tensor::zeros({C, H, W}, Device::CUDA);
     auto mask_2d = create_binary_mask(H, W, 0.25f);
     auto mask_expanded = mask_2d.unsqueeze(0).expand({C, H, W});
     auto mask_sum = mask_expanded.sum() + EPSILON;
+    const auto background = Tensor::ones({C, H, W}, Device::CUDA) - mask_expanded;
 
-    // Loss should be zero for identical images
-    auto l1_diff = (rendered - gt).abs();
-    auto masked_l1 = (l1_diff * mask_expanded).sum() / mask_sum;
-    EXPECT_NEAR(masked_l1.item<float>(), 0.0f, 1e-5f);
+    const auto background_only_loss =
+        (((background * 10.0f) - gt).abs() * mask_expanded).sum() / mask_sum;
+    EXPECT_NEAR(background_only_loss.item<float>(), 0.0f, 1e-5f);
 
-    // Now add large difference only in background
-    // Since mask ignores background, loss should still be ~0
-    // (This test verifies the mask is applied correctly)
+    const auto foreground_loss =
+        (((mask_expanded * 2.0f) - gt).abs() * mask_expanded).sum() / mask_sum;
+    EXPECT_NEAR(foreground_loss.item<float>(), 2.0f, 1e-5f);
 }
 
 // Test gradient computation for masked L1
@@ -283,7 +330,8 @@ TEST_F(MaskLossTest, MaskModeEnum) {
     EXPECT_EQ(static_cast<int>(MaskMode::None), 0);
     EXPECT_EQ(static_cast<int>(MaskMode::Segment), 1);
     EXPECT_EQ(static_cast<int>(MaskMode::Ignore), 2);
-    EXPECT_EQ(static_cast<int>(MaskMode::AlphaConsistent), 3);
+    EXPECT_EQ(static_cast<int>(MaskMode::SegmentAndIgnore), 3);
+    EXPECT_EQ(static_cast<int>(MaskMode::AlphaConsistent), 4);
 }
 
 // Test optimization parameters for masks
@@ -437,30 +485,28 @@ TEST_F(MaskLossTest, MaskedSSIMComputation) {
 }
 
 // Test that masked SSIM focuses only on object regions
-TEST_F(MaskLossTest, MaskedSSIMIgnoresBackground) {
+TEST_F(MaskLossTest, MaskedSSIMWeightsForegroundMoreThanFullImage) {
     constexpr int C = 3;
     constexpr size_t H = 32;
     constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
-    // Create identical images in object region, different in background
-    auto base = Tensor::rand({1, C, H, W}, Device::CUDA);
-    auto modified = base.clone();
-
-    // Create mask where center is object (1.0), edges are background (0.0)
+    const auto base = Tensor::zeros({1, C, H, W}, Device::CUDA);
     auto mask_2d = create_binary_mask(H, W, 0.25f); // 25% is object
     auto mask_expanded = mask_2d.unsqueeze(0).expand({C, H, W});
     auto mask_sum = mask_expanded.sum() + EPSILON;
+    const auto background = Tensor::ones({1, C, H, W}, Device::CUDA) - mask_expanded.unsqueeze(0);
 
-    // SSIM of base with itself (in masked region)
-    auto result = lfs::training::kernels::ssim_forward_map(base, base, false);
+    const auto result = lfs::training::kernels::ssim_forward_map(base, background, false);
     auto ssim_map_3d = result.ssim_map.squeeze(0);
     auto masked_ssim_map = ssim_map_3d * mask_expanded;
     auto masked_ssim = masked_ssim_map.sum() / mask_sum;
 
-    // Should be ~1.0 since object regions are identical
-    float ssim_val = masked_ssim.item<float>();
-    EXPECT_NEAR(ssim_val, 1.0f, 0.05f);
+    const float masked_value = masked_ssim.item<float>();
+    const float full_value = result.ssim_value.item<float>();
+    EXPECT_GE(masked_value, 0.0f);
+    EXPECT_LE(masked_value, 1.0f);
+    EXPECT_GT(masked_value, full_value);
 }
 
 // Test full masked loss computation (L1 + SSIM)

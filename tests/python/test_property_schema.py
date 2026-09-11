@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Tests for PropertySchema extraction from operator properties."""
+"""Tests for shared registry metadata from operator properties."""
 
 import sys
 from pathlib import Path
@@ -40,8 +40,8 @@ def lfs_types():
         pytest.skip(f"lfs_plugins.types module not available: {e}")
 
 
-class TestPropertySchemaExtraction:
-    """Tests for property schema extraction from Python operators."""
+class TestOperatorPropertyExtraction:
+    """Tests for property metadata extraction from Python operators."""
 
     def test_float_property_basic(self, lf, lfs_types):
         """FloatProperty should be recognized."""
@@ -120,8 +120,8 @@ class TestPropertySchemaExtraction:
             lf.unregister_class(BoolOp)
 
 
-class TestPropertySchemaWithConstraints:
-    """Tests for property schemas with constraints (min/max/step)."""
+class TestOperatorPropertyConstraints:
+    """Tests for operator properties with constraints (min/max/step)."""
 
     def test_override_float_with_value(self, lf, lfs_types):
         """Float properties should accept override values."""
@@ -163,7 +163,7 @@ class TestPropertySchemaWithConstraints:
             lf.unregister_class(ConstrainedInt)
 
 
-class TestPropertySchemaComplexTypes:
+class TestOperatorPropertyComplexTypes:
     """Tests for complex property types (vectors, enums)."""
 
     def test_list_property_passthrough(self, lf, lfs_types):
@@ -207,8 +207,137 @@ class TestPropertySchemaComplexTypes:
             lf.unregister_class(DictOp)
 
 
-class TestPropertySchemaEdgeCases:
-    """Tests for edge cases in property schema handling."""
+class TestPropertyRegistryConversion:
+    """Tests for the shared Python descriptor-to-property metadata converter."""
+
+    def test_failed_operator_registration_removes_property_group(self, lf, lfs_types):
+        from lfs_plugins import props
+
+        class BrokenOperator(lfs_types.Operator):
+            amount = props.FloatProperty(default=1.0)
+
+            def __init__(self):
+                raise RuntimeError("intentional registration failure")
+
+        group_id = "operator." + BrokenOperator._class_id()
+        lf.register_class(BrokenOperator)
+        assert lf.ui.property_group_info(group_id) == {}
+
+    def test_operator_arg_flags_vector_types_and_optional_bounds(self, lf, lfs_types):
+        from lfs_plugins import props
+
+        class Item(props.PropertyGroup):
+            value = props.StringProperty(default="item")
+
+        class UnknownProperty(props.Property):
+            pass
+
+        class BaseOperator(lfs_types.Operator):
+            inherited = props.FloatProperty(default=0.25)
+            inherited_text = props.StringProperty(default="base")
+            inherited_vec3 = props.FloatVectorProperty(
+                default=(0.25, 0.5, 0.75), size=3
+            )
+
+        class DescriptorOperator(BaseOperator):
+            label = "Descriptor Operator"
+            unconstrained = props.FloatProperty(default=0.5)
+            constrained = props.FloatProperty(default=1.0, min=-2.0, max=3.0)
+            enabled = props.BoolProperty(default=True)
+            text = props.StringProperty(default="hello")
+            color = props.FloatVectorProperty(
+                default=(0.1, 0.2, 0.3), size=3, subtype=props.PropSubtype.COLOR
+            )
+            vec2 = props.FloatVectorProperty(default=(1.0, 2.0), size=2)
+            vec3 = props.FloatVectorProperty(default=(1.0, 2.0, 3.0), size=3)
+            vec4 = props.FloatVectorProperty(default=(1.0, 2.0, 3.0, 4.0), size=4)
+            vec5 = props.FloatVectorProperty(
+                default=(1.0, 2.0, 3.0, 4.0, 5.0), size=5
+            )
+            indices = props.IntVectorProperty(default=(1, 2, 3), size=3)
+            mode = props.EnumProperty(
+                items=[("REPLACE", "Replace", ""), ("ADD", "Add", "")],
+                default="ADD",
+            )
+            invalid_enum = props.EnumProperty(items=[("ONLY", "Only")])
+            invalid_enum_fields = props.EnumProperty(items=[("ONLY", "Only", 7)])
+            tensor = props.TensorProperty(shape=(-1, 3))
+            collection = props.CollectionProperty(type=Item)
+            unknown = UnknownProperty(default=2.0)
+
+            def execute(self, context):
+                return {"FINISHED"}
+
+        group_id = "operator." + DescriptorOperator._class_id()
+        lf.register_class(DescriptorOperator)
+        try:
+            info = lf.ui.property_group_info(group_id)
+            assert info["id"] == group_id
+            metas = {meta["id"]: meta for meta in info["properties"]}
+
+            expected_args = {
+                "unconstrained",
+                "constrained",
+                "enabled",
+                "text",
+                "color",
+                "vec2",
+                "vec3",
+                "vec4",
+                "vec5",
+                "indices",
+                "mode",
+                "tensor",
+            }
+            assert {
+                prop_id for prop_id, meta in metas.items() if meta["operator_arg"]
+            } == expected_args
+            assert set(metas) == expected_args | {
+                "inherited",
+                "inherited_text",
+                "inherited_vec3",
+                "invalid_enum",
+                "invalid_enum_fields",
+                "collection",
+                "unknown",
+            }
+
+            assert metas["vec2"]["type"] == "vec2"
+            assert metas["vec3"]["type"] == "vec3"
+            assert metas["vec4"]["type"] == "vec4"
+            assert metas["vec5"]["type"] == "float_vector"
+            assert metas["vec5"]["vector_size"] == 5
+            assert metas["indices"]["type"] == "int_vector"
+            assert metas["indices"]["vector_size"] == 3
+            assert metas["color"]["type"] == "color3"
+
+            assert "min" not in metas["unconstrained"]
+            assert "max" not in metas["unconstrained"]
+            assert metas["constrained"]["min"] == -2.0
+            assert metas["constrained"]["max"] == 3.0
+            assert metas["color"]["min"] == 0.0
+            assert metas["color"]["max"] == 1.0
+
+            assert all("default" not in metas[prop_id] for prop_id in expected_args)
+            assert metas["inherited"]["default"] == 0.25
+            assert metas["inherited_text"]["default"] == "base"
+            assert list(metas["inherited_vec3"]["default"]) == [0.25, 0.5, 0.75]
+            assert metas["unknown"]["default"] == 2.0
+            assert not metas["inherited"]["operator_arg"]
+            assert not metas["inherited_text"]["operator_arg"]
+            assert not metas["inherited_vec3"]["operator_arg"]
+            assert not metas["invalid_enum"]["operator_arg"]
+            assert not metas["invalid_enum_fields"]["operator_arg"]
+            assert not metas["collection"]["operator_arg"]
+            assert not metas["unknown"]["operator_arg"]
+        finally:
+            lf.unregister_class(DescriptorOperator)
+
+        assert lf.ui.property_group_info(group_id) == {}
+
+
+class TestOperatorPropertyEdgeCases:
+    """Tests for edge cases in operator property handling."""
 
     def test_none_property_value(self, lf, lfs_types):
         """None values should be handled correctly."""

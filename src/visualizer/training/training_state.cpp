@@ -11,7 +11,14 @@ namespace lfs::vis {
 
     bool TrainingStateMachine::isActive() const {
         const auto s = getState();
-        return s == TrainingState::Running || s == TrainingState::Paused;
+        return s == TrainingState::Starting ||
+               s == TrainingState::Running ||
+               s == TrainingState::Paused;
+    }
+
+    FinishReason TrainingStateMachine::getFinishReason() const {
+        std::lock_guard lock(mutex_);
+        return finish_reason_;
     }
 
     bool TrainingStateMachine::canPerform(TrainingAction action) const {
@@ -32,7 +39,8 @@ namespace lfs::vis {
         switch (action) {
         case TrainingAction::LoadDataset:
         case TrainingAction::LoadCheckpoint:
-            if (state == TrainingState::Running)
+            if (state == TrainingState::Starting ||
+                state == TrainingState::Running)
                 return "Cannot load while training is running. Pause or stop first.";
             if (state == TrainingState::Stopping)
                 return "Cannot load while training is stopping. Wait for completion.";
@@ -43,6 +51,8 @@ namespace lfs::vis {
                 return "No dataset loaded. Load a dataset first.";
             if (state == TrainingState::Running)
                 return "Training is already running.";
+            if (state == TrainingState::Starting)
+                return "Training is starting.";
             if (state == TrainingState::Paused)
                 return "Training is paused. Use resume instead.";
             if (state == TrainingState::Finished)
@@ -50,7 +60,7 @@ namespace lfs::vis {
             break;
 
         case TrainingAction::Pause:
-            if (state != TrainingState::Running)
+            if (state != TrainingState::Starting && state != TrainingState::Running)
                 return "Can only pause while training is running.";
             break;
 
@@ -65,7 +75,8 @@ namespace lfs::vis {
             break;
 
         case TrainingAction::Reset:
-            if (state == TrainingState::Running)
+            if (state == TrainingState::Starting ||
+                state == TrainingState::Running)
                 return "Cannot reset while training is running. Stop first.";
             if (state == TrainingState::Idle)
                 return "Nothing to reset.";
@@ -73,15 +84,11 @@ namespace lfs::vis {
 
         case TrainingAction::ClearScene:
         case TrainingAction::DeleteTrainingNode:
-            if (state == TrainingState::Running)
+            if (state == TrainingState::Starting ||
+                state == TrainingState::Running)
                 return "Cannot modify scene while training is running.";
             if (state == TrainingState::Stopping)
                 return "Cannot modify scene while training is stopping.";
-            break;
-
-        case TrainingAction::SaveCheckpoint:
-            if (!isActive())
-                return "Can only save checkpoint during active training.";
             break;
 
         default:
@@ -92,46 +99,76 @@ namespace lfs::vis {
     }
 
     bool TrainingStateMachine::transitionTo(TrainingState new_state) {
-        const auto old_state = getState();
-
-        if (!isValidTransition(old_state, new_state)) {
-            LOG_WARN("Invalid state transition: {} -> {}",
-                     stateName(old_state), stateName(new_state));
-            return false;
-        }
-
-        LOG_DEBUG("Training state: {} -> {}", stateName(old_state), stateName(new_state));
-
-        executeExitActions(old_state);
-        state_.store(new_state, std::memory_order_release);
-
-        if (new_state != TrainingState::Finished) {
-            finish_reason_ = FinishReason::None;
-        }
-
-        executeEntryActions(new_state);
-
-        if (on_state_change_) {
-            on_state_change_(old_state, new_state);
-        }
-
-        return true;
+        return transitionToImpl(new_state, FinishReason::None);
     }
 
     bool TrainingStateMachine::transitionToFinished(FinishReason reason) {
-        if (!transitionTo(TrainingState::Finished)) {
-            return false;
+        return transitionToImpl(TrainingState::Finished, reason);
+    }
+
+    bool TrainingStateMachine::transitionToImpl(TrainingState new_state, FinishReason finish_reason) {
+        StateChangeCallback callback;
+        TrainingState old_state;
+        bool owns_callback_dispatch = false;
+        const auto current_thread = std::this_thread::get_id();
+        {
+            std::unique_lock lock(mutex_);
+            callback_dispatch_idle_.wait(lock, [this, current_thread] {
+                return !callback_dispatch_active_ || callback_dispatch_owner_ == current_thread;
+            });
+            old_state = getState();
+
+            if (!isValidTransition(old_state, new_state)) {
+                LOG_WARN("Invalid state transition: {} -> {}",
+                         stateName(old_state), stateName(new_state));
+                return false;
+            }
+
+            LOG_DEBUG("Training state: {} -> {}", stateName(old_state), stateName(new_state));
+
+            finish_reason_ = new_state == TrainingState::Finished ? finish_reason : FinishReason::None;
+            state_.store(new_state, std::memory_order_release);
+            callback = on_state_change_;
+            if (callback && !callback_dispatch_active_) {
+                callback_dispatch_active_ = true;
+                callback_dispatch_owner_ = current_thread;
+                owns_callback_dispatch = true;
+            }
         }
-        finish_reason_ = reason;
+
+        if (callback) {
+            try {
+                callback(old_state, new_state);
+            } catch (...) {
+                if (owns_callback_dispatch) {
+                    finishCallbackDispatch();
+                }
+                throw;
+            }
+        }
+        if (owns_callback_dispatch) {
+            finishCallbackDispatch();
+        }
+
         return true;
     }
 
-    void TrainingStateMachine::setResources(const TrainingResources& resources) {
-        resources_ = resources;
+    void TrainingStateMachine::setStateChangeCallback(StateChangeCallback callback) {
+        const auto current_thread = std::this_thread::get_id();
+        std::unique_lock lock(mutex_);
+        callback_dispatch_idle_.wait(lock, [this, current_thread] {
+            return !callback_dispatch_active_ || callback_dispatch_owner_ == current_thread;
+        });
+        on_state_change_ = std::move(callback);
     }
 
-    void TrainingStateMachine::clearResourceTracking() {
-        resources_ = TrainingResources{};
+    void TrainingStateMachine::finishCallbackDispatch() noexcept {
+        {
+            std::lock_guard lock(mutex_);
+            callback_dispatch_active_ = false;
+            callback_dispatch_owner_ = {};
+        }
+        callback_dispatch_idle_.notify_all();
     }
 
     bool TrainingStateMachine::isValidTransition(TrainingState from, TrainingState to) const {
@@ -143,20 +180,11 @@ namespace lfs::vis {
         return TRANSITIONS[from_idx][to_idx];
     }
 
-    void TrainingStateMachine::executeExitActions(TrainingState /*old_state*/) {
-        // No cleanup here - may be called from training thread
-    }
-
-    void TrainingStateMachine::executeEntryActions(TrainingState new_state) {
-        if (new_state == TrainingState::Idle) {
-            clearResourceTracking();
-        }
-    }
-
     std::string_view TrainingStateMachine::stateName(TrainingState state) {
         switch (state) {
         case TrainingState::Idle: return "Idle";
         case TrainingState::Ready: return "Ready";
+        case TrainingState::Starting: return "Starting";
         case TrainingState::Running: return "Running";
         case TrainingState::Paused: return "Paused";
         case TrainingState::Stopping: return "Stopping";
@@ -176,7 +204,6 @@ namespace lfs::vis {
         case TrainingAction::Reset: return "Reset";
         case TrainingAction::ClearScene: return "ClearScene";
         case TrainingAction::DeleteTrainingNode: return "DeleteTrainingNode";
-        case TrainingAction::SaveCheckpoint: return "SaveCheckpoint";
         case TrainingAction::COUNT: return "Invalid";
         }
         return "Unknown";

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cuda_runtime.h>
 
@@ -8,34 +9,6 @@ namespace lfs::core::tensor_ops {
 
     namespace {
         constexpr size_t MAX_GRID_Y_DIM = 65535;
-    }
-
-    // Transpose kernel using shared memory
-    template <int TILE_DIM, int BLOCK_ROWS>
-    __global__ void transpose_kernel(const float* input, float* output, size_t rows, size_t cols) {
-        __shared__ float tile[TILE_DIM][TILE_DIM + 1];
-
-        int x = blockIdx.x * TILE_DIM + threadIdx.x;
-        int y = blockIdx.y * TILE_DIM + threadIdx.y;
-        int width = cols;
-
-        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
-            if (x < cols && (y + j) < rows) {
-                tile[threadIdx.y + j][threadIdx.x] = input[(y + j) * width + x];
-            }
-        }
-
-        __syncthreads();
-
-        x = blockIdx.y * TILE_DIM + threadIdx.x;
-        y = blockIdx.x * TILE_DIM + threadIdx.y;
-        width = rows;
-
-        for (int j = 0; j < TILE_DIM; j += BLOCK_ROWS) {
-            if (x < rows && (y + j) < cols) {
-                output[(y + j) * width + x] = tile[threadIdx.x][threadIdx.y + j];
-            }
-        }
     }
 
     // Register-tiled sgemm: C = A @ B
@@ -352,16 +325,19 @@ namespace lfs::core::tensor_ops {
     void launch_eye(float* data, size_t m, size_t n, cudaStream_t stream) {
         int bs = 256;
         eye_kernel<<<(m * n + bs - 1) / bs, bs, 0, stream>>>(data, m, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.eye");
     }
 
     void launch_diag(const float* diagonal, float* matrix, size_t n, cudaStream_t stream) {
         int bs = 256;
         diag_kernel<<<(n * n + bs - 1) / bs, bs, 0, stream>>>(diagonal, matrix, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.diag");
     }
 
     void launch_extract_diag(const float* matrix, float* diagonal, size_t n, cudaStream_t stream) {
         int bs = 256;
         extract_diag_kernel<<<(n + bs - 1) / bs, bs, 0, stream>>>(matrix, diagonal, n);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.extract_diag");
     }
 
     void launch_sgemm(const float* a, const float* b, float* c, size_t m, size_t n, size_t k, cudaStream_t stream) {
@@ -379,6 +355,7 @@ namespace lfs::core::tensor_ops {
                     rows_this_launch,
                     n,
                     k);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_optimized");
             }
         } else {
             constexpr int T = 16;
@@ -394,6 +371,7 @@ namespace lfs::core::tensor_ops {
                     rows_this_launch,
                     n,
                     k);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_tiled");
             }
         }
     }
@@ -413,6 +391,7 @@ namespace lfs::core::tensor_ops {
                     rows_this_launch,
                     n,
                     k);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_tn_optimized");
             }
         } else {
             constexpr int T = 16;
@@ -428,6 +407,7 @@ namespace lfs::core::tensor_ops {
                     rows_this_launch,
                     n,
                     k);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_tn");
             }
         }
     }
@@ -450,6 +430,7 @@ namespace lfs::core::tensor_ops {
                 m * k,
                 k * n,
                 m * n);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_batched");
         }
     }
 
@@ -469,6 +450,7 @@ namespace lfs::core::tensor_ops {
                 rows_this_launch,
                 n,
                 k);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.matrix.sgemm_bias_relu");
         }
     }
 

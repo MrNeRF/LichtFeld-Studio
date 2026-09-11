@@ -3,35 +3,56 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
+#include "memory_pool.hpp"
+
 #include <cuda_runtime.h>
 #include <memory>
 
 namespace lfs::core {
 
-    // RAII wrapper for CUDA device memory
+    // RAII wrapper for short-lived CUDA device temps (shape/stride metadata,
+    // small op scratch). Routes through CudaMemoryPool so classic-heap
+    // cudaMalloc fragmentation is avoided and allocations stay tracked.
     template <typename T>
     class CudaDeviceMemory {
     private:
         T* ptr_ = nullptr;
         size_t size_ = 0;
+        cudaStream_t stream_ = nullptr;
+
+        void free_owned() {
+            if (ptr_) {
+                // pool-liveness-aware free.
+                safe_cuda_pool_deallocate(ptr_, stream_);
+                ptr_ = nullptr;
+                size_ = 0;
+            }
+        }
 
     public:
         CudaDeviceMemory() = default;
 
-        explicit CudaDeviceMemory(size_t count) : size_(count) {
+        explicit CudaDeviceMemory(size_t count, cudaStream_t stream = nullptr)
+            : size_(count),
+              stream_(stream) {
             if (count > 0) {
-                cudaError_t err = cudaMalloc(&ptr_, count * sizeof(T));
-                if (err != cudaSuccess) {
-                    ptr_ = nullptr;
+                ptr_ = static_cast<T*>(
+                    CudaMemoryPool::instance().allocate(count * sizeof(T), stream));
+                if (!ptr_) {
+                    ensure_cuda_success(
+                        cudaErrorMemoryAllocation, "CudaMemoryPool(CudaDeviceMemory)",
+                        detail::format_cuda_safe(
+                            "element_count={}, element_bytes={}, requested_bytes={}",
+                            count, sizeof(T), count * sizeof(T)),
+                        LFS_SOURCE_SITE_CURRENT(), CudaFailureDisposition::LogOnly);
                     size_ = 0;
                 }
             }
         }
 
         ~CudaDeviceMemory() {
-            if (ptr_) {
-                cudaFree(ptr_);
-            }
+            free_owned();
         }
 
         // Delete copy constructor and assignment
@@ -41,21 +62,23 @@ namespace lfs::core {
         // Move constructor
         CudaDeviceMemory(CudaDeviceMemory&& other) noexcept
             : ptr_(other.ptr_),
-              size_(other.size_) {
+              size_(other.size_),
+              stream_(other.stream_) {
             other.ptr_ = nullptr;
             other.size_ = 0;
+            other.stream_ = nullptr;
         }
 
         // Move assignment
         CudaDeviceMemory& operator=(CudaDeviceMemory&& other) noexcept {
             if (this != &other) {
-                if (ptr_) {
-                    cudaFree(ptr_);
-                }
+                free_owned();
                 ptr_ = other.ptr_;
                 size_ = other.size_;
+                stream_ = other.stream_;
                 other.ptr_ = nullptr;
                 other.size_ = 0;
+                other.stream_ = nullptr;
             }
             return *this;
         }
@@ -72,12 +95,13 @@ namespace lfs::core {
             return tmp;
         }
 
-        void reset(T* ptr = nullptr, size_t size = 0) {
+        void reset(T* ptr = nullptr, size_t size = 0, cudaStream_t stream = nullptr) {
             if (ptr_ && ptr_ != ptr) {
-                cudaFree(ptr_);
+                free_owned();
             }
             ptr_ = ptr;
             size_ = size;
+            stream_ = stream;
         }
 
         // Copy data from host

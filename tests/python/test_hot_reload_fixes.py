@@ -25,7 +25,7 @@ import pytest
 
 
 @pytest.fixture
-def plugin_test_dir(monkeypatch):
+def plugin_test_dir(monkeypatch, bypass_plugin_installer):
     """Create temporary plugins directory for tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         plugins_dir = Path(tmpdir) / "plugins"
@@ -273,7 +273,7 @@ class TestReloadFailureLogging:
 
         with caplog.at_level(logging.ERROR, logger="lfs_plugins.watcher"):
             watcher._pending_reloads.add("fail_reload")
-            watcher._process_pending_reloads()
+            watcher._process_pending_plugin_reloads_on_ui()
 
         assert any("Hot-reload failed" in r.message and "fail_reload" in r.message for r in caplog.records)
 
@@ -299,7 +299,7 @@ class TestReloadFailureLogging:
 
         with caplog.at_level(logging.INFO, logger="lfs_plugins.watcher"):
             watcher._pending_reloads.add("good_reload")
-            watcher._process_pending_reloads()
+            watcher._process_pending_plugin_reloads_on_ui()
 
         assert any("Hot-reloaded plugin" in r.message and "good_reload" in r.message for r in caplog.records)
 
@@ -324,7 +324,7 @@ class TestReloadFailureLogging:
         with patch.object(mgr, "reload", side_effect=RuntimeError("Unexpected reload error")):
             with caplog.at_level(logging.ERROR, logger="lfs_plugins.watcher"):
                 watcher._pending_reloads.add("exc_reload")
-                watcher._process_pending_reloads()
+                watcher._process_pending_plugin_reloads_on_ui()
 
         error_records = [r for r in caplog.records if "Hot-reload exception" in r.message]
         assert len(error_records) > 0
@@ -549,14 +549,17 @@ class TestHashCleanupOnUnload:
         mgr._watcher = None
 
     def test_clear_nonexistent_hash_is_safe(self, plugin_test_dir):
-        """Verify clearing hash for unknown plugin doesn't crash."""
+        """Clearing an unknown plugin must leave tracked hashes untouched."""
         from lfs_plugins.watcher import PluginWatcher
         from lfs_plugins import PluginManager
 
         mgr = PluginManager.instance()
         watcher = PluginWatcher(mgr, poll_interval=1.0)
+        watcher._file_hashes["existing"] = {"path": "hash"}
 
         watcher.clear_plugin_hashes("nonexistent_plugin")
+
+        assert watcher._file_hashes == {"existing": {"path": "hash"}}
 
     def test_hashes_isolated_between_plugins(self, plugin_test_dir):
         """Verify hash clearing only affects target plugin."""

@@ -311,6 +311,14 @@ namespace lfs::vis::gui {
             html += fmt::format(
                 R"(<div class="context-menu-item" id="ctx-focal">{}</div>)",
                 LOC(Sequencer::EDIT_FOCAL_LENGTH));
+            if (is_first)
+                html += fmt::format(
+                    R"(<div class="context-menu-item disabled" id="ctx-set-time-disabled">{}</div>)",
+                    LOC(Sequencer::SET_TIME));
+            else
+                html += fmt::format(
+                    R"(<div class="context-menu-item" id="ctx-set-time">{}</div>)",
+                    LOC(Sequencer::SET_TIME));
             html += R"(<div class="context-menu-separator"></div>)";
 
             const bool translate_active = edit_mode == SequencerViewportEditMode::Translate;
@@ -488,9 +496,9 @@ namespace lfs::vis::gui {
         overlay_px_height_ = 80.0f * dp;
 
         const size_t kf_num = selected + 1;
-        el_edit_label_->SetInnerRML(
-            fmt::format(fmt::runtime(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME)), kf_num));
-        el_edit_delta_->SetInnerRML(fmt::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
+        el_edit_label_->SetInnerRML(LOCF(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME, kf_num));
+        el_edit_delta_->SetInnerRML(
+            LOCF(lichtfeld::Strings::Sequencer::EDIT_DELTA, pos_delta, rot_delta, DEG_SIGN));
 
         if (!edit_overlay_visible_) {
             el_edit_overlay_->SetProperty("display", "block");
@@ -523,9 +531,19 @@ namespace lfs::vis::gui {
             preview_source_ = texture_src;
         }
 
-        el_preview_window_->SetProperty("left", fmt::format("{:.1f}px", left));
-        el_preview_window_->SetProperty("top", fmt::format("{:.1f}px", top));
-        el_preview_window_->SetProperty("width", fmt::format("{:.1f}px", width + 8.0f));
+        constexpr float CHROME_HEIGHT = 26.0f;
+        const float win_w = width + 8.0f;
+        const float win_h = height + CHROME_HEIGHT;
+        float left_px = left;
+        float top_px = top;
+        if (width_ > 0)
+            left_px = std::clamp(left_px, 0.0f, std::max(0.0f, static_cast<float>(width_) - win_w));
+        if (height_ > 0)
+            top_px = std::clamp(top_px, 0.0f, std::max(0.0f, static_cast<float>(height_) - win_h));
+
+        el_preview_window_->SetProperty("left", fmt::format("{:.1f}px", left_px));
+        el_preview_window_->SetProperty("top", fmt::format("{:.1f}px", top_px));
+        el_preview_window_->SetProperty("width", fmt::format("{:.1f}px", win_w));
         el_preview_title_->SetInnerRML(title);
         el_preview_window_->SetClass("playing", playing);
         el_preview_image_->SetProperty("width", fmt::format("{:.1f}px", width));
@@ -573,8 +591,11 @@ namespace lfs::vis::gui {
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), mods);
 
         auto* hover = rml_context_->GetHoverElement();
+        const auto hover_id = hover ? hover->GetId() : Rml::String{};
+        const bool over_backdrop =
+            hover_id == "menu-backdrop" || hover_id == "popup-backdrop";
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
-                                      hover->GetId() != "body";
+                                      hover_id != "body" && !over_backdrop;
 
         if (edit_overlay_visible_ && el_edit_overlay_) {
             const float h = el_edit_overlay_->GetOffsetHeight();
@@ -583,11 +604,18 @@ namespace lfs::vis::gui {
         }
 
         const bool over_edit_overlay = isMouseOverEditOverlay(mx, my);
+        wants_input_ = over_interactive || over_edit_overlay;
 
-        if (over_interactive || over_edit_overlay ||
-            context_menu_open_ || time_edit_active_ || focal_edit_active_) {
+        const bool menu_or_popup_open =
+            context_menu_open_ || time_edit_active_ || focal_edit_active_;
+        const bool consume_outside_click =
+            menu_or_popup_open && !wants_input_ &&
+            (input.mouse_clicked[0] || input.mouse_clicked[1] ||
+             input.mouse_released[0] || input.mouse_released[1]);
+        if (consume_outside_click)
             wants_input_ = true;
 
+        if (wants_input_) {
             if (skip_next_click_) {
                 skip_next_click_ = false;
             } else {
@@ -718,11 +746,6 @@ namespace lfs::vis::gui {
         rml_manager_->queueVulkanContext(rml_context_, 0.0f, 0.0f, true);
     }
 
-    void RmlSequencerOverlay::compositeToScreen(const int screen_w, const int screen_h) const {
-        (void)screen_w;
-        (void)screen_h;
-    }
-
     void RmlSequencerOverlay::destroyGraphicsResources() {
         hidePreviewWindow();
     }
@@ -801,6 +824,14 @@ namespace lfs::vis::gui {
                      *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
+        } else if (id == "ctx-set-time") {
+            const auto kf_index = overlay->context_menu_keyframe_;
+            overlay->hideContextMenu();
+            if (kf_index) {
+                const auto* const kf = overlay->controller_.timeline().getKeyframe(*kf_index);
+                if (kf && *kf_index > 0 && !kf->is_loop_point)
+                    overlay->showTimeEdit(*kf_index, kf->time);
+            }
         } else if (id == "ctx-translate") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(

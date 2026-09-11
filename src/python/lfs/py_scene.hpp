@@ -22,9 +22,6 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
-    class PyScene;
-    class PyCameraDataset;
-
     struct PySelectionGroup {
         uint8_t id;
         std::string name;
@@ -218,12 +215,14 @@ namespace lfs::python {
         }
 
         int32_t id() const { return node_->id; }
+        std::string uuid() const { return node_->uuid.to_string(); }
         int32_t parent_id() const { return node_->parent_id; }
         std::vector<int32_t> children() const { return node_->children; }
         core::NodeType type() const { return node_->type; }
 
         // Transform (special matrix conversion)
         void set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform);
+        nb::tuple local_transform() const;
         nb::tuple world_transform() const;
 
         // Metadata (read-only)
@@ -318,8 +317,8 @@ namespace lfs::python {
 
         nb::list python_dir() const {
             nb::list result;
-            for (const char* attr : {"id", "parent_id", "children", "type",
-                                     "world_transform", "set_local_transform",
+            for (const char* attr : {"id", "uuid", "parent_id", "children", "type",
+                                     "local_transform", "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
                                      "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "keyframe_data",
                                      "camera_uid", "image_path", "mask_path", "depth_path", "has_camera",
@@ -450,6 +449,7 @@ namespace lfs::python {
 
         // Queries
         std::optional<PySceneNode> get_node_by_id(int32_t id);
+        std::optional<PySceneNode> get_node_by_uuid(const std::string& uuid);
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();

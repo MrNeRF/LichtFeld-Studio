@@ -7,7 +7,6 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
-#include <cuda_runtime.h>
 
 namespace lfs::training {
 
@@ -42,6 +41,12 @@ namespace lfs::training {
         vec.erase(std::remove_if(vec.begin(), vec.end(),
                                  [&](const Registration& r) { return r.id == handle; }),
                   vec.end());
+        pending_callbacks_.erase(
+            std::remove_if(pending_callbacks_.begin(), pending_callbacks_.end(),
+                           [&](const PendingCallback& pending) {
+                               return pending.registration_id == handle;
+                           }),
+            pending_callbacks_.end());
 
         if (vec.empty()) {
             callbacks_.erase(it);
@@ -67,7 +72,7 @@ namespace lfs::training {
             pending_callbacks_.reserve(pending_callbacks_.size() + local.size());
             for (const auto& reg : local) {
                 if (reg.cb) {
-                    pending_callbacks_.push_back(PendingCallback{reg.cb, ctx});
+                    pending_callbacks_.push_back(PendingCallback{reg.id, reg.cb, ctx});
                 }
             }
         }
@@ -81,11 +86,6 @@ namespace lfs::training {
                 return;
             }
             local.swap(pending_callbacks_);
-        }
-
-        if (cudaSetDevice(0) != cudaSuccess) {
-            spdlog::error("cudaSetDevice failed in hook drain");
-            return;
         }
 
         for (const auto& pending : local) {

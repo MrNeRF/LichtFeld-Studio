@@ -81,10 +81,7 @@ namespace nvimgcodec {
     std::mutex mapped_files_mutex;
     std::map<std::string, MappedFile> mapped_files;
 
-    MmapedFileIoStream::MmapedFileIoStream(const std::string& path, bool read_ahead) : FileIoStream(path),
-                                                                                       length_(0),
-                                                                                       pos_(0),
-                                                                                       read_ahead_whole_file_(read_ahead) {
+    MmapedFileIoStream::MmapedFileIoStream(const std::string& path, bool read_ahead) : FileIoStream(path), length_(0), pos_(0), read_ahead_whole_file_(read_ahead) {
         std::lock_guard<std::mutex> lock(mapped_files_mutex);
         std::weak_ptr<void> mapped_memory;
         std::tie(mapped_memory, length_) = mapped_files[path];
@@ -137,7 +134,7 @@ namespace nvimgcodec {
             pos += pos_;
         else if (whence == SEEK_END)
             pos += length_;
-        if (pos < 0 || pos > (size_t)length_)
+        if (pos > (size_t)length_)
             throw std::runtime_error("Invalid seek");
         pos_ = pos;
     }

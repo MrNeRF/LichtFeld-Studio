@@ -40,7 +40,7 @@ namespace lfs::vis {
 
     namespace gui {
 
-        class SequencerUIManager {
+        class LFS_VIS_API SequencerUIManager {
         public:
             SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state,
                                gui::RmlUIManager* rml_manager);
@@ -50,7 +50,6 @@ namespace lfs::vis {
             void render(const UIContext& ctx, const ViewportLayout& viewport,
                         float panel_x, float panel_y, float panel_width, float panel_height,
                         const PanelInputState& panel_input);
-            void compositeOverlays(int screen_w, int screen_h);
             void setSequencerEnabled(bool enabled);
             void reloadRmlResources();
 
@@ -59,15 +58,18 @@ namespace lfs::vis {
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
+            void syncKeyframesToSceneGraph() { scene_sync_->syncToSceneGraph(); }
             void setFloating(bool floating);
-            [[nodiscard]] float panelTopY() const { return panel_ && !panel_->isFloating() ? panel_->cachedPanelY() : -1.0f; }
             [[nodiscard]] bool blocksPointer(double x, double y) const;
             [[nodiscard]] bool blocksKeyboard() const;
             [[nodiscard]] bool needsAnimationFrame() const;
             [[nodiscard]] float preferredFloatingHeight() const;
             // Serialized status of the active PLY sequence (empty when inactive).
             // Used by MCP tooling to verify playback/scrub behaviour.
-            [[nodiscard]] LFS_VIS_API std::string plyPlayerStatusJson() const;
+            [[nodiscard]] std::string plyPlayerStatusJson() const;
+            [[nodiscard]] float timelineZoom() const;
+            [[nodiscard]] float timelinePan() const;
+            void setTimelineView(float zoom, float pan);
 
         private:
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport,
@@ -87,7 +89,6 @@ namespace lfs::vis {
             void requestPlySequenceWindow(size_t frame_index);
             void prunePlySequenceRequests(size_t frame_index);
             void evictPlySequenceFrames(size_t keep_frame_index);
-            [[nodiscard]] bool isPlySequenceFrameResident(size_t frame_index) const;
             [[nodiscard]] std::optional<size_t> selectPlySequenceDisplayFrame(size_t requested_frame) const;
             [[nodiscard]] bool isPlySequenceFrameInWindow(size_t frame_index, size_t center_frame, size_t frame_count) const;
             [[nodiscard]] bool isPlySequenceFrameInWindow(size_t frame_index,
@@ -105,6 +106,22 @@ namespace lfs::vis {
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void syncPipPreviewWindow(const ViewportLayout& viewport);
+
+            struct PipPreviewKey {
+                std::optional<sequencer::KeyframeId> selected_id;
+                uint64_t timeline_revision = 0;
+                float playhead = 0.0f;
+                glm::vec3 position{0.0f};
+                glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+                float focal_length_mm = 0.0f;
+                bool equirectangular = false;
+                int width = 0;
+                int height = 0;
+
+                bool operator==(const PipPreviewKey&) const = default;
+            };
+
+            [[nodiscard]] PipPreviewKey currentPipPreviewKey() const;
             void beginViewportKeyframeEdit(size_t keyframe_index);
             void endViewportKeyframeEdit();
             [[nodiscard]] sequencer::CameraState currentViewportCameraState() const;
@@ -130,13 +147,14 @@ namespace lfs::vis {
             float panel_elapsed_time_ = 0.0f;
             bool playback_ticked_before_scene_ = false;
 
-            static constexpr int PREVIEW_WIDTH = 320;
-            static constexpr int PREVIEW_HEIGHT = 180;
             static constexpr float PREVIEW_TARGET_FPS = 30.0f;
             VulkanUiTexture pip_texture_;
             bool pip_initialized_ = false;
-            std::optional<size_t> pip_last_keyframe_;
+            std::optional<PipPreviewKey> pip_last_key_;
+            // Rml reload / GPU reset are not encoded in model state.
             bool pip_needs_update_ = true;
+            int pip_render_width_ = 320;
+            int pip_render_height_ = 180;
             bool last_equirectangular_ = false;
             std::optional<size_t> last_ply_sequence_frame_;
             std::vector<size_t> loaded_ply_sequence_frames_;

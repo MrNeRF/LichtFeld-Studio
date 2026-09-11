@@ -58,8 +58,7 @@ namespace nvimgcodec {
     } // namespace
 
     StdFileIoStream::StdFileIoStream(const std::string& path, bool to_write)
-        : FileIoStream(path),
-          path_(path) {
+        : FileIoStream(path), path_(path), to_write_(to_write) {
 #ifdef _WIN32
         const auto wpath = utf8_to_wstring(path_);
         fp_ = _wfopen(wpath.c_str(), to_write ? L"wb" : L"rb");
@@ -124,6 +123,9 @@ namespace nvimgcodec {
     }
 
     void* StdFileIoStream::map(size_t offset, size_t size) const {
+        if (to_write_) {
+            return nullptr;
+        }
         if (buffer_data_.load() == nullptr) {
             nvtx3::scoped_range marker{"file read"};
             std::lock_guard<std::mutex> lock(mutex_);

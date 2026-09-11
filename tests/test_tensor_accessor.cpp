@@ -521,45 +521,6 @@ TEST_F(TensorAccessorTest, MultipleAccessors) {
     EXPECT_FLOAT_EQ(acc2_custom(1, 1), acc2_torch[1][1]);
 }
 
-// ============= Performance Test =============
-
-TEST_F(TensorAccessorTest, AccessorPerformance) {
-    auto t_custom = Tensor::zeros({1000, 1000}, Device::CPU);
-    auto t_torch = torch::zeros({1000, 1000}, torch::TensorOptions().dtype(torch::kFloat32));
-
-    auto acc_custom = t_custom.accessor<float, 2>();
-    auto acc_torch = t_torch.accessor<float, 2>();
-
-    // Fill entire matrix using accessor - time our implementation
-    auto start_custom = std::chrono::high_resolution_clock::now();
-    for (size_t i = 0; i < 1000; ++i) {
-        for (size_t j = 0; j < 1000; ++j) {
-            acc_custom(i, j) = i + j;
-        }
-    }
-    auto end_custom = std::chrono::high_resolution_clock::now();
-    auto duration_custom = std::chrono::duration_cast<std::chrono::milliseconds>(end_custom - start_custom);
-
-    // Fill using PyTorch accessor
-    auto start_torch = std::chrono::high_resolution_clock::now();
-    for (size_t i = 0; i < 1000; ++i) {
-        for (size_t j = 0; j < 1000; ++j) {
-            acc_torch[i][j] = i + j;
-        }
-    }
-    auto end_torch = std::chrono::high_resolution_clock::now();
-    auto duration_torch = std::chrono::duration_cast<std::chrono::milliseconds>(end_torch - start_torch);
-
-    LOG_INFO("Accessor Performance (1000x1000 matrix):");
-    LOG_INFO("  Our implementation: {} ms", duration_custom.count());
-    LOG_INFO("  PyTorch: {} ms", duration_torch.count());
-
-    // Spot check - both should have the same values
-    EXPECT_FLOAT_EQ(acc_custom(0, 0), acc_torch[0][0]);
-    EXPECT_FLOAT_EQ(acc_custom(100, 200), acc_torch[100][200]);
-    EXPECT_FLOAT_EQ(acc_custom(999, 999), acc_torch[999][999]);
-}
-
 // ============= Random Data Comprehensive Test =============
 
 TEST_F(TensorAccessorTest, RandomAccessPattern) {

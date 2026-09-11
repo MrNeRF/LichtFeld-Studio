@@ -43,7 +43,7 @@ class TrainingMonitorPanel(lf.ui.Panel):
             return
         interval = self.settings.auto_save_interval
         if iteration - self.last_auto_save >= interval:
-            lf.save_checkpoint()
+            lf.project_save()
             self.last_auto_save = iteration
             lf.log.info(f"Auto-saved checkpoint at iteration {iteration}")
 
@@ -106,7 +106,7 @@ class TrainingMonitorPanel(lf.ui.Panel):
                 lf.resume_training()
 
         if ui.button("Save Checkpoint", (-1, 0)):
-            lf.save_checkpoint()
+            lf.project_save()
             lf.log.info("Checkpoint saved manually")
 
 

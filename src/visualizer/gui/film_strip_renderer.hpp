@@ -30,10 +30,7 @@ namespace lfs::vis::gui {
         static constexpr float STRIP_HEIGHT = 56.0f;
         static constexpr float THUMB_PADDING = 4.0f;
         static constexpr float SPROCKET_W = 4.0f;
-        static constexpr float SPROCKET_H = 3.0f;
         static constexpr float SPROCKET_SPACING = 10.0f;
-        static constexpr float SPROCKET_ROUNDING = 1.0f;
-        static constexpr float SPROCKET_INSET = 0.5f;
 
         struct RenderOptions {
             float panel_x = 0.0f;
@@ -92,9 +89,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] const std::optional<HoverState>& hoverState() const { return hover_state_; }
         [[nodiscard]] const std::vector<ThumbInfo>& thumbs() const { return thumbs_; }
         [[nodiscard]] const std::vector<ExactMarkerInfo>& markers() const { return exact_markers_; }
-        [[nodiscard]] std::uintptr_t textureIdForSlot(const int slot_idx) const;
         [[nodiscard]] std::string srcUrlForSlot(const int slot_idx) const;
-        [[nodiscard]] bool slotIsCurrentGeneration(const int slot_idx) const;
 
         void invalidateAll();
         void destroyGraphicsResources();

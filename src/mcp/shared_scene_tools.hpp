@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
 
@@ -21,25 +22,27 @@ namespace lfs::mcp {
                                                            const core::param::TrainingParameters&)>;
         using PathHandler =
             std::function<std::expected<void, std::string>(const std::filesystem::path&)>;
-        using SaveCheckpointHandler =
-            std::function<std::expected<std::filesystem::path, std::string>(const std::optional<std::filesystem::path>&)>;
+        using SavePlyHandler =
+            std::function<std::expected<void, std::string>(const std::filesystem::path&, bool include_provenance)>;
         using StartTrainingHandler =
             std::function<std::expected<void, std::string>()>;
         using RenderCaptureHandler =
             std::function<std::expected<std::string, std::string>(std::optional<int> camera_index, int width, int height)>;
         using GaussianCountHandler =
             std::function<std::expected<int64_t, std::string>()>;
+        using LastTrainingErrorHandler =
+            std::function<std::optional<lfs::Error>()>;
 
         std::string runtime = "shared";
         std::string thread_affinity = "any";
 
         LoadDatasetHandler load_dataset;
         PathHandler load_checkpoint;
-        SaveCheckpointHandler save_checkpoint;
-        PathHandler save_ply;
+        SavePlyHandler save_ply;
         StartTrainingHandler start_training;
         RenderCaptureHandler render_capture;
         GaussianCountHandler gaussian_count;
+        LastTrainingErrorHandler last_training_error;
     };
 
     LFS_MCP_API void register_shared_scene_tools(const SharedSceneToolBackend& backend);

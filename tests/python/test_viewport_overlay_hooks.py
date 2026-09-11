@@ -113,6 +113,7 @@ def _install_stub_modules(monkeypatch):
         ),
         rml=SimpleNamespace(get_document=lambda _name: document),
         context=lambda: SimpleNamespace(),
+        get_content_type=lambda: "splat_files",
         get_active_tool=lambda: "",
         get_transform_space=lambda: 1,
         get_pivot_mode=lambda: 0,
@@ -141,6 +142,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui_stub
+    lf_stub.can_transform_selection = lambda: True
     lf_stub.get_selected_node_names = lambda: []
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
 
@@ -184,6 +186,19 @@ def test_unregister_removes_draw_hook(overlays_module):
     assert remove_calls == [
         ("viewport_overlay", "draw", hook_calls[0][2]),
     ]
+
+
+def test_on_document_unloaded_resets_controller(overlays_module):
+    module, *_rest, _document = overlays_module
+
+    module.register()
+    assert module._document_controller is not None
+    assert module._document_controller._handle is not None
+
+    module.on_document_unloaded()
+
+    assert module._document_controller is not None
+    assert module._document_controller._handle is None
 
 
 def test_document_sync_binds_model_and_updates_actions(overlays_module):

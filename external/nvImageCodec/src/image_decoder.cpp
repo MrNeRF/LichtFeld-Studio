@@ -27,8 +27,7 @@
 namespace nvimgcodec {
 
     ImageDecoder::ImageDecoder(const nvimgcodecDecoderDesc_t* desc, const nvimgcodecExecutionParams_t* exec_params, const char* options)
-        : decoder_desc_(desc),
-          exec_params_(exec_params) {
+        : decoder_desc_(desc), exec_params_(exec_params) {
         auto ret = decoder_desc_->create(decoder_desc_->instance, &decoder_, exec_params, options);
         if (NVIMGCODEC_STATUS_SUCCESS != ret) {
             decoder_ = nullptr;
@@ -64,7 +63,12 @@ namespace nvimgcodec {
 
     bool ImageDecoder::decode(
         nvimgcodecImageDesc_t* image, const nvimgcodecCodeStreamDesc_t* code_stream, const nvimgcodecDecodeParams_t* params, int thread_idx) {
-        assert(decoder_desc_ && decoder_desc_->decode);
+        assert(decoder_desc_);
+        // Defense in depth: a batch-only decoder (e.g. nvjpeg lossless) leaves the single-sample
+        // `decode` callback NULL. It must never be dispatched here; fail gracefully rather than
+        // call a NULL function pointer (release builds strip the assert above).
+        if (decoder_desc_->decode == nullptr)
+            return false;
         try {
             auto ret = decoder_desc_->decode(decoder_, image, code_stream, params, thread_idx);
             return ret == NVIMGCODEC_STATUS_SUCCESS;
@@ -94,7 +98,9 @@ namespace nvimgcodec {
 
     bool ImageDecoder::decodeBatch(const nvimgcodecImageDesc_t** images, const nvimgcodecCodeStreamDesc_t** code_streams,
                                    const nvimgcodecDecodeParams_t* params, int batch_size, int thread_idx) {
-        assert(decoder_desc_ && decoder_desc_->decodeBatch);
+        assert(decoder_desc_);
+        if (decoder_desc_->decodeBatch == nullptr)
+            return false;
         try {
             return decoder_desc_->decodeBatch(decoder_, images, code_streams, batch_size, params, thread_idx);
         } catch (std::exception& e) {

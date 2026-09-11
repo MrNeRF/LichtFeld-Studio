@@ -26,9 +26,7 @@ namespace nvimgcodec {
     class ParsersExtension {
     public:
         explicit ParsersExtension(const nvimgcodecFrameworkDesc_t* framework)
-            : framework_(framework),
-              jpeg_parser_plugin_(framework),
-              jpeg2k_parser_plugin_(framework) {
+            : framework_(framework), jpeg_parser_plugin_(framework), jpeg2k_parser_plugin_(framework) {
             framework->registerParser(framework->instance, jpeg_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
             framework->registerParser(framework->instance, jpeg2k_parser_plugin_.getParserDesc(), NVIMGCODEC_PRIORITY_NORMAL);
         }

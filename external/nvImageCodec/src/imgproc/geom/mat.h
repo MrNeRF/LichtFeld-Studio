@@ -197,13 +197,12 @@ namespace nvimgcodec {
             return result;
         }
 
-#define DEFINE_ASSIGN_MAT_OP(op)                    \
-    template <typename U>                           \
-    NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE mat& \
-    operator op(const mat<rows, cols, U>& other) {  \
-        MAT_STORAGE_LOOP(i)                         \
-        m[i] op other.m[i];                         \
-        return *this;                               \
+#define DEFINE_ASSIGN_MAT_OP(op)                                                                   \
+    template <typename U>                                                                          \
+    NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE mat& operator op(const mat<rows, cols, U>& other) { \
+        MAT_STORAGE_LOOP(i)                                                                        \
+        m[i] op other.m[i];                                                                        \
+        return *this;                                                                              \
     }
 
 #define DEFINE_ASSIGN_MAT_SCALAR_OP(op)                                  \

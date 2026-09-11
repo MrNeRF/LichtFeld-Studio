@@ -23,7 +23,6 @@ namespace lfs::io::mesh {
     public:
         const TextureData* load_from_file(const std::filesystem::path& path);
         TextureData load_from_memory(const uint8_t* data, size_t size);
-        void clear_cache();
 
     private:
         std::unordered_map<std::string, TextureData> cache_;

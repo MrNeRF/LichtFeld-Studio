@@ -59,7 +59,7 @@ namespace lfs::vis {
         return selected_nodes_.size();
     }
 
-    const std::vector<bool>& SelectionState::getNodeMask(const core::Scene& scene) const {
+    std::vector<bool> SelectionState::getNodeMask(const core::Scene& scene) const {
         std::shared_lock lock(mutex_);
         if (!node_mask_dirty_)
             return cached_node_mask_;

@@ -17,6 +17,7 @@
 #define NOMINMAX
 #include "cuda_encoder.h"
 #include "errors_handling.h"
+#include "imgproc/image_info_checks.h"
 #include "imgproc/pinned_buffer.h"
 #include "log.h"
 #include "type_convert.h"
@@ -79,20 +80,14 @@ namespace nvjpeg {
 
             cudaEvent_t event_;
             nvjpegEncoderState_t state_;
-            std::optional<cudaStream_t> stream_;
+            std::optional<cudaStream_t> stream_ = std::nullopt;
 
             PerThreadResources(const nvimgcodecFrameworkDesc_t* framework, const char* plugin_id, nvjpegHandle_t handle,
                                const nvimgcodecExecutionParams_t* exec_params)
-                : framework_(framework),
-                  plugin_id_(plugin_id),
-                  handle_(handle),
-                  exec_params_(exec_params),
-                  pinned_buffer_(exec_params_),
-                  event_(nullptr),
-                  state_(nullptr)
+                : framework_(framework), plugin_id_(plugin_id), handle_(handle), exec_params_(exec_params), pinned_buffer_(exec_params ? exec_params->pinned_allocator : nullptr), event_(nullptr), state_(nullptr)
 
             {
-                XM_CHECK_CUDA(cudaEventCreate(&event_));
+                XM_CHECK_CUDA(cudaEventCreateWithFlags(&event_, cudaEventDisableTiming));
             }
 
             nvjpegEncoderState_t& state(cudaStream_t cuda_stream) {
@@ -101,7 +96,11 @@ namespace nvjpeg {
                         XM_CHECK_CUDA(cudaStreamSynchronize(stream_.value()));
                         XM_NVJPEG_LOG_DESTROY(nvjpegEncoderStateDestroy(state_));
                     }
+#if NVJPEG_HW_ENCODER_SUPPORTED
+                    XM_CHECK_NVJPEG(nvjpegEncoderStateCreateWithBackend(handle_, &state_, NVJPEG_ENC_BACKEND_GPU, cuda_stream));
+#else
                     XM_CHECK_NVJPEG(nvjpegEncoderStateCreate(handle_, &state_, cuda_stream));
+#endif
                     stream_ = cuda_stream;
                 }
                 return state_;
@@ -154,7 +153,6 @@ namespace nvjpeg {
         try {
             NVIMGCODEC_LOG_TRACE(framework_, plugin_id_, "jpeg_can_encode");
             XM_CHECK_NULL(code_stream);
-            XM_CHECK_NULL(status);
             XM_CHECK_NULL(params);
 
             XM_CHECK_NULL(image);
@@ -176,10 +174,12 @@ namespace nvjpeg {
             }
 
             if (params->quality_type != NVIMGCODEC_QUALITY_TYPE_DEFAULT && params->quality_type != NVIMGCODEC_QUALITY_TYPE_QUALITY) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported quality type: " << params->quality_type);
                 status |= NVIMGCODEC_PROCESSING_STATUS_QUALITY_TYPE_UNSUPPORTED;
             }
             if (params->quality_type == NVIMGCODEC_QUALITY_TYPE_QUALITY) {
                 if (params->quality_value < 1 || params->quality_value > 100) {
+                    NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported quality value: " << params->quality_value);
                     status |= NVIMGCODEC_PROCESSING_STATUS_QUALITY_VALUE_UNSUPPORTED;
                 }
             }
@@ -188,6 +188,7 @@ namespace nvjpeg {
                 static const std::set<nvimgcodecJpegEncoding_t> supported_encoding{
                     NVIMGCODEC_JPEG_ENCODING_BASELINE_DCT, NVIMGCODEC_JPEG_ENCODING_PROGRESSIVE_DCT_HUFFMAN};
                 if (supported_encoding.find(out_jpeg_image_info.encoding) == supported_encoding.end()) {
+                    NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported output encoding: " << out_jpeg_image_info.encoding);
                     return NVIMGCODEC_PROCESSING_STATUS_ENCODING_UNSUPPORTED;
                 }
             }
@@ -195,14 +196,17 @@ namespace nvjpeg {
             static const std::set<nvimgcodecColorSpec_t> supported_color_space{
                 NVIMGCODEC_COLORSPEC_UNCHANGED, NVIMGCODEC_COLORSPEC_SRGB, NVIMGCODEC_COLORSPEC_GRAY, NVIMGCODEC_COLORSPEC_SYCC};
             if (supported_color_space.find(image_info.color_spec) == supported_color_space.end()) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported input color spec: " << image_info.color_spec);
                 status |= NVIMGCODEC_PROCESSING_STATUS_COLOR_SPEC_UNSUPPORTED;
             }
             static const std::set<nvimgcodecChromaSubsampling_t> supported_css{NVIMGCODEC_SAMPLING_444, NVIMGCODEC_SAMPLING_422,
                                                                                NVIMGCODEC_SAMPLING_420, NVIMGCODEC_SAMPLING_440, NVIMGCODEC_SAMPLING_411, NVIMGCODEC_SAMPLING_410, NVIMGCODEC_SAMPLING_GRAY};
             if (supported_css.find(image_info.chroma_subsampling) == supported_css.end()) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported input chroma subsampling: " << image_info.chroma_subsampling);
                 status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLING_UNSUPPORTED;
             }
             if (supported_css.find(out_image_info.chroma_subsampling) == supported_css.end()) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported output chroma subsampling: " << out_image_info.chroma_subsampling);
                 status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLING_UNSUPPORTED;
             }
 
@@ -213,18 +217,22 @@ namespace nvjpeg {
                 NVIMGCODEC_SAMPLEFORMAT_I_BGR,
                 NVIMGCODEC_SAMPLEFORMAT_P_YUV,
                 NVIMGCODEC_SAMPLEFORMAT_P_Y,
+                NVIMGCODEC_SAMPLEFORMAT_I_Y,
             };
             if (supported_sample_format.find(image_info.sample_format) == supported_sample_format.end()) {
+                NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported input sample format: " << image_info.sample_format);
                 status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED;
             }
 
-            if (image_info.sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y) {
+            if (image_info.sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y || image_info.sample_format == NVIMGCODEC_SAMPLEFORMAT_I_Y) {
                 if ((image_info.chroma_subsampling != NVIMGCODEC_SAMPLING_GRAY) ||
                     (out_image_info.chroma_subsampling != NVIMGCODEC_SAMPLING_GRAY)) {
+                    NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported input chroma subsampling: " << image_info.chroma_subsampling << " for sample format P_Y or I_Y");
                     status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED;
                     status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLING_UNSUPPORTED;
                 }
                 if ((image_info.color_spec != NVIMGCODEC_COLORSPEC_GRAY) && (image_info.color_spec != NVIMGCODEC_COLORSPEC_SYCC)) {
+                    NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported input color spec: " << image_info.color_spec << " for sample format P_Y or I_Y");
                     status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_FORMAT_UNSUPPORTED;
                     status |= NVIMGCODEC_PROCESSING_STATUS_COLOR_SPEC_UNSUPPORTED;
                 }
@@ -233,11 +241,27 @@ namespace nvjpeg {
             for (uint32_t p = 0; p < image_info.num_planes; ++p) {
                 auto sample_type = image_info.plane_info[p].sample_type;
                 if (sample_type != NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8) {
+                    NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Unsupported input sample type: " << sample_type);
                     status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_TYPE_UNSUPPORTED;
                 }
             }
+            if (!nvimgcodec::check_planes_consistency(framework_, plugin_id_, image_info)) {
+                status |= NVIMGCODEC_PROCESSING_STATUS_SAMPLE_TYPE_UNSUPPORTED;
+            }
+
+            // Check for tile geometry - JPEG encoder does not support tiling
+            nvimgcodecTileGeometryInfo_t* tile_geometry = static_cast<nvimgcodecTileGeometryInfo_t*>(params->struct_next);
+            while (tile_geometry && tile_geometry->struct_type != NVIMGCODEC_STRUCTURE_TYPE_TILE_GEOMETRY_INFO)
+                tile_geometry = static_cast<nvimgcodecTileGeometryInfo_t*>(tile_geometry->struct_next);
+            if (tile_geometry) {
+                if (tile_geometry->num_tiles_x != 0 || tile_geometry->num_tiles_y != 0 ||
+                    tile_geometry->tile_width != 0 || tile_geometry->tile_height != 0) {
+                    NVIMGCODEC_LOG_WARNING(framework_, plugin_id_, "Tiling is not supported with JPEG encoder.");
+                    status |= NVIMGCODEC_PROCESSING_STATUS_TILING_UNSUPPORTED;
+                }
+            }
         } catch (const NvJpegException& e) {
-            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not check if nvjpge can encode - " << e.info());
+            NVIMGCODEC_LOG_ERROR(framework_, plugin_id_, "Could not check if nvjpeg can encode - " << e.info());
             return NVIMGCODEC_PROCESSING_STATUS_FAIL;
         }
         return status;
@@ -245,12 +269,7 @@ namespace nvjpeg {
 
     EncoderImpl::EncoderImpl(
         const char* plugin_id, const nvimgcodecFrameworkDesc_t* framework, const nvimgcodecExecutionParams_t* exec_params, const char* options)
-        : framework_(framework),
-          plugin_id_(plugin_id),
-          device_allocator_{nullptr, nullptr, nullptr},
-          pinned_allocator_{nullptr, nullptr, nullptr},
-          exec_params_(exec_params),
-          options_(options) {
+        : framework_(framework), plugin_id_(plugin_id), device_allocator_{nullptr, nullptr, nullptr}, pinned_allocator_{nullptr, nullptr, nullptr}, exec_params_(exec_params), options_(options) {
         if (exec_params->device_allocator && exec_params->device_allocator->device_malloc && exec_params->device_allocator->device_free) {
             device_allocator_.dev_ctx = exec_params->device_allocator->device_ctx;
             device_allocator_.dev_malloc = exec_params->device_allocator->device_malloc;
@@ -345,6 +364,8 @@ namespace nvjpeg {
                 return ret;
             }
 
+            nvimgcodec::warn_if_custom_precision_unsupported(framework_, plugin_id_, image_info);
+
             auto& t = per_thread_[thread_idx];
 
             nvimgcodecJpegImageInfo_t out_jpeg_image_info{NVIMGCODEC_STRUCTURE_TYPE_JPEG_IMAGE_INFO, sizeof(nvimgcodecJpegImageInfo_t), 0};
@@ -424,8 +445,8 @@ namespace nvjpeg {
                 XM_CHECK_NVJPEG(nvjpegEncoderParamsSetSamplingFactors(encode_params.get(), out_chroma_subsampling, NULL));
             }
             if (((color_spec == NVIMGCODEC_COLORSPEC_SYCC) &&
-                 ((sample_format == NVIMGCODEC_SAMPLEFORMAT_P_YUV) || (sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y))) ||
-                ((color_spec == NVIMGCODEC_COLORSPEC_GRAY) && (sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y))) {
+                 ((sample_format == NVIMGCODEC_SAMPLEFORMAT_P_YUV) || (sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y) || (sample_format == NVIMGCODEC_SAMPLEFORMAT_I_Y))) ||
+                ((color_spec == NVIMGCODEC_COLORSPEC_GRAY) && (sample_format == NVIMGCODEC_SAMPLEFORMAT_P_Y || sample_format == NVIMGCODEC_SAMPLEFORMAT_I_Y))) {
                 nvjpegChromaSubsampling_t input_chroma_subsampling = nvimgcodec_to_nvjpeg_css(chroma_subsampling);
                 XM_CHECK_NVJPEG(nvjpegEncodeYUV(handle_, state, encode_params.get(), &input_image, input_chroma_subsampling,
                                                 image_info.plane_info[0].width, image_info.plane_info[0].height, image_info.cuda_stream));

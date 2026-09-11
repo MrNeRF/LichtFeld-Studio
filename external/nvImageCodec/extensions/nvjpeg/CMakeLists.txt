@@ -38,6 +38,9 @@ set(EXT_HEADERS
   type_convert.h
 )
 
+# Add utils directory for common headers
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
+
 include(CheckCXXSourceCompiles)
 set(CMAKE_REQUIRED_INCLUDES "${CUDAToolkit_INCLUDE_DIRS}")
 check_cxx_source_compiles(
@@ -46,6 +49,15 @@ check_cxx_source_compiles(
     return NVJPEG_BACKEND_LOSSLESS_JPEG;
   }"
   NVJPEG_LOSSLESS_SUPPORTED)
+
+include(CheckCXXSourceCompiles)
+set(CMAKE_REQUIRED_INCLUDES "${CUDAToolkit_INCLUDE_DIRS}")
+check_cxx_source_compiles(
+  "#include <nvjpeg.h>
+  int main(){
+    return NVJPEG_ENC_BACKEND_HARDWARE;
+  }"
+  NVJPEG_HW_ENCODER_SUPPORTED)
 
 include(CheckCXXSymbolExists)
 check_cxx_symbol_exists(nvjpegBufferDeviceResize "nvjpeg.h" NVJPEG_BUFFER_RESIZE_API)
@@ -57,14 +69,22 @@ endif()
 if(NVJPEG_LOSSLESS_SUPPORTED)
   message("nvJPEG lossless supported")
   add_definitions(-DNVJPEG_LOSSLESS_SUPPORTED=1)
+ list(APPEND EXT_SRCS lossless_decoder.cpp)
 else()
   message("nvJPEG lossless NOT supported")
   add_definitions(-DNVJPEG_LOSSLESS_SUPPORTED=0)
 endif()
 
-if(NVJPEG_LOSSLESS_SUPPORTED)
- list(APPEND EXT_SRCS lossless_decoder.cpp)
+if(NVJPEG_HW_ENCODER_SUPPORTED)
+  message("nvJPEG hardware encoder supported")
+  add_definitions(-DNVJPEG_HW_ENCODER_SUPPORTED=1)
+  list(APPEND EXT_SRCS hw_encoder.cpp)
+  list(APPEND EXT_HEADERS hw_encoder.h)
+else()
+  message("nvJPEG hardware encoder NOT supported")
+  add_definitions(-DNVJPEG_HW_ENCODER_SUPPORTED=0)
 endif()
+
 add_library(${EXT_LIBRARY_NAME}_obj OBJECT ${EXT_SRCS} ${EXT_HEADERS})
 add_library(${EXT_LIBRARY_NAME} SHARED $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static> ext_module.cpp)
 add_library(${EXT_LIBRARY_NAME}_static STATIC $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static>)
@@ -79,20 +99,19 @@ endif()
 if(NOT WITH_DYNAMIC_NVJPEG)
   if(UNIX)
     target_link_libraries(${EXT_LIBRARY_NAME}
-      PUBLIC CUDA::cudart_static CUDA::nvjpeg_static CUDA::culibos)
+      PUBLIC ${CUDA_CUDART_LIB} ${CUDA_NVJPEG_LIB} CUDA::culibos)
   else()
     target_link_libraries(${EXT_LIBRARY_NAME}
-      PUBLIC CUDA::cudart_static CUDA::nvjpeg)
+      PUBLIC ${CUDA_CUDART_LIB} CUDA::nvjpeg)
   endif()
 else()
   target_link_libraries(${EXT_LIBRARY_NAME}
-    PRIVATE CUDA::cudart_static dynlink_nvjpeg)
+    PRIVATE ${CUDA_CUDART_LIB} dynlink_nvjpeg)
   target_link_libraries(${EXT_LIBRARY_NAME}
     PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg>")
 endif()
 
 if(UNIX)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fPIC -fvisibility=hidden -Wl,--exclude-libs,ALL")
   target_link_libraries(${EXT_LIBRARY_NAME} PRIVATE "${NVIMGCODEC_COMMON_DEPENDENCIES}")
   target_link_libraries(${EXT_LIBRARY_NAME}_static PRIVATE "${NVIMGCODEC_COMMON_DEPENDENCIES}")
 
@@ -119,16 +138,15 @@ endif()
 
 if(UNIX)
   install(TARGETS ${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static
-    LIBRARY DESTINATION extensions NAMELINK_SKIP COMPONENT lib
-    ARCHIVE COMPONENT lib
-    PUBLIC_HEADER DESTINATION include COMPONENT lib
+    LIBRARY DESTINATION "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}" NAMELINK_SKIP COMPONENT lib
+    ARCHIVE DESTINATION "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}" COMPONENT lib
+    PUBLIC_HEADER DESTINATION "${NVIMGCODEC_INSTALL_INCLUDEDIR}" COMPONENT lib
   )
 
 else()
-  install(TARGETS ${EXT_LIBRARY_NAME}
-    RUNTIME DESTINATION extensions COMPONENT lib
-    LIBRARY COMPONENT lib
-    ARCHIVE COMPONENT lib
-    PUBLIC_HEADER DESTINATION include COMPONENT lib
+  install(TARGETS ${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static
+    RUNTIME DESTINATION "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}" COMPONENT lib
+    ARCHIVE DESTINATION "${NVIMGCODEC_INSTALL_EXTENSION_LIBDIR}" COMPONENT lib
+    PUBLIC_HEADER DESTINATION "${NVIMGCODEC_INSTALL_INCLUDEDIR}" COMPONENT lib
   )
 endif()

@@ -181,30 +181,26 @@ TEST_F(NaNInfGPUCheckTest, BothNaNAndInf) {
     auto lfs_t = from_torch(torch_t);
 
     EXPECT_TRUE(torch_has_nan_or_inf(torch_t)) << "Torch should detect NaN and Inf";
-    EXPECT_TRUE(lfs_t.has_nan()) << "LFS has_nan should detect (checks both)";
-    EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf should detect (checks both)";
+    EXPECT_EQ(lfs_t.has_nan(), torch_has_nan(torch_t));
+    EXPECT_EQ(lfs_t.has_inf(), torch_has_inf(torch_t));
 }
 
-TEST_F(NaNInfGPUCheckTest, NaNOnly_HasInfShouldAlsoDetect) {
-    // Our GPU implementation checks both NaN and Inf in has_nan() and has_inf()
+TEST_F(NaNInfGPUCheckTest, NaNOnlyMatchesTorchPredicates) {
     auto torch_t = torch::randn({1000}, torch::kCUDA);
     torch_t[500] = std::numeric_limits<float>::quiet_NaN();
     auto lfs_t = from_torch(torch_t);
 
-    // LFS has_inf() also returns true for NaN (implementation detail)
-    EXPECT_TRUE(lfs_t.has_nan()) << "LFS has_nan should detect NaN";
-    // Note: Our GPU impl checks both, so has_inf will return true for NaN too
-    EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf uses same kernel, detects NaN too";
+    EXPECT_EQ(lfs_t.has_nan(), torch_has_nan(torch_t));
+    EXPECT_EQ(lfs_t.has_inf(), torch_has_inf(torch_t));
 }
 
-TEST_F(NaNInfGPUCheckTest, InfOnly_HasNaNShouldAlsoDetect) {
+TEST_F(NaNInfGPUCheckTest, InfOnlyMatchesTorchPredicates) {
     auto torch_t = torch::randn({1000}, torch::kCUDA);
     torch_t[500] = std::numeric_limits<float>::infinity();
     auto lfs_t = from_torch(torch_t);
 
-    EXPECT_TRUE(lfs_t.has_inf()) << "LFS has_inf should detect Inf";
-    // Note: Our GPU impl checks both, so has_nan will return true for Inf too
-    EXPECT_TRUE(lfs_t.has_nan()) << "LFS has_nan uses same kernel, detects Inf too";
+    EXPECT_EQ(lfs_t.has_nan(), torch_has_nan(torch_t));
+    EXPECT_EQ(lfs_t.has_inf(), torch_has_inf(torch_t));
 }
 
 // ============= Edge Cases =============
@@ -438,7 +434,7 @@ TEST_F(NaNInfGPUCheckTest, RandomPositions_100Trials) {
         auto lfs_t = from_torch(torch_t);
 
         bool torch_result = torch_has_nan_or_inf(torch_t);
-        bool lfs_result = lfs_t.has_nan(); // Our impl checks both
+        bool lfs_result = lfs_t.has_nan() || lfs_t.has_inf();
 
         EXPECT_EQ(torch_result, lfs_result)
             << "Mismatch at trial " << trial << " with type " << type;
@@ -489,53 +485,6 @@ TEST_F(NaNInfGPUCheckTest, GaussianOpacity_5M_x_1) {
     auto lfs_t = from_torch(torch_t);
 
     EXPECT_EQ(torch_has_nan(torch_t), lfs_t.has_nan());
-}
-
-// ============= Performance Comparison =============
-
-TEST_F(NaNInfGPUCheckTest, Performance_LFS_vs_Torch) {
-    const int size = 5000000;
-    const int warmup_iters = 10;
-    const int bench_iters = 100;
-
-    auto torch_t = torch::randn({size}, torch::kCUDA);
-    auto lfs_t = from_torch(torch_t);
-
-    // Warmup
-    for (int i = 0; i < warmup_iters; ++i) {
-        torch_has_nan(torch_t);
-        lfs_t.has_nan();
-    }
-    cudaDeviceSynchronize();
-
-    // Benchmark Torch
-    auto torch_start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < bench_iters; ++i) {
-        torch_has_nan(torch_t);
-    }
-    cudaDeviceSynchronize();
-    auto torch_end = std::chrono::high_resolution_clock::now();
-    auto torch_us = std::chrono::duration_cast<std::chrono::microseconds>(torch_end - torch_start).count();
-
-    // Benchmark LFS
-    auto lfs_start = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < bench_iters; ++i) {
-        lfs_t.has_nan();
-    }
-    cudaDeviceSynchronize();
-    auto lfs_end = std::chrono::high_resolution_clock::now();
-    auto lfs_us = std::chrono::duration_cast<std::chrono::microseconds>(lfs_end - lfs_start).count();
-
-    double torch_avg_us = static_cast<double>(torch_us) / bench_iters;
-    double lfs_avg_us = static_cast<double>(lfs_us) / bench_iters;
-
-    std::cout << "\n=== Performance Comparison (5M elements) ===\n";
-    std::cout << "Torch avg: " << torch_avg_us << " us\n";
-    std::cout << "LFS avg:   " << lfs_avg_us << " us\n";
-    std::cout << "Speedup:   " << torch_avg_us / lfs_avg_us << "x\n";
-
-    // LFS should be competitive with or faster than Torch
-    // Don't fail if slower, just report
 }
 
 // ============= CPU Fallback Tests =============
@@ -807,7 +756,7 @@ TEST_F(NaNInfGPUCheckTest, RandomStress_1000Trials_VariousSizes) {
 }
 
 TEST_F(NaNInfGPUCheckTest, InfDetection_LargeTensors) {
-    // Verify Inf detection works the same as NaN for large tensors
+    // Verify the split NaN/Inf predicates on large tensors.
     std::vector<int> sizes = {1000000, 5000000};
 
     for (int size : sizes) {
@@ -815,13 +764,21 @@ TEST_F(NaNInfGPUCheckTest, InfDetection_LargeTensors) {
         auto torch_pinf = torch::randn({size}, torch::kCUDA);
         torch_pinf[size / 2] = std::numeric_limits<float>::infinity();
         auto lfs_pinf = from_torch(torch_pinf);
-        EXPECT_TRUE(lfs_pinf.has_nan()) << "+Inf not detected at size " << size; // has_nan checks both
+        EXPECT_FALSE(lfs_pinf.has_nan()) << "+Inf reported as NaN at size " << size;
+        EXPECT_TRUE(lfs_pinf.has_inf()) << "+Inf not detected at size " << size;
 
         // Test -Inf
         auto torch_ninf = torch::randn({size}, torch::kCUDA);
         torch_ninf[size / 2] = -std::numeric_limits<float>::infinity();
         auto lfs_ninf = from_torch(torch_ninf);
-        EXPECT_TRUE(lfs_ninf.has_nan()) << "-Inf not detected at size " << size;
+        EXPECT_FALSE(lfs_ninf.has_nan()) << "-Inf reported as NaN at size " << size;
+        EXPECT_TRUE(lfs_ninf.has_inf()) << "-Inf not detected at size " << size;
+
+        auto torch_nan = torch::randn({size}, torch::kCUDA);
+        torch_nan[size / 2] = std::numeric_limits<float>::quiet_NaN();
+        auto lfs_nan = from_torch(torch_nan);
+        EXPECT_TRUE(lfs_nan.has_nan()) << "NaN not detected at size " << size;
+        EXPECT_FALSE(lfs_nan.has_inf()) << "NaN reported as Inf at size " << size;
     }
 }
 

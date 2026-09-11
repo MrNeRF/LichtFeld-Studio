@@ -1,7 +1,10 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
+#include "core/cuda_error.hpp"
 #include "core/logger.hpp"
+#include "core/nn/activation_arena.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/cuda_stream_context.hpp"
@@ -14,84 +17,340 @@
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
-#include <curand.h>
 #include <format>
 #include <numeric>
 #include <optional>
+#include <string_view>
 
 namespace lfs::core {
 
     namespace {
-
-        cudaStream_t resolve_cuda_execution_stream(const Tensor& tensor) {
-            cudaStream_t execution_stream = getCurrentCUDAStream();
-            if (execution_stream == nullptr && tensor.device() == Device::CUDA) {
-                execution_stream = tensor.stream();
-            }
-            return execution_stream;
-        }
-
         Tensor empty_on_tensor_stream(const TensorShape& shape, Device device, DataType dtype, const Tensor& tensor) {
             if (device != Device::CUDA) {
                 return Tensor::empty(shape, device, dtype);
             }
 
-            const cudaStream_t execution_stream = resolve_cuda_execution_stream(tensor);
-            tensor.sync_to_stream(execution_stream);
+            const cudaStream_t execution_stream = prepare_inputs_for_stream({&tensor});
             CUDAStreamGuard guard(execution_stream);
             return Tensor::empty(shape, device, dtype);
+        }
+
+        std::optional<std::vector<Tensor>> promote_tensor_list(
+            const std::vector<Tensor>& tensors) {
+            DataType result_dtype = tensors.front().dtype();
+            for (const Tensor& tensor : tensors) {
+                result_dtype = promote_dtypes(result_dtype, tensor.dtype());
+            }
+
+            const bool needs_promotion = std::any_of(
+                tensors.begin(), tensors.end(),
+                [result_dtype](const Tensor& tensor) {
+                    return tensor.dtype() != result_dtype;
+                });
+            if (!needs_promotion)
+                return std::nullopt;
+
+            std::vector<Tensor> promoted;
+            promoted.reserve(tensors.size());
+            for (const Tensor& tensor : tensors) {
+                promoted.push_back(tensor.dtype() == result_dtype
+                                       ? tensor
+                                       : tensor.to(result_dtype));
+            }
+            return promoted;
+        }
+
+        struct ReductionPlan {
+            std::vector<int> axes;
+            std::vector<size_t> output_shape;
+            DataType result_dtype = DataType::Float32;
+            size_t reduce_count = 1;
+        };
+
+        ReductionPlan make_reduction_plan(const TensorShape& shape,
+                                          const DataType input_dtype,
+                                          const ReduceOp op,
+                                          const ReduceArgs& args) {
+            const size_t rank = shape.rank();
+            LFS_ASSERT_MSG(rank <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                           "reduction rank exceeds supported axis index range");
+
+            ReductionPlan plan;
+            std::vector<bool> reduced(rank, false);
+            if (args.axes.empty()) {
+                plan.axes.resize(rank);
+                std::iota(plan.axes.begin(), plan.axes.end(), 0);
+                std::fill(reduced.begin(), reduced.end(), true);
+            } else if (rank == 0) {
+                bool scalar_axis_seen = false;
+                for (const int axis : args.axes) {
+                    const int resolved = detail::resolve_tensor_dim(axis, rank);
+                    LFS_ASSERT_MSG(detail::tensor_dim_is_valid(resolved, rank),
+                                   std::format("reduce axis {} is out of range for rank {}",
+                                               axis, rank));
+                    LFS_ASSERT_MSG(!scalar_axis_seen,
+                                   "reduce axes must be unique");
+                    scalar_axis_seen = true;
+                }
+            } else {
+                plan.axes.reserve(args.axes.size());
+                for (const int axis : args.axes) {
+                    const int resolved = axis < 0 ? axis + static_cast<int>(rank) : axis;
+                    LFS_ASSERT_MSG(resolved >= 0 && resolved < static_cast<int>(rank),
+                                   std::format("reduce axis {} is out of range for rank {}",
+                                               axis, rank));
+                    LFS_ASSERT_MSG(!reduced[static_cast<size_t>(resolved)],
+                                   "reduce axes must be unique");
+                    reduced[static_cast<size_t>(resolved)] = true;
+                    plan.axes.push_back(resolved);
+                }
+                std::sort(plan.axes.begin(), plan.axes.end());
+            }
+
+            for (size_t dim = 0; dim < rank; ++dim) {
+                if (reduced[dim]) {
+                    plan.reduce_count *= shape[dim];
+                }
+                if (!reduced[dim] || args.keepdim) {
+                    plan.output_shape.push_back(reduced[dim] ? 1 : shape[dim]);
+                }
+            }
+
+            if (op == ReduceOp::Mean) {
+                LFS_ASSERT_MSG(input_dtype == DataType::Float32 ||
+                                   input_dtype == DataType::Float16,
+                               "mean requires a floating-point tensor");
+            }
+
+            if (op == ReduceOp::Any || op == ReduceOp::All ||
+                ((op == ReduceOp::Max || op == ReduceOp::Min) &&
+                 input_dtype == DataType::Bool)) {
+                plan.result_dtype = DataType::Bool;
+            } else if ((op == ReduceOp::Sum || op == ReduceOp::Prod) &&
+                       (input_dtype == DataType::Int32 || input_dtype == DataType::Bool ||
+                        input_dtype == DataType::UInt8)) {
+                plan.result_dtype = DataType::Int64;
+            } else if (input_dtype == DataType::Bool) {
+                plan.result_dtype = DataType::Int64;
+            } else {
+                plan.result_dtype = input_dtype;
+            }
+
+            return plan;
+        }
+
+        Tensor make_empty_reduction_result(const ReductionPlan& plan,
+                                           const Device device,
+                                           const ReduceOp op) {
+            const TensorShape output_shape(plan.output_shape);
+            if (output_shape.elements() == 0) {
+                return Tensor::empty(output_shape, device, plan.result_dtype);
+            }
+
+            float value = 0.0f;
+            switch (op) {
+            case ReduceOp::Sum:
+            case ReduceOp::Any:
+                value = 0.0f;
+                break;
+            case ReduceOp::Prod:
+            case ReduceOp::All:
+                value = 1.0f;
+                break;
+            case ReduceOp::Mean:
+            case ReduceOp::Std:
+            case ReduceOp::Var:
+                value = std::numeric_limits<float>::quiet_NaN();
+                break;
+            case ReduceOp::Max:
+            case ReduceOp::Min:
+                LFS_ASSERT_MSG(false,
+                               "max/min reduction has no identity for an empty reduction slice");
+                break;
+            default:
+                LFS_ASSERT_MSG(false,
+                               "empty reduction encountered an unsupported operation");
+            }
+            return Tensor::full(output_shape, value, device, plan.result_dtype);
+        }
+
+        void reduce_int32_cpu(const int32_t* input,
+                              void* output,
+                              const TensorShape& shape,
+                              const std::vector<size_t>& strides,
+                              const ReductionPlan& plan,
+                              const ReduceOp op,
+                              const size_t output_elements) {
+            const size_t rank = shape.rank();
+            LFS_ASSERT_MSG(input != nullptr && output != nullptr,
+                           "Int32 CPU reduction requires valid input and output pointers");
+            LFS_ASSERT_MSG(strides.size() == rank,
+                           "Int32 CPU reduction shape and stride ranks must match");
+
+            if (plan.axes.size() == rank) {
+                LFS_ASSERT_MSG(output_elements == 1,
+                               "full Int32 reduction must produce one output element");
+                switch (op) {
+                case ReduceOp::Sum: {
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                                   "Int32 sum requires Int64 output");
+                    int64_t sum = 0;
+                    for (size_t i = 0; i < plan.reduce_count; ++i) {
+                        sum += static_cast<int64_t>(input[i]);
+                    }
+                    static_cast<int64_t*>(output)[0] = sum;
+                    return;
+                }
+                case ReduceOp::Prod: {
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                                   "Int32 product requires Int64 output");
+                    int64_t product = 1;
+                    for (size_t i = 0; i < plan.reduce_count; ++i) {
+                        product *= static_cast<int64_t>(input[i]);
+                    }
+                    static_cast<int64_t*>(output)[0] = product;
+                    return;
+                }
+                case ReduceOp::Max:
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                                   "Int32 max requires Int32 output");
+                    static_cast<int32_t*>(output)[0] =
+                        *std::max_element(input, input + plan.reduce_count);
+                    return;
+                case ReduceOp::Min:
+                    LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                                   "Int32 min requires Int32 output");
+                    static_cast<int32_t*>(output)[0] =
+                        *std::min_element(input, input + plan.reduce_count);
+                    return;
+                default:
+                    LFS_ASSERT_MSG(false,
+                                   "full Int32 CPU reduction encountered an unsupported operation");
+                }
+            }
+
+            std::vector<bool> reduced(rank, false);
+            for (const int axis : plan.axes) {
+                reduced[static_cast<size_t>(axis)] = true;
+            }
+
+            std::vector<size_t> reduced_dims;
+            std::vector<size_t> retained_dims;
+            for (size_t dim = 0; dim < rank; ++dim) {
+                (reduced[dim] ? reduced_dims : retained_dims).push_back(dim);
+            }
+
+            const auto input_offset = [&](const size_t output_index,
+                                          const size_t reduction_index) {
+                size_t offset = 0;
+                size_t remainder = output_index;
+                for (auto it = retained_dims.rbegin(); it != retained_dims.rend(); ++it) {
+                    const size_t dim = *it;
+                    offset += (remainder % shape[dim]) * strides[dim];
+                    remainder /= shape[dim];
+                }
+
+                remainder = reduction_index;
+                for (auto it = reduced_dims.rbegin(); it != reduced_dims.rend(); ++it) {
+                    const size_t dim = *it;
+                    offset += (remainder % shape[dim]) * strides[dim];
+                    remainder /= shape[dim];
+                }
+                return offset;
+            };
+
+            switch (op) {
+            case ReduceOp::Sum: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                               "Int32 sum requires Int64 output");
+                auto* result = static_cast<int64_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int64_t sum = 0;
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        sum += static_cast<int64_t>(input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = sum;
+                }
+                break;
+            }
+            case ReduceOp::Prod: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int64,
+                               "Int32 product requires Int64 output");
+                auto* result = static_cast<int64_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int64_t product = 1;
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        product *= static_cast<int64_t>(input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = product;
+                }
+                break;
+            }
+            case ReduceOp::Max: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                               "Int32 max requires Int32 output");
+                auto* result = static_cast<int32_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int32_t value = std::numeric_limits<int32_t>::lowest();
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        value = std::max(value, input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = value;
+                }
+                break;
+            }
+            case ReduceOp::Min: {
+                LFS_ASSERT_MSG(plan.result_dtype == DataType::Int32,
+                               "Int32 min requires Int32 output");
+                auto* result = static_cast<int32_t*>(output);
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    int32_t value = std::numeric_limits<int32_t>::max();
+                    for (size_t r = 0; r < plan.reduce_count; ++r) {
+                        value = std::min(value, input[input_offset(out_idx, r)]);
+                    }
+                    result[out_idx] = value;
+                }
+                break;
+            }
+            default:
+                LFS_ASSERT_MSG(false,
+                               "Int32 CPU reduction encountered an unsupported operation");
+            }
         }
 
     } // namespace
 
     // ============= CORE UNIFIED OPERATIONS =============
+    constexpr static int promotion_rank(DataType dtype) {
+        switch (dtype) {
+        case DataType::Bool: return 0;
+        case DataType::UInt8: return 1;
+        case DataType::Int32: return 2;
+        case DataType::Int64: return 3;
+        case DataType::Float16: return 4;
+        case DataType::Float32: return 5;
+        }
+        return -1;
+    }
+
     constexpr static DataType promote_types(DataType a, DataType b) {
-        if (a == b)
-            return a;
-
-        if (a == DataType::Bool) {
-            if (b == DataType::Float32 || b == DataType::Float16)
-                return b;
-            if (b == DataType::Int32 || b == DataType::Int64)
-                return b;
-            return DataType::Float32;
-        }
-        if (b == DataType::Bool) {
-            if (a == DataType::Float32 || a == DataType::Float16)
-                return a;
-            if (a == DataType::Int32 || a == DataType::Int64)
-                return a;
-            return DataType::Float32;
-        }
-
-        if ((a == DataType::Int32 || a == DataType::Int64) &&
-            (b == DataType::Float32 || b == DataType::Float16)) {
-            return (b == DataType::Float16) ? DataType::Float16 : DataType::Float32;
-        }
-        if ((b == DataType::Int32 || b == DataType::Int64) &&
-            (a == DataType::Float32 || a == DataType::Float16)) {
-            return (a == DataType::Float16) ? DataType::Float16 : DataType::Float32;
-        }
-
-        if ((a == DataType::Int32 && b == DataType::Int64) ||
-            (a == DataType::Int64 && b == DataType::Int32)) {
-            return DataType::Int64;
-        }
-
-        if ((a == DataType::Float16 && b == DataType::Float32) ||
-            (a == DataType::Float32 && b == DataType::Float16)) {
-            return DataType::Float32;
-        }
-
-        return DataType::Float32;
+        return promotion_rank(a) >= promotion_rank(b) ? a : b;
     }
 
     Tensor Tensor::load(LoadOp op, const LoadArgs& args) {
         Tensor result;
+        LFS_ASSERT_MSG(args.device == Device::CPU || args.device == Device::CUDA,
+                       "tensor load received an invalid device");
+        LFS_ASSERT_MSG(dtype_size(args.dtype) != 0,
+                       "tensor load received an invalid dtype");
+        LFS_ASSERT_MSG(static_cast<int>(op) >= static_cast<int>(LoadOp::Empty) &&
+                           static_cast<int>(op) <= static_cast<int>(LoadOp::Multinomial),
+                       "tensor load received an unknown operation");
 
         switch (op) {
         case LoadOp::Empty: {
@@ -102,49 +361,48 @@ namespace lfs::core {
             result.device_ = args.device;
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
+            result.ensure_state();
             result.state_->stream = getCurrentCUDAStream();
 
+            LFS_ASSERT_MSG(result.shape_.elements() == 0 ||
+                               dtype_size(result.dtype_) <=
+                                   std::numeric_limits<size_t>::max() / result.shape_.elements(),
+                           "tensor allocation byte count overflow");
             size_t bytes = result.shape_.elements() * dtype_size(result.dtype_);
             internal::telemetry_record_materialization(bytes);
 
             if (bytes == 0) {
-                if (result.device_ == Device::CUDA) {
-                    cudaStream_t s = result.stream();
-                    void* dummy = CudaMemoryPool::instance().allocate(1, s);
-                    result.data_owner_ = std::shared_ptr<void>(dummy, [s](void* p) {
-                        CudaMemoryPool::instance().deallocate(p, s);
-                    });
-                } else {
-                    void* dummy = nullptr;
-                    if (args.use_pinned) {
-                        dummy = PinnedMemoryAllocator::instance().allocate(1);
-                        cudaStream_t s = result.stream();
-                        result.data_owner_ = std::shared_ptr<void>(dummy, [s](void* p) {
-                            if (p)
-                                PinnedMemoryAllocator::instance().deallocate(p, s);
-                        });
-                    } else {
-                        dummy = std::malloc(1);
-                        result.data_owner_ = std::shared_ptr<void>(dummy, [](void* p) {
-                            std::free(p);
-                        });
-                    }
-                }
+                // Null-owner path: zero-numel tensors need a live data_owner_ for
+                // is_valid(), but must not touch CUDA/slab (no 1-byte sentinel).
+                // Same pattern as zeros_direct(total_bytes == 0).
                 result.data_ = nullptr;
+                static char empty_owner_sentinel = 0;
+                result.data_owner_ =
+                    std::shared_ptr<void>(&empty_owner_sentinel, [](void*) {});
+                result.init_storage_meta();
                 return result;
             }
 
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
-                void* ptr = CudaMemoryPool::instance().allocate(bytes, s);
-                if (!ptr) {
-                    throw std::runtime_error(std::format(
-                        "CUDA out of memory: failed to allocate {} bytes ({:.2f} GB). "
-                        "Try reducing max_cap, sh_degree, or image resolution.",
-                        bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
+                if (auto* arena = nn::ActivationArena::current()) {
+                    if (void* arena_ptr = arena->try_alloc(bytes)) {
+                        auto owner = arena->owner();
+                        result.adopt_storage(arena_ptr, [owner](void*) { (void)owner; });
+                        result.data_ = result.data_owner_.get();
+                        result.compute_alignment();
+                        result.storage_meta_->external_kind = "nn.arena";
+                        result.storage_meta_->external_owner = std::move(owner);
+                        return result;
+                    }
                 }
-                result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
-                    CudaMemoryPool::instance().deallocate(p, s);
+                void* ptr = allocate_cuda_storage(bytes, s);
+                // Do not call CudaMemoryPool::instance() from the
+                // deleter — after ordered process teardown the Meyers singleton
+                // may already be destroyed. safe_cuda_pool_deallocate no-ops
+                // when the process-wide live pointer has been cleared.
+                result.adopt_storage(ptr, [s](void* p) {
+                    safe_cuda_pool_deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
                 result.compute_alignment(); // Compute alignment flags once
@@ -167,8 +425,13 @@ namespace lfs::core {
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
                     cudaStream_t s = result.stream();
-                    result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
-                        if (p)
+                    // After PinnedMemoryAllocator::shutdown() the
+                    // allocator still exists but re-freeing emptied cache
+                    // blocks from late statics is unsafe. Skip when process
+                    // teardown has started (hooks already drained long-lived
+                    // holders; OS reclaims the rest).
+                    result.adopt_storage(ptr, [s](void* p) {
+                        if (p && !gpu_process_teardown_started())
                             PinnedMemoryAllocator::instance().deallocate(p, s);
                     });
                 } else {
@@ -179,7 +442,7 @@ namespace lfs::core {
                             "Out of memory: failed to allocate {} bytes ({:.2f} GB) of CPU memory.",
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
-                    result.data_owner_ = std::shared_ptr<void>(ptr, [](void* p) {
+                    result.adopt_storage(ptr, [](void* p) {
                         std::free(p);
                     });
                 }
@@ -191,7 +454,31 @@ namespace lfs::core {
         }
 
         case LoadOp::Const: {
+            LFS_ASSERT_MSG(std::holds_alternative<float>(args.args),
+                           "constant tensor load requires a float value");
             float value = std::get<float>(args.args);
+            const bool floating_dtype =
+                args.dtype == DataType::Float32 || args.dtype == DataType::Float16;
+            LFS_ASSERT_MSG(floating_dtype || std::isfinite(value),
+                           "non-finite full/constant values require a floating-point dtype");
+            LFS_ASSERT_MSG(args.dtype != DataType::Float16 ||
+                               !std::isfinite(value) || std::abs(value) <= 65504.0f,
+                           "Float16 constant is outside the finite representable range");
+            LFS_ASSERT_MSG(args.dtype != DataType::Int32 ||
+                               (value >= static_cast<float>(std::numeric_limits<int32_t>::lowest()) &&
+                                value <= std::nextafter(
+                                             static_cast<float>(std::numeric_limits<int32_t>::max()),
+                                             0.0f)),
+                           "Int32 constant is outside the representable range");
+            LFS_ASSERT_MSG(args.dtype != DataType::Int64 ||
+                               (value >= static_cast<float>(std::numeric_limits<int64_t>::lowest()) &&
+                                value <= std::nextafter(
+                                             static_cast<float>(std::numeric_limits<int64_t>::max()),
+                                             0.0f)),
+                           "Int64 constant is outside the representable range");
+            LFS_ASSERT_MSG(args.dtype != DataType::UInt8 ||
+                               (value >= 0.0f && value <= 255.0f),
+                           "UInt8 constant must be in [0, 255]");
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
                 return result;
@@ -199,7 +486,9 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 if (result.dtype_ == DataType::Float32) {
                     if (value == 0.0f) {
-                        cudaMemset(result.data_, 0, result.bytes());
+                        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(result.data_, 0, result.bytes(),
+                                                           result.stream()),
+                                           "constant Float32 CUDA memset");
                     } else {
                         tensor_ops::launch_load_op(
                             result.data_,
@@ -213,32 +502,47 @@ namespace lfs::core {
                     }
                 } else if (result.dtype_ == DataType::Float16) {
                     if (value == 0.0f) {
-                        cudaMemset(result.data_, 0, result.bytes());
+                        LFS_CUDA_CHECK_MSG(cudaMemsetAsync(result.data_, 0, result.bytes(),
+                                                           result.stream()),
+                                           "constant Float16 CUDA memset");
                     } else {
                         // Create Float16 values on CPU, then copy to GPU
                         std::vector<__half> temp(result.numel(), __float2half(value));
-                        cudaMemcpy(result.data_, temp.data(), result.bytes(), cudaMemcpyHostToDevice);
+                        LFS_CUDA_CHECK_MSG(
+                            cudaMemcpy(result.data_, temp.data(), result.bytes(),
+                                       cudaMemcpyHostToDevice),
+                            "constant Float16 CUDA copy");
                     }
                 } else if (result.dtype_ == DataType::Bool) {
                     unsigned char fill_val = (value != 0.0f) ? 1 : 0;
-                    cudaMemset(result.data_, fill_val, result.bytes());
+                    LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, fill_val, result.bytes()),
+                                       "constant Bool CUDA memset");
                 } else if (result.dtype_ == DataType::Int32) {
                     if (value == 0.0f) {
-                        cudaMemset(result.data_, 0, result.bytes());
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                                           "constant Int32 CUDA memset");
                     } else {
                         std::vector<int> temp(result.numel(), static_cast<int>(value));
-                        cudaMemcpy(result.data_, temp.data(), result.bytes(), cudaMemcpyHostToDevice);
+                        LFS_CUDA_CHECK_MSG(
+                            cudaMemcpy(result.data_, temp.data(), result.bytes(),
+                                       cudaMemcpyHostToDevice),
+                            "constant Int32 CUDA copy");
                     }
                 } else if (result.dtype_ == DataType::Int64) {
                     if (value == 0.0f) {
-                        cudaMemset(result.data_, 0, result.bytes());
+                        LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, 0, result.bytes()),
+                                           "constant Int64 CUDA memset");
                     } else {
                         std::vector<int64_t> temp(result.numel(), static_cast<int64_t>(value));
-                        cudaMemcpy(result.data_, temp.data(), result.bytes(), cudaMemcpyHostToDevice);
+                        LFS_CUDA_CHECK_MSG(
+                            cudaMemcpy(result.data_, temp.data(), result.bytes(),
+                                       cudaMemcpyHostToDevice),
+                            "constant Int64 CUDA copy");
                     }
                 } else if (result.dtype_ == DataType::UInt8) {
                     const uint8_t fill_val = static_cast<uint8_t>(std::clamp(value, 0.0f, 255.0f));
-                    cudaMemset(result.data_, fill_val, result.bytes());
+                    LFS_CUDA_CHECK_MSG(cudaMemset(result.data_, fill_val, result.bytes()),
+                                       "constant UInt8 CUDA memset");
                 }
             } else {
                 if (result.dtype_ == DataType::Float32) {
@@ -265,19 +569,46 @@ namespace lfs::core {
         }
 
         case LoadOp::Arange: {
+            LFS_ASSERT_MSG((std::holds_alternative<std::tuple<float, float, float>>(args.args)),
+                           "arange load requires start, end, and step values");
             auto [start, end, step] = std::get<std::tuple<float, float, float>>(args.args);
+            LFS_ASSERT_MSG(args.dtype == DataType::Float32 || args.dtype == DataType::Int32,
+                           "arange supports only Float32 and Int32");
+            LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end) && std::isfinite(step),
+                           "arange bounds and step must be finite");
+            LFS_ASSERT_MSG(step != 0.0f,
+                           "arange step cannot be zero");
+            const long double extent = static_cast<long double>(end) -
+                                       static_cast<long double>(start);
+            LFS_ASSERT_MSG(extent * static_cast<long double>(step) >= 0.0L,
+                           "arange step points away from the end value");
 
-            if (step == 0) {
-                LOG_ERROR("Step cannot be zero");
-                return Tensor();
+            const long double count_value =
+                std::ceil(extent / static_cast<long double>(step));
+            LFS_ASSERT_MSG(std::isfinite(count_value) && count_value >= 0.0L &&
+                               count_value <=
+                                   static_cast<long double>(std::numeric_limits<size_t>::max()),
+                           "arange element count is not representable");
+            const size_t count = static_cast<size_t>(count_value);
+            LFS_ASSERT_MSG(count == 0 ||
+                               dtype_size(args.dtype) <=
+                                   std::numeric_limits<size_t>::max() / count,
+                           "arange allocation byte count overflow");
+            if (args.dtype == DataType::Int32 && count > 0) {
+                const double last = static_cast<double>(start) +
+                                    static_cast<double>(count - 1) * static_cast<double>(step);
+                const double minimum = std::min(static_cast<double>(start), last);
+                const double maximum = std::max(static_cast<double>(start), last);
+                LFS_ASSERT_MSG(minimum >= static_cast<double>(std::numeric_limits<int32_t>::lowest()) &&
+                                   maximum <= static_cast<double>(std::numeric_limits<int32_t>::max()),
+                               "Int32 arange values are outside the representable range");
             }
-
-            if ((end - start) * step < 0) {
-                LOG_ERROR("Invalid range: start={}, end={}, step={}", start, end, step);
-                return Tensor();
+            if (count == 0) {
+                LoadArgs empty_args = args;
+                empty_args.shape = TensorShape{0};
+                empty_args.args = std::monostate{};
+                return load(LoadOp::Empty, empty_args);
             }
-
-            size_t count = static_cast<size_t>(std::ceil((end - start) / step));
 
             result.shape_ = TensorShape{count};
             result.strides_ = result.shape_.strides(); // Initialize to contiguous strides
@@ -286,21 +617,17 @@ namespace lfs::core {
             result.device_ = args.device;
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
+            result.ensure_state();
             result.state_->stream = getCurrentCUDAStream();
 
             size_t bytes = count * dtype_size(result.dtype_);
 
             if (result.device_ == Device::CUDA) {
                 cudaStream_t s = result.stream();
-                void* ptr = CudaMemoryPool::instance().allocate(bytes, s);
-                if (!ptr) {
-                    throw std::runtime_error(std::format(
-                        "CUDA out of memory: failed to allocate {} bytes ({:.2f} GB). "
-                        "Try reducing max_cap, sh_degree, or image resolution.",
-                        bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
-                }
+                void* ptr = allocate_cuda_storage(bytes, s);
+                // pool-liveness-aware deleter (see empty/ path above).
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
-                    CudaMemoryPool::instance().deallocate(p, s);
+                    safe_cuda_pool_deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
 
@@ -315,13 +642,17 @@ namespace lfs::core {
                     for (size_t i = 0; i < count; ++i) {
                         data[i] = start + i * step;
                     }
-                    cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice);
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice),
+                        "Float32 arange CUDA copy");
                 } else if (result.dtype_ == DataType::Int32) {
                     std::vector<int> data(count);
                     for (size_t i = 0; i < count; ++i) {
                         data[i] = static_cast<int>(start + i * step);
                     }
-                    cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice);
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice),
+                        "Int32 arange CUDA copy");
                 }
             } else {
                 void* ptr = PinnedMemoryAllocator::instance().allocate(bytes);
@@ -331,8 +662,9 @@ namespace lfs::core {
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
                 cudaStream_t s = result.stream();
+                // pool/pinned teardown-safe free (see empty path above).
                 result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
-                    if (p)
+                    if (p && !gpu_process_teardown_started())
                         PinnedMemoryAllocator::instance().deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
@@ -353,7 +685,21 @@ namespace lfs::core {
         }
 
         case LoadOp::Random: {
+            LFS_ASSERT_MSG((std::holds_alternative<std::pair<float, float>>(args.args)),
+                           "uniform/rand load requires lower and upper bounds");
             auto [low, high] = std::get<std::pair<float, float>>(args.args);
+            LFS_ASSERT_MSG(args.dtype == DataType::Float32 || args.dtype == DataType::Int32,
+                           "uniform/rand supports only Float32 and Int32");
+            LFS_ASSERT_MSG(std::isfinite(low) && std::isfinite(high) &&
+                               ((args.dtype == DataType::Float32 && low <= high) ||
+                                (args.dtype == DataType::Int32 && low < high)),
+                           "uniform/rand bounds must be finite and ordered");
+            LFS_ASSERT_MSG(args.dtype != DataType::Int32 ||
+                               (low >= static_cast<float>(std::numeric_limits<int32_t>::lowest()) &&
+                                high <= std::nextafter(
+                                            static_cast<float>(std::numeric_limits<int32_t>::max()),
+                                            0.0f)),
+                           "Int32 uniform/rand bounds are outside the representable range");
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
                 return result;
@@ -393,23 +739,39 @@ namespace lfs::core {
         }
 
         case LoadOp::Normal: {
+            LFS_ASSERT_MSG((std::holds_alternative<std::pair<float, float>>(args.args)),
+                           "normal/randn load requires mean and standard deviation");
             auto [mean, std] = std::get<std::pair<float, float>>(args.args);
+            LFS_ASSERT_MSG(args.dtype == DataType::Float32,
+                           "normal/randn supports only Float32");
+            LFS_ASSERT_MSG(std::isfinite(mean) && std::isfinite(std) && std >= 0.0f,
+                           "normal/randn requires finite mean and std >= 0");
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
                 return result;
 
-            if (result.device_ == Device::CUDA) {
-                // Use Philox RNG without resetting offset (stateful like PyTorch - much faster!)
-                curandGenerator_t* gen = static_cast<curandGenerator_t*>(
-                    RandomGenerator::instance().get_generator(Device::CUDA));
+            if (std == 0.0f) {
+                result.fill_(mean);
+                break;
+            }
 
+            if (result.device_ == Device::CUDA) {
                 size_t n = result.numel();
                 if (n % 2 == 1) {
-                    curandGenerateNormal(*gen, result.ptr<float>(), n + 1, mean, std);
+                    auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
+                    RandomGenerator::instance().generate_cuda_normal(
+                        scratch.ptr<float>(), n + 1, mean, std, result.stream());
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpyAsync(result.ptr<float>(), scratch.ptr<float>(),
+                                        n * sizeof(float), cudaMemcpyDeviceToDevice,
+                                        result.stream()),
+                        "normal/randn scratch copy (bytes={}, requested_count={})",
+                        n * sizeof(float), n);
+                    LFS_CUDA_CHECK(cudaStreamSynchronize(result.stream()));
                 } else {
-                    curandGenerateNormal(*gen, result.ptr<float>(), n, mean, std);
+                    RandomGenerator::instance().generate_cuda_normal(
+                        result.ptr<float>(), n, mean, std, result.stream());
                 }
-                // curandGenerateNormal is blocking, no need for explicit sync
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
                     RandomGenerator::instance().get_generator(Device::CPU));
@@ -423,7 +785,16 @@ namespace lfs::core {
         }
 
         case LoadOp::Randint: {
+            LFS_ASSERT_MSG((std::holds_alternative<std::pair<int, int>>(args.args)),
+                           "randint load requires integer lower and upper bounds");
             auto [low, high] = std::get<std::pair<int, int>>(args.args);
+            LFS_ASSERT_MSG(args.dtype == DataType::Int32 || args.dtype == DataType::Float32 ||
+                               args.dtype == DataType::UInt8,
+                           "randint encountered an unsupported dtype");
+            LFS_ASSERT_MSG(low < high,
+                           "randint requires low < high");
+            LFS_ASSERT_MSG(args.dtype != DataType::UInt8 || (low >= 0 && high <= 256),
+                           "UInt8 randint bounds must be within [0, 256]");
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
                 return result;
@@ -437,35 +808,29 @@ namespace lfs::core {
                 } else if (result.dtype_ == DataType::Float32) {
                     int* temp_buffer = static_cast<int*>(
                         CudaMemoryPool::instance().allocate(result.numel() * sizeof(int), stream));
+                    LFS_ASSERT_MSG(temp_buffer != nullptr,
+                                   "randint failed to allocate its Float32 CUDA conversion buffer");
+                    tensor_ops::launch_randint(temp_buffer, result.numel(), low, high,
+                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
 
-                    if (temp_buffer) {
-                        tensor_ops::launch_randint(temp_buffer, result.numel(), low, high,
-                                                   RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    tensor_ops::launch_convert_type<int, float>(temp_buffer, result.ptr<float>(),
+                                                                result.numel(), stream);
+                    // No sync - tensor operation
 
-                        tensor_ops::launch_convert_type<int, float>(temp_buffer, result.ptr<float>(),
-                                                                    result.numel(), stream);
-                        // No sync - tensor operation
-
-                        CudaMemoryPool::instance().deallocate(temp_buffer, stream);
-                    } else {
-                        LOG_ERROR("Failed to allocate temp buffer from memory pool");
-                    }
+                    CudaMemoryPool::instance().deallocate(temp_buffer, stream);
                 } else if (result.dtype_ == DataType::UInt8) {
                     int* temp_buffer = static_cast<int*>(
                         CudaMemoryPool::instance().allocate(result.numel() * sizeof(int), stream));
+                    LFS_ASSERT_MSG(temp_buffer != nullptr,
+                                   "randint failed to allocate its UInt8 CUDA conversion buffer");
+                    tensor_ops::launch_randint(temp_buffer, result.numel(), low, high,
+                                               RandomGenerator::instance().get_next_cuda_seed(), stream);
 
-                    if (temp_buffer) {
-                        tensor_ops::launch_randint(temp_buffer, result.numel(), low, high,
-                                                   RandomGenerator::instance().get_next_cuda_seed(), stream);
+                    tensor_ops::launch_convert_type<int, uint8_t>(temp_buffer, result.ptr<uint8_t>(),
+                                                                  result.numel(), stream);
+                    // No sync - tensor operation
 
-                        tensor_ops::launch_convert_type<int, uint8_t>(temp_buffer, result.ptr<uint8_t>(),
-                                                                      result.numel(), stream);
-                        // No sync - tensor operation
-
-                        CudaMemoryPool::instance().deallocate(temp_buffer, stream);
-                    } else {
-                        LOG_ERROR("Failed to allocate temp buffer from memory pool");
-                    }
+                    CudaMemoryPool::instance().deallocate(temp_buffer, stream);
                 }
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
@@ -493,7 +858,13 @@ namespace lfs::core {
         }
 
         case LoadOp::Bernoulli: {
+            LFS_ASSERT_MSG(std::holds_alternative<float>(args.args),
+                           "bernoulli load requires a probability");
             float p = std::get<float>(args.args);
+            LFS_ASSERT_MSG(args.dtype == DataType::Float32,
+                           "bernoulli currently supports only Float32");
+            LFS_ASSERT_MSG(std::isfinite(p) && p >= 0.0f && p <= 1.0f,
+                           "bernoulli probability must be in [0, 1]");
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
                 return result;
@@ -515,22 +886,36 @@ namespace lfs::core {
         }
 
         case LoadOp::Multinomial: {
+            LFS_ASSERT_MSG((std::holds_alternative<std::pair<void*, bool>>(args.args)),
+                           "multinomial load requires weights and replacement mode");
             auto [weights_ptr, replacement] = std::get<std::pair<void*, bool>>(args.args);
             const Tensor* weights = static_cast<const Tensor*>(weights_ptr);
 
-            if (!weights->is_valid() || weights->ndim() != 1) {
-                LOG_ERROR("Multinomial requires 1D weight tensor");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(weights != nullptr && weights->is_valid() && weights->ndim() == 1,
+                           "multinomial requires a valid rank-1 weight tensor");
+            LFS_ASSERT_MSG(weights->dtype() == DataType::Float32,
+                           "multinomial weights must be Float32");
+            LFS_ASSERT_MSG(args.device == weights->device(),
+                           "multinomial output and weights must use the same device");
+            LFS_ASSERT_MSG(args.dtype == DataType::Int64,
+                           "multinomial output must use Int64 dtype");
+
+            Tensor weights_materialized;
+            weights = &weights->contiguous_read(weights_materialized);
 
             size_t n = weights->numel();
             size_t num_samples = args.shape.elements();
+            LFS_ASSERT_MSG(n > 0 && num_samples > 0,
+                           "multinomial requires non-empty weights and output");
+            LFS_ASSERT_MSG(replacement || num_samples <= n,
+                           "multinomial sample count exceeds weights without replacement");
 
             result = load(LoadOp::Empty, args);
             if (!result.is_valid())
                 return result;
 
             if (weights->device() == Device::CUDA) {
+                prepare_inputs_for_stream({weights}, result.stream());
                 tensor_ops::launch_multinomial(weights->ptr<float>(), result.ptr<int64_t>(),
                                                n, num_samples, replacement,
                                                RandomGenerator::instance().get_next_cuda_seed(), result.stream());
@@ -538,13 +923,16 @@ namespace lfs::core {
             } else {
                 auto weights_data = weights->to_vector();
 
-                float sum = std::accumulate(weights_data.begin(), weights_data.end(), 0.0f);
-                if (sum <= 0) {
-                    LOG_ERROR("Weights must sum to positive value");
-                    return Tensor();
-                }
+                LFS_ASSERT_MSG(
+                    std::all_of(weights_data.begin(), weights_data.end(), [](float weight) {
+                        return std::isfinite(weight) && weight >= 0.0f;
+                    }),
+                    "multinomial weights must be finite and non-negative");
+                double sum = std::accumulate(weights_data.begin(), weights_data.end(), 0.0);
+                LFS_ASSERT_MSG(std::isfinite(sum) && sum > 0.0f,
+                               "multinomial weights must have a positive finite sum");
 
-                std::vector<float> cdf(n);
+                std::vector<double> cdf(n);
                 cdf[0] = weights_data[0] / sum;
                 for (size_t i = 1; i < n; ++i) {
                     cdf[i] = cdf[i - 1] + weights_data[i] / sum;
@@ -552,13 +940,13 @@ namespace lfs::core {
 
                 auto& gen = *static_cast<std::mt19937_64*>(
                     RandomGenerator::instance().get_generator(Device::CPU));
-                std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+                std::uniform_real_distribution<double> dis(0.0, 1.0);
 
                 int64_t* samples = result.ptr<int64_t>();
 
                 if (replacement) {
                     for (size_t i = 0; i < num_samples; ++i) {
-                        float u = dis(gen);
+                        double u = dis(gen);
                         auto it = std::lower_bound(cdf.begin(), cdf.end(), u);
                         samples[i] = static_cast<int64_t>(std::distance(cdf.begin(), it));
                     }
@@ -585,8 +973,14 @@ namespace lfs::core {
         }
 
         case LoadOp::Eye: {
+            LFS_ASSERT_MSG(args.shape.rank() == 2,
+                           "eye requires a rank-2 output shape");
+            LFS_ASSERT_MSG(args.dtype == DataType::Float32,
+                           "eye currently supports only Float32");
             result = load(LoadOp::Const, {args.shape, args.device, args.dtype, args.use_pinned, 0.0f});
-            if (!result.is_valid() || args.shape.rank() != 2)
+            if (!result.is_valid())
+                return result;
+            if (result.numel() == 0)
                 return result;
 
             size_t m = args.shape[0];
@@ -594,7 +988,11 @@ namespace lfs::core {
             size_t min_dim = std::min(m, n);
 
             if (result.device_ == Device::CUDA) {
+                LFS_CUDA_CHECK_MSG(cudaGetLastError(),
+                                   "eye pending CUDA state check");
                 tensor_ops::launch_eye(result.ptr<float>(), m, n, result.stream());
+                LFS_CUDA_CHECK_MSG(cudaGetLastError(),
+                                   "eye CUDA kernel launch");
                 // No sync - tensor operation
             } else {
                 float* data = result.ptr<float>();
@@ -606,11 +1004,11 @@ namespace lfs::core {
         }
 
         case LoadOp::FromCPU: {
+            LFS_ASSERT_MSG(std::holds_alternative<void*>(args.args),
+                           "FromCPU load requires a source pointer");
             void* src_ptr = std::get<void*>(args.args);
-            if (!src_ptr) {
-                LOG_ERROR("FromCPU requires valid source pointer");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(src_ptr != nullptr,
+                           "FromCPU requires a non-null source pointer");
 
             result = Tensor(src_ptr, args.shape, Device::CPU, args.dtype);
 
@@ -621,13 +1019,14 @@ namespace lfs::core {
         }
 
         case LoadOp::FromCUDA: {
+            LFS_ASSERT_MSG(std::holds_alternative<void*>(args.args),
+                           "FromCUDA load requires a source pointer");
             void* src_ptr = std::get<void*>(args.args);
-            if (!src_ptr) {
-                LOG_ERROR("FromCUDA requires valid source pointer");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(src_ptr != nullptr,
+                           "FromCUDA requires a non-null source pointer");
 
-            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype);
+            result = Tensor(src_ptr, args.shape, Device::CUDA, args.dtype,
+                            getCurrentCUDAStream());
 
             if (args.device == Device::CPU) {
                 result = result.to(Device::CPU);
@@ -636,32 +1035,147 @@ namespace lfs::core {
         }
 
         default:
-            LOG_ERROR("Unknown load operation");
-            break;
+            LFS_ASSERT_MSG(false,
+                           "unknown tensor load operation");
         }
 
         return result;
     }
 
     Tensor Tensor::multinomial(const Tensor& weights, int num_samples, bool replacement) {
-        if (!replacement && static_cast<size_t>(num_samples) > weights.numel()) {
-            num_samples = static_cast<int>(weights.numel());
+        LFS_ASSERT_MSG(weights.is_valid() && weights.ndim() == 1,
+                       "multinomial requires valid rank-1 weights");
+        LFS_ASSERT_MSG(weights.dtype() == DataType::Float32,
+                       "multinomial weights must be Float32");
+        LFS_ASSERT_MSG(num_samples > 0,
+                       "multinomial sample count must be positive");
+        LFS_ASSERT_MSG(replacement || static_cast<size_t>(num_samples) <= weights.numel(),
+                       "multinomial cannot sample more entries than weights without replacement");
+
+        // The kernels scan weights densely. Force a contiguous logical copy at
+        // the API boundary so host validation and
+        // device sampling always see the same probability mass (strided column
+        // views from densify LAS paths are training-reachable).
+        Tensor weights_materialized;
+        const Tensor& dense_weights = weights.contiguous_read(weights_materialized);
+        LFS_ASSERT_MSG(dense_weights.is_contiguous(),
+                       "multinomial requires contiguous weights after materialize firewall");
+
+        const auto host_weights = dense_weights.to_vector();
+        double weight_sum = 0.0;
+        for (size_t index = 0; index < host_weights.size(); ++index) {
+            const float weight = host_weights[index];
+            LFS_ASSERT_MSG(std::isfinite(weight) && weight >= 0.0f,
+                           "multinomial weights must be finite and non-negative");
+            weight_sum += weight;
         }
+        LFS_ASSERT_MSG(std::isfinite(weight_sum) && weight_sum > 0.0,
+                       "multinomial weights must have a positive finite sum");
 
         LoadArgs args;
         args.shape = TensorShape({static_cast<size_t>(num_samples)});
-        args.device = weights.device();
+        args.device = dense_weights.device();
         args.dtype = DataType::Int64; // Must be Int64 for MCMC compatibility (nonzero() returns Int64)
-        args.args = std::pair<void*, bool>{const_cast<void*>(static_cast<const void*>(&weights)), replacement};
+        // Pass dense_weights (not the possibly-strided original) so LoadOp and
+        // launch_multinomial never observe non-contiguous storage.
+        args.args = std::pair<void*, bool>{
+            const_cast<void*>(static_cast<const void*>(&dense_weights)), replacement};
         return load(LoadOp::Multinomial, args);
     }
 
+    Tensor Tensor::reduce(const ReduceOp op) const {
+        return reduce(op, ReduceArgs{});
+    }
+
     Tensor Tensor::reduce(ReduceOp op, const ReduceArgs& args) const {
-        static const char* op_names[] = {"sum", "mean", "max", "min", "prod", "any", "all", "argmax", "argmin", "std", "var"};
-        const char* op_name = (static_cast<int>(op) < 11) ? op_names[static_cast<int>(op)] : "reduce";
-        debug::OpTraceGuard trace(op_name, *this);
+        LFS_CUDA_BREADCRUMB_STREAM("tensor.reduce", stream());
+        constexpr std::array op_names = {
+            "sum", "mean", "max", "min", "prod", "any", "all",
+            "std", "var", "argmax", "argmin", "count_nonzero", "norm"};
+        const int op_value = static_cast<int>(op);
+        LFS_ASSERT_MSG(op_value >= static_cast<int>(ReduceOp::Sum) &&
+                           op_value <= static_cast<int>(ReduceOp::Norm),
+                       "reduce received an unknown operation");
+        const char* op_name = op_names[static_cast<size_t>(op_value)];
+        debug::OpTraceGuard trace(op_name, *this, LFS_SOURCE_SITE_CURRENT());
 
         validate_unary_op();
+        if (op == ReduceOp::Argmax || op == ReduceOp::Argmin) {
+            LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                           "argmax and argmin currently require Float32 input");
+            LFS_ASSERT_MSG(args.axes.size() <= 1,
+                           "argmax and argmin accept at most one dimension");
+            if (!args.axes.empty()) {
+                return op == ReduceOp::Argmax
+                           ? max_with_indices(args.axes.front(), args.keepdim).second
+                           : min_with_indices(args.axes.front(), args.keepdim).second;
+            }
+
+            auto flattened = reshape(TensorShape({numel()}));
+            Tensor indices = op == ReduceOp::Argmax
+                                 ? flattened.max_with_indices(0, false).second
+                                 : flattened.min_with_indices(0, false).second;
+            if (args.keepdim && ndim() > 0) {
+                indices = indices.reshape(
+                    TensorShape(std::vector<size_t>(ndim(), 1)));
+            }
+            return indices;
+        }
+        LFS_ASSERT_MSG(op != ReduceOp::CountNonzero && op != ReduceOp::Norm,
+                       "count_nonzero and norm must use their dedicated tensor operations");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Float16 ||
+                           dtype_ == DataType::Int32 || dtype_ == DataType::Bool,
+                       "reduce currently supports only Float32, Float16, Int32, and Bool");
+        // Float16: reduce in f32 then cast back (kernels are float-specialized).
+        // Avoids silent holes in the float16 path; cost is one convert each way.
+        if (dtype_ == DataType::Float16) {
+            Tensor f32 = this->to(DataType::Float32);
+            Tensor out = f32.reduce(op, args);
+            return out.to(DataType::Float16);
+        }
+        if (dtype_ == DataType::Bool && op == ReduceOp::Max) {
+            return reduce(ReduceOp::Any, args);
+        }
+        if (dtype_ == DataType::Bool && op == ReduceOp::Min) {
+            return reduce(ReduceOp::All, args);
+        }
+        const ReductionPlan reduction = make_reduction_plan(shape_, dtype_, op, args);
+        if ((op == ReduceOp::Std || op == ReduceOp::Var || op == ReduceOp::Norm)) {
+            LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                           "std, var, and norm reductions currently require Float32");
+        }
+        if (dtype_ == DataType::Int32) {
+            LFS_ASSERT_MSG(op == ReduceOp::Sum ||
+                               op == ReduceOp::Max || op == ReduceOp::Min ||
+                               op == ReduceOp::Prod,
+                           "Int32 reduction encountered an unsupported operation");
+        }
+        if (dtype_ == DataType::Float32) {
+            LFS_ASSERT_MSG(op != ReduceOp::Any && op != ReduceOp::All,
+                           "Float32 any/all reductions are unsupported");
+        }
+        if (numel() == 0) {
+            return make_empty_reduction_result(reduction, device_, op);
+        }
+        if (dtype_ == DataType::Bool && device_ == Device::CPU &&
+            !args.axes.empty() && args.axes.size() != shape_.rank()) {
+            LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
+                           "partial CPU Bool reductions currently support only any and all");
+        }
+        if (dtype_ == DataType::Bool && device_ == Device::CUDA &&
+            !args.axes.empty() && args.axes.size() != shape_.rank()) {
+            LFS_ASSERT_MSG(op == ReduceOp::Any || op == ReduceOp::All,
+                           "partial CUDA Bool reductions currently support only any and all");
+            std::vector<int> sorted_axes = args.axes;
+            for (int& axis : sorted_axes) {
+                axis = resolve_dim(axis);
+            }
+            std::sort(sorted_axes.begin(), sorted_axes.end());
+            for (size_t i = 1; i < sorted_axes.size(); ++i) {
+                LFS_ASSERT_MSG(sorted_axes[i] == sorted_axes[i - 1] + 1,
+                               "multi-axis CUDA Bool reductions require contiguous axes");
+            }
+        }
 
         // Fused transform-reduce: consume pending pointwise chain
         if (dtype_ == DataType::Float32 &&
@@ -685,38 +1199,89 @@ namespace lfs::core {
                 std::vector<internal::LazyPointwiseOp> fused_ops;
                 if (internal::lazy_executor_try_consume_pointwise_fusion(
                         lazy_expr_id(), &fused_source, &fused_ops) &&
-                    fused_source.is_valid() &&
+                    fused_source.is_valid()) {
+                    fused_source.materialize_if_deferred();
+                }
+                if (fused_source.is_valid() &&
                     fused_source.device() == Device::CUDA &&
                     fused_source.is_contiguous() &&
                     fused_source.dtype() == DataType::Float32 &&
+                    !fused_ops.empty() &&
                     static_cast<int>(fused_ops.size()) <= tensor_ops::FUSED_POINTWISE_MAX_OPS) {
-                    tensor_ops::FusedPointwiseOpChain chain{};
-                    chain.num_ops = static_cast<int>(fused_ops.size());
-                    for (int i = 0; i < chain.num_ops; ++i) {
-                        chain.ops[i].kind = static_cast<uint8_t>(fused_ops[i].kind);
-                        chain.ops[i].scalar = fused_ops[i].scalar;
+                    std::vector<Tensor> rhs_storage;
+                    rhs_storage.reserve(fused_ops.size());
+                    bool rhs_ok = true;
+                    for (auto& fop : fused_ops) {
+                        const auto k = fop.kind;
+                        const bool is_tensor_bin =
+                            k == internal::LazyPointwiseOpKind::AddTensor ||
+                            k == internal::LazyPointwiseOpKind::SubTensor ||
+                            k == internal::LazyPointwiseOpKind::MulTensor ||
+                            k == internal::LazyPointwiseOpKind::DivTensor;
+                        if (!is_tensor_bin) {
+                            continue;
+                        }
+                        if (!fop.rhs || !fop.rhs->is_valid()) {
+                            rhs_ok = false;
+                            break;
+                        }
+                        Tensor rhs = *fop.rhs;
+                        rhs.materialize_if_deferred();
+                        if (!rhs.is_valid() || rhs.device() != Device::CUDA ||
+                            !rhs.is_contiguous() || rhs.dtype() != DataType::Float32 ||
+                            rhs.shape() != fused_source.shape()) {
+                            rhs_ok = false;
+                            break;
+                        }
+                        rhs_storage.push_back(std::move(rhs));
                     }
+                    if (rhs_ok) {
+                        tensor_ops::FusedPointwiseOpChain chain{};
+                        chain.num_ops = static_cast<int>(fused_ops.size());
+                        size_t rhs_i = 0;
+                        for (int i = 0; i < chain.num_ops; ++i) {
+                            chain.ops[i].kind = static_cast<uint8_t>(fused_ops[i].kind);
+                            chain.ops[i].scalar = fused_ops[i].scalar;
+                            const auto k = fused_ops[i].kind;
+                            const bool is_tensor_bin =
+                                k == internal::LazyPointwiseOpKind::AddTensor ||
+                                k == internal::LazyPointwiseOpKind::SubTensor ||
+                                k == internal::LazyPointwiseOpKind::MulTensor ||
+                                k == internal::LazyPointwiseOpKind::DivTensor;
+                            if (is_tensor_bin) {
+                                chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
+                                ++rhs_i;
+                            } else {
+                                chain.ops[i].rhs = nullptr;
+                            }
+                        }
 
-                    const size_t n = fused_source.numel();
-                    Tensor result;
-                    {
-                        const cudaStream_t execution_stream = resolve_cuda_execution_stream(fused_source);
-                        fused_source.sync_to_stream(execution_stream);
-                        CUDAStreamGuard guard(execution_stream);
-                        result = Tensor::empty(
-                            TensorShape(args.keepdim
-                                            ? std::vector<size_t>(shape_.rank(), 1)
-                                            : std::vector<size_t>{}),
-                            Device::CUDA, DataType::Float32);
-                        tensor_ops::launch_fused_transform_reduce(
-                            fused_source.ptr<float>(), result.ptr<float>(), n,
-                            chain, op, result.stream());
+                        const size_t n = fused_source.numel();
+                        Tensor result;
+                        {
+                            cudaStream_t execution_stream =
+                                prepare_inputs_for_stream({&fused_source});
+                            for (const auto& r : rhs_storage) {
+                                execution_stream =
+                                    prepare_inputs_for_stream({&r}, execution_stream);
+                            }
+                            CUDAStreamGuard guard(execution_stream);
+                            result = Tensor::empty(
+                                TensorShape(args.keepdim
+                                                ? std::vector<size_t>(shape_.rank(), 1)
+                                                : std::vector<size_t>{}),
+                                Device::CUDA, DataType::Float32);
+                            result.set_stream(execution_stream);
+                            tensor_ops::launch_fused_transform_reduce(
+                                std::as_const(fused_source).ptr<float>(), result.ptr<float>(), n,
+                                chain, op, execution_stream);
+                        }
+
+                        internal::lazy_executor_diagnostics_counters_increment_fused();
+                        internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
+                        internal::lazy_ir_record_reduce(*this, result, op_name);
+                        return result;
                     }
-
-                    internal::lazy_executor_diagnostics_counters_increment_fused();
-                    internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
-                    internal::lazy_ir_record_reduce(*this, result, op_name);
-                    return result;
                 }
             }
         }
@@ -736,46 +1301,122 @@ namespace lfs::core {
                 std::vector<internal::LazyPointwiseOp> fused_ops;
                 if (internal::lazy_executor_try_consume_pointwise_fusion(
                         lazy_expr_id(), &fused_source, &fused_ops) &&
-                    fused_source.is_valid() &&
+                    fused_source.is_valid()) {
+                    fused_source.materialize_if_deferred();
+                }
+                if (fused_source.is_valid() &&
                     fused_source.device() == Device::CUDA &&
                     fused_source.is_contiguous() &&
                     fused_source.dtype() == DataType::Float32 &&
+                    !fused_ops.empty() &&
                     static_cast<int>(fused_ops.size()) <= tensor_ops::FUSED_POINTWISE_MAX_OPS) {
-                    tensor_ops::FusedPointwiseOpChain chain{};
-                    chain.num_ops = static_cast<int>(fused_ops.size());
-                    for (int i = 0; i < chain.num_ops; ++i) {
-                        chain.ops[i].kind = static_cast<uint8_t>(fused_ops[i].kind);
-                        chain.ops[i].scalar = fused_ops[i].scalar;
+                    std::vector<Tensor> rhs_storage;
+                    rhs_storage.reserve(fused_ops.size());
+                    bool rhs_ok = true;
+                    for (auto& fop : fused_ops) {
+                        const auto k = fop.kind;
+                        const bool is_tensor_bin =
+                            k == internal::LazyPointwiseOpKind::AddTensor ||
+                            k == internal::LazyPointwiseOpKind::SubTensor ||
+                            k == internal::LazyPointwiseOpKind::MulTensor ||
+                            k == internal::LazyPointwiseOpKind::DivTensor;
+                        if (!is_tensor_bin) {
+                            continue;
+                        }
+                        if (!fop.rhs || !fop.rhs->is_valid()) {
+                            rhs_ok = false;
+                            break;
+                        }
+                        Tensor rhs = *fop.rhs;
+                        rhs.materialize_if_deferred();
+                        if (!rhs.is_valid() || rhs.device() != Device::CUDA ||
+                            !rhs.is_contiguous() || rhs.dtype() != DataType::Float32 ||
+                            rhs.shape() != fused_source.shape()) {
+                            rhs_ok = false;
+                            break;
+                        }
+                        rhs_storage.push_back(std::move(rhs));
                     }
+                    if (rhs_ok) {
+                        tensor_ops::FusedPointwiseOpChain chain{};
+                        chain.num_ops = static_cast<int>(fused_ops.size());
+                        size_t rhs_i = 0;
+                        for (int i = 0; i < chain.num_ops; ++i) {
+                            chain.ops[i].kind = static_cast<uint8_t>(fused_ops[i].kind);
+                            chain.ops[i].scalar = fused_ops[i].scalar;
+                            const auto k = fused_ops[i].kind;
+                            const bool is_tensor_bin =
+                                k == internal::LazyPointwiseOpKind::AddTensor ||
+                                k == internal::LazyPointwiseOpKind::SubTensor ||
+                                k == internal::LazyPointwiseOpKind::MulTensor ||
+                                k == internal::LazyPointwiseOpKind::DivTensor;
+                            if (is_tensor_bin) {
+                                chain.ops[i].rhs = std::as_const(rhs_storage[rhs_i]).ptr<float>();
+                                ++rhs_i;
+                            } else {
+                                chain.ops[i].rhs = nullptr;
+                            }
+                        }
 
-                    const size_t segment_size = fused_source.shape()[fused_source.shape().rank() - 1];
-                    const size_t num_segments = fused_source.numel() / segment_size;
-                    assert(segment_size > 0);
-                    assert(num_segments > 0);
+                        LFS_ASSERT_MSG(fused_source.shape().rank() > 0,
+                                       std::format("fused segmented reduction source must have at least "
+                                                   "one dimension before reading the last dimension "
+                                                   "(source_shape={}, source_rank={}, source_numel={}, "
+                                                   "reduction_op={})",
+                                                   fused_source.shape().str(), fused_source.shape().rank(),
+                                                   fused_source.numel(), op_name));
+                        const size_t segment_size = fused_source.shape()[fused_source.shape().rank() - 1];
+                        LFS_ASSERT_MSG(segment_size > 0,
+                                       std::format("fused segmented reduction requires a non-empty "
+                                                   "last dimension before division "
+                                                   "(segment_size={}, source_shape={}, source_numel={}, "
+                                                   "reduction_op={})",
+                                                   segment_size, fused_source.shape().str(),
+                                                   fused_source.numel(), op_name));
+                        LFS_ASSERT_MSG(fused_source.numel() % segment_size == 0,
+                                       std::format("fused segmented reduction source size must be an "
+                                                   "exact multiple of the segment size "
+                                                   "(source_numel={}, segment_size={}, source_shape={}, "
+                                                   "reduction_op={})",
+                                                   fused_source.numel(), segment_size,
+                                                   fused_source.shape().str(), op_name));
+                        const size_t num_segments = fused_source.numel() / segment_size;
+                        LFS_ASSERT_MSG(num_segments > 0,
+                                       std::format("fused segmented reduction requires at least one segment "
+                                                   "(num_segments={}, source_numel={}, segment_size={}, "
+                                                   "source_shape={}, reduction_op={})",
+                                                   num_segments, fused_source.numel(), segment_size,
+                                                   fused_source.shape().str(), op_name));
 
-                    std::vector<size_t> out_shape;
-                    for (size_t i = 0; i < shape_.rank() - 1; ++i) {
-                        out_shape.push_back(shape_[i]);
-                    }
-                    if (args.keepdim) {
-                        out_shape.push_back(1);
-                    }
+                        std::vector<size_t> out_shape;
+                        for (size_t i = 0; i < shape_.rank() - 1; ++i) {
+                            out_shape.push_back(shape_[i]);
+                        }
+                        if (args.keepdim) {
+                            out_shape.push_back(1);
+                        }
 
-                    Tensor result;
-                    {
-                        const cudaStream_t execution_stream = resolve_cuda_execution_stream(fused_source);
-                        fused_source.sync_to_stream(execution_stream);
-                        CUDAStreamGuard guard(execution_stream);
-                        result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
-                        tensor_ops::launch_fused_segmented_transform_reduce(
-                            fused_source.ptr<float>(), result.ptr<float>(),
-                            num_segments, segment_size, chain, op, result.stream());
-                    }
+                        Tensor result;
+                        {
+                            cudaStream_t execution_stream =
+                                prepare_inputs_for_stream({&fused_source});
+                            for (const auto& r : rhs_storage) {
+                                execution_stream =
+                                    prepare_inputs_for_stream({&r}, execution_stream);
+                            }
+                            CUDAStreamGuard guard(execution_stream);
+                            result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
+                            result.set_stream(execution_stream);
+                            tensor_ops::launch_fused_segmented_transform_reduce(
+                                std::as_const(fused_source).ptr<float>(), result.ptr<float>(),
+                                num_segments, segment_size, chain, op, execution_stream);
+                        }
 
-                    internal::lazy_executor_diagnostics_counters_increment_fused();
-                    internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
-                    internal::lazy_ir_record_reduce(*this, result, op_name);
-                    return result;
+                        internal::lazy_executor_diagnostics_counters_increment_fused();
+                        internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
+                        internal::lazy_ir_record_reduce(*this, result, op_name);
+                        return result;
+                    } // rhs_ok
                 }
             }
         }
@@ -784,85 +1425,120 @@ namespace lfs::core {
         // data_ptr() triggers materialization which std::moves internal state; if shape pointers
         // were captured before that move, they dangle. Materializing up front is safe and cheap
         // (no-op for already-materialized tensors).
-        const_cast<Tensor*>(this)->materialize_if_deferred();
+        pin_operands({this});
 
         // FAST PATH: 2D dim=0 reduction (column sums) - use specialized kernel
-        // This is faster than transpose+contiguous+reduce because it avoids the copy
-        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() == 2 &&
-            dtype_ == DataType::Float32 && is_contiguous_) {
-            int dim = args.axes[0];
-            if (dim < 0)
-                dim += 2;
-            if (dim == 0 && (op == ReduceOp::Sum || op == ReduceOp::Mean ||
-                             op == ReduceOp::Max || op == ReduceOp::Min)) {
-                size_t M = shape_[0]; // rows (reduction dim)
-                size_t N = shape_[1]; // cols (output size)
+        // This is faster than transpose+contiguous+reduce because it avoids the copy.
+        // Honor path override so microbench can A/B strided_fast vs transpose on 2D.
+        {
+            using RP = tensor_ops::ReducePathForTesting;
+            const RP override = tensor_ops::reduce_path_override_for_testing();
+            const bool force_w2 = (override == RP::StridedFast || override == RP::Transpose);
+            if (!force_w2 && args.axes.size() == 1 && device_ == Device::CUDA &&
+                shape_.rank() == 2 && dtype_ == DataType::Float32 && is_contiguous_) {
+                int dim = args.axes[0];
+                if (dim < 0)
+                    dim += 2;
+                if (dim == 0 && (op == ReduceOp::Sum || op == ReduceOp::Mean ||
+                                 op == ReduceOp::Max || op == ReduceOp::Min)) {
+                    size_t M = shape_[0]; // rows (reduction dim)
+                    size_t N = shape_[1]; // cols (output size)
 
-                std::vector<size_t> out_shape = args.keepdim ? std::vector<size_t>{1, N} : std::vector<size_t>{N};
-                auto result = empty_on_tensor_stream(TensorShape(out_shape), device_, dtype_, *this);
+                    std::vector<size_t> out_shape =
+                        args.keepdim ? std::vector<size_t>{1, N} : std::vector<size_t>{N};
+                    auto result =
+                        empty_on_tensor_stream(TensorShape(out_shape), device_, dtype_, *this);
 
-                LOG_DEBUG("[COLUMN REDUCE] M={}, N={}, op={}", M, N, static_cast<int>(op));
-                tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op, result.stream());
-                internal::lazy_ir_record_reduce(*this, result, op_name);
-                return result;
+                    tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op,
+                                                     result.stream());
+                    tensor_ops::set_reduce_last_path_for_testing(RP::Column);
+                    internal::lazy_ir_record_reduce(*this, result, op_name);
+                    return result;
+                }
             }
         }
 
-        // OPTIMIZATION: For single-axis reduction where the reduction dimension is NOT the last,
-        // it's faster to transpose the tensor so the reduction dim becomes contiguous, then reduce.
-        // This trades a memory copy for much better memory coalescing in the reduction kernel.
-        //
-        // Example: [1024, 1024].sum({0}) with row-major layout:
-        //   - Strided: Each output element reads 1024 values with stride=1024 → ~74 us
-        //   - Transposed: Copy to column-major, then contiguous reduce → ~15 us
-        //
-        // Threshold: Only use this optimization when inner_size >= 256 (strided access hurts)
-        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() >= 2) {
+        // non-last-dim reduce with large inner_size.
+        // Prefer modern strided/column-style kernel over permute+contiguous when
+        // the measured heuristic says so; keep transpose for the cheap-copy edge
+        // class (argmin of microbench — see should_prefer_strided_over_transpose).
+        // Float16 is converted at reduce entry, so this path is Float32 only.
+        if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() >= 2 &&
+            is_contiguous_ && dtype_ == DataType::Float32 &&
+            (op == ReduceOp::Sum || op == ReduceOp::Mean ||
+             op == ReduceOp::Max || op == ReduceOp::Min)) {
             int dim = args.axes[0];
             if (dim < 0)
                 dim += static_cast<int>(shape_.rank());
 
             if (dim >= 0 && dim < static_cast<int>(shape_.rank()) - 1) {
-                // Calculate inner_size (product of dims after the reduction dim)
+                size_t outer_size = 1;
+                for (int i = 0; i < dim; ++i) {
+                    outer_size *= shape_[static_cast<size_t>(i)];
+                }
+                const size_t reduce_size = shape_[static_cast<size_t>(dim)];
                 size_t inner_size = 1;
-                for (size_t i = dim + 1; i < shape_.rank(); ++i) {
+                for (size_t i = static_cast<size_t>(dim) + 1; i < shape_.rank(); ++i) {
                     inner_size *= shape_[i];
                 }
 
-                // Transpose+contiguous+reduce is faster than strided segmented reduce
-                // The copy overhead is offset by better memory coalescing in reduction
                 if (inner_size >= 256) {
-                    // Build permutation to move dim to the last position
-                    // e.g., for dim=0, rank=2: [0,1] → [1,0]
-                    // e.g., for dim=1, rank=3: [0,1,2] → [0,2,1]
+                    using RP = tensor_ops::ReducePathForTesting;
+                    const RP override = tensor_ops::reduce_path_override_for_testing();
+                    bool use_strided =
+                        tensor_ops::should_prefer_strided_over_transpose(
+                            outer_size, reduce_size, inner_size);
+                    if (override == RP::StridedFast) {
+                        use_strided = true;
+                    } else if (override == RP::Transpose) {
+                        use_strided = false;
+                    }
+
+                    if (use_strided) {
+                        std::vector<size_t> out_dims;
+                        for (size_t i = 0; i < shape_.rank(); ++i) {
+                            if (static_cast<int>(i) == dim) {
+                                if (args.keepdim)
+                                    out_dims.push_back(1);
+                            } else {
+                                out_dims.push_back(shape_[i]);
+                            }
+                        }
+                        auto result = empty_on_tensor_stream(
+                            TensorShape(out_dims), device_, dtype_, *this);
+                        tensor_ops::launch_strided_reduce_fast(
+                            ptr<float>(), result.ptr<float>(),
+                            outer_size, reduce_size, inner_size, op, result.stream());
+                        tensor_ops::set_reduce_last_path_for_testing(RP::StridedFast);
+                        internal::lazy_ir_record_reduce(*this, result, op_name);
+                        return result;
+                    }
+
+                    // Transpose path (wins for short-reduce / wide-output edge class)
                     std::vector<int> perm;
                     for (size_t i = 0; i < shape_.rank(); ++i) {
                         if (static_cast<int>(i) != dim) {
                             perm.push_back(static_cast<int>(i));
                         }
                     }
-                    perm.push_back(dim); // dim goes to the last position
+                    perm.push_back(dim);
 
-                    LOG_DEBUG("[REDUCE TRANSPOSE] dim={}, inner_size={}, perm=[{}], shape=[{}]",
-                              dim, inner_size,
-                              perm.size() > 0 ? std::to_string(perm[0]) + (perm.size() > 1 ? "," + std::to_string(perm[1]) : "") + (perm.size() > 2 ? "," + std::to_string(perm[2]) : "") : "",
-                              shape_.rank() > 0 ? std::to_string(shape_[0]) + (shape_.rank() > 1 ? "," + std::to_string(shape_[1]) : "") + (shape_.rank() > 2 ? "," + std::to_string(shape_[2]) : "") : "");
-
-                    // Permute and make contiguous (this does the transpose copy)
                     Tensor transposed = this->permute(perm).contiguous();
+                    tensor_ops::set_reduce_last_path_for_testing(RP::Transpose);
 
-                    LOG_DEBUG("[REDUCE TRANSPOSE] transposed shape=[{}], is_contiguous={}",
-                              transposed.shape().rank() > 0 ? std::to_string(transposed.shape()[0]) + (transposed.shape().rank() > 1 ? "," + std::to_string(transposed.shape()[1]) : "") + (transposed.shape().rank() > 2 ? "," + std::to_string(transposed.shape()[2]) : "") : "",
-                              transposed.is_contiguous() ? "true" : "false");
-
-                    // Verify transposed tensor has expected number of elements
-                    LOG_DEBUG("[REDUCE TRANSPOSE] orig numel={}, transposed numel={}", numel(), transposed.numel());
-
-                    // Now reduce along the LAST dimension (which is contiguous)
                     ReduceArgs new_args = args;
-                    new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1}; // Use transposed.shape()!
+                    new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1};
 
-                    return transposed.reduce(op, new_args);
+                    Tensor reduced = transposed.reduce(op, new_args);
+                    if (!args.keepdim) {
+                        return reduced;
+                    }
+
+                    std::vector<int> inverse_perm(perm.size());
+                    for (size_t i = 0; i < perm.size(); ++i) {
+                        inverse_perm[static_cast<size_t>(perm[i])] = static_cast<int>(i);
+                    }
+                    return reduced.permute(inverse_perm);
                 }
             }
         }
@@ -881,7 +1557,8 @@ namespace lfs::core {
             bool unbiased = args.unbiased;
 
             ReduceArgs mean_args = args;
-            mean_args.args = std::monostate{}; // Clear variant args for mean calculation
+            mean_args.args = std::monostate{};
+            mean_args.keepdim = true;
             auto mean_tensor = reduce(ReduceOp::Mean, mean_args);
 
             Tensor mean_broadcast = (mean_tensor.shape() == shape_)
@@ -892,7 +1569,9 @@ namespace lfs::core {
             auto squared = diff.mul(diff);
 
             // Compute sum of squared differences
-            auto sum_sq = squared.reduce(ReduceOp::Sum, mean_args);
+            ReduceArgs sum_args = args;
+            sum_args.args = std::monostate{};
+            auto sum_sq = squared.reduce(ReduceOp::Sum, sum_args);
 
             // Calculate N (number of elements being reduced)
             std::vector<int> axes = args.axes;
@@ -909,11 +1588,8 @@ namespace lfs::core {
                 }
             }
 
-            // Apply Bessel's correction if unbiased and N > 1
-            float correction = static_cast<float>(reduce_count);
-            if (unbiased && reduce_count > 1) {
-                correction = static_cast<float>(reduce_count - 1);
-            }
+            const float correction = static_cast<float>(reduce_count) -
+                                     (unbiased ? 1.0f : 0.0f);
 
             auto variance = sum_sq.div(correction);
 
@@ -924,144 +1600,71 @@ namespace lfs::core {
             }
         }
 
-        std::vector<int> axes = args.axes;
-        if (axes.empty()) {
-            axes.resize(input->shape_.rank());
-            std::iota(axes.begin(), axes.end(), 0);
-        }
-
-        // Resolve negative indices to positive indices
-        for (auto& ax : axes) {
-            ax = input->resolve_dim(ax);
-        }
-
-        std::vector<size_t> out_shape;
-        for (size_t i = 0; i < input->shape_.rank(); ++i) {
-            bool is_reduced = std::find(axes.begin(), axes.end(), static_cast<int>(i)) != axes.end();
-            if (!is_reduced || args.keepdim) {
-                out_shape.push_back(is_reduced ? 1 : input->shape_[i]);
-            }
-        }
-
-        DataType out_dtype = input->dtype_;
-        if (op == ReduceOp::Any || op == ReduceOp::All) {
-            out_dtype = DataType::Bool;
-        } else if (op == ReduceOp::Argmax || op == ReduceOp::Argmin) {
-            out_dtype = DataType::Int64;
-        } else if (input->dtype_ == DataType::Bool) {
-            // Bool reductions return Int64 (PyTorch behavior)
-            out_dtype = DataType::Int64;
-        }
+        const std::vector<int>& axes = reduction.axes;
+        const std::vector<size_t>& out_shape = reduction.output_shape;
+        const DataType out_dtype = reduction.result_dtype;
 
         std::optional<CUDAStreamGuard> execution_guard;
         if (input->device_ == Device::CUDA) {
-            const cudaStream_t execution_stream = resolve_cuda_execution_stream(*input);
-            input->sync_to_stream(execution_stream);
+            const cudaStream_t execution_stream = prepare_inputs_for_stream({input});
             execution_guard.emplace(execution_stream);
         }
 
         auto result = Tensor::empty(TensorShape(out_shape), input->device_, out_dtype);
-
-        if (input->numel() == 0) {
-            float identity_value = 0.0f;
-            switch (op) {
-            case ReduceOp::Sum:
-            case ReduceOp::Mean:
-                identity_value = 0.0f;
-                break;
-            case ReduceOp::Prod:
-                identity_value = 1.0f;
-                break;
-            case ReduceOp::Max:
-                identity_value = -std::numeric_limits<float>::infinity();
-                break;
-            case ReduceOp::Min:
-                identity_value = std::numeric_limits<float>::infinity();
-                break;
-            case ReduceOp::Any:
-                identity_value = 0.0f;
-                break;
-            case ReduceOp::All:
-                identity_value = 1.0f;
-                break;
-            default:
-                identity_value = 0.0f;
-                break;
-            }
-
-            if (input->device_ == Device::CUDA) {
-                if (out_dtype == DataType::Float32) {
-                    std::vector<float> temp(result.numel(), identity_value);
-                    cudaMemcpy(result.data_ptr(), temp.data(),
-                               result.bytes(), cudaMemcpyHostToDevice);
-                } else if (out_dtype == DataType::Bool) {
-                    unsigned char bool_val = (identity_value != 0.0f) ? 1 : 0;
-                    cudaMemset(result.data_ptr(), bool_val, result.bytes());
-                }
-            } else {
-                if (out_dtype == DataType::Float32) {
-                    float* ptr = static_cast<float*>(result.data_ptr());
-                    std::fill_n(ptr, result.numel(), identity_value);
-                } else if (out_dtype == DataType::Bool) {
-                    unsigned char* ptr = static_cast<unsigned char*>(result.data_ptr());
-                    std::fill_n(ptr, result.numel(), identity_value != 0.0f ? 1 : 0);
-                }
-            }
-            return result;
+        if (input->device_ == Device::CUDA) {
+            result.set_stream(getCurrentCUDAStream());
         }
 
         if (input->device_ == Device::CUDA) {
+            pin_operands({input});
             tensor_ops::launch_reduce_op(
                 input->data_ptr(), result.data_ptr(),
                 input->shape_.dims().data(), input->shape_.rank(),
                 axes.data(), axes.size(),
                 args.keepdim, op,
-                input->dtype_, result.stream());
+                input->dtype_, out_dtype, result.stream());
             // No sync - tensor operation
         } else {
             // CPU implementation
 
             // Handle Int32 dtype
             if (input->dtype_ == DataType::Int32) {
-                const int* src = static_cast<const int*>(input->data_ptr());
-                int* dst = static_cast<int*>(result.data_ptr());
+                reduce_int32_cpu(
+                    static_cast<const int32_t*>(input->data_ptr()), result.data_ptr(),
+                    input->shape_, input->strides_, reduction, op, result.numel());
+                return result;
+            }
 
-                // Full reduction to scalar (only mode supported for Int32)
-                if (axes.size() == input->shape_.rank()) {
-                    if (op == ReduceOp::Sum) {
-                        int sum = 0;
-                        for (size_t i = 0; i < input->numel(); ++i) {
-                            sum += src[i];
-                        }
-                        dst[0] = sum;
-                    } else if (op == ReduceOp::Mean) {
-                        int sum = 0;
-                        for (size_t i = 0; i < input->numel(); ++i) {
-                            sum += src[i];
-                        }
-                        dst[0] = sum / static_cast<int>(input->numel());
-                    } else if (op == ReduceOp::Max) {
-                        int max_val = src[0];
-                        for (size_t i = 1; i < input->numel(); ++i) {
-                            max_val = std::max(max_val, src[i]);
-                        }
-                        dst[0] = max_val;
-                    } else if (op == ReduceOp::Min) {
-                        int min_val = src[0];
-                        for (size_t i = 1; i < input->numel(); ++i) {
-                            min_val = std::min(min_val, src[i]);
-                        }
-                        dst[0] = min_val;
-                    } else if (op == ReduceOp::Prod) {
-                        int prod = 1;
-                        for (size_t i = 0; i < input->numel(); ++i) {
-                            prod *= src[i];
-                        }
-                        dst[0] = prod;
-                    }
-                    return result;
+            // Full Bool arithmetic reductions produce Int64 results.
+            if (input->dtype_ == DataType::Bool &&
+                axes.size() == input->shape_.rank() &&
+                op != ReduceOp::Any && op != ReduceOp::All) {
+                const unsigned char* src =
+                    static_cast<const unsigned char*>(input->data_ptr());
+                int64_t* dst = static_cast<int64_t*>(result.data_ptr());
+                int64_t true_count = 0;
+                for (size_t i = 0; i < input->numel(); ++i) {
+                    true_count += src[i] != 0 ? 1 : 0;
                 }
-                // Partial reductions not supported for Int32
+
+                switch (op) {
+                case ReduceOp::Sum:
+                    dst[0] = true_count;
+                    break;
+                case ReduceOp::Mean:
+                    dst[0] = true_count / static_cast<int64_t>(input->numel());
+                    break;
+                case ReduceOp::Max:
+                    dst[0] = true_count != 0 ? 1 : 0;
+                    break;
+                case ReduceOp::Min:
+                case ReduceOp::Prod:
+                    dst[0] = true_count == static_cast<int64_t>(input->numel()) ? 1 : 0;
+                    break;
+                default:
+                    LFS_ASSERT_MSG(false,
+                                   "CPU Bool reduction encountered an unsupported operation");
+                }
                 return result;
             }
 
@@ -1231,13 +1834,13 @@ namespace lfs::core {
                 } else if (op == ReduceOp::Max) {
                     float max_val = src[0];
                     for (size_t i = 1; i < input->numel(); ++i) {
-                        max_val = std::max(max_val, src[i]);
+                        max_val = ops::max_reduce_op{}(max_val, src[i]);
                     }
                     dst[0] = max_val;
                 } else if (op == ReduceOp::Min) {
                     float min_val = src[0];
                     for (size_t i = 1; i < input->numel(); ++i) {
-                        min_val = std::min(min_val, src[i]);
+                        min_val = ops::min_reduce_op{}(min_val, src[i]);
                     }
                     dst[0] = min_val;
                 } else if (op == ReduceOp::Prod) {
@@ -1246,6 +1849,9 @@ namespace lfs::core {
                         prod *= src[i];
                     }
                     dst[0] = prod;
+                } else {
+                    LFS_ASSERT_MSG(false,
+                                   "full CPU Float32 reduction encountered an unsupported operation");
                 }
                 return result;
             }
@@ -1354,16 +1960,17 @@ namespace lfs::core {
                         result_val_double += val; // Use double accumulation
                         break;
                     case ReduceOp::Max:
-                        result_val_float = std::max(result_val_float, val);
+                        result_val_float = ops::max_reduce_op{}(result_val_float, val);
                         break;
                     case ReduceOp::Min:
-                        result_val_float = std::min(result_val_float, val);
+                        result_val_float = ops::min_reduce_op{}(result_val_float, val);
                         break;
                     case ReduceOp::Prod:
                         result_val_float *= val;
                         break;
                     default:
-                        break;
+                        LFS_ASSERT_MSG(false,
+                                       "CPU Float32 reduction encountered an unsupported operation");
                     }
                 }
 
@@ -1386,74 +1993,69 @@ namespace lfs::core {
 
     Tensor Tensor::ternary(const Tensor& b, const Tensor& c) const {
         validate_ternary_op(b, c);
+        LFS_ASSERT_MSG(dtype_ == DataType::Bool,
+                       "where condition must have Bool dtype");
 
         if (numel() == 0 || b.numel() == 0 || c.numel() == 0) {
+            LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), b.shape().dims()),
+                           "where inputs have incompatible broadcast shapes");
             auto shape_ab = this->broadcast_shape(b.shape());
-            if (shape_ab.rank() == 0) {
-                LOG_ERROR("Incompatible shapes for first two tensors in ternary operation with empty tensors");
-                return Tensor();
-            }
 
             auto shape_abc_vec = broadcast::shape(shape_ab.dims(), c.shape().dims());
-            if (shape_abc_vec.empty()) {
-                LOG_ERROR("Incompatible shapes for ternary operation");
-                return Tensor();
-            }
+            LFS_ASSERT_MSG(broadcast::can_broadcast(shape_ab.dims(), c.shape().dims()),
+                           "where inputs have incompatible broadcast shapes");
 
             DataType out_dtype = promote_types(b.dtype(), c.dtype());
             return empty(TensorShape(shape_abc_vec), device_, out_dtype);
         }
 
-        if (dtype_ != DataType::Bool) {
-            LOG_ERROR("Where operation requires boolean condition tensor");
-            return Tensor();
-        }
-
+        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), b.shape().dims()),
+                       "where condition and x shapes are incompatible");
         auto shape_ab = this->broadcast_shape(b.shape());
-        if (shape_ab.rank() == 0) {
-            LOG_ERROR("Incompatible shapes for first two tensors in ternary operation");
-            return Tensor();
-        }
 
         auto shape_abc_vec = broadcast::shape(shape_ab.dims(), c.shape().dims());
-        if (shape_abc_vec.empty()) {
-            LOG_ERROR("Incompatible shapes for ternary operation");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_ab.dims(), c.shape().dims()),
+                       "where input shapes are incompatible");
 
         TensorShape shape_abc(shape_abc_vec);
 
         DataType out_dtype = promote_types(b.dtype(), c.dtype());
 
+        // Kernel is shape-aware: matched-shape operands need no clone.
+        // Only expand when a true broadcast is required.
         Tensor a_broadcast, b_broadcast, c_broadcast;
 
+        // where kernels (CUDA shape-indexed OR CPU linear) require dense expanded
+        // storage. broadcast_to is a zero-stride view — materialize.
         if (shape_ == shape_abc) {
-            a_broadcast = clone();
+            a_broadcast = *this;
         } else {
-            a_broadcast = broadcast_to(shape_abc);
+            a_broadcast = broadcast_to(shape_abc).contiguous();
         }
 
         if (b.shape() == shape_abc) {
-            b_broadcast = b.clone();
+            b_broadcast = b;
         } else {
-            b_broadcast = b.broadcast_to(shape_abc);
+            b_broadcast = b.broadcast_to(shape_abc).contiguous();
         }
 
         if (c.shape() == shape_abc) {
-            c_broadcast = c.clone();
+            c_broadcast = c;
         } else {
-            c_broadcast = c.broadcast_to(shape_abc);
+            c_broadcast = c.broadcast_to(shape_abc).contiguous();
         }
 
         Tensor b_cast = (b_broadcast.dtype() == out_dtype) ? b_broadcast : b_broadcast.to(out_dtype);
         Tensor c_cast = (c_broadcast.dtype() == out_dtype) ? c_broadcast : c_broadcast.to(out_dtype);
-        if (!b_cast.is_valid() || !c_cast.is_valid()) {
-            LOG_ERROR("where: failed to cast inputs to output dtype {}", dtype_name(out_dtype));
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(b_cast.is_valid() && c_cast.is_valid(),
+                       std::format("where failed to cast inputs to output dtype {}",
+                                   dtype_name(out_dtype)));
 
         if (device_ == Device::CUDA && out_dtype == DataType::Float32) {
+            pin_operands({&a_broadcast, &b_cast, &c_cast});
             auto result = Tensor::empty(shape_abc, device_, out_dtype);
+            prepare_inputs_for_stream(
+                {&a_broadcast, &b_cast, &c_cast}, result.stream());
             tensor_ops::launch_where(
                 a_broadcast.ptr<unsigned char>(),
                 b_cast.ptr<float>(),
@@ -1476,11 +2078,11 @@ namespace lfs::core {
         Tensor cond_cpu = (a_broadcast.device() == Device::CUDA) ? a_broadcast.to(Device::CPU) : a_broadcast;
         Tensor x_cpu = (b_cast.device() == Device::CUDA) ? b_cast.to(Device::CPU) : b_cast;
         Tensor y_cpu = (c_cast.device() == Device::CUDA) ? c_cast.to(Device::CPU) : c_cast;
-        if (!cond_cpu.is_valid() || !x_cpu.is_valid() || !y_cpu.is_valid()) {
-            LOG_ERROR("where: failed to materialize host tensors for dtype {}", dtype_name(out_dtype));
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(cond_cpu.is_valid() && x_cpu.is_valid() && y_cpu.is_valid(),
+                       std::format("where failed to materialize host tensors for dtype {}",
+                                   dtype_name(out_dtype)));
 
+        pin_operands({&cond_cpu, &x_cpu, &y_cpu});
         Tensor result_cpu = Tensor::empty(shape_abc, Device::CPU, out_dtype);
         const unsigned char* cond = cond_cpu.ptr<unsigned char>();
         const char* x = static_cast<const char*>(x_cpu.data_ptr());
@@ -1500,35 +2102,39 @@ namespace lfs::core {
     }
 
     Tensor Tensor::where(const Tensor& condition, const Tensor& x, const Tensor& y) {
-        if (!condition.is_valid() || !x.is_valid() || !y.is_valid()) {
-            LOG_ERROR("where: invalid input tensors");
-            return Tensor();
-        }
-
-        if (condition.dtype() != DataType::Bool) {
-            LOG_ERROR("where: condition must be boolean tensor");
-            return Tensor();
-        }
-
-        // Check device compatibility
-        if (condition.device() != x.device() || x.device() != y.device()) {
-            LOG_ERROR("where: all tensors must be on the same device");
-            return Tensor();
-        }
+        tensor_contract::require_valid(
+            condition, "where", "condition", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            x, "where", "true value", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_valid(
+            y, "where", "false value", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_dtype(
+            condition, DataType::Bool, "where", "condition", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            condition, x, "where", "condition", "true value", LFS_SOURCE_SITE_CURRENT());
+        tensor_contract::require_same_device(
+            condition, y, "where", "condition", "false value", LFS_SOURCE_SITE_CURRENT());
         return condition.ternary(x, y);
     }
 
     float Tensor::norm(float p) const {
-        if (!is_valid())
-            return 0.0f;
+        LFS_ASSERT_MSG(is_valid(),
+                       "norm requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "norm currently supports only Float32");
+        LFS_ASSERT_MSG(!std::isnan(p),
+                       "norm order cannot be NaN");
 
         if (p == 2.0f) {
             auto squared = this->mul(*this);
             return std::sqrt(squared.sum_scalar());
         } else if (p == 1.0f) {
             return this->abs().sum_scalar();
+        } else if (p == 0.0f) {
+            return this->ne(0.0f).sum_scalar();
         } else if (std::isinf(p)) {
-            return this->abs().max_scalar();
+            return p > 0.0f ? this->abs().max_scalar()
+                            : this->abs().min_scalar();
         } else {
             auto abs_vals = this->abs();
             auto powered = abs_vals.pow(p);
@@ -1538,28 +2144,13 @@ namespace lfs::core {
     }
 
     Tensor Tensor::norm(float p, std::span<const int> dims, bool keepdim) const {
-        if (!is_valid()) {
-            LOG_ERROR("norm() on invalid tensor");
-            return Tensor();
-        }
-
-        if (numel() == 0) {
-            // Return appropriate empty tensor
-            std::vector<size_t> out_shape;
-            for (size_t i = 0; i < shape_.rank(); ++i) {
-                bool is_reduced = false;
-                for (int d : dims) {
-                    if (resolve_dim(d) == static_cast<int>(i)) {
-                        is_reduced = true;
-                        break;
-                    }
-                }
-                if (!is_reduced || keepdim) {
-                    out_shape.push_back(is_reduced ? 1 : shape_[i]);
-                }
-            }
-            return empty(TensorShape(out_shape), device_, dtype_);
-        }
+        LFS_ASSERT_MSG(is_valid(),
+                       "norm requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32,
+                       "norm currently supports only Float32");
+        LFS_ASSERT_MSG(!std::isnan(p),
+                       "norm order cannot be NaN");
+        (void)resolve_dims(dims);
 
         // Special cases for common norms
         if (p == 2.0f) {
@@ -1593,18 +2184,22 @@ namespace lfs::core {
     }
 
     std::pair<Tensor, Tensor> Tensor::_broadcasted(const Tensor& other, bool match_dtype) const {
-        if (!is_valid() || !other.is_valid()) {
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(is_valid() && other.is_valid(),
+                       "broadcast requires valid tensors");
+        LFS_ASSERT_MSG(device_ == other.device(),
+                       "broadcast operands must be on the same device");
 
         auto bcast_shape = this->broadcast_shape(other.shape());
-        if (bcast_shape.rank() == 0) {
-            LOG_ERROR("Incompatible shapes for broadcasting");
-            return {Tensor(), Tensor()};
-        }
+        LFS_ASSERT_MSG(broadcast::can_broadcast(shape_.dims(), other.shape().dims()),
+                       "broadcast shapes are incompatible");
 
-        Tensor a_broadcast = (shape_ == bcast_shape) ? this->clone() : broadcast_to(bcast_shape);
-        Tensor b_broadcast = (other.shape() == bcast_shape) ? other.clone() : other.broadcast_to(bcast_shape);
+        // _broadcasted consumers expect dense expanded storage.
+        Tensor a_broadcast = (shape_ == bcast_shape)
+                                 ? this->clone()
+                                 : broadcast_to(bcast_shape).contiguous();
+        Tensor b_broadcast = (other.shape() == bcast_shape)
+                                 ? other.clone()
+                                 : other.broadcast_to(bcast_shape).contiguous();
 
         if (match_dtype && dtype_ != other.dtype()) {
             auto common_dtype = promote_types(dtype_, other.dtype());
@@ -1622,8 +2217,29 @@ namespace lfs::core {
     // ============= STATIC CAT OPERATION =============
 
     Tensor Tensor::cat(const std::vector<Tensor>& tensors, int dim) {
+        LFS_CUDA_BREADCRUMB("tensor.cat");
         if (tensors.empty()) {
             throw std::invalid_argument("Cannot concatenate empty vector of tensors");
+        }
+        bool has_non_contiguous_input = false;
+        for (const auto& tensor : tensors) {
+            tensor_contract::require_valid(
+                tensor, "cat", "input", LFS_SOURCE_SITE_CURRENT());
+            has_non_contiguous_input |= !tensor.is_contiguous();
+        }
+
+        if (auto promoted = promote_tensor_list(tensors)) {
+            return cat(*promoted, dim);
+        }
+
+        if (has_non_contiguous_input) {
+            std::vector<Tensor> materialized;
+            materialized.reserve(tensors.size());
+            for (const Tensor& tensor : tensors) {
+                Tensor storage;
+                materialized.push_back(tensor.contiguous_read(storage));
+            }
+            return cat(materialized, dim);
         }
 
         if (tensors.size() == 1) {
@@ -1756,6 +2372,7 @@ namespace lfs::core {
             result.dtype_ = first_dtype;
             result.data_ = tensors[0].data_;
             result.data_owner_ = tensors[0].data_owner_; // Share ownership
+            result.storage_meta_ = tensors[0].storage_meta_;
             result.state_ = std::make_shared<Tensor::TensorState>(*tensors[0].state_);
             result.state_->capacity = tensors[0].capacity();
             result.state_->logical_size = total_size_along_dim;
@@ -1773,17 +2390,7 @@ namespace lfs::core {
                 LOG_DEBUG("  Starting CUDA memcpy for {} additional tensors, initial offset={} bytes",
                           tensors.size() - 1, offset);
 
-                // Validate destination buffer before copying
-                cudaPointerAttributes dest_attrs;
-                cudaError_t attr_err = cudaPointerGetAttributes(&dest_attrs, result.data_);
-                if (attr_err != cudaSuccess) {
-                    LOG_ERROR("  Destination buffer validation FAILED: {}", cudaGetErrorString(attr_err));
-                    LOG_ERROR("  Buffer ptr={}, attempting to access at offset={}", result.data_, offset);
-                    cudaGetLastError(); // Clear error
-                } else {
-                    LOG_DEBUG("  Destination buffer valid: type={}, device={}, devicePtr={}, hostPtr={}",
-                              static_cast<int>(dest_attrs.type), dest_attrs.device, dest_attrs.devicePointer, dest_attrs.hostPointer);
-                }
+                LFS_VALIDATE_CUDA_DEVICE_POINTER(result.data_, "in-place cat destination");
 
                 for (size_t i = 1; i < tensors.size(); ++i) {
                     const size_t bytes = tensors[i].bytes();
@@ -1792,31 +2399,18 @@ namespace lfs::core {
                     LOG_DEBUG("  Copying tensor[{}]: shape_[0]={}, numel={}, {} bytes from src={} at offset {}",
                               i, tensor_rows, tensors[i].numel(), bytes, src_ptr, offset);
 
-                    // Validate source buffer
-                    cudaPointerAttributes src_attrs;
-                    attr_err = cudaPointerGetAttributes(&src_attrs, src_ptr);
-                    if (attr_err != cudaSuccess) {
-                        LOG_ERROR("  Source buffer validation FAILED: {}", cudaGetErrorString(attr_err));
-                        cudaGetLastError(); // Clear error
-                    } else {
-                        LOG_DEBUG("  Source buffer valid: type={}, device={}, devicePtr={}",
-                                  static_cast<int>(src_attrs.type), src_attrs.device, src_attrs.devicePointer);
-                    }
+                    LFS_VALIDATE_CUDA_DEVICE_POINTER(src_ptr, "in-place cat source");
 
-                    cudaError_t err = cudaMemcpy(
-                        static_cast<char*>(result.data_) + offset,
-                        src_ptr,
-                        bytes,
-                        cudaMemcpyDeviceToDevice);
-                    if (err != cudaSuccess) {
-                        LOG_ERROR("  cudaMemcpy FAILED: {}", cudaGetErrorString(err));
-                        LOG_ERROR("  Source tensor[{}]: ptr={}, device={}, is_contiguous={}, is_view={}",
-                                  i, src_ptr, static_cast<int>(tensors[i].device()),
-                                  tensors[i].is_contiguous(), tensors[i].is_view());
-                        LOG_ERROR("  Destination: buffer_start={}, offset={}, bytes={}, total={}",
-                                  result.data_, offset, bytes, offset + bytes);
-                        throw std::runtime_error(std::string("cudaMemcpy failed in in-place cat: ") + cudaGetErrorString(err));
-                    }
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(static_cast<char*>(result.data_) + offset, src_ptr, bytes,
+                                   cudaMemcpyDeviceToDevice),
+                        "in-place cat copy (tensor_index={}, source_pointer={}, "
+                        "source_device={}, source_contiguous={}, source_is_view={}, "
+                        "destination_pointer={}, destination_offset={}, bytes={}, "
+                        "destination_end={})",
+                        i, src_ptr, static_cast<int>(tensors[i].device()),
+                        tensors[i].is_contiguous(), tensors[i].is_view(), result.data_, offset,
+                        bytes, offset + bytes);
                     offset += bytes;
                 }
                 LOG_DEBUG("  CUDA memcpy complete, final offset={} bytes", offset);
@@ -1843,6 +2437,9 @@ namespace lfs::core {
         LOG_DEBUG("  Created new tensor: id={}, data_ptr={}, capacity={}",
                   result.id_, result.data_ptr(), result.capacity());
 
+        if (result.numel() == 0)
+            return result;
+
         size_t element_size = dtype_size(first_dtype);
 
         // ============= OPTIMIZED PATH: First dimension =============
@@ -1852,11 +2449,10 @@ namespace lfs::core {
                 size_t offset = 0;
                 for (const auto& t : tensors) {
                     size_t bytes = t.bytes();
-                    cudaMemcpy(
-                        static_cast<char*>(result.data_ptr()) + offset,
-                        t.data_ptr(),
-                        bytes,
-                        cudaMemcpyDeviceToDevice);
+                    LFS_CUDA_CHECK_MSG(
+                        cudaMemcpy(static_cast<char*>(result.data_ptr()) + offset,
+                                   t.data_ptr(), bytes, cudaMemcpyDeviceToDevice),
+                        "cat CUDA copy");
                     offset += bytes;
                 }
             } else {
@@ -1886,6 +2482,8 @@ namespace lfs::core {
             }
 
             if (first_device == Device::CUDA) {
+                for (const auto& tensor : tensors)
+                    pin_operands({&tensor});
                 tensor_ops::launch_cat_last_dim(
                     result.data_ptr(),
                     tensors,
@@ -1928,6 +2526,8 @@ namespace lfs::core {
         }
 
         if (first_device == Device::CUDA) {
+            for (const auto& tensor : tensors)
+                pin_operands({&tensor});
             tensor_ops::launch_cat_middle_dim(
                 result.data_ptr(),
                 tensors,
@@ -1963,29 +2563,41 @@ namespace lfs::core {
     // ============= STATIC STACK OPERATION =============
 
     Tensor Tensor::stack(const std::vector<Tensor>& tensors, int dim) {
-        if (tensors.empty()) {
-            LOG_ERROR("Cannot stack empty vector of tensors");
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(!tensors.empty(),
+                       "stack requires at least one tensor");
+        tensor_contract::require_valid(
+            tensors[0], "stack", "reference", LFS_SOURCE_SITE_CURRENT());
 
         const auto& first_shape = tensors[0].shape();
         const auto first_device = tensors[0].device();
         const auto first_dtype = tensors[0].dtype();
 
         // Validate all tensors have same shape, device, and dtype
+        bool has_non_contiguous_input = !tensors[0].is_contiguous();
         for (size_t i = 1; i < tensors.size(); ++i) {
-            if (tensors[i].shape() != first_shape) {
-                LOG_ERROR("All tensors must have the same shape for stack");
-                return Tensor();
+            tensor_contract::require_valid(
+                tensors[i], "stack", "input", LFS_SOURCE_SITE_CURRENT());
+            tensor_contract::require_shape(
+                tensors[0], tensors[i], "stack", "reference", "input",
+                LFS_SOURCE_SITE_CURRENT());
+            tensor_contract::require_same_device(
+                tensors[0], tensors[i], "stack", "reference", "input",
+                LFS_SOURCE_SITE_CURRENT());
+            has_non_contiguous_input |= !tensors[i].is_contiguous();
+        }
+
+        if (auto promoted = promote_tensor_list(tensors)) {
+            return stack(*promoted, dim);
+        }
+
+        if (has_non_contiguous_input) {
+            std::vector<Tensor> materialized;
+            materialized.reserve(tensors.size());
+            for (const Tensor& tensor : tensors) {
+                Tensor storage;
+                materialized.push_back(tensor.contiguous_read(storage));
             }
-            if (tensors[i].device() != first_device) {
-                LOG_ERROR("All tensors must be on the same device");
-                return Tensor();
-            }
-            if (tensors[i].dtype() != first_dtype) {
-                LOG_ERROR("All tensors must have the same dtype");
-                return Tensor();
-            }
+            return stack(materialized, dim);
         }
 
         // Build output shape with new dimension inserted at 'dim'
@@ -1996,10 +2608,8 @@ namespace lfs::core {
             dim = first_shape.rank() + dim + 1;
         }
 
-        if (dim < 0 || dim > static_cast<int>(first_shape.rank())) {
-            LOG_ERROR("Invalid dimension for stack: {}", dim);
-            return Tensor();
-        }
+        LFS_ASSERT_MSG(dim >= 0 && dim <= static_cast<int>(first_shape.rank()),
+                       "stack dimension is out of range");
 
         // Insert new dimension of size tensors.size() at position 'dim'
         new_dims.insert(new_dims.begin() + dim, tensors.size());
@@ -2015,8 +2625,10 @@ namespace lfs::core {
             if (dim == 0 && first_device == Device::CUDA) {
                 // dim=0: output slices are contiguous, use direct memcpy
                 void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
-                cudaMemcpy(dst, tensors[i].data_ptr(), bytes_per_tensor,
-                           cudaMemcpyDeviceToDevice);
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemcpy(dst, tensors[i].data_ptr(), bytes_per_tensor,
+                               cudaMemcpyDeviceToDevice),
+                    "stack CUDA copy");
             } else if (dim == 0) {
                 void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
                 std::memcpy(dst, tensors[i].data_ptr(), bytes_per_tensor);
@@ -2033,9 +2645,28 @@ namespace lfs::core {
     // ============= OPTIMIZED CLAMP (FUSED VERSION) =============
 
     Tensor Tensor::clamp(float min_val, float max_val) const {
-        if (!is_valid()) {
-            LOG_ERROR("clamp() on invalid tensor");
-            return Tensor();
+        LFS_ASSERT_MSG(is_valid(),
+                       "clamp requires a valid tensor");
+        LFS_ASSERT_MSG(dtype_ == DataType::Float32 || dtype_ == DataType::Int32,
+                       "clamp currently supports only Float32 and Int32");
+        LFS_ASSERT_MSG(!std::isnan(min_val) && !std::isnan(max_val) && min_val <= max_val,
+                       "clamp bounds must not be NaN and must be ordered");
+
+        Tensor input_materialized;
+        const Tensor& input = contiguous_read(input_materialized);
+        if (&input != this) {
+            return input.clamp(min_val, max_val);
+        }
+
+        if (dtype_ == DataType::Int32) {
+            const bool integer_bounds =
+                (min_val == -std::numeric_limits<float>::infinity() ||
+                 detail::is_exact_int32_scalar(min_val)) &&
+                (max_val == std::numeric_limits<float>::infinity() ||
+                 detail::is_exact_int32_scalar(max_val));
+            if (!integer_bounds) {
+                return to(DataType::Float32).clamp(min_val, max_val);
+            }
         }
 
         if (numel() == 0) {
@@ -2055,10 +2686,17 @@ namespace lfs::core {
                 tensor_ops::launch_clamp_fused(src, dst, min_val, max_val, numel(), result.stream());
             } else if (dtype_ == DataType::Int32) {
                 // Fallback: copy then clamp for int
-                cudaMemcpy(result.data_, data_ptr(), bytes(), cudaMemcpyDeviceToDevice);
+                LFS_CUDA_CHECK_MSG(
+                    cudaMemcpy(result.data_, data_ptr(), bytes(), cudaMemcpyDeviceToDevice),
+                    "Int32 clamp CUDA copy");
+                const int min_int = min_val == -std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::lowest()
+                                        : static_cast<int>(min_val);
+                const int max_int = max_val == std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::max()
+                                        : static_cast<int>(max_val);
                 tensor_ops::launch_clamp_scalar_int(result.ptr<int>(),
-                                                    static_cast<int>(min_val),
-                                                    static_cast<int>(max_val),
+                                                    min_int, max_int,
                                                     numel(), result.stream());
             }
         } else {
@@ -2072,8 +2710,12 @@ namespace lfs::core {
             } else if (dtype_ == DataType::Int32) {
                 const int* src = ptr<int>();
                 int* dst = result.ptr<int>();
-                int min_int = static_cast<int>(min_val);
-                int max_int = static_cast<int>(max_val);
+                const int min_int = min_val == -std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::lowest()
+                                        : static_cast<int>(min_val);
+                const int max_int = max_val == std::numeric_limits<float>::infinity()
+                                        ? std::numeric_limits<int>::max()
+                                        : static_cast<int>(max_val);
                 for (size_t i = 0; i < numel(); ++i) {
                     dst[i] = std::clamp(src[i], min_int, max_int);
                 }

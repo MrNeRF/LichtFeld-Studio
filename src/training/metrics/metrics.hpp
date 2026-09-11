@@ -5,14 +5,18 @@
 #pragma once
 
 #include "../dataset.hpp"
+#include "core/nn/models/lpips.hpp"
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -44,14 +48,22 @@ namespace lfs::training {
         bool apply_valid_padding_;
     };
 
-    // Evaluation result structure (no LPIPS)
     struct EvalMetrics {
         float psnr = 0.0f;
         float ssim = 0.0f;
+        std::optional<float> lpips;
         float elapsed_time = 0.0f;
         int num_gaussians = 0;
         int iteration = 0;
         bool valid = false;
+        std::optional<float> normal_angle_deg;
+        std::optional<float> depth_absrel;
+        float bias_r = 0.0f;
+        float bias_g = 0.0f;
+        float bias_b = 0.0f;
+        float bias_corr_r = 0.0f;
+        float bias_corr_g = 0.0f;
+        float bias_corr_b = 0.0f;
 
         [[nodiscard]] std::string to_string() const {
             if (!valid) {
@@ -60,14 +72,25 @@ namespace lfs::training {
             std::stringstream ss;
             ss << std::fixed << std::setprecision(4);
             ss << "PSNR: " << psnr
-               << ", SSIM: " << ssim
-               << ", Time: " << elapsed_time << "s/image"
-               << ", #GS: " << num_gaussians;
+               << ", SSIM: " << ssim;
+            if (lpips && std::isfinite(*lpips)) {
+                ss << ", LPIPS: " << *lpips;
+            }
+            ss << ", Time: " << elapsed_time << "s/image"
+               << ", #GS: " << num_gaussians
+               << ", bias=(" << bias_r << "," << bias_g << "," << bias_b << ")"
+               << ", bias_corr=(" << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b << ")";
+            if (normal_angle_deg && std::isfinite(*normal_angle_deg)) {
+                ss << ", normal_angle_deg: " << *normal_angle_deg;
+            }
+            if (depth_absrel && std::isfinite(*depth_absrel)) {
+                ss << ", depth_absrel: " << *depth_absrel;
+            }
             return ss.str();
         }
 
         static std::string to_csv_header() {
-            return "iteration,psnr,ssim,time_per_image,num_gaussians";
+            return "iteration,psnr,ssim,lpips,time_per_image,num_gaussians,normal_angle_deg,depth_absrel,bias_r,bias_g,bias_b,bias_corr_r,bias_corr_g,bias_corr_b";
         }
 
         [[nodiscard]] std::string to_csv_row() const {
@@ -75,12 +98,42 @@ namespace lfs::training {
             ss << iteration << ","
                << std::fixed << std::setprecision(6)
                << psnr << ","
-               << ssim << ","
+               << ssim << ",";
+            if (lpips && std::isfinite(*lpips)) {
+                ss << *lpips;
+            }
+            ss << ","
                << elapsed_time << ","
-               << num_gaussians;
+               << num_gaussians << ",";
+            if (normal_angle_deg && std::isfinite(*normal_angle_deg)) {
+                ss << *normal_angle_deg;
+            }
+            ss << ",";
+            if (depth_absrel && std::isfinite(*depth_absrel)) {
+                ss << *depth_absrel;
+            }
+            ss << "," << bias_r << "," << bias_g << "," << bias_b
+               << "," << bias_corr_r << "," << bias_corr_g << "," << bias_corr_b;
             return ss.str();
         }
     };
+
+    [[nodiscard]] lfs::core::Tensor image_for_metrics_and_save(const lfs::core::Tensor& image);
+
+    [[nodiscard]] std::optional<float> mean_normal_angle_deg(
+        const lfs::core::Tensor& rendered_normal,
+        const lfs::core::Tensor& prior_normal,
+        const lfs::core::Tensor& rendered_alpha);
+
+    struct DepthAbsRelSample {
+        float u = 0.0f;
+        float v = 0.0f;
+        float true_depth = 0.0f;
+    };
+
+    [[nodiscard]] std::optional<float> median_depth_absrel(
+        const lfs::core::Tensor& rendered_depth,
+        const std::vector<DepthAbsRelSample>& samples);
 
     // Metrics reporter class
     class MetricsReporter {
@@ -102,6 +155,22 @@ namespace lfs::training {
     class MetricsEvaluator {
     public:
         explicit MetricsEvaluator(const lfs::core::param::TrainingParameters& params);
+
+        using AppearanceFn =
+            std::function<lfs::core::Tensor(const lfs::core::Tensor& rgb_chw, const lfs::core::Camera& cam)>;
+
+        void set_appearance(AppearanceFn fn) { appearance_ = std::move(fn); }
+        [[nodiscard]] bool has_appearance() const { return static_cast<bool>(appearance_); }
+
+        void set_lpips_weights_path(std::optional<std::filesystem::path> path) {
+            _lpips_weights_path = std::move(path);
+            _lpips_metric.reset();
+            _lpips_load_attempted = false;
+        }
+
+        void set_normal_prior_decode(const lfs::core::Camera::NormalPriorDecode& decode) {
+            _normal_prior_decode = decode;
+        }
 
         // Check if evaluation is enabled
         bool is_enabled() const { return _params.optimization.enable_eval; }
@@ -130,18 +199,19 @@ namespace lfs::training {
     private:
         // Configuration
         const lfs::core::param::TrainingParameters _params;
+        lfs::core::Camera::NormalPriorDecode _normal_prior_decode{};
 
         // Metrics
         std::unique_ptr<PSNR> _psnr_metric;
         std::unique_ptr<SSIM> _ssim_metric;
+        std::optional<lfs::core::nn::models::Lpips> _lpips_metric;
+        std::optional<std::filesystem::path> _lpips_weights_path;
+        bool _lpips_load_attempted = false;
         std::unique_ptr<MetricsReporter> _reporter;
+        AppearanceFn appearance_;
 
         // Helper functions
         lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
                                          bool alpha_as_mask) const;
-        lfs::core::Tensor apply_depth_colormap(const lfs::core::Tensor& depth_normalized) const;
-
-        // Create dataloader from dataset
-        auto make_dataloader(std::shared_ptr<CameraDataset> dataset, const int workers = 1) const;
     };
 } // namespace lfs::training

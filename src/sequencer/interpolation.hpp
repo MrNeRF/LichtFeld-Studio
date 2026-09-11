@@ -4,10 +4,13 @@
 #pragma once
 
 #include "keyframe.hpp"
+#include <cstddef>
 #include <span>
 #include <vector>
 
 namespace lfs::sequencer {
+
+    inline constexpr size_t MAX_GENERATED_PATH_SAMPLES = 1'000'000;
 
     // Map t in [0,1] to eased t
     [[nodiscard]] float applyEasing(float t, EasingType easing);

@@ -1,0 +1,99 @@
+.panel-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.startup-recent-crash {
+    display: block;
+    margin: 4dp 0 10dp 0;
+    padding: 8dp 10dp;
+    border-width: 1dp;
+}
+
+.startup-recent-crash.hidden {
+    display: none;
+}
+
+.startup-recent-crash-text {
+    display: block;
+    font-size: 12dp;
+}
+
+.startup-recent-list {
+    display: block;
+    margin-top: 4dp;
+    max-height: 360dp;
+    overflow-y: auto;
+}
+
+.startup-recent-row {
+    display: block;
+    padding: 8dp 4dp;
+    margin-bottom: 4dp;
+    border-width: 0dp;
+    border-bottom-width: 1dp;
+}
+
+.startup-recent-row-main {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.startup-recent-name {
+    flex: 1;
+    font-size: 13dp;
+    font-weight: bold;
+}
+
+.startup-recent-badge {
+    margin-left: 8dp;
+    font-size: 11dp;
+    opacity: 0.85;
+}
+
+.startup-recent-badge.hidden {
+    display: none;
+}
+
+.startup-recent-path {
+    display: block;
+    margin-top: 2dp;
+    font-size: 11dp;
+    opacity: 0.75;
+}
+
+.startup-recent-row-meta {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-top: 6dp;
+}
+
+.startup-recent-mtime {
+    flex: 1;
+    font-size: 11dp;
+    opacity: 0.75;
+}
+
+.startup-recent-meta-label {
+    opacity: 0.85;
+}
+
+.startup-recent-open-btn {
+    margin-left: 8dp;
+}
+
+.startup-recent-actions {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-end;
+    margin-top: 8dp;
+}
+
+.startup-recent-actions .btn {
+    margin-left: 6dp;
+}

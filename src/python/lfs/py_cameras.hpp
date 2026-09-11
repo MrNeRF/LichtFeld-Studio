@@ -45,6 +45,7 @@ namespace lfs::python {
         std::string depth_path() const;
         bool has_mask() const;
         bool has_depth() const;
+        bool has_image() const;
         int uid() const;
 
         // Render/view contract: visualizer camera pose and derived view matrix.

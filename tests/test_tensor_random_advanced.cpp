@@ -310,19 +310,15 @@ TEST_F(TensorRandomAdvancedTest, MultinomialSingleSample) {
 TEST_F(TensorRandomAdvancedTest, MultinomialInvalidInputs) {
     // Non-1D weights
     auto weights_2d = Tensor::ones({3, 3}, Device::CPU);
-    auto result1 = Tensor::multinomial(weights_2d, 5, true);
-    EXPECT_FALSE(result1.is_valid());
+    EXPECT_THROW(Tensor::multinomial(weights_2d, 5, true), std::runtime_error);
 
     // Zero total weight
     auto zero_weights = Tensor::zeros({5}, Device::CPU);
-    auto result2 = Tensor::multinomial(zero_weights, 5, true);
-    EXPECT_FALSE(result2.is_valid());
+    EXPECT_THROW(Tensor::multinomial(zero_weights, 5, true), std::runtime_error);
 
-    // Negative weights - should handle gracefully
+    // Negative weights violate the probability contract.
     auto negative_weights = Tensor::full({5}, -1.0f, Device::CPU);
-    auto result3 = Tensor::multinomial(negative_weights, 5, true);
-    // Either invalid or handled by clamping to zero
-    // Just ensure it doesn't crash
+    EXPECT_THROW(Tensor::multinomial(negative_weights, 5, true), std::runtime_error);
 }
 
 TEST_F(TensorRandomAdvancedTest, MultinomialTooManySamplesWithoutReplacement) {
@@ -331,16 +327,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialTooManySamplesWithoutReplacement) {
     std::vector<float> weights_data = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
     auto custom_weights = Tensor::from_vector(weights_data, {5}, Device::CPU);
 
-    // Try to sample more than available without replacement
-    auto custom_samples = Tensor::multinomial(custom_weights, 10, false);
-
-    // Implementation should either fail or cap at num_weights
-    if (custom_samples.is_valid()) {
-        auto values = custom_samples.to_vector_int64();
-        std::set<int> unique(values.begin(), values.end());
-        EXPECT_LE(unique.size(), 5) << "Cannot have more unique samples than weights";
-        EXPECT_LE(custom_samples.numel(), 5) << "Should cap at number of weights";
-    }
+    EXPECT_THROW(Tensor::multinomial(custom_weights, 10, false), std::runtime_error);
 }
 
 // ============= Reproducibility Tests =============
@@ -381,7 +368,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialReproducibilityCUDA) {
 
 TEST_F(TensorRandomAdvancedTest, MultinomialWithoutReplacementReproducibility) {
     std::vector<float> weights_data = {1.0f, 1.0f, 1.0f, 1.0f, 1.0f};
-    auto weights = Tensor::from_vector(weights_data, {5}, Device::CPU);
+    auto weights = Tensor::from_vector(weights_data, {5}, Device::CUDA);
 
     Tensor::manual_seed(67890);
     auto samples1 = Tensor::multinomial(weights, 3, false);
@@ -506,7 +493,7 @@ TEST_F(TensorRandomAdvancedTest, MultinomialAsIndices) {
     auto indices = Tensor::multinomial(weights, 10, true);
 
     // Use multinomial result as indices for index_select
-    auto data = Tensor::arange(0.0f, 5.0f);
+    auto data = Tensor::arange(0.0f, 5.0f).to(indices.device());
     auto selected = data.index_select(0, indices);
 
     ASSERT_TRUE(selected.is_valid());

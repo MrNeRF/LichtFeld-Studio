@@ -53,18 +53,7 @@ namespace lfs::training {
         return (flags & static_cast<uint32_t>(flag)) != 0;
     }
 
-    /// Save PPISP (and optionally controller pool) to standalone file
-    /// @param path Output file path (typically .ppisp extension)
-    /// @param ppisp Required - the trained PPISP module
-    /// @param controller_pool Optional - controller pool for novel views
-    /// @param metadata Optional - stable frame/camera metadata for trainer-side reuse
-    [[nodiscard]] std::expected<void, std::string> save_ppisp_file(
-        const std::filesystem::path& path,
-        const PPISP& ppisp,
-        const PPISPControllerPool* controller_pool = nullptr,
-        const PPISPFileMetadata* metadata = nullptr);
-
-    /// Load PPISP state from standalone file
+    /// Import PPISP state from a standalone legacy file.
     /// @param path Input file path
     /// @param ppisp PPISP instance to load into (must be pre-constructed with matching dimensions)
     /// @param controller_pool Optional controller pool to load into

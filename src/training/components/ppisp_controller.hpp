@@ -23,10 +23,16 @@ namespace lfs::training {
     public:
         using Config = PPISPControllerConfig;
 
-        PPISPController(int total_iterations, Config config = {});
+        explicit PPISPController(int total_iterations);
+        PPISPController(int total_iterations, Config config);
 
         // Pre-allocate shared buffers for given max image size (call once, used by all controllers)
         static void preallocate_shared_buffers(size_t max_H, size_t max_W);
+
+        // drop process-lifetime shared CUDA tensors before pool
+        // shutdown. Registered as a GpuPreShutdownHook; also callable from
+        // tests. Idempotent.
+        static void release_shared_buffers() noexcept;
 
         lfs::core::Tensor predict(const lfs::core::Tensor& rendered_rgb, float exposure_prior = 1.0f);
         void backward(const lfs::core::Tensor& grad_output);

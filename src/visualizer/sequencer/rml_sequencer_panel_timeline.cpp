@@ -20,8 +20,6 @@ namespace lfs::vis {
         constexpr float MIN_KEYFRAME_SPACING = 0.1f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
-        constexpr float PLAYHEAD_HIT_RADIUS = 6.0f;
-        constexpr float PLAYHEAD_HANDLE_WIDTH = 8.0f;
     } // namespace
 
     using namespace panel_config;
@@ -201,7 +199,9 @@ namespace lfs::vis {
                                       gui::FilmStripRenderer::THUMB_PADDING * 2.0f;
         const float base_thumb_w = thumb_display_h * (static_cast<float>(gui::FilmStripRenderer::THUMB_WIDTH) /
                                                       static_cast<float>(gui::FilmStripRenderer::THUMB_HEIGHT));
-        const int num_thumbs = sequencer_ui::thumbnailCount(timeline_width, base_thumb_w, zoom_level_);
+        const int num_thumbs = std::min(
+            gui::FilmStripRenderer::MAX_SLOTS,
+            sequencer_ui::thumbnailCount(timeline_width, base_thumb_w, zoom_level_));
         const float actual_thumb_w = num_thumbs > 0 ? timeline_width / static_cast<float>(num_thumbs) : 0.0f;
         const float groove_w = timeline_width + gui::FilmStripRenderer::THUMB_PADDING * 2.0f;
 

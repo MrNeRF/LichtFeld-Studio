@@ -8,10 +8,6 @@ message(STATUS "Configuring Python components (runner + nanobind module)")
 find_package(Python REQUIRED COMPONENTS Interpreter Development Development.Module Development.SABIModule)
 find_package(nanobind CONFIG REQUIRED)
 
-option(LFS_DEV_IMPORT_SOURCE_PYTHON
-    "Import built-in Python packages from src/python in non-portable builds"
-    ON)
-
 # vcpkg extension modules use release ABI; debug libpython has Py_DEBUG which
 # changes _PyRuntimeState layout, causing ABI mismatch crashes.
 # Force release Python library for debug builds on both Python::Python and Python::Module
@@ -92,6 +88,7 @@ target_link_libraries(lfs_python_runtime
         Python::Python
         glm::glm
     PRIVATE
+        lfs_core
         lfs_logger
 )
 
@@ -175,6 +172,7 @@ nanobind_add_module(
     lfs_py
     NB_STATIC
     lfs/module.cpp
+    lfs/py_error.cpp
     lfs/py_animation.cpp
     lfs/py_command.cpp
     lfs/py_gizmo.cpp
@@ -184,10 +182,12 @@ nanobind_add_module(
     lfs/py_scene.cpp
     lfs/py_scripts.cpp
     lfs/py_cameras.cpp
+    lfs/py_diagnostics.cpp
     lfs/py_io.cpp
     lfs/py_packages.cpp
     lfs/py_params.cpp
     lfs/py_plugins.cpp
+    lfs/py_operator_properties.cpp
     lfs/py_ui.cpp
     lfs/py_ui_context.cpp
     lfs/py_ui_theme.cpp
@@ -236,8 +236,6 @@ set_target_properties(lfs_py PROPERTIES
 # and hook bridges through ELF symbol interposition.
 target_compile_definitions(lfs_py PRIVATE
     LFS_PYTHON_EXECUTABLE="${Python_EXECUTABLE}"
-    $<$<CONFIG:Debug>:DEBUG_BUILD>
-    $<$<CONFIG:Release>:RELEASE_BUILD>
 )
 
 
@@ -265,12 +263,10 @@ target_link_libraries(lfs_py PRIVATE
     ${LFS_PY_INTERNAL_LINK_LIBS}
     OpenMeshCore
     OpenMeshTools
-    OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
+    SDL3::SDL3
     ${CMAKE_DL_LIBS}
-    imgui::imgui
-    implot::implot
     GPUOpen::VulkanMemoryAllocator
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )

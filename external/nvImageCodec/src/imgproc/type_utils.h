@@ -27,6 +27,33 @@ namespace nvimgcodec {
         return static_cast<size_t>(type) >> (8 + 3);
     }
 
+    // Resolve a plane_info.precision value to its user-visible bitcount: pass-through when
+    // non-zero, otherwise the sample type's full bitdepth (the C-layer's 0 sentinel).
+    constexpr int ResolvePrecision(uint8_t precision, nvimgcodecSampleDataType_t sample_type) {
+        return precision != 0 ? precision : static_cast<int>(TypeSize(sample_type) * 8);
+    }
+
+    // returns size, in bytes, of a buffer that is required to fit whole image describe by image_info, including padding bytes
+    constexpr size_t GetBufferSize(const nvimgcodecImageInfo_t& image_info) {
+        size_t buffer_size = 0;
+        for (unsigned p = 0; p < image_info.num_planes; ++p) {
+            const auto& plane = image_info.plane_info[p];
+            buffer_size += plane.row_stride * plane.height;
+        }
+        return buffer_size;
+    }
+
+    // returns number of bytes required to fit whole image, excluding padding bytes
+    constexpr size_t GetImageSize(const nvimgcodecImageInfo_t& image_info) {
+        size_t working_area_size = 0;
+        for (unsigned p = 0; p < image_info.num_planes; ++p) {
+            const auto& plane = image_info.plane_info[p];
+            size_t row_size = TypeSize(plane.sample_type) * plane.width * plane.num_channels;
+            working_area_size += row_size * plane.height;
+        }
+        return working_area_size;
+    }
+
     constexpr bool IsFloatingPoint(nvimgcodecSampleDataType_t type) {
         switch (type) {
         case NVIMGCODEC_SAMPLE_DATA_TYPE_FLOAT32:
@@ -94,16 +121,21 @@ namespace nvimgcodec {
         return (uint64_t(1) << PositiveBits(dtype)) - 1;
     }
 
-    inline int ActualPrecision(int precision, nvimgcodecSampleDataType_t dtype) {
-        assert(precision <= PositiveBits(dtype));
-        return precision == 0 ? PositiveBits(dtype) : precision;
+    inline int MagnitudeBits(int precision, nvimgcodecSampleDataType_t dtype) {
+        if (precision == 0) {
+            return PositiveBits(dtype);
+        } else {
+            int precision_without_sgn = precision - IsSigned(dtype);
+            assert(precision_without_sgn <= PositiveBits(dtype));
+            return precision_without_sgn;
+        }
     }
 
     /**
      * @brief Whether given precision needs scaling to use the full width of the type
      */
     inline bool NeedDynamicRangeScaling(int precision, nvimgcodecSampleDataType_t dtype) {
-        return PositiveBits(dtype) != ActualPrecision(precision, dtype);
+        return PositiveBits(dtype) != MagnitudeBits(precision, dtype);
     }
 
     /**
@@ -111,7 +143,7 @@ namespace nvimgcodec {
      */
     inline bool NeedDynamicRangeScaling(
         int out_precision, nvimgcodecSampleDataType_t out_dtype, int in_precision, nvimgcodecSampleDataType_t in_dtype) {
-        if (out_dtype == in_dtype && ActualPrecision(out_precision, out_dtype) == ActualPrecision(in_precision, in_dtype))
+        if (out_dtype == in_dtype && MagnitudeBits(out_precision, out_dtype) == MagnitudeBits(in_precision, in_dtype))
             return false;
         return NeedDynamicRangeScaling(in_precision, in_dtype) || NeedDynamicRangeScaling(out_precision, out_dtype);
     }
@@ -121,7 +153,7 @@ namespace nvimgcodec {
      *        width of the data type
      */
     inline double DynamicRangeMultiplier(int precision, nvimgcodecSampleDataType_t dtype) {
-        double input_max_value = (uint64_t(1) << ActualPrecision(precision, dtype)) - 1;
+        double input_max_value = (uint64_t(1) << MagnitudeBits(precision, dtype)) - 1;
         return MaxValue(dtype) / input_max_value;
     }
 

@@ -13,6 +13,67 @@ endif()
 
 cmake_minimum_required(VERSION 3.30)
 
+# Manifest-mode vcpkg runs only while CMake configures. Track overlay-port
+# contents explicitly so the usual `cmake --build` regeneration also reruns
+# vcpkg when a portfile, patch or overlay manifest changes.
+file(GLOB_RECURSE LFS_VCPKG_OVERLAY_FILES CONFIGURE_DEPENDS LIST_DIRECTORIES FALSE
+    "${CMAKE_CURRENT_SOURCE_DIR}/.github/overlays/*")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${LFS_VCPKG_OVERLAY_FILES})
+
+# Keep test-only packages out of the application dependency graph. Command-line
+# cache values are visible before project(), when the vcpkg toolchain resolves
+# manifest features.
+list(REMOVE_ITEM VCPKG_MANIFEST_FEATURES tests vulkan-validation)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS)
+    list(APPEND VCPKG_MANIFEST_FEATURES tests)
+endif()
+
+set(_lfs_vulkan_validation_feature OFF)
+if(DEFINED LFS_ENABLE_VULKAN_VALIDATION)
+    set(_lfs_vulkan_validation_feature "${LFS_ENABLE_VULKAN_VALIDATION}")
+elseif(NOT CMAKE_CONFIGURATION_TYPES AND CMAKE_BUILD_TYPE MATCHES "^(Debug|RelWithDebInfo)$")
+    set(_lfs_vulkan_validation_feature ON)
+endif()
+if(_lfs_vulkan_validation_feature)
+    list(APPEND VCPKG_MANIFEST_FEATURES vulkan-validation)
+endif()
+list(REMOVE_DUPLICATES VCPKG_MANIFEST_FEATURES)
+unset(_lfs_vulkan_validation_feature)
+
+# vcpkg manifest install runs during CMake configure/regeneration, outside the
+# native build tool's `cmake --build -j ...` limit. Cap vcpkg separately before
+# the toolchain is loaded by project().
+set(LFS_VCPKG_MAX_CONCURRENCY "" CACHE STRING "Maximum number of concurrent jobs vcpkg may use while building packages; empty uses an explicit vcpkg setting or caps auto-detection at 6")
+set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${LFS_VCPKG_MAX_CONCURRENCY}")
+if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY STREQUAL "")
+    if(DEFINED ENV{VCPKG_MAX_CONCURRENCY} AND NOT "$ENV{VCPKG_MAX_CONCURRENCY}" STREQUAL "")
+        set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{VCPKG_MAX_CONCURRENCY}")
+    elseif(DEFINED ENV{CMAKE_BUILD_PARALLEL_LEVEL} AND NOT "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}" STREQUAL "")
+        set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "$ENV{CMAKE_BUILD_PARALLEL_LEVEL}")
+        if(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY MATCHES "^[1-9][0-9]*$" AND
+           _LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY GREATER 6)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        endif()
+    else()
+        include(ProcessorCount)
+        ProcessorCount(_LFS_HOST_PROCESSOR_COUNT)
+        if(_LFS_HOST_PROCESSOR_COUNT EQUAL 0)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        elseif(_LFS_HOST_PROCESSOR_COUNT GREATER 6)
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY 6)
+        else()
+            set(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY "${_LFS_HOST_PROCESSOR_COUNT}")
+        endif()
+    endif()
+endif()
+if(NOT _LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR "LFS_VCPKG_MAX_CONCURRENCY must resolve to a positive integer, got '${_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY}'")
+endif()
+set(ENV{VCPKG_MAX_CONCURRENCY} "${_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY}")
+message(STATUS "vcpkg package build concurrency limited to ${_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY}")
+unset(_LFS_EFFECTIVE_VCPKG_MAX_CONCURRENCY)
+unset(_LFS_HOST_PROCESSOR_COUNT)
+
 option(LFS_ENFORCE_LINUX_GUI_BACKENDS "Fail configure when Linux SDL3 would lack X11 and Wayland support" ON)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/LinuxGuiSanity.cmake")
@@ -30,7 +91,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/VcpkgProfiles.cmake")
+lfs_validate_vcpkg_profile()
+
 project(LichtFeld-Studio VERSION 0.5.3 LANGUAGES CUDA CXX C)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SelectFastLinker.cmake")
 
 # On Linux, hide symbols pulled in from third-party image / compression static
 # archives so they don't escape into the dynamic symbol tables of the binaries
@@ -86,59 +152,46 @@ endif()
 # Disable C++20 module scanning
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
-# Get git version info
-execute_process(
-    COMMAND git rev-parse --short HEAD
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_COMMIT_HASH_SHORT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
+set(GIT_SRC_DIR "${CMAKE_SOURCE_DIR}")
+set(GIT_VERSION_HEADER "${CMAKE_BINARY_DIR}/include/git_version.h")
+include("${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake")
+add_custom_target(lfs_git_version ALL
+    BYPRODUCTS "${CMAKE_BINARY_DIR}/include/git_version.h"
+    COMMAND ${CMAKE_COMMAND}
+            "-DGIT_SRC_DIR=${CMAKE_SOURCE_DIR}"
+            "-DGIT_VERSION_HEADER=${CMAKE_BINARY_DIR}/include/git_version.h"
+            -P "${CMAKE_SOURCE_DIR}/cmake/GenerateGitVersion.cmake"
+    COMMENT "Refreshing git_version.h"
+    VERBATIM
 )
-execute_process(
-    COMMAND git describe --tags --dirty --always --match "v*"
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE GIT_TAGGED_VERSION
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT GIT_COMMIT_HASH_SHORT AND DEFINED ENV{GITHUB_SHA} AND NOT "$ENV{GITHUB_SHA}" STREQUAL "")
-    string(SUBSTRING "$ENV{GITHUB_SHA}" 0 7 GIT_COMMIT_HASH_SHORT)
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    if(DEFINED ENV{GITHUB_REF_TYPE} AND "$ENV{GITHUB_REF_TYPE}" STREQUAL "tag" AND
-       DEFINED ENV{GITHUB_REF_NAME} AND NOT "$ENV{GITHUB_REF_NAME}" STREQUAL "")
-        set(GIT_TAGGED_VERSION "$ENV{GITHUB_REF_NAME}")
-    elseif(GIT_COMMIT_HASH_SHORT)
-        set(GIT_TAGGED_VERSION "${GIT_COMMIT_HASH_SHORT}")
-    endif()
-endif()
-if(NOT GIT_COMMIT_HASH_SHORT)
-    set(GIT_COMMIT_HASH_SHORT "unknown")
-endif()
-if(NOT GIT_TAGGED_VERSION)
-    set(GIT_TAGGED_VERSION "unknown")
-endif()
-
-# Generate git_version.h at configure time
-file(WRITE "${CMAKE_BINARY_DIR}/include/git_version.h"
-"#pragma once\n\
-#define GIT_COMMIT_HASH_SHORT \"${GIT_COMMIT_HASH_SHORT}\"\n\
-#define GIT_TAGGED_VERSION \"${GIT_TAGGED_VERSION}\"\n"
-)
-
-# Setup
-get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
 option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_FORMAT_TESTS "Build only the CPU-only .licht format tests (no CUDA)" OFF)
 option(BUILD_UNICODE_TEST_ONLY "Build only Unicode path test (no CUDA)" OFF)
-option(ENABLE_ALLOCATION_PROFILING "Enable tensor allocation profiling" OFF)
+option(BUILD_LOCALIZATION_TESTS "Register headless localization contract tests without LibTorch" OFF)
 option(LFS_FAST_COMPILE "Optimize measured slow C++ components for build speed instead of runtime speed (WIN32 only)" OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# Debug options
-option(ENABLE_TENSOR_VALIDATION "Enable runtime tensor NaN/Inf validation" OFF)
-option(ENABLE_CUDA_DEBUG_SYNC "Enable synchronous CUDA kernel checking (slow)" OFF)
-option(ENABLE_TENSOR_OP_TRACING "Enable tensor operation tracing" OFF)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeveloperOptions.cmake")
+
+# Keep immutable third-party archives outside individual build trees. A clean
+# configure still verifies each declared checksum and extracts into its own
+# tree, but it does not redownload hundreds of MiB already fetched locally.
+if(WIN32 AND DEFINED ENV{LOCALAPPDATA})
+    file(TO_CMAKE_PATH "$ENV{LOCALAPPDATA}/LichtFeldStudio/downloads" _lfs_download_cache_default)
+elseif(APPLE AND DEFINED ENV{HOME})
+    set(_lfs_download_cache_default "$ENV{HOME}/Library/Caches/LichtFeldStudio/downloads")
+elseif(DEFINED ENV{XDG_CACHE_HOME} AND NOT "$ENV{XDG_CACHE_HOME}" STREQUAL "")
+    set(_lfs_download_cache_default "$ENV{XDG_CACHE_HOME}/lichtfeld/downloads")
+elseif(DEFINED ENV{HOME})
+    set(_lfs_download_cache_default "$ENV{HOME}/.cache/lichtfeld/downloads")
+else()
+    set(_lfs_download_cache_default "${CMAKE_BINARY_DIR}/_downloads")
+endif()
+set(LFS_DOWNLOAD_CACHE_DIR "${_lfs_download_cache_default}" CACHE PATH
+    "Shared cache for checksum-pinned third-party download archives")
+file(MAKE_DIRECTORY "${LFS_DOWNLOAD_CACHE_DIR}")
+unset(_lfs_download_cache_default)
 
 # Add -rdynamic for backtrace symbol resolution
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -153,37 +206,123 @@ option(BUILD_PORTABLE "Build portable distribution" OFF)
 if(BUILD_PORTABLE)
     set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_FORMAT_TESTS OFF CACHE BOOL "" FORCE)
     add_compile_definitions(LFS_BUILD_PORTABLE=1)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
 
-# Compiler cache is opt-in. Auto-enabling a broken local launcher can silently
-# poison object files and make the build non-reproducible.
-option(ENABLE_COMPILER_CACHE "Enable sccache/ccache compiler launchers when available" OFF)
+# Compiler caching is part of the default developer loop. Disable it for clean
+# compiler benchmarks or when diagnosing a launcher-specific problem.
+option(ENABLE_COMPILER_CACHE "Auto-detect and use sccache/ccache compiler launchers" ON)
+set(LFS_CUDA_COMPILER_CACHE "" CACHE STRING
+    "Compiler cache for CUDA only: empty follows the auto-detected launcher, OFF disables CUDA caching, or name/path of a launcher such as ccache")
 if(ENABLE_COMPILER_CACHE)
+    if(NOT WIN32 AND
+       NOT MSVC AND
+       CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+        option(COMPILER_CACHE_PATH_INDEPENDENT
+            "Normalize checkout-local compiler paths for cross-worktree cache hits in Release/MinSizeRel builds"
+            ON)
+    endif()
+
     # CUDA caching disabled on Windows due to nvcc compatibility issues.
     find_program(SCCACHE_PROGRAM sccache)
     find_program(CCACHE_PROGRAM ccache)
     if(SCCACHE_PROGRAM)
-        set(CMAKE_C_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-        set(CMAKE_CXX_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-        if(WIN32)
-            message(STATUS "Compiler cache: sccache (C/C++ only, CUDA uncached)")
-        else()
-            set(CMAKE_CUDA_COMPILER_LAUNCHER "${SCCACHE_PROGRAM}")
-            message(STATUS "Compiler cache: sccache")
-        endif()
+        set(_lfs_compiler_cache_program "${SCCACHE_PROGRAM}")
+        set(_lfs_compiler_cache_name "sccache")
     elseif(CCACHE_PROGRAM)
-        set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-        if(WIN32)
-            message(STATUS "Compiler cache: ccache (C/C++ only, CUDA uncached)")
-        else()
-            set(CMAKE_CUDA_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
-            message(STATUS "Compiler cache: ccache")
-        endif()
+        set(_lfs_compiler_cache_program "${CCACHE_PROGRAM}")
+        set(_lfs_compiler_cache_name "ccache")
     else()
         message(STATUS "Compiler cache: requested, but no launcher was found")
+    endif()
+
+    if(_lfs_compiler_cache_program)
+        set(_lfs_compiler_cache_launcher "${_lfs_compiler_cache_program}")
+        set(_lfs_compiler_cache_paths_normalized OFF)
+
+        # MSVC has no equivalent prefix-map support, and the existing Windows
+        # launcher behavior (including uncached CUDA) must remain unchanged.
+        if(NOT WIN32 AND
+           NOT MSVC AND
+           CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$" AND
+           COMPILER_CACHE_PATH_INDEPENDENT AND
+           CMAKE_GENERATOR MATCHES "^Ninja" AND
+           NOT _IS_MULTI_CONFIG AND
+           CMAKE_BUILD_TYPE MATCHES "^(Release|MinSizeRel)$")
+            # Prefix maps normalize __FILE__, but older cache versions still
+            # hash absolute input paths and the map argument itself.
+            set(_lfs_compiler_cache_source_alias "${CMAKE_BINARY_DIR}/.lfs-cache-source")
+            if(EXISTS "${_lfs_compiler_cache_source_alias}" OR
+               IS_SYMLINK "${_lfs_compiler_cache_source_alias}")
+                file(REMOVE "${_lfs_compiler_cache_source_alias}")
+            endif()
+            file(CREATE_LINK
+                "${CMAKE_SOURCE_DIR}"
+                "${_lfs_compiler_cache_source_alias}"
+                SYMBOLIC
+                RESULT _lfs_compiler_cache_link_result)
+            if(NOT _lfs_compiler_cache_link_result STREQUAL "0")
+                message(FATAL_ERROR
+                    "Failed to create compiler-cache source alias: ${_lfs_compiler_cache_link_result}")
+            endif()
+
+            set(_lfs_compiler_cache_launcher
+                "${CMAKE_COMMAND}"
+                "-DLFS_COMPILER_CACHE_PROGRAM=${_lfs_compiler_cache_program}"
+                "-DLFS_COMPILER_CACHE_SOURCE_ROOT=${CMAKE_SOURCE_DIR}"
+                "-DLFS_COMPILER_CACHE_BINARY_ROOT=${CMAKE_BINARY_DIR}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/CompilerCacheLauncher.cmake"
+                --)
+
+            add_compile_options(
+                "$<$<COMPILE_LANG_AND_ID:C,GNU,Clang,AppleClang>:-ffile-prefix-map=.lfs-cache-source=.>"
+                "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-ffile-prefix-map=.lfs-cache-source=.>")
+            set(_lfs_compiler_cache_paths_normalized ON)
+        endif()
+
+        set(CMAKE_C_COMPILER_LAUNCHER ${_lfs_compiler_cache_launcher})
+        set(CMAKE_CXX_COMPILER_LAUNCHER ${_lfs_compiler_cache_launcher})
+        if(WIN32)
+            message(STATUS "Compiler cache: ${_lfs_compiler_cache_name} (C/C++ only, CUDA uncached)")
+        else()
+            # Keep the existing CUDA launcher unchanged. sccache decomposes
+            # nvcc compilations after canonicalizing their input path, so the
+            # C/C++ source alias does not provide cross-worktree CUDA hits.
+            #
+            # LFS_CUDA_COMPILER_CACHE retargets the CUDA launcher without
+            # touching the C/C++ one. Some nvcc versions cannot be wrapped by
+            # sccache: with CUDA 13.3 a single invocation emitting both PTX and
+            # SASS fails as "fatbinary fatal: Could not open input file
+            # <name>.ptx", because sccache relocates the intermediate. Earlier
+            # toolkits are unaffected, so the default is deliberately unchanged.
+            if(LFS_CUDA_COMPILER_CACHE STREQUAL "")
+                set(CMAKE_CUDA_COMPILER_LAUNCHER "${_lfs_compiler_cache_program}")
+            elseif(LFS_CUDA_COMPILER_CACHE MATCHES "^(OFF|NO|FALSE|0)$")
+                unset(CMAKE_CUDA_COMPILER_LAUNCHER)
+                message(STATUS "Compiler cache: CUDA uncached (LFS_CUDA_COMPILER_CACHE=${LFS_CUDA_COMPILER_CACHE})")
+            else()
+                find_program(LFS_CUDA_COMPILER_CACHE_PROGRAM NAMES "${LFS_CUDA_COMPILER_CACHE}")
+                if(NOT LFS_CUDA_COMPILER_CACHE_PROGRAM)
+                    message(FATAL_ERROR
+                        "LFS_CUDA_COMPILER_CACHE=${LFS_CUDA_COMPILER_CACHE} was not found")
+                endif()
+                set(CMAKE_CUDA_COMPILER_LAUNCHER "${LFS_CUDA_COMPILER_CACHE_PROGRAM}")
+                message(STATUS "Compiler cache: CUDA via ${LFS_CUDA_COMPILER_CACHE_PROGRAM}")
+            endif()
+            message(STATUS "Compiler cache: ${_lfs_compiler_cache_name}")
+            if(_lfs_compiler_cache_paths_normalized)
+                message(STATUS "Compiler cache: C/C++ checkout-local paths normalized")
+            endif()
+        endif()
+
+        unset(_lfs_compiler_cache_launcher)
+        unset(_lfs_compiler_cache_link_result)
+        unset(_lfs_compiler_cache_name)
+        unset(_lfs_compiler_cache_paths_normalized)
+        unset(_lfs_compiler_cache_program)
+        unset(_lfs_compiler_cache_source_alias)
     endif()
 else()
     message(STATUS "Compiler cache: disabled")
@@ -196,18 +335,6 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-
-# Parallel build
-include(ProcessorCount)
-ProcessorCount(total_cores)
-if(total_cores GREATER 1)
-    math(EXPR used_cores "${total_cores} - 2")
-    if(used_cores GREATER 20)
-        set(used_cores 20)
-    endif()
-    set(ENV{MAKEFLAGS} "-j${used_cores}")
-    message(STATUS "Building with ${used_cores} cores")
-endif()
 
 # CUDA setup
 # On Windows, nvidia-smi.exe is in System32, but CMake might be running as 32-bit
@@ -270,6 +397,7 @@ if(BUILD_CUDA_PTX_ONLY)
     endif()
 
     set(LichtFeld-Studio_CUDA_ARCH "${BUILD_CUDA_MIN_SM}-virtual")
+    set(LFS_RUNTIME_MIN_SM "${BUILD_CUDA_MIN_SM}")
 
     math(EXPR _maj "${BUILD_CUDA_MIN_SM}/10")
     math(EXPR _min "${BUILD_CUDA_MIN_SM}%10")
@@ -279,8 +407,16 @@ if(BUILD_CUDA_PTX_ONLY)
 else()
     # Native GPU only
     set(TORCH_CUDA_ARCH_LIST "${DETECTED_COMPUTE_CAP}" CACHE STRING "" FORCE)
+    string(REPLACE "." "" LFS_RUNTIME_MIN_SM "${DETECTED_COMPUTE_CAP}")
     message(STATUS "CUDA: native (${LichtFeld-Studio_CUDA_ARCH})")
 endif()
+
+if(NOT LFS_RUNTIME_MIN_SM MATCHES "^[0-9]+$")
+    message(WARNING "Could not derive a runtime SM floor from '${LFS_RUNTIME_MIN_SM}'; "
+        "falling back to 70. The startup GPU check will be permissive.")
+    set(LFS_RUNTIME_MIN_SM "70")
+endif()
+message(STATUS "Runtime GPU floor: SM ${LFS_RUNTIME_MIN_SM}")
 
 enable_language(CUDA)
 find_package(CUDAToolkit 12.8 REQUIRED)
@@ -326,19 +462,23 @@ find_package(volk CONFIG REQUIRED)
 find_package(SDL3 REQUIRED)
 lfs_validate_linux_sdl_video_backends()
 find_package(glm REQUIRED)
-find_package(imgui REQUIRED)
-find_package(implot REQUIRED)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SetupNativeFileDialog.cmake")
 find_package(nlohmann_json REQUIRED)
 find_package(args REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(JPEG REQUIRED)
+find_package(PNG REQUIRED)
+find_package(TIFF REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(Freetype REQUIRED)
 find_package(WebP REQUIRED)
+find_package(tinyexr CONFIG REQUIRED)
 find_package(LibArchive REQUIRED)
+find_package(zstd CONFIG REQUIRED)
 find_package(libdeflate CONFIG REQUIRED)
-find_package(OpenImageIO REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+find_package(xxHash CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(pxr CONFIG REQUIRED)
 find_package(assimp REQUIRED)
 find_package(RmlUi CONFIG REQUIRED)
 
@@ -360,30 +500,67 @@ configure_file(
         @ONLY
 )
 
-
-# Project-wide definitions
-add_definitions(-DPROJECT_ROOT_PATH="${PROJ_ROOT_DIR}")
-
-# CUDA device debugging (-G flag) generates huge object files. Disable in CI.
-option(CUDA_DEVICE_DEBUG "Enable CUDA device debugging (-G flag)" ON)
-
-if(CUDA_DEVICE_DEBUG)
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "-G" CACHE INTERNAL "")
-else()
-    set(LFS_CUDA_DEVICE_DEBUG_FLAGS "" CACHE INTERNAL "")
-endif()
+# App/core ABI tripwire. Seed headers for IDEs and syntax checks at configure
+# time, then refresh before ABI consumers build without making core source/header
+# edits configure dependencies. Define this after the effective CUDA architecture
+# selection so the stamp represents the actual
+# target configuration. Each multi-config configuration gets its own header so
+# Debug and Release cannot race or overwrite each other.
+include(cmake/InitializeCoreAbiStamp.cmake)
+lfs_initialize_core_abi_stamps()
+add_custom_target(lfs_core_abi_stamp ALL
+    BYPRODUCTS "${LFS_CORE_ABI_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        "-DLFS_SOURCE_DIR=${CMAKE_SOURCE_DIR}"
+        "-DLFS_CORE_ABI_TEMPLATE=${CMAKE_SOURCE_DIR}/cmake/lfs_core_abi_stamp.h.in"
+        "-DLFS_CORE_ABI_HEADER=${LFS_CORE_ABI_HEADER}"
+        "-DLFS_PROJECT_VERSION=${PROJECT_VERSION}"
+        "-DLFS_CONFIGURED_GIT_COMMIT_HASH_SHORT=${GIT_COMMIT_HASH_SHORT}"
+        "-DLFS_BUILD_CONFIG=$<CONFIG>"
+        "-DLFS_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}"
+        "-DLFS_SIZEOF_VOID_P=${CMAKE_SIZEOF_VOID_P}"
+        "-DLFS_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        "-DLFS_CXX_COMPILER_VERSION=${CMAKE_CXX_COMPILER_VERSION}"
+        "-DLFS_CUDA_COMPILER_ID=${CMAKE_CUDA_COMPILER_ID}"
+        "-DLFS_CUDA_COMPILER_VERSION=${CMAKE_CUDA_COMPILER_VERSION}"
+        "-DLFS_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
+        "-DLFS_VCPKG_TARGET_TRIPLET=${VCPKG_TARGET_TRIPLET}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/GenerateCoreAbiStamp.cmake"
+    COMMENT "Refreshing lfs_core ABI stamp"
+    VERBATIM
+)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
-    if(CUDA_DEVICE_DEBUG)
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G -O0")
-    else()
-        set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
+    if(NOT MSVC)
+        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
     endif()
+    set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -O0")
 endif()
 
 # External dependencies (EXCLUDE_FROM_ALL to handle install ourselves)
 add_subdirectory(external EXCLUDE_FROM_ALL)
+
+# Keep LichtFeld's ordinary MSVC translation units on nvcc's conforming host
+# preprocessor and report the selected C++ language version accurately.
+# This is intentionally added after external/ so vendored targets keep their
+# upstream compiler settings.
+if(MSVC)
+    add_compile_options(
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+        $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
+        $<$<COMPILE_LANGUAGE:CXX>:/utf-8>
+        $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>
+    )
+endif()
+
+if(LFS_ENABLE_CUDA_DEVICE_DEBUG)
+    add_compile_options($<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G>)
+endif()
+
+add_compile_definitions(
+    $<$<CONFIG:Debug>:DEBUG_BUILD>
+    $<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:RELEASE_BUILD>
+)
 
 # =============================================================================
 # LIBRARY MODULES
@@ -394,6 +571,7 @@ add_subdirectory(src/training)   # Training module (lfs::training namespace)
 add_subdirectory(src/io)         # I/O module (lfs::io namespace)
 add_subdirectory(src/rendering)  # Rendering module (lfs::rendering namespace)
 add_subdirectory(src/sequencer)  # Sequencer module (lfs::sequencer namespace)
+add_subdirectory(src/preprocessing) # CLI preprocessing module (ONNXRuntime)
 add_subdirectory(src/visualizer) # Visualizer module (lfs::vis namespace)
 add_subdirectory(src/tcp)        # TCP event server (ZMQ responder + publisher)
 add_subdirectory(src/geometry)   # Geometry utilities
@@ -412,13 +590,35 @@ add_executable(${PROJECT_NAME}
     src/app/main.cpp
     src/app/application.cpp
     src/app/mcp_gui_tools.cpp
+    src/app/mcp_operator_schema.cpp
     src/app/mcp_operator_tools.cpp
     src/app/mcp_runtime_tools.cpp
     src/app/mcp_sequencer_tools.cpp
     src/app/mcp_ui_registry_tools.cpp
     src/app/converter.cpp
     resources/lichtfeld-studio.rc
+    resources/lichtfeld-studio.manifest
 )
+
+add_dependencies(${PROJECT_NAME} lfs_core_abi_stamp)
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE
+    "${LFS_CORE_ABI_INCLUDE_DIR}"
+)
+
+# The binary only carries code for these architectures; the app refuses to start on anything
+# lower instead of dying inside the first kernel launch (#1540).
+target_compile_definitions(${PROJECT_NAME} PRIVATE LFS_MIN_SM=${LFS_RUNTIME_MIN_SM})
+
+foreach(_lfs_git_version_consumer IN ITEMS
+        ${PROJECT_NAME}
+        lfs_core
+        lfs_visualizer
+        lfs_py
+        lfs_mcp)
+    if(TARGET ${_lfs_git_version_consumer})
+        add_dependencies(${_lfs_git_version_consumer} lfs_git_version)
+    endif()
+endforeach()
 
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -442,7 +642,7 @@ target_include_directories(${PROJECT_NAME}
 
 if(CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED)
     set(LFS_APP_INTERNAL_LINK_LIBS
-        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
+        "$<LINK_GROUP:RESCAN,lfs_visualizer,lfs_mcp,lfs_sequencer,lfs_rendering_tensor,lfs_training,lfs_preprocessing,lfs_geometry,lfs_core,lfs_io,lfs_video,fastlfs_backend,lfs_python_utils,lfs_tcp>"
     )
 else()
     set(LFS_APP_INTERNAL_LINK_LIBS
@@ -452,6 +652,7 @@ else()
         lfs_sequencer
         lfs_rendering_tensor
         lfs_training
+        lfs_preprocessing
         lfs_geometry
         lfs_core
         lfs_io
@@ -469,7 +670,6 @@ target_link_libraries(${PROJECT_NAME}
         CUDA::curand
         spdlog::spdlog
         taywee::args
-        OpenImageIO::OpenImageIO
         SDL3::SDL3
 )
 
@@ -580,8 +780,17 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
     set(_vcpkg_debug_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/debug/bin")
     set(_vcpkg_release_bin_dir "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
     file(GLOB _vcpkg_release_dlls CONFIGURE_DEPENDS "${_vcpkg_release_bin_dir}/*.dll")
-    file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
-    
+
+    # A single-config Release/RelWithDebInfo build never consumes Debug DLLs,
+    # so changes in debug/bin must not invalidate its CMake graph. Multi-config
+    # generators still need both lists because one graph serves all configs.
+    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_is_multi_config OR CMAKE_BUILD_TYPE STREQUAL "Debug")
+        file(GLOB _vcpkg_debug_dlls CONFIGURE_DEPENDS "${_vcpkg_debug_bin_dir}/*.dll")
+    else()
+        set(_vcpkg_debug_dlls)
+    endif()
+
     # Always copy release DLLs - needed for both Release and Debug builds
     if(_vcpkg_release_dlls)
         add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -591,11 +800,10 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
             COMMENT "Copying vcpkg release DLLs"
         )
     endif()
-    
+
     # Only copy debug DLLs for Debug builds (they link to debug CRT which breaks Release)
     # For single-config generators (Ninja, Makefiles): check CMAKE_BUILD_TYPE
     # For multi-config generators (VS, Xcode): use generator expression
-    get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     if(_is_multi_config)
         # Multi-config: use generator expression to conditionally copy
         if(_vcpkg_debug_dlls)
@@ -657,6 +865,58 @@ if(TARGET nvjpeg2k_ext)
             "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/"
         COMMENT "Copying nvjpeg2k extension binary only"
     )
+
+    if(WITH_DYNAMIC_NVJPEG2K)
+        if(CUDAToolkit_VERSION_MAJOR)
+            set(_lfs_nvjpeg2k_cuda_major "${CUDAToolkit_VERSION_MAJOR}")
+        else()
+            set(_lfs_nvjpeg2k_cuda_major "12")
+        endif()
+        set(_lfs_nvjpeg2k_runtime_dir
+            "${CMAKE_BINARY_DIR}/_deps/nvjpeg2k_headers-src/lib/${_lfs_nvjpeg2k_cuda_major}")
+        if(WIN32)
+            set(_lfs_nvjpeg2k_runtime_name "nvjpeg2k_0.dll")
+            set(_lfs_nvjpeg2k_runtime_file
+                "${_lfs_nvjpeg2k_runtime_dir}/${_lfs_nvjpeg2k_runtime_name}")
+            if(EXISTS "${_lfs_nvjpeg2k_runtime_file}")
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lfs_nvjpeg2k_runtime_file}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${_lfs_nvjpeg2k_runtime_name}"
+                    COMMENT "Copying nvjpeg2k runtime library"
+                )
+            else()
+                message(WARNING
+                    "WITH_DYNAMIC_NVJPEG2K is ON but nvjpeg2k_0.dll was not found in "
+                    "${_lfs_nvjpeg2k_runtime_dir}")
+            endif()
+        elseif(UNIX)
+            file(GLOB _lfs_nvjpeg2k_runtime_candidates
+                "${_lfs_nvjpeg2k_runtime_dir}/libnvjpeg2k.so.*.*")
+            list(SORT _lfs_nvjpeg2k_runtime_candidates)
+            if(_lfs_nvjpeg2k_runtime_candidates)
+                list(GET _lfs_nvjpeg2k_runtime_candidates -1 _lfs_nvjpeg2k_runtime_file)
+                get_filename_component(_lfs_nvjpeg2k_runtime_name
+                    "${_lfs_nvjpeg2k_runtime_file}" NAME)
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lfs_nvjpeg2k_runtime_file}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/${_lfs_nvjpeg2k_runtime_name}"
+                    COMMAND ${CMAKE_COMMAND} -E create_symlink
+                        "${_lfs_nvjpeg2k_runtime_name}"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libnvjpeg2k.so.0"
+                    COMMAND ${CMAKE_COMMAND} -E create_symlink
+                        "libnvjpeg2k.so.0"
+                        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/libnvjpeg2k.so"
+                    COMMENT "Copying nvjpeg2k runtime library"
+                )
+            else()
+                message(WARNING
+                    "WITH_DYNAMIC_NVJPEG2K is ON but no libnvjpeg2k.so runtime was found in "
+                    "${_lfs_nvjpeg2k_runtime_dir}")
+            endif()
+        endif()
+    endif()
 endif()
 
 # =============================================================================
@@ -671,6 +931,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/icon/scene"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/fonts"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/themes"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/environments"
     COMMENT "Creating resource directory structure"
 )
 
@@ -727,6 +988,14 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Copying themes"
 )
 
+# Copy bundled environment maps
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/environments"
+        "${RESOURCE_DIR}/assets/environments"
+    COMMENT "Copying environment maps"
+)
+
 # Copy additional assets (logo, splash images, etc.)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -765,60 +1034,23 @@ add_custom_target(copy_locale_files
     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales"
         "${RESOURCE_DIR}/locales"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
+        "${RESOURCE_DIR}/locale_index.json"
     COMMENT "Syncing locale files"
 )
 add_dependencies(${PROJECT_NAME} copy_locale_files)
 
-# OpenUSD runtime resources (schema/file-format plugin metadata).
-# On Windows: copy to <exe>/usd/ so that relative LibraryPaths resolve to the
-# DLL copies already loaded from the exe directory.
-# On Linux: copy to <exe>/../lib/usd/ (conventional layout).
-set(_USD_PLUGIN_SOURCE_DIR "")
-foreach(_candidate
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd"
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd"
-    "${CMAKE_BINARY_DIR}/src/python/usd")
-    # Require an actual plugin sub-directory (not just the root index).
-    if(NOT _USD_PLUGIN_SOURCE_DIR AND EXISTS "${_candidate}/ar/resources/plugInfo.json")
-        set(_USD_PLUGIN_SOURCE_DIR "${_candidate}")
-    endif()
-endforeach()
-
-set(_USD_ROOT_INDEX "")
-foreach(_candidate
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/lib/usd/plugInfo.json"
-    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/usd/plugInfo.json"
-    "${CMAKE_BINARY_DIR}/src/python/usd/plugInfo.json")
-    if(NOT _USD_ROOT_INDEX AND EXISTS "${_candidate}")
-        set(_USD_ROOT_INDEX "${_candidate}")
-    endif()
-endforeach()
-
-if(WIN32)
-    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/usd")
-else()
-    set(_USD_PLUGIN_DEST "$<TARGET_FILE_DIR:${PROJECT_NAME}>/../lib/usd")
-endif()
-
-if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${_USD_PLUGIN_DEST}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-            "${_USD_PLUGIN_SOURCE_DIR}"
-            "${_USD_PLUGIN_DEST}"
-        COMMENT "Copying OpenUSD plugin resources (per-module)"
-    )
-    message(STATUS "Post-build: OpenUSD plugin resources will be copied from ${_USD_PLUGIN_SOURCE_DIR}")
-endif()
-
-if(EXISTS "${_USD_ROOT_INDEX}")
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${_USD_ROOT_INDEX}"
-            "${_USD_PLUGIN_DEST}/plugInfo.json"
-        COMMENT "Copying OpenUSD root plugin index"
-    )
-endif()
+# Copy HTML viewer export resources (read at export time by html.cpp, not
+# compiled in; named target so editing them doesn't require a full rebuild)
+add_custom_target(copy_viewer_resource_files
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/viewer"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer"
+        "${RESOURCE_DIR}/viewer"
+    COMMENT "Syncing HTML viewer export resources"
+)
+add_dependencies(${PROJECT_NAME} copy_viewer_resource_files)
 
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
@@ -901,57 +1133,16 @@ elseif(WIN32)
     endif()
 endif()
 
-# Build type configuration function
-function(configure_build_type target)
-    get_target_property(target_type ${target} TYPE)
-
-    if(target_type STREQUAL "INTERFACE_LIBRARY")
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} INTERFACE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} INTERFACE RELEASE_BUILD)
-        endif()
-        # Debug options for interface libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} INTERFACE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} INTERFACE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} INTERFACE TENSOR_OP_TRACING)
-        endif()
-    else()
-        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-            target_compile_definitions(${target} PRIVATE DEBUG_BUILD)
-        elseif(CMAKE_BUILD_TYPE STREQUAL "Release|RelWithDebInfo|MinSizeRel")
-            target_compile_definitions(${target} PRIVATE RELEASE_BUILD)
-        endif()
-        # Debug options for regular libraries
-        if(ENABLE_TENSOR_VALIDATION)
-            target_compile_definitions(${target} PRIVATE TENSOR_VALIDATION_ENABLED)
-        endif()
-        if(ENABLE_CUDA_DEBUG_SYNC)
-            target_compile_definitions(${target} PRIVATE CUDA_DEBUG_SYNC)
-        endif()
-        if(ENABLE_TENSOR_OP_TRACING)
-            target_compile_definitions(${target} PRIVATE TENSOR_OP_TRACING)
-        endif()
-    endif()
-endfunction()
-
-# Apply build configuration to all targets
-configure_build_type(fastlfs_backend)
-configure_build_type(lfs_core)
-configure_build_type(lfs_core_cuda)
-configure_build_type(lfs_training)
-configure_build_type(lfs_rendering_tensor)
-configure_build_type(lfs_rendering)
-configure_build_type(lfs_visualizer)
-configure_build_type(lfs_io)
-configure_build_type(lfs_geometry)
-configure_build_type(lfs_tcp)
-configure_build_type(${PROJECT_NAME})
+if(UNIX)
+    add_custom_target(validate-gui
+        COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/run_vulkan_validation.sh"
+                --binary "$<TARGET_FILE:${PROJECT_NAME}>"
+        DEPENDS ${PROJECT_NAME}
+        USES_TERMINAL
+        COMMENT "Launching LichtFeld Studio with source-built Vulkan validation"
+        VERBATIM
+    )
+endif()
 
 if(LFS_FAST_COMPILE AND MSVC)
     function(lfs_enable_fast_cxx_compile target)
@@ -988,13 +1179,17 @@ endif()
 # =============================================================================
 # TESTING (Optional)
 # =============================================================================
-if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY)
+if(BUILD_TESTS OR BUILD_UNICODE_TEST_ONLY OR BUILD_FORMAT_TESTS OR BUILD_LOCALIZATION_TESTS)
     enable_testing()
     add_subdirectory(tests)
     if(BUILD_UNICODE_TEST_ONLY)
         message(STATUS "Unicode path test enabled. Build with 'ninja unicode_path_test' and run with 'ctest -R UnicodePathTest'")
+    elseif(BUILD_LOCALIZATION_TESTS AND NOT BUILD_TESTS)
+        message(STATUS "Headless localization tests enabled. Build with 'ninja test_localization_contracts' and run with 'ctest -R LocalizationContracts'")
+    elseif(NOT BUILD_TESTS)
+        message(STATUS "Format tests enabled. Build with 'ninja lichtfeld_format_tests' and run with 'ctest -L format'")
     else()
-        message(STATUS "Tests enabled. Build with 'ninja lichtfeld_tests' and run with 'ninja run_tests' or 'ctest'")
+        message(STATUS "Tests enabled. Build with 'ninja lichtfeld_tests' and run with 'ninja run_tests' or 'ctest -L fast'")
     endif()
 endif()
 
@@ -1013,7 +1208,6 @@ message(STATUS "  LibArchive Found: ${LibArchive_FOUND}")
 message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  CUDA Standard: ${CMAKE_CUDA_STANDARD}")
-message(STATUS "  OpenImageIO Found: ${OpenImageIO_FOUND}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Unicode Test Only: ${BUILD_UNICODE_TEST_ONLY}")
 message(STATUS "  Portable Build: ${BUILD_PORTABLE}")
@@ -1086,23 +1280,9 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo.png" D
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/volinga-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
-
-# OpenUSD plugin resources (schema definitions + plugInfo.json files)
-# On Windows configure_usd_plugins() looks for <exe_dir>/usd → install next to the exe (bin/usd).
-# On Linux it looks for <exe_dir>/../lib/usd → install in lib/usd (unchanged).
-if(WIN32)
-    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_BINDIR}/usd")
-else()
-    set(_USD_INSTALL_DEST "${CMAKE_INSTALL_LIBDIR}/usd")
-endif()
-if(EXISTS "${_USD_PLUGIN_SOURCE_DIR}")
-    install(DIRECTORY "${_USD_PLUGIN_SOURCE_DIR}/" DESTINATION "${_USD_INSTALL_DEST}"
-            PATTERN "__pycache__" EXCLUDE
-            PATTERN "*.pyc" EXCLUDE)
-endif()
-if(EXISTS "${_USD_ROOT_INDEX}")
-    install(FILES "${_USD_ROOT_INDEX}" DESTINATION "${_USD_INSTALL_DEST}")
-endif()
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locale_index.json"
+        DESTINATION "${INSTALL_RESOURCE_DIR}")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/viewer" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 # Plugin development documentation
 set(DOC_INSTALL_DIR "${CMAKE_INSTALL_DATADIR}/doc/LichtFeld-Studio")
@@ -1131,6 +1311,23 @@ if(TARGET nvimgcodec)
             LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions"
             RUNTIME DESTINATION "extensions"
         )
+        if(WITH_DYNAMIC_NVJPEG2K AND DEFINED _lfs_nvjpeg2k_runtime_file AND EXISTS "${_lfs_nvjpeg2k_runtime_file}")
+            if(WIN32)
+                install(FILES "${_lfs_nvjpeg2k_runtime_file}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+            elseif(UNIX)
+                install(FILES "${_lfs_nvjpeg2k_runtime_file}" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+                install(CODE "
+                    execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
+                        \"${_lfs_nvjpeg2k_runtime_name}\"
+                        \"libnvjpeg2k.so.0\"
+                        WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+                    execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink
+                        \"libnvjpeg2k.so.0\"
+                        \"libnvjpeg2k.so\"
+                        WORKING_DIRECTORY \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+                ")
+            endif()
+        endif()
     endif()
 endif()
 

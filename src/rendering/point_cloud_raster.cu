@@ -100,6 +100,25 @@ namespace lfs::rendering::pcraster {
                     }
                     desaturate = true;
                 }
+            } else if (params.has_crop_ellipsoid) {
+                const float* T = params.crop_ellipsoid.to_local;
+                const float lx = matMulRow(T, 0, x, y, z, 1.0f);
+                const float ly = matMulRow(T, 1, x, y, z, 1.0f);
+                const float lz = matMulRow(T, 2, x, y, z, 1.0f);
+                const float rx = fmaxf(fabsf(params.crop_ellipsoid.radii[0]), 1e-8f);
+                const float ry = fmaxf(fabsf(params.crop_ellipsoid.radii[1]), 1e-8f);
+                const float rz = fmaxf(fabsf(params.crop_ellipsoid.radii[2]), 1e-8f);
+                const float norm = (lx * lx) / (rx * rx) +
+                                   (ly * ly) / (ry * ry) +
+                                   (lz * lz) / (rz * rz);
+                const bool inside = norm <= 1.0f;
+                const bool visible = params.crop_ellipsoid.inverse ? !inside : inside;
+                if (!visible) {
+                    if (!params.crop_ellipsoid.desaturate) {
+                        return;
+                    }
+                    desaturate = true;
+                }
             }
 
             const float* V = params.view;
@@ -121,7 +140,7 @@ namespace lfs::rendering::pcraster {
                 const float dz = view_z / len;
                 const float pi = 3.14159265358979323846f;
                 const float u = 0.5f + atan2f(dx, -dz) / (2.0f * pi);
-                const float v = 0.5f + asinf(fminf(fmaxf(dy, -1.0f), 1.0f)) / pi;
+                const float v = 0.5f - asinf(fminf(fmaxf(dy, -1.0f), 1.0f)) / pi;
                 pixel_x = u * static_cast<float>(params.width - 1);
                 pixel_y = v * static_cast<float>(params.height - 1);
                 if (!isfinite(pixel_x) || !isfinite(pixel_y) ||
@@ -149,7 +168,7 @@ namespace lfs::rendering::pcraster {
                     return;
                 }
                 pixel_x = (ndc_x * 0.5f + 0.5f) * static_cast<float>(params.width - 1);
-                pixel_y = (ndc_y * 0.5f + 0.5f) * static_cast<float>(params.height - 1);
+                pixel_y = (0.5f - ndc_y * 0.5f) * static_cast<float>(params.height - 1);
                 depth = params.orthographic ? -view_z : fmaxf(-view_z, 0.0f);
                 if (depth <= 0.0f && !params.orthographic) {
                     return;

@@ -89,6 +89,7 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ExtremeOpacity_ProducesNaN) {
         opacities.ptr<float>(),
         scales.ptr<float>(),
         ratios.ptr<int32_t>(),
+        0.005f,
         new_opacities.ptr<float>(),
         new_scales.ptr<float>(),
         N);
@@ -139,6 +140,7 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_NormalOpacity_NoNaN) {
         opacities.ptr<float>(),
         scales.ptr<float>(),
         ratios.ptr<int32_t>(),
+        0.005f,
         new_opacities.ptr<float>(),
         new_scales.ptr<float>(),
         N);
@@ -177,6 +179,7 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ReproduceGaussian15975) {
         opacities.ptr<float>(),
         scales.ptr<float>(),
         ratios.ptr<int32_t>(),
+        0.005f,
         new_opacities.ptr<float>(),
         new_scales.ptr<float>(),
         N);
@@ -225,6 +228,7 @@ TEST_F(MCMCNaNFixTest, NewScalesLog_ProducesValidOutput) {
             opacities.ptr<float>(),
             scales.ptr<float>(),
             ratios.ptr<int32_t>(),
+            0.005f,
             new_opacities.ptr<float>(),
             new_scales.ptr<float>(),
             N);

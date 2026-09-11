@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include <array>
 #include <gtest/gtest.h>
+#include <numeric>
 #include <torch/torch.h>
 #include <vector>
 
@@ -190,15 +192,13 @@ TEST_F(TensorViewTest, InvalidView) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({2, 3, 4});
 
     // Wrong number of elements
-    auto invalid_custom = tensor_custom.view({5, 5});
-    EXPECT_FALSE(invalid_custom.is_valid());
+    EXPECT_THROW(tensor_custom.view({5, 5}), std::runtime_error);
 
     // PyTorch throws exception
     EXPECT_THROW(tensor_torch.view({5, 5}), std::exception);
 
     // Multiple -1
-    auto invalid2_custom = tensor_custom.view({-1, -1});
-    EXPECT_FALSE(invalid2_custom.is_valid());
+    EXPECT_THROW(tensor_custom.view({-1, -1}), std::runtime_error);
 
     EXPECT_THROW(tensor_torch.view({-1, -1}), std::exception);
 }
@@ -253,21 +253,13 @@ TEST_F(TensorViewTest, InvalidSlice) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({10, 5});
 
     // Out of range dimension
-    auto invalid1_custom = tensor_custom.slice(2, 0, 1);
-    EXPECT_FALSE(invalid1_custom.is_valid());
+    EXPECT_THROW(tensor_custom.slice(2, 0, 1), std::runtime_error);
 
     // Invalid range (start > end)
-    auto invalid2_custom = tensor_custom.slice(0, 5, 3);
-    EXPECT_FALSE(invalid2_custom.is_valid());
+    EXPECT_THROW(tensor_custom.slice(0, 5, 3), std::runtime_error);
 
-    // end > size - PyTorch allows this and clamps
-    auto slice_custom = tensor_custom.slice(0, 0, 11);
-    auto slice_torch = tensor_torch.slice(0, 0, 11); // PyTorch clamps to 10
-
-    // Either should fail or clamp to size
-    if (slice_custom.is_valid()) {
-        compare_tensors(slice_custom, slice_torch, 1e-5f, 1e-7f, "SliceClamp");
-    }
+    // Unlike PyTorch's clamping slice, the LFS API rejects an invalid range.
+    EXPECT_THROW(tensor_custom.slice(0, 0, 11), std::runtime_error);
 }
 
 // ============= Squeeze/Unsqueeze Tests =============
@@ -387,8 +379,7 @@ TEST_F(TensorViewTest, ExpandErrors) {
     auto [tensor_custom, tensor_torch] = create_test_tensors({3, 4});
 
     // Cannot expand non-singleton dimension to different size
-    auto invalid_custom = tensor_custom.expand({3, 5});
-    EXPECT_FALSE(invalid_custom.is_valid());
+    EXPECT_THROW(tensor_custom.expand({3, 5}), std::runtime_error);
     EXPECT_THROW(tensor_torch.expand({3, 5}), std::exception);
 
     // Valid expand from singleton
@@ -410,6 +401,87 @@ TEST_F(TensorViewTest, TransposeBasic) {
 
     EXPECT_TRUE(transposed_custom.is_valid());
     EXPECT_EQ(transposed_custom.numel(), tensor_custom.numel());
+}
+
+TEST_F(TensorViewTest, ViewMetadataAndMaterializationOwnership) {
+    const auto base = Tensor::arange(120.0f).to(Device::CUDA).reshape({4, 5, 6});
+    const auto transposed = base.transpose(0, 1);
+
+    EXPECT_EQ(base.strides(), (std::vector<size_t>{30, 6, 1}));
+    EXPECT_EQ(transposed.strides(), (std::vector<size_t>{6, 30, 1}));
+    EXPECT_EQ(transposed.storage_offset(), 0u);
+    EXPECT_TRUE(transposed.is_view());
+    EXPECT_FALSE(transposed.owns_memory());
+    EXPECT_FALSE(transposed.is_contiguous());
+
+    const auto sliced = base.slice(0, 1, 3);
+    EXPECT_EQ(sliced.storage_offset(), 30u);
+    EXPECT_TRUE(sliced.is_view());
+    EXPECT_FALSE(sliced.owns_memory());
+    EXPECT_TRUE(sliced.is_contiguous());
+
+    const auto materialized = transposed.contiguous();
+    EXPECT_TRUE(materialized.owns_memory());
+    EXPECT_FALSE(materialized.is_view());
+    EXPECT_TRUE(materialized.is_contiguous());
+    EXPECT_EQ(materialized.to_vector(), transposed.to_vector());
+}
+
+TEST_F(TensorViewTest, BroadcastPointwiseMaterializationDoesNotMutateViewSource) {
+    constexpr int height = 4;
+    constexpr int width = 5;
+    std::vector<float> values(3 * height * width);
+    std::iota(values.begin(), values.end(), -3.0f);
+    const auto make_channels = [](const std::array<float, 3>& channels) {
+        return Tensor::from_vector(
+            std::vector<float>(channels.begin(), channels.end()),
+            TensorShape({1, 3, 1, 1}), Device::CUDA);
+    };
+    const auto shift = make_channels({0.25f, -0.5f, 1.25f});
+    const auto scale = make_channels({0.5f, 2.0f, 4.0f});
+    const auto expected_source = values;
+    const auto base = Tensor::from_vector(values, TensorShape({3, height, width}), Device::CUDA);
+
+    auto run_case = [&](const char* name, const Tensor& input, const Tensor& expected_input,
+                        const Tensor& result) {
+        ASSERT_EQ(input.to_vector(), expected_input.to_vector()) << name;
+        const auto output = result.to_vector();
+        ASSERT_EQ(output.size(), values.size()) << name;
+        constexpr std::array<float, 3> shifts{0.25f, -0.5f, 1.25f};
+        constexpr std::array<float, 3> scales{0.5f, 2.0f, 4.0f};
+        for (std::size_t i = 0; i < output.size(); ++i) {
+            const auto channel = i / static_cast<std::size_t>(height * width);
+            const float expected = (values[i] - shifts[channel]) / scales[channel];
+            EXPECT_FLOAT_EQ(output[i], expected)
+                << name << " index=" << i;
+        }
+    };
+
+    const auto view = base.unsqueeze(0);
+    const auto direct_result = view.sub(shift).div(scale).contiguous();
+    run_case("unsqueeze view sub-div", base, Tensor::from_vector(expected_source, TensorShape({3, height, width}), Device::CUDA),
+             direct_result.squeeze(0));
+
+    auto materialized_view = view.sub(shift).div(scale).contiguous();
+    EXPECT_TRUE(materialized_view.owns_memory());
+    EXPECT_FALSE(materialized_view.is_view());
+    ASSERT_EQ(base.to_vector(), expected_source);
+
+    auto view_chain = base.unsqueeze(0);
+    view_chain = view_chain.mul(scale).sub(shift).contiguous();
+    EXPECT_EQ(base.to_vector(), view_chain.squeeze(0).to_vector());
+
+    auto write_through_view = base.unsqueeze(0);
+    const auto write_through_source = write_through_view.mul(scale).sub(shift).contiguous();
+    write_through_view = write_through_source;
+    EXPECT_EQ(base.to_vector(), write_through_source.squeeze(0).to_vector());
+
+    const auto batched = Tensor::from_vector(
+        values, TensorShape({1, 3, height, width}), Device::CUDA);
+    const auto batched_before = batched.to_vector();
+    const auto batched_result = batched.sub(shift).div(scale).contiguous();
+    ASSERT_EQ(batched.to_vector(), batched_before);
+    ASSERT_EQ(batched_result.squeeze(0).to_vector(), materialized_view.squeeze(0).to_vector());
 }
 
 TEST_F(TensorViewTest, PermuteBasic) {
@@ -579,15 +651,11 @@ TEST_F(TensorViewTest, SqueezeEdgeCases) {
     auto squeezed_custom = all_ones_custom.squeeze();
     auto squeezed_torch = all_ones_torch.squeeze();
 
-    // Known difference: Custom implementation keeps at least rank 1,
-    // PyTorch goes to rank 0 (scalar tensor)
-    EXPECT_EQ(squeezed_custom.ndim(), 1); // Custom: shape {1}
-    EXPECT_EQ(squeezed_torch.dim(), 0);   // PyTorch: 0-D scalar
+    EXPECT_EQ(squeezed_custom.ndim(), 0);
+    EXPECT_EQ(squeezed_torch.dim(), 0);
 
     // Values should still match
     EXPECT_FLOAT_EQ(squeezed_custom.item(), squeezed_torch.item<float>());
-
-    std::cout << "WARNING: squeeze() on all-1 dims keeps rank 1, PyTorch goes to rank 0 (known difference)\n";
 
     // No dimensions of size 1
     auto [no_ones_custom, no_ones_torch] = create_test_tensors({2, 3, 4});

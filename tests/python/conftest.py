@@ -3,6 +3,7 @@
 """Pytest configuration and fixtures for lichtfeld module tests."""
 
 import hashlib
+import logging
 import os
 import sys
 import tempfile
@@ -12,7 +13,7 @@ import pytest
 
 # Find the build directory and add to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-BUILD_DIR = PROJECT_ROOT / "build"
+BUILD_DIR = Path(os.environ.get("LFS_TEST_BUILD_DIR", PROJECT_ROOT / "build"))
 SOURCE_MODULE_PATH = PROJECT_ROOT / "src" / "python"
 
 # Add the source Python modules first so tests exercise the working tree.
@@ -24,9 +25,24 @@ MODULE_PATH = BUILD_DIR / "src" / "python"
 if MODULE_PATH.exists():
     sys.path.insert(1 if SOURCE_MODULE_PATH.exists() else 0, str(MODULE_PATH))
 
+# Since Python 3.8, PATH is not searched for extension-module dependencies on
+# Windows; part of lichtfeld's DLL chain lives only in the build root.
+if sys.platform == "win32" and BUILD_DIR.exists():
+    # Keep the handle alive so the registration lasts for the whole session.
+    _dll_dir = os.add_dll_directory(str(BUILD_DIR))
+
+# Ensure the C++ extension is loaded before numpy/torch so exception unwind
+# is not poisoned by their bundled native libs (see lane G nightly abort).
+try:
+    import lichtfeld  # noqa: F401
+except Exception:
+    pass
+
 
 # The real, user-facing Asset Manager catalog. No test may ever write here.
-PRODUCTION_ASSET_CATALOG_DIR = Path.home() / ".lichtfeld" / "asset_manager"
+PRODUCTION_ASSET_CATALOG_DIR = (
+    Path.home() / ".lichtfeld" / "data" / "asset_library"
+)
 
 
 def _asset_catalog_fingerprint():
@@ -52,8 +68,10 @@ def pytest_configure(config):
     # (import/collection time). Per-test fixtures override this with their own
     # temp dir; this baseline only guarantees nothing resolves to production.
     session_catalog = Path(tempfile.gettempdir()) / "lfs-test-asset-manager"
-    os.environ.setdefault("LICHTFELD_ASSET_MANAGER_DIR", str(session_catalog))
     os.environ.setdefault("LFS_ASSET_MANAGER_DIR", str(session_catalog))
+    os.environ.setdefault(
+        "LFS_ASSET_MANAGER_ASSETS_DIR", str(session_catalog / "assets")
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -79,29 +97,100 @@ def guard_production_asset_catalog():
 def isolate_asset_manager_catalog(tmp_path, monkeypatch):
     """Redirect the Asset Manager catalog to a per-test temp directory.
 
-    Code paths that resolve the catalog implicitly (e.g.
-    register_catalog_asset_path -> load_asset_index) otherwise write into the
-    user's real ~/.lichtfeld/asset_manager/library.json, leaving dead entries
-    that point at deleted pytest tmp dirs. resolve_asset_manager_storage_path()
-    reads these env vars first on every call, so the redirect is binding-proof;
-    pinning the legacy path to the temp dir suppresses the real-catalog copy.
+    Code paths that resolve the catalog implicitly otherwise write into the
+    user's real Asset Manager library. resolve_asset_manager_storage_path()
+    reads this env var first on every call, so the redirect is binding-proof.
     """
-    catalog_dir = tmp_path / "asset_manager"
-    monkeypatch.setenv("LICHTFELD_ASSET_MANAGER_DIR", str(catalog_dir))
+    catalog_dir = tmp_path / "asset_library"
     monkeypatch.setenv("LFS_ASSET_MANAGER_DIR", str(catalog_dir))
-    try:
-        from lfs_plugins import asset_index
-
-        monkeypatch.setattr(asset_index, "LEGACY_STORAGE_PATH", catalog_dir, raising=False)
-        monkeypatch.setattr(
-            asset_index, "LEGACY_LIBRARY_PATH", catalog_dir / "library.json", raising=False
-        )
-        monkeypatch.setattr(
-            asset_index, "DEFAULT_LIBRARY_PATH", catalog_dir / "library.json", raising=False
-        )
-    except Exception:
-        pass
+    monkeypatch.setenv("LFS_ASSET_MANAGER_ASSETS_DIR", str(tmp_path / "assets"))
     return catalog_dir
+
+
+@pytest.fixture(autouse=True)
+def isolate_lichtfeld_module_overrides():
+    """Keep test-local module stubs from leaking into later test modules.
+
+    Several UI tests replace ``lichtfeld`` and reload ``lfs_plugins`` against
+    that stub. Restoring only ``lichtfeld`` leaves already-imported plugin
+    modules holding the stub, making otherwise independent files fail according
+    to collection order. Preserve the module graph seen at test entry and put it
+    back after the test.
+    """
+    prefixes = ("lichtfeld", "lfs_plugins")
+
+    def is_managed(name):
+        return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
+
+    before = {name: module for name, module in sys.modules.items() if is_managed(name)}
+    manager_before = sys.modules.get("lfs_plugins.manager")
+    manager_lf_before = getattr(manager_before, "_lf", None)
+    plugin_loggers = (
+        logging.getLogger("lfs_plugins"),
+        logging.getLogger("lfs_plugins.manager"),
+    )
+    handlers_before = {
+        logger: tuple(logger.handlers) for logger in plugin_loggers
+    }
+    yield
+
+    for logger in plugin_loggers:
+        logger.handlers[:] = handlers_before[logger]
+    if manager_before is not None:
+        manager_before._lf = manager_lf_before
+
+    extras = {
+        name: sys.modules[name]
+        for name in list(sys.modules)
+        if is_managed(name) and name not in before
+    }
+    for name, module in extras.items():
+        del sys.modules[name]
+        parent_name, dot, attr = name.rpartition(".")
+        if not dot:
+            continue
+        parent = sys.modules.get(parent_name)
+        if parent is not None and getattr(parent, attr, None) is module:
+            delattr(parent, attr)
+
+    sys.modules.update(before)
+
+    # A test may delete and re-import the manager while a stub is installed;
+    # restore its logging bridge to the restored runtime module as well.
+    restored_manager = sys.modules.get("lfs_plugins.manager")
+    restored_lf = sys.modules.get("lichtfeld")
+    if restored_manager is not None and restored_lf is not None:
+        restored_manager._lf = restored_lf
+
+    # `sys.modules.pop("lfs_plugins.types")` + reimport rebinds the live
+    # package attribute even after the original module is restored in
+    # sys.modules. Native register_class looks up Operator via
+    # import("lfs_plugins.types"), while tests do `from lfs_plugins import
+    # types`; those must be the same object.
+    for name, module in before.items():
+        parent_name, dot, attr = name.rpartition(".")
+        if not dot:
+            continue
+        parent = sys.modules.get(parent_name)
+        if parent is not None:
+            setattr(parent, attr, module)
+
+
+@pytest.fixture
+def bypass_plugin_installer(monkeypatch):
+    """Keep manager behavior tests independent from the bundled uv runtime."""
+    from lfs_plugins.installer import PluginInstaller
+
+    monkeypatch.setattr(
+        PluginInstaller,
+        "ensure_venv",
+        lambda self, *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        PluginInstaller,
+        "install_dependencies",
+        lambda self, *args, **kwargs: True,
+    )
 
 
 @pytest.fixture(scope="session")

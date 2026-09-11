@@ -46,12 +46,14 @@ namespace lfs::vis {
 
     // Selection sub-modes (for selection tool)
     enum class SelectionSubMode : uint8_t {
-        Centers,
-        Rectangle,
-        Polygon,
-        Lasso,
-        Rings,
-        Color
+        Centers = 0,
+        Rectangle = 1,
+        Polygon = 2,
+        Lasso = 3,
+        Rings = 4,
+        Color = 5,
+        Box = 6,
+        Sphere = 7
     };
 
     // Transform coordinate space
@@ -75,13 +77,7 @@ namespace lfs::vis {
         void update(const SceneManager* scene_manager, const TrainerManager* trainer_manager);
 
         // Mode queries
-        [[nodiscard]] EditorMode getMode() const { return mode_; }
-        [[nodiscard]] bool isPreTraining() const { return mode_ == EditorMode::PRE_TRAINING; }
         [[nodiscard]] bool isTraining() const { return mode_ == EditorMode::TRAINING; }
-        [[nodiscard]] bool isTrainingOrPaused() const {
-            return mode_ == EditorMode::TRAINING || mode_ == EditorMode::PAUSED;
-        }
-        [[nodiscard]] bool isFinished() const { return mode_ == EditorMode::FINISHED; }
         [[nodiscard]] bool isToolsDisabled() const {
             return mode_ == EditorMode::TRAINING || mode_ == EditorMode::PAUSED || mode_ == EditorMode::FINISHED;
         }
@@ -98,13 +94,17 @@ namespace lfs::vis {
         // Capability queries
         [[nodiscard]] bool canTransformSelectedNode() const;
         [[nodiscard]] bool canSelectGaussians() const;
-        [[nodiscard]] bool hasGaussians() const { return has_gaussians_; }
         [[nodiscard]] bool forcePointCloudMode() const { return mode_ == EditorMode::PRE_TRAINING; }
 
         // Active tool management (legacy - will be removed)
         void setActiveTool(ToolType tool);
         [[nodiscard]] ToolType getActiveTool() const { return active_tool_; }
-        void validateActiveTool();
+        void armToolRestoreGuard() { tool_restore_guard_ = true; }
+        [[nodiscard]] bool consumeToolRestoreGuard() {
+            const bool armed = tool_restore_guard_;
+            tool_restore_guard_ = false;
+            return armed;
+        }
 
         // String-based operator system (Blender-style)
         void setActiveOperator(const std::string& id, const std::string& gizmo_type);
@@ -134,6 +134,15 @@ namespace lfs::vis {
         bool dispatchModalEvent(const ModalEvent& evt) const override { return modal_event_cb_ ? modal_event_cb_(evt) : false; }
 
     private:
+        std::uint64_t last_scene_generation_ = 0;
+        std::uint64_t last_selection_generation_ = 0;
+        bool last_has_scene_manager_ = false;
+        bool last_has_trainer_manager_ = false;
+        bool last_trainer_running_ = false;
+        bool last_trainer_paused_ = false;
+        bool last_trainer_finished_ = false;
+        std::size_t last_scene_node_count_ = 0;
+        bool state_initialized_ = false;
         EditorMode mode_ = EditorMode::EMPTY;
         core::NodeType selected_node_type_ = core::NodeType::SPLAT;
         ToolType active_tool_ = ToolType::None;
@@ -142,6 +151,7 @@ namespace lfs::vis {
         bool has_editable_transform_selection_ = false;
         bool has_splat_selection_ = false;
         bool has_editable_splat_selection_ = false;
+        bool tool_restore_guard_ = false;
         std::string transform_selection_error_;
 
         // String-based operator system

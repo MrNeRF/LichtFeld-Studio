@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Regression tests for plugin structure validation."""
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,41 @@ class MainPanel(lf.ui.Panel):
     def draw(self, ui):
         ui.label("hello")
 """,
+    )
+
+    assert validate_plugin(plugin_dir) == []
+
+
+def test_validator_ignores_panel_sources_inside_venv(tmp_path):
+    from lfs_plugins.validator import validate_plugin
+
+    plugin_dir = tmp_path / "example_plugin"
+    _write_plugin(
+        plugin_dir,
+        """import lichtfeld as lf
+
+
+class MainPanel(lf.ui.Panel):
+    id = "example.main_panel"
+    label = "Example"
+    space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+""",
+    )
+
+    venv = plugin_dir / ".venv"
+    python_name = "python.exe" if sys.platform == "win32" else "python"
+    python_path = venv / ("Scripts" if sys.platform == "win32" else "bin") / python_name
+    python_path.parent.mkdir(parents=True)
+    python_path.touch()
+    dependency = venv / "Lib" / "site-packages" / "dependency.py"
+    dependency.parent.mkdir(parents=True)
+    dependency.write_text(
+        "import lichtfeld as lf\n"
+        "from pathlib import Path\n\n"
+        "class DependencyPanel(lf.ui.Panel):\n"
+        "    template = str(Path(__file__).with_name('missing.rml'))\n"
+        "    label = '日本語'\n",
+        encoding="utf-8",
     )
 
     assert validate_plugin(plugin_dir) == []

@@ -39,16 +39,5 @@ namespace lfs {
             world2BBox_ = EuclideanTransform(transform);
         }
 
-        glm::vec3 BoundingBox::getCenter() const {
-            const auto local_center = (min_bounds_ + max_bounds_) * 0.5f;
-            const auto world_center = world2BBox_.inv().transformPoint(local_center);
-            return glm::vec3{world_center};
-        }
-
-        glm::vec3 BoundingBox::getLocalCenter() const {
-            const auto local_center = (min_bounds_ + max_bounds_) * 0.5f;
-            return glm::vec3{local_center};
-        }
-
     } // namespace geometry
 } // namespace lfs

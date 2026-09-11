@@ -17,6 +17,7 @@ def _install_stub_modules(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
+        PanelSpace=SimpleNamespace(FLOATING="FLOATING", BOTTOM_DOCK="BOTTOM_DOCK"),
         add_hook=lambda panel, section, callback, position="append": hook_calls.append(
             (panel, section, callback, position)
         ),
@@ -25,6 +26,12 @@ def _install_stub_modules(monkeypatch):
         ),
         get_active_tool=lambda: "",
         get_active_submode=lambda: "",
+        get_panel=lambda _panel_id: SimpleNamespace(space="BOTTOM_DOCK"),
+        get_bottom_dock_active_tab=lambda: "",
+        set_bottom_dock_active_tab=lambda _panel_id: None,
+        set_sequencer_visible=lambda _visible: None,
+        is_sequencer_visible=lambda: False,
+        set_panel_enabled=lambda _panel_id, _enabled: None,
         rml=SimpleNamespace(get_document=lambda _name: None),
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
@@ -48,6 +55,10 @@ def _install_stub_modules(monkeypatch):
         def set_active(_tool_id):
             return None
 
+        @staticmethod
+        def sync_native_active():
+            return None
+
     tools_mod.ToolRegistry = _ToolRegistryStub
     monkeypatch.setitem(sys.modules, "lfs_plugins.tools", tools_mod)
 
@@ -57,7 +68,10 @@ def _install_stub_modules(monkeypatch):
 
     ui_pkg = ModuleType("lfs_plugins.ui")
     ui_pkg.__path__ = []
-    ui_pkg.RuntimeState = SimpleNamespace(trainer_state=SimpleNamespace(value="idle"))
+    ui_pkg.RuntimeState = SimpleNamespace(
+        trainer_state=SimpleNamespace(value="idle"),
+        language_generation=SimpleNamespace(value=0),
+    )
     ui_pkg.native_value = lambda _field, fallback: fallback
     monkeypatch.setitem(sys.modules, "lfs_plugins.ui", ui_pkg)
 
@@ -243,10 +257,13 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "transform_flyout_open" not in model.bound_funcs
     assert "selection_group_buttons" in model.bound_record_lists
     assert "selection_mode_buttons" in model.bound_record_lists
+    assert "selection_volume_gizmo_buttons" in model.bound_record_lists
     assert "transform_group_buttons" in model.bound_record_lists
     assert "transform_tool_buttons" in model.bound_record_lists
     assert "mirror_group_buttons" in model.bound_record_lists
     assert "crop_group_buttons" in model.bound_record_lists
+    assert "crop_enable_buttons" in model.bound_record_lists
+    assert "crop_settings_buttons" in model.bound_record_lists
     assert "crop_object_buttons" in model.bound_record_lists
     assert "crop_transform_buttons" in model.bound_record_lists
     assert "crop_action_buttons" in model.bound_record_lists
@@ -255,6 +272,16 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "show_transform_space_controls" in model.bound_funcs
     assert "show_transform_pivot_controls" in model.bound_funcs
     assert "show_crop_toolbar" in model.bound_funcs
+    assert "show_crop_edit_controls" in model.bound_funcs
+    assert "show_crop_enable_separator" in model.bound_funcs
+    assert "crop_roi_settings_open" in model.bound_funcs
+    assert "crop_roi_params_available" in model.bound_funcs
+    assert "label_crop_roi_settings" in model.bound_funcs
+    assert "label_cropbox_lr_scale" in model.bound_funcs
+    assert "label_cropbox_loss_weight" in model.bound_funcs
+    assert "cropbox_lr_scale" in model.bound_binds
+    assert "cropbox_loss_weight" in model.bound_binds
+    assert "show_selection_volume_gizmos" in model.bound_funcs
     assert "toolbar_action" in model.bound_events
     assert "selection_tool_label" not in model.bound_funcs
     assert "selection_mode_label" not in model.bound_funcs
@@ -269,7 +296,9 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "selection_depth_far_slider_min" in model.bound_funcs
     assert "selection_depth_far_slider_max" in model.bound_funcs
     assert "selection_action" in model.bound_events
-    assert "transform_tool_label" in model.bound_funcs
+    assert "transform_show_translate" in model.bound_funcs
+    assert "transform_show_rotate" in model.bound_funcs
+    assert "transform_show_scale" in model.bound_funcs
     assert "transform_bake_label" in model.bound_funcs
     assert "transform_show_actions" in model.bound_funcs
     assert "transform_pos_x_str" in model.bound_binds
@@ -282,6 +311,54 @@ def test_toolbar_binds_overlay_model_fields(toolbar_module):
     assert "viewport_export_custom_height_str" in model.bound_binds
     assert "viewport_export_can_export" in model.bound_funcs
     assert "viewport_export_action" in model.bound_events
+
+
+def test_bottom_dock_toolbar_selection_and_dispatch_rules(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    spaces = {
+        module._SEQUENCER_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
+        module._HISTOGRAM_PANEL_ID: lf_stub.ui.PanelSpace.BOTTOM_DOCK,
+    }
+    visible = {module._SEQUENCER_PANEL_ID: False, module._HISTOGRAM_PANEL_ID: False}
+    active = [""]
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "get_panel",
+        lambda panel_id: SimpleNamespace(space=spaces[panel_id]),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_bottom_dock_active_tab", lambda: active[0], raising=False)
+
+    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, False)
+    visible[module._HISTOGRAM_PANEL_ID] = True
+    assert not module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+    active[0] = module._HISTOGRAM_PANEL_ID
+    assert module._bottom_dock_panel_selected(module._HISTOGRAM_PANEL_ID, True)
+
+    calls = []
+    set_visible = lambda value: calls.append(("visible", value))
+    set_active = lambda panel_id: (calls.append(("active", panel_id)), active.__setitem__(0, panel_id))
+    monkeypatch.setattr(lf_stub.ui, "set_bottom_dock_active_tab", set_active, raising=False)
+
+    active[0] = ""
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, False, set_visible)
+    assert calls[-2:] == [("visible", True), ("active", module._HISTOGRAM_PANEL_ID)]
+
+    calls.clear()
+    active[0] = module._SEQUENCER_PANEL_ID
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("active", module._HISTOGRAM_PANEL_ID)]
+
+    calls.clear()
+    active[0] = module._HISTOGRAM_PANEL_ID
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("visible", False)]
+
+    spaces[module._HISTOGRAM_PANEL_ID] = lf_stub.ui.PanelSpace.FLOATING
+    calls.clear()
+    module._toggle_bottom_dock_panel(module._HISTOGRAM_PANEL_ID, True, set_visible)
+    assert calls == [("visible", False)]
 
 
 def test_toolbar_attach_handle_marks_model_dirty(toolbar_module):
@@ -412,7 +489,7 @@ def test_selection_tool_uses_centered_modes(toolbar_module, monkeypatch):
 def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     lf_stub = sys.modules["lichtfeld"]
-    state = SimpleNamespace(active_tool="", transform_space=1, pivot_mode=0, mirror_calls=[])
+    state = SimpleNamespace(active_tool="", transform_space=1, multi_transform_mode=0, pivot_mode=0, mirror_calls=[])
 
     transform_submodes = (
         SimpleNamespace(id="local", label="Local", icon="local", shortcut=""),
@@ -470,6 +547,8 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: "", raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: state.transform_space, raising=False)
     monkeypatch.setattr(lf_stub.ui, "set_transform_space", lambda value: setattr(state, "transform_space", value), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_multi_transform_mode", lambda: state.multi_transform_mode, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_multi_transform_mode", lambda value: setattr(state, "multi_transform_mode", value), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: state.pivot_mode, raising=False)
     monkeypatch.setattr(lf_stub.ui, "set_pivot_mode", lambda value: setattr(state, "pivot_mode", value), raising=False)
     monkeypatch.setattr(lf_stub.ui, "execute_mirror", lambda axis: state.mirror_calls.append(axis), raising=False)
@@ -524,6 +603,7 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     snapshot = controller.snapshot()
     assert snapshot["show_transform_toolbar"] is False
     assert next(button for button in snapshot["transform_tool_buttons"] if button["value"] == "builtin.translate")["selected"] is True
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["local", "world"]
 
     controller.dispatch("submode", "local")
     controller.dispatch("pivot", "bounds")
@@ -533,6 +613,25 @@ def test_transform_and_mirror_tools_use_centered_subtool_rows(toolbar_module, mo
     assert state.pivot_mode == 1
     assert next(button for button in snapshot["submode_buttons"] if button["value"] == "local")["selected"] is True
     assert next(button for button in snapshot["pivot_buttons"] if button["value"] == "bounds")["selected"] is True
+
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["left", "right"], raising=False)
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_transform_space_controls"] is True
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["selection", "individual"]
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "selection")["selected"] is True
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "selection")["tooltip_key"] == "toolbar.selection_transform"
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "individual")["tooltip_key"] == "toolbar.individual_transform"
+
+    controller.dispatch("submode", "individual")
+    snapshot = controller.snapshot()
+
+    assert state.multi_transform_mode == 1
+    assert next(button for button in snapshot["submode_buttons"] if button["value"] == "individual")["selected"] is True
+
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["target"], raising=False)
+    snapshot = controller.snapshot()
+    assert [button["value"] for button in snapshot["submode_buttons"]] == ["local", "world"]
 
     controller.dispatch("tool", "builtin.translate")
     snapshot = controller.snapshot()
@@ -606,6 +705,8 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
         raising=False,
     )
     monkeypatch.setattr(lf_stub.ui, "apply_crop_tool", lambda: state.calls.append(("apply_crop_tool",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "reset_crop_tool", lambda: state.calls.append(("reset_crop_tool",)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "delete_crop_tool_volume", lambda: state.calls.append(("delete_crop_tool_volume",)), raising=False)
     monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
     monkeypatch.setattr(
         module.ToolRegistry,
@@ -621,10 +722,29 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     assert snapshot["crop_group_buttons"][0]["selected"] is True
     assert [button["value"] for button in snapshot["crop_object_buttons"]] == ["box", "ellipsoid"]
     assert [button["value"] for button in snapshot["crop_transform_buttons"]] == ["translate", "rotate", "scale"]
-    assert [button["action"] for button in snapshot["crop_action_buttons"]] == ["crop_trim", "crop_apply"]
+    assert [button["action"] for button in snapshot["crop_action_buttons"]] == [
+        "crop_fit",
+        "crop_trim",
+        "crop_reset",
+        "crop_apply",
+        "crop_delete",
+    ]
     assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "ellipsoid")["icon_src"] == "../icon/sphere.png"
-    assert snapshot["crop_action_buttons"][0]["icon_src"] == "../icon/arrows-minimize.png"
-    assert snapshot["crop_action_buttons"][1]["icon_src"] == "../icon/check.png"
+    assert [button["icon_src"] for button in snapshot["crop_action_buttons"]] == [
+        "../icon/arrows-maximize.png",
+        "../icon/arrows-minimize.png",
+        "../icon/reset.png",
+        "../icon/check.png",
+        "../icon/scene/trash.png",
+    ]
+    assert [button["tooltip_key"] for button in snapshot["crop_action_buttons"]] == [
+        "scene.fit_to_scene",
+        "scene.fit_to_scene_trimmed",
+        "scene.reset_crop",
+        "common.apply",
+        "scene.delete",
+    ]
+    assert snapshot["crop_action_buttons"][-1]["separator_before"] is True
     assert next(button for button in snapshot["crop_object_buttons"] if button["value"] == "box")["selected"] is True
     assert next(button for button in snapshot["crop_transform_buttons"] if button["value"] == "rotate")["selected"] is True
 
@@ -640,13 +760,507 @@ def test_crop_tool_uses_centered_object_and_transform_rows(toolbar_module, monke
     assert state.gizmo_type == "scale"
     assert state.calls[-1] == ("set_active_operator", "builtin.cropbox", "scale")
 
+    controller.dispatch("crop_fit", "")
+
+    assert state.calls[-1] == ("fit_crop_tool", False)
+
     controller.dispatch("crop_trim", "")
 
     assert state.calls[-1] == ("fit_crop_tool", True)
 
+    controller.dispatch("crop_reset", "")
+
+    assert state.calls[-1] == ("reset_crop_tool",)
+
     controller.dispatch("crop_apply", "")
 
     assert state.calls[-1] == ("apply_crop_tool",)
+
+    controller.dispatch("crop_delete", "")
+
+    assert state.calls[-1] == ("delete_crop_tool_volume",)
+
+
+def test_crop_enable_toggle_tracks_dataset_stages_and_uses_cropbox_operator(
+    toolbar_module, monkeypatch
+):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(
+        active_tool="builtin.cropbox",
+        content_type="dataset",
+        operator_calls=[],
+    )
+    cropbox = SimpleNamespace(enabled=True)
+    crop_node = SimpleNamespace(
+        id=7,
+        name="bicycle_cropbox",
+        type=SimpleNamespace(name="CROPBOX"),
+        children=(),
+        cropbox=lambda: cropbox,
+    )
+    scene = SimpleNamespace(
+        get_node=lambda name: crop_node if name == crop_node.name else None,
+        get_node_by_id=lambda node_id: crop_node if node_id == crop_node.id else None,
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+
+    def invoke(operator_id, **kwargs):
+        state.operator_calls.append((operator_id, kwargs))
+        cropbox.enabled = kwargs["enabled"]
+
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(
+        lf_stub, "get_selected_node_names", lambda: [crop_node.name], raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_content_type", lambda: state.content_type, raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False
+    )
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: "box", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: "translate", raising=False)
+    monkeypatch.setattr(lf_stub.ui, "ops", SimpleNamespace(invoke=invoke), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False
+    )
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(
+            lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "clear_active",
+        staticmethod(lambda: setattr(state, "active_tool", "")),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_crop_toolbar"] is True
+    assert snapshot["show_crop_edit_controls"] is True
+    assert snapshot["show_crop_enable_separator"] is True
+    assert snapshot["crop_enable_buttons"] == [
+        {
+            "button_id": "crop-enabled",
+            "action": "crop_toggle_enabled",
+            "value": "",
+            "icon_src": "../icon/scene/visible.png",
+            "tooltip_key": "toolbar.enable_crop_box",
+            "tooltip_text": "Enable Crop Box",
+            "action_id": "",
+            "shortcut_text": "",
+            "selected": True,
+            "enabled": True,
+            "opacity": "1",
+        }
+    ]
+    assert snapshot["crop_settings_buttons"] == [
+        {
+            "button_id": "crop-roi-settings",
+            "action": "toggle_crop_roi_settings",
+            "value": "",
+            "icon_src": "../icon/settings.png",
+            "tooltip_key": "toolbar.crop_roi_settings",
+            "tooltip_text": "Crop ROI Settings",
+            "action_id": "",
+            "shortcut_text": "",
+            "selected": False,
+            "enabled": True,
+            "opacity": "1",
+        }
+    ]
+
+    controller.dispatch("crop_toggle_enabled", "")
+
+    assert state.operator_calls == [
+        (
+            "crop_box.set",
+            {"node": "bicycle_cropbox", "enabled": False},
+        )
+    ]
+    assert controller.snapshot()["crop_enable_buttons"][0]["selected"] is False
+
+    for trainer_state in module._TOOLBAR_HIDDEN_STATES:
+        module.RuntimeState.trainer_state.value = trainer_state
+        snapshot = controller.snapshot()
+
+        assert snapshot["show_crop_toolbar"] is True
+        assert snapshot["show_crop_edit_controls"] is False
+        assert snapshot["show_crop_enable_separator"] is False
+        assert snapshot["crop_enable_buttons"][0]["selected"] is False
+        assert snapshot["crop_settings_buttons"][0]["selected"] is False
+        assert snapshot["crop_object_buttons"] == []
+        assert snapshot["crop_transform_buttons"] == []
+        assert snapshot["crop_action_buttons"] == []
+
+    module.RuntimeState.trainer_state.value = "idle"
+    state.content_type = "splat_files"
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_crop_toolbar"] is False
+    assert snapshot["crop_enable_buttons"] == []
+    assert snapshot["crop_settings_buttons"] == []
+
+
+def test_crop_roi_settings_write_live_params_and_track_external_values(
+    toolbar_module, monkeypatch
+):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    set_calls = []
+
+    class Params:
+        cropbox_lr_scale = 0.1
+        cropbox_loss_weight = 0.1
+
+        @staticmethod
+        def has_params():
+            return True
+
+        def set(self, name, value):
+            set_calls.append((name, value))
+            setattr(self, name, value)
+
+    params = Params()
+    cropbox = SimpleNamespace(enabled=True)
+    crop_node = SimpleNamespace(
+        id=7,
+        name="bicycle_cropbox",
+        type=SimpleNamespace(name="CROPBOX"),
+        children=(),
+        cropbox=lambda: cropbox,
+    )
+    scene = SimpleNamespace(
+        get_node=lambda name: crop_node if name == crop_node.name else None,
+        get_node_by_id=lambda node_id: crop_node if node_id == crop_node.id else None,
+    )
+
+    monkeypatch.setattr(lf_stub, "optimization_params", lambda: params, raising=False)
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(
+        lf_stub, "get_selected_node_names", lambda: [crop_node.name], raising=False
+    )
+    monkeypatch.setattr(
+        lf_stub.ui, "get_content_type", lambda: "dataset", raising=False
+    )
+
+    controller = module._ViewportToolbarController()
+    model = _DataModelStub()
+    controller.bind_model(model)
+    controller.attach_handle(model.handle)
+
+    lr_getter, lr_setter = model.bound_binds["cropbox_lr_scale"]
+    loss_getter, loss_setter = model.bound_binds["cropbox_loss_weight"]
+
+    assert controller._gizmo.cropbox_toolbar_signature() == (
+        "bicycle_cropbox",
+        True,
+        True,
+        0.1,
+        0.1,
+    )
+    assert controller._gizmo._build_crop_settings_records(True)[0]["selected"] is True
+
+    lr_setter("0.35")
+    loss_setter("0.65")
+
+    assert set_calls == [
+        ("cropbox_lr_scale", 0.35),
+        ("cropbox_loss_weight", 0.65),
+    ]
+    assert lr_getter() == "0.350"
+    assert loss_getter() == "0.650"
+    assert model.handle.request_update_calls == 2
+
+    params.cropbox_lr_scale = 0.42
+    params.cropbox_loss_weight = 0.73
+    signature = controller._gizmo.cropbox_toolbar_signature()
+    assert signature[-2:] == (0.42, 0.73)
+
+    controller._sync_crop_roi_params(signature)
+
+    assert lr_getter() == "0.420"
+    assert loss_getter() == "0.730"
+    assert "cropbox_lr_scale" in model.handle.dirty_calls
+    assert "cropbox_loss_weight" in model.handle.dirty_calls
+
+
+def test_crop_tool_activation_creates_explicitly_but_snapshot_is_passive(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(
+        active_tool="",
+        gizmo_type="",
+        crop_shape="box",
+        calls=[],
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+
+    def set_active_operator(tool_id, gizmo_type=""):
+        state.calls.append(("set_active_operator", tool_id, gizmo_type))
+        state.active_tool = tool_id
+        state.gizmo_type = gizmo_type
+
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["target"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: state.gizmo_type, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_active_operator", set_active_operator, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: state.crop_shape, raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_crop_tool_shape",
+        lambda shape: (state.calls.append(("set_crop_tool_shape", shape)), setattr(state, "crop_shape", shape)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "add_ellipsoid", lambda name: state.calls.append(("add_ellipsoid", name)), raising=False)
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+
+    controller.snapshot()
+    assert state.calls == []
+
+    controller.dispatch("tool", "builtin.cropbox")
+    assert ("add_cropbox", "target") in state.calls
+    assert ("set_active_operator", "builtin.cropbox", "translate") in state.calls
+    add_call_count = len([call for call in state.calls if call[0].startswith("add_")])
+
+    controller.snapshot()
+    assert len([call for call in state.calls if call[0].startswith("add_")]) == add_call_count
+
+    controller.dispatch("crop_object", "ellipsoid")
+    assert ("set_crop_tool_shape", "ellipsoid") in state.calls
+    assert ("add_ellipsoid", "target") in state.calls
+
+
+def test_crop_tool_activation_infers_selected_ellipsoid(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(
+        active_tool="",
+        gizmo_type="",
+        crop_shape="box",
+        calls=[],
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+    ellipsoid_node = SimpleNamespace(type=SimpleNamespace(name="ELLIPSOID"), children=[])
+    scene = SimpleNamespace(
+        get_node=lambda name: ellipsoid_node if name == "Model_ellipsoid" else None,
+        get_node_by_id=lambda _node_id: None,
+    )
+
+    def set_active_operator(tool_id, gizmo_type=""):
+        state.calls.append(("set_active_operator", tool_id, gizmo_type))
+        state.active_tool = tool_id
+        state.gizmo_type = gizmo_type
+
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["Model_ellipsoid"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: state.gizmo_type, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_active_operator", set_active_operator, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: state.crop_shape, raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_crop_tool_shape",
+        lambda shape: (state.calls.append(("set_crop_tool_shape", shape)), setattr(state, "crop_shape", shape)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "add_ellipsoid", lambda name: state.calls.append(("add_ellipsoid", name)), raising=False)
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    controller.dispatch("tool", "builtin.cropbox")
+
+    assert ("set_crop_tool_shape", "ellipsoid") in state.calls
+    assert ("add_ellipsoid", "Model_ellipsoid") in state.calls
+    assert ("add_cropbox", "Model_ellipsoid") not in state.calls
+    assert state.crop_shape == "ellipsoid"
+
+
+def test_crop_tool_activation_infers_existing_target_ellipsoid(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(
+        active_tool="",
+        gizmo_type="",
+        crop_shape="box",
+        calls=[],
+    )
+    crop_tool = SimpleNamespace(
+        id="builtin.cropbox",
+        icon="cropbox",
+        label="Crop",
+        shortcut="",
+        group="utility",
+        submodes=(),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+    model_node = SimpleNamespace(type=SimpleNamespace(name="SPLAT"), children=[7])
+    ellipsoid_node = SimpleNamespace(type=SimpleNamespace(name="ELLIPSOID"), children=[])
+    scene = SimpleNamespace(
+        get_node=lambda name: model_node if name == "Model" else None,
+        get_node_by_id=lambda node_id: ellipsoid_node if node_id == 7 else None,
+    )
+
+    def set_active_operator(tool_id, gizmo_type=""):
+        state.calls.append(("set_active_operator", tool_id, gizmo_type))
+        state.active_tool = tool_id
+        state.gizmo_type = gizmo_type
+
+    monkeypatch.setattr(lf_stub, "get_scene", lambda: scene, raising=False)
+    monkeypatch.setattr(lf_stub, "get_selected_node_names", lambda: ["Model"], raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_gizmo_type", lambda: state.gizmo_type, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_active_operator", set_active_operator, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_shape", lambda: state.crop_shape, raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_crop_tool_shape",
+        lambda shape: (state.calls.append(("set_crop_tool_shape", shape)), setattr(state, "crop_shape", shape)),
+        raising=False,
+    )
+    monkeypatch.setattr(lf_stub.ui, "add_cropbox", lambda name: state.calls.append(("add_cropbox", name)), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "add_ellipsoid", lambda name: state.calls.append(("add_ellipsoid", name)), raising=False)
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [crop_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: crop_tool if tool_id == "builtin.cropbox" else None),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    controller.dispatch("tool", "builtin.cropbox")
+
+    assert ("set_crop_tool_shape", "ellipsoid") in state.calls
+    assert ("add_ellipsoid", "Model") in state.calls
+    assert ("add_cropbox", "Model") not in state.calls
+    assert state.crop_shape == "ellipsoid"
+def test_selection_volume_modes_show_inline_gizmo_controls(toolbar_module, monkeypatch):
+    module, _hook_calls, _remove_calls = toolbar_module
+    lf_stub = sys.modules["lichtfeld"]
+    state = SimpleNamespace(
+        active_tool="builtin.select",
+        active_submode="box",
+        crop_operation="rotate",
+        calls=[],
+    )
+    select_tool = SimpleNamespace(
+        id="builtin.select",
+        icon="selection",
+        label="Select",
+        shortcut="1",
+        submodes=(
+            SimpleNamespace(id="centers", label="Centers", icon="circle-dot", shortcut=""),
+            SimpleNamespace(id="color", label="Color", icon="color-picker", shortcut=""),
+            SimpleNamespace(id="box", label="Box", icon="box", shortcut=""),
+            SimpleNamespace(id="sphere", label="Sphere", icon="sphere", shortcut=""),
+        ),
+        pivot_modes=(),
+        selected=None,
+        can_activate=lambda _context: True,
+    )
+
+    monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: state.active_tool, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_active_submode", lambda: state.active_submode, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "set_selection_mode", lambda mode: setattr(state, "active_submode", mode), raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_crop_tool_operation", lambda: state.crop_operation, raising=False)
+    monkeypatch.setattr(
+        lf_stub.ui,
+        "set_crop_tool_operation",
+        lambda operation: (
+            state.calls.append(("set_crop_tool_operation", operation)),
+            setattr(state, "crop_operation", operation),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(module.ToolRegistry, "get_all", staticmethod(lambda: [select_tool]), raising=False)
+    monkeypatch.setattr(
+        module.ToolRegistry,
+        "get",
+        staticmethod(lambda tool_id: select_tool if tool_id == "builtin.select" else None),
+        raising=False,
+    )
+
+    controller = module._GizmoToolbarController()
+    snapshot = controller.snapshot()
+
+    assert snapshot["show_crop_toolbar"] is False
+    assert snapshot["show_selection_volume_gizmos"] is True
+    assert snapshot["crop_object_buttons"] == []
+    assert snapshot["crop_transform_buttons"] == []
+    assert snapshot["crop_action_buttons"] == []
+    assert [button["value"] for button in snapshot["selection_volume_gizmo_buttons"]] == [
+        "translate",
+        "rotate",
+        "scale",
+    ]
+    assert next(button for button in snapshot["selection_volume_gizmo_buttons"] if button["value"] == "rotate")["selected"] is True
+
+    controller.dispatch("crop_transform", "translate")
+
+    assert state.calls[-1] == ("set_crop_tool_operation", "translate")
+    snapshot = controller.snapshot()
+    assert next(button for button in snapshot["selection_volume_gizmo_buttons"] if button["value"] == "translate")["selected"] is True
+
+    state.active_submode = "color"
+    snapshot = controller.snapshot()
+    assert snapshot["show_selection_volume_gizmos"] is False
+    assert snapshot["selection_volume_gizmo_buttons"] == []
 
 
 def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_centered():
@@ -685,17 +1299,17 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
         "transform_scale_axis",
         "transform_scale_uniform",
     )
-    transform_dynamic_tooltip_keys = (
-        "transform_space",
-        "transform_axis",
-    )
+    # Product uses toolbar.local_space / toolbar.world_space; no tooltip.transform_* keys.
+    transform_dynamic_tooltip_keys = ()
     transform_toolbar_tooltip_keys = (
         "local_space",
         "world_space",
+        "selection_transform",
+        "individual_transform",
         "origin_pivot",
         "bounds_center_pivot",
     )
-    utility_toolbar_tooltip_keys = ()
+    utility_toolbar_tooltip_keys = ("asset_manager",)
     selection_tooltip_keys = (
         "selection_panel",
         "selection_depth_range",
@@ -724,13 +1338,17 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert rml.count('data-for="button : pivot_buttons"') == 1
     assert rml.count('data-for="button : mirror_group_buttons"') == 2
     assert rml.count('data-for="button : crop_group_buttons"') == 2
+    assert rml.count('data-for="button : crop_enable_buttons"') == 2
+    assert rml.count('data-for="button : crop_settings_buttons"') == 2
     assert rml.count('data-for="button : crop_object_buttons"') == 2
     assert rml.count('data-for="button : crop_transform_buttons"') == 2
     assert rml.count('data-for="button : crop_action_buttons"') == 2
+    assert rml.count('data-for="button : selection_volume_gizmo_buttons"') == 1
     assert 'class="toolbar-flyout-divider hidden"' not in rml
     assert "toolbar-flyout" not in rml
     assert rml.count('data-for="button : selection_group_buttons"') == 2
     assert rml.count('class="toolbar-separator"') == 6
+    assert 'class="toolbar-separator hidden"' in rml
     assert rml.count('class="viewport-gizmo-controls"') == 2
     assert rml.count('class="viewport-gizmo-control-row"') == 2
     assert 'id="primary-viewport-gizmo-controls" class="viewport-gizmo-controls"' in rml
@@ -746,10 +1364,11 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     for toolbar_markup in (primary_left, secondary_left):
         assert 'data-for="button : camera_mode_buttons"' not in toolbar_markup
         assert 'data-for="button : utility_primary_buttons"' not in toolbar_markup
-    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 24
+    assert rml.count('data-attr-data-shortcut="button.shortcut_text"') == 29
     assert "data-attr-data-tooltip" not in rml
     assert 'data-attr-title="button.tooltip_text"' in rml
     assert rml.count('data-for="button : selection_mode_buttons"') == 1
+    assert 'data-class-hidden="!show_selection_volume_gizmos"' in rml
     assert rml.count('data-for="button : transform_group_buttons"') == 2
     assert rml.count('data-for="button : transform_tool_buttons"') == 3
     assert 'id="selection-block"' in rml
@@ -771,9 +1390,18 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert 'data-attr-min="selection_depth_near_slider_min"' in rml
     assert 'data-attr-max="selection_depth_far_slider_max"' in rml
     assert "../icon/depth-map.png" in rml
-    assert "../icon/contrast.png" in rml
+    assert "../icon/select-invert.png" in rml
     assert "../icon/scene/trash.png" in rml
     assert "../icon/scene/x.png" in rml
+    assert rml.count('class="crop-roi-popover hidden"') == 2
+    assert rml.count('data-class-hidden="!crop_roi_settings_open"') == 2
+    assert rml.count('data-value="cropbox_lr_scale"') == 2
+    assert rml.count('data-value="cropbox_loss_weight"') == 2
+    assert rml.count('min="0"') >= 4
+    assert rml.count('max="1"') >= 4
+    assert rml.count('step="0.01"') >= 4
+    assert 'data-tooltip="tooltip.cropbox_lr_scale"' in rml
+    assert 'data-tooltip="tooltip.cropbox_loss_weight"' in rml
     assert 'id="transform-block"' in rml
     assert 'class="viewport-transform-overlay hidden"' in rml
     assert 'class="viewport-transform-row"' in rml
@@ -800,6 +1428,10 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
             "mirror",
             "align_3point",
             "crop_box",
+            "enable_crop_box",
+            "crop_roi_settings",
+            "rejected_splat_lr_scale",
+            "outside_roi_loss_weight",
             "ellipsoid",
             "brush_selection",
             "rect_selection",
@@ -810,6 +1442,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
             "home",
             "fullscreen",
             "toggle_ui",
+            "asset_manager",
         )
         forbidden_shortcut_fragments = (
             "(1)",
@@ -850,6 +1483,21 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
                 assert not any(fragment in value for fragment in forbidden_shortcut_fragments), (
                     f"{locale_path.name} toolbar.{key} still contains a hardcoded shortcut: {value}"
                 )
+        assert data.get("toolbar", {}).get(
+            "enable_crop_box"
+        ), f"{locale_path.name} missing toolbar.enable_crop_box"
+        for key in (
+            "crop_roi_settings",
+            "rejected_splat_lr_scale",
+            "outside_roi_loss_weight",
+        ):
+            assert data.get("toolbar", {}).get(
+                key
+            ), f"{locale_path.name} missing toolbar.{key}"
+        for key in ("cropbox_lr_scale", "cropbox_loss_weight"):
+            assert data.get("tooltip", {}).get(
+                key
+            ), f"{locale_path.name} missing tooltip.{key}"
         for key in selection_tooltip_keys:
             assert data.get("tooltip", {}).get(key), f"{locale_path.name} missing tooltip.{key}"
         for key in (*transform_tooltip_keys, *transform_dynamic_tooltip_keys):
@@ -891,8 +1539,8 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     gizmo_button_start = rcss.index(".viewport-gizmo-controls .icon-btn {")
     gizmo_button_end = rcss.index(".viewport-gizmo-controls .icon-btn:hover")
     gizmo_button_rcss = rcss[gizmo_button_start:gizmo_button_end]
-    assert "width: 30dp;\n    height: 30dp;\n    min-width: 30dp;\n    min-height: 30dp;" in gizmo_button_rcss
-    assert ".viewport-gizmo-controls .icon-btn img {\n    width: 20dp;\n    height: 20dp;" in rcss
+    assert "width: 27dp;\n    height: 27dp;\n    min-width: 27dp;\n    min-height: 27dp;" in gizmo_button_rcss
+    assert ".viewport-gizmo-controls .icon-btn img {\n    width: 18dp;\n    height: 18dp;" in rcss
     assert "viewport-nav-toolbar" not in rcss
     assert "viewport-nav-row" not in rcss
     assert "viewport-nav-separator" not in rcss
@@ -907,7 +1555,7 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "#depth-view-block .viewport-depth-panel {\n    padding: 5dp 6dp;" in rcss
     assert "#depth-view-block .viewport-depth-mode-select {\n    height: 22dp;" in rcss
     assert "#depth-view-block .viewport-depth-axis {\n    height: 22dp;" in rcss
-    assert "#depth-view-block .viewport-selection-depth-axis > .number-input.viewport-depth-input {\n    height: 22dp;" in rcss
+    assert "#depth-view-block .viewport-depth-axis > .scrub-field {\n    width: 112dp;\n    min-width: 112dp;\n    height: 22dp;" in rcss
     assert ".toolbar-flyout-trigger.hidden" not in rcss
     assert ".viewport-transform-overlay" in rcss
     assert ".viewport-selection-overlay" in rcss
@@ -922,12 +1570,296 @@ def test_viewport_overlay_template_moves_tools_left_and_transform_numbers_center
     assert "viewport-export-status" not in rml[panel_start:panel_end]
 
 
+def test_viewport_toolbar_uses_theme_glass_without_backdrop_filter():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    theme_rcss = (resources / "viewport_overlay.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    resolver = (
+        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+    viewport_overlay = (
+        project_root / "src/visualizer/gui/rml_viewport_overlay.cpp"
+    ).read_text(encoding="utf-8")
+
+    toolbar_start = rcss.index(".toolbar-vertical {")
+    toolbar_end = rcss.index("\n}", toolbar_start)
+    toolbar_rule = rcss[toolbar_start:toolbar_end]
+    for declaration in (
+        "position: relative;",
+        "width: 38dp;",
+        "height: auto;",
+        "padding: 5dp 3dp;",
+        "overflow: hidden;",
+    ):
+        assert declaration in toolbar_rule
+    assert "bottom:" not in toolbar_rule
+    assert "top:" not in toolbar_rule
+    assert "transform:" not in toolbar_rule
+
+    toolbar_root_start = rcss.index(".panel-toolbar-root {")
+    toolbar_root_end = rcss.index("\n}", toolbar_root_start)
+    toolbar_root_rule = rcss[toolbar_root_start:toolbar_root_end]
+    assert "display: flex;" in toolbar_root_rule
+    assert "align-items: center;" in toolbar_root_rule
+    assert "#secondary-utility-toolbar" not in rcss
+    assert "left: -20dp;" not in rcss
+
+    for token in (
+        "viewport.toolbar_glass_decor",
+        "viewport.toolbar_border",
+        "viewport.toolbar_shadow",
+        "viewport.toolbar_text",
+        "viewport.toolbar_selected_decor",
+        "viewport.toolbar_selected_icon",
+        "viewport.gizmo_decor",
+        "viewport.gizmo_hover_decor",
+        "viewport.gizmo_selected_decor",
+        "viewport.gizmo_selected_hover_decor",
+    ):
+        assert f"@{{{token}}}" in theme_rcss
+        assert f'{{"{token}"' in resolver
+
+    centered_toolbar_start = theme_rcss.index(".toolbar-hcenter .toolbar-container {")
+    centered_toolbar_end = theme_rcss.index("\n}", centered_toolbar_start)
+    centered_toolbar_rule = theme_rcss[centered_toolbar_start:centered_toolbar_end]
+    assert "@{viewport.toolbar_glass_decor};" in centered_toolbar_rule
+    assert "border-color: @{viewport.toolbar_border};" in centered_toolbar_rule
+    assert "box-shadow: @{viewport.toolbar_shadow};" in centered_toolbar_rule
+
+    tool_panel_start = theme_rcss.index(".viewport-transform-panel {")
+    tool_panel_end = theme_rcss.index("\n}", tool_panel_start)
+    tool_panel_rule = theme_rcss[tool_panel_start:tool_panel_end]
+    assert "@{viewport.toolbar_glass_decor};" in tool_panel_rule
+    assert "color: @{viewport.toolbar_text};" in tool_panel_rule
+    assert "border-color: @{viewport.toolbar_border};" in tool_panel_rule
+    assert "box-shadow: @{viewport.toolbar_shadow};" in tool_panel_rule
+
+    centered_selected_start = theme_rcss.index(".toolbar-hcenter .icon-btn.selected {")
+    centered_selected_end = theme_rcss.index("\n}", centered_selected_start)
+    centered_selected_rule = theme_rcss[centered_selected_start:centered_selected_end]
+    assert "@{viewport.toolbar_selected_decor};" in centered_selected_rule
+    assert ".toolbar-hcenter .icon-btn.selected img" in theme_rcss
+    assert ".viewport-transform-panel .icon-btn.selected img" in theme_rcss
+
+    assert "backdrop-filter" not in theme_rcss
+    assert "filter:" not in theme_rcss
+    assert "effectiveViewportChromeStyle()" in resolver
+    assert "setFrostedGlassAvailable(rendered)" in viewport_overlay
+    assert "markRenderNeeded(RenderReason::ThemePresentation)" in viewport_overlay
+
+    for unused_token in (
+        "layered_shadow.1",
+        "panel.body_bg",
+        "panel.body_bg_or_transparent",
+    ):
+        assert f'{{"{unused_token}"' not in resolver
+
+
+def test_viewport_toolbar_position_modes_keep_drag_explicit_and_persisted():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
+    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
+    overlay = (
+        project_root / "src/visualizer/gui/rml_viewport_overlay.cpp"
+    ).read_text(encoding="utf-8")
+    preferences = (project_root / "src/visualizer/preferences.cpp").read_text(
+        encoding="utf-8"
+    )
+
+    assert rml.count('class="toolbar-drag-handle"') == 2
+    assert rml.count('title="@tr:preferences.viewport_toolbar_drag"') == 2
+    assert ".panel-toolbar-root.toolbar-position-top" in rcss
+    assert ".panel-toolbar-root.toolbar-position-free" in rcss
+    assert ".toolbar-position-free .toolbar-drag-handle" in rcss
+    assert "drag: drag;" in rcss
+    assert 'SetClass("toolbar-position-centered"' in overlay
+    assert "toolbarFreeTravel" in overlay
+    assert "saveViewportToolbarFreeYPreference(viewport_toolbar_free_y_)" in overlay
+    assert 'position == "top" || position == "centered" || position == "free"' in preferences
+
+
+def test_python_theme_mutations_are_marshaled_to_viewer_thread():
+    project_root = Path(__file__).parent.parent.parent
+    py_ui = (project_root / "src/python/lfs/py_ui.cpp").read_text(encoding="utf-8")
+    py_ui_theme = (
+        project_root / "src/python/lfs/py_ui_theme.cpp"
+    ).read_text(encoding="utf-8")
+    ui_stub = (
+        project_root / "src/python/stubs/lichtfeld/ui/__init__.pyi"
+    ).read_text(encoding="utf-8")
+
+    for source in (py_ui, py_ui_theme):
+        assert "viewer->isOnViewerThread()" in source
+        assert "nb::gil_scoped_release release;" in source
+        assert "vis::post_work_and_wait(" in source
+
+    for source, binding, helper in (
+        (py_ui, "set_theme", "invoke_on_viewer("),
+        (py_ui, "set_theme_family", "invoke_on_viewer("),
+        (py_ui_theme, "set_viewport_chrome_style", "invoke_on_viewer_thread("),
+        (py_ui_theme, "set_viewport_toolbar_position", "invoke_on_viewer_thread("),
+    ):
+        start = source.index(f'"{binding}",')
+        end = source.index("nb::arg", start)
+        assert helper in source[start:end]
+
+    assert "def get_viewport_chrome_style() -> str:" in ui_stub
+    assert "def set_viewport_chrome_style(style: str) -> None:" in ui_stub
+    assert "def get_viewport_toolbar_position() -> str:" in ui_stub
+    assert "def set_viewport_toolbar_position(position: str) -> None:" in ui_stub
+
+
+def test_empty_viewport_rejects_independent_split_activation_and_hides_orphan_ui():
+    project_root = Path(__file__).parent.parent.parent
+    input_header = (
+        project_root / "src/visualizer/input/input_controller.hpp"
+    ).read_text(encoding="utf-8")
+    input_source = (
+        project_root / "src/visualizer/input/input_controller.cpp"
+    ).read_text(encoding="utf-8")
+    gui_manager = (
+        project_root / "src/visualizer/gui/gui_manager.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "void toggleIndependentSplitView();" in input_header
+
+    toggle_start = input_source.index(
+        "void InputController::toggleIndependentSplitView()"
+    )
+    toggle_end = input_source.index(
+        "SplitViewPanelId InputController::splitPanelForScreenX", toggle_start
+    )
+    toggle_block = input_source[toggle_start:toggle_end]
+
+    assert "if (!isIndependentSplitViewActive())" in toggle_block
+    assert "services().sceneOrNull()" in toggle_block
+    assert "!scene_manager || scene_manager->isEmpty()" in toggle_block
+    assert "ToggleIndependentSplitView{.viewport = &viewport_}.emit();" in toggle_block
+
+    key_action_start = input_source.index(
+        "case input::Action::TOGGLE_INDEPENDENT_SPLIT_VIEW:"
+    )
+    key_action_end = input_source.index("return;", key_action_start)
+    key_action_block = input_source[key_action_start:key_action_end]
+    assert "toggleIndependentSplitView();" in key_action_block
+    assert "ToggleIndependentSplitView" not in key_action_block
+
+    toolbar_start = gui_manager.index("bool show_secondary_toolbar = false;")
+    toolbar_end = gui_manager.index(
+        "rml_viewport_overlay_.setToolbarPanels(", toolbar_start
+    )
+    toolbar_block = gui_manager[toolbar_start:toolbar_end]
+
+    assert "rendering->isIndependentSplitViewActive() && !editor_ctx.isEmpty()" in toolbar_block
+    assert "show_secondary_toolbar = secondary_panel->valid();" in toolbar_block
+
+    divider_start = gui_manager.index(
+        "RmlViewportOverlay::SplitDividerOverlayState split_divider_state;"
+    )
+    divider_end = gui_manager.index(
+        "rml_viewport_overlay_.setSplitDividerOverlay(split_divider_state);",
+        divider_start,
+    )
+    divider_block = gui_manager[divider_start:divider_end]
+
+    assert (
+        "rendering && rendering->isSplitViewActive() && "
+        "!rendering->isIndependentSplitViewActive())"
+        in divider_block
+    )
+    assert "rendering->getSplitDividerScreenX" in divider_block
+    assert "rendering->getContentBounds" in divider_block
+
+
+def test_right_panel_tabs_keep_stable_boundaries_without_transparent_shell():
+    project_root = Path(__file__).parent.parent.parent
+    resources = project_root / "src/visualizer/gui/rmlui/resources"
+    right_panel_rcss = (resources / "right_panel.rcss").read_text(encoding="utf-8")
+    panel_tabs_theme = (resources / "panel_tabs.theme.rcss").read_text(
+        encoding="utf-8"
+    )
+    right_panel_theme = (resources / "right_panel.theme.rcss").read_text(encoding="utf-8")
+    right_panel_rml = (resources / "right_panel.rml").read_text(encoding="utf-8")
+    right_panel_cpp = (
+        project_root / "src/visualizer/gui/rml_right_panel.cpp"
+    ).read_text(encoding="utf-8")
+    shell_theme = (resources / "shell.theme.rcss").read_text(encoding="utf-8")
+    panel_host_theme = (resources / "panel_host.theme.rcss").read_text(encoding="utf-8")
+    scene_tree_rcss = (resources / "scene_tree.rcss").read_text(encoding="utf-8")
+    scene_tree_theme = (resources / "scene_tree.theme.rcss").read_text(encoding="utf-8")
+    resolver = (
+        project_root / "src/visualizer/gui/rmlui/rml_theme.cpp"
+    ).read_text(encoding="utf-8")
+
+    tab_start = right_panel_rcss.index(".tab {")
+    tab_end = right_panel_rcss.index("\n}", tab_start)
+    tab_rule = right_panel_rcss[tab_start:tab_end]
+    assert "box-sizing: border-box;" in tab_rule
+    assert "border-width: 1dp;" in tab_rule
+    assert "border-bottom-width: 2dp;" in tab_rule
+    assert "transition: none;" in tab_rule
+    assert "0.15s" not in tab_rule
+
+    assert right_panel_rml.index('href="panel_tabs.rcss"') < right_panel_rml.index(
+        'href="right_panel.rcss"'
+    )
+    assert right_panel_cpp.index('loadBaseRCSS("rmlui/panel_tabs.rcss")') < (
+        right_panel_cpp.index('loadBaseRCSS("rmlui/right_panel.rcss")')
+    )
+
+    for token in (
+        "right_panel.tab_border",
+        "right_panel.tab_bottom_border",
+        "right_panel.tab_active_border",
+        "right_panel.tab_active_bottom_border",
+    ):
+        assert f"@{{{token}}}" in right_panel_theme
+        assert f'"{token}"' in resolver
+
+    for shared_token in (
+        "right_panel.tab_active_bg",
+        "right_panel.separator",
+    ):
+        assert f"@{{{shared_token}}}" in panel_tabs_theme
+        assert f'{{"{shared_token}"' in resolver
+
+    hover_start = right_panel_theme.index(".tab:hover {")
+    hover_end = right_panel_theme.index("\n}", hover_start)
+    hover_rule = right_panel_theme[hover_start:hover_end]
+    assert "border-color:" not in hover_rule
+    assert "border-bottom-color:" not in hover_rule
+
+    active_start = right_panel_theme.index(".tab.active {")
+    active_end = right_panel_theme.index("\n}", active_start)
+    active_rule = right_panel_theme[active_start:active_end]
+    assert "border-bottom-color: @{right_panel.tab_active_bottom_border};" in active_rule
+
+    assert "@{panel.body_decor};" in shell_theme
+    assert "@{chrome.right_panel_decor};" in right_panel_theme
+    assert "@{panel.host_body_decor};" in panel_host_theme
+    assert '{"panel.host_body_decor"' in resolver
+
+    scene_body_start = scene_tree_rcss.index("body {")
+    scene_body_end = scene_tree_rcss.index("\n}", scene_body_start)
+    scene_body_rule = scene_tree_rcss[scene_body_start:scene_body_end]
+    assert "box-sizing: border-box;" in scene_body_rule
+    assert "border-width: 1dp;" in scene_body_rule
+    assert "border-radius: 5dp;" in scene_body_rule
+    assert "overflow: hidden;" in scene_body_rule
+    assert "border-color: @{right_panel.border};" in scene_tree_theme
+
+
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     model = _DataModelStub()
     lf_stub = sys.modules["lichtfeld"]
     panel_enabled = {
-        "lfs.input_settings": True,
+        "lfs.asset_manager": True,
+        "lfs.preferences": True,
         "lfs.plugin_marketplace": True,
     }
 
@@ -947,6 +1879,7 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     monkeypatch.setattr(lf_stub.ui, "context", lambda: SimpleNamespace(), raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_active_tool", lambda: "", raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_transform_space", lambda: 1, raising=False)
+    monkeypatch.setattr(lf_stub.ui, "get_multi_transform_mode", lambda: 0, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_pivot_mode", lambda: 0, raising=False)
     monkeypatch.setattr(lf_stub.ui, "get_split_view_mode", lambda: "single", raising=False)
     monkeypatch.setattr(lf_stub.ui, "is_sequencer_visible", lambda: False, raising=False)
@@ -955,8 +1888,9 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
         "tr",
         lambda key: {
             "toolbar.focus_selection": "Focus Selection",
+            "toolbar.asset_manager": "Assets",
             "menu.tools.plugin_marketplace": "Plugins",
-            "window.input_settings": "Input",
+            "window.preferences": "Preferences",
             "toolbar.viewport_export": "Export",
         }.get(key, key),
         raising=False,
@@ -985,7 +1919,14 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     camera_buttons = model.handle.record_updates["camera_mode_buttons"]
     primary_buttons = model.handle.record_updates["utility_primary_buttons"]
     extra_buttons = model.handle.record_updates["utility_extra_buttons"]
-    assert len(camera_buttons) == 3
+    assert len(camera_buttons) == 4
+    assert [button["value"] for button in camera_buttons] == [
+        "orbit",
+        "trackball",
+        "fpv",
+        "drone",
+    ]
+    assert camera_buttons[3]["icon_src"] == "../icon/drone.png"
     assert [button["action"] for button in primary_buttons] == [
         "home",
         "focus_selection",
@@ -993,27 +1934,41 @@ def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypat
     assert primary_buttons[1]["icon_src"] == "../icon/focus-selection.png"
     assert primary_buttons[1]["tooltip_text"] == "Focus Selection"
     assert [button["button_id"] for button in extra_buttons] == [
-        "util-input-settings",
+        "util-preferences",
         "util-viewport-export",
+        "util-asset-manager",
         "util-plugin-marketplace",
         "util-sequencer",
     ]
     extra_by_id = {button["button_id"]: button for button in extra_buttons}
-    input_settings = extra_by_id["util-input-settings"]
-    assert input_settings["action"] == "toggle_panel"
-    assert input_settings["value"] == "lfs.input_settings"
-    assert input_settings["icon_src"] == "../icon/settings.png"
-    assert input_settings["tooltip_text"] == "Input"
-    assert input_settings["selected"] is True
+    preferences = extra_by_id["util-preferences"]
+    assert preferences["action"] == "toggle_panel"
+    assert preferences["value"] == "lfs.preferences"
+    assert preferences["icon_src"] == "../icon/settings.png"
+    assert preferences["tooltip_text"] == "Preferences"
+    assert preferences["selected"] is True
     assert extra_by_id["util-viewport-export"]["action"] == "toggle_viewport_export"
-    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/sequencer/export.png"
+    assert extra_by_id["util-viewport-export"]["icon_src"] == "../icon/viewport-export.png"
     assert extra_by_id["util-viewport-export"]["tooltip_text"] == "Export"
     assert extra_by_id["util-viewport-export"]["selected"] is False
+    assert extra_by_id["util-asset-manager"]["action"] == "toggle_panel"
+    assert extra_by_id["util-asset-manager"]["value"] == "lfs.asset_manager"
+    assert extra_by_id["util-asset-manager"]["icon_src"] == "../icon/archive.png"
+    assert extra_by_id["util-asset-manager"]["tooltip_text"] == "Assets"
+    assert extra_by_id["util-asset-manager"]["selected"] is True
     assert extra_by_id["util-plugin-marketplace"]["action"] == "toggle_panel"
     assert extra_by_id["util-plugin-marketplace"]["value"] == "lfs.plugin_marketplace"
     assert extra_by_id["util-plugin-marketplace"]["icon_src"] == "../icon/puzzle.png"
     assert extra_by_id["util-plugin-marketplace"]["tooltip_text"] == "Plugins"
     assert extra_by_id["util-plugin-marketplace"]["selected"] is True
+
+    model.handle.record_updates.clear()
+    model.bound_events["toolbar_action"](None, None, ["toggle_panel", "lfs.asset_manager"])
+
+    assert panel_enabled["lfs.asset_manager"] is False
+    extra_buttons = model.handle.record_updates["utility_extra_buttons"]
+    extra_by_id = {button["button_id"]: button for button in extra_buttons}
+    assert extra_by_id["util-asset-manager"]["selected"] is False
 
     model.handle.record_updates.clear()
     model.bound_events["toolbar_action"](None, None, ["toggle_panel", "lfs.plugin_marketplace"])

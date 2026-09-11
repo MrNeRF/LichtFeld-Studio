@@ -20,7 +20,7 @@
 #include <nvimgcodec.h>
 #include <nvjpeg.h>
 
-nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgcodec_format);
+nvjpegOutputFormat_t nvimgcodec_to_nvjpeg_format(nvimgcodecSampleFormat_t nvimgcodec_format, nvimgcodecSampleDataType_t nvimgcodec_data_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UNKNOWN);
 nvjpegExifOrientation_t nvimgcodec_to_nvjpeg_orientation(nvimgcodecOrientation_t orientation);
 nvjpegChromaSubsampling_t nvimgcodec_to_nvjpeg_css(nvimgcodecChromaSubsampling_t nvimgcodec_css);
 nvjpegJpegEncoding_t nvimgcodec_to_nvjpeg_encoding(nvimgcodecJpegEncoding_t nvimgcodec_encoding);

@@ -3,7 +3,16 @@
 
 #pragma once
 
+#include "core/provenance.hpp"
+
+#include <climits>
+#include <cstddef>
 #include <cstdint>
+#include <expected>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace lfs::io::video {
 
@@ -59,6 +68,91 @@ namespace lfs::io::video {
         int height = 1080;
         int framerate = 30;
         int crf = 18;
+        std::optional<core::ProvenanceStamp> provenance{}; // always written to the format's metadata slot; caller chooses full vs minimal, writers fall back to minimal
     };
+
+    [[nodiscard]] inline std::expected<void, std::string> validateVideoEncodingOptions(
+        const VideoExportOptions& options) {
+        if (options.width <= 0 || options.height <= 0)
+            return std::unexpected("Video width and height must be positive");
+        if ((options.width & 1) != 0 || (options.height & 1) != 0)
+            return std::unexpected("YUV420 video width and height must be even");
+        if (options.framerate <= 0 || options.framerate > 1000)
+            return std::unexpected("Video framerate must be between 1 and 1000");
+        if (options.crf < 0 || options.crf > 51)
+            return std::unexpected("Video CRF must be between 0 and 51");
+
+        const size_t width = static_cast<size_t>(options.width);
+        const size_t height = static_cast<size_t>(options.height);
+        if (width > std::numeric_limits<size_t>::max() / height ||
+            width * height > static_cast<size_t>(INT_MAX / 3)) {
+            // CUDA conversion kernels use signed int indexing for packed RGB.
+            return std::unexpected("Video dimensions exceed the supported pixel budget");
+        }
+        return {};
+    }
+
+    // UI-side bounds for manual WxH entry. The encoder additionally requires even
+    // sides (YUV420) and a packed-RGB pixel budget; 8192x8192 is well inside that.
+    inline constexpr int MIN_VIDEO_SIDE = 16;
+    inline constexpr int MAX_VIDEO_SIDE = 8192;
+
+    struct VideoResolution {
+        int width = 0;
+        int height = 0;
+    };
+
+    [[nodiscard]] inline int clampEvenVideoDimension(int value) {
+        if (value < MIN_VIDEO_SIDE)
+            value = MIN_VIDEO_SIDE;
+        if (value > MAX_VIDEO_SIDE)
+            value = MAX_VIDEO_SIDE;
+        if ((value & 1) != 0)
+            --value;
+        return value;
+    }
+
+    // Accepts "WxH" or "W x H" (x/X). Rejects empty, missing sides, signs, and trailing junk.
+    // Out-of-range and odd values are clamped to even [MIN_VIDEO_SIDE, MAX_VIDEO_SIDE].
+    [[nodiscard]] inline std::optional<VideoResolution> parseVideoResolution(const std::string_view text) {
+        const char* p = text.data();
+        const char* const end = p + text.size();
+        const auto skip_ws = [&]() {
+            while (p < end && (*p == ' ' || *p == '\t'))
+                ++p;
+        };
+        const auto parse_uint = [&](int& out) -> bool {
+            if (p >= end || *p < '0' || *p > '9')
+                return false;
+            long value = 0;
+            while (p < end && *p >= '0' && *p <= '9') {
+                value = value * 10 + (*p - '0');
+                if (value > static_cast<long>(std::numeric_limits<int>::max()))
+                    return false;
+                ++p;
+            }
+            out = static_cast<int>(value);
+            return true;
+        };
+
+        skip_ws();
+        int width = 0;
+        int height = 0;
+        if (!parse_uint(width))
+            return std::nullopt;
+        skip_ws();
+        if (p >= end || (*p != 'x' && *p != 'X'))
+            return std::nullopt;
+        ++p;
+        skip_ws();
+        if (!parse_uint(height))
+            return std::nullopt;
+        skip_ws();
+        if (p != end)
+            return std::nullopt;
+        if (width <= 0 || height <= 0)
+            return std::nullopt;
+        return VideoResolution{clampEvenVideoDimension(width), clampEvenVideoDimension(height)};
+    }
 
 } // namespace lfs::io::video

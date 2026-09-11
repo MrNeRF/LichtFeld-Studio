@@ -2,7 +2,59 @@
 
 Complete API reference for LichtFeld Studio plugins.
 
+This page is aligned against the committed Python stubs in
+`src/python/stubs/lichtfeld/` and the plugin framework in
+`src/python/lfs_plugins/`. When in doubt, the stubs are the quickest way to
+verify exact signatures.
+
 ---
+
+## Python API Surface Map
+
+The public Python surface is split between the native `lichtfeld` module and
+the pure-Python plugin helpers in `lfs_plugins`.
+
+| Module | Main responsibility |
+|---|---|
+| `lichtfeld` | Training control, scene shortcuts, tensors, rendering, viewport, transform gizmos, registration, app helpers |
+| `lichtfeld.app` | Application-level file open helper |
+| `lichtfeld.animation` | Tracks, clips, and timeline evaluation |
+| `lichtfeld.io` | Load/save splats, point clouds, datasets, images, and supported format queries |
+| `lichtfeld.keymap` | Input binding profiles, action lookup, capture, import/export |
+| `lichtfeld.log` | Native log sink |
+| `lichtfeld.mcp` | Register Python MCP tools and call/read shared MCP capabilities/resources |
+| `lichtfeld.mesh` | OpenMesh-style mesh data, handles, iterators, readers/writers, decimaters |
+| `lichtfeld.ops` | Native operator invocation, descriptors, built-in operator/tool enums |
+| `lichtfeld.packages` | `uv`-backed package install/list/uninstall and stub path helpers |
+| `lichtfeld.pipeline` | Chainable selection/edit/transform operation stages |
+| `lichtfeld.plugins` | Plugin discovery, lifecycle, registry install/update, capabilities, settings, scaffolding |
+| `lichtfeld.scene` | Scene graph, nodes, splat data, point clouds, cameras, selection groups |
+| `lichtfeld.scripts` | Script panel state and batch execution |
+| `lichtfeld.selection` | Gaussian stroke/preview/brush/lasso/depth/crop selection primitives |
+| `lichtfeld.ui` | Panels, menus, immediate UI, dialogs, theme, tools, app UI state, RML bridge |
+| `lichtfeld.undo` | Undo/redo stack, transactions, memory accounting, subscriptions |
+| `lfs_plugins.*` | Plugin base types, properties, runtime state bindings, tool definitions, capabilities, templates, managers |
+
+The sections below focus on the APIs plugin authors most often call directly.
+Large low-level surfaces such as `lichtfeld.mesh.TriMesh` and every tensor
+operator are intentionally summarized; inspect the `.pyi` files for exhaustive
+method lists.
+
+## Documentation Map
+
+Python and plugin API documentation currently lives in these places:
+
+| Path | Purpose |
+|---|---|
+| `docs/plugins/getting-started.md` | Plugin authoring guide, common workflows, panel/operator examples, and runtime patterns |
+| `docs/plugins/api-reference.md` | Practical Python/plugin API reference aligned with the committed stubs |
+| `docs/plugins/examples/README.md` and `docs/plugins/examples/` | Runnable example plugins and focused API examples |
+| `docs/plugin-system.md` | Plugin runtime architecture, manager responsibilities, scaffolding, and packaging overview |
+| `docs/plugin-dev-workflow.md` | CLI/Python workflow for creating, validating, installing, and iterating on plugins |
+| `docs/Python_UI.md` | Compatibility redirect for the old Python UI document |
+| `docs/Python_API_issues.md` | Known Python API issues, binding gaps, stale-doc corrections, and follow-up recommendations |
+| `docs/docs/development/mcp/` | MCP automation guide, resources, tools, and workflow recipes |
+| `docs/docs/development/rmlui-styling.md` | RmlUI/RCSS styling rules used by retained Python panels |
 
 ## Registration
 
@@ -863,7 +915,11 @@ Runtime compatibility constants:
 
 ## Layout API
 
-The `ui` object passed to `Panel.draw()` provides the immediate widget API used by both simple and hybrid panels. Depending on the panel space and shell, it may be rendered through the direct viewport path or the immediate-mode RML bridge, but the Python widget surface stays the same.
+The `ui` object passed to a regular `Panel.draw()` is a live `RmlUILayout`,
+an immediate widget API reconciled into retained RmlUi elements. Viewport
+overlay panels and document-less draw hooks receive the compatibility
+`UILayout`: its viewport drawing methods are live during the overlay frame,
+while interactive controls warn once and return inert defaults.
 
 ### Text
 
@@ -934,7 +990,7 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 
 | Method                                              | Returns              | Description              |
 |-----------------------------------------------------|----------------------|--------------------------|
-| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | File/folder picker. `dialog_title` is accepted for compatibility and currently ignored. |
+| `path_input(label, value, folder_mode=True, dialog_title='')` | `(bool, str)` | Editable path plus native browse button on `RmlUILayout`; `folder_mode` selects folder vs file. A non-empty title is passed to the custom-title dialog path, while an empty title uses the native default. Unsupported on compatibility `UILayout`. |
 
 ### Property Binding
 
@@ -952,18 +1008,13 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 | `new_line()`                                        | `None`  | Force new line           |
 | `indent(width=0)`                                   | `None`  | Increase indent          |
 | `unindent(width=0)`                                 | `None`  | Decrease indent          |
-| `begin_group()` / `end_group()`                     | `None`  | Logical widget group     |
-| `set_next_item_width(width)`                        | `None`  | Width for next widget    |
 | `dummy(size)`                                       | `None`  | Empty space placeholder  |
 
-### Collapsible / Tree
+### Collapsible
 
 | Method                                              | Returns | Description                    |
 |-----------------------------------------------------|---------|--------------------------------|
 | `collapsing_header(label, default_open=False)`      | `bool`  | Collapsible section            |
-| `tree_node(label)`                                  | `bool`  | Tree node (call `tree_pop()`)  |
-| `tree_node_ex(label, flags='')`                     | `bool`  | Extended tree node             |
-| `tree_pop()`                                        | `None`  | Close tree node                |
 
 ### Tables
 
@@ -977,6 +1028,12 @@ The `ui` object passed to `Panel.draw()` provides the immediate widget API used 
 | `table_set_column_index(column)`                    | `bool`  | Jump to column           |
 | `table_set_bg_color(target, color)`                 | `None`  | Set row/cell background  |
 | `end_table()`                                       | `None`  | End table                |
+
+Rows are position-identified by default. If rows can be removed or reordered,
+call `push_id()` with a stable value (a hidden `##key` is accepted) after
+`begin_table()` and before `table_next_row()`, and keep that id active through
+the row's cells. The Rml bridge then preserves the matching row, focus, caret,
+listeners, and cell state across reconciliation.
 
 ### Images
 
@@ -1006,7 +1063,7 @@ ui.image_texture(tex, (256, 256))
 
 ### DynamicTexture
 
-GPU tensor to UI texture bridge. In the Vulkan viewer this uses the backend's opaque ImGui texture handle.
+GPU tensor to UI texture bridge. In the Vulkan viewer this uses an opaque Vulkan UI texture id (`uint64`).
 
 ```python
 tex = lf.ui.DynamicTexture()          # Empty
@@ -1017,24 +1074,13 @@ tex = lf.ui.DynamicTexture(tensor)    # From tensor
 |--------------------|----------------------|------------------------------------------------|
 | `update(tensor)`   | `None`               | Upload `[H, W, 3\|4]` tensor (auto-converts CPU→CUDA, uint8→float32) |
 | `destroy()`        | `None`               | Release UI texture resources                   |
-| `id`               | `int`                | Opaque ImGui backend texture handle            |
+| `id`               | `int`                | Opaque Vulkan UI texture id (`uint64`)         |
 | `width`            | `int`                | Current width in pixels                        |
 | `height`           | `int`                | Current height in pixels                       |
 | `valid`            | `bool`               | `True` if texture is initialized               |
 | `uv1`             | `tuple[float, float]` | UV scale factors for power-of-2 padding        |
 
 Calling `update()` with a different resolution automatically recreates the backend texture. Textures are freed on plugin unload via `lf.ui.free_plugin_textures(name)`.
-
-### Drag & Drop
-
-| Method                                              | Returns       | Description              |
-|-----------------------------------------------------|---------------|--------------------------|
-| `begin_drag_drop_source()`                          | `bool`        | Start drag source        |
-| `set_drag_drop_payload(type, data)`                 | `None`        | Set drag payload         |
-| `end_drag_drop_source()`                            | `None`        | End drag source          |
-| `begin_drag_drop_target()`                          | `bool`        | Start drag target        |
-| `accept_drag_drop_payload(type)`                    | `str or None` | Accept payload           |
-| `end_drag_drop_target()`                            | `None`        | End drag target          |
 
 ### Popups & Menus
 
@@ -1053,29 +1099,32 @@ Calling `update()` with a different resolution automatically recreates the backe
 | `menu_item(label, enabled=True)`                    | `bool`  | Menu item                |
 | `menu_item_toggle(label, shortcut, selected)`       | `bool`  | Toggle menu item         |
 | `menu_item_shortcut(label, shortcut, enabled=True)` | `bool`  | Menu item with shortcut  |
-| `menu(menu_id, text='', icon='')`                   | `None`  | Inline menu reference    |
-| `popover(panel_id, text='', icon='')`               | `None`  | Panel popover            |
 
-### Windows & Children
+### Child Regions
 
 | Method                                                        | Returns        | Description           |
 |---------------------------------------------------------------|----------------|-----------------------|
-| `begin_window(title, flags=0)`                                | `bool`         | Start window          |
-| `begin_window_closable(title, flags=0)`                       | `(bool, bool)` | Closable window       |
-| `end_window()`                                                | `None`         | End window            |
 | `begin_child(id, size=(0,0), border=False)`                   | `bool`         | Start child region    |
 | `end_child()`                                                 | `None`         | End child region      |
+
+### Overlay Window State
+
+These methods belong to viewport-overlay `UILayout`; they are not exposed on
+panel `RmlUILayout`, whose containing panel already owns position and size.
+
+| Method                                                        | Returns        | Description           |
+|---------------------------------------------------------------|----------------|-----------------------|
+| `begin_window(title, flags=0)`                                | `bool`         | Start overlay window state |
+| `end_window()`                                                | `None`         | End overlay window state |
 | `set_next_window_pos(pos, first_use=False)`                   | `None`         | Set window position   |
 | `set_next_window_size(size, first_use=False)`                 | `None`         | Set window size       |
-| `set_next_window_pos_center()`                                | `None`         | Center window         |
 | `set_next_window_pos_centered(first_use=False)`               | `None`         | Center next window (main viewport) |
-| `set_next_window_pos_viewport_center()`                       | `None`         | Viewport center       |
-| `set_next_window_focus()`                                     | `None`         | Focus next window     |
-| `set_next_window_bg_alpha(alpha)`                             | `None`         | Set next window BG alpha |
-| `push_window_style()` / `pop_window_style()`                  | `None`         | Window style stack    |
-| `push_modal_style()` / `pop_modal_style()`                    | `None`         | Modal style stack     |
 
 ### Drawing (Viewport)
+
+On a viewport-overlay `UILayout`, these primitives enqueue into the active
+viewport-scoped `ScreenOverlayRenderer`. Coordinates are absolute screen
+coordinates. Outside an active overlay frame they emit no command.
 
 | Method                                                         | Returns | Description            |
 |----------------------------------------------------------------|---------|------------------------|
@@ -1094,13 +1143,24 @@ Calling `update()` with a different resolution automatically recreates the backe
 
 ### Drawing (Window)
 
+The `draw_window_*` names are compatibility aliases and use the same absolute
+screen-coordinate convention as `draw_*`; they do not add a window origin.
+
 | Method                                                         | Returns | Description            |
 |----------------------------------------------------------------|---------|------------------------|
-| `draw_window_rect_filled(x0, y0, x1, y1, color)`              | `None`  | Filled rect to window  |
-| `draw_window_rect(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Rect outline to window |
-| `draw_window_line(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Line to window         |
-| `draw_window_text(x, y, text, color)`                          | `None`  | Text to window         |
-| `draw_window_triangle_filled(x0, y0, x1, y1, x2, y2, color)` | `None`  | Triangle to window     |
+| `draw_window_rect_filled(x0, y0, x1, y1, color)`              | `None`  | Filled rectangle       |
+| `draw_window_rect(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Rectangle outline      |
+| `draw_window_rect_rounded(x0, y0, x1, y1, color, r, thickness=1)` | `None` | Rounded outline    |
+| `draw_window_rect_rounded_filled(x0, y0, x1, y1, color, r)`   | `None`  | Filled rounded rect    |
+| `draw_window_line(x0, y0, x1, y1, color, thickness=1)`        | `None`  | Line                   |
+| `draw_window_text(x, y, text, color)`                          | `None`  | Text                   |
+| `draw_window_triangle_filled(x0, y0, x1, y1, x2, y2, color)` | `None`  | Filled triangle        |
+
+The legacy `background` arguments on applicable `draw_*` calls are accepted
+but ignored: there is no separate background draw list. Overlay calls share
+one command stream, packed as shapes followed by text/images. Enqueue order is
+retained within each batch, but cross-batch call order is not a z-order
+guarantee.
 
 ### Progress & Status
 
@@ -1116,8 +1176,6 @@ Calling `update()` with a different resolution automatically recreates the backe
 | `is_item_hovered()`                                 | `bool`  | Last item hovered        |
 | `is_item_clicked(button=0)`                         | `bool`  | Last item clicked        |
 | `is_item_active()`                                  | `bool`  | Last item active         |
-| `is_window_focused()`                               | `bool`  | Window has focus         |
-| `is_window_hovered()`                               | `bool`  | Window is hovered        |
 | `is_mouse_double_clicked(button=0)`                 | `bool`  | Double click detected    |
 | `is_mouse_dragging(button=0)`                       | `bool`  | Mouse dragging           |
 | `get_mouse_wheel()`                                 | `float` | Scroll wheel delta       |
@@ -1127,7 +1185,6 @@ Calling `update()` with a different resolution automatically recreates the backe
 
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
-| `get_cursor_pos()`                                  | `tuple` | Cursor position          |
 | `get_cursor_screen_pos()`                           | `tuple` | Cursor screen position   |
 | `get_window_pos()`                                  | `tuple` | Window position          |
 | `get_window_width()`                                | `float` | Window width             |
@@ -1142,38 +1199,20 @@ Calling `update()` with a different resolution automatically recreates the backe
 
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
-| `push_style_var(var, value)`                        | `None`  | Push float style var     |
-| `push_style_var_vec2(var, value)`                   | `None`  | Push vec2 style var      |
-| `pop_style_var(count=1)`                            | `None`  | Pop style vars           |
-| `push_style_color(col, color)`                      | `None`  | Push color override      |
-| `pop_style_color(count=1)`                          | `None`  | Pop color overrides      |
 | `push_item_width(width)` / `pop_item_width()`      | `None`  | Item width stack         |
 | `begin_disabled(disabled=True)` / `end_disabled()`  | `None`  | Disable widget region. For composable disabled regions, prefer `SubLayout.enabled` (see Layout Composition below). |
 
-### Keyboard / Mouse Capture
+### Pointer
 
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
-| `set_keyboard_focus_here()`                         | `None`  | Focus next widget        |
-| `capture_keyboard_from_app(capture=True)`           | `None`  | Capture keyboard input   |
-| `capture_mouse_from_app(capture=True)`              | `None`  | Capture mouse input      |
 | `set_mouse_cursor_hand()`                           | `None`  | Set hand cursor          |
-
-### Cursor Control
-
-| Method                                              | Returns | Description              |
-|-----------------------------------------------------|---------|--------------------------|
-| `set_cursor_pos(pos)`                               | `None`  | Set cursor position      |
-| `set_cursor_pos_x(x)`                               | `None`  | Set cursor X             |
-| `set_scroll_here_y(ratio=0.5)`                      | `None`  | Scroll to current Y      |
 
 ### Specialized Widgets
 
 | Method                                                                            | Returns        | Description           |
 |-----------------------------------------------------------------------------------|----------------|-----------------------|
-| `crf_curve_preview(label, gamma, toe, shoulder, gamma_r=0, gamma_g=0, gamma_b=0)`| `None`         | Tone curve preview    |
-| `chromaticity_diagram(label, rx, ry, gx, gy, bx, by, nx, ny, range=0.5)`         | `(bool, list)` | Chromaticity diagram  |
-| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Custom list template |
+| `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Live on `RmlUILayout`. Compatibility `UILayout` raises `TypeError` outside draw hooks and warns/returns inert values in draw hooks. |
 
 ### Layout Composition
 
@@ -1183,12 +1222,19 @@ Create composable sub-layouts with automatic widget positioning and state cascad
 |----------------------------------------------------|-------------|---------------------------------|
 | `row()`                                            | `SubLayout` | Horizontal layout               |
 | `column()`                                         | `SubLayout` | Vertical layout                 |
-| `split(factor=0.5)`                                | `SubLayout` | Two-column split                |
+| `split(factor=0.5)`                                | `SubLayout` | Two-child split; factor controls first/second width ratio |
 | `box()`                                            | `SubLayout` | Bordered container              |
-| `grid_flow(columns=0, even_columns=True, even_rows=True)` | `SubLayout` | Responsive grid         |
+| `grid_flow(columns=0, even_columns=True, even_rows=True)` | `SubLayout` | Responsive grid with explicit column/row sizing controls |
 | `prop_enum(data, prop_id, value, text='')`          | `bool`      | Enum toggle button              |
 
 `SubLayout` is a context manager. Use `with ui.row() as row:` to enter the layout, then call widget methods on `row` instead of `ui`. Sub-layouts nest arbitrarily.
+
+For `split`, values are clamped to `[0, 1]`; a 4dp gap is accounted for while
+preserving the requested ratio. Only two children are shown. For `grid_flow`,
+positive `columns` with `even_columns=True` assigns equal percentage widths;
+`columns=0` uses a wrapping 100dp basis. `even_columns=False` uses content
+width. `even_rows=True` grows and stretches cells to the row height;
+`even_rows=False` preserves natural height.
 
 #### SubLayout state properties
 
@@ -1256,8 +1302,8 @@ import lichtfeld as lf
 | `remove_node(name, keep_children=False)`          | `None`           | Remove node                       |
 | `rename_node(old, new)`                           | `bool`           | Rename node                       |
 | `reparent(node_id, new_parent_id)`                | `None`           | Change parent                     |
-| `duplicate_node(name)`                            | `str`            | Duplicate, returns new name       |
-| `merge_group(group_name)`                         | `str`            | Merge group children              |
+| `duplicate_node(name)`                            | `str`            | Duplicate, returns new node name  |
+| `merge_group(group_name)`                         | `str`            | Merge group children, returns merged node name |
 | `get_node(name)`                                  | `SceneNode`      | Get node by name                  |
 | `get_node_by_id(id)`                              | `SceneNode`      | Get node by ID                    |
 | `get_nodes()`                                     | `list[SceneNode]`| All nodes                         |
@@ -1281,7 +1327,7 @@ import lichtfeld as lf
 | `locked`            | `bool`               | Lock flag                         |
 | `gaussian_count`    | `int`                | Number of gaussians (splat nodes) |
 | `centroid`          | `tuple[float, float, float]` | Node centroid             |
-| `world_transform`   | `tuple`              | World-space 4x4 transform        |
+| `world_transform`   | `tuple`              | World-space 4x4 transform, row-major |
 | `splat_data()`      | `SplatData or None`  | Splat data for this node (None if not a splat) |
 | `point_cloud()`     | `PointCloud or None` | Point cloud data (None if not a point cloud) |
 | `cropbox()`         | `CropBox or None`    | Crop box data                     |
@@ -1297,10 +1343,11 @@ import lichtfeld as lf
 | `get_selected_node_name()`            | `str`            | First selected node name          |
 | `get_selected_node_names()`           | `list[str]`      | All selected node names           |
 | `can_transform_selection()`           | `bool`           | Selection is transformable        |
-| `get_selected_node_transform()`       | `list[float]`    | 16 floats, column-major           |
-| `set_selected_node_transform(matrix)` | `None`           | Set transform                     |
+| `get_selected_node_transform()`       | `list[float]`    | 16 column-major floats            |
+| `set_selected_node_transform(matrix)` | `None`           | Set transform from 16 column-major floats |
 | `get_selection_center()`              | `list[float]`    | Local space center                |
-| `get_selection_world_center()`        | `list[float]`    | World space center                |
+| `get_selection_visualizer_world_center()` | `list[float]` | Visualizer world-space center     |
+| `get_selection_world_center()`        | `list[float]`    | Deprecated legacy data-world center; use `get_selection_visualizer_world_center()` |
 | `capture_selection_transforms()`      | `dict`           | Snapshot for undo                 |
 
 ### Scene Shortcuts
@@ -1321,19 +1368,56 @@ Module-level shortcuts for common scene operations (equivalent to `Scene` object
 | Method                          | Returns     | Description                  |
 |---------------------------------|-------------|------------------------------|
 | `set_selection_mask(mask)`      | `None`      | Apply bool tensor mask       |
+| `preview_selection_mask(mask)`  | `None`      | Preview transient selection without an undo step |
+| `commit_selection_preview()`    | `None`      | Commit the transient preview as one undo step |
+| `cancel_selection_preview()`    | `None`      | Restore the selection before preview |
 | `clear_selection()`             | `None`      | Clear gaussian selection     |
 | `has_selection()`               | `bool`      | Any gaussians selected       |
 | `selection_mask`                | `Tensor`    | Property. Current mask       |
 | `set_selection(indices)`        | `None`      | Select by index list         |
+| `add_selection_group(name, color)` | `int`    | Create a named group         |
+| `selection_groups()`            | `list[SelectionGroup]` | Current groups      |
+| `active_selection_group`        | `int`       | Property. Active group id    |
+| `set_selection_group_locked(id, locked)` | `None` | Lock/unlock group edits |
+
+### Selection Primitives (`lf.selection`)
+
+`lichtfeld.selection` is the lower-level selection-tool API. It operates on
+selection strokes, previews, and viewport-space hit data.
+
+| Function | Returns | Description |
+|---|---|---|
+| `begin_stroke()` / `commit_stroke(mode)` / `cancel_stroke()` | `None` / `bool` / `None` | Manage one undoable selection stroke |
+| `get_stroke_selection()` | `Tensor \| None` | Current stroke mask `[N]` uint8 |
+| `set_preview(add_mode=True)` / `clear_preview()` | `None` | Show/clear add/remove preview overlay |
+| `draw_brush_circle(x, y, radius, add_mode=True)` | `None` | Brush cursor overlay |
+| `draw_rect_preview(x0, y0, x1, y1, add_mode=True)` | `None` | Rectangle preview overlay |
+| `draw_polygon_preview(points, closed=False, add_mode=True)` | `None` | Polygon preview overlay |
+| `draw_lasso_preview(points, add_mode=True)` | `None` | Lasso preview overlay |
+| `has_screen_positions()` / `get_screen_positions()` | `bool` / `Tensor \| None` | Viewport-projected positions `[N, 2]` |
+| `set_depth_filter_range(enabled, depth_near=0, depth_far=100, frustum_half_width=50)` | `None` | Camera-space selection depth filter |
+| `get_depth_filter_range()` | `tuple[bool, float, float, float]` | `(enabled, near, far, half_width)` |
+| `set_crop_filter(enabled)` / `apply_crop_filter()` | `None` | Crop-box constrained selection |
+| `screen_to_render(x, y)` | `tuple[float, float]` | Convert screen to render coordinates |
+| `pick_at_screen(x, y)` | `PickResult \| None` | Depth/world hit at screen point |
+| `ring_select(index, add=True)` | `None` | Select/deselect one gaussian |
+| `grow(radius, iterations=1)` / `shrink(radius, iterations=1)` | `None` | Spatial grow/shrink selection |
+| `by_opacity(min_opacity=0, max_opacity=1)` | `None` | Select by activated opacity range |
+| `by_scale(max_scale)` | `None` | Select by activated scale threshold |
+| `by_color(gaussian_index, threshold=0.2)` | `None` | Select by SH DC color similarity |
+
+`PickResult.index` is the gaussian under the current cursor, not necessarily
+the queried screen coordinate. Use `depth` and `world_position` for the queried
+coordinate data.
 
 ### Transforms
 
 | Function                                    | Returns        | Description                      |
 |---------------------------------------------|----------------|----------------------------------|
-| `get_node_transform(name)`                  | `list[float]`  | 16 floats, column-major          |
-| `set_node_transform(name, matrix)`          | `None`         | Set 4x4 transform                |
-| `decompose_transform(matrix)`               | `dict`         | See keys below                   |
-| `compose_transform(translation, euler_deg, scale)` | `list[float]` | Build 4x4 from components (Euler in degrees) |
+| `get_node_transform(name)`                  | `list[float]`  | 16 column-major floats           |
+| `set_node_transform(name, matrix)`          | `None`         | Set 4x4 transform from 16 column-major floats |
+| `decompose_transform(matrix)`               | `dict`         | Decompose 16 column-major floats; see keys below |
+| `compose_transform(translation, euler_deg, scale)` | `list[float]` | Build 16 column-major floats from components (Euler in degrees) |
 
 `decompose_transform` returns a dict with these keys:
 
@@ -1366,7 +1450,7 @@ Accessible via `scene.combined_model()` (all nodes merged) or `node.splat_data()
 | `active_sh_degree`    | `int`        | Current SH degree               |
 | `max_sh_degree`       | `int`        | Maximum SH degree               |
 | `scene_scale`         | `float`      | Scene scale factor              |
-| `soft_delete(mask)`   | `Tensor`     | Mark for deletion, returns prev state |
+| `soft_delete(mask)`   | `Tensor`     | Mark for deletion, returns newly deleted mask |
 | `undelete(mask)`      | `None`       | Restore deleted gaussians       |
 | `apply_deleted()`     | `int`        | Permanently remove, returns count|
 | `clear_deleted()`     | `None`       | Clear deletion mask             |
@@ -1375,6 +1459,29 @@ Accessible via `scene.combined_model()` (all nodes merged) or `node.splat_data()
 | `visible_count()`     | `int`        | Number of non-deleted gaussians |
 
 > After calling `soft_delete()`, `undelete()`, or `clear_deleted()`, call `scene.notify_changed()` to update the viewport.
+
+### Point Clouds, Cameras, and Dataset Nodes
+
+| API | Returns | Description |
+|---|---|---|
+| `Scene.add_point_cloud(name, points, colors, parent=-1)` | `int` | Add `[N,3]` position/color tensors |
+| `SceneNode.point_cloud()` | `PointCloud \| None` | Point-cloud payload for point-cloud nodes |
+| `PointCloud.means` / `PointCloud.colors` | `Tensor` | Position and color tensors |
+| `PointCloud.normals`, `sh0`, `shN`, `opacity`, `scaling`, `rotation` | `Tensor \| None` | Optional gaussian-like attributes |
+| `PointCloud.normalize_colors()` | `None` | Normalize colors to `[0,1]` |
+| `PointCloud.filter(mask)` / `filter_indices(indices)` | `int` | Keep matching points, return removed count |
+| `PointCloud.set_means(points)` / `set_colors(colors)` | `None` | Update positions/colors without replacing both |
+| `Scene.add_camera_group(name, parent, camera_count)` | `int` | Add camera group |
+| `Scene.add_camera(name, parent, R, T, focal_x, focal_y, width, height, image_path='', uid=-1, mask=None)` | `int` | Add camera node |
+| `SceneNode.load_mask(...)` / `load_depth(...)` | `Tensor \| None` | Load camera mask/depth from node metadata |
+| `Scene.get_active_cameras()` | `list[SceneNode]` | Cameras enabled for training |
+| `CameraDataset.cameras()` | `list[Camera]` | Dataset cameras as Python objects |
+| `Camera.load_image(resize_factor=1, max_width=0, output_uint8=False)` | `Tensor` | `[C,H,W]` CUDA image |
+| `Camera.rotation` / `Camera.translation` | `Tensor` | Visualizer camera pose, directly usable with `render_view()` |
+
+Deprecated raw dataset-camera properties are still available on `Camera`:
+`R`, `T`, `world_view_transform`, and `cam_position`. Prefer
+`rotation`, `translation`, `K`, and `view_matrix` for new code.
 
 ### Training Control
 
@@ -1385,7 +1492,7 @@ Accessible via `scene.combined_model()` (all nodes merged) or `node.splat_data()
 | `resume_training()`        | `None`           | Resume                        |
 | `stop_training()`          | `None`           | Stop                          |
 | `reset_training()`         | `None`           | Reset to iteration 0          |
-| `save_checkpoint()`        | `None`           | Save checkpoint               |
+| `project_save()`           | `None`           | Save the active `.licht` project |
 | `switch_to_edit_mode()`    | `None`           | Enter edit mode               |
 | `has_trainer()`            | `bool`           | Trainer loaded                |
 | `trainer_state()`          | `str`            | State string                  |
@@ -1430,9 +1537,14 @@ Callbacks registered with `lf.on_*` receive one positional hook payload. If you 
 | `get_current_view()`                                  | `ViewInfo`       | Current camera view        |
 | `get_viewport_render()`                               | `ViewportRender` | Current viewport image     |
 | `capture_viewport()`                                  | `ViewportRender` | Capture for async use      |
-| `render_view(rotation, translation, w, h, fov=60, bg=None)` | `Tensor`  | Render active visualizer scene from camera |
-| `render_view_u8(rotation, translation, w, h, fov=60, bg=None)` | `Tensor`  | Render active visualizer scene as CPU uint8 RGB |
-| `compute_screen_positions(rotation, translation, w, h, fov=60)` | `Tensor` | [N, 2] screen positions |
+| `export_viewport_image(path, format='', width=0, height=0, transparent=False, jpeg_quality=95, include_provenance=True)` | `dict` | Export active viewport to PNG/JPEG (`include_provenance=False` still embeds a minimal build stamp) |
+| `look_at(eye, target, up=(0,1,0))`                    | `(Tensor, Tensor)` | Compute `(rotation, translation)` for rendering |
+| `render_view(rotation, translation, width, height, fov=60, bg_color=None, with_depth=False, depth_mode='median')` | `Tensor \| tuple \| None` | Render active scene from camera |
+| `render_view_u8(rotation, translation, width, height, fov=60, bg_color=None, orthographic=None, ortho_scale=None)` | `Tensor \| None` | Render active scene as CPU uint8 RGB |
+| `render_at(eye, target, width, height, fov=60, up=(0,1,0), bg_color=None)` | `Tensor \| None` | Convenience look-at render |
+| `render_asset_preview(path, width=512, height=224, focal_length_mm=35)` | `Tensor \| None` | Offscreen asset thumbnail without mutating live scene |
+| `render_asset_preview_from_camera(path, eye, target, ...)` | `Tensor \| None` | Offscreen thumbnail from custom camera |
+| `compute_screen_positions(rotation, translation, width, height, fov=60)` | `Tensor` | [N, 2] screen positions |
 | `get_render_settings()`                               | `RenderSettings` | Current render settings    |
 | `get_render_mode()` / `set_render_mode(mode)`         | `RenderMode`     | Render mode                |
 
@@ -1451,13 +1563,70 @@ Callbacks registered with `lf.on_*` receive one positional hook payload. If you 
 
 ```python
 lf.export_scene(
-    format: int,             # 0=PLY, 1=SOG, 2=SPZ, 3=HTML
+    format: int,             # 0=PLY, 1=SOG, 2=SPZ, 3=HTML, 4=USD,
+                             # 5=USDZ NuRec, 6=RAD, 7=COLMAP
     path: str,
     node_names: list[str],
     sh_degree: int,
+    rad_flip_y: bool = False,
+    rad_streamable: bool = True,
+    spz_version: int = 4,    # SPZ only: 4 (zstd) or 3 (legacy gzip)
+    include_provenance: bool = True,  # False writes a minimal build stamp; ignored for COLMAP and SPZ v3
 )
 lf.save_config_file(path: str)
 ```
+
+### File I/O (`lf.io`)
+
+Use `lf.io` when you need data objects directly instead of loading into the
+live application scene.
+
+| Function | Returns | Description |
+|---|---|---|
+| `lf.io.load(path, format=None, resize_factor=None, max_width=None, images_folder=None, progress=None, min_track_length=None)` | `LoadResult` | Load splat file, point cloud, mesh-derived data, or dataset |
+| `lf.io.load_point_cloud(path)` | `(Tensor, Tensor)` | Load PLY point cloud as positions/colors |
+| `lf.io.save_ply(data, path, binary=True, progress=None, extra_attributes=None, include_provenance=True)` | `None` | Save `SplatData` as PLY (`False` still embeds a minimal build stamp) |
+| `lf.io.save_point_cloud_ply(point_cloud, path, extra_attributes=None, include_provenance=True)` | `None` | Save `PointCloud` as PLY (`False` still embeds a minimal build stamp) |
+| `lf.io.save_sog(data, path, kmeans_iterations=10, use_gpu=True, progress=None, include_provenance=True)` | `None` | Save SOG-compressed splats (`False` still embeds a minimal build stamp) |
+| `lf.io.save_spz(data, path, version=4, include_provenance=True)` | `None` | Save SPZ splats (`version` 4=zstd, 3=legacy gzip; `include_provenance` ignored for v3) |
+| `lf.io.save_usd(data, path, include_provenance=True)` | `None` | Save OpenUSD gaussian file (`False` still embeds a minimal build stamp) |
+| `lf.io.save_nurec_usdz(data, path, include_provenance=True)` | `None` | Save NuRec-compatible USDZ (`False` still embeds a minimal build stamp) |
+| `lf.io.export_html(data, path, kmeans_iterations=10, progress=None, include_provenance=True)` | `None` | Self-contained HTML viewer (`False` still embeds a minimal build stamp) |
+| `lf.io.save_image(path, image, include_provenance=True)` | `None` | Save PNG/JPG/TIFF/EXR from `[H,W,C]` or `[C,H,W]` tensor (`False` still embeds a minimal build stamp on PNG/JPEG) |
+| `lf.io.is_dataset_path(path)` | `bool` | Dataset directory detection |
+| `lf.io.is_gaussian_splat_ply(path)` | `bool` | PLY schema check for gaussian splat attributes |
+| `lf.io.get_supported_formats()` / `get_supported_extensions()` | `list[str]` | Loader/exporter support |
+
+`include_provenance=False` writes a minimal build stamp (`app_version` + `build_commit`). The flag is ignored for COLMAP and SPZ v3 (legacy gzip), which have no stamp slot.
+
+`LoadResult` exposes `splat_data`, `point_cloud`, `cameras`,
+`scene_center`, `loader_used`, `load_time_ms`, `warnings`, and `is_dataset`.
+PLY extra attributes must avoid reserved gaussian names and must match the
+visible/raw point count expected by the exporter.
+
+### Pipeline Operations (`lf.pipeline`)
+
+Pipelines compose built-in operations and execute them as one chain.
+
+```python
+pipe = (
+    lf.pipeline.Pipeline("grow-and-move")
+    | lf.pipeline.select.grow(radius=0.05)
+    | lf.pipeline.transform.translate(offset=(0.0, 0.1, 0.0))
+)
+if pipe.poll():
+    result = pipe.execute()
+```
+
+| API | Description |
+|---|---|
+| `lf.pipeline.Pipeline(name='')` | Create an empty chain |
+| `Pipeline.add(stage)` / `Pipeline \| stage` | Append a stage |
+| `Pipeline.poll()` / `execute()` | Check and execute all stages |
+| `Stage.execute()` | Execute a single stage immediately |
+| `lf.pipeline.select.all/none/invert/grow/shrink(**kwargs)` | Selection stages |
+| `lf.pipeline.transform.translate/rotate/scale/set(**kwargs)` | Transform stages |
+| `lf.pipeline.edit.duplicate(**kwargs)` | Duplicate stage |
 
 ### Logging
 
@@ -1512,8 +1681,13 @@ lf.undo.stack() -> dict
 | `lf.ui.set_transform_space(space)`          | `None`           | Set transform space index  |
 | `lf.ui.get_pivot_mode()` / `set_pivot_mode(mode)` | `int`      | Pivot mode enum index      |
 | `lf.ui.get_fps()`                           | `float`          | Current FPS                |
-| `lf.ui.get_gpu_memory()`                    | `(int, int, int)` | (process_used, total_used, total) bytes |
 | `lf.ui.get_git_commit()`                    | `str`            | Git commit hash            |
+| `lf.ui.is_key_pressed(key, repeat=False)`    | `bool`           | SDL-backed rising edge for the current UI frame; UI thread only, no repeat events |
+| `lf.ui.is_key_down(key)`                     | `bool`           | Current SDL keyboard level |
+
+For a coarse CUDA memory number in Python plugin code, use
+`lfs_plugins.get_gpu_memory()` from the helper package. There is no
+`lf.ui.get_gpu_memory()` binding in the current stubs.
 
 ### File Dialogs
 
@@ -1525,14 +1699,26 @@ lf.undo.stack() -> dict
 | `lf.ui.open_ply_file_dialog(start_dir='')`  | `str`            |
 | `lf.ui.open_mesh_file_dialog(start_dir='')` | `str`            |
 | `lf.ui.open_checkpoint_file_dialog()`       | `str`            |
+| `lf.ui.open_ppisp_file_dialog(start_dir='')`| `str`            |
 | `lf.ui.open_json_file_dialog()`             | `str`            |
+| `lf.ui.open_csv_file_dialog()`              | `str`            |
+| `lf.ui.open_xml_file_dialog()`              | `str`            |
+| `lf.ui.open_las_file_dialog()`              | `str`            |
 | `lf.ui.open_video_file_dialog()`            | `str`            |
+| `lf.ui.select_colmap_sparse_folder_dialog(default_path='')` | `str` |
+| `lf.ui.open_environment_map_dialog(start_dir='')` | `str`     |
+| `lf.ui.save_las_file_dialog(default_name='export')` | `str` |
+| `lf.ui.save_laz_file_dialog(default_name='export')` | `str` |
 | `lf.ui.save_json_file_dialog(default_name='config.json')` | `str` |
-| `lf.ui.save_ply_file_dialog(default_name='export.ply')`   | `str` |
-| `lf.ui.save_sog_file_dialog(default_name='export.sog')`   | `str` |
-| `lf.ui.save_spz_file_dialog(default_name='export.spz')`   | `str` |
-| `lf.ui.save_usd_file_dialog(default_name='export.usd')`   | `str` |
-| `lf.ui.save_html_file_dialog(default_name='viewer.html')` | `str` |
+| `lf.ui.save_png_file_dialog(default_name='export.png')`   | `str` |
+| `lf.ui.save_jpg_file_dialog(default_name='export.jpg')`   | `str` |
+| `lf.ui.save_ply_file_dialog(default_name='export')`       | `str` |
+| `lf.ui.save_sog_file_dialog(default_name='export')`       | `str` |
+| `lf.ui.save_spz_file_dialog(default_name='export')`       | `str` |
+| `lf.ui.save_usd_file_dialog(default_name='export')`       | `str` |
+| `lf.ui.save_usdz_file_dialog(default_name='export')`      | `str` |
+| `lf.ui.save_html_file_dialog(default_name='viewer')`      | `str` |
+| `lf.ui.save_rad_file_dialog(default_name='export')`       | `str` |
 
 `lf.ui.open_folder_dialog()` accepts `title` for compatibility with older scripts. The current native dialog backend ignores it.
 
@@ -1551,6 +1737,9 @@ Inject UI into existing panels at predefined hook points. Callbacks receive a `l
 | `@lf.ui.hook(panel, section, position="append")` | Decorator form of `add_hook` |
 
 Hook points are runtime-defined. Query them with `lf.ui.get_hook_points()` instead of hard-coding.
+Callbacks whose layout cannot host interactive widgets warn once per method
+and return inert controls. Viewport drawing remains available during an active
+overlay frame.
 
 ### Tensor API
 
@@ -1639,6 +1828,128 @@ The tables below list the most-used tensor APIs. For the full bound surface, see
 | `lf.mat4(rows)`      | Create 4x4 matrix        |
 | `lf.help()`          | Show help                |
 
+### Native Operators (`lf.ops` / `lf.ui.ops`)
+
+Use `lf.ops` for the native operator registry and descriptor metadata. The
+`lf.ui.ops` namespace exposes the same common invoke/poll/modal controls for UI
+code.
+
+| API | Returns | Description |
+|---|---|---|
+| `lf.ops.invoke(id, **kwargs)` | `OperatorReturnValue` | Invoke a native or Python operator |
+| `lf.ops.poll(id)` | `bool` | Check whether the operator can run |
+| `lf.ops.get_all()` | `list[str]` | Registered operator IDs |
+| `lf.ops.get_descriptor(id)` | `OperatorDescriptor \| None` | Label, description, icon, shortcut, flags |
+| `lf.ops.has_modal()` / `cancel_modal()` | `bool` / `None` | Modal operator state/control |
+
+`OperatorReturnValue` has boolean helpers: `finished`, `cancelled`,
+`running_modal`, `pass_through`, and `bool(result)` for successful completion.
+Extra return data can be accessed by attribute.
+
+### MCP Tools (`lf.mcp`)
+
+Python plugins can register MCP tools into the same local MCP surface used by
+automation clients.
+
+```python
+@lf.mcp.tool(name="my_plugin.echo", description="Echo a message")
+def echo(args):
+    return {"message": args.get("message", "")}
+```
+
+| Function | Returns | Description |
+|---|---|---|
+| `register_tool(fn, name='', description='')` | `None` | Register a Python function as an MCP tool |
+| `@tool(name='', description='')` | decorator | Decorator form |
+| `unregister_tool(name)` | `None` | Remove a Python MCP tool |
+| `list_tools()` / `describe_tools()` | `list` | All shared MCP tools/capabilities |
+| `list_python_tools()` | `list[str]` | Python tools registered through `lf.mcp` |
+| `list_resources()` / `read_resource(uri)` | `list` | Shared MCP resource discovery/read |
+| `call_tool(name, args=None)` | `object` | Invoke a registered tool/capability |
+
+### Packages (`lf.packages`)
+
+Package installation is backed by `uv` and the LichtFeld-managed Python
+environment.
+
+| Function | Returns | Description |
+|---|---|---|
+| `init()` | `str` | Initialize `~/.lichtfeld/venv` |
+| `install(package)` / `uninstall(package)` | `str` | Synchronous package change |
+| `list()` | `list[PackageInfo]` | Installed packages |
+| `is_installed(package)` | `bool` | Package presence check |
+| `install_async(package)` | `bool` | Start non-blocking install |
+| `install_torch(cuda='auto', version='')` | `str` | Install PyTorch with CUDA detection |
+| `install_torch_async(cuda='auto', version='')` | `bool` | Non-blocking PyTorch install |
+| `is_busy()` | `bool` | Async operation running |
+| `is_uv_available()` / `uv_path()` | `bool` / `str` | `uv` discovery |
+| `embedded_python_path()` / `site_packages_dir()` / `typings_dir()` | `str` | Runtime paths |
+
+There is no `uninstall_async()` API in the current stubs; use synchronous
+`uninstall()`.
+
+### Scripts (`lf.scripts`)
+
+These functions back the Scripts panel and are useful for plugin-managed script
+batches.
+
+| Function | Returns | Description |
+|---|---|---|
+| `get_scripts()` | `list` | Loaded script records |
+| `set_script_enabled(index, enabled)` | `None` | Toggle one script |
+| `set_script_error(index, error)` | `None` | Set or clear one script error |
+| `clear_errors()` / `clear()` | `None` | Clear errors or all scripts |
+| `run(paths)` | `dict` | Run scripts, returns success/error data |
+| `get_enabled_paths()` | `list[str]` | Enabled script paths |
+| `count()` | `int` | Script count |
+
+### Keymaps (`lf.keymap`)
+
+`lf.keymap` exposes input bindings for tools and global actions.
+
+| Function | Description |
+|---|---|
+| `get_action_for_key(mode, key, modifiers=0)` / `get_action_for_scroll(mode, modifiers=0, held_keys=[])` | Resolve input to action |
+| `get_key_for_action(action, mode=GLOBAL)` / `get_trigger(action, mode=GLOBAL)` | Read current binding |
+| `set_binding(mode, action, key, modifiers=0)` / `set_trigger_binding(mode, action, trigger)` | Change binding |
+| `clear_binding(mode, action)` / `reset_to_default()` | Remove or reset bindings |
+| `find_conflict_for_action(mode, action)` | Detect binding conflicts |
+| `get_available_profiles()` / `get_current_profile()` | Profile discovery |
+| `load_profile(name)` / `save_profile(name)` / `export_profile(path)` / `import_profile(path)` | Profile persistence |
+| `start_capture(mode, action)` / `capture_scroll(...)` / `cancel_capture()` | Interactive capture |
+| `is_capturing()` / `get_captured_trigger()` / `bindings_revision()` | Capture and change state |
+
+The enum surfaces include `Action`, `ToolMode`, `Modifier`, `MouseButton`,
+`KeyTrigger`, and `MouseButtonTrigger`.
+
+### Animation (`lf.animation`)
+
+| Class | Purpose |
+|---|---|
+| `AnimationTrack` | Keyframes for one target property path; supports `add_keyframe()`, `remove_keyframe()`, `evaluate()`, and `keyframes()` |
+| `AnimationClip` | Multi-track clip with `add_track(value_type, target_path)`, `remove_track()`, `get_track()`, and `evaluate(time)` |
+| `Timeline` | Camera keyframe timeline plus optional animation clip; exposes `animation_clip()` and `evaluate_clip(time)` |
+
+Track value types are `"bool"`, `"int"`, `"float"`, `"vec2"`, `"vec3"`,
+`"vec4"`, `"quat"`, and `"mat4"`.
+
+### Mesh (`lf.mesh`)
+
+`lf.mesh` is a broad OpenMesh binding surface. The most common plugin entry
+points are:
+
+| API | Returns | Description |
+|---|---|---|
+| `MeshData` | class | Tensor-backed mesh payload used by scene/rendering |
+| `read_trimesh(filename, **options)` / `read_polymesh(filename, **options)` | `TriMesh` / `PolyMesh` | Load OpenMesh meshes |
+| `write_mesh(filename, mesh, **options)` | `None` | Save `TriMesh` or `PolyMesh` |
+| `write_mesh(mesh_data, path)` | `None` | Save tensor-backed mesh data |
+| `TriMesh` / `PolyMesh` | classes | OpenMesh-style topology, geometry, and property APIs |
+| `TriMeshDecimater` / `PolyMeshDecimater` | classes | Decimation module management |
+
+For exact method coverage, use `src/python/stubs/lichtfeld/mesh.pyi`; that
+file is intentionally the canonical exhaustive reference for the mesh binding.
+
 ---
 
 ## pyproject.toml Schema
@@ -1677,7 +1988,7 @@ from lfs_plugins.icon_manager import get_icon, get_ui_icon, get_scene_icon, get_
 | `get_scene_icon(name)`                      | `int`   | Load `assets/icon/scene/{name}.png`      |
 | `get_plugin_icon(name, plugin_path, plugin_name)` | `int` | Load `{plugin_path}/icons/{name}.png` with fallback |
 
-All return opaque UI texture handles (0 on failure). Icons are cached by C++.
+All return opaque Vulkan UI texture ids (0 on failure). Icons are cached by C++ (`IconCache`).
 
 Direct loading:
 ```python

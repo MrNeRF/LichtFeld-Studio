@@ -8,8 +8,10 @@
 #include <cmath>
 #include <expected>
 #include <istream>
+#include <optional>
 #include <ostream>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace lfs::training {
@@ -60,6 +62,15 @@ namespace lfs::training {
         float vig_non_pos = 0.01f;  // Penalize positive vignetting alpha coefficients
         float color_mean = 1.0f;    // Encourage color correction mean ~ 0
         float crf_channel = 0.1f;   // Encourage similar CRF across RGB channels
+        bool train_crf = true;      // When false, CRF stays at identity and is not stepped
+    };
+
+    /// Full-width row band of a larger image: vignetting is evaluated in full-image
+    /// coordinates so banded application matches a single full-image pass exactly.
+    /// full_height == 0 means the input covers the whole image.
+    struct PPISPRegion {
+        int y_offset = 0;
+        int full_height = 0;
     };
 
     /// Physically-Plausible Image Signal Processing for per-camera/per-frame appearance modeling
@@ -74,6 +85,22 @@ namespace lfs::training {
 
         /// Finalize registration and allocate tensors (must call after all register_frame calls)
         void finalize();
+
+        /// Write 0.5 * (ev - mean) into exposure_params_ for known UIDs. Moments unchanged.
+        void seed_exposure(const std::vector<std::pair<int, float>>& uid_ev);
+
+        void set_exif_exposure_mean(std::optional<float> mean) { exif_exposure_mean_ = mean; }
+        [[nodiscard]] std::optional<float> exif_exposure_mean() const { return exif_exposure_mean_; }
+        void set_train_crf(bool train) { config_.train_crf = train; }
+        [[nodiscard]] bool train_crf() const { return config_.train_crf; }
+
+        /// Per-frame exposure in EV (same units as the optimiser).
+        [[nodiscard]] lfs::core::Tensor& exposure_params() { return exposure_params_; }
+        [[nodiscard]] const lfs::core::Tensor& exposure_params() const { return exposure_params_; }
+        [[nodiscard]] lfs::core::Tensor& color_params() { return color_params_; }
+        [[nodiscard]] const lfs::core::Tensor& color_params() const { return color_params_; }
+        [[nodiscard]] const lfs::core::Tensor& vignetting_params() const { return vignetting_params_; }
+        [[nodiscard]] const lfs::core::Tensor& crf_params() const { return crf_params_; }
 
         /// Check if a frame UID is registered
         bool is_known_frame(int uid) const;
@@ -90,7 +117,20 @@ namespace lfs::training {
         /// Forward pass: apply ISP pipeline (exposure, vignetting, color correction, CRF)
         /// @param camera_id Original COLMAP camera_id (translated internally)
         /// @param uid Original frame UID (translated internally)
-        lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid);
+        lfs::core::Tensor apply(const lfs::core::Tensor& rgb, int camera_id, int uid,
+                                const PPISPRegion& region = {});
+
+        /// Same as apply(), but exposure comes from the argument instead of
+        /// exposure_params_[frame]. Camera-level vignetting/CRF come from camera_id;
+        /// per-frame colour is identity (held-out frames have no colour latent).
+        lfs::core::Tensor apply_with_exposure(const lfs::core::Tensor& rgb, int camera_id,
+                                              float exposure_ev, const PPISPRegion& region = {});
+
+        /// Identity colour, given EV, camera vig/CRF, then user overrides on top.
+        lfs::core::Tensor apply_with_exposure_and_overrides(const lfs::core::Tensor& rgb, int camera_id,
+                                                            float exposure_ev,
+                                                            const PPISPRenderOverrides& overrides,
+                                                            const PPISPRegion& region = {});
 
         /// Apply ISP with controller-predicted params (for novel view synthesis)
         /// @param rgb input image [C,H,W]
@@ -98,20 +138,23 @@ namespace lfs::training {
         /// @param camera_idx camera index for vignetting/CRF (use 0 or averaged if unknown)
         lfs::core::Tensor apply_with_controller_params(const lfs::core::Tensor& rgb,
                                                        const lfs::core::Tensor& controller_params,
-                                                       int camera_idx = 0);
+                                                       int camera_idx = 0,
+                                                       const PPISPRegion& region = {});
 
         /// Apply ISP with controller-predicted params + user overrides (for novel view with adjustments)
         lfs::core::Tensor apply_with_controller_params_and_overrides(const lfs::core::Tensor& rgb,
                                                                      const lfs::core::Tensor& controller_params,
                                                                      int camera_idx,
-                                                                     const PPISPRenderOverrides& overrides);
+                                                                     const PPISPRenderOverrides& overrides,
+                                                                     const PPISPRegion& region = {});
 
         /// Apply ISP with user-controlled overrides (for viewport preview)
         /// Full control over all PPISP parameters as described in paper Section 4 and Supplementary D
         /// @param camera_id Original COLMAP camera_id (translated internally)
         /// @param uid Original frame UID (translated internally)
         lfs::core::Tensor apply_with_overrides(const lfs::core::Tensor& rgb, int camera_id, int uid,
-                                               const PPISPRenderOverrides& overrides);
+                                               const PPISPRenderOverrides& overrides,
+                                               const PPISPRegion& region = {});
 
         /// Backward pass: accumulate gradients (call optimizer_step after all backward calls)
         /// @param camera_id Original COLMAP camera_id (translated internally)
@@ -146,6 +189,15 @@ namespace lfs::training {
         /// Update learning rate schedule
         void scheduler_step();
 
+        /// Subtract the mean over frames from exposure and colour latents.
+        void project_mean();
+
+        /// Mean per-frame exposure EV (CPU; for eval diagnostics).
+        [[nodiscard]] float mean_exposure_ev() const;
+        /// Max absolute mean of the 8 colour offsets after ZCA (CPU; for eval diagnostics).
+        [[nodiscard]] float max_abs_color_offset_mean() const;
+        void log_eval_diagnostics() const;
+
         // Accessors
         int num_cameras() const { return num_cameras_; }
         int num_frames() const { return num_frames_; }
@@ -160,16 +212,14 @@ namespace lfs::training {
             return camera_id_to_idx_.begin()->first;
         }
 
+        /// Physical camera with the most registered frames (ties: smallest id).
+        [[nodiscard]] int majority_camera_id() const;
+
         /// Get any valid frame UID (for fallback rendering)
         int any_frame_uid() const {
             assert(!uid_to_frame_idx_.empty());
             return uid_to_frame_idx_.begin()->first;
         }
-
-        /// Get learned parameters for a specific frame as [1,9] tensor
-        /// Returns: [exposure, color_params[0:8]] for distillation target
-        /// @param uid Original frame UID (translated internally)
-        lfs::core::Tensor get_params_for_frame(int uid) const;
 
         /// Return camera ids ordered by the contiguous camera index used by internal tensors.
         [[nodiscard]] std::vector<int> ordered_camera_ids() const;
@@ -184,6 +234,7 @@ namespace lfs::training {
         // Serialization (full state for checkpoints)
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is);
+        void adopt_checkpoint_state(PPISP& loaded) noexcept;
 
         // Inference-only serialization (weights only, no Adam state)
         void serialize_inference(std::ostream& os) const;
@@ -200,7 +251,12 @@ namespace lfs::training {
         int translate_camera(int camera_id) const;
         int translate_frame(int uid) const;
 
+        lfs::core::Tensor apply_forward(const lfs::core::Tensor& rgb, int camera_idx, int frame_idx,
+                                        const float* exposure, const float* color, int num_frames,
+                                        const PPISPRegion& region);
+
         void allocate_tensors();
+        void init_color_pinv_block_diag();
 
         // Parameter tensors (all on GPU)
         // Exposure: [num_frames] - per-frame exposure in log-space
@@ -230,6 +286,10 @@ namespace lfs::training {
         lfs::core::Tensor crf_exp_avg_sq_;
         lfs::core::Tensor crf_grad_;
 
+        // Scratch for apply_with_exposure: 1-element exposure + identity colour.
+        lfs::core::Tensor override_exposure_;
+        lfs::core::Tensor override_color_;
+
         // Scratch buffers for backward_with_controller_params (preallocated)
         lfs::core::Tensor ctrl_bwd_exposure_;
         lfs::core::Tensor ctrl_bwd_color_;
@@ -239,6 +299,9 @@ namespace lfs::training {
         lfs::core::Tensor ctrl_bwd_output_;
         size_t ctrl_bwd_rgb_h_ = 0;
         size_t ctrl_bwd_rgb_w_ = 0;
+
+        // Persistent GPU scalar for the fused vignetting regulariser (EC path).
+        lfs::core::Tensor vig_reg_loss_;
 
         Config config_;
         int64_t step_ = 0;
@@ -253,6 +316,7 @@ namespace lfs::training {
         std::unordered_map<int, int> uid_to_frame_idx_;
         std::unordered_map<int, int> uid_to_camera_id_;
         bool finalized_ = false;
+        std::optional<float> exif_exposure_mean_;
 
         // ZCA pinv block-diagonal matrix for color mean regularization [8x8]
         lfs::core::Tensor color_pinv_block_diag_;

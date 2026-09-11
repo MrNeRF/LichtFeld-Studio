@@ -2,7 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
+#include <array>
 #include <gtest/gtest.h>
+#include <numeric>
 #include <torch/torch.h>
 
 using namespace lfs::core;
@@ -138,6 +140,35 @@ protected:
         torch::manual_seed(42);
     }
 };
+
+TEST_F(TensorIndexingAdvancedTest, RowProxyAssignmentAcrossRanksAndDevices) {
+    auto matrix = Tensor::zeros({3, 4}, Device::CPU);
+    matrix[0] = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f}, {4}, Device::CPU);
+    matrix[2] = Tensor::full({4}, 7.0f, Device::CPU);
+    EXPECT_EQ(matrix.to_vector(),
+              (std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f,
+                                  0.0f, 0.0f, 0.0f, 0.0f,
+                                  7.0f, 7.0f, 7.0f, 7.0f}));
+
+    auto volume = Tensor::zeros({2, 2, 3}, Device::CPU);
+    volume[1] = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+        {2, 3}, Device::CPU);
+    EXPECT_EQ(volume.to_vector(),
+              (std::vector<float>{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                  1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f}));
+
+    auto cross_device = Tensor::zeros({2, 3}, Device::CUDA);
+    cross_device[1] = Tensor::from_vector(
+        std::vector<float>{8.0f, 9.0f, 10.0f}, {3}, Device::CPU);
+    EXPECT_EQ(cross_device.cpu().to_vector(),
+              (std::vector<float>{0.0f, 0.0f, 0.0f, 8.0f, 9.0f, 10.0f}));
+
+    auto vector = Tensor::zeros({4}, Device::CPU);
+    vector[2] = 42.0f;
+    EXPECT_EQ(vector.to_vector(), (std::vector<float>{0.0f, 0.0f, 42.0f, 0.0f}));
+}
 
 // ============= index_add_ Tests =============
 
@@ -332,7 +363,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithClampMode) {
     auto t_torch = torch::arange(0, 5, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{-1, 0, 3, 10};
-    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CUDA);
 
     // PyTorch clamps by default in index_select when indices are clamped manually
     std::vector<int64_t> indices_clamped;
@@ -352,7 +383,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithWrapMode) {
     auto t_torch = torch::arange(0, 5, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{-1, 0, 5, 7};
-    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {4}, Device::CUDA);
 
     // PyTorch wraps with modulo
     std::vector<int64_t> indices_wrapped;
@@ -461,6 +492,28 @@ TEST_F(TensorIndexingAdvancedTest, NonzeroCUDA) {
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "NonzeroCUDA");
 }
 
+TEST_F(TensorIndexingAdvancedTest, NonzeroPreservesCoordinatesAcrossRanksAndEmptyResults) {
+    const auto matrix = Tensor::from_vector(
+        std::vector<float>{0.0f, 1.0f, 0.0f, 2.0f, 3.0f, 0.0f},
+        {2, 3}, Device::CPU);
+    const auto matrix_indices = matrix.nonzero();
+    EXPECT_EQ(matrix_indices.shape(), TensorShape({3, 2}));
+    EXPECT_EQ(matrix_indices.to_vector_int64(),
+              (std::vector<int64_t>{0, 1, 1, 0, 1, 1}));
+
+    const auto volume = Tensor::from_vector(
+        std::vector<float>{0.0f, 0.0f, 4.0f, 0.0f, 0.0f, 5.0f, 0.0f, 0.0f},
+        {2, 2, 2}, Device::CPU);
+    const auto volume_indices = volume.nonzero();
+    EXPECT_EQ(volume_indices.shape(), TensorShape({2, 3}));
+    EXPECT_EQ(volume_indices.to_vector_int64(),
+              (std::vector<int64_t>{0, 1, 0, 1, 0, 1}));
+
+    const auto empty_indices = Tensor::zeros({2, 3}, Device::CPU).nonzero();
+    EXPECT_EQ(empty_indices.shape(), TensorShape({0, 2}));
+    EXPECT_EQ(empty_indices.dtype(), DataType::Int64);
+}
+
 // ============= Masked Select Tests =============
 
 TEST_F(TensorIndexingAdvancedTest, MaskedSelectBasic) {
@@ -518,7 +571,7 @@ TEST_F(TensorIndexingAdvancedTest, GatherBasic) {
     auto t_torch = torch::arange(0, 10, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{0, 2, 4, 6, 8};
-    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CUDA);
     auto indices_torch = torch::tensor(indices_vec, torch::kInt64);
 
     auto result_custom = t_custom.gather(0, indices_custom);
@@ -575,7 +628,7 @@ TEST_F(TensorIndexingAdvancedTest, ComplexIndexingChain) {
 
     // Select specific rows
     auto row_vec = std::vector<int>{0, 5, 9};
-    auto row_idx_custom = Tensor::from_vector(row_vec, {3}, Device::CPU);
+    auto row_idx_custom = Tensor::from_vector(row_vec, {3}, Device::CUDA);
     auto row_idx_torch = torch::tensor(row_vec, torch::kInt64);
 
     auto rows_custom = t_custom.index_select(0, row_idx_custom);
@@ -583,7 +636,7 @@ TEST_F(TensorIndexingAdvancedTest, ComplexIndexingChain) {
 
     // Then select specific columns
     auto col_vec = std::vector<int>{0, 5, 9};
-    auto col_idx_custom = Tensor::from_vector(col_vec, {3}, Device::CPU);
+    auto col_idx_custom = Tensor::from_vector(col_vec, {3}, Device::CUDA);
     auto col_idx_torch = torch::tensor(col_vec, torch::kInt64);
 
     auto result_custom = rows_custom.index_select(1, col_idx_custom);
@@ -597,7 +650,7 @@ TEST_F(TensorIndexingAdvancedTest, ScatterGatherRoundtrip) {
     auto original_torch = torch::arange(0, 10, torch::kFloat32);
 
     auto indices_vec = std::vector<int>{0, 2, 4, 6, 8};
-    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(indices_vec, {5}, Device::CUDA);
     auto indices_torch = torch::tensor(indices_vec, torch::kInt64);
 
     // Gather
@@ -605,7 +658,7 @@ TEST_F(TensorIndexingAdvancedTest, ScatterGatherRoundtrip) {
     auto gathered_torch = original_torch.gather(0, indices_torch);
 
     // Scatter back
-    auto result_custom = Tensor::zeros({10}, Device::CPU);
+    auto result_custom = Tensor::zeros({10}, Device::CUDA);
     auto result_torch = torch::zeros({10});
 
     result_custom.scatter_(0, indices_custom, gathered_custom);
@@ -620,7 +673,7 @@ TEST_F(TensorIndexingAdvancedTest, EmptyIndices) {
     auto t_custom = Tensor::arange(0.0f, 10.0f);
     auto t_torch = torch::arange(0, 10, torch::kFloat32);
 
-    auto indices_custom = Tensor::from_vector(std::vector<int>{}, {0}, Device::CPU);
+    auto indices_custom = Tensor::from_vector(std::vector<int>{}, {0}, Device::CUDA);
     auto indices_torch = torch::tensor({}, torch::kInt64);
 
     auto result_custom = t_custom.gather(0, indices_custom);
@@ -641,4 +694,83 @@ TEST_F(TensorIndexingAdvancedTest, SingleElement) {
     auto result_torch = t_torch.gather(0, indices_torch);
 
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "SingleElement");
+}
+
+TEST_F(TensorIndexingAdvancedTest, IndexCopyUpdatesColumnsFromSlicedExpressions) {
+    auto tensor = Tensor::from_vector(
+        std::vector<float>{1.0f, 2.0f, 3.0f, 4.0f,
+                           5.0f, 6.0f, 7.0f, 8.0f,
+                           9.0f, 10.0f, 11.0f, 12.0f},
+        {3, 4}, Device::CUDA);
+
+    for (int column = 0; column < 4; ++column) {
+        const auto index = Tensor::from_vector(
+                               std::vector<int>{column}, {1}, Device::CUDA)
+                               .to(DataType::Int32);
+        const auto values = tensor.slice(1, column, column + 1).mul(2.0f).add(1.0f);
+        tensor.index_copy_(1, index, values);
+    }
+
+    EXPECT_EQ(tensor.cpu().to_vector(),
+              (std::vector<float>{3.0f, 5.0f, 7.0f, 9.0f,
+                                  11.0f, 13.0f, 15.0f, 17.0f,
+                                  19.0f, 21.0f, 23.0f, 25.0f}));
+}
+
+TEST_F(TensorIndexingAdvancedTest, IndexCopyQuaternionCompositionRegression) {
+    constexpr float rw = 0.92388f;
+    constexpr float ry = 0.382683f;
+    const std::vector<float> input = {
+        -1.2682f, -0.0383f, -0.1029f, 1.4400f,
+        -0.4705f, 1.1624f, 0.3058f, 0.5276f,
+        -0.5726f, 1.8732f, -0.6816f, -0.2104f};
+    auto rotation = Tensor::from_vector(input, {3, 4}, Device::CUDA);
+
+    const auto w = rotation.slice(1, 0, 1).squeeze(1);
+    const auto x = rotation.slice(1, 1, 2).squeeze(1);
+    const auto y = rotation.slice(1, 2, 3).squeeze(1);
+    const auto z = rotation.slice(1, 3, 4).squeeze(1);
+    const std::array components = {
+        w.mul(rw).sub(y.mul(ry)),
+        x.mul(rw).add(z.mul(ry)),
+        w.mul(ry).add(y.mul(rw)),
+        z.mul(rw).sub(x.mul(ry))};
+
+    for (int column = 0; column < 4; ++column) {
+        const auto index = Tensor::from_vector(
+                               std::vector<int>{column}, {1}, Device::CUDA)
+                               .to(DataType::Int32);
+        rotation.index_copy_(1, index, components[column].unsqueeze(1));
+    }
+
+    const auto actual = rotation.cpu().to_vector();
+    ASSERT_EQ(actual.size(), input.size());
+    for (size_t row = 0; row < 3; ++row) {
+        const float expected[] = {
+            rw * input[row * 4] - ry * input[row * 4 + 2],
+            rw * input[row * 4 + 1] + ry * input[row * 4 + 3],
+            ry * input[row * 4] + rw * input[row * 4 + 2],
+            rw * input[row * 4 + 3] - ry * input[row * 4 + 1]};
+        for (size_t column = 0; column < 4; ++column) {
+            EXPECT_NEAR(actual[row * 4 + column], expected[column], 1e-5f);
+        }
+    }
+}
+
+TEST_F(TensorIndexingAdvancedTest, IndexSelectHundredThousandRowsPreservesValues) {
+    constexpr size_t source_rows = 100'000;
+    constexpr size_t selected_rows = 99'880;
+    const auto source = Tensor::arange(0.0f, static_cast<float>(source_rows * 4))
+                            .reshape({static_cast<int>(source_rows), 4});
+    std::vector<int> index_values(selected_rows);
+    std::iota(index_values.begin(), index_values.end(), 0);
+    const auto indices = Tensor::from_vector(
+        index_values, {selected_rows}, Device::CUDA);
+
+    const auto selected = source.index_select(0, indices).cpu().to_vector();
+
+    ASSERT_EQ(selected.size(), selected_rows * 4);
+    for (size_t i = 0; i < selected.size(); ++i) {
+        EXPECT_FLOAT_EQ(selected[i], static_cast<float>(i));
+    }
 }

@@ -49,6 +49,9 @@ namespace lfs::vis {
         glm::mat4 view_projection{1.0f};
         glm::vec3 camera_position{0.0f};
         std::vector<VulkanMeshDrawItem> items;
+        std::size_t frame_slot = 0;
+        std::size_t draw_group = 0;
+        std::size_t draw_group_count = 1;
     };
 
     struct VulkanMeshViewportPanel {

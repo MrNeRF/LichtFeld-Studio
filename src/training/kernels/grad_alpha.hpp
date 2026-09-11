@@ -61,61 +61,6 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
-     * @brief Fused kernel for sigmoid backward chain rule
-     *
-     * Computes in-place: v_raw = v_activated * sigmoid * (1 - sigmoid)
-     * where sigmoid values are already computed (activated opacities)
-     *
-     * @param v_opacities Gradient w.r.t. activated opacities [N], modified in-place
-     * @param sigmoid Activated opacities (sigmoid output) [N]
-     * @param N Number of elements
-     * @param stream CUDA stream
-     */
-    void launch_sigmoid_backward(
-        float* v_opacities,
-        const float* sigmoid,
-        int64_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * @brief Fused kernel for exp backward chain rule
-     *
-     * Computes in-place: v_raw = v_activated * activated
-     * (derivative of exp(x) is exp(x))
-     *
-     * @param v_scales Gradient w.r.t. activated scales [N, 3], modified in-place
-     * @param scales Activated scales (exp output) [N, 3]
-     * @param N Number of Gaussians
-     * @param stream CUDA stream
-     */
-    void launch_exp_backward(
-        float* v_scales,
-        const float* scales,
-        int64_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * @brief Fused kernel for quaternion normalization backward
-     *
-     * Computes: v_raw = (v_activated - q_norm * dot(q_norm, v_activated)) / ||q_raw||
-     *
-     * This is the chain rule for f(q) = q / ||q||
-     * The Jacobian is: (I - q_norm * q_norm^T) / ||q||
-     *
-     * @param v_quats Gradient w.r.t. normalized quats [N, 4], modified in-place
-     * @param quats_normalized Normalized quaternions [N, 4]
-     * @param quats_raw Raw (unnormalized) quaternions [N, 4]
-     * @param N Number of quaternions
-     * @param stream CUDA stream
-     */
-    void launch_quat_normalize_backward(
-        float* v_quats,
-        const float* quats_normalized,
-        const float* quats_raw,
-        int64_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
      * @brief Add gradients from src to dst buffer (dst += src)
      *
      * Simple element-wise addition for gradient accumulation.
@@ -184,62 +129,6 @@ namespace lfs::training::kernels {
         float* densification_info,
         const float* grad_means,
         int64_t N,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * @brief Permute CHW to HWC layout
-     *
-     * Converts [C, H, W] tensor to [H, W, C] layout.
-     * Used for converting grad_image from CHW to HWC format for gsplat backward.
-     *
-     * @param src Source tensor [C, H, W]
-     * @param dst Destination tensor [H, W, C]
-     * @param C Number of channels
-     * @param H Height
-     * @param W Width
-     * @param stream CUDA stream
-     */
-    void launch_permute_chw_to_hwc(
-        const float* src,
-        float* dst,
-        int C, int H, int W,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * @brief Permute HWC to CHW layout
-     *
-     * Converts [H, W, C] tensor to [C, H, W] layout.
-     * Used to materialize gsplat arena outputs into reusable CHW tensors.
-     *
-     * @param src Source tensor [H, W, C]
-     * @param dst Destination tensor [C, H, W]
-     * @param C Number of channels
-     * @param H Height
-     * @param W Width
-     * @param stream CUDA stream
-     */
-    void launch_permute_hwc_to_chw(
-        const float* src,
-        float* dst,
-        int C, int H, int W,
-        cudaStream_t stream = nullptr);
-
-    /**
-     * @brief Squeeze 1HW to HW
-     *
-     * Removes leading dimension of 1: [1, H, W] -> [H, W].
-     * Just a memory copy since layout is identical.
-     *
-     * @param src Source tensor [1, H, W]
-     * @param dst Destination tensor [H, W]
-     * @param H Height
-     * @param W Width
-     * @param stream CUDA stream
-     */
-    void launch_squeeze_1hw_to_hw(
-        const float* src,
-        float* dst,
-        int H, int W,
         cudaStream_t stream = nullptr);
 
     /**

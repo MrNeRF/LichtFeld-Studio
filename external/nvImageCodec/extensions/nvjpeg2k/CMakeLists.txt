@@ -33,6 +33,9 @@ set(EXT_HEADERS
   nvjpeg2k_utils.h
 )
 
+# Add utils directory for common headers
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
+
 add_library(${EXT_LIBRARY_NAME}_obj OBJECT ${EXT_SRCS} ${EXT_HEADERS})
 add_library(${EXT_LIBRARY_NAME} SHARED $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static> ext_module.cpp)
 add_library(${EXT_LIBRARY_NAME}_static STATIC $<TARGET_OBJECTS:${EXT_LIBRARY_NAME}_obj> $<TARGET_OBJECTS:nvimgcodec_imgproc_static>)
@@ -50,21 +53,24 @@ if(NOT WITH_DYNAMIC_NVJPEG2K)
 else()
   target_link_libraries(${EXT_LIBRARY_NAME}
     PRIVATE dynlink_nvjpeg2k)
-  target_link_libraries(${EXT_LIBRARY_NAME}
-    PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg2k>")
+  if(UNIX)
+    target_link_libraries(${EXT_LIBRARY_NAME}
+      PRIVATE "-Wl,--exclude-libs,$<TARGET_FILE_NAME:dynlink_nvjpeg2k>")
+  endif()
 endif()
 
 target_link_libraries(${EXT_LIBRARY_NAME} PUBLIC
-  CUDA::cudart_static)
+  ${CUDA_CUDART_LIB})
 
 if(UNIX)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -fPIC -fvisibility=hidden -Wl,--exclude-libs,ALL")
   target_link_libraries(${EXT_LIBRARY_NAME} PRIVATE "${NVIMGCODEC_COMMON_DEPENDENCIES}")
   target_link_libraries(${EXT_LIBRARY_NAME}_static PRIVATE "${NVIMGCODEC_COMMON_DEPENDENCIES}")
 
   set_target_properties(${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     VERSION ${PROJECT_VERSION}
+    BUILD_RPATH "$ORIGIN;$ORIGIN/.."
+    INSTALL_RPATH "$ORIGIN;$ORIGIN/.."
     NO_SONAME OFF)
 else()
   # Windows: set explicit output directories for multi-config generators
@@ -85,16 +91,15 @@ endif()
 
 if(UNIX)
   install(TARGETS ${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static
-    LIBRARY DESTINATION extensions NAMELINK_SKIP COMPONENT lib
-    ARCHIVE COMPONENT lib
-    PUBLIC_HEADER DESTINATION include COMPONENT lib
+    LIBRARY DESTINATION "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}" NAMELINK_SKIP COMPONENT lib
+    ARCHIVE DESTINATION "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}" COMPONENT lib
+    PUBLIC_HEADER DESTINATION "${NVIMGCODEC_INSTALL_INCLUDEDIR}" COMPONENT lib
   )
 
 else()
-  install(TARGETS ${EXT_LIBRARY_NAME}
-    RUNTIME DESTINATION extensions COMPONENT lib
-    LIBRARY COMPONENT lib
-    ARCHIVE COMPONENT lib
-    PUBLIC_HEADER DESTINATION include COMPONENT lib
+  install(TARGETS ${EXT_LIBRARY_NAME} ${EXT_LIBRARY_NAME}_static
+    RUNTIME DESTINATION "${NVIMGCODEC_INSTALL_EXTENSIONS_DIR}" COMPONENT lib
+    ARCHIVE DESTINATION "${NVIMGCODEC_INSTALL_EXTENSION_LIBDIR}" COMPONENT lib
+    PUBLIC_HEADER DESTINATION "${NVIMGCODEC_INSTALL_INCLUDEDIR}" COMPONENT lib
   )
 endif()

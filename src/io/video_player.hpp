@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace lfs::io {
@@ -23,32 +24,40 @@ namespace lfs::io {
         void close();
         bool isOpen() const;
 
-        void play();
-        void pause();
         void togglePlayPause();
         bool isPlaying() const;
 
         void seek(double seconds);
-        void seekFrame(int64_t frame_number);
+        bool rerenderCurrentFrame();
         void stepForward();
         void stepBackward();
 
         // Update playback, returns true if frame changed
         bool update(double delta_seconds);
 
-        // Get current frame as RGB data (call after update returns true)
+        // Get current frame as RGB or RGBA data (call after update returns true).
         const uint8_t* currentFrameData() const;
+        int currentFrameChannels() const;
+        bool currentFrameHasGpuRotation() const;
         int width() const;
         int height() const;
+        int sourceWidth() const;
+        int sourceHeight() const;
 
         double currentTime() const;
         double duration() const;
-        int64_t currentFrameNumber() const;
-        int64_t totalFrames() const;
         double fps() const;
 
-        // Thumbnail generation (seeks and decodes single frame)
-        std::vector<uint8_t> getThumbnail(double time, int max_width);
+        // Detected rotation from video metadata (0, 90, 180, 270)
+        int rotation() const;
+
+        // HDR detection
+        bool isHdr() const;
+        bool isHdrConversionSupported();
+        std::string hdrInfo() const;
+        void setHdrToSdr(bool enabled);
+        void setPreviewRotation(int degrees);
+        std::string takeError();
 
     private:
         class Impl;

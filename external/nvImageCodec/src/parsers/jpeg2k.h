@@ -47,6 +47,10 @@ namespace nvimgcodec {
             const nvimgcodecFrameworkDesc_t* framework_;
             uint16_t num_components = 0, CSiz = 0;
             uint32_t height = 0, width = 0;
+            // True once a JP2 ihdr box has been parsed in the current getImageInfo call.
+            // Distinguishes "no ihdr present (bare codestream)" from a JP2 whose ihdr legitimately
+            // reports a value that would otherwise collide with a sentinel.
+            bool has_ihdr = false;
             uint8_t bits_per_component = 0;
             nvimgcodecColorSpec_t color_spec = NVIMGCODEC_COLORSPEC_UNKNOWN;
             uint32_t XSiz = 0, YSiz = 0, XOSiz = 0, YOSiz = 0, XTSiz = 0, YTSiz = 0, XTOSiz = 0, YTOSiz = 0;

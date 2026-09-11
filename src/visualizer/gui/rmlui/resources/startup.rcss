@@ -83,6 +83,52 @@ body {
     margin-top: 12dp;
 }
 
+#plugin-load-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 14dp;
+    width: 360dp;
+    height: 16dp;
+    gap: 8dp;
+}
+
+#plugin-load-track {
+    width: 300dp;
+    height: 14dp;
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 0.15);
+    background-color: rgba(255, 255, 255, 0.06);
+    border-radius: 999dp;
+    overflow: hidden;
+}
+
+#plugin-load-fill {
+    width: 0%;
+    height: 100%;
+    background-color: rgb(85, 171, 255);
+    border-radius: 999dp;
+}
+
+#plugin-load-stage {
+    display: block;
+    width: 286dp;
+    height: 14dp;
+    margin-left: 7dp;
+    margin-top: -14dp;
+    line-height: 14dp;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#plugin-load-percent {
+    display: block;
+    width: 52dp;
+    text-align: right;
+}
+
 select {
     font-size: 12dp;
     padding: 2dp 6dp;

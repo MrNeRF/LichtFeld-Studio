@@ -8,9 +8,15 @@
 #include "rasterization_config.h"
 #include <cstddef> // Added for size_t
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <tuple>
 
+// cstdint already provides std::uint64_t for preflight counters
+
 namespace fast_lfs::rasterization {
+
+    class FastGSPhaseArena;
 
     struct FastGSSettings {
         const float* cam_position_ptr; // Device pointer [3]
@@ -29,6 +35,7 @@ namespace fast_lfs::rasterization {
     struct ForwardContext {
         void* per_primitive_buffers = nullptr;
         void* per_tile_buffers = nullptr;
+        // Points into the active rasterizer arena frame; released with frame_id.
         void* sorted_primitive_indices = nullptr;
         size_t per_primitive_buffers_size = 0;
         size_t per_tile_buffers_size = 0;
@@ -36,6 +43,7 @@ namespace fast_lfs::rasterization {
         size_t per_instance_sort_scratch_size = 0;
         size_t per_instance_sort_total_size = 0;
         int n_instances = 0;
+        int n_visible = 0;
         int sh_layout_bases = 1;
         uint64_t frame_id = 0;
         // The stream all of this context's kernels/allocations are ordered on;
@@ -47,8 +55,18 @@ namespace fast_lfs::rasterization {
         void* grad_depth_helper = nullptr;
         void* grad_opacity_helper = nullptr;
         void* grad_color_helper = nullptr;
-        // Error handling for OOM
+        void* primitive_normals = nullptr;
+        const uint* primitive_work_indices = nullptr;
+        // Backward-phase allocator retained by the frame context for the
+        // optional normal helper, which is only known at backward dispatch.
+        std::function<char*(size_t)> phase_allocator;
+        std::shared_ptr<FastGSPhaseArena> phase_arena;
+        // Error handling for OOM / pathological frames
         bool success = false;
+        bool resource_exhausted = false;
+        // 32-bit instance-count overflow (garbage extents). Soft
+        // fail the step, do not kill the training run.
+        bool instance_count_overflow = false;
         const char* error_message = nullptr;
     };
 
@@ -58,12 +76,15 @@ namespace fast_lfs::rasterization {
         const float* rotations_raw_ptr,        // Device pointer [N*4]
         const float* opacities_raw_ptr,        // Device pointer [N]
         const float* sh_coefficients_0_ptr,    // Device pointer [N*3]
-        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN float buffer
+        const float* sh_coefficients_rest_ptr, // Device pointer to swizzled shN (float or u16 bitcast)
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
         float* image_ptr,                      // Device pointer [3*H*W]
         float* alpha_ptr,                      // Device pointer [H*W]
         float* depth_ptr,                      // Device pointer [H*W]
+        float* normal_ptr,                     // Device pointer [3*H*W] or nullptr — enables the normal render channel
+        const float* bg_color_ptr,             // Device pointer [3] solid bg, or nullptr
+        const float* bg_image_ptr,             // Device pointer [3*H*W] CHW, or nullptr
         int n_primitives,
         int active_sh_bases,
         int sh_layout_bases,
@@ -76,7 +97,11 @@ namespace fast_lfs::rasterization {
         float near_plane,
         float far_plane,
         bool mip_filter = false,
-        cudaStream_t stream = nullptr); // nullptr → getCurrentCUDAStream()
+        cudaStream_t stream = nullptr,              // nullptr → getCurrentCUDAStream()
+        const float* sh_value_bounds_ptr = nullptr, // float2 per 256; null = fp32/IEEE-f16 shN
+        unsigned int sh_value_n_cells = 0,
+        unsigned int sh_value_bits = 0, // 0=fp32, 16=q16(+bounds) or IEEE f16
+        float* max_screen_share_ptr = nullptr);
 
     void release_forward_context(const ForwardContext& forward_ctx);
 
@@ -91,6 +116,7 @@ namespace fast_lfs::rasterization {
         const float* grad_image_ptr,              // Device pointer [3*H*W]
         const float* grad_alpha_ptr,              // Device pointer [H*W]
         const float* grad_depth_ptr,              // Device pointer [H*W] or nullptr
+        const float* grad_normal_ptr,             // Device pointer [3*H*W] or nullptr
         const float* image_ptr,                   // Device pointer [3*H*W]
         const float* alpha_ptr,                   // Device pointer [H*W]
         const float* means_ptr,                   // Device pointer [N*3]
@@ -103,6 +129,7 @@ namespace fast_lfs::rasterization {
         const ForwardContext& forward_ctx,
         float* grad_w2c_ptr, // Device pointer [4*4] - output or nullptr
         int n_primitives,
+        int n_visible,
         int active_sh_bases,
         int sh_layout_bases,
         int width,
@@ -114,9 +141,24 @@ namespace fast_lfs::rasterization {
         bool mip_filter,
         DensificationType densification_type,
         const FusedAdamSettings* fused_adam,
-        bool detach_depth_weights = false);
+        // shN representation binds, mirroring forward_raw. The backward
+        // kernel decodes sh_coefficients_rest with THESE, never with the fused
+        // Adam settings' copy — optimizer enablement (SH warmup) must not change
+        // how the coefficient buffer is interpreted. bits==16 with bounds → q16
+        // codes; bits==16 without bounds → IEEE f16 swizzle; bits==0 → fp32.
+        const float* shN_value_bounds_ptr = nullptr,
+        unsigned shN_value_n_cells = 0u,
+        unsigned shN_value_bits = 0u,
+        const bool* mean_step_far_mask = nullptr,
+        int mean_step_far_mask_n = 0,
+        const float* edge_weight_map = nullptr,
+        float* edge_score_out = nullptr);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
+
+    /// cudaPointerGetAttributes preflight call count (0 in Release/NDEBUG).
+    [[nodiscard]] std::uint64_t preflight_pointer_attr_call_count() noexcept;
+    void reset_preflight_pointer_attr_call_count() noexcept;
 
 } // namespace fast_lfs::rasterization

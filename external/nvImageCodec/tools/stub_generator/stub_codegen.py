@@ -64,15 +64,23 @@ def main():
         'extra_args', nargs='*', type=str, default=None)
     args = parser.parse_args()
 
-    if os.name == 'nt':
-        if 'NVIMGCODEC_LIBCLANG_LIBRARY' in os.environ:
-            libclang_path = os.environ['NVIMGCODEC_LIBCLANG_LIBRARY']
-        else:
-            libclang_path = 'C:/Program Files/LLVM/bin/libclang.dll'
+    # Prefer libclang from the Python environment running this script. The
+    # Windows builder also has LLVM installed, so keep that as a fallback.
+    libclang_path = os.environ.get('NVIMGCODEC_LIBCLANG_LIBRARY')
+    if not libclang_path:
+        native_dir = os.path.join(os.path.dirname(clang.__file__), 'native')
+        for name in ('libclang.dll', 'libclang.so', 'libclang.dylib'):
+            candidate = os.path.join(native_dir, name)
+            if os.path.isfile(candidate):
+                libclang_path = candidate
+                break
 
-        if os.path.isfile(libclang_path):
-            print(f"Found libclang at {libclang_path}")
-            clang.cindex.Config.set_library_file(libclang_path)
+    if not libclang_path and os.name == 'nt':
+        libclang_path = 'C:/Program Files/LLVM/bin/libclang.dll'
+
+    if libclang_path and os.path.isfile(libclang_path):
+        print(f"Found libclang at {libclang_path}")
+        clang.cindex.Config.set_library_file(libclang_path)
 
     config = json.load(args.input)
 

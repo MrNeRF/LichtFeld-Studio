@@ -66,6 +66,13 @@ extern "C" {
 #define NVIMGCODEC_MAX_NUM_DIM 5
 
 /**
+ * @brief Maximal number of channels with distinct out of bounds fill samples in a region.
+ * Channels with higher index will use fill sample from the last (5th) channel.
+ * For usage see nvimgcodecRegion_t.
+ */
+#define NVIMGCODEC_MAX_ROI_FILL_CHANNELS 5
+
+/**
  * @brief Maximum number of image planes.
  */
 #define NVIMGCODEC_MAX_NUM_PLANES 32
@@ -205,6 +212,7 @@ typedef enum {
     NVIMGCODEC_STRUCTURE_TYPE_METADATA,
     NVIMGCODEC_STRUCTURE_TYPE_METADATA_KIND,
     NVIMGCODEC_STRUCTURE_TYPE_METADATA_FORMAT,
+    NVIMGCODEC_STRUCTURE_TYPE_TIFF_CODE_STREAM_INFO,
     NVIMGCODEC_STRUCTURE_TYPE_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecStructureType_t;
 
@@ -382,31 +390,57 @@ typedef enum {
  */
 typedef enum {
     NVIMGCODEC_SAMPLEFORMAT_UNKNOWN = 0,
-    NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED = 1, //**< unchanged planar */
-    NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED = 2, //**< unchanged interleaved */
-    NVIMGCODEC_SAMPLEFORMAT_P_RGB = 3,       //**< planar RGB */
-    NVIMGCODEC_SAMPLEFORMAT_I_RGB = 4,       //**< interleaved RGB */
-    NVIMGCODEC_SAMPLEFORMAT_P_BGR = 5,       //**< planar BGR */
-    NVIMGCODEC_SAMPLEFORMAT_I_BGR = 6,       //**< interleaved BGR */
-    NVIMGCODEC_SAMPLEFORMAT_P_Y = 7,         //**< Y component only */
-    NVIMGCODEC_SAMPLEFORMAT_P_YUV = 9,       //**< YUV planar format */
+    NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED = 1, /**< Unchanged planar. */
+    NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED = 2, /**< Unchanged interleaved. */
+    /** Alias of P_UNCHANGED for callers that want to pin only the channel
+     * interleaving (planar) and let color_spec choose the components.
+     * Preferred over P_UNCHANGED whenever color_spec is concrete; the two
+     * names produce identical behaviour. */
+    NVIMGCODEC_SAMPLEFORMAT_P_AUTO_COMPONENTS = NVIMGCODEC_SAMPLEFORMAT_P_UNCHANGED,
+    /** Alias of I_UNCHANGED for callers that want to pin only the channel
+     * interleaving (interleaved) and let color_spec choose the components.
+     * Preferred over I_UNCHANGED whenever color_spec is concrete; the two
+     * names produce identical behaviour. */
+    NVIMGCODEC_SAMPLEFORMAT_I_AUTO_COMPONENTS = NVIMGCODEC_SAMPLEFORMAT_I_UNCHANGED,
+    NVIMGCODEC_SAMPLEFORMAT_P_Y = 3,                               /**< Planar Y component only. For 3-dimensional shape is defined as (1, H, W) and this is only difference with I_Y.*/
+    NVIMGCODEC_SAMPLEFORMAT_I_Y = 4,                               /**< Interleaved Y component only. For 3-dimensional shape is defined as (H, W, 1) and this is only difference with P_Y.*/
+    NVIMGCODEC_SAMPLEFORMAT_P_YA = 5,                              /**< Planar Y component with alpha. */
+    NVIMGCODEC_SAMPLEFORMAT_I_YA = 6,                              /**< Interleaved Y component with alpha. */
+    NVIMGCODEC_SAMPLEFORMAT_P_RGB = 7,                             /**< Planar RGB. */
+    NVIMGCODEC_SAMPLEFORMAT_I_RGB = 8,                             /**< Interleaved RGB. */
+    NVIMGCODEC_SAMPLEFORMAT_P_BGR = 9,                             /**< Planar BGR. */
+    NVIMGCODEC_SAMPLEFORMAT_I_BGR = 10,                            /**< Interleaved BGR. */
+    NVIMGCODEC_SAMPLEFORMAT_P_YUV = 11,                            /**< Planar YUV format. */
+    NVIMGCODEC_SAMPLEFORMAT_P_YCC = NVIMGCODEC_SAMPLEFORMAT_P_YUV, /**< Planar YCC format. */
+    NVIMGCODEC_SAMPLEFORMAT_I_YUV = 12,                            /**< Interleaved YUV format. */
+    NVIMGCODEC_SAMPLEFORMAT_I_YCC = NVIMGCODEC_SAMPLEFORMAT_I_YUV, /**< Interleaved YCC format. */
+    NVIMGCODEC_SAMPLEFORMAT_P_RGBA = 13,                           /**< Planar RGBA. */
+    NVIMGCODEC_SAMPLEFORMAT_I_RGBA = 14,                           /**< Interleaved RGBA. */
+    NVIMGCODEC_SAMPLEFORMAT_P_YCCK = 15,                           /**< Planar YCCK. */
+    NVIMGCODEC_SAMPLEFORMAT_I_YCCK = 16,                           /**< Interleaved YCCK. */
+    NVIMGCODEC_SAMPLEFORMAT_P_CMYK = 17,                           /**< Planar CMYK. */
+    NVIMGCODEC_SAMPLEFORMAT_I_CMYK = 18,                           /**< Interleaved CMYK. */
     NVIMGCODEC_SAMPLEFORMAT_UNSUPPORTED = -1,
     NVIMGCODEC_SAMPLEFORMAT_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecSampleFormat_t;
 
 /**
  * @brief Defines color specification.
+ *
+ * This enumeration specifies how the color information in image samples should be interpreted.
  */
 typedef enum {
-    NVIMGCODEC_COLORSPEC_UNKNOWN = 0,
-    NVIMGCODEC_COLORSPEC_UNCHANGED = NVIMGCODEC_COLORSPEC_UNKNOWN,
-    NVIMGCODEC_COLORSPEC_SRGB = 1,
-    NVIMGCODEC_COLORSPEC_GRAY = 2,
-    NVIMGCODEC_COLORSPEC_SYCC = 3,
-    NVIMGCODEC_COLORSPEC_CMYK = 4,
-    NVIMGCODEC_COLORSPEC_YCCK = 5,
-    NVIMGCODEC_COLORSPEC_UNSUPPORTED = -1,
-    NVIMGCODEC_COLORSPEC_ENUM_FORCE_INT = INT32_MAX
+    NVIMGCODEC_COLORSPEC_UNKNOWN = 0,                              /**< The color specification is unknown or not specified. */
+    NVIMGCODEC_COLORSPEC_UNCHANGED = NVIMGCODEC_COLORSPEC_UNKNOWN, /**< The color specification should be left unchanged; equivalent to UNKNOWN. */
+    NVIMGCODEC_COLORSPEC_SRGB = 1,                                 /**< The image uses the standard RGB (sRGB) color space. */
+    NVIMGCODEC_COLORSPEC_GRAY = 2,                                 /**< The image is grayscale (single channel, no color). */
+    NVIMGCODEC_COLORSPEC_SYCC = 3,                                 /**< The image uses the sYCC color space (YCbCr with sRGB primaries). */
+    NVIMGCODEC_COLORSPEC_CMYK = 4,                                 /**< The image uses the CMYK color space (Cyan, Magenta, Yellow, Black). */
+    NVIMGCODEC_COLORSPEC_YCCK = 5,                                 /**< The image uses the YCCK color space (YCbCr plus Black channel). */
+    NVIMGCODEC_COLORSPEC_PALETTE = 6,                              /**< Sample data is represented using a palette color map. */
+    NVIMGCODEC_COLORSPEC_ICC_PROFILE = 7,                          /**< Precise color space is provided in an ICC profile. */
+    NVIMGCODEC_COLORSPEC_UNSUPPORTED = -1,                         /**< The color specification is unsupported by the library. */
+    NVIMGCODEC_COLORSPEC_ENUM_FORCE_INT = INT32_MAX                /**< Forces the enum to be represented as a 32-bit integer. */
 } nvimgcodecColorSpec_t;
 
 /**
@@ -418,9 +452,11 @@ typedef struct
     size_t struct_size;                    /**< The size of the structure, in bytes. */
     void* struct_next;                     /**< Is NULL or a pointer to an extension structure type. */
 
-    int rotated; /**< Rotation angle in degrees (clockwise). Only multiples of 90 are allowed. */
-    int flip_x;  /**< Flip horizontal 0 or 1*/
-    int flip_y;  /**< Flip vertical 0 or 1*/
+    int rotated; /**< Counter-clockwise rotation in degrees applied to the raw codestream
+                      pixels to produce the displayed image. Only multiples of 90 are
+                      allowed (0, 90, 180, 270). */
+    int flip_x;  /**< Mirror across the vertical axis, applied after the rotation. 0 or 1. */
+    int flip_y;  /**< Mirror across the horizontal axis, applied after the rotation. 0 or 1. */
 } nvimgcodecOrientation_t;
 
 /**
@@ -442,7 +478,43 @@ typedef struct
 } nvimgcodecImagePlaneInfo_t;
 
 /**
+ * @brief A helper struct for storing out of bounds region fill sample.
+ */
+typedef struct
+{
+    union {
+        uint32_t as_uint; /**< If value is set as `uint32_t`, type should be set as `UINT8`, `UINT16` or `UINT32` */
+        int32_t as_int;   /**< If value is set as `int32_t`, type should be set as `INT8`, `INT16` or `INT32`*/
+        float as_float;   /**< If value is set as `float`, type should be set as `FLOAT32`*/
+    } value;              /**< Sample value to set pixel to. Use `value.as_uint`, `value.as_int` or `value.as_float` to access underlying value. */
+
+    nvimgcodecSampleDataType_t type; /**< Should be set accordingly to type of `value`.
+       If type is not provided, 0 will be used as value. */
+} nvimgcodecOutOfBoundsSample_t;
+
+/**
+ * @brief Defines buffer kind in which image data is stored.
+ */
+typedef enum {
+    NVIMGCODEC_OUT_OF_BOUNDS_POLICY_CONSTANT = 0, /**< Each of ouf bounds pixel will be set to sample specified in `out_of_bounds_samples`
+        in nvimgcodecRegion_t. */
+    NVIMGCODEC_OUT_OF_BOUNDS_POLICY_ENUM_FORCE_INT = INT32_MAX
+} nvimgcodecOutOfBoundsPolicy_t;
+
+/**
  * @brief Defines region of an image.
+ *
+ * The coordinate system depends on `nvimgcodecDecodeParams_t::apply_exif_orientation`:
+ * - When `apply_exif_orientation == 1`, the region is interpreted in **display**
+ *   (post-orientation) coordinates. For a codestream whose EXIF orientation swaps width
+ *   and height (rotated 90 or 270 degrees), this means the region's axes match the rotated
+ *   image, not the raw codestream layout.
+ * - When `apply_exif_orientation == 0`, the region is interpreted in **codestream**
+ *   coordinates, matching `nvimgcodecImagePlaneInfo_t::width`/`height` of the parsed code
+ *   stream and `nvimgcodec::CodeStream.height`/`width` in the Python bindings.
+ *
+ * `start[0]`/`end[0]` is the y (height) axis; `start[1]`/`end[1]` is the x (width) axis.
+ * Half-open ranges: a pixel is included when `start <= idx < end`.
  */
 typedef struct
 {
@@ -453,6 +525,15 @@ typedef struct
     int ndim;                          /**< Number of dimensions, 0 value means no region. */
     int start[NVIMGCODEC_MAX_NUM_DIM]; /**< Region start position at the particular dimension. */
     int end[NVIMGCODEC_MAX_NUM_DIM];   /**< Region end position at the particular dimension. */
+
+    nvimgcodecOutOfBoundsPolicy_t out_of_bounds_policy;                                    /**< Specifies how out of bounds pixels should be set. */
+    nvimgcodecOutOfBoundsSample_t out_of_bounds_samples[NVIMGCODEC_MAX_ROI_FILL_CHANNELS]; /**< If `out_of_bounds_policy`
+        is set to `NVIMGCODEC_OUT_OF_BOUNDS_POLICY_CONSTANT` then this is an array of samples that
+        will be set for out of bounds pixels. Array length must be at most 5, for the rest of the channels fill sample
+        of the 5th channel will be used. If array is shorter than 5, then missing channels fill sample will be set to 0.
+
+        If `out_of_bounds_policy` is set to a different value, then this array will be ignored. */
+
 } nvimgcodecRegion_t;
 
 /**
@@ -487,7 +568,6 @@ typedef struct
     nvimgcodecImagePlaneInfo_t plane_info[NVIMGCODEC_MAX_NUM_PLANES]; /**< Array with information about image planes. */
 
     void* buffer;                            /**< Pointer to buffer in which image data is stored. */
-    size_t buffer_size;                      /**< Size of buffer in which image data is stored. */
     nvimgcodecImageBufferKind_t buffer_kind; /**< Buffer kind in which image data is stored.*/
 
     cudaStream_t cuda_stream; /**< CUDA stream to synchronize with */
@@ -504,6 +584,10 @@ typedef struct
 
     size_t image_idx;          /**< Image index starts from 0. */
     nvimgcodecRegion_t region; /**< Region of interest. */
+    size_t bitstream_offset;   /**< TIFF IFD byte offset selecting one image view; 0 selects the default view.
+                                   Note that this field cannot be used in conjunction with `image_idx`. Currently, this field
+                                   is only used by the TIFF extension, and offsets should normally come from `ifd_offset`,
+                                   `next_ifd_offset`, or `subifd_offsets` of `nvimgcodecCodeStreamInfoTiffExt_t`. */
 } nvimgcodecCodeStreamView_t;
 
 /**
@@ -519,7 +603,30 @@ typedef struct
     char codec_name[NVIMGCODEC_MAX_CODEC_NAME_SIZE];    /**< Information about codec used. Only valid when used with code stream. */
 
     size_t num_images; /**< Number of images in CodeStream. */
+    size_t size;       /**< Size of underlying bitstream in bytes. */
 } nvimgcodecCodeStreamInfo_t;
+
+/** Maximum number of SubIFD offsets that can be stored in CodeStreamInfoTiffExt */
+#define NVIMGCODEC_MAX_SUBIFD_OFFSETS 16
+
+/**
+ * @brief TIFF-specific extension for CodeStreamInfo.
+ *
+ * Chain this struct via struct_next of nvimgcodecCodeStreamInfo_t to receive
+ * IFD traversal and SubIFD information for TIFF files.
+ */
+typedef struct
+{
+    nvimgcodecStructureType_t struct_type; /**< Must be NVIMGCODEC_STRUCTURE_TYPE_TIFF_CODE_STREAM_INFO */
+    size_t struct_size;                    /**< The size of the structure, in bytes. */
+    void* struct_next;                     /**< Is NULL or a pointer to an extension structure type. */
+
+    size_t ifd_offset;      /**< Byte offset of the selected image's IFD. 0 = unknown or not applicable. */
+    size_t next_ifd_offset; /**< Byte offset of the next sibling IFD. 0 = no next sibling. */
+
+    uint32_t subifd_count;                                /**< Number of stored SubIFD offsets for the current image (Tag 330), capped at `NVIMGCODEC_MAX_SUBIFD_OFFSETS`. */
+    size_t subifd_offsets[NVIMGCODEC_MAX_SUBIFD_OFFSETS]; /**< SubIFD byte offsets. Only first subifd_count entries are valid. */
+} nvimgcodecCodeStreamInfoTiffExt_t;
 
 /**
  * @brief JPEG Encoding
@@ -572,10 +679,12 @@ typedef struct
     size_t struct_size;                    /**< The size of the structure, in bytes. */
     void* struct_next;                     /**< Is NULL or a pointer to an extension structure type. */
 
-    uint32_t num_tiles_y; /**< Number of tile rows. */
-    uint32_t num_tiles_x; /**< Number of tile columns. */
-    uint32_t tile_height; /**< Height of the tile. */
-    uint32_t tile_width;  /**< Width of the tile. */
+    uint32_t num_tiles_y;   /**< Number of tile rows. */
+    uint32_t num_tiles_x;   /**< Number of tile columns. */
+    uint32_t tile_height;   /**< Height of the tile. */
+    uint32_t tile_width;    /**< Width of the tile. */
+    uint32_t tile_offset_x; /**< Horizontal offset of the tile. */
+    uint32_t tile_offset_y; /**< Vertical offset of the tile. */
 } nvimgcodecTileGeometryInfo_t;
 
 /**
@@ -665,6 +774,7 @@ typedef enum {
     NVIMGCODEC_PROCESSING_STATUS_NUM_CHANNELS_UNSUPPORTED = 0x401,   /**< Unsupported number of channels to decode/encode. */
     NVIMGCODEC_PROCESSING_STATUS_QUALITY_TYPE_UNSUPPORTED = 0x801,   /**< Unsupported quality type to encode. */
     NVIMGCODEC_PROCESSING_STATUS_QUALITY_VALUE_UNSUPPORTED = 0x1001, /**< Unsupported quality value to encode. */
+    NVIMGCODEC_PROCESSING_STATUS_TILING_UNSUPPORTED = 0x2001,        /**< Unsupported tiling to encode. */
 
     NVIMGCODEC_PROCESSING_STATUS_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecProcessingStatus;
@@ -688,18 +798,19 @@ typedef struct
 } nvimgcodecDecodeParams_t;
 
 /**
- * @brief Supported quality types (algorithms), which determines how `quality_value` is interpreted.
+ * @brief Supported quality types (algorithms), which determines how ``quality_value`` is interpreted.
  */
 typedef enum {
-    NVIMGCODEC_QUALITY_TYPE_DEFAULT = 0,           /**< Each plugin decides what is best quality setting to use. `quality_value` is ignored.*/
-    NVIMGCODEC_QUALITY_TYPE_LOSSLESS = 1,          /**< Image encoding is reversible and keeps original image quality. `quality_value` is ignored except for the CUDA tiff encoder backend,
-                                                        for which `quality_value=0` means no compression, and `quality_value=1` means LZW compression. */
-    NVIMGCODEC_QUALITY_TYPE_QUALITY = 2,           /**< `quality_value` is interpreted as JPEG-like quality in range from 1 (worst) to 100 (best). */
-    NVIMGCODEC_QUALITY_TYPE_QUANTIZATION_STEP = 3, /**< `quality_value` is interpreted as quantization step (by how much pixel data will be divided).
+    NVIMGCODEC_QUALITY_TYPE_DEFAULT = 0,           /**< Each plugin decides what is best quality setting to use. ``quality_value``is ignored.*/
+    NVIMGCODEC_QUALITY_TYPE_LOSSLESS = 1,          /**< Image encoding is reversible and keeps original image quality. ``quality_value`` is ignored except for:
+                                                        - the CUDA TIFF encoder backend, for which ``quality_value = 0`` means no compression, and ``quality_value = 1`` means LZW compression,
+                                                        - the CPU PNG encoder backend, for which ``quality_value`` can be in range from 0 (lowest compression ratio, fastest) to 9 (highest compression ratio, slowest). */
+    NVIMGCODEC_QUALITY_TYPE_QUALITY = 2,           /**< ``quality_value`` is interpreted as JPEG-like quality in range from 1 (worst) to 100 (best). */
+    NVIMGCODEC_QUALITY_TYPE_QUANTIZATION_STEP = 3, /**< ``quality_value`` is interpreted as quantization step (by how much pixel data will be divided).
                                                         The higher the value, the worse quality image is produced.*/
-    NVIMGCODEC_QUALITY_TYPE_PSNR = 4,              /**< `quality_value` is interpreted as desired Peak Signal-to-Noise Ratio (PSNR) target for the encoded image.
+    NVIMGCODEC_QUALITY_TYPE_PSNR = 4,              /**< ``quality_value`` is interpreted as desired Peak Signal-to-Noise Ratio (PSNR) target for the encoded image.
                                                         The higher the value, the better quality image is produced. Value should be positive. */
-    NVIMGCODEC_QUALITY_TYPE_SIZE_RATIO = 5,        /**< `quality_value` is interpreted as desired encoded image size ratio compared to original size, should be floating in range (0.0, 1.0).
+    NVIMGCODEC_QUALITY_TYPE_SIZE_RATIO = 5,        /**< ``quality_value`` is interpreted as desired encoded image size ratio compared to original size, should be floating in range (0.0, 1.0).
                                                        E.g. value 0.1 means target size of 10% of original image. */
     NVIMGCODEC_QUALITY_TYPE_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecQualityType_t;
@@ -716,7 +827,6 @@ typedef struct
     nvimgcodecQualityType_t quality_type; /**< Quality type (algorithm) that will be used to encode image. */
     float quality_value;                  /**< Specifies how good encoded image should look like.
                                                Refer to the {@link nvimgcodecQualityType_t nvimgcodecQualityType_t} for the allowed values for each quality type. */
-
 } nvimgcodecEncodeParams_t;
 
 /**
@@ -754,6 +864,7 @@ typedef struct
     uint32_t num_resolutions;                    /**< Number of resolutions. */
     uint32_t code_block_w;                       /**< Code block width. Allowed values 32, 64 */
     uint32_t code_block_h;                       /**< Code block height. Allowed values 32, 64 */
+    int mct_mode;                                /**< Sets whether or not to use multiple component transform. Valid values 0 or 1. */
     int ht;                                      /**< Sets whether or not to use High-Throughput encoding. Valid values 0 or 1. */
 } nvimgcodecJpeg2kEncodeParams_t;
 
@@ -779,10 +890,16 @@ typedef struct
  */
 typedef enum {
     NVIMGCODEC_METADATA_KIND_UNKNOWN = 0x0, /**< Unknown metadata kind */
+    NVIMGCODEC_METADATA_KIND_TIFF_TAG,      /**< TIFF tag metadata */
+    NVIMGCODEC_METADATA_KIND_ICC_PROFILE,   /**< ICC profile metadata */
     NVIMGCODEC_METADATA_KIND_EXIF,          /**< EXIF metadata (reserved for future use)*/
     NVIMGCODEC_METADATA_KIND_GEO,           /**< Geographic metadata */
     NVIMGCODEC_METADATA_KIND_MED_APERIO,    /**< Medical metadata - Aperio format */
     NVIMGCODEC_METADATA_KIND_MED_PHILIPS,   /**< Medical metadata - Philips format */
+    NVIMGCODEC_METADATA_KIND_MED_VENTANA,   /**< Medical metadata - Ventana format */
+    NVIMGCODEC_METADATA_KIND_MED_LEICA,     /**< Medical metadata - Leica format */
+    NVIMGCODEC_METADATA_KIND_MED_TRESTLE,   /**< Medical metadata - Trestle format */
+    NVIMGCODEC_METADATA_KIND_TIFF_TAG_LIST, /**< List of available TIFF tag IDs */
 
     NVIMGCODEC_METADATA_KIND_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecMetadataKind_t;
@@ -795,9 +912,34 @@ typedef enum {
     NVIMGCODEC_METADATA_FORMAT_RAW,           /**< Raw binary metadata format */
     NVIMGCODEC_METADATA_FORMAT_JSON,          /**< JSON metadata format */
     NVIMGCODEC_METADATA_FORMAT_XML,           /**< XML metadata format */
+    NVIMGCODEC_METADATA_FORMAT_XMP,           /**< XMP metadata format */
 
     NVIMGCODEC_METADATA_FORMAT_ENUM_FORCE_INT = INT32_MAX
 } nvimgcodecMetadataFormat_t;
+
+/**
+ * @brief Metadata types as defined for TIFF tag types in TIFF specification
+ */
+typedef enum {
+    NVIMGCODEC_METADATA_VALUE_TYPE_UNKNOWN = 0x0,  /**< Unknown metadata type */
+    NVIMGCODEC_METADATA_VALUE_TYPE_BYTE = 1,       /**< 8-bit unsigned integer */
+    NVIMGCODEC_METADATA_VALUE_TYPE_ASCII = 2,      /**< 8-bit byte containing 7-bit ASCII code; last byte must be NUL */
+    NVIMGCODEC_METADATA_VALUE_TYPE_SHORT = 3,      /**< 16-bit (2-byte) unsigned integer */
+    NVIMGCODEC_METADATA_VALUE_TYPE_LONG = 4,       /**< 32-bit (4-byte) unsigned integer */
+    NVIMGCODEC_METADATA_VALUE_TYPE_RATIONAL = 5,   /**< Two LONGs: numerator and denominator */
+    NVIMGCODEC_METADATA_VALUE_TYPE_SBYTE = 6,      /**< 8-bit signed (twos-complement) integer */
+    NVIMGCODEC_METADATA_VALUE_TYPE_UNDEFINED = 7,  /**< 8-bit byte, value depends on field definition */
+    NVIMGCODEC_METADATA_VALUE_TYPE_SSHORT = 8,     /**< 16-bit (2-byte) signed (twos-complement) integer */
+    NVIMGCODEC_METADATA_VALUE_TYPE_SLONG = 9,      /**< 32-bit (4-byte) signed (twos-complement) integer */
+    NVIMGCODEC_METADATA_VALUE_TYPE_SRATIONAL = 10, /**< Two SLONGs: numerator and denominator */
+    NVIMGCODEC_METADATA_VALUE_TYPE_FLOAT = 11,     /**< 4-byte IEEE floating point value */
+    NVIMGCODEC_METADATA_VALUE_TYPE_DOUBLE = 12,    /**< 8-byte IEEE floating point value */
+    NVIMGCODEC_METADATA_VALUE_TYPE_IFD = 13,       /**< 4-byte (32-bit) unsigned integer used for IFD offsets */
+    NVIMGCODEC_METADATA_VALUE_TYPE_LONG8 = 16,     /**< 8-byte (64-bit) unsigned integer (BigTIFF) */
+    NVIMGCODEC_METADATA_VALUE_TYPE_SLONG8 = 17,    /**< 8-byte (64-bit) signed integer (BigTIFF) */
+    NVIMGCODEC_METADATA_VALUE_TYPE_IFD8 = 18,      /**< 8-byte (64-bit) unsigned integer used for IFD offsets (BigTIFF) */
+    NVIMGCODEC_METADATA_VALUE_TYPE_ENUM_FORCE_INT = INT32_MAX
+} nvimgcodecMetadataValueType_t;
 
 /**
  * @brief Defines metadata information for an image.
@@ -811,12 +953,14 @@ typedef struct
     size_t struct_size;                    /**< The size of the structure, in bytes. */
     void* struct_next;                     /**< Is NULL or a pointer to an extension structure type. */
 
-    nvimgcodecMetadataKind_t kind;     /**< The kind of metadata (e.g. EXIF) */
-    nvimgcodecMetadataFormat_t format; /**< The format of the metadata buffer */
+    nvimgcodecMetadataKind_t kind;            /**< The kind of metadata (e.g. EXIF) */
+    nvimgcodecMetadataFormat_t format;        /**< The format of the metadata buffer */
+    nvimgcodecMetadataValueType_t value_type; /**< The type of the metadata value when format is RAW (e.g. BYTE, SHORT, etc.) */
+    uint32_t value_count;                     /**< The number of values in the metadata buffer. For ASCII type it is the number of bytes in the buffer (including NUL byte). */
+    uint16_t id;                              /**< The id of the metadata. For TIFF tag metadata, it is the tag id. For other metadata kinds, it is reserved for future use. */
 
     size_t buffer_size; /**< Size of the metadata buffer in bytes */
     void* buffer;       /**< Pointer to the metadata buffer */
-
 } nvimgcodecMetadata_t;
 
 /**
@@ -1673,7 +1817,9 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecFutureGetProcessingStatus(
  * @brief Creates Image which wraps sample buffer together with format information.
  *
  * @param instance [in] The library instance handle the image will be used with.
- * @param image [in/out] Points a nvimgcodecImage_t handle in which the resulting image is returned.
+ * @param image [in,out] Pointer to a nvimgcodecImage_t handle that will receive the created image.
+ *        If *image is NULL, a new image instance will be created.
+ *        If *image is not NULL, the existing image instance will be reused instead of creating a new one.
  * @param image_info [in] Points a nvimgcodecImageInfo_t struct which describes sample buffer together with format.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
@@ -1702,29 +1848,45 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecImageGetImageInfo(nvimgcodecImage_t i
  *
  * @param instance  [in] The library instance handle the code stream will be used with.
  * @param code_stream [in/out] Points a nvimgcodecCodeStream_t handle in which the resulting code stream is returned.
+ *        If *code_stream is NULL, a new code stream instance will be created.
+ *        If *code_stream is not NULL, the existing code stream instance will be reused instead of creating a new one.
  * @param file_name [in] File name with compressed image data to wrap.
+ * @param code_stream_view [in] Optional pointer to a nvimgcodecCodeStreamView_t struct specifying parsing parameters
+ *        such as bitstream_offset. Can be NULL for default behavior.
+ *        Note: image_idx and region are rejected here; use nvimgcodecCodeStreamGetSubCodeStream to select
+ *        a specific image or region after creation.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecCodeStreamCreateFromFile(
-    nvimgcodecInstance_t instance, nvimgcodecCodeStream_t* code_stream, const char* file_name);
+    nvimgcodecInstance_t instance, nvimgcodecCodeStream_t* code_stream, const char* file_name,
+    const nvimgcodecCodeStreamView_t* code_stream_view);
 
 /**
  * @brief Creates code stream which wraps host memory source of compressed data.
  *
  * @param instance  [in] The library instance handle the code stream will be used with.
  * @param code_stream [in/out] Points a nvimgcodecCodeStream_t handle in which the resulting code stream is returned.
+ *        If *code_stream is NULL, a new code stream instance will be created.
+ *        If *code_stream is not NULL, the existing code stream instance will be reused instead of creating a new one.
  * @param data [in] Pointer to buffer with compressed data.
  * @param length [in] Length of compressed data in provided buffer.
+ * @param code_stream_view [in] Optional pointer to a nvimgcodecCodeStreamView_t struct specifying parsing parameters
+ *        such as bitstream_offset. Can be NULL for default behavior.
+ *        Note: image_idx and region are rejected here; use nvimgcodecCodeStreamGetSubCodeStream to select
+ *        a specific image or region after creation.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecCodeStreamCreateFromHostMem(
-    nvimgcodecInstance_t instance, nvimgcodecCodeStream_t* code_stream, const unsigned char* data, size_t length);
+    nvimgcodecInstance_t instance, nvimgcodecCodeStream_t* code_stream, const unsigned char* data, size_t length,
+    const nvimgcodecCodeStreamView_t* code_stream_view);
 
 /**
  * @brief Creates code stream which wraps file sink for compressed data with given format.
  *
  * @param instance  [in] The library instance handle the code stream will be used with.
  * @param code_stream [in/out] Points a nvimgcodecCodeStream_t handle in which the resulting code stream is returned.
+ *        If *code_stream is NULL, a new code stream instance will be created.
+ *        If *code_stream is not NULL, the existing code stream instance will be reused instead of creating a new one.
  * @param file_name [in] File name sink for compressed image data to wrap.
  * @param image_info [in] Points a nvimgcodecImageInfo_t struct which describes output image format.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
@@ -1748,6 +1910,8 @@ typedef unsigned char* (*nvimgcodecResizeBufferFunc_t)(void* ctx, size_t req_siz
  *
  * @param instance  [in] The library instance handle the code stream will be used with.
  * @param code_stream [in/out] Points a nvimgcodecCodeStream_t handle in which the resulting code stream is returned.
+ *        If *code_stream is NULL, a new code stream instance will be created.
+ *        If *code_stream is not NULL, the existing code stream instance will be reused instead of creating a new one.
  * @param ctx [in] Pointer to user defined context with which get buffer function will be called back.
  * @param resize_buffer_func [in] Points a nvimgcodecResizeBufferFunc_t function handle which will be used to resize and providing host output buffer.
  * @param image_info [in] Points a nvimgcodecImageInfo_t struct which describes output image format.
@@ -1778,7 +1942,10 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecCodeStreamGetCodeStreamInfo(nvimgcode
  *
  * @param code_stream [in] The code stream handle from which the sub-code stream is to be created.
  * @param sub_code_stream [in/out] Points to a nvimgcodecCodeStream_t handle in which the resulting sub-code stream is returned.
+ *        If *sub_code_stream is NULL, a new code stream instance will be created.
+ *        If *sub_code_stream is not NULL, the existing code stream instance will be reused instead of creating a new one.
  * @param code_stream_view [in] Points to a nvimgcodecCodeStreamView_t struct which describes the view of the code stream to be used for the sub-code stream.
+ *        Views selecting a specific image are resolved during this call, so containers may parse metadata up to the requested image.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecCodeStreamGetSubCodeStream(nvimgcodecCodeStream_t code_stream, nvimgcodecCodeStream_t* sub_code_stream,
@@ -1800,8 +1967,10 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecCodeStreamGetImageInfo(
  * @param instance  [in] The library instance handle the decoder will be used with.
  * @param decoder  [in/out] Points a nvimgcodecDecoder_t handle in which the decoder is returned.
  * @param exec_params [in] Points an execution parameters.
- * @param options [in] String with optional space separated list of parameters for specific decoders in format
- *                     "<decoder_id>:<parameter_name>=<parameter_value>". For example  "nvjpeg:fancy_upsampling=1"
+ * @param options [in] Optional space-separated list of parameters. Use "<decoder_id>:<name>=<value>" for
+ *                     decoder-specific options, or a leading colon for global options (e.g. ":num_cuda_streams=4")
+ *                     or options that any matching decoder may honor (e.g. ":fancy_upsampling=1"). Pass NULL
+ *                     or empty string for no options. See the documentation for the full list of options per decoder.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderCreate(
@@ -1868,10 +2037,11 @@ NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecDecoderDecode(nvimgcodecDecoder_t dec
  * @brief Creates generic image encoder.
  *
  * @param instance [in] The library instance handle the encoder will be used with.
- * @param encoder [in/out] Points a nvimgcodecEncoder_t handle in which the decoder is returned.
+ * @param encoder [in/out] Points a nvimgcodecEncoder_t handle in which the encoder is returned.
  * @param exec_params [in] Points an execution parameters.
- * @param options [in] String with optional, space separated, list of parameters for specific encoders, in format
- *                     "<encoder_id>:<parameter_name>=<parameter_value>."
+ * @param options [in] Optional space-separated list of parameters. Use "<encoder_id>:<name>=<value>" for
+ *                     encoder-specific options, or a leading colon for global options (e.g. ":num_cuda_streams=4").
+ *                     Pass NULL or empty string for no options. See the documentation for encoder options.
  * @return nvimgcodecStatus_t - An error code as specified in {@link nvimgcodecStatus_t API Return Status Codes}
  */
 NVIMGCODECAPI nvimgcodecStatus_t nvimgcodecEncoderCreate(

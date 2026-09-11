@@ -1017,13 +1017,14 @@ scene.clear_selection()
 ```python
 import lichtfeld as lf
 
-# Get/set as 16-float column-major matrix
+# Get/set a 16-float column-major transform matrix
 matrix = lf.get_node_transform("My Splat")
 lf.set_node_transform("My Splat", matrix)
 
 # Decompose/compose
 components = lf.decompose_transform(matrix)
-# components = {"translation": [x,y,z], "euler": [rx,ry,rz], "scale": [sx,sy,sz]}
+# components includes translation, rotation_quat, rotation_euler,
+# rotation_euler_deg, and scale
 
 new_matrix = lf.compose_transform(
     translation=[1.0, 2.0, 3.0],
@@ -1126,7 +1127,7 @@ class CenterSelection(Operator):
         return lf.has_selection() and lf.can_transform_selection()
 
     def execute(self, context) -> set:
-        center = lf.get_selection_world_center()
+        center = lf.get_selection_visualizer_world_center()
         if center:
             lf.log.info(f"Selection center: {center}")
         return {"FINISHED"}
@@ -1405,7 +1406,7 @@ lf.pause_training()
 lf.resume_training()
 lf.stop_training()
 lf.reset_training()
-lf.save_checkpoint()
+lf.project_save()
 ```
 
 ### Example: custom training callback
@@ -1423,7 +1424,7 @@ class AutoSavePlugin:
     def on_post_step(self, _hook):
         ctx = lf.context()
         if ctx.iteration - self.last_save >= self.interval:
-            lf.save_checkpoint()
+            lf.project_save()
             self.last_save = ctx.iteration
             lf.log.info(f"Auto-save requested at iteration {ctx.iteration}")
 

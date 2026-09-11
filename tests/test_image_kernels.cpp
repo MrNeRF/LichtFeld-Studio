@@ -4,8 +4,11 @@
 
 #include <gtest/gtest.h>
 
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/tensor.hpp"
+#include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
+#include "lfs/training/refine_scratch.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -80,4 +83,44 @@ TEST_F(ImageKernelsTest, FusedCannyUInt8MatchesNormalizedFloatInput) {
     }
 
     EXPECT_LT(max_abs_diff, 1e-5f);
+}
+
+TEST_F(ImageKernelsTest, EdgeWeightFloatPositiveMedianPreservesNonQuantizedValues) {
+    const std::vector<float> values{0.0f, 0.2f, 0.3f, 0.46f};
+    auto weights = Tensor::from_vector(
+        values, TensorShape({2, 2}), Device::CUDA);
+    lfs::training::PositiveMedianScratch scratch;
+
+    launch_normalize_by_positive_median(
+        weights.ptr<float>(), weights.numel(), weights.stream(), &scratch);
+
+    const auto result = weights.cpu();
+    const auto* ptr = result.ptr<float>();
+    EXPECT_FLOAT_EQ(ptr[0], 0.0f);
+    EXPECT_NEAR(ptr[1], 2.0f / 3.0f, 1.0e-6f);
+    EXPECT_FLOAT_EQ(ptr[2], 1.0f);
+    EXPECT_NEAR(ptr[3], 23.0f / 15.0f, 1.0e-6f);
+    // 0.46 / 0.3 is not representable by the rejected u8/16 cache path.
+    EXPECT_GT(std::abs(ptr[3] - std::round(ptr[3] * 16.0f) / 16.0f), 0.01f);
+}
+
+TEST_F(ImageKernelsTest, LanczosRgbAndGrayscaleUseBoundedCoefficientBuffers) {
+    auto rgb = Tensor::full({4, 6, 3}, 255.0f, Device::CUDA, DataType::UInt8);
+    auto grayscale = Tensor::full({4, 6}, 255.0f, Device::CUDA, DataType::UInt8);
+
+    const auto rgb_output = lanczos_resize(rgb, 3, 5, 2, nullptr);
+    const auto grayscale_output = lanczos_resize_grayscale(grayscale, 3, 5, 2, nullptr);
+
+    ASSERT_TRUE(rgb_output.is_valid());
+    ASSERT_EQ(rgb_output.shape(), TensorShape({3, 3, 5}));
+    ASSERT_TRUE(grayscale_output.is_valid());
+    ASSERT_EQ(grayscale_output.shape(), TensorShape({3, 5}));
+    EXPECT_TRUE(rgb_output.isfinite().all().item<bool>());
+    EXPECT_TRUE(grayscale_output.isfinite().all().item<bool>());
+}
+
+TEST_F(ImageKernelsTest, LanczosRejectsNonPositiveOutputExtentBeforeAllocation) {
+    const auto input = Tensor::zeros({2, 2, 3}, Device::CUDA, DataType::UInt8);
+    EXPECT_FALSE(lanczos_resize(input, 0, 2, 2, nullptr).is_valid());
+    EXPECT_FALSE(lanczos_resize(input, 2, -1, 2, nullptr).is_valid());
 }

@@ -10,6 +10,9 @@
 
 namespace lfs::sequencer {
 
+    inline constexpr float MAX_ANIMATION_VALUE_MAGNITUDE = 1.0e12f;
+    inline constexpr float MIN_ANIMATION_QUATERNION_NORM_SQUARED = 1.0e-12f;
+
     enum class ValueType : uint8_t { Bool,
                                      Int,
                                      Float,

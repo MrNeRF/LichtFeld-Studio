@@ -9,7 +9,9 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 
 #include <RmlUi/Core/DataModelHandle.h>
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -38,6 +40,7 @@ namespace lfs::vis::gui {
         std::string label;
         std::string operator_id;
         std::string shortcut;
+        std::string tooltip;
         bool enabled = true;
         bool selected = false;
         int callback_index = -1;
@@ -71,12 +74,31 @@ namespace lfs::vis::gui {
         std::string operator_id;
         std::string shortcut;
         std::string checkmark;
+        std::string tooltip;
         bool enabled = true;
         bool separator_before = false;
         bool has_shortcut = false;
         bool show_checkmark = false;
         bool is_label = false;
         int callback_index = -1;
+    };
+
+    struct MenuDropdownChildView {
+        int index = -1;
+        std::string label;
+        std::string action;
+        std::string operator_id;
+        std::string shortcut;
+        std::string checkmark;
+        std::string tooltip;
+        bool enabled = true;
+        bool separator_before = false;
+        bool has_shortcut = false;
+        bool show_checkmark = false;
+        bool has_children = false;
+        bool submenu_open = false;
+        int callback_index = -1;
+        std::vector<MenuDropdownLeafView> children;
     };
 
     struct MenuDropdownRootView {
@@ -86,6 +108,7 @@ namespace lfs::vis::gui {
         std::string operator_id;
         std::string shortcut;
         std::string checkmark;
+        std::string tooltip;
         bool enabled = true;
         bool separator_before = false;
         bool has_shortcut = false;
@@ -93,7 +116,7 @@ namespace lfs::vis::gui {
         bool has_children = false;
         bool submenu_open = false;
         int callback_index = -1;
-        std::vector<MenuDropdownLeafView> children;
+        std::vector<MenuDropdownChildView> children;
     };
 
     class RmlMenuBar {
@@ -112,6 +135,10 @@ namespace lfs::vis::gui {
         bool isOpen() const { return open_menu_index_ >= 0; }
         float barHeight() const;
 
+        // Keeps the render-on-demand loop ticking while a tooltip is counting
+        // down so it reveals on time without needing a mouse jiggle.
+        [[nodiscard]] bool needsAnimationFrame() const { return tooltip_.revealDue(); }
+
     private:
         bool updateTheme();
         void rebuildLabels();
@@ -119,9 +146,11 @@ namespace lfs::vis::gui {
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();
-        void setOpenSubmenu(int index);
+        void sizeOpenDropdowns();
+        void setOpenSubmenu(int root_index, int child_index);
         Rml::Element* dropdownElementAtPoint(float x, float y) const;
         int submenuIndexForElement(Rml::Element* element) const;
+        int childSubmenuIndexForElement(Rml::Element* element) const;
         void rebuildToolbarButtons();
         void dispatchToolbarAction(const std::string& action, const std::string& value);
         Rml::Element* toolbarButtonAtPoint(float x, float y) const;
@@ -144,6 +173,9 @@ namespace lfs::vis::gui {
         std::vector<MenuToolbarButtonView> camera_buttons_;
         std::vector<MenuToolbarButtonView> render_buttons_;
         std::vector<MenuToolbarButtonView> projection_buttons_;
+        std::array<std::string, 4> navigation_tooltips_;
+        std::uint64_t navigation_tooltip_language_generation_ = 0;
+        bool has_navigation_tooltip_language_generation_ = false;
         int active_index_ = -1;
 
         Rml::Element* menu_items_ = nullptr;
@@ -160,6 +192,7 @@ namespace lfs::vis::gui {
         RmlTooltipController tooltip_;
         float viewport_right_edge_ = 0.0f;
         float applied_toolbar_right_ = -1.0f;
+        bool toolbar_fits_ = true;
         bool ui_hidden_ = false;
         bool last_window_split_view_ = false;
         bool last_ui_hidden_ = false;
@@ -167,6 +200,7 @@ namespace lfs::vis::gui {
 
         int open_menu_index_ = -1;
         int open_submenu_index_ = -1;
+        int open_child_submenu_index_ = -1;
         std::string open_menu_idname_;
         bool wants_input_ = false;
         bool render_needed_ = true;

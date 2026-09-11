@@ -248,6 +248,17 @@ TEST(UndistortPinhole, StrongPincushionDistortion) {
     run_image_undistort(params);
 }
 
+TEST(UndistortDiagnostics, ReportsCropSolveFailure) {
+    const auto params = compute_undistort_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, 0, 0,
+        Tensor::from_vector({0.1f, -0.02f, 0.003f, -0.0004f}, {4}, Device::CPU),
+        Tensor(), CameraModelType::FISHEYE);
+
+    EXPECT_TRUE(params.crop_solve_failed);
+    EXPECT_EQ(params.dst_width, 0);
+    EXPECT_EQ(params.dst_height, 0);
+}
+
 // ====================== Fisheye model tests ======================
 
 TEST(UndistortFisheye, SimpleRadialFisheye) {
@@ -478,7 +489,7 @@ protected:
 
         auto result = lfs::io::read_colmap_cameras_and_images(base_path_, "images_4");
         ASSERT_TRUE(result.has_value()) << "Failed to load COLMAP data";
-        auto& [cams, center] = *result;
+        auto& [cams, center] = result->value;
         cameras_ = std::move(cams);
         ASSERT_GT(cameras_.size(), 0u);
     }

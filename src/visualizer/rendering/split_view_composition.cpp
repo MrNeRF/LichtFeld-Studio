@@ -9,7 +9,7 @@
 #include "scene/scene_manager.hpp"
 #include "viewport_request_builder.hpp"
 #include "visualizer/scene_coordinate_utils.hpp"
-#include <cassert>
+#include "window/vulkan_result.hpp"
 #include <format>
 
 namespace lfs::vis {
@@ -56,8 +56,17 @@ namespace lfs::vis {
             const glm::ivec2 render_size,
             const size_t visible_node_count,
             const size_t visible_node_index) {
-            assert(ctx.model);
-            assert(visible_node_index < visible_node_count);
+            LFS_VK_DEBUG_ASSERT(
+                ctx.model != nullptr,
+                "PLY comparison panel requires a combined scene model (model={:#x}, visible_node_index={}, visible_node_count={})",
+                reinterpret_cast<std::uintptr_t>(ctx.model),
+                visible_node_index,
+                visible_node_count);
+            LFS_VK_DEBUG_ASSERT(
+                visible_node_index < visible_node_count,
+                "PLY comparison panel node index must be inside the visibility mask (visible_node_index={}, visible_node_count={})",
+                visible_node_index,
+                visible_node_count);
 
             auto content = buildModelPanelContent(
                 ctx,
@@ -87,7 +96,6 @@ namespace lfs::vis {
             const std::array<SplitViewPanelPlan, 2>& panels,
             const glm::ivec2 output_size,
             const glm::vec3& background_color,
-            const bool prefer_batched_gaussian_render,
             const bool letterbox = false,
             const glm::ivec2 content_size = {0, 0}) {
             return SplitViewCompositionPlan{
@@ -99,7 +107,6 @@ namespace lfs::vis {
                     {.divider_color = kSplitDividerColor,
                      .letterbox = letterbox,
                      .content_size = content_size},
-                .prefer_batched_gaussian_render = prefer_batched_gaussian_render,
             };
         }
 
@@ -113,8 +120,7 @@ namespace lfs::vis {
 
             std::string gt_label = LOC(lichtfeld::Strings::StatusBar::GROUND_TRUTH);
             if (ctx.scene_manager && ctx.current_camera_id >= 0) {
-                const auto disabled_uids = ctx.scene_manager->getScene().getTrainingDisabledCameraUids();
-                if (disabled_uids.count(ctx.current_camera_id) > 0) {
+                if (!ctx.scene_manager->getScene().isCameraTrainingEnabled(ctx.current_camera_id)) {
                     gt_label = LOC(lichtfeld::Strings::StatusBar::GROUND_TRUTH_EXCLUDED);
                 }
             }
@@ -161,7 +167,6 @@ namespace lfs::vis {
                                   .flip_y = std::nullopt}}}},
                 ctx.render_size,
                 ctx.settings.background_color,
-                false,
                 true,
                 res.gt_context->dimensions);
             plan.mode_label = LOC(lichtfeld::Strings::StatusBar::GT_COMPARE);
@@ -183,8 +188,20 @@ namespace lfs::vis {
 
             const size_t left_idx = ctx.settings.split_view_offset % visible_nodes.size();
             const size_t right_idx = (ctx.settings.split_view_offset + 1) % visible_nodes.size();
-            assert(visible_nodes[left_idx]->model);
-            assert(visible_nodes[right_idx]->model);
+            LFS_VK_DEBUG_ASSERT(
+                visible_nodes[left_idx]->model != nullptr,
+                "PLY comparison left node must own a renderable model (left_index={}, visible_node_count={}, node_id={}, model={:#x})",
+                left_idx,
+                visible_nodes.size(),
+                visible_nodes[left_idx]->id,
+                reinterpret_cast<std::uintptr_t>(visible_nodes[left_idx]->model.get()));
+            LFS_VK_DEBUG_ASSERT(
+                visible_nodes[right_idx]->model != nullptr,
+                "PLY comparison right node must own a renderable model (right_index={}, visible_node_count={}, node_id={}, model={:#x})",
+                right_idx,
+                visible_nodes.size(),
+                visible_nodes[right_idx]->id,
+                reinterpret_cast<std::uintptr_t>(visible_nodes[right_idx]->model.get()));
 
             const bool use_combined_scene_masks = ctx.model && !ctx.settings.point_cloud_mode;
 
@@ -241,8 +258,7 @@ namespace lfs::vis {
                                   .texcoord_scale = glm::vec2(1.0f, 1.0f),
                                   .flip_y = std::nullopt}}}},
                 ctx.makeViewportData().size,
-                ctx.settings.background_color,
-                false);
+                ctx.settings.background_color);
             plan.mode_label = LOC(lichtfeld::Strings::StatusBar::SPLIT_VIEW);
             plan.detail_label = std::format("{} | {}", plan.panels[0].label, plan.panels[1].label);
             return plan;
@@ -299,32 +315,12 @@ namespace lfs::vis {
                                   .flip_y = std::nullopt,
                                   .normalize_x_to_panel = true}}}},
                 ctx.render_size,
-                ctx.settings.background_color,
-                true);
+                ctx.settings.background_color);
             plan.mode_label = LOC(lichtfeld::Strings::StatusBar::SPLIT_VIEW);
             plan.detail_label = std::format("{} | {}", plan.panels[0].label, plan.panels[1].label);
             return plan;
         }
     } // namespace
-
-    lfs::rendering::SplitViewRequest SplitViewCompositionPlan::toRequest() const {
-        return lfs::rendering::SplitViewRequest{
-            .panels = {panels[0].panel, panels[1].panel},
-            .composite = composite,
-            .presentation = presentation,
-            .prefer_batched_gaussian_render = prefer_batched_gaussian_render,
-        };
-    }
-
-    SplitViewInfo SplitViewCompositionPlan::toInfo() const {
-        return SplitViewInfo{
-            .enabled = true,
-            .mode_label = mode_label,
-            .detail_label = detail_label,
-            .left_name = panels[0].label,
-            .right_name = panels[1].label,
-        };
-    }
 
     std::optional<SplitViewCompositionPlan> buildSplitViewCompositionPlan(
         const FrameContext& ctx,

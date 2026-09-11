@@ -3,6 +3,8 @@
 
 #include "color_convert.cuh"
 
+#include "core/cuda_error.hpp"
+
 namespace lfs::io::video {
 
     namespace {
@@ -180,6 +182,7 @@ namespace lfs::io::video {
 
         rgbToNv12Kernel<<<grid, block, 0, stream>>>(
             rgb_src, y_dst, uv_dst, width, height, effective_y_pitch, effective_uv_pitch);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgb_to_nv12");
     }
 
     void rgbToYuv420pCuda(
@@ -196,6 +199,7 @@ namespace lfs::io::video {
                         (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
 
         rgbToYuv420pKernel<<<grid, block, 0, stream>>>(rgb_src, y_dst, u_dst, v_dst, width, height);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rgb_to_yuv420p");
     }
 
     __global__ void nv12ToRgbKernel(
@@ -258,6 +262,83 @@ namespace lfs::io::video {
 
         nv12ToRgbKernel<<<grid, block, 0, stream>>>(
             y_src, uv_src, rgb_dst, width, height, effective_y_pitch, effective_uv_pitch);
+        LFS_CUDA_LAUNCH_CHECK(stream, "io.video.nv12_to_rgb");
+    }
+
+    __global__ void rotateRgbKernel(
+        const uint8_t* __restrict__ src,
+        uint8_t* __restrict__ dst,
+        const int width,
+        const int height,
+        const int angle) {
+
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+        if (angle == 90) {
+            const int h = width;
+            const int w = height;
+            if (x >= w || y >= h)
+                return;
+            // 90° CW: dst[y][x] = src[height-1-x][y]
+            const int src_x = y;
+            const int src_y = height - 1 - x;
+            const int src_idx = (src_y * width + src_x) * 3;
+            const int dst_idx = (y * w + x) * 3;
+            dst[dst_idx] = src[src_idx];
+            dst[dst_idx + 1] = src[src_idx + 1];
+            dst[dst_idx + 2] = src[src_idx + 2];
+        } else if (angle == 180) {
+            if (x >= width || y >= height)
+                return;
+            // 180°: dst[y][x] = src[height-1-y][width-1-x]
+            const int src_x = width - 1 - x;
+            const int src_y = height - 1 - y;
+            const int src_idx = (src_y * width + src_x) * 3;
+            const int dst_idx = (y * width + x) * 3;
+            dst[dst_idx] = src[src_idx];
+            dst[dst_idx + 1] = src[src_idx + 1];
+            dst[dst_idx + 2] = src[src_idx + 2];
+        } else { // 270
+            const int h = width;
+            const int w = height;
+            if (x >= w || y >= h)
+                return;
+            // 270° CW (= 90° CCW): dst[y][x] = src[x][width-1-y]
+            const int src_x = width - 1 - y;
+            const int src_y = x;
+            const int src_idx = (src_y * width + src_x) * 3;
+            const int dst_idx = (y * w + x) * 3;
+            dst[dst_idx] = src[src_idx];
+            dst[dst_idx + 1] = src[src_idx + 1];
+            dst[dst_idx + 2] = src[src_idx + 2];
+        }
+    }
+
+    void rotateRgbCuda(
+        const uint8_t* const src,
+        uint8_t* const dst,
+        const int width,
+        const int height,
+        const int angle,
+        cudaStream_t stream) {
+
+        if (angle == 180) {
+            const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+            const dim3 grid((width + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                            (height + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            rotateRgbKernel<<<grid, block, 0, stream>>>(src, dst, width, height, angle);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rotate_rgb");
+        } else {
+            // 90/270: swapped dimensions for output
+            const int h = width;
+            const int w = height;
+            const dim3 block(BLOCK_SIZE, BLOCK_SIZE);
+            const dim3 grid((w + BLOCK_SIZE - 1) / BLOCK_SIZE,
+                            (h + BLOCK_SIZE - 1) / BLOCK_SIZE);
+            rotateRgbKernel<<<grid, block, 0, stream>>>(src, dst, width, height, angle);
+            LFS_CUDA_LAUNCH_CHECK(stream, "io.video.rotate_rgb");
+        }
     }
 
 } // namespace lfs::io::video

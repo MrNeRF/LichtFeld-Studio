@@ -77,9 +77,7 @@ namespace nvimgcodec {
     }
 
     ProcessingResultsPromise::ProcessingResultsPromise(int num_samples)
-        : results_(num_samples),
-          is_set_(num_samples),
-          pending_(num_samples) {
+        : results_(num_samples), is_set_(num_samples), pending_(num_samples) {
         for (auto& elem : is_set_)
             elem.store(false);
         is_all_set_.store(false);

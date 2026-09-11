@@ -54,8 +54,4 @@ namespace lfs::io::mesh {
         return tex;
     }
 
-    void TextureLoader::clear_cache() {
-        cache_.clear();
-    }
-
 } // namespace lfs::io::mesh

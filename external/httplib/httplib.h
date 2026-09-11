@@ -8617,11 +8617,14 @@ namespace httplib {
         }
     }
 
+    // LFS patch: always exchange-then-close so stop() cannot double-close a
+    // stale fd after the accept-error path and cannot leak a bound-but-not-
+    // listening socket.
     inline void Server::stop() {
-        if (is_running_) {
-            assert(svr_sock_ != INVALID_SOCKET);
-            std::atomic<socket_t> sock(svr_sock_.exchange(INVALID_SOCKET));
-            detail::shutdown_socket(sock);
+        const socket_t sock = svr_sock_.exchange(INVALID_SOCKET);
+        if (sock != INVALID_SOCKET) {
+            std::atomic<socket_t> ssock(sock);
+            detail::shutdown_socket(ssock);
             detail::close_socket(sock);
         }
         is_decommissioned = false;
@@ -9234,8 +9237,11 @@ namespace httplib {
                     } else if (errno == EINTR || errno == EAGAIN) {
                         continue;
                     }
-                    if (svr_sock_ != INVALID_SOCKET) {
-                        detail::close_socket(svr_sock_);
+                    // LFS patch: exchange the listener fd before close so a
+                    // concurrent Server::stop() cannot double-close a reused fd.
+                    const socket_t sock = svr_sock_.exchange(INVALID_SOCKET);
+                    if (sock != INVALID_SOCKET) {
+                        detail::close_socket(sock);
                         ret = false;
                         output_error_log(Error::Connection, nullptr);
                     } else {

@@ -6,8 +6,10 @@
 
 #include "core/parameters.hpp"
 #include "core/splat_data.hpp"
+#include "lfs/training/screen_share.cuh"
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -29,10 +31,16 @@ namespace lfs::training {
 
     // Build the row mask for splats loaded via --add-splat ... --freeze.
     // Invalid/empty means no frozen rows for the requested size.
+    // GPU mask is cached and rebuilt only when frozen ranges or N change
+    // (no host vector + H2D on the steady inject_noise path).
     lfs::core::Tensor make_frozen_mask(
         const lfs::core::SplatData& splat_data,
         size_t n,
         lfs::core::Device device);
+
+    /// Test/telemetry: times make_frozen_mask rebuilt the GPU cache.
+    [[nodiscard]] std::uint64_t frozen_mask_rebuild_count() noexcept;
+    void reset_frozen_mask_rebuild_count() noexcept;
 
     lfs::core::Tensor make_trainable_mask(
         const lfs::core::SplatData& splat_data,
@@ -51,30 +59,29 @@ namespace lfs::training {
         const lfs::core::SplatData& splat_data,
         lfs::core::Tensor& scores);
 
+    // Scale crop-rejected row signals without mutating accumulated statistics.
+    // Invalid crop mask and scale 1 return the original tensor without device work.
+    lfs::core::Tensor apply_crop_damping_to_scores(
+        const AdamOptimizer& optimizer,
+        const lfs::core::Tensor& scores);
+
     size_t frozen_row_count(const lfs::core::SplatData& splat_data, size_t n);
 
+    // Refresh the topology-derived mask without changing the configured LR scale.
     void apply_frozen_ranges_to_optimizer(
         const lfs::core::SplatData& splat_data,
         AdamOptimizer& optimizer);
+
+    // Configure the LR scale and refresh the topology-derived mask.
+    void apply_frozen_ranges_to_optimizer(
+        const lfs::core::SplatData& splat_data,
+        AdamOptimizer& optimizer,
+        float freeze_lr_scale);
 
     void remap_frozen_ranges_after_compaction(
         lfs::core::SplatData& splat_data,
         const lfs::core::Tensor& kept_old_indices,
         size_t old_size);
-
-    // Function types for parameter and optimizer state updates
-    using ParamUpdateFn = std::function<lfs::core::Tensor(const int, const lfs::core::Tensor&)>;
-    using OptimizerUpdateFn = std::function<void(
-        AdamParamState& state,
-        const lfs::core::Tensor& new_param)>;
-
-    // Update parameter with optimizer state synchronization
-    void update_param_with_optimizer(
-        const ParamUpdateFn& param_fn,
-        const OptimizerUpdateFn& optimizer_fn,
-        std::unique_ptr<AdamOptimizer>& optimizer,
-        lfs::core::SplatData& splat_data,
-        std::vector<size_t> param_idxs = {0, 1, 2, 3, 4, 5});
 
     // Returns the fused MCMC-style dead mask:
     // opacity <= min_opacity OR ||rotation||^2 < 1e-8.
@@ -87,5 +94,142 @@ namespace lfs::training {
     // ||rotation||^2 < 1e-8.
     lfs::core::Tensor compute_near_zero_rotation_mask(
         const lfs::core::Tensor& rotations);
+
+    /**
+     * Grow-only N-row densify scratch for masks and weights.
+     * Initially sized to the model's reserved capacity so refine does not
+     * over-allocate against the configured max cap from iteration zero.
+     */
+    struct DensifyNScratch {
+        lfs::core::Tensor f32_a;  // weights / scores
+        lfs::core::Tensor bool_a; // masks
+        size_t n_capacity = 0;
+        size_t n_required = 0;
+
+        void ensure_n(size_t n, lfs::core::Device device);
+
+        /// Resident capacity bytes (f32×1 + bool×1 at high-water).
+        [[nodiscard]] std::size_t resident_bytes() const noexcept {
+            std::size_t bytes = 0;
+            if (n_capacity > 0) {
+                bytes += n_capacity * (sizeof(float) + sizeof(bool));
+            }
+            return bytes;
+        }
+
+        /// Peak logical rows requested from the grow-only backing buffers.
+        [[nodiscard]] std::size_t required_bytes() const noexcept {
+            return n_required * (sizeof(float) + sizeof(bool));
+        }
+
+        // Drop all storage. Not process-static (lives on the strategy), but
+        // zeros_direct f32/bool + pool-backed i64 free paths are teardown-safe
+        // Call when the owning strategy is reset early.
+        void release() noexcept {
+            f32_a = {};
+            bool_a = {};
+            n_capacity = 0;
+            n_required = 0;
+        }
+
+        [[nodiscard]] lfs::core::Tensor f32_a_view(size_t n) const;
+        [[nodiscard]] lfs::core::Tensor bool_a_view(size_t n) const;
+    };
+
+    /**
+     * Reusable densification child-buffer workspace.
+     * Grow-only high-water for LAS second-child attribute buffers (K rows).
+     * Avoids per-refine empty() allocs for means/rot/scale/sh0/shN/opacity.
+     */
+    struct DensifyChildWorkspace {
+        ~DensifyChildWorkspace();
+
+        lfs::core::Tensor means;     // [cap, 3]
+        lfs::core::Tensor rotations; // [cap, 4]
+        lfs::core::Tensor scales;    // [cap, 3]
+        lfs::core::Tensor sh0;       // [cap, 1, 3] (MRNF) or use sh0_flat
+        lfs::core::Tensor sh0_flat;  // [cap, 3] (IGS+)
+        lfs::core::Tensor shN;       // [cap, sh_rest, 3]
+        lfs::core::Tensor opacities; // [cap]
+        size_t capacity = 0;
+        size_t required_bytes_high_water = 0;
+        size_t sh_rest = 0;
+        bool sh0_as_flat = false;
+
+        /// Ensure workspace holds at least K rows (×1.2 growth). Returns views of size K.
+        void ensure(size_t K, size_t sh_rest_in, bool use_shN, bool sh0_flat_layout,
+                    lfs::core::Device device);
+
+        [[nodiscard]] std::size_t required_bytes() const noexcept;
+        [[nodiscard]] std::size_t resident_bytes() const noexcept;
+
+        [[nodiscard]] lfs::core::Tensor means_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor rotations_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor scales_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor sh0_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor shN_view(size_t K) const;
+        [[nodiscard]] lfs::core::Tensor opacities_view(size_t K) const;
+    };
+
+    /**
+     * grow densification_info / 1D score buffers without full realloc
+     * when reserved capacity allows. densification_info is [n_rows,N] (2 rows
+     * for every strategy): when n or n_rows changes we must
+     * reallocate (row offsets depend on N); when shape already matches, reuse.
+     * For 1D scores: append_zeros into reserved capacity when possible.
+     */
+    void ensure_densification_info_shape_inplace(
+        lfs::core::Tensor& densification_info,
+        size_t n,
+        lfs::core::Device device,
+        size_t n_rows = 2);
+
+    void ensure_score_buffer_inplace(
+        lfs::core::Tensor& scores,
+        size_t n,
+        lfs::core::Device device,
+        size_t reserve_capacity = 0);
+
+    inline void ensure_max_screen_share_shape(
+        lfs::core::SplatData& splat,
+        const size_t n,
+        const size_t reserve_capacity = 0) {
+        ensure_score_buffer_inplace(
+            splat._max_screen_share, n, splat.means().device(), reserve_capacity);
+        splat._max_screen_share.set_name("splat.max_screen_share");
+    }
+
+    inline void publish_screen_share_cap(
+        AdamOptimizer* optimizer,
+        lfs::core::SplatData& splat,
+        const lfs::core::param::OptimizationParameters& params) {
+        if (!optimizer) {
+            return;
+        }
+        if (!screen_share_cap_active(params.max_screen_share) ||
+            !splat._max_screen_share.is_valid()) {
+            optimizer->set_screen_share_cap(nullptr, 0, 0.0f, 0.0f);
+            return;
+        }
+        optimizer->set_screen_share_cap(
+            splat._max_screen_share.ptr<float>(),
+            static_cast<int>(splat._max_screen_share.numel()),
+            params.max_screen_share,
+            params.screen_share_penalty);
+    }
+
+    /// Collect leftover per-primitive Adam scale pointers from the removed
+    /// legacy moment codec. Always returns 0 under joint-only Adam state.
+    int collect_adam_scale_ptrs(
+        AdamOptimizer& optimizer,
+        float* out_ptrs[12]);
+
+    /// Zero fp32 Adam grad rows at indices (and ShN via swizzled zero when
+    /// layout_rest > 0). Scales/moments are left alone — pair with fused scale
+    /// zero. Required because strategy::step runs Adam after densify.
+    void zero_adam_grads_at_indices(
+        AdamOptimizer& optimizer,
+        const lfs::core::Tensor& indices,
+        uint32_t shN_layout_rest = 0);
 
 } // namespace lfs::training

@@ -21,6 +21,10 @@ except ImportError:
     import tomli as tomllib
 
 
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
 def validate_plugin(plugin_path: str | Path) -> list[str]:
     """Validate plugin structure and manifest. Returns list of errors (empty if valid)."""
     plugin_dir = Path(plugin_path)
@@ -34,7 +38,7 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
         errors.append("Missing pyproject.toml")
     else:
         try:
-            data = tomllib.loads(manifest.read_text())
+            data = tomllib.loads(_read_text(manifest))
             lf = data.get("tool", {}).get("lichtfeld", {})
             if not lf:
                 errors.append("pyproject.toml: missing [tool.lichtfeld] section")
@@ -64,7 +68,7 @@ def validate_plugin(plugin_path: str | Path) -> list[str]:
     if not init_py.exists():
         errors.append("Missing __init__.py")
     else:
-        content = init_py.read_text()
+        content = _read_text(init_py)
         if "def on_load" not in content:
             errors.append("Missing on_load() function")
         if "def on_unload" not in content:
@@ -82,7 +86,7 @@ def _check_venv(plugin_dir: Path) -> list[str]:
     venv = plugin_dir / ".venv"
 
     has_deps = (plugin_dir / "pyproject.toml").exists() and \
-        any((plugin_dir / "pyproject.toml").read_text().find(s) >= 0
+        any(_read_text(plugin_dir / "pyproject.toml").find(s) >= 0
             for s in ("dependencies",))
 
     if not venv.exists():
@@ -109,11 +113,13 @@ def _check_venv(plugin_dir: Path) -> list[str]:
 def _check_panel_assets(plugin_dir: Path) -> list[str]:
     errors = []
     for py_file in plugin_dir.rglob("*.py"):
+        if ".venv" in py_file.parts:
+            continue
         if py_file.name == "__init__.py":
             continue
 
         try:
-            module = ast.parse(py_file.read_text(), filename=str(py_file))
+            module = ast.parse(_read_text(py_file), filename=str(py_file))
         except SyntaxError:
             continue
 
@@ -220,7 +226,7 @@ def _resolve_template_path(plugin_dir: Path, panel_dir: Path, template_ref: Path
 
 def _check_rml_links(plugin_dir: Path, template_path: Path) -> list[str]:
     errors = []
-    text = template_path.read_text()
+    text = _read_text(template_path)
     for href in re.findall(r'<link[^>]+type="text/rcss"[^>]+href="([^"]+)"', text):
         asset_path = template_path.parent / href
         if not asset_path.exists():

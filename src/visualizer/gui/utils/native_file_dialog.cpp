@@ -7,12 +7,14 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "io/formats/colmap.hpp"
+#include "io/video/video_extensions.hpp"
 
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_video.h>
 #include <nfd.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -244,6 +246,15 @@ namespace lfs::vis::gui {
                    message.find("response code 2") != std::string_view::npos;
         }
 
+#ifndef __linux__
+        void warnUnsupportedDialogTitleOnce() {
+            static std::once_flag flag;
+            std::call_once(flag, []() {
+                LOG_WARN("Custom native file-dialog titles are unavailable on this platform");
+            });
+        }
+#endif
+
         class FilterListStorage {
         public:
             explicit FilterListStorage(const std::vector<DialogFilter>& filters) {
@@ -427,7 +438,7 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::vector<DialogFilter> pointCloudFilters() {
-            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".spz", ".rad", ".usd", ".usda", ".usdc", ".usdz"})};
+            return {makeFilter("Point Cloud Files", {".ply", ".sog", ".ssog", ".spz", ".rad", ".usd", ".usda", ".usdc", ".usdz"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> meshFilters() {
@@ -441,6 +452,13 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::vector<DialogFilter> ppispFilters() {
             return {makeFilter("PPISP Sidecar Files", {".ppisp"})};
+        }
+
+        // Native NFD/GTK filters are extension-only and cannot exclude
+        // *.tmp.licht. Unpublished picks are rejected later by
+        // ProjectLifecycle::normalizedProjectPath / isPublishedLichtPath.
+        [[nodiscard]] std::vector<DialogFilter> projectFilters() {
+            return {makeFilter("LichtFeld Projects", {".licht"})};
         }
 
         [[nodiscard]] std::vector<DialogFilter> jsonFilters() {
@@ -468,7 +486,11 @@ namespace lfs::vis::gui {
         }
 
         [[nodiscard]] std::vector<DialogFilter> videoFilters() {
-            return {makeFilter("Video Files", {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})};
+            std::vector<std::string> extensions;
+            extensions.reserve(lfs::io::video::kSupportedVideoExtensions.size());
+            for (const std::string_view ext : lfs::io::video::kSupportedVideoExtensions)
+                extensions.emplace_back(ext);
+            return {makeFilter("Video Files", std::move(extensions))};
         }
 
         [[nodiscard]] std::vector<DialogFilter> pythonFilters() {
@@ -482,29 +504,26 @@ namespace lfs::vis::gui {
         }
 
 #ifdef __linux__
-        // Direct GTK folder picker, used instead of NFD's SELECT_FOLDER on
-        // Linux. NFD returns `gtk_file_chooser_get_filename()`, which is the
-        // highlighted child in the listing; users expect "save into the
-        // folder that's open in the picker", which is what
-        // `gtk_file_chooser_get_current_folder()` returns. We initialize
-        // GTK through NFD_Init (idempotent gtk_init_check) so SetDialog
-        // entry points all converge on the same backend init.
-        [[nodiscard]] std::filesystem::path runLinuxGtkFolderPicker(
+        [[nodiscard]] std::filesystem::path runLinuxGtkPathPicker(
             const std::filesystem::path& defaultDirectory,
-            const char* title) {
+            const char* title,
+            const GtkFileChooserAction action,
+            const bool returnCurrentFolder) {
             if (!ensureDialogBackendInitialized()) {
                 return {};
             }
 
+            const char* const acceptLabel =
+                action == GTK_FILE_CHOOSER_ACTION_OPEN ? "_Open" : "_Select";
             GtkWidget* const dialog = gtk_file_chooser_dialog_new(
                 title,
                 nullptr,
-                GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                action,
                 "_Cancel", GTK_RESPONSE_CANCEL,
-                "_Select", GTK_RESPONSE_ACCEPT,
+                acceptLabel, GTK_RESPONSE_ACCEPT,
                 nullptr);
             if (dialog == nullptr) {
-                LOG_ERROR("Failed to construct GTK folder chooser dialog");
+                LOG_ERROR("Failed to construct GTK file chooser dialog");
                 return {};
             }
 
@@ -515,11 +534,13 @@ namespace lfs::vis::gui {
 
             std::filesystem::path result;
             if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-                if (gchar* const current =
-                        gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(dialog));
-                    current != nullptr) {
-                    result = lfs::core::utf8_to_path(current);
-                    g_free(current);
+                gchar* selected =
+                    returnCurrentFolder
+                        ? gtk_file_chooser_get_current_folder(GTK_FILE_CHOOSER(dialog))
+                        : gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+                if (selected != nullptr) {
+                    result = lfs::core::utf8_to_path(selected);
+                    g_free(selected);
                 }
             }
 
@@ -531,9 +552,22 @@ namespace lfs::vis::gui {
             }
             return result;
         }
+
+        // The COLMAP export picker selects the directory currently being
+        // browsed, rather than a highlighted child inside that directory.
+        [[nodiscard]] std::filesystem::path runLinuxGtkFolderPicker(
+            const std::filesystem::path& defaultDirectory,
+            const char* title) {
+            return runLinuxGtkPathPicker(
+                defaultDirectory, title, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, true);
+        }
 #endif
 
     } // namespace
+
+    void warmupNativeFileDialogBackend() {
+        (void)ensureDialogBackendInitialized();
+    }
 
     std::filesystem::path OpenImageFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
@@ -547,7 +581,35 @@ namespace lfs::vis::gui {
         return result;
     }
 
-    std::filesystem::path PickFolderDialog(const std::filesystem::path& defaultPath) {
+    std::filesystem::path OpenFileDialog(const std::filesystem::path& defaultPath,
+                                         const std::string& dialogTitle) {
+#ifdef __linux__
+        if (!dialogTitle.empty()) {
+            return runLinuxGtkPathPicker(
+                normalizeDefaultDirectory(defaultPath), dialogTitle.c_str(),
+                GTK_FILE_CHOOSER_ACTION_OPEN, false);
+        }
+#else
+        if (!dialogTitle.empty())
+            warnUnsupportedDialogTitleOnce();
+#endif
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest({}, defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path PickFolderDialog(const std::filesystem::path& defaultPath,
+                                           const std::string& dialogTitle) {
+#ifdef __linux__
+        if (!dialogTitle.empty()) {
+            return runLinuxGtkPathPicker(
+                normalizeDefaultDirectory(defaultPath), dialogTitle.c_str(),
+                GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, false);
+        }
+#else
+        if (!dialogTitle.empty())
+            warnUnsupportedDialogTitleOnce();
+#endif
         std::filesystem::path result;
         runDialog(makePickFolderRequest(defaultPath), result);
         return result;
@@ -574,6 +636,13 @@ namespace lfs::vis::gui {
     std::filesystem::path OpenPPISPFileDialog(const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeOpenFileRequest(ppispFilters(), defaultPath), result);
+        return result;
+    }
+
+    std::filesystem::path OpenProjectFileDialog(const std::filesystem::path& defaultPath) {
+        // Filter stays {".licht"}; unpublished temps are rejected after pick.
+        std::filesystem::path result;
+        runDialog(makeOpenFileRequest(projectFilters(), defaultPath), result);
         return result;
     }
 
@@ -710,6 +779,16 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::filesystem::path SaveSsogFileDialog(const std::string& defaultName) {
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(singleExtensionFilter("SSOG Files", ".ssog"),
+                                      {},
+                                      defaultName,
+                                      ".ssog"),
+                  result);
+        return result;
+    }
+
     std::filesystem::path SaveSpzFileDialog(const std::string& defaultName,
                                             const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
@@ -780,6 +859,14 @@ namespace lfs::vis::gui {
                                                const std::filesystem::path& defaultPath) {
         std::filesystem::path result;
         runDialog(makeSaveFileRequest(pythonFilters(), defaultPath, defaultName, ".py"), result);
+        return result;
+    }
+
+    std::filesystem::path SaveProjectFileDialog(const std::string& defaultName,
+                                                const std::filesystem::path& defaultPath) {
+        // Filter stays {".licht"}; unpublished temps are rejected after pick.
+        std::filesystem::path result;
+        runDialog(makeSaveFileRequest(projectFilters(), defaultPath, defaultName, ".licht"), result);
         return result;
     }
 

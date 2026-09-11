@@ -62,7 +62,6 @@ body {
 }
 
 #pip-preview-window {
-    width: 336dp;
     padding: 4dp;
     pointer-events: none;
 }
@@ -79,8 +78,6 @@ body {
 
 #pip-preview-image {
     display: block;
-    width: 320dp;
-    height: 180dp;
 }
 
 .kf-edit-header {

@@ -4,9 +4,9 @@
 
 #include "scene_ops.hpp"
 
+#include "core/property_registry.hpp"
 #include "core/services.hpp"
 #include "operator/operator_registry.hpp"
-#include "operator/property_schema.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -14,16 +14,6 @@
 namespace lfs::vis::op {
 
     namespace {
-
-        PropertySchema make_schema(std::string name, std::string description, PropertyType type,
-                                   std::optional<int> size = std::nullopt) {
-            PropertySchema schema{};
-            schema.name = std::move(name);
-            schema.description = std::move(description);
-            schema.type = type;
-            schema.size = size;
-            return schema;
-        }
 
         std::optional<std::string> optional_node_prop(const OperatorProperties* props) {
             if (!props) {
@@ -77,100 +67,92 @@ namespace lfs::vis::op {
         }
 
         void register_scene_schemas() {
-            auto selection_mode_schema = make_schema(
-                "mode", "Selection update mode", PropertyType::ENUM);
-            selection_mode_schema.enum_items = {
-                {"replace", "Replace", "Replace the current node selection"},
-                {"add", "Add", "Add this node to the current node selection"},
-            };
-
-            propertySchemas().registerSchema(SelectionClearOperator::DESCRIPTOR.id(), {});
-            propertySchemas().registerSchema(
+            auto& properties = core::prop::PropertyRegistry::instance();
+            properties.register_operator_args(SelectionClearOperator::DESCRIPTOR.id(), {});
+            properties.register_operator_args(
                 SceneSelectNodeOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("name", "Node name to select", PropertyType::STRING),
-                    selection_mode_schema,
+                    core::prop::arg_string("name", "Node name to select"),
+                    core::prop::arg_enum(
+                        "mode", "Selection update mode",
+                        {
+                            {.name = "Replace", .identifier = "replace", .value = 0},
+                            {.name = "Add", .identifier = "add", .value = 1},
+                        }),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 CropBoxAddOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional splat or pointcloud node name; defaults to the current selected node",
-                                PropertyType::STRING),
+                    core::prop::arg_string("node", "Optional splat or pointcloud node name; defaults to the current selected node"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 CropBoxSetOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional crop box node or parent node name; defaults to the current selected crop box",
-                                PropertyType::STRING),
-                    make_schema("min", "Optional local minimum bounds", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("max", "Optional local maximum bounds", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("translation", "Optional local XYZ translation", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("rotation", "Optional local XYZ Euler rotation in radians", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("scale", "Optional local XYZ scale", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("inverse", "Invert the crop volume", PropertyType::BOOL),
-                    make_schema("enabled", "Enable crop filtering for this crop box", PropertyType::BOOL),
-                    make_schema("show", "Show crop boxes in the viewport", PropertyType::BOOL),
-                    make_schema("use", "Use crop box filtering in rendering", PropertyType::BOOL),
+                    core::prop::arg_string("node", "Optional crop box node or parent node name; defaults to the current selected crop box"),
+                    core::prop::arg_float_vector("min", "Optional local minimum bounds", 3),
+                    core::prop::arg_float_vector("max", "Optional local maximum bounds", 3),
+                    core::prop::arg_float_vector("translation", "Optional local XYZ translation", 3),
+                    core::prop::arg_float_vector("rotation", "Optional local XYZ Euler rotation in radians", 3),
+                    core::prop::arg_float_vector("scale", "Optional local XYZ scale", 3),
+                    core::prop::arg_bool("inverse", "Invert the crop volume"),
+                    core::prop::arg_bool("enabled", "Enable crop filtering for this crop box"),
+                    core::prop::arg_bool("show", "Show crop boxes in the viewport"),
+                    core::prop::arg_bool("use", "Use crop box filtering in rendering"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 CropBoxFitOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional crop box node or parent node name; defaults to the current selected crop box",
-                                PropertyType::STRING),
-                    make_schema("use_percentile", "Use percentile bounds instead of strict min/max", PropertyType::BOOL),
+                    core::prop::arg_string("node", "Optional crop box node or parent node name; defaults to the current selected crop box"),
+                    core::prop::arg_bool("use_percentile", "Use percentile bounds instead of strict min/max"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 CropBoxResetOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional crop box node or parent node name; defaults to the current selected crop box",
-                                PropertyType::STRING),
+                    core::prop::arg_string("node", "Optional crop box node or parent node name; defaults to the current selected crop box"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 EllipsoidAddOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional splat or pointcloud node name; defaults to the current selected node",
-                                PropertyType::STRING),
+                    core::prop::arg_string("node", "Optional splat or pointcloud node name; defaults to the current selected node"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 EllipsoidSetOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid",
-                                PropertyType::STRING),
-                    make_schema("radii", "Optional ellipsoid radii", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("translation", "Optional local XYZ translation", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("rotation", "Optional local XYZ Euler rotation in radians", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("scale", "Optional local XYZ scale", PropertyType::FLOAT_VECTOR, 3),
-                    make_schema("inverse", "Invert the ellipsoid selection volume", PropertyType::BOOL),
-                    make_schema("enabled", "Enable ellipsoid filtering for this helper", PropertyType::BOOL),
-                    make_schema("show", "Show ellipsoids in the viewport", PropertyType::BOOL),
-                    make_schema("use", "Use ellipsoid filtering in rendering", PropertyType::BOOL),
+                    core::prop::arg_string("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"),
+                    core::prop::arg_float_vector("radii", "Optional ellipsoid radii", 3),
+                    core::prop::arg_float_vector("translation", "Optional local XYZ translation", 3),
+                    core::prop::arg_float_vector("rotation", "Optional local XYZ Euler rotation in radians", 3),
+                    core::prop::arg_float_vector("scale", "Optional local XYZ scale", 3),
+                    core::prop::arg_bool("inverse", "Invert the ellipsoid selection volume"),
+                    core::prop::arg_bool("enabled", "Enable ellipsoid filtering for this helper"),
+                    core::prop::arg_bool("show", "Show ellipsoids in the viewport"),
+                    core::prop::arg_bool("use", "Use ellipsoid filtering in rendering"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 EllipsoidFitOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid",
-                                PropertyType::STRING),
-                    make_schema("use_percentile", "Use percentile bounds instead of strict min/max", PropertyType::BOOL),
+                    core::prop::arg_string("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"),
+                    core::prop::arg_bool("use_percentile", "Use percentile bounds instead of strict min/max"),
                 });
-            propertySchemas().registerSchema(
+            properties.register_operator_args(
                 EllipsoidResetOperator::DESCRIPTOR.id(),
                 {
-                    make_schema("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid",
-                                PropertyType::STRING),
+                    core::prop::arg_string("node", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"),
                 });
         }
 
         void unregister_scene_schemas() {
-            propertySchemas().unregisterSchema(SelectionClearOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(SceneSelectNodeOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(CropBoxAddOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(CropBoxSetOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(CropBoxFitOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(CropBoxResetOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(EllipsoidAddOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(EllipsoidSetOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(EllipsoidFitOperator::DESCRIPTOR.id());
-            propertySchemas().unregisterSchema(EllipsoidResetOperator::DESCRIPTOR.id());
+            auto& properties = core::prop::PropertyRegistry::instance();
+            properties.unregister_operator_args(SelectionClearOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(SceneSelectNodeOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(CropBoxAddOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(CropBoxSetOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(CropBoxFitOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(CropBoxResetOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(EllipsoidAddOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(EllipsoidSetOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(EllipsoidFitOperator::DESCRIPTOR.id());
+            properties.unregister_operator_args(EllipsoidResetOperator::DESCRIPTOR.id());
         }
 
     } // namespace

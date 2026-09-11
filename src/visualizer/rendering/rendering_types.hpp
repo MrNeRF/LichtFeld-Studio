@@ -39,6 +39,12 @@ namespace lfs::vis {
         IndependentDual
     };
 
+    enum class GTComparisonMode {
+        RGB = 0,
+        Normal = 1,
+        Depth = 2,
+    };
+
     enum class SplitViewPanelId : uint8_t {
         Left = 0,
         Right = 1
@@ -70,6 +76,19 @@ namespace lfs::vis {
 
     [[nodiscard]] inline bool splitViewUsesIndependentPanels(const SplitViewMode mode) {
         return mode == SplitViewMode::IndependentDual;
+    }
+
+    [[nodiscard]] inline float effectiveSceneRenderScale(
+        const float base_scale,
+        const float upscaler_scale,
+        const bool reconstruction_enabled) {
+        const float base = std::isfinite(base_scale) ? std::clamp(base_scale, 0.25f, 1.0f) : 1.0f;
+        if (!reconstruction_enabled)
+            return base;
+        const float reconstruction = std::isfinite(upscaler_scale)
+                                         ? std::clamp(upscaler_scale, 0.25f, 1.0f)
+                                         : 1.0f;
+        return std::clamp(base * reconstruction, 0.25f, 1.0f);
     }
 
     struct SplitViewPanelLayout {
@@ -113,12 +132,70 @@ namespace lfs::vis {
         }};
     };
 
+    struct PlyComparisonPanelLayout {
+        SplitViewPanelLayout panel;
+        // Maps full-viewport UVs into the panel render target. The render target
+        // includes a margin around the cached splitter position.
+        glm::vec2 texcoord_scale{1.0f, 1.0f};
+        glm::vec2 texcoord_offset{0.0f, 0.0f};
+    };
+
+    inline constexpr float PLY_COMPARISON_SPLITTER_MARGIN_FRACTION = 0.125f;
+
+    [[nodiscard]] inline std::array<PlyComparisonPanelLayout, 2>
+    makePlyComparisonPanelLayouts(const int total_width, const float split_position) {
+        const int divider_x = splitViewDividerPixel(total_width, split_position);
+        const int margin = std::clamp(
+            static_cast<int>(std::lround(static_cast<float>(std::max(total_width, 0)) *
+                                         PLY_COMPARISON_SPLITTER_MARGIN_FRACTION)),
+            0,
+            std::max(total_width, 0));
+        const int left_render_width = std::min(total_width, divider_x + margin);
+        const int right_render_x = std::max(0, divider_x - margin);
+        const int right_render_width = std::max(total_width - right_render_x, 0);
+        const auto normalized = [total_width](const int x) {
+            return total_width > 0 ? static_cast<float>(x) / static_cast<float>(total_width) : 0.0f;
+        };
+        const auto scale = [total_width](const int width) {
+            return width > 0 ? static_cast<float>(total_width) / static_cast<float>(width) : 1.0f;
+        };
+        return {{
+            {.panel = {.panel = SplitViewPanelId::Left,
+                       .x = 0,
+                       .width = std::max(left_render_width, 0),
+                       .start_position = 0.0f,
+                       .end_position = normalized(left_render_width)},
+             .texcoord_scale = {scale(left_render_width), 1.0f},
+             .texcoord_offset = {0.0f, 0.0f}},
+            {.panel = {.panel = SplitViewPanelId::Right,
+                       .x = right_render_x,
+                       .width = right_render_width,
+                       .start_position = normalized(right_render_x),
+                       .end_position = 1.0f},
+             .texcoord_scale = {scale(right_render_width), 1.0f},
+             .texcoord_offset = {-normalized(right_render_x) * scale(right_render_width), 0.0f}},
+        }};
+    }
+
+    [[nodiscard]] inline bool plyComparisonSplitterWithinMargin(
+        const int total_width, const float cached_split_position, const float current_split_position) {
+        if (total_width <= 0) {
+            return false;
+        }
+        const int margin = static_cast<int>(std::lround(
+            static_cast<float>(total_width) * PLY_COMPARISON_SPLITTER_MARGIN_FRACTION));
+        return std::abs(static_cast<float>(splitViewDividerPixel(total_width, cached_split_position) -
+                                           splitViewDividerPixel(total_width, current_split_position))) <= margin;
+    }
+
     enum class SelectionPreviewMode {
         Centers,
         Rectangle,
         Polygon,
         Lasso,
         Rings,
+        Box,
+        Sphere,
         Color
     };
 
@@ -173,6 +250,9 @@ namespace lfs::vis {
         bool mip_filter = false;
         int sh_degree = 3;
         float render_scale = 1.0f; // Viewer resolution scale (0.25-1.0), does not affect training
+        std::string scene_upscaler = "native";
+        std::string scene_upscaler_preset = "native";
+        float scene_upscaler_scale = 1.0f;
         CameraMetricsMode camera_metrics_mode = CameraMetricsMode::Off;
 
         // Crop box (data stored in scene graph CropBoxData, these are UI toggles only)
@@ -182,7 +262,7 @@ namespace lfs::vis {
         bool show_ellipsoid = false;
         bool use_ellipsoid = false;
         bool desaturate_unselected = false;     // Desaturate unselected PLYs when one is selected
-        bool desaturate_cropping = true;        // Desaturate outside crop box/ellipsoid instead of hiding
+        bool desaturate_cropping = false;       // Desaturate outside crop box/ellipsoid instead of hiding
         bool hide_outside_depth_box = false;    // Hide gaussians outside the selection depth box
         bool crop_filter_for_selection = false; // Use crop box/ellipsoid as selection filter
 
@@ -230,6 +310,7 @@ namespace lfs::vis {
 
         // Split view
         SplitViewMode split_view_mode = SplitViewMode::Disabled;
+        GTComparisonMode gt_comparison_mode = GTComparisonMode::RGB;
         float split_position = 0.5f;
         size_t split_view_offset = 0;
 
@@ -312,6 +393,18 @@ namespace lfs::vis {
         }
     }
 
+    inline void sanitizeGTComparisonSettings(RenderSettings& settings) {
+        switch (settings.gt_comparison_mode) {
+        case GTComparisonMode::RGB:
+        case GTComparisonMode::Normal:
+        case GTComparisonMode::Depth:
+            break;
+        default:
+            settings.gt_comparison_mode = GTComparisonMode::RGB;
+            break;
+        }
+    }
+
     inline void enforceProjectionBackend(RenderSettings& settings) {
         if (!settings.equirectangular) {
             return;
@@ -337,6 +430,8 @@ namespace lfs::vis {
         std::string detail_label;
         std::string left_name;
         std::string right_name;
+
+        [[nodiscard]] friend bool operator==(const SplitViewInfo&, const SplitViewInfo&) = default;
     };
 
     struct ViewportRegion {

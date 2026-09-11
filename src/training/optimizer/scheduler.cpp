@@ -5,6 +5,8 @@
 #include "scheduler.hpp"
 #include "adam_optimizer.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/tensor_serialization.hpp"
+#include <array>
 #include <cmath>
 #include <string>
 #include <unordered_map>
@@ -173,9 +175,9 @@ namespace lfs::training {
     }
 
     void ExponentialLR::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "scheduler magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "scheduler version");
 
         if (magic != SCHED_EXPONENTIAL_MAGIC) {
             throw std::runtime_error("Invalid ExponentialLR checkpoint: wrong magic");
@@ -184,18 +186,38 @@ namespace lfs::training {
             throw std::runtime_error("Unsupported ExponentialLR checkpoint version");
         }
 
-        is.read(reinterpret_cast<char*>(&gamma_), sizeof(gamma_));
+        double gamma = 0.0;
+        lfs::core::serialization_detail::read_exact(is, &gamma, sizeof(gamma), "scheduler gamma");
+        if (!std::isfinite(gamma) || gamma <= 0.0)
+            throw std::runtime_error("Invalid ExponentialLR checkpoint: gamma must be finite and positive");
 
-        uint32_t num_params;
-        is.read(reinterpret_cast<char*>(&num_params), sizeof(num_params));
-        params_to_update_.resize(num_params);
+        uint32_t num_params = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &num_params, sizeof(num_params), "scheduler parameter count");
+        if (num_params > AdamOptimizer::all_param_types().size())
+            throw std::runtime_error("Invalid ExponentialLR checkpoint: too many parameters");
+        std::vector<ParamType> params_to_update;
+        params_to_update.reserve(num_params);
+        std::array<bool, 6> seen{};
         for (uint32_t i = 0; i < num_params; ++i) {
-            uint8_t param_val;
-            is.read(reinterpret_cast<char*>(&param_val), sizeof(param_val));
-            params_to_update_[i] = static_cast<ParamType>(param_val);
+            uint8_t param_val = 0;
+            lfs::core::serialization_detail::read_exact(
+                is, &param_val, sizeof(param_val), "scheduler parameter id");
+            if (param_val >= seen.size() || seen[param_val])
+                throw std::runtime_error("Invalid ExponentialLR checkpoint: invalid parameter id");
+            seen[param_val] = true;
+            params_to_update.push_back(static_cast<ParamType>(param_val));
         }
 
+        gamma_ = gamma;
+        params_to_update_ = std::move(params_to_update);
+
         LOG_DEBUG("Deserialized ExponentialLR: gamma={}", gamma_);
+    }
+
+    void ExponentialLR::adopt_checkpoint_state(ExponentialLR& loaded) noexcept {
+        std::swap(gamma_, loaded.gamma_);
+        params_to_update_.swap(loaded.params_to_update_);
     }
 
     void WarmupExponentialLR::serialize(std::ostream& os) const {
@@ -221,9 +243,9 @@ namespace lfs::training {
     }
 
     void WarmupExponentialLR::deserialize(std::istream& is) {
-        uint32_t magic, version;
-        is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-        is.read(reinterpret_cast<char*>(&version), sizeof(version));
+        uint32_t magic = 0, version = 0;
+        lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "warmup scheduler magic");
+        lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "warmup scheduler version");
 
         if (magic != SCHED_WARMUP_MAGIC) {
             throw std::runtime_error("Invalid WarmupExponentialLR checkpoint: wrong magic");
@@ -232,22 +254,61 @@ namespace lfs::training {
             throw std::runtime_error("Unsupported WarmupExponentialLR checkpoint version");
         }
 
-        is.read(reinterpret_cast<char*>(&gamma_), sizeof(gamma_));
-        is.read(reinterpret_cast<char*>(&warmup_steps_), sizeof(warmup_steps_));
-        is.read(reinterpret_cast<char*>(&warmup_start_factor_), sizeof(warmup_start_factor_));
-        is.read(reinterpret_cast<char*>(&current_step_), sizeof(current_step_));
-        is.read(reinterpret_cast<char*>(&initial_lr_), sizeof(initial_lr_));
-
-        uint32_t num_params;
-        is.read(reinterpret_cast<char*>(&num_params), sizeof(num_params));
-        params_to_update_.resize(num_params);
-        for (uint32_t i = 0; i < num_params; ++i) {
-            uint8_t param_val;
-            is.read(reinterpret_cast<char*>(&param_val), sizeof(param_val));
-            params_to_update_[i] = static_cast<ParamType>(param_val);
+        double gamma = 0.0;
+        int warmup_steps = 0;
+        double warmup_start_factor = 0.0;
+        int current_step = 0;
+        double initial_lr = 0.0;
+        lfs::core::serialization_detail::read_exact(is, &gamma, sizeof(gamma), "warmup scheduler gamma");
+        lfs::core::serialization_detail::read_exact(
+            is, &warmup_steps, sizeof(warmup_steps), "warmup scheduler warmup steps");
+        lfs::core::serialization_detail::read_exact(
+            is, &warmup_start_factor, sizeof(warmup_start_factor), "warmup scheduler start factor");
+        lfs::core::serialization_detail::read_exact(
+            is, &current_step, sizeof(current_step), "warmup scheduler current step");
+        lfs::core::serialization_detail::read_exact(
+            is, &initial_lr, sizeof(initial_lr), "warmup scheduler initial learning rate");
+        if (!std::isfinite(gamma) || gamma <= 0.0 || warmup_steps < 0 || current_step < 0 ||
+            !std::isfinite(warmup_start_factor) || warmup_start_factor < 0.0 ||
+            !std::isfinite(initial_lr) || initial_lr < 0.0) {
+            throw std::runtime_error("Invalid WarmupExponentialLR checkpoint state");
         }
 
+        uint32_t num_params = 0;
+        lfs::core::serialization_detail::read_exact(
+            is, &num_params, sizeof(num_params), "warmup scheduler parameter count");
+        if (num_params > AdamOptimizer::all_param_types().size())
+            throw std::runtime_error("Invalid WarmupExponentialLR checkpoint: too many parameters");
+        std::vector<ParamType> params_to_update;
+        params_to_update.reserve(num_params);
+        std::array<bool, 6> seen{};
+        for (uint32_t i = 0; i < num_params; ++i) {
+            uint8_t param_val = 0;
+            lfs::core::serialization_detail::read_exact(
+                is, &param_val, sizeof(param_val), "warmup scheduler parameter id");
+            if (param_val >= seen.size() || seen[param_val])
+                throw std::runtime_error("Invalid WarmupExponentialLR checkpoint: invalid parameter id");
+            seen[param_val] = true;
+            params_to_update.push_back(static_cast<ParamType>(param_val));
+        }
+
+        gamma_ = gamma;
+        warmup_steps_ = warmup_steps;
+        warmup_start_factor_ = warmup_start_factor;
+        current_step_ = current_step;
+        initial_lr_ = initial_lr;
+        params_to_update_ = std::move(params_to_update);
+
         LOG_DEBUG("Deserialized WarmupExponentialLR: step={}, initial_lr={}", current_step_, initial_lr_);
+    }
+
+    void WarmupExponentialLR::adopt_checkpoint_state(WarmupExponentialLR& loaded) noexcept {
+        std::swap(gamma_, loaded.gamma_);
+        std::swap(warmup_steps_, loaded.warmup_steps_);
+        std::swap(warmup_start_factor_, loaded.warmup_start_factor_);
+        std::swap(current_step_, loaded.current_step_);
+        std::swap(initial_lr_, loaded.initial_lr_);
+        params_to_update_.swap(loaded.params_to_update_);
     }
 
 } // namespace lfs::training

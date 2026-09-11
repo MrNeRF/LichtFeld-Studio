@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/property_registry.hpp"
+#include "core/provenance.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
@@ -23,20 +24,23 @@
 #include "scene/scene_render_state.hpp"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/post_work_utils.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/viewport_appearance_correction.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <expected>
 #include <filesystem>
-#include <future>
+#include <functional>
 #include <numbers>
+#include <optional>
 #include <variant>
 
 #include <glm/glm.hpp>
@@ -52,7 +56,6 @@ namespace lfs::python {
         enum class PreviewReadback {
             FloatRgb,
             UInt8Rgb,
-            UInt8Rgba,
         };
 
         [[nodiscard]] std::optional<core::Tensor> viewportRenderImageHwc(
@@ -65,9 +68,8 @@ namespace lfs::python {
             const auto layout = rendering::detectImageLayout(image);
             if (layout == rendering::ImageLayout::Unknown)
                 return std::nullopt;
-            image = rendering::flipImageVertical(image, layout);
             if (layout == rendering::ImageLayout::CHW) {
-                image = image.permute({1, 2, 0});
+                image = rendering::flipImageVertical(image, layout).permute({1, 2, 0}).contiguous();
             } else {
                 image = image.contiguous();
             }
@@ -108,31 +110,11 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise = std::make_shared<std::promise<std::optional<vis::ViewportRender>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](std::optional<vis::ViewportRender> result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [invoke_capture, finish]() mutable {
-                        finish(invoke_capture());
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_capture,
+                []() -> std::optional<vis::ViewportRender> { return std::nullopt; });
         }
 
         [[nodiscard]] core::PointCloud pointCloudFromMesh(const core::MeshData& mesh) {
@@ -392,31 +374,11 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise = std::make_shared<std::promise<std::optional<core::Tensor>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](std::optional<core::Tensor> result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [path, width, height, focal_length_mm, rotation, translation, finish]() mutable {
-                        finish(renderAssetPreviewOnViewerThread(path, width, height, focal_length_mm, rotation, translation));
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_render,
+                []() -> std::optional<core::Tensor> { return std::nullopt; });
         }
 
         [[nodiscard]] std::optional<glm::mat3> tensorToVisualizerRotation(const PyTensor& py_tensor) {
@@ -499,17 +461,7 @@ namespace lfs::python {
             }
 
             std::shared_ptr<core::Tensor> image;
-            if (readback == PreviewReadback::UInt8Rgba) {
-                image = rendering_manager->renderPreviewImageRgba8(
-                    scene_manager,
-                    rotation,
-                    translation,
-                    lfs::rendering::vFovToFocalLength(fov_degrees),
-                    width,
-                    height,
-                    orthographic_override,
-                    ortho_scale_override);
-            } else if (readback == PreviewReadback::UInt8Rgb) {
+            if (readback == PreviewReadback::UInt8Rgb) {
                 image = rendering_manager->renderPreviewImageRgb8(
                     scene_manager,
                     rotation,
@@ -572,49 +524,11 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise = std::make_shared<std::promise<std::optional<core::Tensor>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-
-            auto finish = [promise, completed](std::optional<core::Tensor> result) mutable {
-                if (!completed->exchange(true)) {
-                    promise->set_value(std::move(result));
-                }
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [rotation,
-                     translation,
-                     width,
-                     height,
-                     fov_degrees,
-                     readback,
-                     background_color_override,
-                     orthographic_override,
-                     ortho_scale_override,
-                     finish]() mutable {
-                        finish(renderViewOnViewerThread(
-                            rotation,
-                            translation,
-                            width,
-                            height,
-                            fov_degrees,
-                            readback,
-                            background_color_override,
-                            orthographic_override,
-                            ortho_scale_override));
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_render,
+                []() -> std::optional<core::Tensor> { return std::nullopt; });
         }
 
         [[nodiscard]] std::optional<std::pair<core::Tensor, core::Tensor>> renderViewAndDepthOnViewerThread(
@@ -675,32 +589,12 @@ namespace lfs::python {
                 return std::nullopt;
             }
 
-            auto promise =
-                std::make_shared<std::promise<std::optional<std::pair<core::Tensor, core::Tensor>>>>();
-            auto future = promise->get_future();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-            auto finish =
-                [promise, completed](std::optional<std::pair<core::Tensor, core::Tensor>> result) mutable {
-                    if (!completed->exchange(true)) {
-                        promise->set_value(std::move(result));
-                    }
-                };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [rotation, translation, width, height, fov_degrees, expected_depth, finish]() mutable {
-                        finish(renderViewAndDepthOnViewerThread(rotation, translation, width, height, fov_degrees, expected_depth));
-                    },
-                .cancel =
-                    [finish]() mutable {
-                        finish(std::nullopt);
-                    }});
-            if (!posted) {
-                return std::nullopt;
-            }
-
             nb::gil_scoped_release release;
-            return future.get();
+            using Result = std::optional<std::pair<core::Tensor, core::Tensor>>;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                invoke_render,
+                []() -> Result { return std::nullopt; });
         }
     } // namespace
 
@@ -730,7 +624,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Color3;
-            meta.default_vec3 = default_val;
+            meta.default_value = default_val;
             meta.min_value = 0.0;
             meta.max_value = 1.0;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
@@ -750,7 +644,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Bool;
-            meta.default_value = default_val ? 1.0 : 0.0;
+            meta.default_value = default_val;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->*member;
             };
@@ -787,7 +681,7 @@ namespace lfs::python {
             meta.description = desc;
             meta.type = PropType::Enum;
             meta.enum_items = items;
-            meta.default_enum = default_idx;
+            meta.default_value = static_cast<int64_t>(default_idx);
             meta.getter = [member, items](const PropertyObjectRef& ref) -> std::any {
                 int val = static_cast<const Proxy*>(ref.ptr)->*member;
                 for (const auto& item : items) {
@@ -821,7 +715,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::String;
-            meta.default_string = default_val;
+            meta.default_value = default_val;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->*member;
             };
@@ -879,7 +773,7 @@ namespace lfs::python {
         add_bool(&Proxy::desaturate_unselected, "desaturate_unselected", "Desaturate Unselected",
                  "Desaturate unselected PLYs when one is selected", false);
         add_bool(&Proxy::desaturate_cropping, "desaturate_cropping", "Desaturate Cropping",
-                 "Dim outside crop area instead of hiding", true);
+                 "Dim outside crop area instead of hiding", false);
         add_bool(&Proxy::hide_outside_depth_box, "hide_outside_depth_box", "Hide Outside Depth Box",
                  "Hide Gaussians outside the selection depth box", false);
 
@@ -895,6 +789,16 @@ namespace lfs::python {
                      2);
         add_bool(&Proxy::mip_filter, "mip_filter", "Mip Filter", "Enable mip-map filtering", false);
         add_float(&Proxy::render_scale, "render_scale", "Render Scale", "Render resolution scale", 1.0, 0.25, 1.0);
+        add_string(&Proxy::scene_upscaler,
+                   "scene_upscaler",
+                   "Scene Reconstruction",
+                   "Stable scene reconstruction backend identifier",
+                   "native");
+        add_string(&Proxy::scene_upscaler_preset,
+                   "scene_upscaler_preset",
+                   "Scene Reconstruction Preset",
+                   "Backend-specific scene reconstruction quality preset",
+                   "native");
         add_float(&Proxy::depth_view_min, "depth_view_min", "Depth Near", "Depth-map visualization near range",
                   lfs::rendering::DEFAULT_DEPTH_VIEW_MIN, 0.0, lfs::rendering::MAX_DEPTH_VIEW_DISTANCE);
         add_float(&Proxy::depth_view_max, "depth_view_max", "Depth Far", "Depth-map visualization far range",
@@ -903,6 +807,9 @@ namespace lfs::python {
         add_int_enum(&Proxy::depth_visualization_mode, "depth_visualization_mode", "Depth Mode",
                      "Depth-map visualization mode",
                      {{"Color", "palette", 0}, {"Gray", "gray", 1}}, 0);
+        add_int_enum(&Proxy::gt_comparison_mode, "gt_comparison_mode", "GT Compare",
+                     "Ground-truth comparison payload",
+                     {{"RGB", "rgb", 0}, {"Normal", "normal", 1}, {"Depth", "depth", 2}}, 0);
         add_int_enum(&Proxy::camera_metrics_mode, "camera_metrics_mode", "Camera Metrics",
                      "Compute metrics when jumping to a source camera",
                      {{"Off", "OFF", 0}, {"PSNR", "PSNR", 1}, {"PSNR + SSIM", "PSNR_SSIM", 2}}, 0);
@@ -964,7 +871,7 @@ namespace lfs::python {
             meta.name = name;
             meta.description = desc;
             meta.type = PropType::Bool;
-            meta.default_value = def ? 1.0 : 0.0;
+            meta.default_value = def;
             meta.getter = [member](const PropertyObjectRef& ref) -> std::any {
                 return static_cast<const Proxy*>(ref.ptr)->ppisp.*member;
             };
@@ -1029,6 +936,14 @@ namespace lfs::python {
                 static_cast<rendering::GaussianRasterBackend>(settings_.raster_backend));
         }
         vis::update_render_settings(settings_);
+        // update_render_settings may normalize dependent properties (for
+        // example the preset when switching scene reconstruction backends).
+        // Keep this Python proxy in lockstep with that applied state so the
+        // next property assignment cannot restore a stale, cross-backend
+        // preset.
+        if (const auto applied = vis::get_render_settings()) {
+            settings_ = *applied;
+        }
         request_redraw();
     }
 
@@ -1052,9 +967,9 @@ namespace lfs::python {
             case core::prop::PropType::Float: {
                 nb::object cls = props_module.attr("FloatProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<float>(meta.default_value),
-                    nb::arg("min") = static_cast<float>(meta.min_value),
-                    nb::arg("max") = static_cast<float>(meta.max_value),
+                    nb::arg("default") = static_cast<float>(std::get<double>(meta.default_value.value())),
+                    nb::arg("min") = static_cast<float>(meta.min_value.value()),
+                    nb::arg("max") = static_cast<float>(meta.max_value.value()),
                     nb::arg("step") = static_cast<float>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1063,9 +978,9 @@ namespace lfs::python {
             case core::prop::PropType::Int: {
                 nb::object cls = props_module.attr("IntProperty");
                 prop_obj = cls(
-                    nb::arg("default") = static_cast<int>(meta.default_value),
-                    nb::arg("min") = static_cast<int>(meta.min_value),
-                    nb::arg("max") = static_cast<int>(meta.max_value),
+                    nb::arg("default") = static_cast<int>(std::get<int64_t>(meta.default_value.value())),
+                    nb::arg("min") = static_cast<int>(meta.min_value.value()),
+                    nb::arg("max") = static_cast<int>(meta.max_value.value()),
                     nb::arg("step") = static_cast<int>(meta.step),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1074,7 +989,7 @@ namespace lfs::python {
             case core::prop::PropType::Bool: {
                 nb::object cls = props_module.attr("BoolProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_value != 0.0,
+                    nb::arg("default") = std::get<bool>(meta.default_value.value()),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -1082,7 +997,7 @@ namespace lfs::python {
             case core::prop::PropType::String: {
                 nb::object cls = props_module.attr("StringProperty");
                 prop_obj = cls(
-                    nb::arg("default") = meta.default_string,
+                    nb::arg("default") = std::get<std::string>(meta.default_value.value()),
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
                 break;
@@ -1094,7 +1009,7 @@ namespace lfs::python {
                 for (size_t i = 0; i < meta.enum_items.size(); ++i) {
                     const auto& item = meta.enum_items[i];
                     items.append(nb::make_tuple(item.identifier, item.name, ""));
-                    if (static_cast<int>(i) == meta.default_enum) {
+                    if (static_cast<int>(i) == std::get<int64_t>(meta.default_value.value())) {
                         default_id = item.identifier;
                     }
                 }
@@ -1109,14 +1024,15 @@ namespace lfs::python {
             case core::prop::PropType::Color3: {
                 nb::object cls = props_module.attr("FloatVectorProperty");
                 std::string subtype = (meta.type == core::prop::PropType::Color3) ? "COLOR" : "";
+                const auto& default_value = std::get<std::array<double, 3>>(meta.default_value.value());
                 prop_obj = cls(
                     nb::arg("default") = nb::make_tuple(
-                        static_cast<float>(meta.default_vec3[0]),
-                        static_cast<float>(meta.default_vec3[1]),
-                        static_cast<float>(meta.default_vec3[2])),
+                        static_cast<float>(default_value[0]),
+                        static_cast<float>(default_value[1]),
+                        static_cast<float>(default_value[2])),
                     nb::arg("size") = 3,
-                    nb::arg("min") = static_cast<float>(meta.min_value),
-                    nb::arg("max") = static_cast<float>(meta.max_value),
+                    nb::arg("min") = static_cast<float>(meta.min_value.value()),
+                    nb::arg("max") = static_cast<float>(meta.max_value.value()),
                     nb::arg("subtype") = subtype,
                     nb::arg("name") = meta.name,
                     nb::arg("description") = meta.description);
@@ -1226,7 +1142,7 @@ namespace lfs::python {
                 throw std::runtime_error("viewport export expected a 3D image tensor");
             }
             if (image.shape()[0] <= 4 && image.shape()[2] > 4) {
-                image = image.permute({1, 2, 0});
+                image = image.permute({1, 2, 0}).contiguous();
             }
             image = image.to(core::Device::CPU);
             if (image.dtype() != core::DataType::UInt8) {
@@ -1260,23 +1176,90 @@ namespace lfs::python {
             return toU8Hwc(std::move(*image));
         }
 
-        [[nodiscard]] core::Tensor renderCurrentViewRgba8(const vis::ViewInfo& view_info,
-                                                          const int width,
-                                                          const int height) {
-            auto image = renderViewThreadSafe(
-                viewInfoRotationMatrix(view_info),
-                glm::vec3{view_info.translation[0], view_info.translation[1], view_info.translation[2]},
-                width,
-                height,
-                view_info.fov,
-                PreviewReadback::UInt8Rgba,
-                std::nullopt,
-                view_info.orthographic,
-                scaledViewInfoOrthoScale(view_info, height));
-            if (!image || !image->is_valid()) {
-                throw std::runtime_error("transparent viewport export render failed");
+        using ExportImageResult = std::expected<core::Tensor, std::string>;
+
+        [[nodiscard]] ExportImageResult runExportOnViewerThread(
+            std::function<ExportImageResult()> invoke_render) {
+            auto* const viewer = get_visualizer();
+            if (!viewer || viewer->isOnViewerThread()) {
+                return invoke_render();
             }
-            return toU8Hwc(std::move(*image));
+            if (!viewer->acceptsPostedWork()) {
+                return std::unexpected("viewer is not accepting export work");
+            }
+
+            nb::gil_scoped_release release;
+            return vis::post_work_and_wait(
+                [viewer](vis::Visualizer::WorkItem work) { return viewer->postWork(std::move(work)); },
+                std::move(invoke_render),
+                []() -> ExportImageResult {
+                    return std::unexpected("viewport export was cancelled");
+                });
+        }
+
+        [[nodiscard]] core::Tensor renderCurrentViewExport(const vis::ViewInfo& view_info,
+                                                           const int width,
+                                                           const int height,
+                                                           const vis::ExportPostProcessMode mode) {
+            auto result = runExportOnViewerThread([&view_info, width, height, mode]() -> ExportImageResult {
+                auto* const viewer = get_visualizer();
+                auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+                auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                if (!rendering_manager || !scene_manager) {
+                    return std::unexpected("no active viewer is available");
+                }
+                const vis::RenderingManager::ExportImageRequest request{
+                    .rotation = viewInfoRotationMatrix(view_info),
+                    .translation = {view_info.translation[0],
+                                    view_info.translation[1],
+                                    view_info.translation[2]},
+                    .focal_length_mm = lfs::rendering::vFovToFocalLength(view_info.fov),
+                    .width = width,
+                    .height = height,
+                    .orthographic_override = view_info.orthographic,
+                    .ortho_scale_override = scaledViewInfoOrthoScale(view_info, height),
+                    .mode = mode,
+                };
+                return rendering_manager->renderExportImage(scene_manager, request);
+            });
+            if (!result) {
+                throw std::runtime_error("viewport export failed: " + result.error());
+            }
+            return std::move(*result);
+        }
+
+        // Post-process for images assembled outside renderExportImage (the BW2A
+        // transparent fallback): applies the same PPISP correction path.
+        [[nodiscard]] core::Tensor applyExportPostProcessThreadSafe(core::Tensor image,
+                                                                    const vis::ExportPostProcessMode mode) {
+            auto result = runExportOnViewerThread(
+                [image = std::move(image), mode]() mutable -> ExportImageResult {
+                    auto* const viewer = get_visualizer();
+                    auto* const rendering_manager = viewer ? viewer->getRenderingManager() : nullptr;
+                    auto* const scene_manager = viewer ? viewer->getSceneManager() : nullptr;
+                    if (!rendering_manager || !scene_manager) {
+                        return std::unexpected("no active viewer is available");
+                    }
+                    const auto view_info = viewInfoForPanelArg("main");
+                    const vis::ExportPostProcessView view{
+                        .rotation = view_info ? viewInfoRotationMatrix(*view_info) : glm::mat3{1.0f},
+                        .focal_length_mm =
+                            view_info ? lfs::rendering::vFovToFocalLength(view_info->fov) : 0.0f,
+                        .equirectangular_view = rendering_manager->getSettings().equirectangular,
+                        .controller_predict_size =
+                            view_info ? glm::ivec2{view_info->width, view_info->height} : glm::ivec2{0, 0},
+                    };
+                    return vis::applyExportPostProcess(std::move(image),
+                                                       scene_manager,
+                                                       rendering_manager->getSettings(),
+                                                       rendering_manager->getCurrentCameraId(),
+                                                       mode,
+                                                       view);
+                });
+            if (!result) {
+                throw std::runtime_error("viewport export post-process failed: " + result.error());
+            }
+            return std::move(*result);
         }
 
         [[nodiscard]] core::Tensor recoverAlphaRgba(core::Tensor black_rgb, core::Tensor white_rgb) {
@@ -1594,7 +1577,8 @@ namespace lfs::python {
                                    int width,
                                    int height,
                                    const bool transparent,
-                                   const int jpeg_quality) {
+                                   const int jpeg_quality,
+                                   const bool include_provenance) {
         auto output_path = core::utf8_to_path(path);
         const auto normalized_format = normalizeExportImageFormat(format, output_path);
         if (transparent && normalized_format != "png") {
@@ -1641,7 +1625,8 @@ namespace lfs::python {
 
             if (transparent) {
                 try {
-                    image = renderCurrentViewRgba8(*view_info, target_width, target_height);
+                    image = renderCurrentViewExport(
+                        *view_info, target_width, target_height, vis::ExportPostProcessMode::Transparent);
                 } catch (const std::exception& e) {
                     LOG_DEBUG("transparent viewport export direct RGBA render failed, falling back to BW2A: {}", e.what());
                     auto black = renderCurrentViewRgb8(
@@ -1654,14 +1639,30 @@ namespace lfs::python {
                         target_width,
                         target_height,
                         std::optional<glm::vec3>{glm::vec3{1.0f}});
-                    image = recoverAlphaRgba(std::move(black), std::move(white));
+                    image = applyExportPostProcessThreadSafe(
+                        recoverAlphaRgba(std::move(black), std::move(white)),
+                        vis::ExportPostProcessMode::Transparent);
                 }
             } else {
-                image = renderCurrentViewRgb8(*view_info, target_width, target_height, std::nullopt);
+                const auto render_settings = vis::get_render_settings();
+                const bool export_hdr_environment =
+                    render_settings &&
+                    render_settings->environment_mode ==
+                        static_cast<int>(vis::EnvironmentBackgroundMode::Equirectangular) &&
+                    !render_settings->environment_map_path.empty();
+                image = renderCurrentViewExport(
+                    *view_info,
+                    target_width,
+                    target_height,
+                    export_hdr_environment ? vis::ExportPostProcessMode::EnvironmentComposite
+                                           : vis::ExportPostProcessMode::Opaque);
             }
         }
 
-        core::save_image_u8(output_path, image, jpeg_quality);
+        const auto comment = core::provenance_to_json(
+            include_provenance ? core::make_provenance_stamp()
+                               : core::make_minimal_provenance_stamp());
+        core::save_image_u8(output_path, image, jpeg_quality, comment);
 
         nb::dict result;
         result["path"] = core::path_to_utf8(output_path);
@@ -1766,6 +1767,7 @@ namespace lfs::python {
               nb::arg("height") = 0,
               nb::arg("transparent") = false,
               nb::arg("jpeg_quality") = 95,
+              nb::arg("include_provenance") = true,
               R"doc(
 Export the active viewport image to PNG or JPEG.
 
@@ -1776,6 +1778,7 @@ Args:
     height: Target height in pixels. If both dimensions are zero, captures the current viewport.
     transparent: For PNG only, export straight RGBA from the preview renderer.
     jpeg_quality: JPEG compression quality in [1, 100].
+    include_provenance: When true, writes a full Comment stamp on PNG and JPEG; when false, a minimal build stamp is still embedded.
 
 Returns:
     Dict with path, width, height, channels, format, and transparent.

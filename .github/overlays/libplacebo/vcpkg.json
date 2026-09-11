@@ -1,0 +1,24 @@
+{
+  "name": "libplacebo",
+  "version": "7.360.1",
+  "description": "GPU-accelerated video rendering, color management, and HDR tone mapping library",
+  "homepage": "https://libplacebo.org/",
+  "license": "LGPL-2.1-or-later",
+  "supports": "(windows | linux) & !uwp & !xbox",
+  "dependencies": [
+    "shaderc",
+    "vulkan",
+    {
+      "name": "pkgconf",
+      "host": true
+    },
+    {
+      "name": "python3",
+      "host": true
+    },
+    {
+      "name": "vcpkg-tool-meson",
+      "host": true
+    }
+  ]
+}

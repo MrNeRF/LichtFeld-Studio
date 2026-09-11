@@ -17,9 +17,11 @@
 
 #include "thread_pool.h"
 #include "log.h"
+#include <cassert>
 #include <cstdlib>
 #include <imgproc/device_guard.h>
 #include <nvtx3/nvtx3.hpp>
+#include <optional>
 #include <utility>
 
 #ifdef _WIN32
@@ -58,11 +60,7 @@ namespace nvimgcodec {
     } // namespace
 
     ThreadPool::ThreadPool(int num_thread, int device_id, bool set_affinity, const char* name)
-        : threads_(num_thread),
-          running_(true),
-          work_complete_(true),
-          started_(false),
-          active_threads_(0) {
+        : threads_(num_thread), running_(true), work_complete_(true), started_(false), active_threads_(0) {
         if (num_thread == 0) {
             throw std::runtime_error("Thread pool must have non-zero size");
         }
@@ -81,7 +79,13 @@ namespace nvimgcodec {
         tl_errors_.resize(num_thread);
     }
 
+    // wait() has a throw site (std::runtime_error) gated on checkForErrors==true; we
+    // pass false here, so the throw is unreachable and the destructor stays effectively
+    // noexcept. Coverity cannot track parameter values across calls, so it conservatively
+    // reports the throw site as reachable from this noexcept context.
+    // coverity[exn_spec_violation : FALSE]
     ThreadPool::~ThreadPool() {
+        // coverity[fun_call_w_exception : FALSE]
         wait(false);
 
         {
@@ -91,7 +95,19 @@ namespace nvimgcodec {
         condition_.notify_all();
 
         for (auto& thread : threads_) {
-            thread.join();
+            // We never detach worker threads, so they must always be joinable here.
+            assert(thread.joinable());
+            try {
+                thread.join();
+            } catch (const std::exception& e) {
+                // thread.join() can throw std::system_error; log for diagnosability
+                // and swallow so we don't terminate the process from a destructor.
+                NVIMGCODEC_LOG_ERROR(Logger::get_default(),
+                                     "ThreadPool destructor: exception joining worker thread: " << e.what());
+            } catch (...) {
+                NVIMGCODEC_LOG_ERROR(Logger::get_default(),
+                                     "ThreadPool destructor: unknown exception joining worker thread");
+            }
         }
 #if NVML_ENABLED
         nvml::Shutdown();
@@ -154,8 +170,10 @@ namespace nvimgcodec {
 
     void ThreadPool::threadMain(int thread_id, int device_id, bool set_affinity, const std::string& name) {
         setThreadName(name.c_str());
+        // Worker tasks can call CUDA; keep the requested device current for the whole thread lifetime.
+        std::optional<DeviceGuard> device_guard;
         try {
-            DeviceGuard g(device_id);
+            device_guard.emplace(device_id);
 #if NVML_ENABLED
             if (set_affinity) {
                 const char* env_affinity = std::getenv("NVIMGCODEC_AFFINITY_MASK");
@@ -179,6 +197,11 @@ namespace nvimgcodec {
         } catch (...) {
             tl_errors_[thread_id].push("Caught unknown exception");
         }
+
+        // If DeviceGuard construction failed, the requested CUDA device is not current on this
+        // thread. Stop now instead of falling through to dequeue work without the right context.
+        if (!device_guard.has_value())
+            return;
 
         while (running_) {
             // Block on the condition to wait for work

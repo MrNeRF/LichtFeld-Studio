@@ -7,6 +7,7 @@
 #include "keyframe.hpp"
 
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <span>
 #include <string>
@@ -59,6 +60,8 @@ namespace lfs::sequencer {
 
         [[nodiscard]] bool saveToJson(const std::string& path) const;
         [[nodiscard]] bool loadFromJson(const std::string& path);
+        [[nodiscard]] nlohmann::json saveToJson() const;
+        [[nodiscard]] bool loadFromJson(const nlohmann::json& json);
 
         // ========== Multi-Track Animation Clip ==========
         void setAnimationClip(std::unique_ptr<AnimationClip> clip);

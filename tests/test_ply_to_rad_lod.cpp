@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/environment.hpp"
 #include "core/splat_data.hpp"
 #include "io/formats/rad.hpp"
 #include "io/ply_to_rad_lod.hpp"
@@ -420,12 +421,12 @@ TEST(PlyToRadLod, OutOfCoreLoadKeepsTreeAndStreamsChunks) {
 // Gated validation for real converted files (huge inputs):
 // LFS_RAD_VALIDATE_FILE=/path/to/file.rad
 TEST(PlyToRadLod, ValidateExternalRad) {
-    const char* const env_path = std::getenv("LFS_RAD_VALIDATE_FILE");
-    if (env_path == nullptr || env_path[0] == '\0') {
+    const auto env_path = lfs::core::environment::value("LFS_RAD_VALIDATE_FILE");
+    if (!env_path) {
         GTEST_SKIP() << "set LFS_RAD_VALIDATE_FILE to validate a converted RAD";
     }
 
-    auto loaded = lfs::io::load_rad(env_path);
+    auto loaded = lfs::io::load_rad(std::filesystem::path(*env_path));
     ASSERT_TRUE(loaded.has_value()) << loaded.error();
     ASSERT_TRUE(loaded->lod_tree && loaded->lod_tree->has_tree());
     const auto& tree = *loaded->lod_tree;
@@ -491,11 +492,11 @@ TEST(PlyToRadLod, ValidateExternalRad) {
 // reports how many distinct chunks each layout needs. Run with
 // LFS_RAD_AUDIT=<file.rad> against two files to compare layouts.
 TEST(PlyToRadLod, TreeletLayoutAudit) {
-    const char* const target = std::getenv("LFS_RAD_AUDIT");
-    if (target == nullptr) {
+    const auto target = lfs::core::environment::value("LFS_RAD_AUDIT");
+    if (!target) {
         GTEST_SKIP() << "set LFS_RAD_AUDIT to run";
     }
-    auto view = lfs::io::open_rad_meta_sidecar(target);
+    auto view = lfs::io::open_rad_meta_sidecar(std::filesystem::path(*target));
     ASSERT_TRUE(view.has_value()) << view.error();
     const std::size_t n = view->node_count;
     const auto level_of = [&](const std::uint32_t i) {

@@ -43,10 +43,6 @@ namespace lfs::vis::gui {
         return 0;
     }
 
-    void MenuBar::clearThumbnails() {
-        thumbnails_.clear();
-    }
-
     void MenuBar::startThumbnailDownload(const std::string& video_id) {
         if (video_id.empty() || thumbnails_.contains(video_id))
             return;

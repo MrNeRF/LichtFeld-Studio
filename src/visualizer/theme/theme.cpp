@@ -5,16 +5,23 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
+#include "preferences.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <set>
 #include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__linux__)
+#include <SDL3/SDL_video.h>
+#endif
 
 namespace lfs::vis {
 
@@ -43,16 +50,24 @@ namespace lfs::vis {
         float g_dpi_scale = 1.0f;
         bool g_initialized = false;
         bool g_themes_loaded = false;
+        std::string g_theme_family_preference = "lichtfeld";
+        std::string g_theme_mode_preference = "dark";
+        bool g_auto_system_light = false;
+        std::size_t g_theme_presentation_revision = 0;
 
         void ensureThemesLoaded();
+        const Theme& activeTheme();
         void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
         bool activateThemePreset(std::string_view theme_id);
+        bool loadThemeFamilyVariant(Theme& theme,
+                                    const std::filesystem::path& path,
+                                    std::string_view variant_mode);
 
         void ensureInitialized() {
             if (!g_initialized) {
                 ensureThemesLoaded();
-                g_current_theme = darkTheme();
-                g_current_theme_id = "dark";
+                g_current_theme = activeTheme();
+                g_current_theme_id = loadThemePreferenceName();
                 g_initialized = true;
             }
         }
@@ -63,29 +78,59 @@ namespace lfs::vis {
 
     namespace {
 
-        json colorToJson(const ImVec4& c) {
+        json colorToJson(const ThemeColor& c) {
             return json::array({c.x, c.y, c.z, c.w});
         }
 
-        ImVec4 colorFromJson(const json& j) {
+        ThemeColor colorFromJson(const json& j) {
             if (j.is_array() && j.size() >= 4) {
                 return {j[0].get<float>(), j[1].get<float>(), j[2].get<float>(), j[3].get<float>()};
             }
             return {0.0f, 0.0f, 0.0f, 1.0f};
         }
 
-        json vec2ToJson(const ImVec2& v) {
+        bool isValidThemeColorJson(const json& value) {
+            if (!value.is_array() || value.size() != 4)
+                return false;
+            for (const auto& channel : value) {
+                if (!channel.is_number())
+                    return false;
+                const double component = channel.get<double>();
+                if (!std::isfinite(component) || component < 0.0 || component > 1.0)
+                    return false;
+            }
+            return true;
+        }
+
+        std::optional<ThemeGradient> gradientFromJson(const json& value) {
+            if (!value.is_object())
+                return std::nullopt;
+            const auto start = value.find("start");
+            const auto end = value.find("end");
+            if (start == value.end() || end == value.end() ||
+                !isValidThemeColorJson(*start) || !isValidThemeColorJson(*end)) {
+                return std::nullopt;
+            }
+            return ThemeGradient{colorFromJson(*start), colorFromJson(*end)};
+        }
+
+        json gradientToJson(const ThemeGradient& gradient) {
+            return json{{"start", colorToJson(gradient.start)},
+                        {"end", colorToJson(gradient.end)}};
+        }
+
+        json vec2ToJson(const ThemeVec2& v) {
             return json::array({v.x, v.y});
         }
 
-        ImVec2 vec2FromJson(const json& j) {
+        ThemeVec2 vec2FromJson(const json& j) {
             if (j.is_array() && j.size() >= 2) {
                 return {j[0].get<float>(), j[1].get<float>()};
             }
             return {0.0f, 0.0f};
         }
 
-        std::string normalizeThemeIdImpl(std::string name) {
+        std::string normalizeThemeIdSyntax(std::string name) {
             std::transform(
                 name.begin(),
                 name.end(),
@@ -94,6 +139,12 @@ namespace lfs::vis {
 
             std::replace(name.begin(), name.end(), '-', '_');
             std::replace(name.begin(), name.end(), ' ', '_');
+
+            return name;
+        }
+
+        std::string normalizeThemeIdImpl(std::string name) {
+            name = normalizeThemeIdSyntax(std::move(name));
 
             if (name == "gruvbox_dark") {
                 return "gruvbox";
@@ -110,27 +161,45 @@ namespace lfs::vis {
             return name;
         }
 
-        bool useLightPopupBackground(const Theme& t) {
-            // Use palette luminance instead of theme name so popup behavior stays
-            // correct even if theme names vary or are edited in JSON files.
-            constexpr float LIGHT_POPUP_BG_THRESHOLD = 0.72f;
-            const float brightness =
-                (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
-            return brightness >= LIGHT_POPUP_BG_THRESHOLD;
+        std::optional<bool> systemLightThemePreferenceImpl() {
+#if defined(_WIN32)
+            DWORD apps_use_light_theme = 0;
+            DWORD value_size = sizeof(apps_use_light_theme);
+            const LSTATUS result = RegGetValueW(
+                HKEY_CURRENT_USER,
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                L"AppsUseLightTheme",
+                RRF_RT_REG_DWORD,
+                nullptr,
+                &apps_use_light_theme,
+                &value_size);
+            if (result == ERROR_SUCCESS)
+                return apps_use_light_theme != 0;
+#elif defined(__linux__)
+            switch (SDL_GetSystemTheme()) {
+            case SDL_SYSTEM_THEME_LIGHT:
+                return true;
+            case SDL_SYSTEM_THEME_DARK:
+                return false;
+            default:
+                break;
+            }
+#endif
+            return std::nullopt;
         }
 
-        ImVec4 mix(const ImVec4& a, const ImVec4& b, const float factor) {
-            return {
-                a.x + (b.x - a.x) * factor,
-                a.y + (b.y - a.y) * factor,
-                a.z + (b.z - a.z) * factor,
-                a.w + (b.w - a.w) * factor};
+        bool systemPrefersLightThemeImpl() {
+            return systemLightThemePreferenceImpl().value_or(false);
+        }
+
+        bool systemThemePreferenceSupportedImpl() {
+            return systemLightThemePreferenceImpl().has_value();
         }
 
     } // namespace
 
     // Color utilities
-    ImVec4 lighten(const ImVec4& color, const float amount) {
+    ThemeColor lighten(const ThemeColor& color, const float amount) {
         return {
             std::min(1.0f, color.x + amount),
             std::min(1.0f, color.y + amount),
@@ -138,7 +207,7 @@ namespace lfs::vis {
             color.w};
     }
 
-    ImVec4 darken(const ImVec4& color, const float amount) {
+    ThemeColor darken(const ThemeColor& color, const float amount) {
         return {
             std::max(0.0f, color.x - amount),
             std::max(0.0f, color.y - amount),
@@ -146,127 +215,22 @@ namespace lfs::vis {
             color.w};
     }
 
-    ImVec4 withAlpha(const ImVec4& color, const float alpha) {
+    ThemeColor withAlpha(const ThemeColor& color, const float alpha) {
         return {color.x, color.y, color.z, alpha};
     }
 
-    ImU32 toU32(const ImVec4& color) {
-        return IM_COL32(
-            static_cast<int>(color.x * 255.0f),
-            static_cast<int>(color.y * 255.0f),
-            static_cast<int>(color.z * 255.0f),
-            static_cast<int>(color.w * 255.0f));
-    }
-
-    ImU32 toU32WithAlpha(const ImVec4& color, const float alpha) {
-        return IM_COL32(
-            static_cast<int>(color.x * 255.0f),
-            static_cast<int>(color.y * 255.0f),
-            static_cast<int>(color.z * 255.0f),
-            static_cast<int>(alpha * 255.0f));
-    }
-
     // Theme computed colors
-    ImU32 Theme::primary_u32() const { return toU32(palette.primary); }
-    ImU32 Theme::error_u32() const { return toU32(palette.error); }
-    ImU32 Theme::success_u32() const { return toU32(palette.success); }
-    ImU32 Theme::warning_u32() const { return toU32(palette.warning); }
-    ImU32 Theme::text_u32() const { return toU32(palette.text); }
-    ImU32 Theme::text_dim_u32() const { return toU32(palette.text_dim); }
-    ImU32 Theme::border_u32() const { return toU32(palette.border); }
-    ImU32 Theme::surface_u32() const { return toU32(palette.surface); }
+    ThemeColor Theme::toolbar_background() const { return withAlpha(palette.surface, TOOLBAR_BG_ALPHA); }
+    ThemeColor Theme::subtoolbar_background() const { return withAlpha(darken(palette.surface, 0.03f), SUBTOOLBAR_BG_ALPHA); }
 
-    ImU32 Theme::selection_fill_u32() const { return toU32WithAlpha(palette.primary, SELECTION_FILL_ALPHA); }
-    ImU32 Theme::selection_border_u32() const { return toU32WithAlpha(palette.primary, SELECTION_BORDER_ALPHA); }
-    ImU32 Theme::selection_line_u32() const { return toU32WithAlpha(palette.primary, SELECTION_LINE_ALPHA); }
+    ThemeColor Theme::menu_background() const { return lighten(palette.surface, menu.bg_lighten); }
+    ThemeColor Theme::menu_hover() const { return lighten(palette.surface_bright, menu.hover_lighten); }
+    ThemeColor Theme::menu_active() const { return withAlpha(palette.primary, menu.active_alpha); }
+    ThemeColor Theme::menu_popup_background() const { return lighten(palette.surface, menu.popup_lighten); }
+    ThemeColor Theme::menu_border() const { return withAlpha(palette.border, menu.border_alpha); }
+    void Theme::pushModalStyle() const {}
 
-    ImU32 Theme::polygon_vertex_u32() const { return toU32(palette.warning); }
-    ImU32 Theme::polygon_vertex_hover_u32() const { return toU32(lighten(palette.warning, 0.2f)); }
-    ImU32 Theme::polygon_close_hint_u32() const { return toU32WithAlpha(palette.success, POLYGON_CLOSE_ALPHA); }
-
-    ImU32 Theme::overlay_background_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
-    ImU32 Theme::overlay_text_u32() const { return toU32(overlay.text); }
-    ImU32 Theme::overlay_shadow_u32() const { return IM_COL32(0, 0, 0, 180); }
-    ImU32 Theme::overlay_hint_u32() const { return toU32WithAlpha(overlay.text_dim, OVERLAY_HINT_ALPHA); }
-    ImU32 Theme::overlay_border_u32() const { return toU32(overlay.border); }
-    ImU32 Theme::overlay_icon_u32() const { return toU32(overlay.icon); }
-    ImU32 Theme::overlay_highlight_u32() const { return toU32WithAlpha(overlay.highlight, OVERLAY_HIGHLIGHT_ALPHA); }
-    ImU32 Theme::overlay_selection_u32() const { return toU32WithAlpha(overlay.selection, OVERLAY_SELECTION_ALPHA); }
-    ImU32 Theme::overlay_selection_flash_u32() const { return toU32WithAlpha(overlay.selection_flash, OVERLAY_SELECTION_FLASH_ALPHA); }
-
-    ImU32 Theme::progress_bar_bg_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
-    ImU32 Theme::progress_bar_fill_u32() const { return toU32WithAlpha(palette.warning, PROGRESS_FILL_ALPHA); }
-    ImU32 Theme::progress_marker_u32() const { return toU32WithAlpha(palette.error, PROGRESS_MARKER_ALPHA); }
-
-    ImVec4 Theme::button_normal() const { return palette.surface; }
-    ImVec4 Theme::button_hovered() const { return palette.surface_bright; }
-    ImVec4 Theme::button_active() const { return darken(palette.surface_bright, 0.05f); }
-    ImVec4 Theme::button_selected() const { return palette.primary; }
-    ImVec4 Theme::button_selected_hovered() const { return lighten(palette.primary, 0.1f); }
-
-    ImVec4 Theme::toolbar_background() const { return withAlpha(palette.surface, TOOLBAR_BG_ALPHA); }
-    ImVec4 Theme::subtoolbar_background() const { return withAlpha(darken(palette.surface, 0.03f), SUBTOOLBAR_BG_ALPHA); }
-
-    ImVec4 Theme::menu_background() const { return lighten(palette.surface, menu.bg_lighten); }
-    ImVec4 Theme::menu_hover() const { return lighten(palette.surface_bright, menu.hover_lighten); }
-    ImVec4 Theme::menu_active() const { return withAlpha(palette.primary, menu.active_alpha); }
-    ImVec4 Theme::menu_popup_background() const { return lighten(palette.surface, menu.popup_lighten); }
-    ImVec4 Theme::menu_border() const { return withAlpha(palette.border, menu.border_alpha); }
-    ImU32 Theme::menu_bottom_border_u32() const { return toU32(darken(palette.surface, menu.bottom_border_darken)); }
-
-    ImU32 Theme::viewport_border_u32() const { return toU32WithAlpha(darken(palette.background, viewport.border_darken), viewport.border_alpha); }
-
-    ImU32 Theme::row_even_u32() const { return toU32(palette.row_even); }
-    ImU32 Theme::row_odd_u32() const { return toU32(palette.row_odd); }
-
-    void Theme::pushContextMenuStyle() const {
-        const ImVec4 popup_bg = useLightPopupBackground(*this) ? palette.background : palette.surface;
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, popup_bg);
-        ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
-        ImGui::PushStyleColor(ImGuiCol_Header, withAlpha(palette.primary, context_menu.header_alpha));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, withAlpha(palette.primary, context_menu.header_hover_alpha));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, withAlpha(palette.primary, context_menu.header_active_alpha));
-        ImGui::PushStyleColor(ImGuiCol_Text, palette.text);
-        const float dpi = g_dpi_scale;
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, context_menu.rounding * dpi);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(context_menu.padding.x * dpi, context_menu.padding.y * dpi));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(context_menu.item_spacing.x * dpi, context_menu.item_spacing.y * dpi));
-    }
-
-    void Theme::popContextMenuStyle() {
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(6);
-    }
-
-    void Theme::pushModalStyle() const {
-        constexpr float MODAL_BG_ALPHA = 0.98f;
-        constexpr float MODAL_BORDER_SIZE = 2.0f;
-        constexpr float MODAL_PADDING_X = 20.0f;
-        constexpr float MODAL_PADDING_Y = 15.0f;
-        constexpr float TITLE_DARKEN = 0.1f;
-        constexpr float TITLE_ACTIVE_DARKEN = 0.05f;
-        const bool is_light_popup = useLightPopupBackground(*this);
-        const ImVec4 modal_surface = is_light_popup ? palette.background : palette.surface;
-        const ImVec4 popup_bg{modal_surface.x, modal_surface.y, modal_surface.z, MODAL_BG_ALPHA};
-        const ImVec4 title_bg = darken(modal_surface, is_light_popup ? 0.0f : TITLE_DARKEN);
-        const ImVec4 title_bg_active = darken(modal_surface, is_light_popup ? 0.0f : TITLE_ACTIVE_DARKEN);
-
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, popup_bg);
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, popup_bg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
-        ImGui::PushStyleColor(ImGuiCol_TitleBgActive, title_bg_active);
-        ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
-        ImGui::PushStyleColor(ImGuiCol_Text, palette.text);
-        const float dpi = g_dpi_scale;
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, MODAL_BORDER_SIZE * dpi);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, sizes.popup_rounding * dpi);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(MODAL_PADDING_X * dpi, MODAL_PADDING_Y * dpi));
-    }
-
-    void Theme::popModalStyle() {
-        ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(6);
-    }
+    void Theme::popModalStyle() {}
 
     void setThemeDpiScale(const float scale) { g_dpi_scale = scale; }
     float getThemeDpiScale() { return g_dpi_scale; }
@@ -288,10 +252,6 @@ namespace lfs::vis {
         return g_current_theme_id;
     }
 
-    std::string normalizeThemeId(std::string name) {
-        return normalizeThemeIdImpl(std::move(name));
-    }
-
     void setTheme(const Theme& t) {
         applyCurrentTheme(t, normalizeThemeIdImpl(t.name));
     }
@@ -307,109 +267,6 @@ namespace lfs::vis {
             applyCurrentTheme(t, active_theme_id);
         }
     } // namespace
-
-    void applyThemeToImGui() {
-        ensureInitialized();
-        if (ImGui::GetCurrentContext() == nullptr) {
-            // Headless Python sessions can still read and mutate theme state
-            // even when no ImGui style exists to update.
-            return;
-        }
-        ImGuiStyle& style = ImGui::GetStyle();
-        const auto& p = g_current_theme.palette;
-        const auto& s = g_current_theme.sizes;
-
-        style.WindowRounding = s.window_rounding;
-        style.FrameRounding = s.frame_rounding;
-        style.PopupRounding = s.popup_rounding;
-        style.ScrollbarRounding = std::max(s.scrollbar_rounding, s.scrollbar_size * 0.5f);
-        style.GrabRounding = s.grab_rounding;
-        style.TabRounding = s.tab_rounding;
-        style.WindowBorderSize = s.border_size;
-        style.ChildBorderSize = s.child_border_size;
-        style.PopupBorderSize = s.popup_border_size;
-        style.WindowPadding = s.window_padding;
-        style.FramePadding = s.frame_padding;
-        style.ItemSpacing = s.item_spacing;
-        style.ItemInnerSpacing = s.item_inner_spacing;
-        style.IndentSpacing = s.indent_spacing;
-        style.ScrollbarSize = s.scrollbar_size;
-        style.GrabMinSize = s.grab_min_size;
-        style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
-
-        const bool is_light = g_current_theme.isLightTheme();
-        const bool is_light_popup = useLightPopupBackground(g_current_theme);
-        const ImVec4 window_bg = p.surface;
-        const ImVec4 child_bg = is_light ? darken(p.surface, 0.015f) : darken(p.surface, 0.025f);
-        const ImVec4 popup_bg = is_light_popup ? lighten(p.surface, 0.02f) : lighten(p.surface, 0.01f);
-        const ImVec4 title_bg = is_light ? darken(p.surface, 0.02f) : lighten(p.surface, 0.035f);
-        const ImVec4 title_bg_active = is_light ? mix(p.surface, p.surface_bright, 0.55f)
-                                                : mix(p.surface, p.surface_bright, 0.75f);
-        const ImVec4 button_bg = is_light ? darken(p.surface, 0.01f) : darken(p.surface, 0.015f);
-        const ImVec4 tab_bg = is_light ? darken(p.surface, 0.01f) : darken(p.surface, 0.008f);
-        const ImVec4 tab_active_bg = is_light ? mix(p.surface_bright, p.primary_dim, 0.10f)
-                                              : mix(p.surface_bright, p.primary_dim, 0.18f);
-        ImVec4* const colors = style.Colors;
-        colors[ImGuiCol_Text] = p.text;
-        colors[ImGuiCol_TextDisabled] = p.text_dim;
-        colors[ImGuiCol_WindowBg] = window_bg;
-        colors[ImGuiCol_ChildBg] = child_bg;
-        colors[ImGuiCol_PopupBg] = popup_bg;
-        colors[ImGuiCol_Border] = p.border;
-        colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
-
-        const float frame_darken = g_current_theme.frameDarkenAmount();
-        colors[ImGuiCol_FrameBg] = darken(window_bg, frame_darken);
-        colors[ImGuiCol_FrameBgHovered] = is_light ? darken(p.surface, 0.08f) : p.surface_bright;
-        colors[ImGuiCol_FrameBgActive] = p.primary_dim;
-        colors[ImGuiCol_TitleBg] = title_bg;
-        colors[ImGuiCol_TitleBgActive] = title_bg_active;
-        colors[ImGuiCol_TitleBgCollapsed] = title_bg;
-        colors[ImGuiCol_MenuBarBg] = title_bg;
-        colors[ImGuiCol_ScrollbarBg] = withAlpha(p.background, 0.5f);
-        colors[ImGuiCol_ScrollbarGrab] = withAlpha(p.text_dim, 0.63f);
-        colors[ImGuiCol_ScrollbarGrabHovered] = withAlpha(p.primary, 0.78f);
-        colors[ImGuiCol_ScrollbarGrabActive] = p.primary;
-        colors[ImGuiCol_CheckMark] = p.primary;
-        colors[ImGuiCol_SliderGrab] = p.primary;
-        colors[ImGuiCol_SliderGrabActive] = lighten(p.primary, 0.1f);
-        colors[ImGuiCol_Button] = button_bg;
-        colors[ImGuiCol_ButtonHovered] = p.surface_bright;
-        colors[ImGuiCol_ButtonActive] = p.primary_dim;
-        colors[ImGuiCol_Header] = withAlpha(p.primary, 0.25f);
-        colors[ImGuiCol_HeaderHovered] = withAlpha(p.primary, 0.5f);
-        colors[ImGuiCol_HeaderActive] = withAlpha(p.primary, 0.7f);
-        colors[ImGuiCol_Separator] = p.border;
-        colors[ImGuiCol_SeparatorHovered] = p.primary;
-        colors[ImGuiCol_SeparatorActive] = p.primary;
-        colors[ImGuiCol_ResizeGrip] = withAlpha(p.primary, 0.2f);
-        colors[ImGuiCol_ResizeGripHovered] = withAlpha(p.primary, 0.6f);
-        colors[ImGuiCol_ResizeGripActive] = p.primary;
-        colors[ImGuiCol_Tab] = tab_bg;
-        colors[ImGuiCol_TabHovered] = p.surface_bright;
-        colors[ImGuiCol_TabActive] = tab_active_bg;
-        colors[ImGuiCol_TabUnfocused] = tab_bg;
-        colors[ImGuiCol_TabUnfocusedActive] = tab_active_bg;
-        colors[ImGuiCol_PlotLines] = p.primary;
-        colors[ImGuiCol_PlotLinesHovered] = lighten(p.primary, 0.2f);
-        colors[ImGuiCol_PlotHistogram] = p.primary;
-        colors[ImGuiCol_PlotHistogramHovered] = lighten(p.primary, 0.2f);
-        colors[ImGuiCol_TableHeaderBg] = title_bg;
-        colors[ImGuiCol_TableBorderStrong] = p.border;
-        colors[ImGuiCol_TableBorderLight] = withAlpha(p.border, 0.65f);
-        colors[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_TableRowBgAlt] = withAlpha(p.surface_bright, is_light ? 0.16f : 0.14f);
-        colors[ImGuiCol_TextSelectedBg] = withAlpha(p.primary, 0.35f);
-        colors[ImGuiCol_DragDropTarget] = p.primary;
-        colors[ImGuiCol_NavHighlight] = p.primary;
-        colors[ImGuiCol_NavWindowingHighlight] = withAlpha(p.primary, 0.7f);
-        colors[ImGuiCol_NavWindowingDimBg] = withAlpha(p.background, 0.2f);
-        colors[ImGuiCol_ModalWindowDimBg] = withAlpha(p.background, 0.35f);
-
-        style.FrameBorderSize = is_light ? 1.0f : 0.0f;
-
-        style.ScaleAllSizes(g_dpi_scale);
-    }
 
     namespace {
 
@@ -433,7 +290,15 @@ namespace lfs::vis {
                 .row_odd = {0.0f, 0.0f, 0.0f, 0.15f},
             },
             .sizes = {},
-            .fonts = {},
+            .fonts = {
+                .regular_path = "Inter-Regular.ttf",
+                .bold_path = "Inter-SemiBold.ttf",
+                .base_size = 12.5f,
+                .small_size = 12.0f,
+                .large_size = 17.0f,
+                .heading_size = 20.0f,
+                .section_size = 14.0f,
+            },
             .menu = {},
             .context_menu = {},
             .viewport = {},
@@ -463,7 +328,15 @@ namespace lfs::vis {
                 .row_odd = {0.0f, 0.0f, 0.0f, 0.10f},
             },
             .sizes = {},
-            .fonts = {},
+            .fonts = {
+                .regular_path = "Inter-Regular.ttf",
+                .bold_path = "Inter-SemiBold.ttf",
+                .base_size = 12.5f,
+                .small_size = 12.0f,
+                .large_size = 17.0f,
+                .heading_size = 20.0f,
+                .section_size = 14.0f,
+            },
             .menu = {},
             .context_menu = {},
             .viewport = {},
@@ -659,21 +532,25 @@ namespace lfs::vis {
             ThemePresetRecord(
                 std::string preset_id,
                 std::string preset_asset_name,
+                std::string preset_variant_mode,
                 const Theme* preset_defaults,
                 ThemePresetInfo preset_info)
                 : id(std::move(preset_id)),
                   asset_name(std::move(preset_asset_name)),
+                  variant_mode(std::move(preset_variant_mode)),
                   defaults(preset_defaults),
                   theme(*preset_defaults),
                   info(std::move(preset_info)) {}
 
             std::string id;
             std::string asset_name;
+            std::string variant_mode;
             const Theme* defaults;
             Theme theme;
             ThemePresetInfo info;
             std::filesystem::path path;
             std::filesystem::file_time_type mtime{};
+            bool loaded = false;
         };
 
         std::vector<ThemePresetRecord> g_theme_presets;
@@ -689,6 +566,43 @@ namespace lfs::vis {
             return nullptr;
         }
 
+        ThemePresetRecord* findThemeFamilyVariant(
+            const std::string_view family_id,
+            const std::string_view mode) {
+            const std::string normalized_family =
+                normalizeThemeIdSyntax(std::string(family_id));
+            for (auto& preset : g_theme_presets) {
+                if (preset.info.family_id == normalized_family && preset.info.mode == mode)
+                    return &preset;
+            }
+            return nullptr;
+        }
+
+        std::size_t themeFamilyVariantCount(const std::string_view family_id) {
+            const std::string normalized_family =
+                normalizeThemeIdSyntax(std::string(family_id));
+            return static_cast<std::size_t>(std::count_if(
+                g_theme_presets.begin(),
+                g_theme_presets.end(),
+                [&normalized_family](const ThemePresetRecord& preset) {
+                    return preset.info.family_id == normalized_family;
+                }));
+        }
+
+        ThemePresetRecord* resolveThemeFamilyVariant(
+            const std::string_view family_id,
+            const std::string_view requested_mode) {
+            std::string mode = normalizeThemeIdSyntax(std::string(requested_mode));
+            if (mode == "auto")
+                mode = systemPrefersLightThemeImpl() ? "light" : "dark";
+
+            if (auto* preset = findThemeFamilyVariant(family_id, mode))
+                return preset;
+            if (auto* preset = findThemeFamilyVariant(family_id, mode == "light" ? "dark" : "light"))
+                return preset;
+            return nullptr;
+        }
+
         const Theme* findThemeDefaults(std::string_view theme_id) {
             const auto normalized = normalizeThemeIdImpl(std::string(theme_id));
             for (const auto& defaults : THEME_DEFAULTS) {
@@ -698,13 +612,9 @@ namespace lfs::vis {
             return nullptr;
         }
 
-        bool isKnownThemePresetId(std::string_view theme_id) {
-            ensureThemesLoaded();
-            return findThemePreset(theme_id) != nullptr;
-        }
-
         void syncThemePresetName(ThemePresetRecord& preset) {
             preset.info.name = preset.theme.name.empty() ? preset.defaults->name : preset.theme.name;
+            preset.info.variant_name = preset.info.name;
         }
 
         bool isSafeThemeRelativeFile(const std::string& file_name) {
@@ -730,12 +640,16 @@ namespace lfs::vis {
                 .name = DEFAULT_DARK.name,
                 .label_key = "menu.view.theme.dark",
                 .mode = "dark",
+                .family_id = "lichtfeld",
+                .family_name = "LichtFeld",
+                .variant_name = DEFAULT_DARK.name,
                 .order = 10,
             };
-            return ThemePresetRecord("dark", "themes/dark.json", &DEFAULT_DARK, std::move(info));
+            return ThemePresetRecord(
+                "dark", "themes/lichtfeld.json", "dark", &DEFAULT_DARK, std::move(info));
         }
 
-        std::optional<ThemePresetRecord> parseThemeManifestEntry(
+        std::optional<ThemePresetRecord> parseLegacyThemeManifestEntry(
             const json& entry,
             const std::size_t entry_index,
             std::set<std::string>& ids) {
@@ -777,6 +691,9 @@ namespace lfs::vis {
                 .mode = entry.value(
                     "mode",
                     std::string(defaults->isLightTheme() ? "light" : "dark")),
+                .family_id = id,
+                .family_name = defaults->name,
+                .variant_name = defaults->name,
                 .order = entry.value("order", static_cast<int>((entry_index + 1) * 10)),
             };
 
@@ -788,8 +705,115 @@ namespace lfs::vis {
             return ThemePresetRecord(
                 id,
                 std::string(THEMES_ASSET_PREFIX) + file,
+                "",
                 defaults,
                 std::move(info));
+        }
+
+        void parseThemeFamilyManifestEntry(
+            const json& entry,
+            const std::size_t entry_index,
+            std::set<std::string>& ids,
+            std::vector<ThemePresetRecord>& presets) {
+            if (!entry.is_object()) {
+                LOG_WARN("Ignoring theme family manifest entry {}: expected object", entry_index);
+                return;
+            }
+
+            const std::string family_file = entry.value("file", "");
+            if (!isSafeThemeRelativeFile(family_file)) {
+                LOG_WARN("Ignoring theme family manifest entry {}: unsafe or empty file '{}'",
+                         entry_index, family_file);
+                return;
+            }
+
+            const int family_order =
+                entry.value("order", static_cast<int>((entry_index + 1) * 100));
+            const std::string asset_name = std::string(THEMES_ASSET_PREFIX) + family_file;
+
+            try {
+                std::set<std::string> family_ids;
+                std::vector<ThemePresetRecord> family_presets;
+                const auto family_path = getAssetPath(asset_name);
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(family_path, file))
+                    throw std::runtime_error("could not open family file");
+
+                json family;
+                file >> family;
+                if (family.value("schema_version", 0) != 2)
+                    throw std::runtime_error("family schema_version must be 2");
+
+                const std::string raw_family_id = family.value("id", "");
+                const std::string family_id = normalizeThemeIdSyntax(raw_family_id);
+                if (raw_family_id.empty() || family_id != raw_family_id)
+                    throw std::runtime_error("invalid family id '" + raw_family_id + "'");
+
+                const std::string family_name = family.value("name", "");
+                if (family_name.empty())
+                    throw std::runtime_error("family name must not be empty");
+
+                const auto variants_it = family.find("variants");
+                if (variants_it == family.end() || !variants_it->is_object())
+                    throw std::runtime_error("variants must be an object");
+
+                bool found_variant = false;
+                for (const std::string_view mode : {std::string_view("dark"),
+                                                    std::string_view("light")}) {
+                    const auto variant_it = variants_it->find(std::string(mode));
+                    if (variant_it == variants_it->end())
+                        continue;
+                    if (!variant_it->is_object())
+                        throw std::runtime_error(std::string(mode) + " variant must be an object");
+
+                    const json& variant = *variant_it;
+                    const std::string raw_id = variant.value("id", "");
+                    const std::string id = normalizeThemeIdImpl(raw_id);
+                    if (raw_id.empty() || id != raw_id)
+                        throw std::runtime_error("invalid variant id '" + raw_id + "'");
+                    if (ids.contains(id) || !family_ids.insert(id).second)
+                        throw std::runtime_error("duplicate variant id '" + id + "'");
+
+                    std::string fallback_id =
+                        normalizeThemeIdImpl(variant.value("fallback", id));
+                    const Theme* defaults = findThemeDefaults(fallback_id);
+                    if (!defaults) {
+                        LOG_WARN("Theme variant '{}' references unknown fallback '{}'; using {}",
+                                 id, fallback_id, mode);
+                        fallback_id = std::string(mode);
+                        defaults = findThemeDefaults(fallback_id);
+                    }
+                    if (!defaults)
+                        defaults = &DEFAULT_DARK;
+
+                    const std::string variant_name = variant.value("name", defaults->name);
+                    if (variant_name.empty())
+                        throw std::runtime_error("variant '" + id + "' name must not be empty");
+
+                    ThemePresetInfo info{
+                        .id = id,
+                        .name = variant_name,
+                        .label_key = variant.value("label_key", "menu.view.theme." + id),
+                        .mode = std::string(mode),
+                        .family_id = family_id,
+                        .family_name = family_name,
+                        .variant_name = variant_name,
+                        .order = family_order +
+                                 variant.value("order", mode == "light" ? 1 : 0),
+                    };
+                    family_presets.emplace_back(
+                        id, asset_name, std::string(mode), defaults, std::move(info));
+                    found_variant = true;
+                }
+
+                if (!found_variant)
+                    throw std::runtime_error("family does not define a dark or light variant");
+                ids.insert(family_ids.begin(), family_ids.end());
+                for (auto& preset : family_presets)
+                    presets.push_back(std::move(preset));
+            } catch (const std::exception& e) {
+                LOG_WARN("Ignoring theme family file '{}': {}", family_file, e.what());
+            }
         }
 
         std::vector<ThemePresetRecord> loadThemeCatalogFromManifest() {
@@ -806,19 +830,29 @@ namespace lfs::vis {
                 json manifest;
                 file >> manifest;
 
-                const int schema_version = manifest.value("schema_version", 0);
-                if (schema_version != 1)
-                    throw std::runtime_error("unsupported schema_version " + std::to_string(schema_version));
-
-                const auto themes_it = manifest.find("themes");
-                if (themes_it == manifest.end() || !themes_it->is_array())
-                    throw std::runtime_error("themes must be an array");
-
                 std::set<std::string> ids;
-                for (std::size_t i = 0; i < themes_it->size(); ++i) {
-                    if (auto preset = parseThemeManifestEntry((*themes_it)[i], i, ids)) {
-                        presets.push_back(std::move(*preset));
+                const int schema_version = manifest.value("schema_version", 0);
+                if (schema_version == 1) {
+                    const auto themes_it = manifest.find("themes");
+                    if (themes_it == manifest.end() || !themes_it->is_array())
+                        throw std::runtime_error("themes must be an array");
+                    for (std::size_t i = 0; i < themes_it->size(); ++i) {
+                        if (auto preset =
+                                parseLegacyThemeManifestEntry((*themes_it)[i], i, ids)) {
+                            presets.push_back(std::move(*preset));
+                        }
                     }
+                } else if (schema_version == 2) {
+                    const auto families_it = manifest.find("families");
+                    if (families_it == manifest.end() || !families_it->is_array())
+                        throw std::runtime_error("families must be an array");
+                    for (std::size_t i = 0; i < families_it->size(); ++i) {
+                        parseThemeFamilyManifestEntry(
+                            (*families_it)[i], i, ids, presets);
+                    }
+                } else {
+                    throw std::runtime_error(
+                        "unsupported schema_version " + std::to_string(schema_version));
                 }
 
                 std::stable_sort(
@@ -845,8 +879,15 @@ namespace lfs::vis {
 
             try {
                 preset.path = getAssetPath(preset.asset_name);
-                if (!loadTheme(preset.theme, lfs::core::path_to_utf8(preset.path)))
+                const bool loaded = preset.variant_mode.empty()
+                                        ? loadTheme(preset.theme,
+                                                    lfs::core::path_to_utf8(preset.path))
+                                        : loadThemeFamilyVariant(
+                                              preset.theme, preset.path, preset.variant_mode);
+                if (!loaded) {
+                    preset.loaded = true;
                     return;
+                }
 
                 syncThemePresetName(preset);
                 preset.mtime = std::filesystem::last_write_time(preset.path);
@@ -854,10 +895,11 @@ namespace lfs::vis {
             } catch (...) {
                 preset.path.clear();
             }
+            preset.loaded = true;
         }
 
         bool hotReloadThemePreset(ThemePresetRecord& preset) {
-            if (preset.path.empty() || !std::filesystem::exists(preset.path))
+            if (!preset.loaded || preset.path.empty() || !std::filesystem::exists(preset.path))
                 return false;
 
             const auto mtime = std::filesystem::last_write_time(preset.path);
@@ -865,7 +907,12 @@ namespace lfs::vis {
                 return false;
 
             Theme reloaded = *preset.defaults;
-            if (!loadTheme(reloaded, lfs::core::path_to_utf8(preset.path)))
+            const bool loaded = preset.variant_mode.empty()
+                                    ? loadTheme(reloaded,
+                                                lfs::core::path_to_utf8(preset.path))
+                                    : loadThemeFamilyVariant(
+                                          reloaded, preset.path, preset.variant_mode);
+            if (!loaded)
                 return false;
 
             preset.theme = std::move(reloaded);
@@ -878,18 +925,28 @@ namespace lfs::vis {
         void loadThemesFromFiles() {
             g_theme_presets = loadThemeCatalogFromManifest();
 
-            std::vector<std::future<void>> jobs;
-            jobs.reserve(g_theme_presets.size());
-            for (auto& preset : g_theme_presets) {
-                jobs.emplace_back(std::async(std::launch::async, [&preset]() {
-                    loadThemePreset(preset);
-                }));
-            }
-            for (auto& job : jobs) {
-                job.get();
-            }
+            const std::string active_id = normalizeThemeIdImpl(UserPreferences::instance().themeName());
+            auto* active = findThemePreset(active_id);
+            if (!active)
+                active = findThemePreset("dark");
+            if (active)
+                loadThemePreset(*active);
 
             g_themes_loaded = true;
+        }
+
+        void loadAllThemePresets() {
+            ensureThemesLoaded();
+            for (auto& preset : g_theme_presets) {
+                if (!preset.loaded)
+                    loadThemePreset(preset);
+            }
+        }
+
+        void ensureThemePresetLoaded(std::string_view theme_id) {
+            ensureThemesLoaded();
+            if (auto* preset = findThemePreset(theme_id); preset && !preset->loaded)
+                loadThemePreset(*preset);
         }
 
         void ensureThemesLoaded() {
@@ -901,8 +958,19 @@ namespace lfs::vis {
     } // namespace
 
     namespace {
-        const Theme& themePreset(std::string_view theme_id) {
+        const Theme& activeTheme() {
             ensureThemesLoaded();
+            auto* preset = findThemePreset(loadThemePreferenceName());
+            if (preset == nullptr)
+                preset = findThemePreset("dark");
+            if (preset == nullptr)
+                return g_theme_presets.front().theme;
+            ensureThemePresetLoaded(preset->id);
+            return preset->theme;
+        }
+
+        const Theme& themePreset(std::string_view theme_id) {
+            ensureThemePresetLoaded(theme_id);
             const auto* preset = findThemePreset(theme_id);
             return preset ? preset->theme : g_theme_presets.front().theme;
         }
@@ -912,35 +980,15 @@ namespace lfs::vis {
         return themePreset("dark");
     }
 
-    const Theme& lightTheme() {
-        return themePreset("light");
-    }
-
-    const Theme& gruvboxTheme() {
-        return themePreset("gruvbox");
-    }
-
-    const Theme& catppuccinMochaTheme() {
-        return themePreset("catppuccin_mocha");
-    }
-
-    const Theme& catppuccinLatteTheme() {
-        return themePreset("catppuccin_latte");
-    }
-
-    const Theme& nordTheme() {
-        return themePreset("nord");
-    }
-
     void visitThemePresets(const ThemePresetVisitor& visitor) {
-        ensureThemesLoaded();
+        loadAllThemePresets();
         for (const auto& preset : g_theme_presets) {
             visitor(preset.id, preset.theme);
         }
     }
 
     void visitThemePresetInfos(const ThemePresetInfoVisitor& visitor) {
-        ensureThemesLoaded();
+        loadAllThemePresets();
         for (const auto& preset : g_theme_presets) {
             visitor(preset.info);
         }
@@ -951,13 +999,12 @@ namespace lfs::vis {
             g_current_theme = theme;
             g_current_theme_id = std::string(theme_id);
             g_initialized = true;
-            applyThemeToImGui();
             if (g_theme_change_cb)
                 g_theme_change_cb(g_current_theme_id);
         }
 
         bool activateThemePreset(std::string_view theme_id) {
-            ensureThemesLoaded();
+            ensureThemePresetLoaded(theme_id);
 
             const auto* preset = findThemePreset(theme_id);
             if (!preset)
@@ -972,9 +1019,67 @@ namespace lfs::vis {
         return activateThemePreset(name);
     }
 
+    bool setThemeFamilySelection(const std::string& family_id, const std::string& mode) {
+        ensureThemesLoaded();
+
+        const std::string normalized_family = normalizeThemeIdSyntax(family_id);
+        std::string normalized_mode = normalizeThemeIdSyntax(mode);
+        const std::size_t variant_count = themeFamilyVariantCount(normalized_family);
+        if (variant_count == 0)
+            return false;
+
+        if (variant_count == 1) {
+            if (auto* only_variant = resolveThemeFamilyVariant(normalized_family, "dark"))
+                normalized_mode = only_variant->info.mode;
+        } else if (normalized_mode != "dark" && normalized_mode != "light" &&
+                   normalized_mode != "auto") {
+            return false;
+        }
+        if (normalized_mode == "auto" && !systemThemePreferenceSupportedImpl())
+            return false;
+
+        auto* preset = resolveThemeFamilyVariant(normalized_family, normalized_mode);
+        if (!preset || !activateThemePreset(preset->id))
+            return false;
+
+        g_theme_family_preference = normalized_family;
+        g_theme_mode_preference = normalized_mode;
+        g_auto_system_light = systemPrefersLightThemeImpl();
+        UserPreferences::instance().setThemeName(normalized_family + ":" + normalized_mode);
+        return true;
+    }
+
+    const std::string& currentThemeFamilyId() {
+        ensureThemesLoaded();
+        return g_theme_family_preference;
+    }
+
+    const std::string& currentThemeSelectionMode() {
+        ensureThemesLoaded();
+        return g_theme_mode_preference;
+    }
+
+    bool supportsSystemThemePreference() {
+        return systemThemePreferenceSupportedImpl();
+    }
+
     bool checkThemeFileChanges() {
         if (!g_themes_loaded)
             return false;
+
+        if (g_theme_mode_preference == "auto") {
+            const bool system_light = systemPrefersLightThemeImpl();
+            if (system_light != g_auto_system_light) {
+                g_auto_system_light = system_light;
+                if (auto* preset = resolveThemeFamilyVariant(
+                        g_theme_family_preference, system_light ? "light" : "dark")) {
+                    if (preset->id != g_current_theme_id && activateThemePreset(preset->id)) {
+                        LOG_INFO("System appearance changed; activated {} theme", preset->id);
+                        return true;
+                    }
+                }
+            }
+        }
 
         const std::string active_theme_id = g_current_theme_id;
         bool any_reloaded = false;
@@ -993,6 +1098,24 @@ namespace lfs::vis {
             }
         } catch (...) {
             LOG_WARN("Failed to check theme manifest for hot reload");
+        }
+
+        try {
+            for (const auto& preset : g_theme_presets) {
+                if (preset.variant_mode.empty() || preset.path.empty() ||
+                    !std::filesystem::exists(preset.path))
+                    continue;
+                if (std::filesystem::last_write_time(preset.path) == preset.mtime)
+                    continue;
+
+                LOG_INFO("Hot-reloading theme family catalog");
+                loadThemesFromFiles();
+                if (!activateThemePreset(active_theme_id))
+                    activateThemePreset("dark");
+                return true;
+            }
+        } catch (...) {
+            LOG_WARN("Failed to check theme family files for hot reload");
         }
 
         for (auto& preset : g_theme_presets) {
@@ -1117,6 +1240,23 @@ namespace lfs::vis {
             overlay["selection"] = colorToJson(t.overlay.selection);
             overlay["selection_flash"] = colorToJson(t.overlay.selection_flash);
 
+            const auto write_gradient = [&j](const char* name,
+                                             const std::optional<ThemeGradient>& gradient) {
+                if (gradient)
+                    j["gradients"][name] = gradientToJson(*gradient);
+            };
+            write_gradient("window_body", t.gradients.window_body);
+            write_gradient("panel_body", t.gradients.panel_body);
+            write_gradient("window_title", t.gradients.window_title);
+            write_gradient("section_header", t.gradients.section_header);
+            write_gradient("section_header_hover", t.gradients.section_header_hover);
+            write_gradient("progress", t.gradients.progress);
+            write_gradient("scrubber_track", t.gradients.scrubber_track);
+            write_gradient("scrubber_fill", t.gradients.scrubber_fill);
+            write_gradient("histogram_header", t.gradients.histogram_header);
+            write_gradient("histogram_fill", t.gradients.histogram_fill);
+            write_gradient("histogram_selection", t.gradients.histogram_selection);
+
             std::ofstream file;
             if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(path), file))
                 return false;
@@ -1127,6 +1267,211 @@ namespace lfs::vis {
         }
     }
 
+    namespace {
+        bool applyThemeJson(Theme& t,
+                            const json& j,
+                            const bool allow_fonts,
+                            const bool apply_name) {
+            try {
+                if (apply_name && j.contains("name") && j["name"].is_string())
+                    t.name = j["name"].get<std::string>();
+
+                if (j.contains("palette")) {
+                    const auto& p = j["palette"];
+                    if (p.contains("background"))
+                        t.palette.background = colorFromJson(p["background"]);
+                    if (p.contains("surface"))
+                        t.palette.surface = colorFromJson(p["surface"]);
+                    if (p.contains("surface_bright"))
+                        t.palette.surface_bright = colorFromJson(p["surface_bright"]);
+                    if (p.contains("primary"))
+                        t.palette.primary = colorFromJson(p["primary"]);
+                    if (p.contains("primary_dim"))
+                        t.palette.primary_dim = colorFromJson(p["primary_dim"]);
+                    if (p.contains("secondary"))
+                        t.palette.secondary = colorFromJson(p["secondary"]);
+                    if (p.contains("text"))
+                        t.palette.text = colorFromJson(p["text"]);
+                    if (p.contains("text_dim"))
+                        t.palette.text_dim = colorFromJson(p["text_dim"]);
+                    if (p.contains("border"))
+                        t.palette.border = colorFromJson(p["border"]);
+                    if (p.contains("success"))
+                        t.palette.success = colorFromJson(p["success"]);
+                    if (p.contains("warning"))
+                        t.palette.warning = colorFromJson(p["warning"]);
+                    if (p.contains("error"))
+                        t.palette.error = colorFromJson(p["error"]);
+                    if (p.contains("info"))
+                        t.palette.info = colorFromJson(p["info"]);
+                    if (p.contains("row_even"))
+                        t.palette.row_even = colorFromJson(p["row_even"]);
+                    if (p.contains("row_odd"))
+                        t.palette.row_odd = colorFromJson(p["row_odd"]);
+                }
+
+                if (j.contains("sizes")) {
+                    const auto& s = j["sizes"];
+                    t.sizes.window_rounding = s.value("window_rounding", t.sizes.window_rounding);
+                    t.sizes.frame_rounding = s.value("frame_rounding", t.sizes.frame_rounding);
+                    t.sizes.popup_rounding = s.value("popup_rounding", t.sizes.popup_rounding);
+                    t.sizes.scrollbar_rounding = s.value("scrollbar_rounding", t.sizes.scrollbar_rounding);
+                    t.sizes.grab_rounding = s.value("grab_rounding", t.sizes.grab_rounding);
+                    t.sizes.tab_rounding = s.value("tab_rounding", t.sizes.tab_rounding);
+                    t.sizes.border_size = s.value("border_size", t.sizes.border_size);
+                    t.sizes.child_border_size = s.value("child_border_size", t.sizes.child_border_size);
+                    t.sizes.popup_border_size = s.value("popup_border_size", t.sizes.popup_border_size);
+                    if (s.contains("window_padding"))
+                        t.sizes.window_padding = vec2FromJson(s["window_padding"]);
+                    if (s.contains("frame_padding"))
+                        t.sizes.frame_padding = vec2FromJson(s["frame_padding"]);
+                    if (s.contains("item_spacing"))
+                        t.sizes.item_spacing = vec2FromJson(s["item_spacing"]);
+                    if (s.contains("item_inner_spacing"))
+                        t.sizes.item_inner_spacing = vec2FromJson(s["item_inner_spacing"]);
+                    t.sizes.indent_spacing = s.value("indent_spacing", t.sizes.indent_spacing);
+                    t.sizes.scrollbar_size = s.value("scrollbar_size", t.sizes.scrollbar_size);
+                    t.sizes.grab_min_size = s.value("grab_min_size", t.sizes.grab_min_size);
+                    t.sizes.toolbar_button_size = s.value("toolbar_button_size", t.sizes.toolbar_button_size);
+                    t.sizes.toolbar_padding = s.value("toolbar_padding", t.sizes.toolbar_padding);
+                    t.sizes.toolbar_spacing = s.value("toolbar_spacing", t.sizes.toolbar_spacing);
+                }
+
+                if (allow_fonts && j.contains("fonts")) {
+                    const auto& f = j["fonts"];
+                    t.fonts.regular_path = f.value("regular_path", t.fonts.regular_path);
+                    t.fonts.bold_path = f.value("bold_path", t.fonts.bold_path);
+                    t.fonts.base_size = f.value("base_size", t.fonts.base_size);
+                    t.fonts.small_size = f.value("small_size", t.fonts.small_size);
+                    t.fonts.large_size = f.value("large_size", t.fonts.large_size);
+                    t.fonts.heading_size = f.value("heading_size", t.fonts.heading_size);
+                    t.fonts.section_size = f.value("section_size", t.fonts.section_size);
+                }
+
+                if (j.contains("menu")) {
+                    const auto& m = j["menu"];
+                    t.menu.bg_lighten = m.value("bg_lighten", t.menu.bg_lighten);
+                    t.menu.hover_lighten = m.value("hover_lighten", t.menu.hover_lighten);
+                    t.menu.active_alpha = m.value("active_alpha", t.menu.active_alpha);
+                    t.menu.popup_lighten = m.value("popup_lighten", t.menu.popup_lighten);
+                    t.menu.popup_rounding = m.value("popup_rounding", t.menu.popup_rounding);
+                    t.menu.popup_border_size = m.value("popup_border_size", t.menu.popup_border_size);
+                    t.menu.border_alpha = m.value("border_alpha", t.menu.border_alpha);
+                    t.menu.bottom_border_darken = m.value("bottom_border_darken", t.menu.bottom_border_darken);
+                    if (m.contains("frame_padding"))
+                        t.menu.frame_padding = vec2FromJson(m["frame_padding"]);
+                    if (m.contains("item_spacing"))
+                        t.menu.item_spacing = vec2FromJson(m["item_spacing"]);
+                    if (m.contains("popup_padding"))
+                        t.menu.popup_padding = vec2FromJson(m["popup_padding"]);
+                }
+
+                if (j.contains("context_menu")) {
+                    const auto& ctx = j["context_menu"];
+                    t.context_menu.rounding = ctx.value("rounding", t.context_menu.rounding);
+                    t.context_menu.header_alpha = ctx.value("header_alpha", t.context_menu.header_alpha);
+                    t.context_menu.header_hover_alpha = ctx.value("header_hover_alpha", t.context_menu.header_hover_alpha);
+                    t.context_menu.header_active_alpha = ctx.value("header_active_alpha", t.context_menu.header_active_alpha);
+                    if (ctx.contains("padding"))
+                        t.context_menu.padding = vec2FromJson(ctx["padding"]);
+                    if (ctx.contains("item_spacing"))
+                        t.context_menu.item_spacing = vec2FromJson(ctx["item_spacing"]);
+                }
+
+                if (j.contains("viewport")) {
+                    const auto& v = j["viewport"];
+                    t.viewport.corner_radius = v.value("corner_radius", t.viewport.corner_radius);
+                    t.viewport.border_size = v.value("border_size", t.viewport.border_size);
+                    t.viewport.border_alpha = v.value("border_alpha", t.viewport.border_alpha);
+                    t.viewport.border_darken = v.value("border_darken", t.viewport.border_darken);
+                }
+
+                if (j.contains("shadows")) {
+                    const auto& sh = j["shadows"];
+                    t.shadows.enabled = sh.value("enabled", t.shadows.enabled);
+                    if (sh.contains("offset"))
+                        t.shadows.offset = vec2FromJson(sh["offset"]);
+                    t.shadows.blur = sh.value("blur", t.shadows.blur);
+                    t.shadows.alpha = sh.value("alpha", t.shadows.alpha);
+                }
+
+                if (j.contains("vignette")) {
+                    const auto& v = j["vignette"];
+                    t.vignette.enabled = v.value("enabled", t.vignette.enabled);
+                    t.vignette.intensity = v.value("intensity", t.vignette.intensity);
+                    t.vignette.radius = v.value("radius", t.vignette.radius);
+                    t.vignette.softness = v.value("softness", t.vignette.softness);
+                }
+
+                if (j.contains("button")) {
+                    const auto& b = j["button"];
+                    t.button.tint_normal = b.value("tint_normal", t.button.tint_normal);
+                    t.button.tint_hover = b.value("tint_hover", t.button.tint_hover);
+                    t.button.tint_active = b.value("tint_active", t.button.tint_active);
+                }
+
+                if (j.contains("overlay")) {
+                    const auto& o = j["overlay"];
+                    if (o.contains("background"))
+                        t.overlay.background = colorFromJson(o["background"]);
+                    if (o.contains("text"))
+                        t.overlay.text = colorFromJson(o["text"]);
+                    if (o.contains("text_dim"))
+                        t.overlay.text_dim = colorFromJson(o["text_dim"]);
+                    if (o.contains("border"))
+                        t.overlay.border = colorFromJson(o["border"]);
+                    if (o.contains("icon"))
+                        t.overlay.icon = colorFromJson(o["icon"]);
+                    if (o.contains("highlight"))
+                        t.overlay.highlight = colorFromJson(o["highlight"]);
+                    if (o.contains("selection"))
+                        t.overlay.selection = colorFromJson(o["selection"]);
+                    if (o.contains("selection_flash"))
+                        t.overlay.selection_flash = colorFromJson(o["selection_flash"]);
+                }
+
+                if (j.contains("gradients")) {
+                    const auto& gradients = j["gradients"];
+                    if (!gradients.is_object()) {
+                        LOG_WARN("Ignoring theme gradients: expected an object");
+                    } else {
+                        const auto apply_gradient = [&gradients](
+                                                        const char* name,
+                                                        std::optional<ThemeGradient>& target) {
+                            const auto value = gradients.find(name);
+                            if (value == gradients.end())
+                                return;
+                            if (value->is_null()) {
+                                target.reset();
+                                return;
+                            }
+                            if (const auto parsed = gradientFromJson(*value)) {
+                                target = *parsed;
+                            } else {
+                                LOG_WARN("Ignoring invalid theme gradient '{}'", name);
+                            }
+                        };
+                        apply_gradient("window_body", t.gradients.window_body);
+                        apply_gradient("panel_body", t.gradients.panel_body);
+                        apply_gradient("window_title", t.gradients.window_title);
+                        apply_gradient("section_header", t.gradients.section_header);
+                        apply_gradient("section_header_hover", t.gradients.section_header_hover);
+                        apply_gradient("progress", t.gradients.progress);
+                        apply_gradient("scrubber_track", t.gradients.scrubber_track);
+                        apply_gradient("scrubber_fill", t.gradients.scrubber_fill);
+                        apply_gradient("histogram_header", t.gradients.histogram_header);
+                        apply_gradient("histogram_fill", t.gradients.histogram_fill);
+                        apply_gradient("histogram_selection", t.gradients.histogram_selection);
+                    }
+                }
+
+                return true;
+            } catch (...) {
+                return false;
+            }
+        }
+    } // namespace
+
     bool loadTheme(Theme& t, const std::string& path) {
         try {
             std::ifstream file;
@@ -1135,271 +1480,123 @@ namespace lfs::vis {
 
             json j;
             file >> j;
-
             t.name = j.value("name", "Custom");
-
-            if (j.contains("palette")) {
-                const auto& p = j["palette"];
-                if (p.contains("background"))
-                    t.palette.background = colorFromJson(p["background"]);
-                if (p.contains("surface"))
-                    t.palette.surface = colorFromJson(p["surface"]);
-                if (p.contains("surface_bright"))
-                    t.palette.surface_bright = colorFromJson(p["surface_bright"]);
-                if (p.contains("primary"))
-                    t.palette.primary = colorFromJson(p["primary"]);
-                if (p.contains("primary_dim"))
-                    t.palette.primary_dim = colorFromJson(p["primary_dim"]);
-                if (p.contains("secondary"))
-                    t.palette.secondary = colorFromJson(p["secondary"]);
-                if (p.contains("text"))
-                    t.palette.text = colorFromJson(p["text"]);
-                if (p.contains("text_dim"))
-                    t.palette.text_dim = colorFromJson(p["text_dim"]);
-                if (p.contains("border"))
-                    t.palette.border = colorFromJson(p["border"]);
-                if (p.contains("success"))
-                    t.palette.success = colorFromJson(p["success"]);
-                if (p.contains("warning"))
-                    t.palette.warning = colorFromJson(p["warning"]);
-                if (p.contains("error"))
-                    t.palette.error = colorFromJson(p["error"]);
-                if (p.contains("info"))
-                    t.palette.info = colorFromJson(p["info"]);
-                if (p.contains("row_even"))
-                    t.palette.row_even = colorFromJson(p["row_even"]);
-                if (p.contains("row_odd"))
-                    t.palette.row_odd = colorFromJson(p["row_odd"]);
-            }
-
-            if (j.contains("sizes")) {
-                const auto& s = j["sizes"];
-                t.sizes.window_rounding = s.value("window_rounding", t.sizes.window_rounding);
-                t.sizes.frame_rounding = s.value("frame_rounding", t.sizes.frame_rounding);
-                t.sizes.popup_rounding = s.value("popup_rounding", t.sizes.popup_rounding);
-                t.sizes.scrollbar_rounding = s.value("scrollbar_rounding", t.sizes.scrollbar_rounding);
-                t.sizes.grab_rounding = s.value("grab_rounding", t.sizes.grab_rounding);
-                t.sizes.tab_rounding = s.value("tab_rounding", t.sizes.tab_rounding);
-                t.sizes.border_size = s.value("border_size", t.sizes.border_size);
-                t.sizes.child_border_size = s.value("child_border_size", t.sizes.child_border_size);
-                t.sizes.popup_border_size = s.value("popup_border_size", t.sizes.popup_border_size);
-                if (s.contains("window_padding"))
-                    t.sizes.window_padding = vec2FromJson(s["window_padding"]);
-                if (s.contains("frame_padding"))
-                    t.sizes.frame_padding = vec2FromJson(s["frame_padding"]);
-                if (s.contains("item_spacing"))
-                    t.sizes.item_spacing = vec2FromJson(s["item_spacing"]);
-                if (s.contains("item_inner_spacing"))
-                    t.sizes.item_inner_spacing = vec2FromJson(s["item_inner_spacing"]);
-                t.sizes.indent_spacing = s.value("indent_spacing", t.sizes.indent_spacing);
-                t.sizes.scrollbar_size = s.value("scrollbar_size", t.sizes.scrollbar_size);
-                t.sizes.grab_min_size = s.value("grab_min_size", t.sizes.grab_min_size);
-                t.sizes.toolbar_button_size = s.value("toolbar_button_size", t.sizes.toolbar_button_size);
-                t.sizes.toolbar_padding = s.value("toolbar_padding", t.sizes.toolbar_padding);
-                t.sizes.toolbar_spacing = s.value("toolbar_spacing", t.sizes.toolbar_spacing);
-            }
-
-            if (j.contains("fonts")) {
-                const auto& f = j["fonts"];
-                t.fonts.regular_path = f.value("regular_path", t.fonts.regular_path);
-                t.fonts.bold_path = f.value("bold_path", t.fonts.bold_path);
-                t.fonts.base_size = f.value("base_size", t.fonts.base_size);
-                t.fonts.small_size = f.value("small_size", t.fonts.small_size);
-                t.fonts.large_size = f.value("large_size", t.fonts.large_size);
-                t.fonts.heading_size = f.value("heading_size", t.fonts.heading_size);
-                t.fonts.section_size = f.value("section_size", t.fonts.section_size);
-            }
-
-            if (j.contains("menu")) {
-                const auto& m = j["menu"];
-                t.menu.bg_lighten = m.value("bg_lighten", t.menu.bg_lighten);
-                t.menu.hover_lighten = m.value("hover_lighten", t.menu.hover_lighten);
-                t.menu.active_alpha = m.value("active_alpha", t.menu.active_alpha);
-                t.menu.popup_lighten = m.value("popup_lighten", t.menu.popup_lighten);
-                t.menu.popup_rounding = m.value("popup_rounding", t.menu.popup_rounding);
-                t.menu.popup_border_size = m.value("popup_border_size", t.menu.popup_border_size);
-                t.menu.border_alpha = m.value("border_alpha", t.menu.border_alpha);
-                t.menu.bottom_border_darken = m.value("bottom_border_darken", t.menu.bottom_border_darken);
-                if (m.contains("frame_padding"))
-                    t.menu.frame_padding = vec2FromJson(m["frame_padding"]);
-                if (m.contains("item_spacing"))
-                    t.menu.item_spacing = vec2FromJson(m["item_spacing"]);
-                if (m.contains("popup_padding"))
-                    t.menu.popup_padding = vec2FromJson(m["popup_padding"]);
-            }
-
-            if (j.contains("context_menu")) {
-                const auto& ctx = j["context_menu"];
-                t.context_menu.rounding = ctx.value("rounding", t.context_menu.rounding);
-                t.context_menu.header_alpha = ctx.value("header_alpha", t.context_menu.header_alpha);
-                t.context_menu.header_hover_alpha = ctx.value("header_hover_alpha", t.context_menu.header_hover_alpha);
-                t.context_menu.header_active_alpha = ctx.value("header_active_alpha", t.context_menu.header_active_alpha);
-                if (ctx.contains("padding"))
-                    t.context_menu.padding = vec2FromJson(ctx["padding"]);
-                if (ctx.contains("item_spacing"))
-                    t.context_menu.item_spacing = vec2FromJson(ctx["item_spacing"]);
-            }
-
-            if (j.contains("viewport")) {
-                const auto& v = j["viewport"];
-                t.viewport.corner_radius = v.value("corner_radius", t.viewport.corner_radius);
-                t.viewport.border_size = v.value("border_size", t.viewport.border_size);
-                t.viewport.border_alpha = v.value("border_alpha", t.viewport.border_alpha);
-                t.viewport.border_darken = v.value("border_darken", t.viewport.border_darken);
-            }
-
-            if (j.contains("shadows")) {
-                const auto& sh = j["shadows"];
-                t.shadows.enabled = sh.value("enabled", t.shadows.enabled);
-                if (sh.contains("offset"))
-                    t.shadows.offset = vec2FromJson(sh["offset"]);
-                t.shadows.blur = sh.value("blur", t.shadows.blur);
-                t.shadows.alpha = sh.value("alpha", t.shadows.alpha);
-            }
-
-            if (j.contains("vignette")) {
-                const auto& v = j["vignette"];
-                t.vignette.enabled = v.value("enabled", t.vignette.enabled);
-                t.vignette.intensity = v.value("intensity", t.vignette.intensity);
-                t.vignette.radius = v.value("radius", t.vignette.radius);
-                t.vignette.softness = v.value("softness", t.vignette.softness);
-            }
-
-            if (j.contains("button")) {
-                const auto& b = j["button"];
-                t.button.tint_normal = b.value("tint_normal", t.button.tint_normal);
-                t.button.tint_hover = b.value("tint_hover", t.button.tint_hover);
-                t.button.tint_active = b.value("tint_active", t.button.tint_active);
-            }
-
-            if (j.contains("overlay")) {
-                const auto& o = j["overlay"];
-                if (o.contains("background"))
-                    t.overlay.background = colorFromJson(o["background"]);
-                if (o.contains("text"))
-                    t.overlay.text = colorFromJson(o["text"]);
-                if (o.contains("text_dim"))
-                    t.overlay.text_dim = colorFromJson(o["text_dim"]);
-                if (o.contains("border"))
-                    t.overlay.border = colorFromJson(o["border"]);
-                if (o.contains("icon"))
-                    t.overlay.icon = colorFromJson(o["icon"]);
-                if (o.contains("highlight"))
-                    t.overlay.highlight = colorFromJson(o["highlight"]);
-                if (o.contains("selection"))
-                    t.overlay.selection = colorFromJson(o["selection"]);
-                if (o.contains("selection_flash"))
-                    t.overlay.selection_flash = colorFromJson(o["selection_flash"]);
-            }
-
-            return true;
-        } catch (...) {
+            return applyThemeJson(t, j, true, false);
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load theme '{}': {}", path, e.what());
             return false;
         }
     }
 
     namespace {
-        std::filesystem::path getThemeConfigDir() {
-            std::filesystem::path config_dir;
-#ifdef _WIN32
-            const char* path = std::getenv("APPDATA");
-            if (path) {
-                config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-            } else {
-                config_dir = std::filesystem::current_path() / "config";
-            }
-#else
-            const char* xdg = std::getenv("XDG_CONFIG_HOME");
-            if (xdg) {
-                config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-            } else {
-                const char* home = std::getenv("HOME");
-                if (home) {
-                    config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-                } else {
-                    config_dir = std::filesystem::current_path() / "config";
+        bool loadThemeFamilyVariant(Theme& theme,
+                                    const std::filesystem::path& path,
+                                    const std::string_view variant_mode) {
+            try {
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(path, file))
+                    return false;
+
+                json family;
+                file >> family;
+                if (family.value("schema_version", 0) != 2)
+                    return false;
+
+                if (const auto shared = family.find("shared"); shared != family.end()) {
+                    if (!shared->is_object() ||
+                        !applyThemeJson(theme, *shared, true, false))
+                        return false;
                 }
+
+                const auto variants = family.find("variants");
+                if (variants == family.end() || !variants->is_object())
+                    return false;
+                const auto variant = variants->find(std::string(variant_mode));
+                if (variant == variants->end() || !variant->is_object())
+                    return false;
+
+                theme.name = variant->value("name", theme.name);
+                return applyThemeJson(theme, *variant, true, false);
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to load theme family variant '{}' from '{}': {}",
+                         variant_mode, lfs::core::path_to_utf8(path), e.what());
+                return false;
             }
-#endif
-            return config_dir;
         }
     } // namespace
 
     void saveThemePreferenceName(const std::string& theme_name) {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "theme_preference";
-            std::ofstream file(pref_path);
-            if (file) {
-                const std::string normalized = normalizeThemeIdImpl(theme_name);
-                if (isKnownThemePresetId(normalized)) {
-                    file << normalized;
-                } else {
-                    file << "dark";
-                }
-            }
-        } catch (...) {
-            // Silently ignore - not critical
+        const std::string normalized = normalizeThemeIdImpl(theme_name);
+        ensureThemesLoaded();
+        const auto* preset = findThemePreset(normalized);
+        if (!preset) {
+            g_theme_family_preference = "lichtfeld";
+            g_theme_mode_preference = "dark";
+            UserPreferences::instance().setThemeName("dark");
+            return;
         }
+
+        g_theme_family_preference = preset->info.family_id;
+        g_theme_mode_preference = preset->info.mode;
+        g_auto_system_light = systemPrefersLightThemeImpl();
+        UserPreferences::instance().setThemeName(preset->id);
     }
 
     std::string loadThemePreferenceName() {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "theme_preference";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                std::string pref;
-                if (file >> pref) {
-                    const std::string normalized = normalizeThemeIdImpl(pref);
-                    if (isKnownThemePresetId(normalized)) {
-                        return normalized;
-                    }
+        ensureThemesLoaded();
+        const std::string stored = UserPreferences::instance().themeName();
+        const std::size_t separator = stored.find(':');
+        if (separator != std::string::npos) {
+            const std::string family_id =
+                normalizeThemeIdSyntax(stored.substr(0, separator));
+            std::string mode = normalizeThemeIdSyntax(stored.substr(separator + 1));
+            if (mode == "auto" && !systemThemePreferenceSupportedImpl())
+                mode = "dark";
+            const std::size_t variant_count = themeFamilyVariantCount(family_id);
+            if (variant_count == 1) {
+                if (auto* only_variant = resolveThemeFamilyVariant(family_id, "dark"))
+                    mode = only_variant->info.mode;
+            }
+            if (auto* preset = resolveThemeFamilyVariant(family_id, mode)) {
+                if (mode == "dark" || mode == "light" ||
+                    (mode == "auto" && variant_count > 1)) {
+                    g_theme_family_preference = family_id;
+                    g_theme_mode_preference = mode;
+                    g_auto_system_light = systemPrefersLightThemeImpl();
+                    return preset->id;
                 }
             }
-        } catch (...) {
-            // Silently ignore - not critical
         }
+
+        const std::string normalized = normalizeThemeIdImpl(stored);
+        if (const auto* preset = findThemePreset(normalized)) {
+            g_theme_family_preference = preset->info.family_id;
+            g_theme_mode_preference = preset->info.mode;
+            g_auto_system_light = systemPrefersLightThemeImpl();
+            return preset->id;
+        }
+
+        g_theme_family_preference = "lichtfeld";
+        g_theme_mode_preference = "dark";
+        g_auto_system_light = systemPrefersLightThemeImpl();
         return "dark";
     }
 
-    void saveThemePreference(const bool is_dark) {
-        saveThemePreferenceName(is_dark ? "dark" : "light");
-    }
-
-    bool loadThemePreference() {
-        return loadThemePreferenceName() != "light";
-    }
-
-    void saveUiScalePreference(float scale) {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            std::filesystem::create_directories(config_dir);
-            const auto pref_path = config_dir / "ui_scale";
-            std::ofstream file(pref_path);
-            if (file) {
-                file << scale;
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to save UI scale preference: {}", e.what());
-        }
+    void saveUiScalePreference(const float scale) {
+        UserPreferences::instance().setUiScale(scale);
     }
 
     float loadUiScalePreference() {
-        try {
-            const auto config_dir = getThemeConfigDir();
-            const auto pref_path = config_dir / "ui_scale";
-            if (std::filesystem::exists(pref_path)) {
-                std::ifstream file(pref_path);
-                float scale = 0.0f;
-                if (file >> scale)
-                    return scale;
-            }
-        } catch (const std::exception& e) {
-            LOG_WARN("Failed to load UI scale preference: {}", e.what());
-        }
-        return 0.0f;
+        return UserPreferences::instance().uiScale();
+    }
+
+    void refreshThemePresentation() {
+        ++g_theme_presentation_revision;
+        applyThemePreservingCurrentId(theme());
+    }
+
+    std::size_t themePresentationRevision() {
+        return g_theme_presentation_revision;
     }
 
     void setThemeVignetteEnabled(bool enabled) {

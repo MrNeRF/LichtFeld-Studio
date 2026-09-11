@@ -150,19 +150,6 @@ namespace lfs::vis::terminal {
         }
     }
 
-    void TerminalWidget::spawn(const std::string& shell) {
-        pty_.close();
-        destroyVterm();
-        initVterm();
-        scrollback_.clear();
-        scroll_offset_ = 0;
-        markDirty();
-
-        if (!pty_.spawn(shell, cols_, rows_)) {
-            LOG_ERROR("Failed to spawn: {}", shell.empty() ? "default shell" : shell);
-        }
-    }
-
     EmbeddedFds TerminalWidget::spawnEmbedded() {
         pty_.close();
         destroyVterm();
@@ -649,17 +636,6 @@ namespace lfs::vis::terminal {
         scroll_offset_ = 0;
         cursor_pos_ = {0, 0};
         markDirty();
-    }
-
-    void TerminalWidget::sendToPty(const std::string& text) {
-        if (!pty_.is_running())
-            return;
-        if (pty_.write(text.c_str(), text.size()) < 0 ||
-            pty_.write("\n", 1) < 0) {
-            LOG_ERROR("PTY send failed");
-            return;
-        }
-        scrollToBottom();
     }
 
     void TerminalWidget::interrupt() {

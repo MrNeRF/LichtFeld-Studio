@@ -19,6 +19,7 @@
 #include "visualizer/training/training_state.hpp"
 #include <algorithm>
 #include <nanobind/ndarray.h>
+#include <stdexcept>
 
 namespace lfs::python {
 
@@ -147,6 +148,7 @@ namespace lfs::python {
             .mode = vis::op::SceneGraphCaptureMode::FULL,
             .include_selected_nodes = include_selected_nodes,
             .include_scene_context = include_scene_context,
+            .payload_uuids = std::vector<core::Uuid>{},
         };
     }
 
@@ -173,6 +175,10 @@ namespace lfs::python {
     // PySceneNode implementation
     void PySceneNode::set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform) {
         apply_node_transform_with_undo(node_->name, ndarray_to_mat4(transform), scene_);
+    }
+
+    nb::tuple PySceneNode::local_transform() const {
+        return mat4_to_tuple(node_->local_transform.get());
     }
 
     nb::tuple PySceneNode::world_transform() const {
@@ -220,8 +226,10 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
 
-        if (scene_)
+        if (scene_) {
             scene_->setPointCloudModified(true);
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
         return old_size - pc_->size();
     }
 
@@ -242,8 +250,10 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
 
-        if (scene_)
+        if (scene_) {
             scene_->setPointCloudModified(true);
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        }
         return old_size - pc_->size();
     }
 
@@ -372,6 +382,20 @@ namespace lfs::python {
                                const int sh_degree,
                                const float scene_scale,
                                const int32_t parent) {
+        const auto require_float32 = [](const char* field, const PyTensor& tensor) {
+            const auto dtype = tensor.tensor().dtype();
+            if (dtype != core::DataType::Float32) {
+                throw std::runtime_error(std::string("add_splat: ") + field +
+                                         " must be float32, got " + core::dtype_name(dtype));
+            }
+        };
+        require_float32("means", means);
+        require_float32("sh0", sh0);
+        require_float32("shN", shN);
+        require_float32("scaling", scaling);
+        require_float32("rotation", rotation);
+        require_float32("opacity", opacity);
+
         std::optional<vis::op::SceneGraphStateSnapshot> history_before;
         if (auto* const scene_manager = get_scene_manager()) {
             history_before = vis::op::SceneGraphPatchEntry::captureState(*scene_manager, {name});
@@ -401,10 +425,12 @@ namespace lfs::python {
             return core::NULL_NODE;
         }
         const auto* const added = scene_->getNodeById(node_id);
+        assert(added);
         const std::string added_name = added ? added->name : name;
 
         lfs::core::events::state::PLYAdded{
             .name = added_name,
+            .uuid = added->uuid,
             .node_gaussians = gaussian_count,
             .total_gaussians = scene_->getTotalGaussianCount(),
             .is_visible = true,
@@ -600,7 +626,9 @@ namespace lfs::python {
 
     void PyScene::remove_node(const std::string& name, bool keep_children) {
         if (auto* const scene_manager = get_scene_manager()) {
-            scene_manager->removePLY(name, keep_children);
+            if (auto result = scene_manager->removePLYWithResult(name, keep_children); !result) {
+                throw std::runtime_error(result.error());
+            }
             return;
         }
         scene_->removeNode(name, keep_children);
@@ -642,6 +670,16 @@ namespace lfs::python {
 
     std::optional<PySceneNode> PyScene::get_node_by_id(int32_t id) {
         auto* node = scene_->getNodeById(id);
+        if (!node)
+            return std::nullopt;
+        return PySceneNode(node, scene_);
+    }
+
+    std::optional<PySceneNode> PyScene::get_node_by_uuid(const std::string& uuid) {
+        const auto parsed = core::Uuid::from_string(uuid);
+        if (!parsed)
+            return std::nullopt;
+        auto* node = scene_->getNodeByUuid(*parsed);
         if (!node)
             return std::nullopt;
         return PySceneNode(node, scene_);
@@ -1121,10 +1159,12 @@ namespace lfs::python {
             .def("set", &PySceneNode::set, nb::arg("name"), nb::arg("value"), "Set property value by name")
             // Identity (read-only)
             .def_prop_ro("id", &PySceneNode::id, "Unique node identifier")
+            .def_prop_ro("uuid", &PySceneNode::uuid, "Durable node UUID")
             .def_prop_ro("parent_id", &PySceneNode::parent_id, "Parent node identifier (-1 for root)")
             .def_prop_ro("children", &PySceneNode::children, "List of child node IDs")
             .def_prop_ro("type", &PySceneNode::type, "Node type (SPLAT, GROUP, CAMERA, etc.)")
             // Transform (special conversion to tuple/ndarray)
+            .def_prop_ro("local_transform", &PySceneNode::local_transform, "Local transform as 4x4 row-major tuple")
             .def_prop_ro("world_transform", &PySceneNode::world_transform, "World-space transform as 4x4 row-major tuple")
             .def("set_local_transform", &PySceneNode::set_local_transform, "Set local transform from a [4, 4] ndarray")
             // Metadata (read-only)
@@ -1282,7 +1322,7 @@ Returns:
 )doc")
             .def("remove_node", &PyScene::remove_node,
                  nb::arg("name"), nb::arg("keep_children") = false,
-                 "Remove a node by name, optionally keeping its children")
+                 "Remove a node by name, optionally keeping its children. Raises RuntimeError if the GUI scene manager rejects removal.")
             .def("rename_node", &PyScene::rename_node,
                  nb::arg("old_name"), nb::arg("new_name"),
                  "Rename a node, returns true on success")
@@ -1297,6 +1337,8 @@ Returns:
             // Queries
             .def("get_node_by_id", &PyScene::get_node_by_id, nb::arg("id"),
                  "Find a node by its integer ID (None if not found)")
+            .def("get_node_by_uuid", &PyScene::get_node_by_uuid, nb::arg("uuid"),
+                 "Find a node by its durable UUID (None if invalid or not found)")
             .def("get_node", &PyScene::get_node, nb::arg("name"),
                  "Find a node by name (None if not found)")
             .def(
@@ -1379,7 +1421,7 @@ Returns:
             .def("apply_deleted", &PyScene::apply_deleted, "Permanently remove soft-deleted Gaussians from all nodes")
             .def("invalidate_cache", &PyScene::invalidate_cache, "Invalidate the combined model cache")
             .def("notify_changed", &PyScene::notify_changed, "Notify the renderer that scene data has changed")
-            .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"), "Duplicate a node by name, returns new node ID")
+            .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"), "Duplicate a node by name, returns the new node name")
             .def("merge_group", &PyScene::merge_group, nb::arg("group_name"), "Merge all splats in a group into a single node, returns merged node ID")
             .def_prop_ro("nodes", &PyScene::nodes, "Iterable collection of all scene nodes");
     }

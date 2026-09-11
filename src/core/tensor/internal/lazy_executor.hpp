@@ -15,6 +15,7 @@
 namespace lfs::core {
 
     class Tensor;
+    struct LazyExprState;
 
     namespace internal {
 
@@ -23,7 +24,12 @@ namespace lfs::core {
             SubScalar = 1,
             MulScalar = 2,
             DivScalar = 3,
-            // 4-9 reserved for future scalar ops
+            // 4-7: same-shape tensor binary stages (second operand via LazyPointwiseOp::rhs)
+            AddTensor = 4,
+            SubTensor = 5,
+            MulTensor = 6,
+            DivTensor = 7,
+            // 8-9 reserved
             Abs = 10,
             Neg = 11,
             Exp = 12,
@@ -44,6 +50,9 @@ namespace lfs::core {
         struct LazyPointwiseOp {
             LazyPointwiseOpKind kind = LazyPointwiseOpKind::AddScalar;
             float scalar = 0.0f;
+            // Optional second operand for AddTensor/SubTensor/MulTensor/DivTensor.
+            // Held by shared_ptr so fusion recipes keep storage alive until launch.
+            std::shared_ptr<Tensor> rhs = {};
         };
 
         struct LazyPlanNodeDebug {
@@ -75,6 +84,10 @@ namespace lfs::core {
             uint64_t peak_cache_bytes = 0;
         };
 
+        // Retain eager operands when a graph is deferred. The returned cell is detached only
+        // if the source storage is subsequently exposed for mutation.
+        LFS_CORE_API std::shared_ptr<Tensor> lazy_executor_snapshot_operand(const Tensor& source);
+
         // Build topological execution plan metadata for a root tensor.
         LFS_CORE_API LazyExecutionPlanDebug lazy_planner_build_plan_for_tensor(const Tensor& output);
 
@@ -85,12 +98,15 @@ namespace lfs::core {
         // Register/de-register deferred-node materializers for topo-driven planner execution.
         LFS_CORE_API void lazy_executor_register_deferred_materializer(uint64_t node_id,
                                                                        std::function<Tensor()> materializer,
-                                                                       std::weak_ptr<void> owner);
+                                                                       std::weak_ptr<LazyExprState> owner);
         LFS_CORE_API void lazy_executor_register_pointwise_fusion_op(uint64_t node_id,
                                                                      uint64_t parent_node_id,
                                                                      const Tensor& source_tensor,
                                                                      LazyPointwiseOp op,
-                                                                     std::weak_ptr<void> owner);
+                                                                     std::weak_ptr<LazyExprState> owner);
+
+        // True when pointwise fusion is active (default on; overridable in tests).
+        LFS_CORE_API bool lazy_executor_pointwise_fusion_enabled();
         LFS_CORE_API void lazy_executor_unregister_deferred_materializer(uint64_t node_id);
         LFS_CORE_API size_t lazy_executor_registered_node_count_for_testing();
         LFS_CORE_API void lazy_executor_clear_registry_for_testing();
@@ -104,9 +120,8 @@ namespace lfs::core {
         LFS_CORE_API void lazy_executor_reset_diagnostics_for_testing();
         LFS_CORE_API LazyExecutorDiagnosticsSnapshot lazy_executor_diagnostics_snapshot_for_testing();
 
-        // Optional runtime diagnostics dump gate (env + testing override).
+        // Optional diagnostics dump gate used by focused tests.
         LFS_CORE_API void lazy_executor_set_debug_dump_override_for_testing(std::optional<bool> enabled);
-        LFS_CORE_API void lazy_executor_clear_debug_dump_cache_for_testing();
         LFS_CORE_API bool lazy_executor_debug_dump_enabled_for_testing();
 
         // Pointwise fusion scaffold gate (on by default in lazy mode).

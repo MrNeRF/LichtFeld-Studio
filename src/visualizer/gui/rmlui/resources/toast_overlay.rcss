@@ -1,0 +1,39 @@
+body {
+    font-family: Inter;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+}
+
+#toast-stack {
+    position: absolute;
+    width: 320dp;
+    display: block;
+}
+
+.toast {
+    display: block;
+    margin-top: 8dp;
+    padding: 10dp 12dp;
+    border-width: 2dp;
+    border-radius: 6dp;
+}
+
+.toast-title {
+    display: block;
+    font-size: 12dp;
+    font-weight: bold;
+}
+
+.toast-count {
+    display: inline;
+    font-weight: normal;
+}
+
+.toast-message {
+    display: block;
+    font-size: 12dp;
+    margin-top: 4dp;
+}

@@ -3,10 +3,75 @@
 
 #include "sparsity_optimizer.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/tensor_serialization.hpp"
 #include <cuda_runtime.h>
 #include <format>
+#include <limits>
+#include <stdexcept>
+#include <tuple>
+#include <utility>
 
 namespace lfs::training {
+
+    namespace {
+        constexpr uint32_t SPARSITY_CHECKPOINT_MAGIC = 0x4C464153; // "LFAS"
+        constexpr uint32_t SPARSITY_CHECKPOINT_VERSION = 1;
+
+        using SerializedState = std::tuple<lfs::core::Tensor, lfs::core::Tensor, lfs::core::Tensor>;
+
+        void validate_state_tensors(
+            const lfs::core::Tensor& z,
+            const lfs::core::Tensor& u,
+            const lfs::core::Tensor& opa_sigmoid,
+            const std::optional<size_t> expected_rows) {
+            const auto valid_state_tensor = [](const lfs::core::Tensor& tensor) {
+                return tensor.is_valid() && tensor.dtype() == lfs::core::DataType::Float32 &&
+                       tensor.ndim() == 2 && tensor.size(0) > 0 && tensor.size(1) == 1;
+            };
+            if (!valid_state_tensor(z) || !valid_state_tensor(u) || !valid_state_tensor(opa_sigmoid) ||
+                u.shape() != z.shape() || opa_sigmoid.shape() != z.shape()) {
+                throw std::runtime_error("Invalid sparsity ADMM checkpoint tensor schema");
+            }
+            if (expected_rows && z.size(0) != *expected_rows) {
+                throw std::runtime_error("Invalid checkpoint: sparsity ADMM state does not match model count");
+            }
+        }
+
+        SerializedState read_serialized_state(std::istream& is) {
+            uint32_t magic = 0;
+            uint32_t version = 0;
+            lfs::core::serialization_detail::read_exact(is, &magic, sizeof(magic), "sparsity-ADMM magic");
+            lfs::core::serialization_detail::read_exact(is, &version, sizeof(version), "sparsity-ADMM version");
+            if (magic != SPARSITY_CHECKPOINT_MAGIC) {
+                throw std::runtime_error("Invalid sparsity ADMM checkpoint");
+            }
+            if (version != SPARSITY_CHECKPOINT_VERSION) {
+                throw std::runtime_error("Unsupported sparsity ADMM checkpoint version");
+            }
+
+            lfs::core::Tensor z;
+            lfs::core::Tensor u;
+            lfs::core::Tensor opa_sigmoid;
+            is >> z >> u >> opa_sigmoid;
+            validate_state_tensors(z, u, opa_sigmoid, std::nullopt);
+            return {std::move(z), std::move(u), std::move(opa_sigmoid)};
+        }
+
+        size_t checked_add(const size_t lhs, const size_t rhs) {
+            if (rhs > std::numeric_limits<size_t>::max() - lhs) {
+                throw std::runtime_error("Sparsity ADMM checkpoint byte size overflows");
+            }
+            return lhs + rhs;
+        }
+
+        size_t serialized_tensor_size(const lfs::core::Tensor& tensor) {
+            auto bytes = checked_add(sizeof(lfs::core::TensorFileHeader), tensor.bytes());
+            if (tensor.ndim() > std::numeric_limits<size_t>::max() / sizeof(uint64_t)) {
+                throw std::runtime_error("Sparsity ADMM tensor rank byte size overflows");
+            }
+            return checked_add(bytes, tensor.ndim() * sizeof(uint64_t));
+        }
+    } // namespace
 
     // Forward declaration of CUDA kernel launcher (defined in sparsity_optimizer_kernels.cu)
     void launch_admm_backward_fused(
@@ -28,6 +93,51 @@ namespace lfs::training {
         z_ = {};
         opa_sigmoid_ = {};
         initialized_ = false;
+    }
+
+    void ADMMSparsityOptimizer::serialize(std::ostream& os) const {
+        validate_checkpoint_state(std::nullopt);
+        os.write(reinterpret_cast<const char*>(&SPARSITY_CHECKPOINT_MAGIC), sizeof(SPARSITY_CHECKPOINT_MAGIC));
+        os.write(reinterpret_cast<const char*>(&SPARSITY_CHECKPOINT_VERSION), sizeof(SPARSITY_CHECKPOINT_VERSION));
+        os << z_ << u_ << opa_sigmoid_;
+    }
+
+    void ADMMSparsityOptimizer::deserialize(std::istream& is) {
+        auto [z, u, opa_sigmoid] = read_serialized_state(is);
+
+        z_ = z.cuda();
+        u_ = u.cuda();
+        opa_sigmoid_ = opa_sigmoid.cuda();
+        initialized_ = true;
+    }
+
+    size_t ADMMSparsityOptimizer::checkpoint_size_bytes(const size_t expected_rows) const {
+        validate_checkpoint_state(expected_rows);
+        auto bytes = checked_add(sizeof(SPARSITY_CHECKPOINT_MAGIC), sizeof(SPARSITY_CHECKPOINT_VERSION));
+        bytes = checked_add(bytes, serialized_tensor_size(z_));
+        bytes = checked_add(bytes, serialized_tensor_size(u_));
+        return checked_add(bytes, serialized_tensor_size(opa_sigmoid_));
+    }
+
+    size_t ADMMSparsityOptimizer::consume_checkpoint(std::istream& is) {
+        auto state = read_serialized_state(is);
+        return std::get<0>(state).size(0);
+    }
+
+    void ADMMSparsityOptimizer::validate_checkpoint_state(
+        const std::optional<size_t> expected_rows) const {
+        if (!initialized_) {
+            throw std::runtime_error("Cannot serialize uninitialized sparsity ADMM state");
+        }
+        validate_state_tensors(z_, u_, opa_sigmoid_, expected_rows);
+    }
+
+    void ADMMSparsityOptimizer::adopt_checkpoint_state(ADMMSparsityOptimizer& loaded) noexcept {
+        std::swap(config_, loaded.config_);
+        std::swap(z_, loaded.z_);
+        std::swap(u_, loaded.u_);
+        std::swap(opa_sigmoid_, loaded.opa_sigmoid_);
+        std::swap(initialized_, loaded.initialized_);
     }
 
     std::expected<void, std::string>

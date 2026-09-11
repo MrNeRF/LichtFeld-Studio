@@ -54,6 +54,7 @@ const int FLAG_HAS_SELECTION   = 1 << 5;
 const int FLAG_HAS_PREVIEW     = 1 << 6;
 const int FLAG_PREVIEW_ADD     = 1 << 7;
 const int FLAG_HAS_DELETED     = 1 << 9;
+const int FLAG_CROP_ELLIPSOID  = 1 << 10;
 const uint SELECTION_GROUP_MAX = 255u;
 const uint SELECTION_PREVIEW_COLOR_INDEX = 256u;
 const float SELECTION_COMMITTED_BLEND = 0.75;
@@ -114,8 +115,15 @@ void main() {
     bool desaturate = false;
     if ((PC_FLAGS & FLAG_HAS_CROP) != 0) {
         vec3 local = (pc.crop_to_local * vec4(ws, 1.0)).xyz;
-        bool inside = all(greaterThanEqual(local, pc.crop_min.xyz)) &&
-                      all(lessThanEqual(local, pc.crop_max.xyz));
+        bool inside = false;
+        if ((PC_FLAGS & FLAG_CROP_ELLIPSOID) != 0) {
+            vec3 radii = max(abs(pc.crop_min.xyz), vec3(1e-8));
+            float norm = dot(local / radii, local / radii);
+            inside = norm <= 1.0;
+        } else {
+            inside = all(greaterThanEqual(local, pc.crop_min.xyz)) &&
+                     all(lessThanEqual(local, pc.crop_max.xyz));
+        }
         bool visible = ((PC_FLAGS & FLAG_CROP_INVERSE) != 0) ? !inside : inside;
         if (!visible) {
             if ((PC_FLAGS & FLAG_CROP_DESATURATE) == 0) {

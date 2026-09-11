@@ -24,6 +24,18 @@ import spherical_harmonics;
 #define LFS_QUANT_POOL 0
 #endif
 
+// Standalone PLY/SOG SH rest: IEEE f16 float4-swizzle (same topology as fp32,
+// half the bytes). Mutually exclusive with LFS_QUANT_POOL / LFS_SHN_Q16.
+#ifndef LFS_SHN_F16
+#define LFS_SHN_F16 0
+#endif
+
+// Training-viewport exportable SH rest: pad-dropped q16 + per-256 float2
+// bounds. Mutually exclusive with LFS_QUANT_POOL / LFS_SHN_F16.
+#ifndef LFS_SHN_Q16
+#define LFS_SHN_Q16 0
+#endif
+
 
 struct Gaussian_3D : IDifferentiable
 {
@@ -58,7 +70,14 @@ Gaussian_3D load_gaussian_split(
     int32_t g_idx,
     StructuredBuffer<float> xyz_ws,
     StructuredBuffer<float> sh0,
+#if LFS_SHN_F16
+    uint64_t shN_address,
+#elif LFS_SHN_Q16
+    uint64_t shN_address,
+    StructuredBuffer<float2> shN_bounds,
+#else
     StructuredBuffer<float4> shN,
+#endif
     StructuredBuffer<float4> rotations,
     StructuredBuffer<float> scaling_raw,
     StructuredBuffer<float> opacity_raw,
@@ -67,8 +86,18 @@ Gaussian_3D load_gaussian_split(
     uint shN_layout_slots
 ) {
     float3 g_xyz_ws = read_t3_float3(g_idx, xyz_ws);
+#if LFS_SHN_F16
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_f16(
+        g_idx, sh0, shN_address, active_sh, shN_layout_slots);
+#elif LFS_SHN_Q16
+    // shN_layout_slots carries n_cells (pad-dropped u16 cells per primitive)
+    // on the q16 path (host sets uniforms.shN_layout_slots = n_cells).
+    SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split_q16(
+        g_idx, sh0, shN_address, shN_bounds, active_sh, shN_layout_slots);
+#else
     SpherHarmCoeffs g_sh_coeffs = read_spherical_harmonics_coeffs_split(
         g_idx, sh0, shN, active_sh, shN_layout_slots);
+#endif
     float4 g_rotations = rotations[g_idx];
     // Matches CUDA reference: clamp raw log-scale before activation so a
     // single broken splat cannot blow up into a screen-spanning haze floater
@@ -169,6 +198,78 @@ struct SplatActiveState {
     uint model_transform_base;
     bool model_transform_enabled;
 };
+// crop_flags must already be loaded; callers gate on the enable bit before
+// any transform/min/max loads (and skip whole slot groups when none are active).
+[ForceInline]
+void apply_crop_box_filter(
+    StructuredBuffer<float4> overlay_params,
+    uint flags_idx,
+    float4 crop_flags,
+    bool node_data_enabled,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    if (!overlay_enabled(crop_flags.x)) return;
+
+    int parent_node_idx = overlay_int(crop_flags.w);
+    bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+    if (!applies) return;
+
+    float3 local = transform_point_rows(overlay_params, flags_idx + 3u, mean_ws);
+    float3 bmin = overlay_params[flags_idx + 1u].xyz;
+    float3 bmax = overlay_params[flags_idx + 2u].xyz;
+    bool inside = local.x >= bmin.x && local.x <= bmax.x &&
+                  local.y >= bmin.y && local.y <= bmax.y &&
+                  local.z >= bmin.z && local.z <= bmax.z;
+    bool outside = inside == overlay_enabled(crop_flags.y);
+    if (outside) {
+        overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+        if (overlay_enabled(crop_flags.z)) {
+            overlay_flags |= OVERLAY_FLAG_DIM;
+        } else {
+            active = false;
+        }
+    }
+}
+
+// ellipsoid_flags must already be loaded; enable is checked before radii/transform.
+[ForceInline]
+void apply_ellipsoid_filter(
+    StructuredBuffer<float4> overlay_params,
+    uint flags_idx,
+    float4 ellipsoid_flags,
+    bool node_data_enabled,
+    int node_idx,
+    float3 mean_ws,
+    inout bool active,
+    inout uint overlay_flags)
+{
+    if (!active) return;
+    if (!overlay_enabled(ellipsoid_flags.x)) return;
+
+    int parent_node_idx = overlay_int(ellipsoid_flags.w);
+    bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
+    if (!applies) return;
+
+    float3 local = transform_point_rows(overlay_params, flags_idx + 2u, mean_ws);
+    float3 radii = max(abs(overlay_params[flags_idx + 1u].xyz), float3(1e-8f));
+    float norm = (local.x * local.x) / (radii.x * radii.x) +
+                 (local.y * local.y) / (radii.y * radii.y) +
+                 (local.z * local.z) / (radii.z * radii.z);
+    bool inside = norm <= 1.0f;
+    bool outside = inside == overlay_enabled(ellipsoid_flags.y);
+    if (outside) {
+        overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
+        if (overlay_enabled(ellipsoid_flags.z)) {
+            overlay_flags |= OVERLAY_FLAG_DIM;
+        } else {
+            active = false;
+        }
+    }
+}
 
 SplatActiveState compute_splat_active_state(
     uint logical_idx,
@@ -193,48 +294,43 @@ SplatActiveState compute_splat_active_state(
                          ? transform_point_rows(model_transforms, model_transform_base, xyz_ws_in)
                          : xyz_ws_in;
 
-    float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
-    if (overlay_enabled(crop_flags.x)) {
-        int parent_node_idx = overlay_int(crop_flags.w);
-        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
-        if (applies) {
-            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_CROP_TRANSFORM, mean_ws);
-            float3 bmin = overlay_params[OVERLAY_PARAM_CROP_MIN].xyz;
-            float3 bmax = overlay_params[OVERLAY_PARAM_CROP_MAX].xyz;
-            bool inside = local.x >= bmin.x && local.x <= bmax.x &&
-                          local.y >= bmin.y && local.y <= bmax.y &&
-                          local.z >= bmin.z && local.z <= bmax.z;
-            bool outside = inside == overlay_enabled(crop_flags.y);
-            if (outside) {
-                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-                if (overlay_enabled(crop_flags.z)) {
-                    overlay_flags |= OVERLAY_FLAG_DIM;
-                } else {
-                    active = false;
-                }
+    // Host packs crop boxes densely: primary at CROP_FLAGS, then extras. If the
+    // primary enable bit is off, no crop is active — skip the whole 16-slot walk.
+    // When extras exist they are contiguous; stop at the first disabled slot.
+    {
+        float4 crop_flags = overlay_params[OVERLAY_PARAM_CROP_FLAGS];
+        if (overlay_enabled(crop_flags.x)) {
+            apply_crop_box_filter(overlay_params, OVERLAY_PARAM_CROP_FLAGS, crop_flags,
+                                  node_data_enabled, node_idx, mean_ws,
+                                  active, overlay_flags);
+            for (uint crop_i = 0u; crop_i < OVERLAY_PARAM_CROP_EXTRA_COUNT; ++crop_i) {
+                const uint flags_idx =
+                    OVERLAY_PARAM_CROP_EXTRA_BASE + crop_i * OVERLAY_PARAM_CROP_STRIDE;
+                float4 extra_flags = overlay_params[flags_idx];
+                if (!overlay_enabled(extra_flags.x))
+                    break;
+                apply_crop_box_filter(overlay_params, flags_idx, extra_flags,
+                                      node_data_enabled, node_idx, mean_ws,
+                                      active, overlay_flags);
             }
         }
     }
 
-    float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
-    if (active && overlay_enabled(ellipsoid_flags.x)) {
-        int parent_node_idx = overlay_int(ellipsoid_flags.w);
-        bool applies = parent_node_idx < 0 || (node_data_enabled && node_idx == parent_node_idx);
-        if (applies) {
-            float3 local = transform_point_rows(overlay_params, OVERLAY_PARAM_ELLIPSOID_TRANSFORM, mean_ws);
-            float3 radii = overlay_params[OVERLAY_PARAM_ELLIPSOID_RADII].xyz;
-            float norm = (local.x * local.x) / (radii.x * radii.x) +
-                         (local.y * local.y) / (radii.y * radii.y) +
-                         (local.z * local.z) / (radii.z * radii.z);
-            bool inside = norm <= 1.0f;
-            bool outside = inside == overlay_enabled(ellipsoid_flags.y);
-            if (outside) {
-                overlay_flags |= OVERLAY_FLAG_NONSELECTABLE;
-                if (overlay_enabled(ellipsoid_flags.z)) {
-                    overlay_flags |= OVERLAY_FLAG_DIM;
-                } else {
-                    active = false;
-                }
+    {
+        float4 ellipsoid_flags = overlay_params[OVERLAY_PARAM_ELLIPSOID_FLAGS];
+        if (overlay_enabled(ellipsoid_flags.x)) {
+            apply_ellipsoid_filter(overlay_params, OVERLAY_PARAM_ELLIPSOID_FLAGS, ellipsoid_flags,
+                                   node_data_enabled, node_idx, mean_ws,
+                                   active, overlay_flags);
+            for (uint ellipsoid_i = 0u; ellipsoid_i < OVERLAY_PARAM_ELLIPSOID_EXTRA_COUNT; ++ellipsoid_i) {
+                const uint flags_idx =
+                    OVERLAY_PARAM_ELLIPSOID_EXTRA_BASE + ellipsoid_i * OVERLAY_PARAM_ELLIPSOID_STRIDE;
+                float4 extra_flags = overlay_params[flags_idx];
+                if (!overlay_enabled(extra_flags.x))
+                    break;
+                apply_ellipsoid_filter(overlay_params, flags_idx, extra_flags,
+                                       node_data_enabled, node_idx, mean_ws,
+                                       active, overlay_flags);
             }
         }
     }
@@ -553,6 +649,18 @@ layout(binding=2) StructuredBuffer<uint> shN;  // s8x4 per swizzled slot
 layout(binding=3) StructuredBuffer<uint2> rotations;  // f16x4 (w,x,y,z)
 layout(binding=4) StructuredBuffer<uint2> scaling_raw;  // log f16x3 + pad
 layout(binding=5) StructuredBuffer<uint> opacity_raw;  // f16, 2 splats per uint
+#elif LFS_SHN_F16
+layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
+// shN is uniforms.shN_address (PhysicalStorageBuffer64); binding 2 is unused.
+layout(binding=3) StructuredBuffer<float4> rotations;  // 4
+layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
+layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
+#elif LFS_SHN_Q16
+layout(binding=1) StructuredBuffer<float> sh0;  // 1*3 fp32 DC
+// shN is uniforms.shN_address (PhysicalStorageBuffer64); binding 2 is unused.
+layout(binding=3) StructuredBuffer<float4> rotations;  // 4
+layout(binding=4) StructuredBuffer<float> scaling_raw;  // 3
+layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 #else
 layout(binding=1) StructuredBuffer<float> sh0;  // 1*3
 layout(binding=2) StructuredBuffer<float4> shN;  // rest-only 15*3
@@ -563,9 +671,8 @@ layout(binding=5) StructuredBuffer<float> opacity_raw;  // 1
 
 // Output buffers
 #if !LFS_PROJECTION_SURVIVORS
-// The macro chain derives coverage from the rect + ellipse; tiles_touched and
-// radii are legacy-chain outputs only and their bindings are absent in the
-// survivor variant.
+// The macro chain derives coverage from the rect + ellipse; tiles_touched is
+// a legacy-chain output only. Binding 8 (write-only radii) was retired.
 layout(binding=6) RWStructuredBuffer<int> out_tiles_touched;
 #endif
 #if USE_EMULATED_INT64
@@ -573,14 +680,11 @@ layout(binding=7) RWStructuredBuffer<int32_t> out_rect_tile_space;
 #else
 layout(binding=7) RWStructuredBuffer<int64_t> out_rect_tile_space;
 #endif
-#if !LFS_PROJECTION_SURVIVORS
-layout(binding=8) RWStructuredBuffer<int> out_radii;
-#endif
 layout(binding=9) RWStructuredBuffer<float2> out_xy_vs;
 layout(binding=10) RWStructuredBuffer<float> out_depths;
 layout(binding=11) RWStructuredBuffer<float4> out_inv_cov_vs;
 layout(binding=12) RWStructuredBuffer<float> out_rgb;
-layout(binding=13) RWStructuredBuffer<uint> out_overlay_flags;
+layout(binding=13) RWByteAddressBuffer out_overlay_flags;
 layout(binding=14) ByteAddressBuffer transform_indices;
 layout(binding=15) ByteAddressBuffer node_mask;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
@@ -622,14 +726,22 @@ layout(binding=29) StructuredBuffer<float4> page_frames;
 layout(binding=24) StructuredBuffer<float4> page_frames;
 #endif
 #endif
+#if LFS_SHN_Q16
+// Per-256-splat float2 (min,max) bounds for pad-dropped q16 SH rest.
+// Appended last like page_frames so the C++ buffer list just appends it.
+#if LFS_PROJECTION_SURVIVORS
+layout(binding=29) StructuredBuffer<float2> shN_bounds;
+#else
+layout(binding=24) StructuredBuffer<float2> shN_bounds;
+#endif
+#endif
 
 #if !LFS_PROJECTION_SURVIVORS
 // Legacy N-wide variant only: the survivor-list variant never clears, because
 // rejected splats simply do not append a compact slot.
 [ForceInline]
-void clear_forward_projection_output(uint out_idx, uint overlay_flags) {
-    out_overlay_flags[out_idx] = overlay_flags;
-    out_radii[out_idx] = 0;
+void clear_forward_projection_output(uint out_idx, uint overlay_flags, uint lod_enabled) {
+    write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, lod_enabled);
     out_tiles_touched[out_idx] = 0;
   #if USE_EMULATED_INT64
     out_rect_tile_space[2*out_idx+0] = 0;
@@ -718,7 +830,7 @@ void main(
         if ((uniforms.lod_enabled & 32u) != 0u) {
             const uint valid = min(lod_counts[0], uniforms.lod_count);
             if (render_idx >= valid) {
-                clear_forward_projection_output(out_idx, 0u);
+                clear_forward_projection_output(out_idx, 0u, uniforms.lod_enabled);
                 return;
             }
         }
@@ -726,7 +838,7 @@ void main(
         g_idx = lod_indices[render_idx];
         if (g_idx == 0xffffffffu || g_idx >= uniforms.model_num_splats) {
           #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
-            clear_forward_projection_output(out_idx, 0u);
+            clear_forward_projection_output(out_idx, 0u, uniforms.lod_enabled);
           #endif
             return;
         }
@@ -774,6 +886,22 @@ void main(
         active_sh,
         uniforms.shN_layout_slots
       );
+    #elif LFS_SHN_Q16
+    Gaussian_3D gauss = load_gaussian_split(
+        g_idx, xyz_ws, sh0, uniforms.shN_address, shN_bounds, rotations,
+        scaling_raw, opacity_raw,
+        uniforms.lod_enabled,
+        active_sh,
+        uniforms.shN_layout_slots
+      );
+    #elif LFS_SHN_F16
+    Gaussian_3D gauss = load_gaussian_split(
+        g_idx, xyz_ws, sh0, uniforms.shN_address, rotations,
+        scaling_raw, opacity_raw,
+        uniforms.lod_enabled,
+        active_sh,
+        uniforms.shN_layout_slots
+      );
     #else
     Gaussian_3D gauss = load_gaussian_split(
         g_idx, xyz_ws, sh0, shN, rotations,
@@ -812,7 +940,7 @@ void main(
       #if LFS_PROJECTION_SURVIVORS
         return;
       #else
-        clear_forward_projection_output(out_idx, overlay_flags);
+        clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
         return;
       #endif
     }
@@ -875,7 +1003,7 @@ void main(
         splat.det <= 0.0
     ) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
-            clear_forward_projection_output(out_idx, overlay_flags);
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
         #endif
         return;
     }
@@ -903,7 +1031,7 @@ void main(
     int32_t n_tiles = int32_t(rect_tile_space.max_x - rect_tile_space.min_x) * int32_t(rect_tile_space.max_y - rect_tile_space.min_y);
     if (n_tiles == 0) {
         #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD && !LFS_PROJECTION_SURVIVORS
-            clear_forward_projection_output(out_idx, overlay_flags);
+            clear_forward_projection_output(out_idx, overlay_flags, uniforms.lod_enabled);
         #endif
         return;
     }
@@ -953,8 +1081,6 @@ void main(
     out_sort_ids[out_idx] = int32_t(out_idx);
     out_orig_ids[out_idx] = int32_t(logical_idx);
 #else
-    // out_radii[g_idx] = (uint32_t)radius;  // inria
-    out_radii[out_idx] = (uint32_t)ceil(max(radii.x, radii.y));  // gsplat, only used in densification
     out_tiles_touched[out_idx] = n_tiles;
   #if USE_EMULATED_INT64
     out_rect_tile_space[2*out_idx+0] = (int32_t)rect_tile_space.min_x | ((int32_t)rect_tile_space.min_y << 16);
@@ -964,7 +1090,7 @@ void main(
   #endif
 
     if (n_tiles == 0) {
-        out_overlay_flags[out_idx] = overlay_flags;
+        write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, uniforms.lod_enabled);
         return;
     }
 
@@ -993,7 +1119,7 @@ void main(
     out_depths[out_idx] = splat.xyz_vs.z;
     out_inv_cov_vs[out_idx] = splat.inv_cov_vs_opac;
     write_t3_float3(splat.rgb, out_idx, out_rgb);
-    out_overlay_flags[out_idx] = overlay_flags;
+    write_overlay_byte(out_overlay_flags, out_idx, overlay_flags, uniforms.lod_enabled);
 
 #elif EXPORT_MODE == EXPORT_MODE_VULKAN_BACKWARD
 

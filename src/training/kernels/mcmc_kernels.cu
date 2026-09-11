@@ -2,13 +2,17 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "core/tensor.hpp"
+#include "lfs/cuda_scratch.hpp"
 #include "mcmc_kernels.hpp"
+#include <cassert>
 #include <cub/cub.cuh>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <limits>
 #include <thrust/adjacent_difference.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
@@ -42,7 +46,10 @@ namespace lfs::training::mcmc {
                     binom *= static_cast<float>(n - k) / static_cast<float>(k + 1);
             }
         }
-        cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(), RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float));
+        LFS_CUDA_CHECK_MSG(
+            cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(),
+                               RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float)),
+            "MCMC relocation coefficient upload (n_max={})", n_max);
     }
 
     // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
@@ -50,6 +57,7 @@ namespace lfs::training::mcmc {
         const float* __restrict__ opacities,
         const float* __restrict__ scales,
         const int32_t* __restrict__ ratios,
+        const float min_opacity,
         float* __restrict__ new_opacities,
         float* __restrict__ new_scales,
         const size_t N) {
@@ -70,7 +78,7 @@ namespace lfs::training::mcmc {
         // new_opacity = 1 - (1 - opacity)^(1/n_idx)
         const float new_opacity = fminf(fmaxf(
                                             1.0f - powf(1.0f - opacity, 1.0f / static_cast<float>(n_idx)),
-                                            OPACITY_MIN),
+                                            fmaxf(OPACITY_MIN, min_opacity)),
                                         OPACITY_MAX);
         new_opacities[idx] = new_opacity;
 
@@ -99,6 +107,7 @@ namespace lfs::training::mcmc {
         const float* opacities,
         const float* scales,
         const int32_t* ratios,
+        float min_opacity,
         float* new_opacities,
         float* new_scales,
         size_t N,
@@ -117,9 +126,11 @@ namespace lfs::training::mcmc {
             opacities,
             scales,
             ratios,
+            min_opacity,
             new_opacities,
             new_scales,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.relocation");
     }
 
     // Helper: Quaternion to rotation matrix
@@ -147,6 +158,45 @@ namespace lfs::training::mcmc {
         );
     }
 
+    __device__ __forceinline__ void apply_noise_to_mean(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        size_t idx,
+        float current_lr,
+        float noise_x,
+        float noise_y,
+        float noise_z) {
+        size_t idx_3d = 3 * idx;
+
+        // Compute S^2 (diagonal matrix from exp(2 * raw_scale))
+        const vec3 raw_scale = glm::make_vec3(raw_scales + idx_3d);
+        mat3 S2 = mat3(__expf(2.f * raw_scale[0]), 0.f, 0.f,
+                       0.f, __expf(2.f * raw_scale[1]), 0.f,
+                       0.f, 0.f, __expf(2.f * raw_scale[2]));
+
+        // Get rotation matrix R from quaternion
+        vec4 raw_quat = glm::make_vec4(raw_quats + 4 * idx);
+        mat3 R = raw_quat_to_rotmat(raw_quat);
+
+        // Compute covariance = R * S^2 * R^T
+        mat3 covariance = R * S2 * glm::transpose(R);
+
+        // Transform noise: transformed_noise = covariance * noise
+        vec3 transformed_noise = covariance * vec3(noise_x, noise_y, noise_z);
+
+        // Compute opacity-based scaling factor
+        float opacity = __frcp_rn(1.f + __expf(-raw_opacities[idx]));
+        float op_sigmoid = __frcp_rn(1.f + __expf(100.f * opacity - 0.5f));
+        float noise_factor = current_lr * op_sigmoid;
+
+        // Add scaled noise to means
+        means[idx_3d] += noise_factor * transformed_noise.x;
+        means[idx_3d + 1] += noise_factor * transformed_noise.y;
+        means[idx_3d + 2] += noise_factor * transformed_noise.z;
+    }
+
     __global__ void add_noise_kernel(
         const float* raw_opacities,
         const float* raw_scales,
@@ -165,32 +215,36 @@ namespace lfs::training::mcmc {
             return;
 
         size_t idx_3d = 3 * idx;
+        apply_noise_to_mean(
+            raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
+            noise[idx_3d], noise[idx_3d + 1], noise[idx_3d + 2]);
+    }
 
-        // Compute S^2 (diagonal matrix from exp(2 * raw_scale))
-        const vec3 raw_scale = glm::make_vec3(raw_scales + idx_3d);
-        mat3 S2 = mat3(__expf(2.f * raw_scale[0]), 0.f, 0.f,
-                       0.f, __expf(2.f * raw_scale[1]), 0.f,
-                       0.f, 0.f, __expf(2.f * raw_scale[2]));
+    __global__ void inject_noise_kernel(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        float current_lr,
+        size_t N,
+        uint64_t seed) {
 
-        // Get rotation matrix R from quaternion
-        vec4 raw_quat = glm::make_vec4(raw_quats + 4 * idx);
-        mat3 R = raw_quat_to_rotmat(raw_quat);
+        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= N)
+            return;
+        if (frozen_mask != nullptr && idx < frozen_mask_size && frozen_mask[idx])
+            return;
 
-        // Compute covariance = R * S^2 * R^T
-        mat3 covariance = R * S2 * glm::transpose(R);
+        // Philox: free counter init vs XORWOW skip-ahead (1149→6.5µs).
+        curandStatePhilox4_32_10_t rng;
+        curand_init(seed, idx, 0, &rng);
+        const float4 n = curand_normal4(&rng);
 
-        // Transform noise: transformed_noise = covariance * noise
-        vec3 transformed_noise = covariance * glm::make_vec3(noise + idx_3d);
-
-        // Compute opacity-based scaling factor
-        float opacity = __frcp_rn(1.f + __expf(-raw_opacities[idx]));
-        float op_sigmoid = __frcp_rn(1.f + __expf(100.f * opacity - 0.5f));
-        float noise_factor = current_lr * op_sigmoid;
-
-        // Add scaled noise to means
-        means[idx_3d] += noise_factor * transformed_noise.x;
-        means[idx_3d + 1] += noise_factor * transformed_noise.y;
-        means[idx_3d + 2] += noise_factor * transformed_noise.z;
+        apply_noise_to_mean(
+            raw_opacities, raw_scales, raw_quats, means, idx, current_lr,
+            n.x, n.y, n.z);
     }
 
     void launch_add_noise_kernel(
@@ -224,156 +278,40 @@ namespace lfs::training::mcmc {
             frozen_mask_size,
             current_lr,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.add_noise");
     }
 
-    // Fused gather kernel - collects all parameters at once
-    __global__ void gather_gaussian_params_kernel(
-        const int64_t* __restrict__ indices,
-        const float* __restrict__ src_means,
-        const float* __restrict__ src_sh0,
-        const float* __restrict__ src_shN,
-        const float* __restrict__ src_scales,
-        const float* __restrict__ src_rotations,
-        const float* __restrict__ src_opacities,
-        float* __restrict__ dst_means,
-        float* __restrict__ dst_sh0,
-        float* __restrict__ dst_shN,
-        float* __restrict__ dst_scales,
-        float* __restrict__ dst_rotations,
-        float* __restrict__ dst_opacities,
-        size_t n_samples,
-        size_t sh_rest,
-        int opacity_dim,
-        size_t N) { // Add N parameter for bounds checking
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= n_samples)
-            return;
-
-        int64_t src_idx = indices[idx];
-
-        // Bounds check - CRITICAL for safety
-        if (src_idx < 0 || src_idx >= static_cast<int64_t>(N)) {
-            // Invalid index - skip this gather (leave output uninitialized or zero it)
-            return;
-        }
-
-        // Gather means [3]
-        for (int i = 0; i < 3; ++i) {
-            dst_means[idx * 3 + i] = src_means[src_idx * 3 + i];
-        }
-
-        // Gather sh0 [N, 1, 3] -> output [n_samples, 1, 3]
-        // Memory layout: each Gaussian has 1*3 = 3 floats
-        for (int i = 0; i < 3; ++i) {
-            dst_sh0[idx * 3 + i] = src_sh0[src_idx * 3 + i];
-        }
-
-        // Gather shN [sh_rest, 3]
-        for (size_t i = 0; i < sh_rest * 3; ++i) {
-            dst_shN[idx * sh_rest * 3 + i] = src_shN[src_idx * sh_rest * 3 + i];
-        }
-
-        // Gather scales [3]
-        for (int i = 0; i < 3; ++i) {
-            dst_scales[idx * 3 + i] = src_scales[src_idx * 3 + i];
-        }
-
-        // Gather rotations [4]
-        for (int i = 0; i < 4; ++i) {
-            dst_rotations[idx * 4 + i] = src_rotations[src_idx * 4 + i];
-        }
-
-        // Gather opacities [1] or []
-        if (opacity_dim == 1) {
-            dst_opacities[idx] = src_opacities[src_idx];
-        } else {
-            dst_opacities[idx] = src_opacities[src_idx];
-        }
-    }
-
-    void launch_gather_gaussian_params(
-        const int64_t* indices,
-        const float* src_means,
-        const float* src_sh0,
-        const float* src_shN,
-        const float* src_scales,
-        const float* src_rotations,
-        const float* src_opacities,
-        float* dst_means,
-        float* dst_sh0,
-        float* dst_shN,
-        float* dst_scales,
-        float* dst_rotations,
-        float* dst_opacities,
-        size_t n_samples,
-        size_t sh_rest,
-        int opacity_dim,
-        size_t N, // Add N parameter
+    void launch_inject_noise_kernel(
+        const float* raw_opacities,
+        const float* raw_scales,
+        const float* raw_quats,
+        float* means,
+        const bool* frozen_mask,
+        size_t frozen_mask_size,
+        float current_lr,
+        size_t N,
+        uint64_t seed,
         void* stream) {
 
-        if (n_samples == 0) {
+        if (N == 0) {
             return;
         }
 
         dim3 threads(256);
-        dim3 grid((n_samples + threads.x - 1) / threads.x);
-
+        dim3 grid((N + threads.x - 1) / threads.x);
         cudaStream_t cuda_stream = resolve_stream(stream);
 
-        gather_gaussian_params_kernel<<<grid, threads, 0, cuda_stream>>>(
-            indices,
-            src_means,
-            src_sh0,
-            src_shN,
-            src_scales,
-            src_rotations,
-            src_opacities,
-            dst_means,
-            dst_sh0,
-            dst_shN,
-            dst_scales,
-            dst_rotations,
-            dst_opacities,
-            n_samples,
-            sh_rest,
-            opacity_dim,
-            N);
-    }
-
-    // Fused kernel: Compute raw opacity and scaling values (ZERO intermediate allocations)
-    // Performs: clamp(opacity) -> inverse_sigmoid -> log -> optional unsqueeze
-    //           log(scales)
-    __global__ void compute_raw_values_kernel(
-        const float* __restrict__ opacities, // [n]
-        const float* __restrict__ scales,    // [n, 3]
-        float* __restrict__ opacity_raw,     // [n] or [n, 1]
-        float* __restrict__ scaling_raw,     // [n, 3]
-        size_t n,
-        float min_opacity,
-        int opacity_dim) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= n)
-            return;
-
-        // Clamp opacity
-        float opacity_clamped = fminf(fmaxf(opacities[idx], min_opacity), 1.0f - 1e-7f);
-
-        // Inverse sigmoid: log(opacity / (1 - opacity))
-        float opacity_raw_val = logf(opacity_clamped / (1.0f - opacity_clamped));
-
-        // Write opacity (handle both [n] and [n, 1] shapes)
-        if (opacity_dim == 1) {
-            opacity_raw[idx] = opacity_raw_val; // [n, 1] is still indexed linearly
-        } else {
-            opacity_raw[idx] = opacity_raw_val; // [n]
-        }
-
-        // Log of scales (3 values)
-        for (int i = 0; i < 3; ++i) {
-            scaling_raw[idx * 3 + i] = logf(scales[idx * 3 + i]);
-        }
+        inject_noise_kernel<<<grid, threads, 0, cuda_stream>>>(
+            raw_opacities,
+            raw_scales,
+            raw_quats,
+            means,
+            frozen_mask,
+            frozen_mask_size,
+            current_lr,
+            N,
+            seed);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.inject_noise");
     }
 
     // Kernel to update scaling and opacity at specific indices (avoids index_put_ which loses capacity)
@@ -407,35 +345,6 @@ namespace lfs::training::mcmc {
         opacity_raw[target_idx] = new_opacity_raw[idx];
     }
 
-    void launch_compute_raw_values(
-        const float* opacities,
-        const float* scales,
-        float* opacity_raw,
-        float* scaling_raw,
-        size_t n,
-        float min_opacity,
-        int opacity_dim,
-        void* stream) {
-
-        if (n == 0) {
-            return;
-        }
-
-        dim3 threads(256);
-        dim3 grid((n + threads.x - 1) / threads.x);
-
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        compute_raw_values_kernel<<<grid, threads, 0, cuda_stream>>>(
-            opacities,
-            scales,
-            opacity_raw,
-            scaling_raw,
-            n,
-            min_opacity,
-            opacity_dim);
-    }
-
     void launch_update_scaling_opacity(
         const int64_t* indices,
         const float* new_scaling,
@@ -465,6 +374,7 @@ namespace lfs::training::mcmc {
             n_indices,
             opacity_dim,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.update_scaling_opacity");
     }
 
     // Fused copy kernel - copies all parameters from src_indices to dst_indices
@@ -566,258 +476,7 @@ namespace lfs::training::mcmc {
             sh_rest,
             opacity_dim,
             N);
-    }
-
-    // Histogram kernel using atomics - counts occurrences of each index
-    __global__ void histogram_kernel(
-        const int64_t* __restrict__ indices,
-        int32_t* __restrict__ counts,
-        size_t n_samples,
-        size_t N) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= n_samples)
-            return;
-
-        int64_t index = indices[idx];
-
-        // Bounds check
-        if (index < 0 || index >= static_cast<int64_t>(N))
-            return;
-
-        // Atomic increment
-        atomicAdd(&counts[index], 1);
-    }
-
-    void launch_histogram(
-        const int64_t* indices,
-        int32_t* counts,
-        size_t n_samples,
-        size_t N,
-        void* stream) {
-
-        if (n_samples == 0)
-            return;
-
-        dim3 threads(256);
-        dim3 grid((n_samples + threads.x - 1) / threads.x);
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        histogram_kernel<<<grid, threads, 0, cuda_stream>>>(
-            indices, counts, n_samples, N);
-    }
-
-    // Smarter histogram: Use hash map-style approach with sorting
-    // This works well when n_samples << N (which is our case)
-    __global__ void histogram_gather_sorted_kernel(
-        const int64_t* __restrict__ indices,
-        int32_t* __restrict__ output_counts,
-        size_t n_samples,
-        size_t N) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= n_samples)
-            return;
-
-        int64_t my_index = indices[idx];
-
-        // Bounds check
-        if (my_index < 0 || my_index >= static_cast<int64_t>(N)) {
-            output_counts[idx] = 0;
-            return;
-        }
-
-        // Count occurrences: scan forward until we find a different index
-        // This works ONLY if indices are sorted or if we accept O(n) per thread
-        // Since indices are NOT sorted, we do linear scan (unavoidable without large temp storage)
-
-        // Optimization: Use warp-level primitives to speed up counting
-        int32_t count = 0;
-
-        // Each thread scans the array looking for matches
-        // This is O(n) per thread, total O(n*n_samples)
-        // BUT: We can optimize using warp primitives
-
-        const int WARP_SIZE = 32;
-        int lane_id = threadIdx.x % WARP_SIZE;
-
-        // Each warp cooperatively counts for one index
-        for (size_t i = lane_id; i < n_samples; i += WARP_SIZE) {
-            if (indices[i] == my_index) {
-                count++;
-            }
-        }
-
-        // Warp-level reduction to sum counts
-        for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
-            count += __shfl_down_sync(0xffffffff, count, offset);
-        }
-
-        // First lane writes the result
-        if (lane_id == 0) {
-            output_counts[idx] = count;
-        }
-    }
-
-    void launch_histogram_sort(
-        const int64_t* indices,
-        int32_t* output_counts,
-        size_t n_samples,
-        void* stream) {
-
-        if (n_samples == 0)
-            return;
-
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        // Algorithm: Sort indices, then use adjacent_difference to find run boundaries,
-        // then use inclusive_scan to count run lengths, then scatter back to original positions
-
-        // Step 1: Create position array and copy indices
-        thrust::device_vector<int32_t> orig_positions(n_samples);
-        thrust::sequence(thrust::cuda::par.on(cuda_stream), orig_positions.begin(), orig_positions.end());
-
-        thrust::device_vector<int64_t> sorted_indices(indices, indices + n_samples);
-
-        // Step 2: Sort indices while tracking original positions
-        thrust::sort_by_key(thrust::cuda::par.on(cuda_stream),
-                            sorted_indices.begin(), sorted_indices.end(),
-                            orig_positions.begin());
-
-        // Step 3: Mark segment boundaries (1 where index changes, 0 otherwise)
-        thrust::device_vector<int32_t> head_flags(n_samples);
-        thrust::adjacent_difference(thrust::cuda::par.on(cuda_stream),
-                                    sorted_indices.begin(), sorted_indices.end(),
-                                    head_flags.begin(),
-                                    thrust::not_equal_to<int64_t>());
-        // First element is always a segment head
-        if (n_samples > 0) {
-            thrust::fill_n(thrust::cuda::par.on(cuda_stream), head_flags.begin(), 1, 1);
-        }
-
-        // Step 4: Compute run lengths with exclusive_scan_by_key
-        // This gives each element its position within its segment
-        thrust::device_vector<int32_t> run_positions(n_samples);
-        thrust::device_vector<int32_t> ones(n_samples, 1);
-
-        thrust::exclusive_scan_by_key(thrust::cuda::par.on(cuda_stream),
-                                      sorted_indices.begin(), sorted_indices.end(),
-                                      ones.begin(),
-                                      run_positions.begin());
-
-        // Step 5: Find the tail of each segment and compute run length
-        // Use a kernel to compute the count for each element
-        thrust::device_vector<int32_t> run_counts(n_samples);
-
-        thrust::transform(thrust::cuda::par.on(cuda_stream),
-                          thrust::make_counting_iterator<int>(0),
-                          thrust::make_counting_iterator<int>(n_samples),
-                          run_counts.begin(),
-                          [sorted_indices_ptr = thrust::raw_pointer_cast(sorted_indices.data()),
-                           run_positions_ptr = thrust::raw_pointer_cast(run_positions.data()),
-                           n_samples] __device__(int idx) {
-                              int64_t my_index = sorted_indices_ptr[idx];
-                              int my_pos = run_positions_ptr[idx];
-
-                              // Find the last occurrence of this index
-                              int count = 1;
-                              if (idx + 1 < n_samples && sorted_indices_ptr[idx + 1] == my_index) {
-                                  // Not the last in segment, find it
-                                  for (int i = idx + 1; i < n_samples && sorted_indices_ptr[i] == my_index; ++i) {
-                                      count = run_positions_ptr[i] + 1;
-                                  }
-                              } else {
-                                  // Last in segment
-                                  count = my_pos + 1;
-                              }
-                              return count;
-                          });
-
-        // Step 6: Scatter counts back to original positions
-        thrust::scatter(thrust::cuda::par.on(cuda_stream),
-                        run_counts.begin(), run_counts.end(),
-                        orig_positions.begin(),
-                        output_counts);
-    }
-
-    // Fused gather kernel for 2 tensors - replaces 2x index_select
-    // OPTIMIZED: Unroll loops for common cases
-    __global__ void gather_2tensors_kernel(
-        const int64_t* __restrict__ indices,
-        const float* __restrict__ src_a,
-        const float* __restrict__ src_b,
-        float* __restrict__ dst_a,
-        float* __restrict__ dst_b,
-        size_t n_samples,
-        size_t dim_a,
-        size_t dim_b,
-        size_t N) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= n_samples)
-            return;
-
-        int64_t src_idx = indices[idx];
-
-        // Bounds check - CRITICAL for safety
-        if (src_idx < 0 || src_idx >= static_cast<int64_t>(N)) {
-            // Zero the output for invalid indices
-            for (size_t i = 0; i < dim_a; ++i)
-                dst_a[idx * dim_a + i] = 0.0f;
-            for (size_t i = 0; i < dim_b; ++i)
-                dst_b[idx * dim_b + i] = 0.0f;
-            return;
-        }
-
-        // Fast path for common case: dim_a=1, dim_b=3
-        if (dim_a == 1 && dim_b == 3) {
-            dst_a[idx] = src_a[src_idx];
-            dst_b[idx * 3 + 0] = src_b[src_idx * 3 + 0];
-            dst_b[idx * 3 + 1] = src_b[src_idx * 3 + 1];
-            dst_b[idx * 3 + 2] = src_b[src_idx * 3 + 2];
-            return;
-        }
-
-        // General case: Gather first tensor (dim_a elements)
-        for (size_t i = 0; i < dim_a; ++i) {
-            dst_a[idx * dim_a + i] = src_a[src_idx * dim_a + i];
-        }
-
-        // Gather second tensor (dim_b elements)
-        for (size_t i = 0; i < dim_b; ++i) {
-            dst_b[idx * dim_b + i] = src_b[src_idx * dim_b + i];
-        }
-    }
-
-    void launch_gather_2tensors(
-        const int64_t* indices,
-        const float* src_a,
-        const float* src_b,
-        float* dst_a,
-        float* dst_b,
-        size_t n_samples,
-        size_t dim_a,
-        size_t dim_b,
-        size_t N,
-        void* stream) {
-
-        if (n_samples == 0)
-            return;
-
-        dim3 threads(256);
-        dim3 grid((n_samples + threads.x - 1) / threads.x);
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        gather_2tensors_kernel<<<grid, threads, 0, cuda_stream>>>(
-            indices,
-            src_a,
-            src_b,
-            dst_a,
-            dst_b,
-            n_samples,
-            dim_a,
-            dim_b,
-            N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.copy_params");
     }
 
     // ============================================================================
@@ -865,7 +524,7 @@ namespace lfs::training::mcmc {
             return;
         }
 
-        curandState state;
+        curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
         const float u = curand_uniform(&state) * prob_sum;
@@ -910,6 +569,9 @@ namespace lfs::training::mcmc {
         if (n_samples == 0 || n_alive == 0)
             return;
 
+        LFS_ASSERT_MSG(n_alive <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MCMC multinomial input exceeds CUB's int item-count limit");
+
         const cudaStream_t cuda_stream = resolve_stream(stream);
         // Home the scan/sampling temporaries on the launch stream so the
         // stream-aware pool cannot recycle them before this work completes.
@@ -918,19 +580,24 @@ namespace lfs::training::mcmc {
         auto alive_probs = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         auto cumsum_buf = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        thrust::transform(thrust::cuda::par.on(cuda_stream),
+        thrust::transform(thrust::cuda::par_nosync.on(cuda_stream),
                           thrust::counting_iterator<int>(0),
                           thrust::counting_iterator<int>(n_alive),
                           thrust::device_ptr<float>(alive_probs.ptr<float>()),
                           [=] __device__(int i) { return sampling_weights[alive_indices[i]]; });
 
-        void* d_temp_storage = nullptr;
-        size_t temp_storage_bytes = 0;
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
-        cudaMallocAsync(&d_temp_storage, temp_storage_bytes, cuda_stream);
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
+        cuda_scratch::CubWorkspace cub_workspace(
+            "cub::DeviceScan::InclusiveSum", cuda_stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::InclusiveSum(
+                    workspace, workspace_bytes,
+                    alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
+            });
+        cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceScan::InclusiveSum(
+                workspace, workspace_bytes,
+                alive_probs.ptr<float>(), cumsum_buf.ptr<float>(), n_alive, cuda_stream);
+        });
 
         const dim3 sample_threads(256);
         const dim3 sample_grid((n_samples + sample_threads.x - 1) / sample_threads.x);
@@ -947,8 +614,7 @@ namespace lfs::training::mcmc {
             sampled_opacities,
             sampled_scales,
             N);
-
-        cudaFreeAsync(d_temp_storage, cuda_stream);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial gather kernel launch");
     }
 
     // Multinomial sampling from all N weights (no alive_indices indirection)
@@ -977,7 +643,7 @@ namespace lfs::training::mcmc {
             return;
         }
 
-        curandState state;
+        curandStatePhilox4_32_10_t state;
         curand_init(seed, idx, 0, &state);
 
         const float u = curand_uniform(&state) * prob_sum;
@@ -1018,19 +684,27 @@ namespace lfs::training::mcmc {
         if (n_samples == 0 || N == 0)
             return;
 
+        LFS_ASSERT_MSG(N <= static_cast<size_t>(std::numeric_limits<int>::max()),
+                       "MCMC multinomial input exceeds CUB's int item-count limit");
+
         const cudaStream_t cuda_stream = resolve_stream(stream);
         // Home the scan temporary on the launch stream (see launch_multinomial_sample).
         const lfs::core::CUDAStreamGuard stream_guard(cuda_stream);
 
         auto cumsum_buf = lfs::core::Tensor::empty({N}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        void* d_temp_storage = nullptr;
-        size_t temp_storage_bytes = 0;
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
-        cudaMallocAsync(&d_temp_storage, temp_storage_bytes, cuda_stream);
-        cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
+        cuda_scratch::CubWorkspace cub_workspace(
+            "cub::DeviceScan::InclusiveSum", cuda_stream,
+            [&](void* workspace, size_t& workspace_bytes) {
+                return cub::DeviceScan::InclusiveSum(
+                    workspace, workspace_bytes,
+                    sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
+            });
+        cub_workspace.run([&](void* workspace, size_t& workspace_bytes) {
+            return cub::DeviceScan::InclusiveSum(
+                workspace, workspace_bytes,
+                sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
+        });
 
         const dim3 sample_threads(256);
         const dim3 sample_grid((n_samples + sample_threads.x - 1) / sample_threads.x);
@@ -1045,45 +719,7 @@ namespace lfs::training::mcmc {
             sampled_indices,
             sampled_opacities,
             sampled_scales);
-
-        cudaFreeAsync(d_temp_storage, cuda_stream);
-    }
-
-    // Compute rotation magnitude squared kernel (eliminates [N,4] intermediate tensor)
-    __global__ void compute_rotation_mag_sq_kernel(
-        const float* rotations, // [N, 4]
-        float* mag_sq,          // [N]
-        size_t N) {
-
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
-        if (idx >= N)
-            return;
-
-        // Each rotation is a quaternion [w, x, y, z] or [x, y, z, w]
-        // Compute ||q||^2 = q[0]^2 + q[1]^2 + q[2]^2 + q[3]^2
-        const float* q = &rotations[idx * 4];
-        mag_sq[idx] = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
-    }
-
-    void launch_compute_rotation_mag_sq(
-        const float* rotations,
-        float* mag_sq,
-        size_t N,
-        void* stream) {
-
-        if (N == 0) {
-            return;
-        }
-
-        dim3 threads(256);
-        dim3 grid((N + threads.x - 1) / threads.x);
-
-        cudaStream_t cuda_stream = resolve_stream(stream);
-
-        compute_rotation_mag_sq_kernel<<<grid, threads, 0, cuda_stream>>>(
-            rotations,
-            mag_sq,
-            N);
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "MCMC multinomial kernel launch");
     }
 
     __global__ void elementwise_max_inplace_kernel(
@@ -1113,6 +749,40 @@ namespace lfs::training::mcmc {
         cudaStream_t cuda_stream = resolve_stream(stream);
 
         elementwise_max_inplace_kernel<<<grid, threads, 0, cuda_stream>>>(a, b, N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.elementwise_max");
+    }
+
+    __global__ void max_error_and_zero_densification_kernel(
+        float* __restrict__ error_max,
+        float* __restrict__ densification_info,
+        size_t N) {
+
+        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        if (idx >= N)
+            return;
+
+        const float err = densification_info[N + idx];
+        error_max[idx] = fmaxf(error_max[idx], err);
+        densification_info[idx] = 0.f;
+        densification_info[N + idx] = 0.f;
+    }
+
+    void launch_max_error_and_zero_densification(
+        float* error_max,
+        float* densification_info,
+        size_t N,
+        void* stream) {
+
+        if (N == 0)
+            return;
+
+        dim3 threads(256);
+        dim3 grid((N + threads.x - 1) / threads.x);
+        cudaStream_t cuda_stream = resolve_stream(stream);
+
+        max_error_and_zero_densification_kernel<<<grid, threads, 0, cuda_stream>>>(
+            error_max, densification_info, N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.mcmc.max_error_and_zero_densif");
     }
 
 } // namespace lfs::training::mcmc

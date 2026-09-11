@@ -3,8 +3,10 @@
 
 #pragma once
 
-#include "core/logger.hpp"
-#include "memory_pool.hpp"
+#include "core/assert.hpp"
+#include "core/cuda_error.hpp"
+#include "core/tensor_fwd.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <type_traits>
 
@@ -725,59 +727,103 @@ namespace lfs::core::tensor_ops {
     // BINARY BROADCAST KERNEL (Generic fallback)
     // ============================================================================
 
+    struct BroadcastBinaryParams {
+        size_t a_shape[MAX_TENSOR_RANK];
+        size_t b_shape[MAX_TENSOR_RANK];
+        size_t c_shape[MAX_TENSOR_RANK];
+        int a_rank;
+        int b_rank;
+        int c_rank;
+        size_t c_elements;
+    };
+
+    // Same-shape early-out: no index math, optional float4 vectorization.
+    template <typename T, typename OutputT, typename BinaryOp>
+    __global__ void broadcast_binary_same_shape_kernel(
+        const T* __restrict__ a, const T* __restrict__ b, OutputT* __restrict__ c,
+        size_t n, BinaryOp op) {
+        size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            c[idx] = op(a[idx], b[idx]);
+        }
+    }
+
+    template <typename BinaryOp>
+    __global__ void broadcast_binary_same_shape_vec4_kernel_float(
+        const float* __restrict__ a, const float* __restrict__ b, float* __restrict__ c,
+        size_t n, BinaryOp op) {
+        const size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        const size_t idx = vec_idx * 4;
+        if (idx + 3 < n) {
+            float4 av = reinterpret_cast<const float4*>(a)[vec_idx];
+            float4 bv = reinterpret_cast<const float4*>(b)[vec_idx];
+            float4 out;
+            out.x = op(av.x, bv.x);
+            out.y = op(av.y, bv.y);
+            out.z = op(av.z, bv.z);
+            out.w = op(av.w, bv.w);
+            reinterpret_cast<float4*>(c)[vec_idx] = out;
+        } else if (idx < n) {
+            for (size_t i = idx; i < n; ++i) {
+                c[i] = op(a[i], b[i]);
+            }
+        }
+    }
+
     template <typename T, typename OutputT, typename BinaryOp>
     __global__ void broadcast_binary_kernel(
-        const T* a, const T* b, OutputT* c,
-        const int* a_shape, const int* b_shape, const int* c_shape,
-        int a_rank, int b_rank, int c_rank,
-        size_t c_elements, BinaryOp op) {
+        const T* a, const T* b, OutputT* c, BroadcastBinaryParams params,
+        BinaryOp op) {
         size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= c_elements)
+        if (idx >= params.c_elements)
             return;
 
         // Compute strides inline
-        int c_strides[8], a_strides[8], b_strides[8];
+        size_t c_strides[MAX_TENSOR_RANK];
+        size_t a_strides[MAX_TENSOR_RANK];
+        size_t b_strides[MAX_TENSOR_RANK];
 
-        c_strides[c_rank - 1] = 1;
-        for (int i = c_rank - 2; i >= 0; --i) {
-            c_strides[i] = c_strides[i + 1] * c_shape[i + 1];
+        c_strides[params.c_rank - 1] = 1;
+        for (int i = params.c_rank - 2; i >= 0; --i) {
+            c_strides[i] = c_strides[i + 1] * params.c_shape[i + 1];
         }
 
-        if (a_rank > 0) {
-            a_strides[a_rank - 1] = 1;
-            for (int i = a_rank - 2; i >= 0; --i) {
-                a_strides[i] = a_strides[i + 1] * a_shape[i + 1];
+        if (params.a_rank > 0) {
+            a_strides[params.a_rank - 1] = 1;
+            for (int i = params.a_rank - 2; i >= 0; --i) {
+                a_strides[i] = a_strides[i + 1] * params.a_shape[i + 1];
             }
         }
 
-        if (b_rank > 0) {
-            b_strides[b_rank - 1] = 1;
-            for (int i = b_rank - 2; i >= 0; --i) {
-                b_strides[i] = b_strides[i + 1] * b_shape[i + 1];
+        if (params.b_rank > 0) {
+            b_strides[params.b_rank - 1] = 1;
+            for (int i = params.b_rank - 2; i >= 0; --i) {
+                b_strides[i] = b_strides[i + 1] * params.b_shape[i + 1];
             }
         }
 
         // Broadcast indexing
-        int a_idx = 0, b_idx = 0;
+        size_t a_idx = 0;
+        size_t b_idx = 0;
         size_t remaining = idx;
 
-        for (int i = 0; i < c_rank; ++i) {
-            int c_coord = remaining / c_strides[i];
+        for (int i = 0; i < params.c_rank; ++i) {
+            const size_t c_coord = remaining / c_strides[i];
             remaining %= c_strides[i];
 
             // Map to a's coordinate
-            int offset_a = c_rank - a_rank;
+            const int offset_a = params.c_rank - params.a_rank;
             if (i >= offset_a) {
-                int dim = i - offset_a;
-                int coord = (a_shape[dim] == 1) ? 0 : c_coord;
+                const int dim = i - offset_a;
+                const size_t coord = (params.a_shape[dim] == 1) ? 0 : c_coord;
                 a_idx += coord * a_strides[dim];
             }
 
             // Map to b's coordinate
-            int offset_b = c_rank - b_rank;
+            const int offset_b = params.c_rank - params.b_rank;
             if (i >= offset_b) {
-                int dim = i - offset_b;
-                int coord = (b_shape[dim] == 1) ? 0 : c_coord;
+                const int dim = i - offset_b;
+                const size_t coord = (params.b_shape[dim] == 1) ? 0 : c_coord;
                 b_idx += coord * b_strides[dim];
             }
         }
@@ -796,6 +842,10 @@ namespace lfs::core::tensor_ops {
                                  const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
                                  size_t a_rank, size_t b_rank, size_t c_rank,
                                  size_t c_elements, BinaryOp op, cudaStream_t stream) {
+        LFS_ASSERT_MSG(a_rank <= MAX_TENSOR_RANK &&
+                           b_rank <= MAX_TENSOR_RANK &&
+                           c_rank <= MAX_TENSOR_RANK,
+                       "Binary broadcast rank exceeds MAX_TENSOR_RANK");
         if (c_elements == 0)
             return;
 
@@ -842,6 +892,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_row_comparison_kernel<<<grid, block_size, 0, stream>>>(
                     a, b, c, M, N, a_is_row, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.row_comparison");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -876,6 +927,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_scalar_kernel_float<<<grid_size, block_size, 0, stream>>>(
                     a, b, c, a_size, b_size, c_elements, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.scalar");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -908,6 +960,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_row_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, M, N, a_is_row, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.row");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -939,6 +992,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_column_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, M, N, a_is_col, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.column");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -946,38 +1000,61 @@ namespace lfs::core::tensor_ops {
             }
 
             case BroadcastPattern::Channel3D: {
-                // Channel3D broadcast: (H×W×C) op (1×1×C) - VECTORIZED FAST PATH!
-                // Critical for neural rendering: color transforms, normalization, etc.
+                // Channel3D: (H×W×C) op (1×1×C). Heuristic by C:
+                //   C <= 8  → per-pixel kernel (best for small C; float4/RGB specials)
+                //   C <= 128 and smem fits → smem kernel (channels reused from shared)
+                //   else    → coalesced warp kernel (large C, consecutive channels)
                 const size_t H = c_shape[0];
                 const size_t W = c_shape[1];
                 const size_t C = c_shape[2];
                 const bool a_is_broadcast = (a_shape[0] == 1 && a_shape[1] == 1);
-
-                // Grid: process all pixels in parallel
                 const size_t total_pixels = H * W;
-                const int grid_size = (total_pixels + block_size - 1) / block_size;
-                const int max_grid_dim = 65535; // CUDA limit
-
-                // Use 2D grid if 1D grid would exceed limit
-                dim3 grid;
-                if (grid_size <= max_grid_dim) {
-                    grid = dim3(grid_size, 1);
-                } else {
-                    // Split into 2D grid
-                    const int grid_x = (grid_size + max_grid_dim - 1) / max_grid_dim;
-                    const int grid_y = (grid_size + grid_x - 1) / grid_x;
-                    grid = dim3(grid_x, grid_y);
-                }
-
-                // NOTE: For C >= 16, memory coalescing becomes an issue with (H×W×C) layout
-                // Each thread processes one pixel (all C channels), causing strided access
-                // PyTorch likely uses different layout or transpose for better coalescing
-                // Our kernel is optimized for small C (3,4,8) which are most common in rendering
-                // For C=64, we're ~20% slower than PyTorch, but 10-12× faster for C=3,4!
+                const int max_grid_dim = 65535;
 
 #ifdef __CUDACC__
-                broadcast_channel3d_kernel_float<<<grid, block_size, 0, stream>>>(
-                    a, b, c, H, W, C, a_is_broadcast, op);
+                constexpr size_t kSmemChannelCap = 3072; // ~12 KiB float smem
+                if (C > 8 && C <= kSmemChannelCap) {
+                    // Shared-memory kernel: one thread per pixel, channels in smem
+                    const int grid_1d = static_cast<int>((total_pixels + block_size - 1) / block_size);
+                    dim3 grid;
+                    if (grid_1d <= max_grid_dim) {
+                        grid = dim3(grid_1d, 1);
+                    } else {
+                        const int grid_x = (grid_1d + max_grid_dim - 1) / max_grid_dim;
+                        const int grid_y = (grid_1d + grid_x - 1) / grid_x;
+                        grid = dim3(grid_x, grid_y);
+                    }
+                    const size_t smem_bytes = C * sizeof(float);
+                    broadcast_channel3d_smem_kernel_float<<<grid, block_size, smem_bytes, stream>>>(
+                        a, b, c, H, W, C, a_is_broadcast, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d_smem");
+                } else if (C > kSmemChannelCap) {
+                    // Coalesced: warps cooperate on channels; pixels assigned to warps
+                    const int warps_per_block = block_size / 32;
+                    const int grid_1d = static_cast<int>(
+                        (total_pixels + static_cast<size_t>(warps_per_block) - 1) /
+                        static_cast<size_t>(warps_per_block));
+                    const int grid_size = std::max(1, std::min(grid_1d, max_grid_dim));
+                    const size_t smem_bytes = C * sizeof(float);
+                    broadcast_channel3d_coalesced_kernel_float<<<grid_size, block_size,
+                                                                 smem_bytes, stream>>>(
+                        a, b, c, H, W, C, a_is_broadcast, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d_coalesced");
+                } else {
+                    // Small C (1,3,4,8): original per-pixel kernel with float4 specials
+                    const int grid_1d = static_cast<int>((total_pixels + block_size - 1) / block_size);
+                    dim3 grid;
+                    if (grid_1d <= max_grid_dim) {
+                        grid = dim3(grid_1d, 1);
+                    } else {
+                        const int grid_x = (grid_1d + max_grid_dim - 1) / max_grid_dim;
+                        const int grid_y = (grid_1d + grid_x - 1) / grid_x;
+                        grid = dim3(grid_x, grid_y);
+                    }
+                    broadcast_channel3d_kernel_float<<<grid, block_size, 0, stream>>>(
+                        a, b, c, H, W, C, a_is_broadcast, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.channel3d");
+                }
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -1012,6 +1089,7 @@ namespace lfs::core::tensor_ops {
 #ifdef __CUDACC__
                 broadcast_batch3d_kernel_float<<<grid, block_size, 0, stream>>>(
                     a, b, c, B, H, W, a_is_broadcast, op);
+                LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.batch3d");
 #else
                 static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
@@ -1027,47 +1105,61 @@ namespace lfs::core::tensor_ops {
         // Generic kernel for all types and complex patterns
         const int block_size = 256;
 
-        // Generic N-D broadcast - use existing implementation
-        int* d_a_shape = static_cast<int*>(
-            CudaMemoryPool::instance().allocate(a_rank * sizeof(int), stream));
-        int* d_b_shape = static_cast<int*>(
-            CudaMemoryPool::instance().allocate(b_rank * sizeof(int), stream));
-        int* d_c_shape = static_cast<int*>(
-            CudaMemoryPool::instance().allocate(c_rank * sizeof(int), stream));
-
-        if (!d_a_shape || !d_b_shape || !d_c_shape) {
-            LOG_ERROR("Failed to allocate shape arrays from memory pool");
-            if (d_a_shape)
-                CudaMemoryPool::instance().deallocate(d_a_shape, stream);
-            if (d_b_shape)
-                CudaMemoryPool::instance().deallocate(d_b_shape, stream);
-            if (d_c_shape)
-                CudaMemoryPool::instance().deallocate(d_c_shape, stream);
+        // same-shape early-out (no broadcast index math; float4 when aligned)
+        bool same_shape = (a_rank == c_rank && b_rank == c_rank);
+        if (same_shape) {
+            for (size_t i = 0; i < c_rank; ++i) {
+                if (a_shape[i] != c_shape[i] || b_shape[i] != c_shape[i]) {
+                    same_shape = false;
+                    break;
+                }
+            }
+        }
+        if (same_shape) {
+#ifdef __CUDACC__
+            if constexpr (std::is_same_v<T, float> && std::is_same_v<OutputT, float>) {
+                const bool a_al = (reinterpret_cast<uintptr_t>(a) % 16) == 0;
+                const bool b_al = (reinterpret_cast<uintptr_t>(b) % 16) == 0;
+                const bool c_al = (reinterpret_cast<uintptr_t>(c) % 16) == 0;
+                if (a_al && b_al && c_al && c_elements >= 4) {
+                    const size_t vec_n = (c_elements + 3) / 4;
+                    const int grid = static_cast<int>((vec_n + block_size - 1) / block_size);
+                    broadcast_binary_same_shape_vec4_kernel_float<<<grid, block_size, 0, stream>>>(
+                        a, b, c, c_elements, op);
+                    LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.binary_same_shape_vec4");
+                    return;
+                }
+            }
+            const int grid = static_cast<int>((c_elements + block_size - 1) / block_size);
+            broadcast_binary_same_shape_kernel<<<grid, block_size, 0, stream>>>(
+                a, b, c, c_elements, op);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.binary_same_shape");
+#else
+            static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
+#endif
             return;
         }
 
-        std::vector<int> a_vec(a_shape, a_shape + a_rank);
-        std::vector<int> b_vec(b_shape, b_shape + b_rank);
-        std::vector<int> c_vec(c_shape, c_shape + c_rank);
-
-        // Use async memcpy to avoid synchronization overhead
-        cudaMemcpyAsync(d_a_shape, a_vec.data(), a_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_b_shape, b_vec.data(), b_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_c_shape, c_vec.data(), c_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
+        LFS_ASSERT_MSG(c_rank > 0,
+                       "Generic binary broadcast requires a non-scalar output");
+        BroadcastBinaryParams params{};
+        params.a_rank = static_cast<int>(a_rank);
+        params.b_rank = static_cast<int>(b_rank);
+        params.c_rank = static_cast<int>(c_rank);
+        params.c_elements = c_elements;
+        std::copy_n(a_shape, a_rank, params.a_shape);
+        std::copy_n(b_shape, b_rank, params.b_shape);
+        std::copy_n(c_shape, c_rank, params.c_shape);
 
         const int grid_size = (c_elements + block_size - 1) / block_size;
 
 #ifdef __CUDACC__
         broadcast_binary_kernel<<<grid_size, block_size, 0, stream>>>(
-            a, b, c, d_a_shape, d_b_shape, d_c_shape,
-            a_rank, b_rank, c_rank, c_elements, op);
+            a, b, c, params, op);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.broadcast.binary");
 #else
         static_assert(sizeof(T) == 0, "CUDA compiler required for broadcast operations");
 #endif
-
-        CudaMemoryPool::instance().deallocate(d_a_shape, stream);
-        CudaMemoryPool::instance().deallocate(d_b_shape, stream);
-        CudaMemoryPool::instance().deallocate(d_c_shape, stream);
     }
 
 } // namespace lfs::core::tensor_ops

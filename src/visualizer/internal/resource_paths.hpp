@@ -7,14 +7,16 @@
 #include "core/executable_path.hpp"
 #include "core/path_utils.hpp"
 #include <filesystem>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::vis {
 
-    inline std::filesystem::path getAssetPath(const std::string& asset_name) {
+    inline std::filesystem::path resolveAssetPathUncached(const std::string& asset_name) {
         std::vector<std::filesystem::path> search_paths;
 
 #ifdef LFS_DEV_RMLUI_SOURCE_DIR
@@ -47,11 +49,9 @@ namespace lfs::vis {
         }
 #endif
 
-        // Try each path
         for (const auto& path : search_paths) {
-            if (std::filesystem::exists(path)) {
+            if (std::filesystem::exists(path))
                 return path;
-            }
         }
 
         // Build error message showing all searched locations
@@ -62,6 +62,23 @@ namespace lfs::vis {
         error_msg += "\nExecutable directory: " + lfs::core::path_to_utf8(lfs::core::getExecutableDir());
 
         throw std::runtime_error(error_msg);
+    }
+
+    inline std::filesystem::path getAssetPath(const std::string& asset_name) {
+        static std::mutex cache_mutex;
+        static std::unordered_map<std::string, std::filesystem::path> cache;
+        {
+            const std::lock_guard lock(cache_mutex);
+            if (const auto it = cache.find(asset_name); it != cache.end())
+                return it->second;
+        }
+
+        const auto path = resolveAssetPathUncached(asset_name);
+        {
+            const std::lock_guard lock(cache_mutex);
+            cache.emplace(asset_name, path);
+        }
+        return path;
     }
 
 } // namespace lfs::vis

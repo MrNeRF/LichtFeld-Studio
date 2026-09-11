@@ -4,33 +4,26 @@
 
 #pragma once
 
+#include "core/cuda_error.hpp"
+
 #include <cstdint>
 #include <cuda_runtime.h>
-#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
 
-inline void check_cuda_result(cudaError_t ret, const char* name, const char* file, int line) {
-    if (ret != cudaSuccess) {
-        const std::string message = std::string("CUDA error in ") + name + " at " + file + ":" + std::to_string(line) +
-                                    " - " + cudaGetErrorName(ret) + ": " + cudaGetErrorString(ret);
-        std::cerr << "\n[CUDA ERROR] " << message;
-        throw std::runtime_error(message);
-    }
-}
-
-#define CUDA_CHECK(call, name)                               \
-    do {                                                     \
-        check_cuda_result((call), name, __FILE__, __LINE__); \
+#define LFS_FASTGS_CUDA_CALL(call, name)                          \
+    do {                                                          \
+        LFS_CUDA_CHECK_MSG((call), "FastGS operation: {}", name); \
     } while (0)
 
-#define CHECK_CUDA(debug, name)                                                   \
-    do {                                                                          \
-        check_cuda_result(cudaGetLastError(), name, __FILE__, __LINE__);          \
-        if constexpr (debug) {                                                    \
-            check_cuda_result(cudaDeviceSynchronize(), name, __FILE__, __LINE__); \
-        }                                                                         \
+#define LFS_FASTGS_PHASE_CHECK(name)                                             \
+    do {                                                                         \
+        LFS_CUDA_CHECK_MSG(cudaGetLastError(), "FastGS phase launch: {}", name); \
+        if (::lfs::core::cuda_sync_debug_enabled()) {                            \
+            LFS_CUDA_CHECK_MSG(cudaDeviceSynchronize(),                          \
+                               "FastGS phase synchronization: {}", name);        \
+        }                                                                        \
     } while (0)
 
 template <typename T>
@@ -43,6 +36,33 @@ inline int checked_to_int(uint64_t value, const char* message) {
         throw std::overflow_error(message);
     }
     return static_cast<int>(value);
+}
+
+inline int checked_fastgs_visible_count(uint64_t value, uint64_t n_primitives) {
+    if (value > n_primitives) {
+        throw std::runtime_error(
+            "FastGS visible count exceeds primitive count: " + std::to_string(value) +
+            " visible primitives from " + std::to_string(n_primitives) + " primitives");
+    }
+    return checked_to_int(value, "visible primitive count exceeds int range");
+}
+
+// Host-side EWA clip box (same IEEE expression the kernels used to evaluate per thread).
+inline void ewa_clip_bounds(
+    const float w,
+    const float h,
+    const float fx,
+    const float fy,
+    const float cx,
+    const float cy,
+    float& clip_left,
+    float& clip_right,
+    float& clip_top,
+    float& clip_bottom) {
+    clip_left = (-0.15f * w - cx) / fx;
+    clip_right = (1.15f * w - cx) / fx;
+    clip_top = (-0.15f * h - cy) / fy;
+    clip_bottom = (1.15f * h - cy) / fy;
 }
 
 inline int checked_fastgs_instance_count(uint64_t value, uint64_t n_primitives, uint64_t n_tiles) {

@@ -31,8 +31,111 @@ namespace lfs::vis::gui::native_panels {
 
     void VideoExtractorPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
-        if (!widget_ || !widget_->render())
+        if (!widget_)
             PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
+    }
+
+    PanelRenderCapabilities VideoExtractorPanel::renderCapabilities() const {
+        return {.direct = widget_ && widget_->supportsDirectDraw()};
+    }
+
+    PanelDirectRenderResult VideoExtractorPanel::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        if (!widget_)
+            return {};
+        setPanelSpace(request.space);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = getDirectDrawHeight()};
+
+        setInputClipY(request.clip_y_min, request.clip_y_max);
+        setInput(request.input);
+        setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            setForcedHeight(0.0f);
+            setInput(nullptr);
+            setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = getDirectDrawHeight();
+        setForcedHeight(0.0f);
+        setInput(nullptr);
+        setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
+    }
+
+    void VideoExtractorPanel::preloadDirect(const float w, const float h,
+                                            const PanelDrawContext& ctx,
+                                            const float clip_y_min,
+                                            const float clip_y_max,
+                                            const PanelInputState* input) {
+        if (widget_)
+            widget_->preloadDirect(w, h, ctx, clip_y_min, clip_y_max, input);
+    }
+
+    void VideoExtractorPanel::drawDirect(const float x, const float y,
+                                         const float w, const float h,
+                                         const PanelDrawContext& ctx) {
+        if (widget_)
+            widget_->drawDirect(x, y, w, h, ctx);
+    }
+
+    bool VideoExtractorPanel::drawDirectCached(const float x, const float y,
+                                               const float w, const float h,
+                                               const PanelDrawContext& ctx) {
+        return widget_ && widget_->drawDirectCached(x, y, w, h, ctx);
+    }
+
+    float VideoExtractorPanel::getDirectDrawHeight() const {
+        return widget_ ? widget_->getDirectDrawHeight() : 0.0f;
+    }
+
+    void VideoExtractorPanel::setInputClipY(const float y_min, const float y_max) {
+        if (widget_)
+            widget_->setInputClipY(y_min, y_max);
+    }
+
+    void VideoExtractorPanel::setInput(const PanelInputState* input) {
+        if (widget_)
+            widget_->setInput(input);
+    }
+
+    void VideoExtractorPanel::setForcedHeight(const float h) {
+        if (widget_)
+            widget_->setForcedHeight(h);
+    }
+
+    void VideoExtractorPanel::setPanelSpace(const PanelSpace space) {
+        if (widget_)
+            widget_->setFloating(space == PanelSpace::Floating);
+    }
+
+    bool VideoExtractorPanel::needsAnimationFrame() const {
+        return widget_ && widget_->needsAnimationFrame();
+    }
+
+    void VideoExtractorPanel::reloadRmlResources() {
+        if (widget_)
+            widget_->reloadRmlResources();
     }
 
     StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)
@@ -71,6 +174,37 @@ namespace lfs::vis::gui::native_panels {
 
     void SequencerPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
+    }
+
+    PanelDirectRenderResult SequencerPanel::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        is_floating_ = request.space == PanelSpace::Floating;
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = direct_draw_height_};
+
+        input_ = request.input;
+        forced_height_ = request.forced_height;
+
+        bool handled = true;
+        switch (request.mode) {
+        case PanelDirectRenderMode::Measure:
+            break;
+        case PanelDirectRenderMode::Draw:
+            drawDirect(request.x, request.y, request.width, request.height, ctx);
+            break;
+        case PanelDirectRenderMode::Cached:
+            handled = false;
+            break;
+        case PanelDirectRenderMode::Preload:
+            preloadDirect(request.width, request.height, ctx,
+                          request.clip_y_min, request.clip_y_max, request.input);
+            break;
+        }
+
+        input_ = nullptr;
+        forced_height_ = 0.0f;
+        return {.handled = handled, .height = direct_draw_height_};
     }
 
     void SequencerPanel::preloadDirect(const float w, const float h,
@@ -114,8 +248,16 @@ namespace lfs::vis::gui::native_panels {
     }
 
     bool SequencerPanel::poll(const PanelDrawContext& ctx) {
+        // The sequencer is a camera/animation timeline, not a scene-editing
+        // tool, so it must not share the editing gizmos' isToolsDisabled() gate
+        // (true for TRAINING/PAUSED/FINISHED). The gizmos are disabled across all
+        // of those because the trainer owns the model tensors, but the sequencer
+        // has no such dependency. Disable it only while training is actively
+        // running; once training is paused/finished it should be usable without
+        // having to switch to Edit mode (which tears the trainer down).
+        const bool training_active = ctx.ui && ctx.ui->editor && ctx.ui->editor->isTraining();
         const bool is_enabled = !ctx.ui_hidden && ctx.ui && ctx.ui->editor &&
-                                !ctx.ui->editor->isToolsDisabled() && layout_->isShowSequencer();
+                                !training_active && layout_->isShowSequencer();
         if (!is_enabled && seq_)
             seq_->setSequencerEnabled(false);
         return is_enabled;
@@ -154,7 +296,7 @@ namespace lfs::vis::gui::native_panels {
     }
 
     bool ViewportGizmoPanel::poll(const PanelDrawContext& ctx) {
-        return !ctx.ui_hidden && ctx.viewport &&
+        return ctx.viewport &&
                ctx.viewport->size.x > 0 && ctx.viewport->size.y > 0;
     }
 

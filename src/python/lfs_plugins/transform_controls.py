@@ -9,6 +9,7 @@ from typing import List
 import lichtfeld as lf
 
 from . import rml_widgets as w
+from .ui import RuntimeState
 
 try:
     from .ui import native_value as _native_store_value
@@ -63,17 +64,6 @@ def _ui_label(key: str, fallback: str) -> str:
     return fallback
 
 
-def _format_ui_label(key: str, fallback: str, *args) -> str:
-    template = _ui_label(key, fallback).replace("%zu", "%d")
-    try:
-        return template % args
-    except (TypeError, ValueError):
-        try:
-            return template.format(*args)
-        except (IndexError, KeyError, ValueError):
-            return fallback % args
-
-
 def _quat_dot(a: List[float], b: List[float]) -> float:
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]
 
@@ -92,6 +82,18 @@ def _flip_yz_rows(transform):
         result[col * 4 + 1] = -result[col * 4 + 1]
         result[col * 4 + 2] = -result[col * 4 + 2]
     return result
+
+
+def _is_identity_transform(transform) -> bool:
+    if transform is None or len(transform) != 16:
+        return False
+    identity = (
+        1.0, 0.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+    return all(abs(float(value) - identity[i]) <= 1e-6 for i, value in enumerate(transform))
 
 
 class TransformPanelState:
@@ -151,19 +153,6 @@ class TransformControlsController:
         self._force_dirty = False
 
     def bind_model(self, model):
-        model.bind_func("transform_tool_label", self._tool_label)
-        model.bind_func(
-            "transform_node_name",
-            lambda: _format_ui_label("transform.node", "Node: %s", self._selected[0])
-            if self._selected
-            else "",
-        )
-        model.bind_func(
-            "transform_multi_label",
-            lambda: _format_ui_label("transform.nodes_selected", "%d nodes selected", len(self._selected))
-            if self._selected
-            else "",
-        )
         model.bind_func(
             "transform_reset_label",
             lambda: _ui_label("transform.reset_all_short", "Reset All")
@@ -171,8 +160,6 @@ class TransformControlsController:
             else _ui_label("transform.reset_transform", "Reset Transform"),
         )
         model.bind_func("transform_bake_label", lambda: _ui_label("transform.bake_transform", "Bake Transform"))
-        model.bind_func("transform_is_single", lambda: len(self._selected) == 1)
-        model.bind_func("transform_is_multi", lambda: len(self._selected) > 1)
         model.bind_func("transform_show_translate", lambda: self._active_tool == "builtin.translate")
         model.bind_func("transform_show_rotate", lambda: self._active_tool == "builtin.rotate")
         model.bind_func("transform_show_scale", lambda: self._active_tool == "builtin.scale")
@@ -318,14 +305,6 @@ class TransformControlsController:
         self._last_state_key = None
         self._force_dirty = False
 
-    def _tool_label(self):
-        labels = {
-            "builtin.translate": _ui_label("toolbar.translate", "Move"),
-            "builtin.rotate": _ui_label("toolbar.rotate", "Rotate"),
-            "builtin.scale": _ui_label("toolbar.scale", "Scale"),
-        }
-        return labels.get(self._active_tool, _ui_label("transform.tool", "Transform"))
-
     def _current_transform_space(self) -> int:
         value = _native_store_value("transform_space", _MISSING)
         if value is not _MISSING:
@@ -422,6 +401,7 @@ class TransformControlsController:
 
     def _display_state_key(self):
         return (
+            RuntimeState.language_generation.value,
             self._active_tool,
             tuple(self._selected),
             self._transform_space,
@@ -436,6 +416,9 @@ class TransformControlsController:
             f"{self._scale[1]:.3f}",
             f"{self._scale[2]:.3f}",
             f"{sum(self._scale) / 3.0:.3f}",
+            int(self._can_reset_transform()),
+            int(self._can_bake_transform()),
+            self._transform_action_opacity_cache(),
         )
 
     def _dirty_if_display_state_changed(self, dirty=False):
@@ -455,13 +438,8 @@ class TransformControlsController:
             self._handle.dirty(f"transform_rot_{axis}_str")
             self._handle.dirty(f"transform_scale_{axis}_str")
         self._handle.dirty("transform_scale_u_str")
-        self._handle.dirty("transform_tool_label")
-        self._handle.dirty("transform_node_name")
-        self._handle.dirty("transform_multi_label")
         self._handle.dirty("transform_reset_label")
         self._handle.dirty("transform_bake_label")
-        self._handle.dirty("transform_is_single")
-        self._handle.dirty("transform_is_multi")
         self._handle.dirty("transform_show_translate")
         self._handle.dirty("transform_show_rotate")
         self._handle.dirty("transform_show_scale")
@@ -617,6 +595,53 @@ class TransformControlsController:
                 new_transform = lf.compose_transform(new_pos, decomp["rotation_euler_deg"], new_scale)
                 lf.set_node_visualizer_world_transform(name, new_transform)
 
+    def _can_reset_transform(self) -> bool:
+        if not self._selected:
+            return False
+
+        if len(self._selected) == 1:
+            transform = lf.get_node_transform(self._selected[0])
+            return not _is_identity_transform(transform)
+
+        selected = lf.get_selected_node_names()
+        if not selected:
+            return False
+
+        for name in selected:
+            transform = lf.get_node_transform(name)
+            if not _is_identity_transform(transform):
+                return True
+        return False
+
+    def _can_bake_transform(self) -> bool:
+        if not self._selected:
+            return False
+
+        if len(self._selected) == 1:
+            if not self._state.editing_active or not self._state.editing_node_names or not self._state.transforms_before_edit:
+                return False
+            current = lf.get_node_transform(self._selected[0])
+            if current is None:
+                return False
+            return current != self._state.transforms_before_edit[0]
+
+        if not self._state.multi_editing_active:
+            return False
+        if not self._state.multi_node_names or not self._state.multi_transforms_before:
+            return False
+
+        for name, before in zip(self._state.multi_node_names, self._state.multi_transforms_before):
+            current = lf.get_node_transform(name)
+            if current is not None and current != before:
+                return True
+        return False
+
+    def _transform_action_opacity_cache(self):
+        return (
+            "1" if self._can_reset_transform() else "0.22",
+            "1" if self._can_bake_transform() else "0.22",
+        )
+
     def _on_num_step(self, handle, event, args):
         del handle, event
         if len(args) < 2:
@@ -701,6 +726,8 @@ class TransformControlsController:
             self._force_dirty = True
         elif action == "bake":
             self._commit_active_edit()
+            self._last_state_key = None
+            self._force_dirty = True
             bake = getattr(lf, "bake_selected_node_transforms", None)
             if callable(bake):
                 try:

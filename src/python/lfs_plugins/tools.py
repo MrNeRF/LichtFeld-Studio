@@ -100,12 +100,22 @@ class ToolRegistry:
     @classmethod
     def get_active(cls) -> Optional[ToolDef]:
         """Get the active tool definition."""
+        cls.sync_native_active()
         return cls.get(cls._active_tool_id)
 
     @classmethod
     def get_active_id(cls) -> str:
         """Get the active tool ID."""
+        cls.sync_native_active()
         return cls._active_tool_id
+
+    @classmethod
+    def sync_native_active(cls) -> None:
+        import lichtfeld as lf
+
+        getter = getattr(lf.ui, "get_active_tool", None)
+        if callable(getter):
+            cls._active_tool_id = getter() or ""
 
     @classmethod
     def clear(cls):

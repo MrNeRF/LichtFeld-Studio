@@ -30,6 +30,12 @@ namespace lfs::vis::input {
         CROP_BOX = 7,
     };
 
+    enum class SelectionOp : uint8_t {
+        Add,
+        Remove,
+        Intersect,
+    };
+
     // Highest persisted ToolMode value plus one. Value 2 was the removed brush tool mode.
     inline constexpr size_t kToolModeCount = 8;
     inline constexpr std::array<ToolMode, 7> kAllToolModes = {
@@ -127,6 +133,20 @@ namespace lfs::vis::input {
         HISTOGRAM_ZOOM_MARKED,
         TOGGLE_CAMERA_FRUSTUMS,
         SELECTION_INTERSECT,
+        // Appended to avoid renumbering existing persisted action ids.
+        SELECT_MODE_BOX,
+        SELECT_MODE_SPHERE,
+        CUT_SELECTION,
+        TOGGLE_PERFORMANCE_HUD,
+        OPEN_PREFERENCES,
+        TOGGLE_MCP_SERVER,
+        TOGGLE_MCP_BINDING,
+        TOGGLE_GRID,
+        SELECT_ALL_SCENE_NODES,
+        TOGGLE_SCENE_SELECTION_VISIBILITY,
+        TOGGLE_SCENE_SELECTION_TRAINING,
+        GROUP_SELECTED_SCENE_NODES,
+        UNGROUP_SELECTED_SCENE_NODE,
 
     };
 
@@ -273,7 +293,8 @@ namespace lfs::vis::input {
         const std::string& getCurrentProfileName() const { return current_profile_name_; }
         std::uint64_t getBindingsRevision() const { return bindings_revision_; }
 
-        static std::filesystem::path getConfigDir();
+        static std::optional<std::filesystem::path> getConfigDir();
+        static void setPersistenceEnabled(bool enabled) noexcept;
 
         // Query effective bindings. Mode-local bindings are checked first; actions
         // marked as inherited then fall back to GLOBAL.
@@ -364,6 +385,11 @@ namespace lfs::vis::input {
     LFS_VIS_API std::string getKeyName(int key);
     LFS_VIS_API std::string getMouseButtonName(MouseButton button);
     LFS_VIS_API std::string getModifierString(int modifiers);
+    [[nodiscard]] LFS_VIS_API std::optional<SelectionOp> selectionOpForModifiers(
+        const InputBindings& bindings,
+        ToolMode mode,
+        int modifiers,
+        const std::vector<int>& held_keys = {});
     [[nodiscard]] LFS_VIS_API ShortcutScope shortcutScopeForAction(Action action);
 
     [[nodiscard]] LFS_VIS_API std::string_view actionNameKey(Action action);

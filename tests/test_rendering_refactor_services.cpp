@@ -2,34 +2,86 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/camera.hpp"
+#include "core/editor_context.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/image_loader.hpp"
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
+#include "operation/undo_history.hpp"
 #include "rendering/coordinate_conventions.hpp"
+#include "visualizer/gui_capabilities.hpp"
+#include "visualizer/rendering/gt_comparison_cache_utils.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/rendering/split_view_composition.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
+#include "visualizer/rendering/stale_frame_guard.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
 #include "visualizer/rendering/viewport_frame_lifecycle_service.hpp"
 #include "visualizer/rendering/viewport_request_builder.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <cuda_runtime.h>
 #include <filesystem>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <thread>
 #include <vector>
 
 namespace lfs::vis {
+
+    TEST(StaleFrameGuardTest, DeferralsBelowBoundKeepCachedThenEscalateOnce) {
+        StaleFrameGuard guard;
+        EXPECT_TRUE(guard.canUseCachedFrame());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral()) << attempt;
+            EXPECT_TRUE(guard.canUseCachedFrame()) << attempt;
+            EXPECT_FALSE(guard.takeRecoveryRequest()) << attempt;
+        }
+        EXPECT_TRUE(guard.onDeferral());
+        EXPECT_FALSE(guard.canUseCachedFrame());
+        EXPECT_TRUE(guard.takeRecoveryRequest());
+        EXPECT_FALSE(guard.takeRecoveryRequest());
+        // Reimport/reset is not a successful publication. Failure after reset
+        // must not restore the stale image or trigger another reset/WARN.
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+            EXPECT_FALSE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+    }
+
+    TEST(StaleFrameGuardTest, SuccessfulPublicationResetsTheWholeEpisode) {
+        StaleFrameGuard guard;
+        for (int episode = 0; episode < 2; ++episode) {
+            for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+                EXPECT_FALSE(guard.onDeferral());
+            }
+            EXPECT_TRUE(guard.onDeferral());
+            guard.onSuccess();
+            EXPECT_TRUE(guard.canUseCachedFrame());
+            EXPECT_FALSE(guard.takeRecoveryRequest());
+        }
+        // Success also clears a partially consumed budget.
+        EXPECT_FALSE(guard.onDeferral());
+        guard.onSuccess();
+        for (std::uint32_t attempt = 1; attempt < StaleFrameGuard::kMaxCachedDeferrals; ++attempt) {
+            EXPECT_FALSE(guard.onDeferral());
+        }
+        EXPECT_TRUE(guard.onDeferral());
+    }
 
     namespace {
         std::unique_ptr<lfs::core::SplatData> makeTestSplat(const float x) {
@@ -48,6 +100,31 @@ namespace lfs::vis {
                 1.0f);
         }
 
+        std::unique_ptr<lfs::core::SplatData> makeTwoPointTestSplat(const float x0, const float x1) {
+            using lfs::core::DataType;
+            using lfs::core::Device;
+            using lfs::core::Tensor;
+
+            return std::make_unique<lfs::core::SplatData>(
+                0,
+                Tensor::from_vector({x0, 0.0f, 2.0f,
+                                     x1, 0.0f, 2.0f},
+                                    {size_t{2}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 1.0f, 1.0f,
+                                     1.0f, 1.0f, 1.0f},
+                                    {size_t{2}, size_t{1}, size_t{3}}, Device::CPU),
+                Tensor::zeros({size_t{2}, size_t{0}, size_t{3}}, Device::CPU, DataType::Float32),
+                Tensor::from_vector({0.0f, 0.0f, 0.0f,
+                                     0.0f, 0.0f, 0.0f},
+                                    {size_t{2}, size_t{3}}, Device::CPU),
+                Tensor::from_vector({1.0f, 0.0f, 0.0f, 0.0f,
+                                     1.0f, 0.0f, 0.0f, 0.0f},
+                                    {size_t{2}, size_t{4}}, Device::CPU),
+                Tensor::from_vector({8.0f,
+                                     8.0f},
+                                    {size_t{2}, size_t{1}}, Device::CPU),
+                1.0f);
+        }
         std::shared_ptr<lfs::core::PointCloud> makeTestPointCloud() {
             using lfs::core::Device;
             using lfs::core::Tensor;
@@ -81,13 +158,21 @@ namespace lfs::vis {
             }
         }
 
+        void waitUntilResizeSettleReady(ViewportFrameLifecycleService& service) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            while (!service.resizeSettleReady() && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            ASSERT_TRUE(service.resizeSettleReady());
+        }
+
         void ensureCameraImageLoader() {
             static bool initialized = false;
             if (initialized) {
                 return;
             }
 
-            lfs::io::CacheLoader::getInstance(false, false);
+            lfs::io::CacheLoader::getInstance(false);
             lfs::core::set_image_loader([](const lfs::core::ImageLoadParams& p) {
                 return lfs::io::CacheLoader::getInstance().load_cached_image(
                     p.path,
@@ -97,6 +182,11 @@ namespace lfs::vis {
                      .output_uint8 = p.output_uint8});
             });
             initialized = true;
+        }
+
+        bool has_cuda_device() {
+            int device_count = 0;
+            return cudaGetDeviceCount(&device_count) == cudaSuccess && device_count > 0;
         }
     } // namespace
 
@@ -119,9 +209,11 @@ namespace lfs::vis {
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
             services().clear();
+            op::undoHistory().clear();
         }
 
         void TearDown() override {
+            op::undoHistory().clear();
             services().clear();
             lfs::event::EventBridge::instance().clear_all();
             lfs::core::event::bus().clear_all();
@@ -149,6 +241,133 @@ namespace lfs::vis {
         EXPECT_TRUE(*disable.restore_equirectangular);
         EXPECT_TRUE(settings.equirectangular);
         EXPECT_EQ(settings.split_view_mode, SplitViewMode::Disabled);
+    }
+
+    TEST(GTComparisonCache, UInt8PreviewAccountingKeepsCurrentAndNeighbor) {
+        constexpr std::size_t budget = 128ULL * 1024ULL * 1024ULL;
+        const auto current = gt_comparison_detail::previewBytes({3840, 2160});
+        const auto neighbor = gt_comparison_detail::previewBytes({3840, 2160});
+        EXPECT_EQ(current, 3840ULL * 2160ULL * 3ULL);
+        EXPECT_TRUE(gt_comparison_detail::prefetchFits(0, current, neighbor, budget));
+        EXPECT_FALSE(gt_comparison_detail::prefetchFits(0, 80ULL, 40ULL, 100ULL));
+    }
+
+    TEST(GTComparisonCache, DisplayConversionMatchesFloatChwAndUInt8Hwc) {
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        constexpr std::size_t plane = 2 * 2;
+        const std::array<std::uint8_t, 12> hwc_bytes{
+            0, 255, 191,
+            128, 64, 0,
+            255, 128, 64,
+            64, 0, 255};
+        std::vector<float> float_chw_values(3 * plane);
+        for (std::size_t pixel = 0; pixel < plane; ++pixel) {
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                float_chw_values[channel * plane + pixel] =
+                    static_cast<float>(hwc_bytes[pixel * 3 + channel]) / 255.0f;
+            }
+        }
+        const auto float_chw = std::make_shared<Tensor>(Tensor::from_vector(
+            float_chw_values,
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU));
+        const auto uint8_hwc = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{2}, size_t{2}, size_t{3}}, Device::CPU, DataType::UInt8));
+        std::memcpy(uint8_hwc->ptr<std::uint8_t>(), hwc_bytes.data(), hwc_bytes.size());
+
+        const auto float_preview = gt_comparison_detail::convertDisplayTensorToUInt8(float_chw);
+        const auto uint8_preview = gt_comparison_detail::convertDisplayTensorToUInt8(uint8_hwc);
+        ASSERT_TRUE(float_preview);
+        ASSERT_TRUE(uint8_preview);
+        ASSERT_EQ(float_preview->shape(), uint8_preview->shape());
+        const auto* const float_preview_bytes = float_preview->ptr<std::uint8_t>();
+        const auto* const uint8_preview_bytes = uint8_preview->ptr<std::uint8_t>();
+        std::size_t first_mismatch = float_preview->bytes();
+        for (std::size_t index = 0; index < float_preview->bytes(); ++index) {
+            if (float_preview_bytes[index] != uint8_preview_bytes[index]) {
+                first_mismatch = index;
+                break;
+            }
+        }
+        const auto float_value = first_mismatch < float_preview->bytes()
+                                     ? float_preview_bytes[first_mismatch]
+                                     : std::uint8_t{0};
+        const auto uint8_value = first_mismatch < uint8_preview->bytes()
+                                     ? uint8_preview_bytes[first_mismatch]
+                                     : std::uint8_t{0};
+        EXPECT_EQ(first_mismatch, float_preview->bytes())
+            << "first mismatching index=" << first_mismatch
+            << ", float byte=" << static_cast<unsigned int>(float_value)
+            << ", uint8 byte=" << static_cast<unsigned int>(uint8_value);
+
+        const auto uint8_chw = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU, DataType::UInt8));
+        const std::array<std::uint8_t, 12> chw_bytes{
+            0, 128, 255, 64,
+            255, 64, 128, 0,
+            191, 0, 64, 255};
+        std::memcpy(uint8_chw->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size());
+        const auto uint8_chw_preview = gt_comparison_detail::convertDisplayTensorToUInt8(uint8_chw);
+        ASSERT_EQ(uint8_chw_preview.get(), uint8_chw.get());
+        EXPECT_EQ(std::memcmp(uint8_chw_preview->ptr<std::uint8_t>(),
+                              chw_bytes.data(),
+                              chw_bytes.size()),
+                  0);
+    }
+
+    TEST(GTComparisonCache, DisplayConversionCopiesCudaUInt8ChwToCpu) {
+        if (!has_cuda_device()) {
+            GTEST_SKIP() << "CUDA device required";
+        }
+
+        using lfs::core::DataType;
+        using lfs::core::Device;
+        using lfs::core::Tensor;
+
+        const std::array<std::uint8_t, 12> chw_bytes{
+            0, 128, 255, 64,
+            255, 64, 128, 0,
+            191, 0, 64, 255};
+        auto cpu_uint8_chw = std::make_shared<Tensor>(Tensor::empty(
+            {size_t{3}, size_t{2}, size_t{2}}, Device::CPU, DataType::UInt8));
+        std::memcpy(cpu_uint8_chw->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size());
+        const auto cuda_uint8_chw = std::make_shared<Tensor>(cpu_uint8_chw->cuda());
+
+        const auto preview = gt_comparison_detail::convertDisplayTensorToUInt8(cuda_uint8_chw);
+        ASSERT_TRUE(preview);
+        EXPECT_EQ(preview->device(), Device::CPU);
+        EXPECT_NE(preview.get(), cuda_uint8_chw.get());
+        EXPECT_EQ(std::memcmp(preview->ptr<std::uint8_t>(), chw_bytes.data(), chw_bytes.size()), 0);
+    }
+
+    TEST(GTComparisonCache, RightImageGenerationUsesFrameGenerationForRecycledTarget) {
+        constexpr glm::ivec2 size{640, 480};
+        constexpr auto stable_bit = gt_comparison_detail::SPLIT_RIGHT_GENERATION_BIT;
+        const int recycled_address = 1;
+        const int held_display = 2;
+        std::uint64_t generation = 7;
+
+        gt_comparison_detail::updateSplitImageGeneration(
+            &recycled_address, size, nullptr, size, 11, generation);
+        EXPECT_EQ(generation, 11U);
+        // A new ordinary tensor may reuse the same address; it still carries
+        // the current frame generation and must not inherit the old upload key.
+        gt_comparison_detail::updateSplitImageGeneration(
+            &recycled_address, size, nullptr, size, 12, generation);
+        EXPECT_EQ(generation, 12U);
+        gt_comparison_detail::updateSplitImageGeneration(
+            &held_display, size, &held_display, size, 13, generation);
+        EXPECT_EQ(generation, 12U | stable_bit);
+        gt_comparison_detail::updateSplitImageGeneration(
+            &held_display, {800, 600}, &held_display, size, 14, generation);
+        EXPECT_EQ(generation, 14U);
+    }
+
+    TEST(SceneCameraTraining, UnknownUidIsEnabled) {
+        const lfs::core::Scene scene;
+        EXPECT_TRUE(scene.isCameraTrainingEnabled(123456));
     }
 
     TEST(SplitViewServiceTest, UpdateInfoClearsStaleSplitViewLabels) {
@@ -338,7 +557,7 @@ namespace lfs::vis {
         EXPECT_EQ(pose.translation, glm::vec3(1.0f, 2.0f, 3.0f));
     }
 
-    TEST_F(RenderingManagerEventsTest, OrthographicTogglePreservesApparentZoomAtPivotInBothDirections) {
+    TEST_F(RenderingManagerEventsTest, OrthographicEnterSetsScaleFromCurrentFocal) {
         RenderingManager manager;
         auto settings = manager.getSettings();
         settings.focal_length_mm = 50.0f;
@@ -355,19 +574,33 @@ namespace lfs::vis {
                                      (2.0f * distance_to_pivot *
                                       std::tan(glm::radians(lfs::rendering::focalLengthToVFov(50.0f)) * 0.5f));
         EXPECT_NEAR(ortho_settings.ortho_scale, expected_scale, 1e-4f);
+    }
 
-        settings = ortho_settings;
-        settings.ortho_scale *= 1.75f;
+    TEST_F(RenderingManagerEventsTest, OrthographicLeaveKeepsFocalLength) {
+        RenderingManager manager;
+        auto settings = manager.getSettings();
+        settings.focal_length_mm = 35.0f;
+        manager.updateSettings(settings);
+
+        constexpr float viewport_height = 900.0f;
+        constexpr float distance_to_pivot = 7.5f;
+
+        manager.setOrthographic(true, viewport_height, distance_to_pivot);
+        manager.setOrthographic(false, viewport_height, distance_to_pivot);
+        const auto after_round_trip = manager.getSettings();
+        ASSERT_FALSE(after_round_trip.orthographic);
+        EXPECT_FLOAT_EQ(after_round_trip.focal_length_mm, 35.0f);
+
+        manager.setOrthographic(true, viewport_height, distance_to_pivot);
+        settings = manager.getSettings();
+        ASSERT_TRUE(settings.orthographic);
+        settings.ortho_scale *= std::pow(1.1f, 20.0f);
         manager.updateSettings(settings);
 
         manager.setOrthographic(false, viewport_height, distance_to_pivot);
-        const auto perspective_settings = manager.getSettings();
-        ASSERT_FALSE(perspective_settings.orthographic);
-
-        const float expected_vfov = glm::degrees(2.0f * std::atan(
-                                                            viewport_height / (2.0f * distance_to_pivot * settings.ortho_scale)));
-        const float expected_focal = lfs::rendering::vFovToFocalLength(expected_vfov);
-        EXPECT_NEAR(perspective_settings.focal_length_mm, expected_focal, 1e-4f);
+        const auto after_zoom = manager.getSettings();
+        ASSERT_FALSE(after_zoom.orthographic);
+        EXPECT_FLOAT_EQ(after_zoom.focal_length_mm, 35.0f);
     }
 
     TEST(SplitViewServiceTest, GtComparisonPlanPreservesGtTextureOrigin) {
@@ -484,6 +717,23 @@ namespace lfs::vis {
         ASSERT_EQ(state.node_visibility_mask.size(), 1u);
         EXPECT_FALSE(state.node_visibility_mask[0]);
         EXPECT_EQ(manager.getModelForRendering(), state.combined_model);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, VisibleSelectionMaskIsCachedForUnchangedGenerations) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+
+        scene.addSplat("Visible", makeTwoPointTestSplat(0.0f, 1.0f));
+        scene.addSplat("Hidden", makeTestSplat(2.0f));
+        scene.setNodeVisibility("Hidden", false);
+        scene.setSelection({0});
+
+        const auto first = scene.getVisibleSelectionMask();
+        const auto second = scene.getVisibleSelectionMask();
+
+        ASSERT_NE(first, nullptr);
+        ASSERT_NE(second, nullptr);
+        EXPECT_EQ(first.get(), second.get());
     }
 
     TEST_F(SceneManagerRenderStateTest, PointCloudTransformIsTrackedSeparatelyFromModelTransforms) {
@@ -746,6 +996,38 @@ namespace lfs::vis {
         EXPECT_EQ(scene.getVisibleNodeIndex(right_id), 1);
     }
 
+    TEST_F(SceneManagerRenderStateTest, EditHandoffInvalidatesViewportDespitePreservingModelAddress) {
+        SceneManager manager;
+        manager.changeContentType(SceneManager::ContentType::Dataset);
+        auto& scene = manager.getScene();
+        scene.addSplat("Model", makeTestSplat(0.0f));
+        scene.setTrainingModelNode("Model");
+
+        ViewportFrameLifecycleService lifecycle;
+        ViewportArtifactService artifacts;
+        const auto observe = [&] {
+            return lifecycle.handleModelChange(
+                reinterpret_cast<size_t>(manager.getModelForRendering()), artifacts,
+                manager.hasDataset() ? ViewportFrameLifecycleService::ModelSource::Training
+                                     : ViewportFrameLifecycleService::ModelSource::Scene);
+        };
+        const auto* training_model = manager.getModelForRendering();
+        ASSERT_NE(training_model, nullptr);
+        EXPECT_TRUE(observe().changed);
+        EXPECT_FALSE(observe().changed);
+        const auto generation = artifacts.artifactGeneration();
+
+        manager.switchToEditMode();
+
+        ASSERT_FALSE(manager.hasDataset());
+        ASSERT_EQ(manager.getModelForRendering(), training_model);
+        const auto handoff = observe();
+        EXPECT_TRUE(handoff.changed);
+        EXPECT_EQ(handoff.previous_model_ptr, reinterpret_cast<size_t>(training_model));
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        EXPECT_FALSE(observe().changed);
+    }
+
     TEST_F(SceneManagerRenderStateTest, SwitchToEditModePlyComparisonUsesCombinedSceneMasks) {
         using lfs::core::DataType;
         using lfs::core::Device;
@@ -767,6 +1049,7 @@ namespace lfs::vis {
         ASSERT_NE(cropbox, nullptr);
         cropbox->min = {-1.0f, -1.0f, -1.0f};
         cropbox->max = {1.0f, 1.0f, 1.0f};
+        cropbox->enabled = true;
 
         auto scene_state = manager.buildRenderState();
         scene_state.selection_mask = std::make_shared<Tensor>(
@@ -779,7 +1062,6 @@ namespace lfs::vis {
         RenderSettings settings;
         settings.split_view_mode = SplitViewMode::PLYComparison;
         settings.split_position = 0.4f;
-        settings.use_crop_box = true;
         settings.show_rings = true;
         settings.depth_filter_enabled = true;
         settings.depth_filter_min = {-2.0f, -2.0f, -2.0f};
@@ -838,6 +1120,1005 @@ namespace lfs::vis {
         EXPECT_EQ(scene.getVisibleNodeIndex(bike_id), 1);
     }
 
+    TEST_F(SceneManagerRenderStateTest, HiddenEnabledCropBoxStillFiltersRender) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto model_id = scene.addSplat("Model", makeTestSplat(0.0f));
+        const auto cropbox_id = scene.getOrCreateCropBoxForSplat(model_id);
+        ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+
+        auto* cropbox = scene.getCropBoxData(cropbox_id);
+        ASSERT_NE(cropbox, nullptr);
+        cropbox->min = {-0.25f, -0.25f, -0.25f};
+        cropbox->max = {0.25f, 0.25f, 0.25f};
+        cropbox->enabled = true;
+        scene.setNodeVisibility(cropbox_id, false);
+
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        const auto scene_state = manager.buildRenderState();
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+
+        const auto request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+        EXPECT_EQ(request.filters.crop_region->bounds.min, cropbox->min);
+        EXPECT_EQ(request.filters.crop_region->bounds.max, cropbox->max);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, CropBoxWireframeSelectionHonorsParentSelectionAndVisibility) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto model_a_id = scene.addSplat("ModelA", makeTestSplat(0.0f));
+        const auto model_b_id = scene.addSplat("ModelB", makeTestSplat(2.0f));
+        ASSERT_NE(model_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(model_b_id, lfs::core::NULL_NODE);
+
+        const auto cropbox_id = scene.getOrCreateCropBoxForSplat(model_a_id);
+        ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+        auto* cropbox = scene.getCropBoxData(cropbox_id);
+        ASSERT_NE(cropbox, nullptr);
+        cropbox->enabled = true;
+
+        manager.selectNode("ModelB");
+        auto state = manager.buildRenderState();
+        EXPECT_EQ(manager.getSelectedNodeCropBoxId(), lfs::core::NULL_NODE);
+        EXPECT_EQ(manager.getActiveSelectionCropBoxId(), lfs::core::NULL_NODE);
+        EXPECT_EQ(state.selected_cropbox_index, -1);
+        ASSERT_EQ(state.cropboxes.size(), 1u);
+        EXPECT_TRUE(state.cropboxes.front().effectively_visible);
+
+        Viewport viewport(640, 480);
+        FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = state,
+            .settings = RenderSettings{},
+            .render_size = {640, 480},
+        };
+        auto request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+        ASSERT_EQ(request.filters.crop_regions.size(), 1u);
+        EXPECT_EQ(request.filters.crop_regions.front().parent_node_index, scene.getVisibleNodeIndex(model_a_id));
+
+        manager.selectNode("ModelA");
+        state = manager.buildRenderState();
+        EXPECT_EQ(manager.getSelectedNodeCropBoxId(), cropbox_id);
+        EXPECT_EQ(manager.getActiveSelectionCropBoxId(), cropbox_id);
+        ASSERT_GE(state.selected_cropbox_index, 0);
+        ASSERT_LT(static_cast<size_t>(state.selected_cropbox_index), state.cropboxes.size());
+        EXPECT_EQ(state.cropboxes[static_cast<size_t>(state.selected_cropbox_index)].node_id, cropbox_id);
+        EXPECT_TRUE(state.cropboxes[static_cast<size_t>(state.selected_cropbox_index)].effectively_visible);
+
+        scene.setNodeVisibility(cropbox_id, false);
+        state = manager.buildRenderState();
+        EXPECT_EQ(manager.getSelectedNodeCropBoxId(), cropbox_id);
+        EXPECT_EQ(manager.getActiveSelectionCropBoxId(), cropbox_id);
+        ASSERT_EQ(state.cropboxes.size(), 1u);
+        EXPECT_EQ(state.cropboxes.front().node_id, cropbox_id);
+        EXPECT_FALSE(state.cropboxes.front().effectively_visible);
+
+        ctx.scene_state = state;
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, EnabledCropBoxesRemainScopedToTheirParents) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto model_a_id = scene.addSplat("ModelA", makeTestSplat(0.0f));
+        const auto model_b_id = scene.addSplat("ModelB", makeTestSplat(2.0f));
+        ASSERT_NE(model_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(model_b_id, lfs::core::NULL_NODE);
+
+        const auto cropbox_a_id = scene.getOrCreateCropBoxForSplat(model_a_id);
+        ASSERT_NE(cropbox_a_id, lfs::core::NULL_NODE);
+        auto* cropbox_a = scene.getCropBoxData(cropbox_a_id);
+        ASSERT_NE(cropbox_a, nullptr);
+        cropbox_a->min = {-2.0f, -2.0f, -2.0f};
+        cropbox_a->max = {-1.0f, -1.0f, -1.0f};
+        cropbox_a->enabled = true;
+
+        Viewport viewport(640, 480);
+        RenderSettings settings;
+        settings.desaturate_cropping = true;
+
+        manager.selectNode("ModelB");
+        FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = manager.buildRenderState(),
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        auto request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+        ASSERT_EQ(request.filters.crop_regions.size(), 1u);
+        EXPECT_EQ(request.filters.crop_regions.front().bounds.min, cropbox_a->min);
+        EXPECT_EQ(request.filters.crop_regions.front().bounds.max, cropbox_a->max);
+        EXPECT_EQ(request.filters.crop_regions.front().parent_node_index, scene.getVisibleNodeIndex(model_a_id));
+
+        const auto cropbox_b_id = scene.getOrCreateCropBoxForSplat(model_b_id);
+        ASSERT_NE(cropbox_b_id, lfs::core::NULL_NODE);
+        auto* cropbox_b = scene.getCropBoxData(cropbox_b_id);
+        ASSERT_NE(cropbox_b, nullptr);
+        cropbox_b->min = {1.0f, 1.0f, 1.0f};
+        cropbox_b->max = {2.0f, 2.0f, 2.0f};
+        cropbox_b->enabled = true;
+
+        ctx.scene_state = manager.buildRenderState();
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+        ASSERT_EQ(request.filters.crop_regions.size(), 2u);
+        const auto* filter_a = request.filters.crop_regions[0].parent_node_index == scene.getVisibleNodeIndex(model_a_id)
+                                   ? &request.filters.crop_regions[0]
+                                   : &request.filters.crop_regions[1];
+        const auto* filter_b = request.filters.crop_regions[0].parent_node_index == scene.getVisibleNodeIndex(model_b_id)
+                                   ? &request.filters.crop_regions[0]
+                                   : &request.filters.crop_regions[1];
+        EXPECT_EQ(filter_a->bounds.min, cropbox_a->min);
+        EXPECT_EQ(filter_a->bounds.max, cropbox_a->max);
+        EXPECT_EQ(filter_b->bounds.min, cropbox_b->min);
+        EXPECT_EQ(filter_b->bounds.max, cropbox_b->max);
+        EXPECT_TRUE(filter_a->desaturate);
+        EXPECT_TRUE(filter_b->desaturate);
+
+        ctx.settings.desaturate_cropping = false;
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_EQ(request.filters.crop_regions.size(), 2u);
+        EXPECT_FALSE(request.filters.crop_regions[0].desaturate);
+        EXPECT_FALSE(request.filters.crop_regions[1].desaturate);
+
+        scene.setNodeVisibility(model_a_id, false);
+        ctx.scene_state = manager.buildRenderState();
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+        ASSERT_EQ(request.filters.crop_regions.size(), 1u);
+        EXPECT_EQ(request.filters.crop_regions.front().parent_node_index, scene.getVisibleNodeIndex(model_b_id));
+        EXPECT_EQ(request.filters.crop_regions.front().bounds.min, cropbox_b->min);
+        EXPECT_EQ(request.filters.crop_regions.front().bounds.max, cropbox_b->max);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, MultipleEnabledCropBoxesWithoutSelectionRemainParentScoped) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto model_a_id = scene.addSplat("ModelA", makeTestSplat(0.0f));
+        const auto model_b_id = scene.addSplat("ModelB", makeTestSplat(2.0f));
+        ASSERT_NE(model_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(model_b_id, lfs::core::NULL_NODE);
+
+        const auto cropbox_a_id = scene.getOrCreateCropBoxForSplat(model_a_id);
+        const auto cropbox_b_id = scene.getOrCreateCropBoxForSplat(model_b_id);
+        ASSERT_NE(cropbox_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(cropbox_b_id, lfs::core::NULL_NODE);
+        ASSERT_NE(scene.getCropBoxData(cropbox_a_id), nullptr);
+        ASSERT_NE(scene.getCropBoxData(cropbox_b_id), nullptr);
+        scene.getCropBoxData(cropbox_a_id)->enabled = true;
+        scene.getCropBoxData(cropbox_b_id)->enabled = true;
+        manager.clearSelection();
+
+        Viewport viewport(640, 480);
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = manager.buildRenderState(),
+            .settings = RenderSettings{},
+            .render_size = {640, 480},
+        };
+
+        const auto request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_TRUE(request.filters.crop_region.has_value());
+        ASSERT_EQ(request.filters.crop_regions.size(), 2u);
+        EXPECT_NE(request.filters.crop_regions[0].parent_node_index, request.filters.crop_regions[1].parent_node_index);
+        EXPECT_FALSE(request.filters.crop_regions[0].desaturate);
+        EXPECT_FALSE(request.filters.crop_regions[1].desaturate);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, LiveCropboxPreviewOverridesOnlyEditedParent) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto model_a_id = scene.addSplat("ModelA", makeTestSplat(0.0f));
+        const auto model_b_id = scene.addSplat("ModelB", makeTestSplat(2.0f));
+        ASSERT_NE(model_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(model_b_id, lfs::core::NULL_NODE);
+
+        const auto cropbox_a_id = scene.getOrCreateCropBoxForSplat(model_a_id);
+        const auto cropbox_b_id = scene.getOrCreateCropBoxForSplat(model_b_id);
+        ASSERT_NE(cropbox_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(cropbox_b_id, lfs::core::NULL_NODE);
+        auto* cropbox_a = scene.getCropBoxData(cropbox_a_id);
+        auto* cropbox_b = scene.getCropBoxData(cropbox_b_id);
+        ASSERT_NE(cropbox_a, nullptr);
+        ASSERT_NE(cropbox_b, nullptr);
+        cropbox_a->min = {-2.0f, -2.0f, -2.0f};
+        cropbox_a->max = {-1.0f, -1.0f, -1.0f};
+        cropbox_a->enabled = true;
+        cropbox_b->min = {1.0f, 1.0f, 1.0f};
+        cropbox_b->max = {2.0f, 2.0f, 2.0f};
+        cropbox_b->enabled = true;
+
+        Viewport viewport(640, 480);
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = manager.buildRenderState(),
+            .settings = RenderSettings{},
+            .render_size = {640, 480},
+            .gizmo = {
+                .cropbox_active = true,
+                .cropbox_min = {-0.5f, -0.5f, -0.5f},
+                .cropbox_max = {0.5f, 0.5f, 0.5f},
+                .cropbox_transform = glm::mat4(1.0f),
+                .cropbox_affects_render = true,
+                .cropbox_parent_node_index = scene.getVisibleNodeIndex(model_a_id),
+            },
+        };
+
+        const auto request = buildViewportRenderRequest(ctx, {640, 480});
+        ASSERT_EQ(request.filters.crop_regions.size(), 2u);
+        const auto* filter_a = request.filters.crop_regions[0].parent_node_index == scene.getVisibleNodeIndex(model_a_id)
+                                   ? &request.filters.crop_regions[0]
+                                   : &request.filters.crop_regions[1];
+        const auto* filter_b = request.filters.crop_regions[0].parent_node_index == scene.getVisibleNodeIndex(model_b_id)
+                                   ? &request.filters.crop_regions[0]
+                                   : &request.filters.crop_regions[1];
+        EXPECT_EQ(filter_a->bounds.min, glm::vec3(-0.5f));
+        EXPECT_EQ(filter_a->bounds.max, glm::vec3(0.5f));
+        EXPECT_EQ(filter_b->bounds.min, cropbox_b->min);
+        EXPECT_EQ(filter_b->bounds.max, cropbox_b->max);
+    }
+    TEST_F(SceneManagerRenderStateTest, ApplyCropBoxTargetsOnlyParentSplat) {
+        SceneManager manager;
+        services().set(&manager);
+        auto& scene = manager.getScene();
+        const auto model_a_id = scene.addSplat("ModelA", makeTwoPointTestSplat(0.0f, 2.0f));
+        const auto model_b_id = scene.addSplat("ModelB", makeTwoPointTestSplat(0.0f, 2.0f));
+        ASSERT_NE(model_a_id, lfs::core::NULL_NODE);
+        ASSERT_NE(model_b_id, lfs::core::NULL_NODE);
+        auto* model_a = scene.getMutableNode("ModelA");
+        auto* model_b = scene.getMutableNode("ModelB");
+        ASSERT_NE(model_a, nullptr);
+        ASSERT_NE(model_b, nullptr);
+        ASSERT_TRUE(model_a->model);
+        ASSERT_TRUE(model_b->model);
+        ASSERT_EQ(model_a->model->visible_count(), 2u);
+        ASSERT_EQ(model_b->model->visible_count(), 2u);
+        ASSERT_FALSE(model_a->model->has_deleted_mask());
+        ASSERT_FALSE(model_b->model->has_deleted_mask());
+
+        lfs::geometry::BoundingBox crop_box;
+        crop_box.setBounds(glm::vec3(-0.5f, -0.5f, -0.5f), glm::vec3(0.5f, 0.5f, 3.0f));
+        lfs::core::events::cmd::CropPLY{
+            .crop_box = crop_box,
+            .inverse = false,
+            .target_node_id = static_cast<int32_t>(model_a_id),
+        }
+            .emit();
+
+        model_a = scene.getMutableNode("ModelA");
+        model_b = scene.getMutableNode("ModelB");
+        ASSERT_NE(model_a, nullptr);
+        ASSERT_NE(model_b, nullptr);
+        ASSERT_TRUE(model_a->model);
+        ASSERT_TRUE(model_b->model);
+        EXPECT_TRUE(model_a->model->has_deleted_mask());
+        EXPECT_FALSE(model_b->model->has_deleted_mask());
+        EXPECT_EQ(model_b->model->visible_count(), 2u);
+    }
+    TEST_F(SceneManagerRenderStateTest, EnsureEllipsoidConvertsExistingCropBoxInPlace) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        const auto cropbox_id = scene.addCropBox("Model_cropbox", parent_id);
+        ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+        auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_NE(cropbox_node->cropbox, nullptr);
+        cropbox_node->cropbox->min = {-3.0f, -5.0f, -7.0f};
+        cropbox_node->cropbox->max = {3.0f, 5.0f, 7.0f};
+        cropbox_node->cropbox->enabled = true;
+        cropbox_node->cropbox->inverse = true;
+        cropbox_node->cropbox->color = {0.25f, 0.5f, 0.75f};
+        cropbox_node->cropbox->line_width = 5.0f;
+        cropbox_node->cropbox->flash_intensity = 0.4f;
+        const glm::mat4 transform =
+            glm::rotate(glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)),
+                        glm::radians(30.0f),
+                        glm::vec3(0.0f, 1.0f, 0.0f));
+        scene.setNodeTransform(cropbox_node->name, transform);
+        scene.setNodeVisibility(cropbox_id, false);
+        manager.selectNode(cropbox_node->name);
+
+        auto result = cap::ensureEllipsoid(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(result) << result.error();
+        EXPECT_EQ(*result, cropbox_id);
+        EXPECT_EQ(scene.getCropBoxForSplat(parent_id), lfs::core::NULL_NODE);
+        EXPECT_EQ(scene.getEllipsoidForSplat(parent_id), cropbox_id);
+
+        const auto* converted = scene.getNodeById(cropbox_id);
+        ASSERT_NE(converted, nullptr);
+        EXPECT_EQ(converted->type, lfs::core::NodeType::ELLIPSOID);
+        EXPECT_EQ(converted->name, "Model_cropbox");
+        EXPECT_FALSE(converted->cropbox);
+        ASSERT_TRUE(converted->ellipsoid);
+        EXPECT_EQ(converted->parent_id, parent_id);
+        EXPECT_FALSE(converted->visible.get());
+        EXPECT_TRUE(converted->ellipsoid->enabled);
+        EXPECT_TRUE(converted->ellipsoid->inverse);
+        EXPECT_EQ(converted->ellipsoid->color, glm::vec3(0.25f, 0.5f, 0.75f));
+        EXPECT_FLOAT_EQ(converted->ellipsoid->line_width, 5.0f);
+        EXPECT_FLOAT_EQ(converted->ellipsoid->flash_intensity, 0.4f);
+        EXPECT_EQ(converted->ellipsoid->radii, glm::vec3(3.0f, 5.0f, 7.0f));
+        EXPECT_EQ(scene.getNodeTransform(converted->name), transform);
+        EXPECT_EQ(manager.getSelectedNodeName(), converted->name);
+
+        const auto settings = rendering_manager.getSettings();
+        EXPECT_FALSE(settings.show_crop_box);
+        EXPECT_FALSE(settings.use_crop_box);
+        EXPECT_FALSE(settings.show_ellipsoid);
+        EXPECT_TRUE(settings.use_ellipsoid);
+
+        const auto state = manager.buildRenderState();
+        EXPECT_TRUE(state.cropboxes.empty());
+        ASSERT_EQ(state.ellipsoids.size(), 1u);
+        EXPECT_EQ(state.ellipsoids.front().node_id, cropbox_id);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DefaultCropBoxConvertsToEllipsoidAtCropCenter) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        const auto cropbox_id = *cropbox_result;
+        const auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+        EXPECT_EQ(cropbox_node->cropbox->min, glm::vec3(-0.5f, -1e-4f, -1e-4f));
+        EXPECT_EQ(cropbox_node->cropbox->max, glm::vec3(0.5f, 1e-4f, 1e-4f));
+        const glm::mat4 cropbox_transform = scene.getNodeTransform(cropbox_node->name);
+        EXPECT_EQ(glm::vec3(cropbox_transform[3]), glm::vec3(0.5f, 0.0f, 0.0f));
+
+        auto ellipsoid_result = cap::ensureEllipsoid(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(ellipsoid_result) << ellipsoid_result.error();
+        EXPECT_EQ(*ellipsoid_result, cropbox_id);
+
+        const auto* ellipsoid_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        EXPECT_EQ(ellipsoid_node->type, lfs::core::NodeType::ELLIPSOID);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        EXPECT_EQ(ellipsoid_node->ellipsoid->radii, glm::vec3(0.5f, 1e-4f, 1e-4f));
+        EXPECT_EQ(scene.getNodeTransform(ellipsoid_node->name), cropbox_transform);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, AddCropCommandsConvertSelectedCropVolumeViaParent) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+        EditorContext editor;
+        services().set(&editor);
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        const auto cropbox_id = *cropbox_result;
+        const auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+
+        lfs::core::events::cmd::AddCropEllipsoid{.node_name = cropbox_node->name}.emit();
+
+        const auto* ellipsoid_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        EXPECT_EQ(ellipsoid_node->type, lfs::core::NodeType::ELLIPSOID);
+        EXPECT_EQ(scene.getEllipsoidForSplat(parent_id), cropbox_id);
+        EXPECT_EQ(scene.getCropBoxForSplat(parent_id), lfs::core::NULL_NODE);
+        EXPECT_EQ(manager.getSelectedNodeName(), ellipsoid_node->name);
+        EXPECT_EQ(editor.getActiveOperator(), "builtin.cropbox");
+
+        lfs::core::events::cmd::AddCropBox{.node_name = ellipsoid_node->name}.emit();
+
+        const auto* converted_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(converted_node, nullptr);
+        EXPECT_EQ(converted_node->type, lfs::core::NodeType::CROPBOX);
+        EXPECT_EQ(scene.getCropBoxForSplat(parent_id), cropbox_id);
+        EXPECT_EQ(scene.getEllipsoidForSplat(parent_id), lfs::core::NULL_NODE);
+        EXPECT_EQ(manager.getSelectedNodeName(), converted_node->name);
+        EXPECT_EQ(editor.getActiveOperator(), "builtin.cropbox");
+    }
+
+    TEST_F(SceneManagerRenderStateTest, AddCropCommandsRevealExistingHiddenCropVolume) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        const auto cropbox_id = *cropbox_result;
+        const auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+
+        manager.setNodeVisibility(cropbox_id, false);
+        lfs::core::events::cmd::AddCropBox{.node_name = "Model"}.emit();
+
+        cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        EXPECT_TRUE(cropbox_node->visible);
+        EXPECT_EQ(cropbox_node->type, lfs::core::NodeType::CROPBOX);
+        EXPECT_EQ(manager.getSelectedNodeName(), cropbox_node->name);
+
+        manager.setNodeVisibility(cropbox_id, false);
+        lfs::core::events::cmd::AddCropEllipsoid{.node_name = cropbox_node->name}.emit();
+
+        const auto* ellipsoid_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        EXPECT_TRUE(ellipsoid_node->visible);
+        EXPECT_EQ(ellipsoid_node->type, lfs::core::NodeType::ELLIPSOID);
+        EXPECT_EQ(scene.getEllipsoidForSplat(parent_id), cropbox_id);
+        EXPECT_EQ(manager.getSelectedNodeName(), ellipsoid_node->name);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, ResetAndFitPreserveEnabledCropEffects) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        services().set(&rendering_manager);
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addSplat("Model", makeTestSplat(0.0f));
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        const auto cropbox_id = *cropbox_result;
+        auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+        cropbox_node->cropbox->enabled = true;
+        manager.selectNode(cropbox_node->name);
+
+        auto settings = rendering_manager.getSettings();
+        settings.use_crop_box = false;
+        rendering_manager.updateSettings(settings);
+        lfs::core::events::cmd::ResetCropBox{}.emit();
+
+        cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+        EXPECT_TRUE(cropbox_node->cropbox->enabled);
+        EXPECT_TRUE(rendering_manager.getSettings().use_crop_box);
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .model = manager.getModelForRendering(),
+            .scene_state = scene_state,
+            .settings = rendering_manager.getSettings(),
+            .render_size = {640, 480},
+        };
+        auto request = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_TRUE(request.filters.crop_region.has_value());
+
+        settings = rendering_manager.getSettings();
+        settings.use_crop_box = false;
+        rendering_manager.updateSettings(settings);
+        lfs::core::events::cmd::FitCropBoxToScene{.use_percentile = false}.emit();
+        cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+        EXPECT_TRUE(cropbox_node->cropbox->enabled);
+        EXPECT_TRUE(rendering_manager.getSettings().use_crop_box);
+        scene_state = manager.buildRenderState();
+        ctx.scene_state = scene_state;
+        ctx.settings = rendering_manager.getSettings();
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_TRUE(request.filters.crop_region.has_value());
+
+        lfs::core::events::cmd::AddCropEllipsoid{.node_name = cropbox_node->name}.emit();
+        auto* ellipsoid_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        ellipsoid_node->ellipsoid->enabled = true;
+        settings = rendering_manager.getSettings();
+        settings.use_ellipsoid = false;
+        rendering_manager.updateSettings(settings);
+        lfs::core::events::cmd::ResetEllipsoid{}.emit();
+
+        ellipsoid_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        EXPECT_TRUE(ellipsoid_node->ellipsoid->enabled);
+        EXPECT_TRUE(rendering_manager.getSettings().use_ellipsoid);
+        scene_state = manager.buildRenderState();
+        ctx.scene_state = scene_state;
+        ctx.settings = rendering_manager.getSettings();
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_TRUE(request.filters.ellipsoid_region.has_value());
+
+        settings = rendering_manager.getSettings();
+        settings.use_ellipsoid = false;
+        rendering_manager.updateSettings(settings);
+        lfs::core::events::cmd::FitEllipsoidToScene{.use_percentile = false}.emit();
+        ellipsoid_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        EXPECT_TRUE(ellipsoid_node->ellipsoid->enabled);
+        EXPECT_TRUE(rendering_manager.getSettings().use_ellipsoid);
+        scene_state = manager.buildRenderState();
+        ctx.scene_state = scene_state;
+        ctx.settings = rendering_manager.getSettings();
+        request = buildViewportRenderRequest(ctx, {640, 480});
+        EXPECT_TRUE(request.filters.ellipsoid_region.has_value());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DeletingSelectedCropVolumeSelectsParentAndClearsRenderState) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        services().set(&manager);
+        services().set(&rendering_manager);
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        const auto cropbox_id = *cropbox_result;
+        const auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        manager.selectNode(cropbox_node->name);
+
+        auto settings = rendering_manager.getSettings();
+        settings.show_crop_box = true;
+        settings.use_crop_box = true;
+        rendering_manager.updateSettings(settings);
+
+        manager.removePLY(cropbox_node->name);
+
+        EXPECT_EQ(scene.getCropBoxForSplat(parent_id), lfs::core::NULL_NODE);
+        EXPECT_EQ(manager.getSelectedNodeName(), "Model");
+        settings = rendering_manager.getSettings();
+        EXPECT_FALSE(settings.show_crop_box);
+        EXPECT_FALSE(settings.use_crop_box);
+        EXPECT_TRUE(manager.buildRenderState().cropboxes.empty());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, EnsureCropBoxConvertsExistingEllipsoidAndUndoRedoRestoresShape) {
+        SceneManager manager;
+        RenderingManager rendering_manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        const auto ellipsoid_id = scene.addEllipsoid("Model_ellipsoid", parent_id);
+        ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+        auto* ellipsoid_node = scene.getNodeById(ellipsoid_id);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_NE(ellipsoid_node->ellipsoid, nullptr);
+        ellipsoid_node->ellipsoid->radii = {2.0f, 3.0f, 4.0f};
+        ellipsoid_node->ellipsoid->enabled = true;
+        ellipsoid_node->ellipsoid->inverse = true;
+        ellipsoid_node->ellipsoid->color = {0.8f, 0.6f, 0.4f};
+        ellipsoid_node->ellipsoid->line_width = 6.0f;
+        ellipsoid_node->ellipsoid->flash_intensity = 0.3f;
+        const glm::mat4 transform = glm::scale(
+            glm::translate(glm::mat4(1.0f), glm::vec3(-1.0f, 2.0f, -3.0f)),
+            glm::vec3(1.0f, 2.0f, 3.0f));
+        scene.setNodeTransform(ellipsoid_node->name, transform);
+        scene.setNodeVisibility(ellipsoid_id, false);
+        manager.selectNode(ellipsoid_node->name);
+
+        auto result = cap::ensureCropBox(manager, &rendering_manager, parent_id);
+        ASSERT_TRUE(result) << result.error();
+        EXPECT_EQ(*result, ellipsoid_id);
+        EXPECT_EQ(scene.getCropBoxForSplat(parent_id), ellipsoid_id);
+        EXPECT_EQ(scene.getEllipsoidForSplat(parent_id), lfs::core::NULL_NODE);
+
+        auto* converted = scene.getNodeById(ellipsoid_id);
+        ASSERT_NE(converted, nullptr);
+        EXPECT_EQ(converted->type, lfs::core::NodeType::CROPBOX);
+        EXPECT_EQ(converted->name, "Model_ellipsoid");
+        ASSERT_TRUE(converted->cropbox);
+        EXPECT_FALSE(converted->ellipsoid);
+        EXPECT_EQ(converted->cropbox->min, glm::vec3(-2.0f, -3.0f, -4.0f));
+        EXPECT_EQ(converted->cropbox->max, glm::vec3(2.0f, 3.0f, 4.0f));
+        EXPECT_TRUE(converted->cropbox->enabled);
+        EXPECT_TRUE(converted->cropbox->inverse);
+        EXPECT_EQ(converted->cropbox->color, glm::vec3(0.8f, 0.6f, 0.4f));
+        EXPECT_FLOAT_EQ(converted->cropbox->line_width, 6.0f);
+        EXPECT_FLOAT_EQ(converted->cropbox->flash_intensity, 0.3f);
+        EXPECT_EQ(scene.getNodeTransform(converted->name), transform);
+        EXPECT_EQ(manager.getSelectedNodeName(), converted->name);
+
+        auto settings = rendering_manager.getSettings();
+        EXPECT_FALSE(settings.show_ellipsoid);
+        EXPECT_FALSE(settings.use_ellipsoid);
+        EXPECT_FALSE(settings.show_crop_box);
+        EXPECT_TRUE(settings.use_crop_box);
+
+        auto state = manager.buildRenderState();
+        ASSERT_EQ(state.cropboxes.size(), 1u);
+        EXPECT_TRUE(state.ellipsoids.empty());
+
+        auto undo_result = op::undoHistory().undo();
+        ASSERT_TRUE(undo_result.success);
+        const auto* undone = scene.getNode("Model_ellipsoid");
+        ASSERT_NE(undone, nullptr);
+        EXPECT_EQ(undone->type, lfs::core::NodeType::ELLIPSOID);
+        ASSERT_TRUE(undone->ellipsoid);
+        EXPECT_FALSE(undone->cropbox);
+        EXPECT_EQ(undone->ellipsoid->radii, glm::vec3(2.0f, 3.0f, 4.0f));
+        EXPECT_TRUE(undone->ellipsoid->enabled);
+        EXPECT_TRUE(undone->ellipsoid->inverse);
+        EXPECT_FALSE(undone->visible.get());
+        EXPECT_EQ(manager.getSelectedNodeName(), "Model_ellipsoid");
+
+        auto redo_result = op::undoHistory().redo();
+        ASSERT_TRUE(redo_result.success);
+        const auto* redone = scene.getNode("Model_ellipsoid");
+        ASSERT_NE(redone, nullptr);
+        EXPECT_EQ(redone->type, lfs::core::NodeType::CROPBOX);
+        ASSERT_TRUE(redone->cropbox);
+        EXPECT_FALSE(redone->ellipsoid);
+        EXPECT_EQ(redone->cropbox->min, glm::vec3(-2.0f, -3.0f, -4.0f));
+        EXPECT_EQ(redone->cropbox->max, glm::vec3(2.0f, 3.0f, 4.0f));
+        EXPECT_TRUE(redone->cropbox->enabled);
+        EXPECT_TRUE(redone->cropbox->inverse);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestUsesSelectedEnabledEllipsoidCrop) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto ellipsoid_result = cap::ensureEllipsoid(manager, nullptr, parent_id);
+        ASSERT_TRUE(ellipsoid_result) << ellipsoid_result.error();
+        auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        ellipsoid_node->ellipsoid->enabled = true;
+        ellipsoid_node->ellipsoid->inverse = true;
+        ellipsoid_node->ellipsoid->radii = {2.0f, 3.0f, 4.0f};
+        const auto transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f));
+        scene.setNodeTransform(ellipsoid_node->name, transform);
+        manager.selectNode(ellipsoid_node->name);
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        ASSERT_EQ(scene_state.ellipsoids.size(), 1u);
+        RenderSettings settings;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const std::vector<glm::mat4> transforms = scene_state.model_transforms;
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        ASSERT_TRUE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_FALSE(request.filters.crop_box.has_value());
+        EXPECT_EQ(request.filters.crop_ellipsoid->radii, glm::vec3(2.0f, 3.0f, 4.0f));
+        EXPECT_EQ(request.filters.crop_ellipsoid->transform,
+                  glm::inverse(scene_state.ellipsoids.front().world_transform));
+        EXPECT_TRUE(request.filters.crop_inverse);
+        EXPECT_FALSE(request.filters.crop_desaturate);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestIgnoresDisabledSelectedEllipsoidCrop) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto ellipsoid_result = cap::ensureEllipsoid(manager, nullptr, parent_id);
+        ASSERT_TRUE(ellipsoid_result) << ellipsoid_result.error();
+        auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        ellipsoid_node->ellipsoid->enabled = false;
+        manager.selectNode(ellipsoid_node->name);
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        RenderSettings settings;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const std::vector<glm::mat4> transforms = scene_state.model_transforms;
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_FALSE(request.filters.crop_box.has_value());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, DeleteSelectedGaussiansRejectsSelectedCropVolumeWithoutRemovingIt) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, nullptr, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        const auto cropbox_id = *cropbox_result;
+        auto* cropbox_node = scene.getNodeById(cropbox_id);
+        ASSERT_NE(cropbox_node, nullptr);
+        const auto cropbox_name = cropbox_node->name;
+        manager.selectNode(cropbox_name);
+
+        const auto result = manager.deleteSelectedGaussiansWithHistory();
+
+        ASSERT_FALSE(result.has_value());
+        EXPECT_EQ(result.error(), "Use the Crop toolbar Delete action to remove selected crop volumes");
+        EXPECT_NE(scene.getNodeById(cropbox_id), nullptr);
+        EXPECT_EQ(manager.getSelectedNodeName(), cropbox_name);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestKeepsSingleEnabledCropBoxAfterDeselection) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, nullptr, parent_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        auto* cropbox_node = scene.getNodeById(*cropbox_result);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+        cropbox_node->cropbox->enabled = true;
+        cropbox_node->cropbox->inverse = true;
+        cropbox_node->cropbox->min = {-1.0f, -2.0f, -3.0f};
+        cropbox_node->cropbox->max = {1.0f, 2.0f, 3.0f};
+        scene.setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 3.0f, 4.0f)));
+        scene.setNodeVisibility(*cropbox_result, false);
+        manager.clearSelection();
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        ASSERT_EQ(scene_state.cropboxes.size(), 1u);
+        EXPECT_LT(scene_state.cropboxes.front().parent_node_index, 0);
+        EXPECT_FALSE(scene_state.cropboxes.front().effectively_visible);
+        EXPECT_TRUE(scene_state.cropboxes.front().parent_effectively_visible);
+        RenderSettings settings;
+        settings.desaturate_cropping = false;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const std::vector<glm::mat4> transforms = scene_state.model_transforms;
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        ASSERT_TRUE(request.filters.crop_box.has_value());
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_EQ(request.filters.crop_box->min, glm::vec3(-1.0f, -2.0f, -3.0f));
+        EXPECT_EQ(request.filters.crop_box->max, glm::vec3(1.0f, 2.0f, 3.0f));
+        EXPECT_EQ(request.filters.crop_box->transform, glm::inverse(scene_state.cropboxes.front().world_transform));
+        EXPECT_TRUE(request.filters.crop_inverse);
+        EXPECT_FALSE(request.filters.crop_desaturate);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestIgnoresHiddenSplatCropBoxFallback) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto hidden_splat_id = scene.addSplat("HiddenSplat", makeTestSplat(0.0f));
+        ASSERT_NE(hidden_splat_id, lfs::core::NULL_NODE);
+        const auto point_cloud_id = scene.addPointCloud("VisiblePoints", makeTestPointCloud());
+        ASSERT_NE(point_cloud_id, lfs::core::NULL_NODE);
+
+        auto cropbox_result = cap::ensureCropBox(manager, nullptr, hidden_splat_id);
+        ASSERT_TRUE(cropbox_result) << cropbox_result.error();
+        auto* cropbox_node = scene.getNodeById(*cropbox_result);
+        ASSERT_NE(cropbox_node, nullptr);
+        ASSERT_TRUE(cropbox_node->cropbox);
+        cropbox_node->cropbox->enabled = true;
+        scene.setNodeVisibility("HiddenSplat", false);
+        manager.clearSelection();
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        ASSERT_EQ(scene_state.cropboxes.size(), 1u);
+        EXPECT_FALSE(scene_state.cropboxes.front().effectively_visible);
+        EXPECT_FALSE(scene_state.cropboxes.front().parent_effectively_visible);
+        RenderSettings settings;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const std::vector<glm::mat4> transforms = scene_state.model_transforms;
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        EXPECT_FALSE(request.filters.crop_box.has_value());
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestKeepsSingleEnabledEllipsoidAfterDeselection) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto parent_id = scene.addPointCloud("Model", makeTestPointCloud());
+        ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+        auto ellipsoid_result = cap::ensureEllipsoid(manager, nullptr, parent_id);
+        ASSERT_TRUE(ellipsoid_result) << ellipsoid_result.error();
+        auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        ellipsoid_node->ellipsoid->enabled = true;
+        ellipsoid_node->ellipsoid->inverse = true;
+        ellipsoid_node->ellipsoid->radii = {2.0f, 3.0f, 4.0f};
+        scene.setNodeTransform(ellipsoid_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 4.0f, 5.0f)));
+        scene.setNodeVisibility(*ellipsoid_result, false);
+        manager.clearSelection();
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        ASSERT_EQ(scene_state.ellipsoids.size(), 1u);
+        EXPECT_LT(scene_state.ellipsoids.front().parent_node_index, 0);
+        EXPECT_FALSE(scene_state.ellipsoids.front().effectively_visible);
+        EXPECT_TRUE(scene_state.ellipsoids.front().parent_effectively_visible);
+        RenderSettings settings;
+        settings.desaturate_cropping = false;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const std::vector<glm::mat4> transforms = scene_state.model_transforms;
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        ASSERT_TRUE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_FALSE(request.filters.crop_box.has_value());
+        EXPECT_EQ(request.filters.crop_ellipsoid->radii, glm::vec3(2.0f, 3.0f, 4.0f));
+        EXPECT_EQ(request.filters.crop_ellipsoid->transform, glm::inverse(scene_state.ellipsoids.front().world_transform));
+        EXPECT_TRUE(request.filters.crop_inverse);
+        EXPECT_FALSE(request.filters.crop_desaturate);
+    }
+
+    TEST_F(SceneManagerRenderStateTest, PointCloudRequestIgnoresHiddenSplatEllipsoidFallback) {
+        SceneManager manager;
+        auto& scene = manager.getScene();
+        const auto hidden_splat_id = scene.addSplat("HiddenSplat", makeTestSplat(0.0f));
+        ASSERT_NE(hidden_splat_id, lfs::core::NULL_NODE);
+        const auto point_cloud_id = scene.addPointCloud("VisiblePoints", makeTestPointCloud());
+        ASSERT_NE(point_cloud_id, lfs::core::NULL_NODE);
+
+        auto ellipsoid_result = cap::ensureEllipsoid(manager, nullptr, hidden_splat_id);
+        ASSERT_TRUE(ellipsoid_result) << ellipsoid_result.error();
+        auto* ellipsoid_node = scene.getNodeById(*ellipsoid_result);
+        ASSERT_NE(ellipsoid_node, nullptr);
+        ASSERT_TRUE(ellipsoid_node->ellipsoid);
+        ellipsoid_node->ellipsoid->enabled = true;
+        scene.setNodeVisibility("HiddenSplat", false);
+        manager.clearSelection();
+
+        Viewport viewport(640, 480);
+        auto scene_state = manager.buildRenderState();
+        ASSERT_EQ(scene_state.ellipsoids.size(), 1u);
+        EXPECT_FALSE(scene_state.ellipsoids.front().effectively_visible);
+        EXPECT_FALSE(scene_state.ellipsoids.front().parent_effectively_visible);
+        RenderSettings settings;
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_manager = &manager,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+        };
+        const std::vector<glm::mat4> transforms = scene_state.model_transforms;
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        EXPECT_FALSE(request.filters.crop_box.has_value());
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+    }
+
+    TEST(ViewportRequestBuilderTest, PointCloudRequestUsesCropBoxWhenBothPointCloudGizmosAffectRender) {
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        RenderSettings settings;
+        settings.desaturate_cropping = false;
+        const auto ellipsoid_transform = glm::translate(glm::mat4(1.0f), glm::vec3(4.0f, 5.0f, 6.0f));
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .gizmo =
+                {.cropbox_active = true,
+                 .cropbox_min = {-1.0f, -1.0f, -1.0f},
+                 .cropbox_max = {1.0f, 1.0f, 1.0f},
+                 .cropbox_transform = glm::mat4(1.0f),
+                 .cropbox_affects_render = true,
+                 .cropbox_parent_node_index = 0,
+                 .ellipsoid_active = true,
+                 .ellipsoid_radii = {3.0f, 4.0f, 5.0f},
+                 .ellipsoid_transform = ellipsoid_transform,
+                 .ellipsoid_affects_render = true,
+                 .ellipsoid_parent_node_index = 0},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        ASSERT_TRUE(request.filters.crop_box.has_value());
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_EQ(request.filters.crop_box->min, glm::vec3(-1.0f, -1.0f, -1.0f));
+        EXPECT_EQ(request.filters.crop_box->max, glm::vec3(1.0f, 1.0f, 1.0f));
+        EXPECT_EQ(request.filters.crop_box->transform, glm::mat4(1.0f));
+        EXPECT_FALSE(request.filters.crop_inverse);
+        EXPECT_FALSE(request.filters.crop_desaturate);
+    }
+
+    TEST(ViewportRequestBuilderTest, PointCloudRequestKeepsActiveCropBoxBehavior) {
+        Viewport viewport(640, 480);
+        SceneRenderState scene_state;
+        RenderSettings settings;
+        settings.desaturate_cropping = true;
+        const auto cropbox_transform = glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+        const FrameContext ctx{
+            .viewport = viewport,
+            .scene_state = scene_state,
+            .settings = settings,
+            .render_size = {640, 480},
+            .gizmo =
+                {.cropbox_active = true,
+                 .cropbox_min = {-2.0f, -3.0f, -4.0f},
+                 .cropbox_max = {2.0f, 3.0f, 4.0f},
+                 .cropbox_transform = cropbox_transform,
+                 .cropbox_affects_render = true,
+                 .cropbox_parent_node_index = -1},
+        };
+        const std::vector<glm::mat4> transforms{glm::mat4(1.0f)};
+
+        const auto request = buildPointCloudRenderRequest(ctx, {640, 480}, transforms);
+
+        ASSERT_TRUE(request.filters.crop_box.has_value());
+        EXPECT_FALSE(request.filters.crop_ellipsoid.has_value());
+        EXPECT_EQ(request.filters.crop_box->min, glm::vec3(-2.0f, -3.0f, -4.0f));
+        EXPECT_EQ(request.filters.crop_box->max, glm::vec3(2.0f, 3.0f, 4.0f));
+        EXPECT_EQ(request.filters.crop_box->transform, glm::inverse(cropbox_transform));
+        EXPECT_FALSE(request.filters.crop_inverse);
+        EXPECT_TRUE(request.filters.crop_desaturate);
+    }
+
     TEST(ViewportRequestBuilderTest, PointCloudRequestCarriesSelectionOverlay) {
         using lfs::core::DataType;
         using lfs::core::Device;
@@ -893,6 +2174,9 @@ namespace lfs::vis {
         const auto active_resize = service.handleViewportResize({800, 600});
         EXPECT_EQ(active_resize.dirty, DirtyFlag::OVERLAY);
         EXPECT_FALSE(active_resize.completed);
+        EXPECT_TRUE(active_resize.render_resized_frame);
+        EXPECT_TRUE(active_resize.use_interactive_render_scale);
+        EXPECT_FALSE(active_resize.require_immediate_output_resize);
         EXPECT_TRUE(service.isResizeDeferring());
 
         EXPECT_EQ(service.setViewportResizeActive(false),
@@ -906,6 +2190,7 @@ namespace lfs::vis {
         EXPECT_EQ(debounce_step_2.dirty, DirtyFlag::OVERLAY);
         EXPECT_FALSE(debounce_step_2.completed);
 
+        waitUntilResizeSettleReady(service);
         const auto debounce_step_3 = service.handleViewportResize({800, 600});
         EXPECT_EQ(debounce_step_3.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(debounce_step_3.completed);
@@ -921,15 +2206,43 @@ namespace lfs::vis {
         const auto passive_resize = service.handleViewportResize({800, 600});
         EXPECT_EQ(passive_resize.dirty, DirtyFlag::OVERLAY);
         EXPECT_FALSE(passive_resize.completed);
+        EXPECT_TRUE(passive_resize.render_resized_frame);
+        EXPECT_TRUE(passive_resize.use_interactive_render_scale);
+        EXPECT_FALSE(passive_resize.require_immediate_output_resize);
         EXPECT_TRUE(service.isResizeDeferring());
 
         EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
         EXPECT_EQ(service.handleViewportResize({800, 600}).dirty, DirtyFlag::OVERLAY);
 
+        waitUntilResizeSettleReady(service);
         const auto completed = service.handleViewportResize({800, 600});
         EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(completed.completed);
         EXPECT_FALSE(service.isResizeDeferring());
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, DiscreteLayoutResizeRendersAtFullResolution) {
+        ViewportFrameLifecycleService service;
+
+        EXPECT_EQ(service.handleViewportResize({640, 480}).dirty,
+                  DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+        EXPECT_EQ(service.setViewportResizeActive(
+                      true, ViewportResizeRenderPolicy::FullResolution),
+                  0u);
+
+        const auto layout_resize = service.handleViewportResize({960, 480});
+        EXPECT_EQ(layout_resize.dirty, DirtyFlag::OVERLAY);
+        EXPECT_TRUE(layout_resize.render_resized_frame);
+        EXPECT_FALSE(layout_resize.use_interactive_render_scale);
+        EXPECT_TRUE(layout_resize.require_immediate_output_resize);
+        EXPECT_TRUE(service.isResizeDeferring());
+
+        const auto guarded_frame = service.handleViewportResize({960, 480});
+        EXPECT_FALSE(guarded_frame.render_resized_frame);
+        EXPECT_TRUE(guarded_frame.require_immediate_output_resize);
+
+        EXPECT_EQ(service.setViewportResizeActive(false),
+                  DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
     }
 
     TEST(ViewportFrameLifecycleServiceTest, ExplicitRefreshDeferralCompletesAfterStableFrames) {
@@ -943,6 +2256,7 @@ namespace lfs::vis {
         EXPECT_EQ(service.handleViewportResize({640, 480}).dirty, DirtyFlag::OVERLAY);
         EXPECT_EQ(service.handleViewportResize({640, 480}).dirty, DirtyFlag::OVERLAY);
 
+        waitUntilResizeSettleReady(service);
         const auto completed = service.handleViewportResize({640, 480});
         EXPECT_EQ(completed.dirty, DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
         EXPECT_TRUE(completed.completed);
@@ -963,6 +2277,28 @@ namespace lfs::vis {
         const auto repeated_change = service.handleModelChange(0x1234, artifacts);
         EXPECT_FALSE(repeated_change.changed);
         EXPECT_EQ(artifacts.artifactGeneration(), generation_after_first_change);
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, ModelSourceChangesInvalidateOnceInBothDirections) {
+        using Source = ViewportFrameLifecycleService::ModelSource;
+        ViewportFrameLifecycleService service;
+        ViewportArtifactService artifacts;
+
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        auto generation = artifacts.artifactGeneration();
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        generation = artifacts.artifactGeneration();
+        EXPECT_FALSE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
+        EXPECT_EQ(artifacts.artifactGeneration(), generation);
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        EXPECT_GT(artifacts.artifactGeneration(), generation);
+        generation = artifacts.artifactGeneration();
+        EXPECT_FALSE(service.handleModelChange(0x1234, artifacts, Source::Scene).changed);
+        EXPECT_EQ(artifacts.artifactGeneration(), generation);
+
+        service.resetModelTracking();
+        EXPECT_TRUE(service.handleModelChange(0x1234, artifacts, Source::Training).changed);
     }
 
     TEST(ViewportArtifactServiceTest, ExplicitSplitPanelSamplingUsesPanelLocalCoordinates) {
@@ -1002,7 +2338,7 @@ namespace lfs::vis {
         artifacts.updateFromFrameResources(resources, false);
 
         EXPECT_FLOAT_EQ(
-            artifacts.sampleLinearDepthAt(256, 0, {1024, 1}, nullptr, SplitViewPanelId::Right),
+            artifacts.sampleLinearDepthAt(256, 0, {1024, 1}, SplitViewPanelId::Right),
             42.0f);
     }
 

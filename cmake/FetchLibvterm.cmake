@@ -9,6 +9,14 @@
 set(LIBVTERM_SOURCE_DIR ${CMAKE_SOURCE_DIR}/external/libvterm)
 set(LIBVTERM_ENC_DIR ${LIBVTERM_SOURCE_DIR}/src/encoding)
 
+# update submodule libvterm
+if(NOT EXISTS ${LIBVTERM_SOURCE_DIR}/src/encoding.c OR NOT EXISTS ${LIBVTERM_SOURCE_DIR}/include/vterm.h)
+    message(FATAL_ERROR
+        "libvterm sources are missing from external/libvterm. "
+        "Initialize the submodule with: git submodule update --init --recursive external/libvterm"
+    )
+endif()
+
 # Generate encoding tables if not present (pre-generated in submodule)
 if(NOT EXISTS ${LIBVTERM_ENC_DIR}/DECdrawing.inc OR NOT EXISTS ${LIBVTERM_ENC_DIR}/uk.inc)
     find_package(Perl REQUIRED)

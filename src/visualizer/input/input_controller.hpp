@@ -8,7 +8,6 @@
 #include "core/export.hpp"
 #include "core/services.hpp"
 #include "input/input_bindings.hpp"
-#include "input/input_types.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_types.hpp"
 #include <array>
@@ -18,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct SDL_Window;
@@ -35,14 +35,23 @@ namespace lfs::vis {
         class SelectionTool;
     } // namespace tools
     class ToolContext;
+    class Visualizer;
 
     class LFS_VIS_API InputController {
     public:
         enum class CameraNavigationMode {
             Orbit,
             Trackball,
-            FPV
+            FPV,
+            Drone
         };
+
+        // Single source of truth for the mode <-> name mapping used by the
+        // GUI toolbar and the Python API; fromName also accepts the aliases
+        // "turntable" and "fly".
+        [[nodiscard]] static const char* cameraNavigationModeName(CameraNavigationMode mode);
+        [[nodiscard]] static std::optional<CameraNavigationMode>
+        cameraNavigationModeFromName(std::string_view name);
 
         InputController(SDL_Window* window, Viewport& viewport);
         ~InputController();
@@ -64,9 +73,12 @@ namespace lfs::vis {
             tool_context_ = context;
         }
 
+        void setViewer(Visualizer* viewer) { viewer_ = viewer; }
+
         // Called every frame by GUI manager to update viewport bounds
         void updateViewportBounds(float x, float y, float w, float h) {
             viewport_bounds_ = {x, y, w, h};
+            cached_split_divider_screen_x_.reset();
         }
 
         void setFocusedSplitPanel(const SplitViewPanelId panel) {
@@ -74,10 +86,7 @@ namespace lfs::vis {
         }
         void applySplitterCursorOverride() const;
 
-        void toggleIndependentSplitView() {
-            lfs::core::events::cmd::ToggleIndependentSplitView{.viewport = &viewport_}.emit();
-            focusSplitPanel(SplitViewPanelId::Left);
-        }
+        void toggleIndependentSplitView();
 
         // Set special input modes
         void setPointCloudMode(bool enabled) {
@@ -90,8 +99,20 @@ namespace lfs::vis {
         void loadInputProfile(const std::string& name) { bindings_.loadProfile(name); }
         [[nodiscard]] CameraNavigationMode cameraNavigationMode() const { return camera_navigation_mode_; }
         void setCameraNavigationMode(CameraNavigationMode mode);
+        void applyNavigationSpeedPreferences(float zoom_speed, float navigation_speed);
         [[nodiscard]] bool cameraViewSnapEnabled() const { return camera_view_snap_enabled_; }
         void setCameraViewSnapEnabled(bool enabled) { camera_view_snap_enabled_ = enabled; }
+        void restoreProjectNavigation(
+            CameraNavigationMode mode,
+            bool view_snap_enabled) {
+            setCameraNavigationMode(mode);
+            camera_view_snap_enabled_ =
+                view_snap_enabled;
+            viewport_.camera.clearTransientMotion();
+            clearViewportDragState();
+            clearWasdMomentumViewport();
+            depth_range_initialized_ = true;
+        }
         [[nodiscard]] static InputController* instance() { return instance_; }
 
         // Update function for continuous input (WASD movement and inertia)
@@ -112,11 +133,17 @@ namespace lfs::vis {
             const bool wasd_coasting =
                 (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasWasdMomentum()) ||
                 keyboard_camera.hasWasdMomentum();
+            const bool drone_settling =
+                (wasd_momentum_viewport_ && wasd_momentum_viewport_->camera.hasDroneMotion()) ||
+                keyboard_camera.hasDroneMotion();
             return movement_active || camera_drag || orbit_coasting || pan_coasting ||
-                   keyboard_camera.isGliding() || wasd_coasting;
+                   keyboard_camera.isGliding() || wasd_coasting || drone_settling;
         }
         [[nodiscard]] bool hasViewportKeyboardFocus() const;
         [[nodiscard]] bool isViewportPoint(double x, double y) const { return isInViewport(x, y); }
+        [[nodiscard]] int currentModifierKeys() const { return getModifierKeys(); }
+        [[nodiscard]] std::optional<input::SelectionOp> selectionDragOperation() const;
+        [[nodiscard]] bool hasViewportCursorOverride() const;
         void setInputRouter(input::InputRouter* router) { input_router_ = router; }
 
         // Node rectangle selection state (for rendering)
@@ -161,11 +188,12 @@ namespace lfs::vis {
         bool isPointerOverBlockingUi(double x, double y) const;
         bool isPointerOverUiHover(double x, double y) const;
         bool shouldCameraHandleInput() const;
-        void selectCameraByUid(int uid);
+        void selectCameraByUid(int uid, bool toggle_selection);
         void updateCameraSpeed(bool increase);
         void updateZoomSpeed(bool increase);
         void publishCameraMove(Viewport* target_viewport = nullptr);
         bool isNearSplitter(double x, double y) const;
+        void refreshSplitDividerCache() const;
         int getModifierKeys() const;
         bool isKeyPressed(int app_key) const;
         bool isMouseButtonPressed(int app_button) const;
@@ -187,7 +215,7 @@ namespace lfs::vis {
         void applyCameraTrainingStateToSelection(const std::vector<std::string>& selected_names, bool enabled);
         bool snapViewportToNearestAxis(Viewport& target_viewport, SplitViewPanelId panel);
 
-        // Training pause/resume helpers
+        // Camera motion tracking (flag + idle timeout; does not pause training)
         void onCameraMovementStart();
         void onCameraMovementEnd();
         void checkCameraMovementTimeout();
@@ -195,6 +223,7 @@ namespace lfs::vis {
         // Core state
         SDL_Window* window_;
         Viewport& viewport_;
+        mutable std::optional<float> cached_split_divider_screen_x_;
 
         // Input bindings for customizable hotkeys
         input::InputBindings bindings_;
@@ -203,6 +232,7 @@ namespace lfs::vis {
         std::shared_ptr<tools::AlignTool> align_tool_;
         std::shared_ptr<tools::SelectionTool> selection_tool_;
         ToolContext* tool_context_ = nullptr;
+        Visualizer* viewer_ = nullptr;
 
         // Viewport bounds for focus detection
         struct {
@@ -241,6 +271,7 @@ namespace lfs::vis {
         SplitViewPanelId drag_split_panel_ = SplitViewPanelId::Left;
         SplitViewPanelId node_rect_panel_ = SplitViewPanelId::Left;
         int node_rect_button_ = -1;
+        int node_rect_modifiers_ = input::MODIFIER_NONE;
         bool node_point_pick_enabled_ = false;
         bool node_rect_select_enabled_ = false;
         struct PendingClickDragGesture {
@@ -253,6 +284,7 @@ namespace lfs::vis {
         };
         PendingClickDragGesture pending_click_drag_;
         input::Action forced_mouse_press_action_ = input::Action::NONE;
+        int text_input_viewport_click_button_ = -1;
         struct PendingCameraContextMenuGesture {
             bool active = false;
             bool released = false;
@@ -270,6 +302,7 @@ namespace lfs::vis {
         // Used to resolve chord-bound scroll/drag triggers, e.g. R+Scroll for
         // Camera Roll. Newest held key wins when multiple chords are possible.
         std::vector<int> held_keys_;
+        std::optional<input::SelectionOp> selection_drag_op_;
         bool keys_movement_[6] = {false, false, false, false, false, false}; // fwd, left, back, right, up, down
 
         // Cached movement key bindings, indexed by ToolMode. Refreshed on
@@ -289,9 +322,8 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point last_camera_publish_;
         static constexpr auto camera_publish_interval_ = std::chrono::milliseconds(100);
 
-        // Camera movement tracking for training pause/resume
+        // Camera movement tracking (motion flag + idle timeout; does not pause training)
         bool camera_is_moving_ = false;
-        bool training_was_paused_by_camera_ = false;
         std::chrono::steady_clock::time_point last_camera_movement_time_;
         static constexpr auto camera_movement_timeout_ = std::chrono::milliseconds(500);
 
@@ -317,6 +349,7 @@ namespace lfs::vis {
         int hovered_camera_id_ = -1;
         int last_clicked_camera_id_ = -1;
         int pressed_camera_frustum_id_ = -1;
+        int pressed_camera_frustum_modifiers_ = input::MODIFIER_NONE;
         bool press_selected_camera_frustum_ = false;
         std::chrono::steady_clock::time_point last_click_time_;
         glm::dvec2 last_click_pos_{0, 0};

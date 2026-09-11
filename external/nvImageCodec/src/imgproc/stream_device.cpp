@@ -78,10 +78,8 @@ namespace nvimgcodec {
 
     // Retrieve the device id associated with the cudaStream_t
     int get_stream_device_id(cudaStream_t stream) {
-        static thread_local std::unordered_map<CUdevice, int> handle_to_device_id;
-        CUdevice stream_device_handle = get_stream_device(stream);
-        auto it = handle_to_device_id.find(stream_device_handle);
-        if (it == handle_to_device_id.end()) {
+        static std::unordered_map<CUdevice, int> handle_to_device_id = []() {
+            std::unordered_map<CUdevice, int> map;
             int device_count;
             if (cudaGetDeviceCount(&device_count) != cudaSuccess) {
                 throw std::runtime_error("Unable to get device count");
@@ -89,11 +87,16 @@ namespace nvimgcodec {
             for (int device_ordinal = 0; device_ordinal < device_count; ++device_ordinal) {
                 CUdevice device_handle;
                 if (cuDeviceGet(&device_handle, device_ordinal) != CUDA_SUCCESS) {
-                    throw std::runtime_error(std::string("Unable to get device handle for device #") + std::to_string(device_ordinal));
+                    throw std::runtime_error("Unable to get device handle for device #" + std::to_string(device_ordinal));
                 }
-                handle_to_device_id[device_handle] = device_ordinal;
+                map[device_handle] = device_ordinal;
             }
-            return handle_to_device_id.at(stream_device_handle);
+            return map;
+        }();
+        CUdevice stream_device_handle = get_stream_device(stream);
+        auto it = handle_to_device_id.find(stream_device_handle);
+        if (it == handle_to_device_id.end()) {
+            throw std::runtime_error("Device handle not found");
         }
         return it->second;
     }

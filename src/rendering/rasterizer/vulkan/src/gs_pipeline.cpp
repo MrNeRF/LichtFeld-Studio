@@ -1,11 +1,20 @@
 #include "gs_pipeline.h"
 #include "perf_timer.h"
 
+#include "core/error.hpp"
+#include "core/logger.hpp"
 #include "diagnostics/vram_profiler.hpp"
 
+#include <cassert>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <memory>
+#include <mutex>
+#include <stop_token>
+#include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #ifdef max
@@ -17,11 +26,22 @@
 
 static const size_t MAX_UNIFORM_SIZE = 192;
 
-static const uint32_t MAX_TIMESTAMP_QUERY_COUNT = 96;
+// The pre-wave renderer fits in the legacy 96-query budget. Each armed depth
+// wave adds one independently accumulated cumsum interval (begin + end), and
+// PerfTimer deliberately retains every interval so its per-stage count and
+// total remain meaningful. Conditional rendering does not predicate timestamp
+// writes, so even empty slots consume both queries.
+static constexpr uint32_t BASE_TIMESTAMP_QUERY_COUNT = 96;
+static constexpr uint32_t DEPTH_WAVE_TIMESTAMP_QUERY_COUNT =
+    2u * HIGS_DEPTH_MAX_WAVES;
+static constexpr uint32_t MAX_TIMESTAMP_QUERY_COUNT =
+    BASE_TIMESTAMP_QUERY_COUNT + DEPTH_WAVE_TIMESTAMP_QUERY_COUNT;
 
 namespace {
     constexpr std::string_view kSlangShaderBytecodeScope = "vksplat.shaders.slang.spirv";
     constexpr std::string_view kSlangShaderRootScope = "vksplat.shaders.slang";
+    std::mutex g_spirv_cache_mutex;
+    std::unordered_map<std::string, std::shared_ptr<const std::vector<uint32_t>>> g_spirv_cache;
 
     [[nodiscard]] bool isGeneratedSlangSpirvPath(const std::string& spirv_path) {
         return spirv_path.find("/generated/") != std::string::npos ||
@@ -67,17 +87,86 @@ namespace {
             spirvDiagnosticName(spirv_path),
             bytes);
     }
+
+    [[nodiscard]] bool spirvHasComputeWorkgroupSize(
+        const std::vector<std::uint32_t>& spirv,
+        const std::uint32_t expected_x,
+        const std::uint32_t expected_y,
+        const std::uint32_t expected_z) {
+        // OpExecutionMode LocalSize is the execution mode emitted by the
+        // Slang compute shaders in this renderer. Check the module before
+        // creating the pipeline so the host dispatch geometry cannot silently
+        // diverge from the shader's numthreads declaration.
+        constexpr std::uint16_t kOpExecutionMode = 16u;
+        constexpr std::uint32_t kExecutionModeLocalSize = 17u;
+        for (std::size_t word = 5; word < spirv.size();) {
+            const std::uint32_t instruction = spirv[word];
+            const std::uint16_t word_count = static_cast<std::uint16_t>(instruction >> 16u);
+            const std::uint16_t opcode = static_cast<std::uint16_t>(instruction & 0xffffu);
+            if (word_count == 0 || word + word_count > spirv.size()) {
+                return false;
+            }
+            if (opcode == kOpExecutionMode && word_count >= 6u &&
+                spirv[word + 2u] == kExecutionModeLocalSize) {
+                return spirv[word + 3u] == expected_x &&
+                       spirv[word + 4u] == expected_y &&
+                       spirv[word + 5u] == expected_z;
+            }
+            word += word_count;
+        }
+        return false;
+    }
 } // namespace
 
-#if defined(__SSE2__) || defined(_MSC_VER)
-#define SSE2_AVAILABLE 1
-#include <immintrin.h>
-#ifdef _MSC_VER
-#include <intrin.h>
-#else
-#include <x86intrin.h>
-#endif
-#endif
+[[noreturn]] static void throwRendererContractViolation(std::string detail,
+                                                        lfs::core::SourceSite site) {
+    // Use the shared typed helper from vulkan_result.hpp.
+    lfs::rendering::throw_renderer_contract(std::move(detail), site);
+}
+
+[[nodiscard]] static const char* waitOutcomeLabel(
+    const lfs::rendering::WaitOutcome outcome) noexcept {
+    using lfs::rendering::WaitOutcome;
+    switch (outcome) {
+    case WaitOutcome::Ready: return "Ready";
+    case WaitOutcome::Cancelled: return "Cancelled";
+    case WaitOutcome::Shutdown: return "Shutdown";
+    case WaitOutcome::Quarantined: return "Quarantined";
+    }
+    return "Unknown";
+}
+
+// DeviceLost and other bounded-wait errors preserve their typed Error; flow outcomes map to
+// Cancelled / Unavailable. Throws typed lfs::Exception (never stdout / untyped
+// runtime_error).
+[[noreturn]] static void throwBoundedWaitFailure(
+    std::string detail,
+    const lfs::Result<lfs::rendering::WaitOutcome>& outcome,
+    const lfs::core::SourceSite site) {
+    if (!outcome.has_value()) {
+        throw lfs::Exception(outcome.error());
+    }
+    lfs::ErrorCode code = lfs::ErrorCode::Unavailable;
+    switch (*outcome) {
+    case lfs::rendering::WaitOutcome::Ready:
+        code = lfs::ErrorCode::Internal;
+        break;
+    case lfs::rendering::WaitOutcome::Cancelled:
+    case lfs::rendering::WaitOutcome::Shutdown:
+        code = lfs::ErrorCode::Cancelled;
+        break;
+    case lfs::rendering::WaitOutcome::Quarantined:
+        code = lfs::ErrorCode::DeadlineExceeded;
+        break;
+    }
+    throw lfs::Exception(lfs::make_error(lfs::ErrorInit{
+        .code = code,
+        .domain = lfs::ErrorDomain::Vulkan,
+        .user_message = "Vulkan GPU wait did not complete.",
+        .detail = std::move(detail),
+        .detection = site,
+    }));
+}
 
 std::vector<uint32_t> loadSpirv(std::string spirv_path) {
 // Load the SPIR-V file
@@ -90,18 +179,62 @@ std::vector<uint32_t> loadSpirv(std::string spirv_path) {
     }
 #endif
 
+    {
+        const std::lock_guard lock(g_spirv_cache_mutex);
+        if (const auto it = g_spirv_cache.find(spirv_path); it != g_spirv_cache.end())
+            return *it->second;
+    }
+
     std::ifstream file(spirv_path, std::ios::binary | std::ios::ate);
-    if (!file)
-        throw std::runtime_error("Failed to open file: " + spirv_path);
+    if (!file) {
+        lfs::rendering::throw_vk_setup(
+            lfs::ErrorCode::NotFound,
+            std::format(
+                "VkSplat SPIR-V input could not be opened (path='{}', stream_good={}, stream_fail={})",
+                spirv_path,
+                file.good(),
+                file.fail()),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
     std::streamsize fileSize = file.tellg();
+    if (fileSize <= 0 || fileSize % static_cast<std::streamsize>(sizeof(uint32_t)) != 0) {
+        lfs::rendering::throw_vk_setup(
+            lfs::ErrorCode::InvalidArgument,
+            std::format(
+                "VkSplat SPIR-V input must be non-empty and uint32-aligned (path='{}', observed_bytes={}, word_bytes={}, remainder={})",
+                spirv_path,
+                fileSize,
+                sizeof(uint32_t),
+                fileSize > 0 ? fileSize % static_cast<std::streamsize>(sizeof(uint32_t)) : fileSize),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     file.seekg(0, std::ios::beg);
 
     std::vector<uint32_t> spirv_code(fileSize / sizeof(uint32_t));
-    if (!file.read(reinterpret_cast<char*>(spirv_code.data()), fileSize))
-        throw std::runtime_error("Failed to read file: " + spirv_path);
+    if (!file.read(reinterpret_cast<char*>(spirv_code.data()), fileSize)) {
+        lfs::rendering::throw_vk_setup(
+            lfs::ErrorCode::Internal,
+            std::format(
+                "VkSplat SPIR-V input read was incomplete (path='{}', requested_bytes={}, observed_bytes={}, stream_fail={}, stream_bad={})",
+                spirv_path,
+                fileSize,
+                file.gcount(),
+                file.fail(),
+                file.bad()),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
+    {
+        const std::lock_guard lock(g_spirv_cache_mutex);
+        g_spirv_cache[spirv_path] = std::make_shared<const std::vector<uint32_t>>(spirv_code);
+    }
     return spirv_code;
+}
+
+void preloadSpirvFiles(const std::vector<std::string>& paths) {
+    for (const auto& path : paths)
+        (void)loadSpirv(path);
 }
 
 VulkanGSPipeline::VulkanGSPipeline() : instance(VK_NULL_HANDLE),
@@ -113,12 +246,61 @@ VulkanGSPipeline::VulkanGSPipeline() : instance(VK_NULL_HANDLE),
                                        fence(VK_NULL_HANDLE),
                                        timestamp_query_pool(VK_NULL_HANDLE),
                                        queue_family_index(UINT32_MAX) {
+    vulkan_dispatch_ = lfs::rendering::VulkanDispatch::real();
 }
 
-VulkanGSPipeline::~VulkanGSPipeline() {
-    if (commandBatchInProgress)
-        endCommandBatch(false);
-    cleanup();
+void VulkanGSPipeline::setVulkanDispatch(lfs::rendering::VulkanDispatch dispatch) noexcept {
+    vulkan_dispatch_ = std::move(dispatch);
+}
+
+const lfs::rendering::SubmissionState& VulkanGSPipeline::lastSubmissionState() const noexcept {
+    return last_submission_state_;
+}
+
+void VulkanGSPipeline::trackExternalParent(VkBuffer buffer) {
+    barrier_planner_.track(buffer);
+}
+
+void VulkanGSPipeline::untrackExternalParent(VkBuffer buffer) {
+    barrier_planner_.forget(buffer);
+}
+
+lfs::rendering::vulkan::BufferBarrierPlanner& VulkanGSPipeline::barrierPlanner() noexcept {
+    return barrier_planner_;
+}
+
+const lfs::rendering::vulkan::BufferBarrierPlanner& VulkanGSPipeline::barrierPlanner() const noexcept {
+    return barrier_planner_;
+}
+
+void VulkanGSPipeline::planTransfer(
+    std::span<const lfs::rendering::vulkan::DeclaredAccess> accesses) {
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "planTransfer requires an active command batch (batch_active={}, access_count={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                accesses.size(),
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    const auto planned = barrier_planner_.plan(accesses);
+    emitPlannedBufferBarriers(planned);
+#ifndef NDEBUG
+    const int barrier2_emissions = planned.empty() ? 0 : 1;
+    assert(barrier2_emissions <= 1);
+#endif
+}
+
+VulkanGSPipeline::~VulkanGSPipeline() noexcept {
+    cancelCommandBatch();
+    try {
+        cleanup();
+    } catch (const std::exception& error) {
+        fprintf(stderr, "VulkanGSPipeline cleanup failed: %s\n", error.what());
+    } catch (...) {
+        fprintf(stderr, "VulkanGSPipeline cleanup failed with an unknown error\n");
+    }
 }
 
 void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
@@ -135,7 +317,17 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
         external_queue == VK_NULL_HANDLE ||
         external_queue_family_index == UINT32_MAX ||
         external_allocator == VK_NULL_HANDLE) {
-        _THROW_ERROR("initializeExternal received an invalid Vulkan handle");
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat external initialization requires valid Vulkan objects (instance={:#x}, physical_device={:#x}, device={:#x}, queue={:#x}, queue_family={}, allocator={:#x}, pipeline_cache={:#x})",
+                lfs::rendering::vkHandleValue(external_instance),
+                lfs::rendering::vkHandleValue(external_physical_device),
+                lfs::rendering::vkHandleValue(external_device),
+                lfs::rendering::vkHandleValue(external_queue),
+                external_queue_family_index,
+                lfs::rendering::vkHandleValue(external_allocator),
+                lfs::rendering::vkHandleValue(external_pipeline_cache)),
+            LFS_SOURCE_SITE_CURRENT());
     }
 
     instance = external_instance;
@@ -145,17 +337,26 @@ void VulkanGSPipeline::initializeExternal(VkInstance external_instance,
     queue_family_index = external_queue_family_index;
     allocator = external_allocator;
     pipeline_cache = external_pipeline_cache;
+    // Epic #1496: planner queue family must match barrier emission shape.
+    barrier_planner_ = lfs::rendering::vulkan::BufferBarrierPlanner(external_queue_family_index);
 
     vk_cmd_push_descriptor_set_ = reinterpret_cast<PFN_vkCmdPushDescriptorSetKHR>(
         vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
     if (vk_cmd_push_descriptor_set_ == nullptr) {
-        _THROW_ERROR("VK_KHR_push_descriptor is required by vksplat compute pipeline but not available on this device");
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat requires vkCmdPushDescriptorSetKHR, but the device proc address is null (device={:#x}, queue_family={})",
+                lfs::rendering::vkHandleValue(device),
+                queue_family_index),
+            LFS_SOURCE_SITE_CURRENT());
     }
+    debug_name_writer_.initialize(device);
 
     populateDeviceInfo(physical_device);
     createCommandPool();
     createFence();
     createQueryPools();
+    createBufferRetireTimeline();
 
     commandBatchInProgress = false;
 }
@@ -173,9 +374,9 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(shN)
     _(scaling_raw)
     _(opacity_raw)
+    _(page_frames)
     _(tiles_touched)
     _(rect_tile_space)
-    _(radii)
     _(xy_vs)
     _(depths)
     _(inv_cov_vs_opacity)
@@ -185,16 +386,27 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(primitive_sort_indices)
     _(tiles_touched_depth_ordered)
     _(visible_flags)
+    _(visible_block_counts)
     _(visible_prefix)
     _(visible_count)
     _(visible_sort_dispatch_args)
+    _(survivors)
+    _(survivor_state)
+    _(visible_emit_count)
+    _(orig_ids)
+    _(cumsum_counts)
+    _(visible_dispatch)
+    _(macro_partials)
+    _(macro_active_mask)
+    _(macro_wave_args)
     _(index_buffer_offset)
     _(sorting_keys_1)
     _(sorting_keys_2)
     _(sorting_gauss_idx_1)
     _(sorting_gauss_idx_2)
     _(tile_sort_count)
-    _(tile_sort_dispatch_args)
+    _(depth_wave_dispatch)
+    _(wave_predicates)
     _(tile_ranges)
     _(tile_batch_counts)
     _(tile_batch_offsets)
@@ -204,62 +416,7 @@ void VulkanGSPipeline::assignBufferLabels(VulkanGSPipelineBuffers& buffers) {
     _(tile_batch_n_contributors)
     _(pixel_state)
     _(pixel_depth)
-    _(n_contributors)
-    _(_cumsum_blockSums)
-    _(_cumsum_blockSums2)
-    _(_sorting_histogram)
-    _(_sorting_histogram_cumsum)
-#undef _
-}
-
-void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
-    HOST_GUARD;
-    waitForPendingBatch();
-#define _(name)                                   \
-    {                                             \
-        destroyBuffer(buffers.name.deviceBuffer); \
-        buffers.name.clear();                     \
-        buffers.name.shrink_to_fit();             \
-    }
-    _(xyz_ws)
-    _(sh_coeffs)
-    _(rotations)
-    _(scales_opacs)
-    _(sh0)
-    _(shN)
-    _(scaling_raw)
-    _(opacity_raw)
-    _(tiles_touched)
-    _(rect_tile_space)
-    _(radii)
-    _(xy_vs)
-    _(depths)
-    _(inv_cov_vs_opacity)
-    _(rgb)
-    _(overlay_flags)
-    _(primitive_depth_keys)
-    _(primitive_sort_indices)
-    _(tiles_touched_depth_ordered)
-    _(visible_flags)
-    _(visible_prefix)
-    _(visible_count)
-    _(visible_sort_dispatch_args)
-    _(index_buffer_offset)
-    _(sorting_keys_1)
-    _(sorting_keys_2)
-    _(sorting_gauss_idx_1)
-    _(sorting_gauss_idx_2)
-    _(tile_sort_count)
-    _(tile_sort_dispatch_args)
-    _(tile_ranges)
-    _(tile_batch_counts)
-    _(tile_batch_offsets)
-    _(tile_batch_dispatch_args)
-    _(tile_batch_descriptors)
-    _(tile_batch_pixel_state)
-    _(tile_batch_n_contributors)
-    _(pixel_state)
-    _(pixel_depth)
+    _(pixel_depth_weight)
     _(n_contributors)
     _(_cumsum_blockSums)
     _(_cumsum_blockSums2)
@@ -274,6 +431,141 @@ void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
     _(lod_gpu_weights)
     _(lod_gpu_counts)
     _(lod_chunk_touch)
+    _(lod_compact_counts)
+    _(lod_compact_protected)
+    _(lod_compact_misses)
+    _(lod_gpu_levels)
+#undef _
+}
+
+void VulkanGSPipeline::createBufferRetireTimeline() {
+    if (device == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            "createBufferRetireTimeline requires an initialized device",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (buffer_retire_timeline_ != VK_NULL_HANDLE) {
+        return;
+    }
+    VkSemaphoreTypeCreateInfo type_info{};
+    type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    type_info.initialValue = 0;
+
+    VkSemaphoreCreateInfo create_info{};
+    create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    create_info.pNext = &type_info;
+
+    const VkResult result =
+        vkCreateSemaphore(device, &create_info, nullptr, &buffer_retire_timeline_);
+    if (result != VK_SUCCESS) {
+        buffer_retire_timeline_ = VK_NULL_HANDLE;
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkCreateSemaphore",
+            std::format(
+                "VkSplat buffer-retire timeline creation failed (device={:#x}, result={}({}))",
+                lfs::rendering::vkHandleValue(device),
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    next_buffer_retire_value_ = 1;
+    setDebugObjectName(VK_OBJECT_TYPE_SEMAPHORE,
+                       buffer_retire_timeline_,
+                       "vksplat.buffer_retire_timeline");
+}
+
+void VulkanGSPipeline::destroyBufferRetireTimeline() {
+    if (buffer_retire_timeline_ == VK_NULL_HANDLE) {
+        return;
+    }
+    if (device != VK_NULL_HANDLE) {
+        vkDestroySemaphore(device, buffer_retire_timeline_, nullptr);
+    }
+    buffer_retire_timeline_ = VK_NULL_HANDLE;
+    next_buffer_retire_value_ = 1;
+}
+
+void VulkanGSPipeline::cleanupBuffers(VulkanGSPipelineBuffers& buffers) {
+    HOST_GUARD;
+    waitForPendingBatch();
+    drainRetiredBufferShells(/*force=*/true);
+    assert(retired_buffer_shells_.empty());
+#define _(name)                                   \
+    {                                             \
+        destroyBuffer(buffers.name.deviceBuffer); \
+        buffers.name.clear();                     \
+        buffers.name.shrink_to_fit();             \
+    }
+    _(xyz_ws)
+    _(sh_coeffs)
+    _(rotations)
+    _(scales_opacs)
+    _(sh0)
+    _(shN)
+    _(scaling_raw)
+    _(opacity_raw)
+    _(page_frames)
+    _(tiles_touched)
+    _(rect_tile_space)
+    _(xy_vs)
+    _(depths)
+    _(inv_cov_vs_opacity)
+    _(rgb)
+    _(overlay_flags)
+    _(primitive_depth_keys)
+    _(primitive_sort_indices)
+    _(tiles_touched_depth_ordered)
+    _(visible_flags)
+    _(visible_block_counts)
+    _(visible_prefix)
+    _(visible_count)
+    _(visible_sort_dispatch_args)
+    _(survivors)
+    _(survivor_state)
+    _(visible_emit_count)
+    _(orig_ids)
+    _(cumsum_counts)
+    _(visible_dispatch)
+    _(macro_partials)
+    _(macro_active_mask)
+    _(macro_wave_args)
+    _(index_buffer_offset)
+    _(sorting_keys_1)
+    _(sorting_keys_2)
+    _(sorting_gauss_idx_1)
+    _(sorting_gauss_idx_2)
+    _(tile_sort_count)
+    _(depth_wave_dispatch)
+    _(wave_predicates)
+    _(tile_ranges)
+    _(tile_batch_counts)
+    _(tile_batch_offsets)
+    _(tile_batch_dispatch_args)
+    _(tile_batch_descriptors)
+    _(tile_batch_pixel_state)
+    _(tile_batch_n_contributors)
+    _(pixel_state)
+    _(pixel_depth)
+    _(pixel_depth_weight)
+    _(n_contributors)
+    _(_cumsum_blockSums)
+    _(_cumsum_blockSums2)
+    _(_sorting_histogram)
+    _(_sorting_histogram_cumsum)
+    _(lod_indices)
+    _(lod_logical_indices)
+    _(lod_levels)
+    _(lod_weights)
+    _(lod_gpu_indices)
+    _(lod_gpu_logical_indices)
+    _(lod_gpu_weights)
+    _(lod_gpu_counts)
+    _(lod_chunk_touch)
+    _(lod_compact_counts)
+    _(lod_compact_protected)
+    _(lod_compact_misses)
     _(lod_gpu_levels)
 #undef _
 }
@@ -288,19 +580,24 @@ void VulkanGSPipeline::cleanup() {
     HOST_GUARD;
     lfs::diagnostics::VramProfiler::instance().clearStaticScope(kSlangShaderRootScope);
 
-    if (stager.buffer != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(allocator, stager.buffer, stager.allocation);
-        stager.buffer = VK_NULL_HANDLE;
-        stager.allocation = VK_NULL_HANDLE;
-        stager.allocSize = 0;
-    }
-
     if (device != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(device);
+        const VkResult idle_result = vkDeviceWaitIdle(device);
+        if (idle_result != VK_SUCCESS) {
+            LOG_ERROR("Vulkan: vkDeviceWaitIdle failed during VkSplat pipeline cleanup "
+                      "(device={:#x}, result={}({})); continuing resource destruction",
+                      lfs::rendering::vkHandleValue(device),
+                      lfs::rendering::vkResultToString(idle_result),
+                      static_cast<int>(idle_result));
+        }
+
+        drainRetiredBufferShells(/*force=*/true);
+        assert(retired_buffer_shells_.empty());
+        destroyBufferRetireTimeline();
 
         for (_ComputePipeline* pipeline : all_compute_pipelines)
             destroyComputePipeline(*pipeline);
         all_compute_pipelines.clear();
+        pending_compute_pipelines.clear();
 
         if (fence != VK_NULL_HANDLE) {
             vkDestroyFence(device, fence, nullptr);
@@ -330,6 +627,12 @@ void VulkanGSPipeline::cleanup() {
         }
     }
 
+    // Device already null (or never initialized): drop any leftover shells without VMA free.
+    if (!retired_buffer_shells_.empty()) {
+        drainRetiredBufferShells(/*force=*/true);
+    }
+    buffer_retire_timeline_ = VK_NULL_HANDLE;
+    next_buffer_retire_value_ = 1;
     allocator = VK_NULL_HANDLE;
     device = VK_NULL_HANDLE;
     instance = VK_NULL_HANDLE;
@@ -337,6 +640,8 @@ void VulkanGSPipeline::cleanup() {
     command_queue = VK_NULL_HANDLE;
     queue_family_index = UINT32_MAX;
     pending_timeline_waits_.clear();
+    last_timeline_wait_values_.clear();
+    last_timeline_signal_values_.clear();
     for (CommandBatchSlot& slot : command_batch_slots_) {
         slot.pending_signal = VK_NULL_HANDLE;
         slot.pending_signal_value = 0;
@@ -349,6 +654,8 @@ void VulkanGSPipeline::cleanup() {
     active_command_batch_slot_ = 0;
     timerCallbacks.clear();
     cpuTimerCallback_ = {};
+    vk_cmd_push_descriptor_set_ = nullptr;
+    debug_name_writer_.reset();
 }
 
 void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_device) {
@@ -366,10 +673,85 @@ void VulkanGSPipeline::populateDeviceInfo(VkPhysicalDevice selected_physical_dev
         limits.maxComputeWorkGroupCount[0],
         limits.maxComputeWorkGroupCount[1],
         limits.maxComputeWorkGroupCount[2],
-        limits.maxComputeWorkGroupSize[0],
-        limits.maxComputeWorkGroupSize[1],
-        limits.maxComputeWorkGroupSize[2],
+        limits.maxStorageBufferRange,
     };
+}
+
+void VulkanGSPipeline::setDebugObjectName(const VkObjectType type,
+                                          const std::uint64_t handle,
+                                          const std::string_view name) const {
+    const VkResult result = debug_name_writer_.set(type, handle, name);
+    if (result != VK_SUCCESS) {
+        fprintf(stderr,
+                "vkSetDebugUtilsObjectNameEXT failed for '%.*s' (type=%d, handle=0x%llx, result=%s(%d)) at %s:%d\n",
+                static_cast<int>(name.size()),
+                name.data(),
+                static_cast<int>(type),
+                static_cast<unsigned long long>(handle),
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result),
+                __FILE__,
+                __LINE__);
+    }
+}
+
+void VulkanGSPipeline::validateBufferRange(const _VulkanBuffer& buffer,
+                                           const VkDeviceSize relative_offset,
+                                           const VkDeviceSize size,
+                                           const std::string_view operation) const {
+    if (!buffer.containsRange(relative_offset, size)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "{} requires a non-null buffer and a byte range within both its view and backing buffer (buffer={:#x}, allocation={:#x}, base_offset={}, relative_offset={}, size={}, view_capacity={}, backing_size={}, label='{}')",
+                operation,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.allocation),
+                buffer.offset,
+                relative_offset,
+                size,
+                buffer.capacity,
+                buffer.allocSize,
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (size > deviceInfo.maxStorageBufferRange) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "{} exceeds VkPhysicalDeviceLimits::maxStorageBufferRange (buffer={:#x}, allocation={:#x}, base_offset={}, relative_offset={}, range={}, maxStorageBufferRange={}, view_capacity={}, backing_size={}, label='{}')",
+                operation,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                lfs::rendering::vkHandleValue(buffer.allocation),
+                buffer.offset,
+                relative_offset,
+                size,
+                deviceInfo.maxStorageBufferRange,
+                buffer.capacity,
+                buffer.allocSize,
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+}
+
+void VulkanGSPipeline::validateFillRange(const _VulkanBuffer& buffer,
+                                         const VkDeviceSize relative_offset,
+                                         const VkDeviceSize size,
+                                         const std::string_view operation) const {
+    validateBufferRange(buffer, relative_offset, size, operation);
+    const VkDeviceSize absolute_offset = buffer.offset + relative_offset;
+    if ((absolute_offset & 3u) != 0 || (size & 3u) != 0) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "{} requires four-byte-aligned vkCmdFillBuffer bounds (buffer={:#x}, absolute_offset={}, size={}, offset_mod4={}, size_mod4={}, allocation_size={}, label='{}')",
+                operation,
+                lfs::rendering::vkHandleValue(buffer.buffer),
+                absolute_offset,
+                size,
+                absolute_offset & 3u,
+                size & 3u,
+                buffer.allocSize,
+                buffer.label ? buffer.label : "<unlabeled>"),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 }
 
 void VulkanGSPipeline::createCommandPool() {
@@ -378,8 +760,21 @@ void VulkanGSPipeline::createCommandPool() {
     pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     pool_info.queueFamilyIndex = queue_family_index;
 
-    if (vkCreateCommandPool(device, &pool_info, nullptr, &command_pool) != VK_SUCCESS)
-        _THROW_ERROR("Failed to create command pool");
+    const VkResult pool_result = vkCreateCommandPool(device, &pool_info, nullptr, &command_pool);
+    if (pool_result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            pool_result,
+            "vkCreateCommandPool",
+            std::format(
+                "VkSplat command-pool creation failed (device={:#x}, queue_family={}, flags={:#x}, result={}({}))",
+                lfs::rendering::vkHandleValue(device),
+                queue_family_index,
+                static_cast<std::uint32_t>(pool_info.flags),
+                lfs::rendering::vkResultToString(pool_result),
+                static_cast<int>(pool_result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    setDebugObjectName(VK_OBJECT_TYPE_COMMAND_POOL, command_pool, "vksplat.command_pool");
 
     std::array<VkCommandBuffer, kCommandBatchSlotCount> command_buffers{};
     VkCommandBufferAllocateInfo alloc_info = {};
@@ -388,10 +783,27 @@ void VulkanGSPipeline::createCommandPool() {
     alloc_info.commandPool = command_pool;
     alloc_info.commandBufferCount = kCommandBatchSlotCount;
 
-    if (vkAllocateCommandBuffers(device, &alloc_info, command_buffers.data()) != VK_SUCCESS)
-        _THROW_ERROR("Failed to allocate command buffer");
+    const VkResult command_result = vkAllocateCommandBuffers(device, &alloc_info, command_buffers.data());
+    if (command_result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            command_result,
+            "vkAllocateCommandBuffers",
+            std::format(
+                "VkSplat command-buffer allocation failed (device={:#x}, command_pool={:#x}, requested_count={}, result={}({}))",
+                lfs::rendering::vkHandleValue(device),
+                lfs::rendering::vkHandleValue(command_pool),
+                kCommandBatchSlotCount,
+                lfs::rendering::vkResultToString(command_result),
+                static_cast<int>(command_result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     for (std::uint32_t i = 0; i < kCommandBatchSlotCount; ++i) {
         command_batch_slots_[i].command_buffer = command_buffers[i];
+        if (debug_name_writer_.enabled()) {
+            setDebugObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER,
+                               command_buffers[i],
+                               std::format("vksplat.command[{}]", i));
+        }
     }
     command_buffer = command_batch_slots_[0].command_buffer;
 }
@@ -402,8 +814,19 @@ void VulkanGSPipeline::createFence() {
     fenceInfo.flags = 0;
 
     VkResult result = vkCreateFence(device, &fenceInfo, nullptr, &fence);
-    if (result != VK_SUCCESS)
-        _THROW_ERROR("Failed to create fence");
+    if (result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkCreateFence",
+            std::format(
+                "VkSplat batch fence creation failed (device={:#x}, flags={:#x}, result={}({}))",
+                lfs::rendering::vkHandleValue(device),
+                static_cast<std::uint32_t>(fenceInfo.flags),
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    setDebugObjectName(VK_OBJECT_TYPE_FENCE, fence, "vksplat.batch.fence");
 }
 
 void VulkanGSPipeline::createQueryPools() {
@@ -412,9 +835,27 @@ void VulkanGSPipeline::createQueryPools() {
     queryPoolCreateInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     queryPoolCreateInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
     queryPoolCreateInfo.queryCount = MAX_TIMESTAMP_QUERY_COUNT;
-    for (CommandBatchSlot& slot : command_batch_slots_) {
-        if (vkCreateQueryPool(device, &queryPoolCreateInfo, nullptr, &slot.timestamp_query_pool) != VK_SUCCESS)
-            _THROW_ERROR("Failed to create timestamp query pool");
+    for (std::size_t i = 0; i < command_batch_slots_.size(); ++i) {
+        CommandBatchSlot& slot = command_batch_slots_[i];
+        const VkResult result = vkCreateQueryPool(device, &queryPoolCreateInfo, nullptr, &slot.timestamp_query_pool);
+        if (result != VK_SUCCESS) {
+            lfs::rendering::throw_vk_result(
+                result,
+                "vkCreateQueryPool",
+                std::format(
+                    "VkSplat timestamp query-pool creation failed (slot={}, requested_queries={}, device={:#x}, result={}({}))",
+                    i,
+                    MAX_TIMESTAMP_QUERY_COUNT,
+                    lfs::rendering::vkHandleValue(device),
+                    lfs::rendering::vkResultToString(result),
+                    static_cast<int>(result)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        if (debug_name_writer_.enabled()) {
+            setDebugObjectName(VK_OBJECT_TYPE_QUERY_POOL,
+                               slot.timestamp_query_pool,
+                               std::format("vksplat.timestamp_queries[{}]", i));
+        }
     }
     timestamp_query_pool = command_batch_slots_[0].timestamp_query_pool;
 }
@@ -425,13 +866,54 @@ void VulkanGSPipeline::createShaderModule(const std::vector<uint32_t>& spirv_cod
     create_info.codeSize = spirv_code.size() * sizeof(uint32_t);
     create_info.pCode = spirv_code.data();
 
-    if (vkCreateShaderModule(device, &create_info, nullptr, pShaderModule) != VK_SUCCESS)
-        throw std::runtime_error("Failed to create shader module");
+    const VkResult result = vkCreateShaderModule(device, &create_info, nullptr, pShaderModule);
+    if (result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkCreateShaderModule",
+            std::format(
+                "VkSplat shader-module creation failed (device={:#x}, byte_size={}, output={:#x}, result={}({}))",
+                lfs::rendering::vkHandleValue(device),
+                create_info.codeSize,
+                lfs::rendering::vkHandleValue(*pShaderModule),
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 }
 
 void VulkanGSPipeline::beginCommandBatch() {
-    if (commandBatchInProgress)
-        _THROW_ERROR("Command batch already in progress");
+    // Cheap non-blocking poll: free growth shells whose timeline keys completed.
+    drainRetiredBufferShells(/*force=*/false);
+
+    if (commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "beginCommandBatch cannot begin twice (batch_active={}, active_slot={}, next_slot={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                active_command_batch_slot_,
+                next_command_batch_slot_,
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (device == VK_NULL_HANDLE || command_queue == VK_NULL_HANDLE || command_pool == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "beginCommandBatch requires initialized Vulkan queue resources (device={:#x}, queue={:#x}, command_pool={:#x}, next_slot={})",
+                lfs::rendering::vkHandleValue(device),
+                lfs::rendering::vkHandleValue(command_queue),
+                lfs::rendering::vkHandleValue(command_pool),
+                next_command_batch_slot_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (next_command_batch_slot_ >= command_batch_slots_.size()) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "beginCommandBatch next slot is outside the command ring (next_slot={}, ring_size={})",
+                next_command_batch_slot_,
+                command_batch_slots_.size()),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
     active_command_batch_slot_ = next_command_batch_slot_;
     next_command_batch_slot_ = (next_command_batch_slot_ + 1) % kCommandBatchSlotCount;
@@ -439,21 +921,131 @@ void VulkanGSPipeline::beginCommandBatch() {
     waitForPendingBatchSlot(slot);
     command_buffer = slot.command_buffer;
     timestamp_query_pool = slot.timestamp_query_pool;
+    if (command_buffer == VK_NULL_HANDLE || timestamp_query_pool == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "beginCommandBatch selected an incomplete command slot (slot={}, ring_size={}, command_buffer={:#x}, timestamp_query_pool={:#x})",
+                active_command_batch_slot_,
+                command_batch_slots_.size(),
+                lfs::rendering::vkHandleValue(command_buffer),
+                lfs::rendering::vkHandleValue(timestamp_query_pool)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     timestampNumWritten = 0;
     timestampStackDepth = 0;
-    commandBatchInProgress = true;
-
-    PerfTimer::hostToc();
-
     VkCommandBufferBeginInfo begin_info = {};
     begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-    if (vkBeginCommandBuffer(command_buffer, &begin_info) != VK_SUCCESS)
-        _THROW_ERROR("Failed to begin command buffer for batch");
+    if (vulkan_dispatch_.begin_command_buffer == nullptr ||
+        vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr ||
+        vulkan_dispatch_.cmd_reset_query_pool == nullptr) {
+        throwRendererContractViolation(
+            "beginCommandBatch requires a complete VulkanDispatch begin prologue "
+            "(begin_command_buffer, cmd_pipeline_barrier2, cmd_reset_query_pool)",
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
-    vkCmdResetQueryPool(command_buffer, timestamp_query_pool, 0, MAX_TIMESTAMP_QUERY_COUNT);
-    PerfTimer::popMarkers(this);
+    const VkResult begin_result =
+        vulkan_dispatch_.begin_command_buffer(command_buffer, &begin_info);
+    if (begin_result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            begin_result,
+            "vkBeginCommandBuffer",
+            std::format(
+                "vkBeginCommandBuffer could not start the VkSplat batch (slot={}, command_buffer={:#x}, flags={:#x}, result={}({}))",
+                active_command_batch_slot_,
+                lfs::rendering::vkHandleValue(command_buffer),
+                static_cast<std::uint32_t>(begin_info.flags),
+                lfs::rendering::vkResultToString(begin_result),
+                static_cast<int>(begin_result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    // Command buffers rotate, but the VkSplat scratch, indirect, output, and
+    // readback storage is shared across slots. Queue submission order alone
+    // does not prevent adjacent batches from overlapping those accesses. A
+    // queue-local dependency at the batch boundary covers precisely the stages
+    // used by this compute rasterizer; CUDA/Vulkan ownership edges remain on
+    // their dedicated external semaphores.
+    constexpr VkPipelineStageFlags2 kRasterizerStages =
+        VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT |
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    constexpr VkAccessFlags2 kRasterizerAccesses =
+        VK_ACCESS_2_TRANSFER_READ_BIT |
+        VK_ACCESS_2_TRANSFER_WRITE_BIT |
+        VK_ACCESS_2_SHADER_READ_BIT |
+        VK_ACCESS_2_SHADER_WRITE_BIT |
+        VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    const VkMemoryBarrier2 reuse_barrier{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .pNext = nullptr,
+        .srcStageMask = kRasterizerStages,
+        .srcAccessMask = kRasterizerAccesses,
+        .dstStageMask = kRasterizerStages,
+        .dstAccessMask = kRasterizerAccesses,
+    };
+    const VkDependencyInfo reuse_dependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext = nullptr,
+        .dependencyFlags = 0,
+        .memoryBarrierCount = 1,
+        .pMemoryBarriers = &reuse_barrier,
+        .bufferMemoryBarrierCount = 0,
+        .pBufferMemoryBarriers = nullptr,
+        .imageMemoryBarrierCount = 0,
+        .pImageMemoryBarriers = nullptr,
+    };
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &reuse_dependency);
+
+    // Epic #1496 §2.4: planner state matches the reuse barrier just recorded.
+    barrier_planner_.onBatchBegin();
+
+    commandBatchInProgress = true;
+    try {
+        PerfTimer::hostToc();
+        vulkan_dispatch_.cmd_reset_query_pool(
+            command_buffer, timestamp_query_pool, 0, MAX_TIMESTAMP_QUERY_COUNT);
+        PerfTimer::popMarkers(this);
+    } catch (...) {
+        cancelCommandBatch();
+        throw;
+    }
+}
+
+void VulkanGSPipeline::cancelCommandBatch() noexcept {
+    const bool was_recording = commandBatchInProgress;
+    commandBatchInProgress = false;
+    pending_timeline_waits_.clear();
+    timestampNumWritten = 0;
+    timestampStackDepth = 0;
+    PerfTimer::discardMarkers();
+
+    if (!was_recording)
+        return;
+
+    if (device != VK_NULL_HANDLE && command_buffer != VK_NULL_HANDLE &&
+        vulkan_dispatch_.reset_command_buffer != nullptr) {
+        const VkResult result = vulkan_dispatch_.reset_command_buffer(command_buffer, 0);
+        if (result != VK_SUCCESS) {
+            fprintf(stderr,
+                    "cancelCommandBatch could not reset the cancelled command buffer (slot=%u, command_buffer=0x%llx, result=%s(%d)) at %s:%d\n",
+                    active_command_batch_slot_,
+                    static_cast<unsigned long long>(lfs::rendering::vkHandleValue(command_buffer)),
+                    lfs::rendering::vkResultToString(result),
+                    static_cast<int>(result),
+                    __FILE__,
+                    __LINE__);
+        }
+    }
+    try {
+        PerfTimer::hostTic();
+    } catch (const std::exception& error) {
+        fprintf(stderr, "Failed to restore Vulkan host timer after batch cancellation: %s\n", error.what());
+    } catch (...) {
+        fprintf(stderr, "Failed to restore Vulkan host timer after batch cancellation\n");
+    }
 }
 
 void VulkanGSPipeline::waitForPendingBatch() {
@@ -466,11 +1058,40 @@ bool VulkanGSPipeline::timelineValueComplete(const VkSemaphore semaphore,
                                              const std::uint64_t value) const {
     if (semaphore == VK_NULL_HANDLE || value == 0)
         return true;
+    if (vulkan_dispatch_.get_semaphore_counter_value == nullptr) {
+        throwRendererContractViolation(
+            std::format(
+                "vkGetSemaphoreCounterValue dispatch is null while polling a VkSplat batch (semaphore={:#x}, requested_value={})",
+                lfs::rendering::vkHandleValue(semaphore),
+                value),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     std::uint64_t completed_value = 0;
-    const VkResult result = vkGetSemaphoreCounterValue(device, semaphore, &completed_value);
-    if (result != VK_SUCCESS)
-        _THROW_ERROR("Failed to query timeline semaphore");
+    const VkResult result =
+        vulkan_dispatch_.get_semaphore_counter_value(device, semaphore, &completed_value);
+    if (result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkGetSemaphoreCounterValue",
+            std::format(
+                "vkGetSemaphoreCounterValue failed while polling a VkSplat batch (semaphore={:#x}, requested_value={}, completed_value={}, result={}({}))",
+                lfs::rendering::vkHandleValue(semaphore),
+                value,
+                completed_value,
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     return completed_value >= value;
+}
+
+bool VulkanGSPipeline::wasTimelineSignalSubmitted(const VkSemaphore semaphore,
+                                                  const std::uint64_t value) const noexcept {
+    if (semaphore == VK_NULL_HANDLE || value == 0) {
+        return false;
+    }
+    const auto it = last_timeline_signal_values_.find(semaphore);
+    return it != last_timeline_signal_values_.end() && it->second >= value;
 }
 
 void VulkanGSPipeline::waitForPendingBatchSlot(CommandBatchSlot& slot) {
@@ -485,9 +1106,34 @@ void VulkanGSPipeline::waitForPendingBatchSlot(CommandBatchSlot& slot) {
             wait_info.semaphoreCount = 1;
             wait_info.pSemaphores = &slot.pending_signal;
             wait_info.pValues = &slot.pending_signal_value;
-            const VkResult result = vkWaitSemaphores(device, &wait_info, UINT64_MAX);
-            if (result != VK_SUCCESS)
-                _THROW_ERROR("Failed to wait for pending batch timeline semaphore");
+            // A non-ready bounded wait throws and
+            // leaves pending_signal set (no manufactured readiness).
+            lfs::rendering::WaitContext wait_ctx;
+            wait_ctx.dispatch = &vulkan_dispatch_;
+            wait_ctx.fingerprint = "vksplat.pipeline.wait_pending_slot";
+            wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+            auto wait_outcome = lfs::rendering::wait_semaphores_bounded(
+                device,
+                wait_info,
+                std::stop_token{},
+                lfs::rendering::VulkanWaitPolicy{},
+                wait_ctx);
+            if (!wait_outcome.has_value() ||
+                *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+                const std::string outcome_label = wait_outcome.has_value()
+                                                      ? std::string(waitOutcomeLabel(*wait_outcome))
+                                                      : std::string(wait_outcome.error().detail());
+                throwBoundedWaitFailure(
+                    std::format(
+                        "wait_semaphores_bounded failed while retiring a VkSplat batch slot "
+                        "(semaphore={:#x}, value={}, slot_command_buffer={:#x}, outcome={})",
+                        lfs::rendering::vkHandleValue(slot.pending_signal),
+                        slot.pending_signal_value,
+                        lfs::rendering::vkHandleValue(slot.command_buffer),
+                        outcome_label),
+                    wait_outcome,
+                    LFS_SOURCE_SITE_CURRENT());
+            }
         }
     }
 
@@ -503,17 +1149,34 @@ void VulkanGSPipeline::collectTimestampResults(CommandBatchSlot& slot,
     if (timestamp_count == 0)
         return;
     [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.query_results");
-    VkPhysicalDeviceProperties deviceProperties;
-    vkGetPhysicalDeviceProperties(physical_device, &deviceProperties);
-    double timestampPeriod = deviceProperties.limits.timestampPeriod;
-
     std::vector<uint64_t> timestamps(timestamp_count);
-    vkGetQueryPoolResults(
+    const VkResult result = vulkan_dispatch_.get_query_pool_results(
         device, slot.timestamp_query_pool,
         0, timestamp_count,
         sizeof(uint64_t) * timestamp_count,
         timestamps.data(), sizeof(uint64_t),
-        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+        VK_QUERY_RESULT_64_BIT);
+    // Profiling must never add an unbounded wait after batch retirement.
+    // Missing timestamps can be dropped without affecting the rendered image.
+    if (result == VK_NOT_READY)
+        return;
+    if (result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkGetQueryPoolResults",
+            std::format(
+                "vkGetQueryPoolResults failed for VkSplat timestamps (query_pool={:#x}, requested_count={}, max_count={}, result={}({}))",
+                lfs::rendering::vkHandleValue(slot.timestamp_query_pool),
+                timestamp_count,
+                MAX_TIMESTAMP_QUERY_COUNT,
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    VkPhysicalDeviceProperties deviceProperties;
+    vkGetPhysicalDeviceProperties(physical_device, &deviceProperties);
+    double timestampPeriod = deviceProperties.limits.timestampPeriod;
+
     std::vector<double> times(timestamp_count);
     for (uint32_t i = 0; i < timestamp_count; i++)
         times[i] = 1e-9 * double(timestamps[i] - timestamps[0]) * timestampPeriod;
@@ -526,9 +1189,28 @@ void VulkanGSPipeline::addTimelineWait(
     const VkSemaphore semaphore,
     const std::uint64_t value,
     const VkPipelineStageFlags stage_mask) {
-    if (semaphore == VK_NULL_HANDLE || value == 0) {
-        return;
+    if (semaphore == VK_NULL_HANDLE || value == 0 || stage_mask == 0) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "addTimelineWait requires a valid timeline edge (semaphore={:#x}, value={}, stage_mask={:#x}, pending_waits={})",
+                lfs::rendering::vkHandleValue(semaphore),
+                value,
+                static_cast<std::uint64_t>(stage_mask),
+                pending_timeline_waits_.size()),
+            LFS_SOURCE_SITE_CURRENT());
     }
+    const std::uint64_t previous = last_timeline_wait_values_[semaphore];
+    if (value <= previous) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat Vulkan timeline waits must increase strictly (semaphore={:#x}, requested_value={}, previous_value={}, pending_waits={})",
+                lfs::rendering::vkHandleValue(semaphore),
+                value,
+                previous,
+                pending_timeline_waits_.size()),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    last_timeline_wait_values_[semaphore] = value;
     pending_timeline_waits_.push_back(PendingTimelineWait{
         .semaphore = semaphore,
         .value = value,
@@ -538,10 +1220,126 @@ void VulkanGSPipeline::addTimelineWait(
 
 void VulkanGSPipeline::endCommandBatch(bool use_fence,
                                        VkSemaphore signal_semaphore,
-                                       std::uint64_t signal_value) {
-    if (!commandBatchInProgress)
-        _THROW_ERROR("No command batch in progress");
+                                       std::uint64_t signal_value,
+                                       VkSemaphore secondary_signal_semaphore,
+                                       std::uint64_t secondary_signal_value) {
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch called with no active batch (batch_active={}, active_slot={}, next_slot={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                active_command_batch_slot_,
+                next_command_batch_slot_,
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (active_command_batch_slot_ >= command_batch_slots_.size()) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch active slot is outside the command ring (active_slot={}, ring_size={}, command_buffer={:#x})",
+                active_command_batch_slot_,
+                command_batch_slots_.size(),
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (command_buffer == VK_NULL_HANDLE || command_queue == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch requires a recorded command buffer and submission queue (command_buffer={:#x}, queue={:#x}, active_slot={})",
+                lfs::rendering::vkHandleValue(command_buffer),
+                lfs::rendering::vkHandleValue(command_queue),
+                active_command_batch_slot_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if ((signal_semaphore == VK_NULL_HANDLE) != (signal_value == 0)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch timeline signal handle/value must be supplied together (semaphore={:#x}, value={}, use_fence={}, active_slot={})",
+                lfs::rendering::vkHandleValue(signal_semaphore),
+                signal_value,
+                use_fence,
+                active_command_batch_slot_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if ((secondary_signal_semaphore == VK_NULL_HANDLE) != (secondary_signal_value == 0)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch secondary timeline signal handle/value must be supplied together (semaphore={:#x}, value={}, use_fence={}, active_slot={})",
+                lfs::rendering::vkHandleValue(secondary_signal_semaphore),
+                secondary_signal_value,
+                use_fence,
+                active_command_batch_slot_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (signal_semaphore != VK_NULL_HANDLE &&
+        signal_semaphore == secondary_signal_semaphore) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch timeline signal handles must be distinct (primary={:#x}, secondary={:#x}, primary_value={}, secondary_value={}, active_slot={})",
+                lfs::rendering::vkHandleValue(signal_semaphore),
+                lfs::rendering::vkHandleValue(secondary_signal_semaphore),
+                signal_value,
+                secondary_signal_value,
+                active_command_batch_slot_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (use_fence && fence == VK_NULL_HANDLE) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "endCommandBatch requested fence completion with a null fence (use_fence={}, fence={:#x}, active_slot={})",
+                use_fence,
+                lfs::rendering::vkHandleValue(fence),
+                active_command_batch_slot_),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (signal_semaphore != VK_NULL_HANDLE) {
+        const std::uint64_t previous = last_timeline_signal_values_[signal_semaphore];
+        if (signal_value <= previous) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
+                    lfs::rendering::vkHandleValue(signal_semaphore),
+                    signal_value,
+                    previous,
+                    active_command_batch_slot_),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
+    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
+        const std::uint64_t previous =
+            last_timeline_signal_values_[secondary_signal_semaphore];
+        if (secondary_signal_value <= previous) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "VkSplat secondary Vulkan timeline signals must increase strictly (semaphore={:#x}, signal_value={}, previous_value={}, active_slot={})",
+                    lfs::rendering::vkHandleValue(secondary_signal_semaphore),
+                    secondary_signal_value,
+                    previous,
+                    active_command_batch_slot_),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
     CommandBatchSlot& slot = command_batch_slots_[active_command_batch_slot_];
+
+    // T0 — begin lifecycle for this submit (no-reset / no-replacement row).
+    {
+        using lfs::rendering::SubmissionFencePolicy;
+        using lfs::rendering::SubmissionTransition;
+        auto begin = lfs::rendering::apply_submission_transition(
+            last_submission_state_,
+            SubmissionTransition::BeginLifecycle,
+            SubmissionFencePolicy::NoResetNoReplacement,
+            signal_value);
+        if (!begin) {
+            cancelCommandBatch();
+            throwRendererContractViolation(
+                std::format(
+                    "SubmissionState T0 BeginLifecycle failed (detail={}, signal_value={})",
+                    begin.error().detail(),
+                    signal_value),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
 
     if (timestampNumWritten > 0) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.close_markers");
@@ -549,10 +1347,29 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
             PerfTimer::pushMarker(this);
     }
 
+    if (vulkan_dispatch_.end_command_buffer == nullptr ||
+        vulkan_dispatch_.queue_submit == nullptr) {
+        cancelCommandBatch();
+        throwRendererContractViolation(
+            "endCommandBatch requires VulkanDispatch end_command_buffer and queue_submit",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.vkEndCommandBuffer");
-        if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
-            _THROW_ERROR("Failed to end command buffer for batch");
+        const VkResult end_result = vulkan_dispatch_.end_command_buffer(command_buffer);
+        if (end_result != VK_SUCCESS) {
+            cancelCommandBatch();
+            lfs::rendering::throw_vk_result(
+                end_result,
+                "vkEndCommandBuffer",
+                std::format(
+                    "vkEndCommandBuffer failed for the active VkSplat batch (slot={}, command_buffer={:#x}, result={}({}))",
+                    active_command_batch_slot_,
+                    lfs::rendering::vkHandleValue(command_buffer),
+                    lfs::rendering::vkResultToString(end_result),
+                    static_cast<int>(end_result)),
+                LFS_SOURCE_SITE_CURRENT());
         }
     }
 
@@ -569,6 +1386,10 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
     if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
         signal_semaphores.push_back(signal_semaphore);
         signal_values.push_back(signal_value);
+    }
+    if (secondary_signal_semaphore != VK_NULL_HANDLE && secondary_signal_value != 0) {
+        signal_semaphores.push_back(secondary_signal_semaphore);
+        signal_values.push_back(secondary_signal_value);
     }
 
     VkTimelineSemaphoreSubmitInfo timeline_submit_info{};
@@ -600,11 +1421,117 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
         submit_info.pNext = &timeline_submit_info;
     }
 
+    if (wait_semaphores.size() != wait_stages.size() ||
+        wait_semaphores.size() != wait_values.size() ||
+        signal_semaphores.size() != signal_values.size() ||
+        timeline_submit_info.waitSemaphoreValueCount != submit_info.waitSemaphoreCount ||
+        timeline_submit_info.signalSemaphoreValueCount != submit_info.signalSemaphoreCount) {
+        cancelCommandBatch();
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat submit semaphore arrays disagree with VkSubmitInfo counts (wait_handles={}, wait_stages={}, wait_values={}, submit_wait_count={}, timeline_wait_count={}, signal_handles={}, signal_values={}, submit_signal_count={}, timeline_signal_count={})",
+                wait_semaphores.size(),
+                wait_stages.size(),
+                wait_values.size(),
+                submit_info.waitSemaphoreCount,
+                timeline_submit_info.waitSemaphoreValueCount,
+                signal_semaphores.size(),
+                signal_values.size(),
+                submit_info.signalSemaphoreCount,
+                timeline_submit_info.signalSemaphoreValueCount),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
     {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.vkQueueSubmit");
-        if (vkQueueSubmit(command_queue, 1, &submit_info,
-                          use_fence ? fence : VK_NULL_HANDLE) != VK_SUCCESS) {
-            _THROW_ERROR("Failed to submit batch");
+        const VkResult submit_result = vulkan_dispatch_.queue_submit(
+            command_queue, 1, &submit_info, use_fence ? fence : VK_NULL_HANDLE);
+        if (submit_result != VK_SUCCESS) {
+            // T3 — rejected submit: no publish, no replace (no-reset row).
+            {
+                using lfs::rendering::SubmissionFencePolicy;
+                using lfs::rendering::SubmissionTransition;
+                auto rejected = lfs::rendering::apply_submission_transition(
+                    last_submission_state_,
+                    SubmissionTransition::SubmitRejected,
+                    SubmissionFencePolicy::NoResetNoReplacement);
+                if (!rejected) {
+                    // Still cancel + throw the original submit failure; surface
+                    // the contract violation only in the primary message.
+                    cancelCommandBatch();
+                    throwRendererContractViolation(
+                        std::format(
+                            "vkQueueSubmit failed and SubmissionState T3 rejected "
+                            "(submit_result={}({}), transition_detail={})",
+                            lfs::rendering::vkResultToString(submit_result),
+                            static_cast<int>(submit_result),
+                            rejected.error().detail()),
+                        LFS_SOURCE_SITE_CURRENT());
+                }
+            }
+            cancelCommandBatch();
+            lfs::rendering::throw_vk_result(
+                submit_result,
+                "vkQueueSubmit",
+                std::format(
+                    "vkQueueSubmit failed for the VkSplat batch (queue={:#x}, command_buffer={:#x}, slot={}, wait_count={}, signal_count={}, fence={:#x}, result={}({}))",
+                    lfs::rendering::vkHandleValue(command_queue),
+                    lfs::rendering::vkHandleValue(command_buffer),
+                    active_command_batch_slot_,
+                    submit_info.waitSemaphoreCount,
+                    submit_info.signalSemaphoreCount,
+                    lfs::rendering::vkHandleValue(use_fence ? fence : VK_NULL_HANDLE),
+                    lfs::rendering::vkResultToString(submit_result),
+                    static_cast<int>(submit_result)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
+
+    // T4 — set submit_accepted BEFORE publishing the candidate (ordering, not
+    // atomicity — Amendment 1).
+    {
+        using lfs::rendering::SubmissionFencePolicy;
+        using lfs::rendering::SubmissionTransition;
+        auto accepted = lfs::rendering::apply_submission_transition(
+            last_submission_state_,
+            SubmissionTransition::SubmitAccepted,
+            SubmissionFencePolicy::NoResetNoReplacement,
+            signal_value);
+        if (!accepted) {
+            cancelCommandBatch();
+            throwRendererContractViolation(
+                std::format(
+                    "SubmissionState T4 SubmitAccepted failed after native submit "
+                    "success (detail={})",
+                    accepted.error().detail()),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
+
+    // T5 — publish once (host-side evidence map). Never host-signal.
+    if (signal_semaphore != VK_NULL_HANDLE) {
+        last_timeline_signal_values_[signal_semaphore] = signal_value;
+    }
+    if (secondary_signal_semaphore != VK_NULL_HANDLE) {
+        last_timeline_signal_values_[secondary_signal_semaphore] = secondary_signal_value;
+    }
+    if (signal_semaphore != VK_NULL_HANDLE && signal_value != 0) {
+        using lfs::rendering::SubmissionFencePolicy;
+        using lfs::rendering::SubmissionTransition;
+        auto published = lfs::rendering::apply_submission_transition(
+            last_submission_state_,
+            SubmissionTransition::PublishTimeline,
+            SubmissionFencePolicy::NoResetNoReplacement,
+            signal_value);
+        if (!published) {
+            // Publication map already written; this is a bookkeeping fault.
+            throwRendererContractViolation(
+                std::format(
+                    "SubmissionState T5 PublishTimeline failed after host publication "
+                    "(detail={}, signal_value={})",
+                    published.error().detail(),
+                    signal_value),
+                LFS_SOURCE_SITE_CURRENT());
         }
     }
     pending_timeline_waits_.clear();
@@ -613,29 +1540,86 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
 
     if (use_fence) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.wait_fence");
-#if SSE2_AVAILABLE
-#if ENABLE_ASSERTION
-        constexpr unsigned long long kTimeout = 0x100000000ull;
-        auto time0 = __rdtsc();
-#endif
-        while (vkGetFenceStatus(device, fence) != VK_SUCCESS) {
-            _mm_pause();
-#if ENABLE_ASSERTION
-            if (__rdtsc() - time0 >= kTimeout) {
-                // _THROW_ERROR("Fence timed out");
-                printf("\033[91m%s\033[m\n", "Timed out.");
-                std::terminate(); // note that this is often in destructor
-            }
-#endif
+        if (vulkan_dispatch_.reset_fences == nullptr) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            throwRendererContractViolation(
+                "endCommandBatch fence path requires VulkanDispatch reset_fences",
+                LFS_SOURCE_SITE_CURRENT());
         }
-#else
-        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-#endif
-        if (vkResetFences(device, 1, &fence) != VK_SUCCESS)
-            _THROW_ERROR("Failed to reset fence");
+        // A non-ready post-submit fence wait throws without reset because reset
+        // implies the slot is free for reuse.
+        lfs::rendering::WaitContext wait_ctx;
+        wait_ctx.dispatch = &vulkan_dispatch_;
+        wait_ctx.fingerprint = "vksplat.pipeline.wait_post_submit_fence";
+        wait_ctx.owner_quarantine_flag = &gpu_wait_quarantined_;
+        auto wait_outcome = lfs::rendering::wait_fence_bounded(
+            device,
+            fence,
+            std::stop_token{},
+            lfs::rendering::VulkanWaitPolicy{},
+            wait_ctx);
+        if (!wait_outcome.has_value() ||
+            *wait_outcome != lfs::rendering::WaitOutcome::Ready) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            const std::string outcome_label = wait_outcome.has_value()
+                                                  ? std::string(waitOutcomeLabel(*wait_outcome))
+                                                  : std::string(wait_outcome.error().detail());
+            throwBoundedWaitFailure(
+                std::format(
+                    "wait_fence_bounded failed after VkSplat submission "
+                    "(fence={:#x}, slot={}, outcome={})",
+                    lfs::rendering::vkHandleValue(fence),
+                    active_command_batch_slot_,
+                    outcome_label),
+                wait_outcome,
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const VkResult reset_result = vulkan_dispatch_.reset_fences(device, 1, &fence);
+        if (reset_result != VK_SUCCESS) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            lfs::rendering::throw_vk_result(
+                reset_result,
+                "vkResetFences",
+                std::format(
+                    "vkResetFences failed after retiring a VkSplat batch (fence={:#x}, slot={}, result={}({}))",
+                    lfs::rendering::vkHandleValue(fence),
+                    active_command_batch_slot_,
+                    lfs::rendering::vkResultToString(reset_result),
+                    static_cast<int>(reset_result)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
     } else if (signal_semaphore == VK_NULL_HANDLE || signal_value == 0) {
         [[maybe_unused]] auto cpu_timer = timeCpuStage("vksplat.command_batch.wait_idle");
-        vkQueueWaitIdle(command_queue);
+        if (vulkan_dispatch_.queue_wait_idle == nullptr) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            throwRendererContractViolation(
+                "endCommandBatch idle path requires VulkanDispatch queue_wait_idle",
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const VkResult idle_result = vulkan_dispatch_.queue_wait_idle(command_queue);
+        if (idle_result != VK_SUCCESS) {
+            PerfTimer::discardMarkers();
+            timestampNumWritten = 0;
+            PerfTimer::hostTic();
+            lfs::rendering::throw_vk_result(
+                idle_result,
+                "vkQueueWaitIdle",
+                std::format(
+                    "vkQueueWaitIdle failed for an unsynchronized VkSplat batch (queue={:#x}, slot={}, result={}({}))",
+                    lfs::rendering::vkHandleValue(command_queue),
+                    active_command_batch_slot_,
+                    lfs::rendering::vkResultToString(idle_result),
+                    static_cast<int>(idle_result)),
+                LFS_SOURCE_SITE_CURRENT());
+        }
     }
 
     PerfTimer::hostTic();
@@ -651,29 +1635,69 @@ void VulkanGSPipeline::endCommandBatch(bool use_fence,
 
     if (timestampNumWritten > 0) {
         slot.pending_timestamp_marks = PerfTimer::takeMarkers();
-        collectTimestampResults(slot, timestampNumWritten);
-        slot.pending_timestamp_marks.clear();
-        timestampNumWritten = 0;
+        try {
+            collectTimestampResults(slot, timestampNumWritten);
+            slot.pending_timestamp_marks.clear();
+            timestampNumWritten = 0;
+        } catch (...) {
+            slot.pending_timestamp_marks.clear();
+            timestampNumWritten = 0;
+            throw;
+        }
     }
 }
 
-bool VulkanGSPipeline::writeTimestamp(int delta) {
-    if (!commandBatchInProgress)
-        _THROW_ERROR("writeTimestamp requires command batch in progress");
-    if (timestampNumWritten >= MAX_TIMESTAMP_QUERY_COUNT)
-        _THROW_ERROR("Too many timestamps written");
-    if (delta != 1 && delta != -1)
-        _THROW_ERROR("delta in writeTimestamp must be 1 or -1");
-    if (delta == -1 && timestampStackDepth == 0)
-        _THROW_ERROR("attempt to write exit timestamp while stack is empty");
-    vkCmdWriteTimestamp(
+void VulkanGSPipeline::writeTimestamp(int delta) {
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "writeTimestamp requires an active command batch (batch_active={}, delta={}, written={}, stack_depth={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                delta,
+                timestampNumWritten,
+                timestampStackDepth,
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (timestampNumWritten >= MAX_TIMESTAMP_QUERY_COUNT) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat timestamp query capacity was exceeded (written={}, capacity={}, delta={}, stack_depth={})",
+                timestampNumWritten,
+                MAX_TIMESTAMP_QUERY_COUNT,
+                delta,
+                timestampStackDepth),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (delta != 1 && delta != -1) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "writeTimestamp delta must be +1 or -1 (delta={}, written={}, stack_depth={})",
+                delta,
+                timestampNumWritten,
+                timestampStackDepth),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (delta == -1 && timestampStackDepth == 0) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "writeTimestamp cannot close an empty marker stack (delta={}, written={}, stack_depth={})",
+                delta,
+                timestampNumWritten,
+                timestampStackDepth),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (vulkan_dispatch_.cmd_write_timestamp == nullptr) {
+        throwRendererContractViolation(
+            "writeTimestamp requires VulkanDispatch::cmd_write_timestamp",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    vulkan_dispatch_.cmd_write_timestamp(
         command_buffer,
-        // delta == 1 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         timestamp_query_pool, timestampNumWritten);
     timestampNumWritten += 1;
     timestampStackDepth += delta;
-    return true;
 }
 
 bool VulkanGSPipeline::writeTimestampNoExcept(int delta) {
@@ -685,9 +1709,10 @@ bool VulkanGSPipeline::writeTimestampNoExcept(int delta) {
         return false;
     if (delta == -1 && timestampStackDepth == 0)
         return false;
-    vkCmdWriteTimestamp(
+    if (vulkan_dispatch_.cmd_write_timestamp == nullptr)
+        return false;
+    vulkan_dispatch_.cmd_write_timestamp(
         command_buffer,
-        // delta == 1 ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         timestamp_query_pool, timestampNumWritten);
     timestampNumWritten += 1;
@@ -705,34 +1730,24 @@ void VulkanGSPipeline::setCpuTimerCallback(CpuTimerCallback callback) {
 
 VkAccessFlags2 toAccessMask(VulkanGSPipeline::BarrierMask barrierMask) {
     VkAccessFlags2 result = VK_ACCESS_2_NONE;
-    if (barrierMask == VulkanGSPipeline::TRANSFER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::TRANSFER_READ)
         result |= VK_ACCESS_2_TRANSFER_READ_BIT;
     if (barrierMask == VulkanGSPipeline::TRANSFER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE)
         result |= VK_ACCESS_2_SHADER_READ_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_ACCESS_2_SHADER_WRITE_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_READ ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::HOST_READ)
         result |= VK_ACCESS_2_HOST_READ_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_WRITE ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
-        result |= VK_ACCESS_2_HOST_WRITE_BIT;
     if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+    if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
+        result |= VK_ACCESS_2_CONDITIONAL_RENDERING_READ_BIT_EXT;
     return result;
 }
 
@@ -740,32 +1755,35 @@ VkPipelineStageFlags2 toStageMask(VulkanGSPipeline::BarrierMask barrierMask) {
     VkPipelineStageFlags2 result = VK_PIPELINE_STAGE_2_NONE;
     if (barrierMask == VulkanGSPipeline::TRANSFER_READ ||
         barrierMask == VulkanGSPipeline::TRANSFER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
     if (barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_WRITE ||
         barrierMask == VulkanGSPipeline::COMPUTE_SHADER_READ_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE ||
-        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_READ_WRITE)
+        barrierMask == VulkanGSPipeline::TRANSFER_COMPUTE_SHADER_WRITE)
         result |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-    if (barrierMask == VulkanGSPipeline::HOST_READ ||
-        barrierMask == VulkanGSPipeline::HOST_WRITE ||
-        barrierMask == VulkanGSPipeline::HOST_READ_WRITE)
+    if (barrierMask == VulkanGSPipeline::HOST_READ)
         result |= VK_PIPELINE_STAGE_2_HOST_BIT;
     if (barrierMask == VulkanGSPipeline::INDIRECT_DISPATCH_READ)
         result |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+    if (barrierMask == VulkanGSPipeline::CONDITIONAL_RENDERING_READ)
+        result |= VK_PIPELINE_STAGE_2_CONDITIONAL_RENDERING_BIT_EXT;
     return result;
 }
 
 void VulkanGSPipeline::bufferMemoryBarrier(
     const std::vector<std::pair<_VulkanBuffer, VulkanGSPipeline::BarrierMask>>& buffers,
     VulkanGSPipeline::BarrierMask dstMask) {
-    if (!commandBatchInProgress)
-        return;
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "bufferMemoryBarrier requires an active command batch (batch_active={}, buffer_count={}, dst_mask={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                buffers.size(),
+                static_cast<int>(dstMask),
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
     const VkPipelineStageFlags2 dstStageMask = toStageMask(dstMask);
     const VkAccessFlags2 dstAccessMask = toAccessMask(dstMask);
@@ -773,8 +1791,12 @@ void VulkanGSPipeline::bufferMemoryBarrier(
     std::vector<VkBufferMemoryBarrier2> barriers;
     barriers.reserve(buffers.size());
     for (auto& [buffer, srcMask] : buffers) {
-        if (buffer.buffer == VK_NULL_HANDLE)
+        if (buffer.buffer == VK_NULL_HANDLE) {
             continue;
+        }
+        // Epic #1496 §3.4: legacy barrier invalidates planner state for named buffers.
+        barrier_planner_.invalidate(buffer.buffer);
+        validateBufferRange(buffer, 0, buffer.size, "bufferMemoryBarrier");
         VkBufferMemoryBarrier2 barrier = {};
         barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
         barrier.pNext = nullptr;
@@ -792,13 +1814,76 @@ void VulkanGSPipeline::bufferMemoryBarrier(
     if (barriers.empty())
         return;
 
+    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
+        throwRendererContractViolation(
+            "bufferMemoryBarrier requires VulkanDispatch::cmd_pipeline_barrier2",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
     const uint32_t barrier_count = static_cast<uint32_t>(barriers.size());
     VkDependencyInfo dependency = {};
     dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
     dependency.bufferMemoryBarrierCount = barrier_count;
     dependency.pBufferMemoryBarriers = barriers.data();
 
-    vkCmdPipelineBarrier2(command_buffer, &dependency);
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
+}
+
+void VulkanGSPipeline::bufferMemoryBarrier(const std::vector<BufferBarrier>& requested_barriers) {
+    if (!commandBatchInProgress) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "bufferMemoryBarrier requires an active command batch (batch_active={}, buffer_count={}, command_buffer={:#x})",
+                commandBatchInProgress,
+                requested_barriers.size(),
+                lfs::rendering::vkHandleValue(command_buffer)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    std::vector<VkBufferMemoryBarrier2> barriers;
+    barriers.reserve(requested_barriers.size());
+    for (const auto& requested : requested_barriers) {
+        const auto& buffer = requested.buffer;
+        if (buffer.buffer == VK_NULL_HANDLE)
+            continue;
+        // Epic #1496 §3.4: legacy barrier invalidates planner state for named buffers.
+        barrier_planner_.invalidate(buffer.buffer);
+        validateBufferRange(buffer, 0, buffer.size, "bufferMemoryBarrier");
+        barriers.push_back(VkBufferMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .pNext = nullptr,
+            .srcStageMask = toStageMask(requested.src_mask),
+            .srcAccessMask = toAccessMask(requested.src_mask),
+            .dstStageMask = toStageMask(requested.dst_mask),
+            .dstAccessMask = toAccessMask(requested.dst_mask),
+            .srcQueueFamilyIndex = queue_family_index,
+            .dstQueueFamilyIndex = queue_family_index,
+            .buffer = buffer.buffer,
+            .offset = buffer.offset,
+            .size = buffer.size,
+        });
+    }
+    if (barriers.empty())
+        return;
+
+    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
+        throwRendererContractViolation(
+            "bufferMemoryBarrier requires VulkanDispatch::cmd_pipeline_barrier2",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    const VkDependencyInfo dependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext = nullptr,
+        .dependencyFlags = 0,
+        .memoryBarrierCount = 0,
+        .pMemoryBarriers = nullptr,
+        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size()),
+        .pBufferMemoryBarriers = barriers.data(),
+        .imageMemoryBarrierCount = 0,
+        .pImageMemoryBarriers = nullptr,
+    };
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
 }
 
 // Compute pipeline
@@ -823,91 +1908,216 @@ void VulkanGSPipeline::createComputeDescriptorSetLayout(_ComputePipeline& pipeli
     layout_info.bindingCount = static_cast<uint32_t>(bindings.size());
     layout_info.pBindings = bindings.data();
 
-    if (vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &pipeline.descriptor_set_layout) != VK_SUCCESS)
-        _THROW_ERROR("Failed to create descriptor set layout");
+    const VkResult result = vkCreateDescriptorSetLayout(device, &layout_info, nullptr, &pipeline.descriptor_set_layout);
+    if (result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkCreateDescriptorSetLayout",
+            std::format(
+                "VkSplat compute descriptor-set layout creation failed (pipeline='{}', binding_count={}, device={:#x}, result={}({}))",
+                pipeline.diagnostic_name,
+                bindings.size(),
+                lfs::rendering::vkHandleValue(device),
+                lfs::rendering::vkResultToString(result),
+                static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (debug_name_writer_.enabled()) {
+        setDebugObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT,
+                           pipeline.descriptor_set_layout,
+                           std::format("vksplat.{}.descriptor_layout", pipeline.diagnostic_name));
+    }
 }
 
-void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline, const std::string& spirv_path, uint32_t min_shared_memory, bool compatible_subgroup_size) {
+void VulkanGSPipeline::createComputePipeline(_ComputePipeline& pipeline,
+                                             const std::string& spirv_path,
+                                             bool compatible_subgroup_size,
+                                             const uint32_t expected_workgroup_size_x) {
 
-    if (min_shared_memory > this->deviceInfo.sharedSize) {
-        pipeline.shader = VK_NULL_HANDLE;
-        return;
-    }
-
+    pipeline.diagnostic_name = spirvDiagnosticName(spirv_path);
+    all_compute_pipelines.push_back(&pipeline);
     const auto spirv_code = loadSpirv(spirv_path);
+    if (expected_workgroup_size_x != 0 &&
+        !spirvHasComputeWorkgroupSize(spirv_code, expected_workgroup_size_x, 1u, 1u)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "VkSplat compute shader workgroup geometry does not match the host contract (pipeline='{}', shader='{}', expected=[{},1,1])",
+                pipeline.diagnostic_name,
+                spirv_path,
+                expected_workgroup_size_x),
+            LFS_SOURCE_SITE_CURRENT());
+    }
     recordSlangShaderBytecode(spirv_path, spirv_code.size() * sizeof(uint32_t));
     createShaderModule(spirv_code, &pipeline.shader);
+    if (debug_name_writer_.enabled()) {
+        setDebugObjectName(VK_OBJECT_TYPE_SHADER_MODULE,
+                           pipeline.shader,
+                           std::format("vksplat.{}.shader", pipeline.diagnostic_name));
+    }
     createComputeDescriptorSetLayout(pipeline);
 
-    // Create push constant range for uniforms
-    VkPushConstantRange push_constant_range = {};
+    VkPushConstantRange push_constant_range{};
     push_constant_range.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
     push_constant_range.offset = 0;
-    push_constant_range.size = (uint32_t)MAX_UNIFORM_SIZE;
+    push_constant_range.size = static_cast<uint32_t>(MAX_UNIFORM_SIZE);
 
-    VkPipelineLayoutCreateInfo pipeline_layout_info = {};
+    VkPipelineLayoutCreateInfo pipeline_layout_info{};
     pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     pipeline_layout_info.setLayoutCount = 1;
     pipeline_layout_info.pSetLayouts = &pipeline.descriptor_set_layout;
     pipeline_layout_info.pushConstantRangeCount = 1;
     pipeline_layout_info.pPushConstantRanges = &push_constant_range;
 
-    if (vkCreatePipelineLayout(device, &pipeline_layout_info, nullptr, &pipeline.pipeline_layout) != VK_SUCCESS) {
-        _THROW_ERROR("Failed to create pipeline set layout");
+    const VkResult layout_result = vkCreatePipelineLayout(
+        device, &pipeline_layout_info, nullptr, &pipeline.pipeline_layout);
+    if (layout_result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            layout_result,
+            "vkCreatePipelineLayout",
+            std::format("VkSplat compute pipeline-layout creation failed (pipeline='{}', result={}({}))",
+                        pipeline.diagnostic_name,
+                        lfs::rendering::vkResultToString(layout_result),
+                        static_cast<int>(layout_result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (debug_name_writer_.enabled()) {
+        setDebugObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT,
+                           pipeline.pipeline_layout,
+                           std::format("vksplat.{}.pipeline_layout", pipeline.diagnostic_name));
     }
 
-    VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT req = {};
-    req.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT;
-    req.requiredSubgroupSize = SUBGROUP_SIZE; // 32
-
-    VkPipelineShaderStageCreateInfo compute_shader_stage_info = {};
-    compute_shader_stage_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    compute_shader_stage_info.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    compute_shader_stage_info.module = pipeline.shader;
-    compute_shader_stage_info.pName = "main";
-    if (compatible_subgroup_size && deviceInfo.subgroupSize != SUBGROUP_SIZE)
-        compute_shader_stage_info.pNext = &req;
-
-    VkComputePipelineCreateInfo pipeline_info = {};
-    pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    pipeline_info.layout = pipeline.pipeline_layout;
-    pipeline_info.stage = compute_shader_stage_info;
-
-    if (vkCreateComputePipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &pipeline.pipeline) != VK_SUCCESS)
-        _THROW_ERROR("Failed to create compute pipeline");
-
-    all_compute_pipelines.push_back(&pipeline);
+    pipeline.compatible_subgroup_size = compatible_subgroup_size;
+    pipeline.expected_workgroup_size_x = expected_workgroup_size_x;
+    pending_compute_pipelines.push_back(&pipeline);
 }
 
-void VulkanGSPipeline::executeCompute(
+void VulkanGSPipeline::createPendingComputePipelines() {
+    if (pending_compute_pipelines.empty())
+        return;
+
+    std::vector<VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT> subgroup_infos;
+    subgroup_infos.reserve(pending_compute_pipelines.size());
+    std::vector<VkPipelineShaderStageCreateInfo> stages;
+    stages.reserve(pending_compute_pipelines.size());
+    std::vector<VkComputePipelineCreateInfo> infos;
+    infos.reserve(pending_compute_pipelines.size());
+    std::vector<VkPipeline> pipelines(pending_compute_pipelines.size(), VK_NULL_HANDLE);
+
+    for (auto* const pipeline : pending_compute_pipelines) {
+        VkPipelineShaderStageRequiredSubgroupSizeCreateInfoEXT subgroup_info{};
+        subgroup_info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO_EXT;
+        subgroup_info.requiredSubgroupSize = SUBGROUP_SIZE;
+        subgroup_infos.push_back(subgroup_info);
+
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = pipeline->shader;
+        stage.pName = "main";
+        if (pipeline->compatible_subgroup_size && deviceInfo.subgroupSize != SUBGROUP_SIZE)
+            stage.pNext = &subgroup_infos.back();
+        stages.push_back(stage);
+
+        VkComputePipelineCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        info.layout = pipeline->pipeline_layout;
+        info.stage = stages.back();
+        infos.push_back(info);
+    }
+
+    const VkResult result = vkCreateComputePipelines(
+        device, pipeline_cache, static_cast<uint32_t>(infos.size()), infos.data(), nullptr, pipelines.data());
+    if (result != VK_SUCCESS) {
+        lfs::rendering::throw_vk_result(
+            result,
+            "vkCreateComputePipelines",
+            std::format("VkSplat batched compute pipeline creation failed (count={}, result={}({}))",
+                        infos.size(),
+                        lfs::rendering::vkResultToString(result),
+                        static_cast<int>(result)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    for (std::size_t i = 0; i < pending_compute_pipelines.size(); ++i) {
+        auto& pipeline = *pending_compute_pipelines[i];
+        pipeline.pipeline = pipelines[i];
+        if (debug_name_writer_.enabled()) {
+            setDebugObjectName(VK_OBJECT_TYPE_PIPELINE,
+                               pipeline.pipeline,
+                               std::format("vksplat.{}.pipeline", pipeline.diagnostic_name));
+        }
+    }
+    pending_compute_pipelines.clear();
+}
+
+void VulkanGSPipeline::emitPlannedBufferBarriers(
+    const std::vector<VkBufferMemoryBarrier2>& barriers) {
+    if (barriers.empty()) {
+        return;
+    }
+    if (vulkan_dispatch_.cmd_pipeline_barrier2 == nullptr) {
+        throwRendererContractViolation(
+            "tagged dispatch requires VulkanDispatch::cmd_pipeline_barrier2",
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    const VkDependencyInfo dependency{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .pNext = nullptr,
+        .dependencyFlags = 0,
+        .memoryBarrierCount = 0,
+        .pMemoryBarriers = nullptr,
+        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(barriers.size()),
+        .pBufferMemoryBarriers = barriers.data(),
+        .imageMemoryBarrierCount = 0,
+        .pImageMemoryBarriers = nullptr,
+    };
+    // Spec §2.6 / §3.1: at most one barrier2 call per tagged dispatch (coalescing).
+    vulkan_dispatch_.cmd_pipeline_barrier2(command_buffer, &dependency);
+}
+
+void VulkanGSPipeline::recordComputeDispatch(
     std::vector<std::pair<size_t, size_t>> dims,
     const void* uniformsPtr, size_t uniformSize,
     _ComputePipeline& pipeline,
     const std::vector<_VulkanBuffer>& buffers) {
-    if (uniformSize > MAX_UNIFORM_SIZE)
-        _THROW_ERROR("Maximum uniform size exceeded");
+    if (vulkan_dispatch_.cmd_bind_pipeline == nullptr ||
+        vulkan_dispatch_.cmd_push_constants == nullptr ||
+        vulkan_dispatch_.cmd_dispatch == nullptr) {
+        throwRendererContractViolation(
+            "executeCompute requires VulkanDispatch cmd_bind_pipeline, "
+            "cmd_push_constants, and cmd_dispatch",
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
-    DEVICE_GUARD;
-
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    vulkan_dispatch_.cmd_bind_pipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
 
     const std::size_t num_buffers = pipeline.buffer_layouts.size();
     std::vector<VkDescriptorBufferInfo> buffer_infos(num_buffers);
     std::vector<VkWriteDescriptorSet> writes(num_buffers);
     for (std::size_t idx = 0; idx < num_buffers; ++idx) {
         const int binding = pipeline.buffer_layouts[idx];
-        if (buffers[binding].buffer == VK_NULL_HANDLE)
-            _CHECK_FATAL("Buffer " + std::to_string(binding) + " is NULL");
+        if (binding < 0 || static_cast<std::size_t>(binding) >= buffers.size()) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "executeCompute binding index is outside the supplied buffer array (pipeline='{}', binding={}, buffer_count={}, descriptor_index={})",
+                    pipeline.diagnostic_name,
+                    binding,
+                    buffers.size(),
+                    idx),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const VkDeviceSize range = buffers[binding].size != 0
+                                       ? buffers[binding].size
+                                       : buffers[binding].capacity;
+        validateBufferRange(buffers[binding], 0, range, "executeCompute descriptor binding");
         buffer_infos[idx].buffer = buffers[binding].buffer;
         buffer_infos[idx].offset = buffers[binding].offset;
         // Bind the in-use [offset, offset+size) range. For owned buffers size
         // is set by resizeDeviceBuffer / createBuffer to match the requested
         // allocation; for coalesced views into a parent allocation it's the
-        // sub-region's payload byte count. Falling back to allocSize when size
+        // sub-region's payload byte count. Falling back to the view capacity when size
         // is zero keeps any (rare) legacy callers working without surprises.
-        buffer_infos[idx].range = buffers[binding].size != 0
-                                      ? buffers[binding].size
-                                      : buffers[binding].allocSize;
+        buffer_infos[idx].range = range;
 
         writes[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[idx].dstSet = VK_NULL_HANDLE; // ignored for push descriptor
@@ -924,16 +2134,34 @@ void VulkanGSPipeline::executeCompute(
                                 static_cast<uint32_t>(writes.size()),
                                 writes.data());
 
-    // Push constants for uniforms
     if (uniformsPtr) {
-        vkCmdPushConstants(
+        vulkan_dispatch_.cmd_push_constants(
             command_buffer,
             pipeline.pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT,
             0, (uint32_t)uniformSize, uniformsPtr);
     }
 
-    // Dispatch compute shader
+    if (dims.empty() || dims.size() > 3) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute requires one to three dispatch dimensions (pipeline='{}', dimension_count={})",
+                pipeline.diagnostic_name,
+                dims.size()),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    for (std::size_t i = 0; i < dims.size(); ++i) {
+        if (dims[i].first == 0 || dims[i].second == 0) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "executeCompute dispatch dimensions must have non-zero element and local sizes (pipeline='{}', dimension={}, elements={}, local_size={})",
+                    pipeline.diagnostic_name,
+                    i,
+                    dims[i].first,
+                    dims[i].second),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+    }
     while (dims.size() < 3)
         dims.push_back({1, 1});
     uint32_t nGroupsX = (uint32_t)_CEIL_DIV(dims[0].first, dims[0].second);
@@ -942,48 +2170,70 @@ void VulkanGSPipeline::executeCompute(
     if (nGroupsX > deviceInfo.maxGroupsX ||
         nGroupsY > deviceInfo.maxGroupsY ||
         nGroupsZ > deviceInfo.maxGroupsZ)
-        _THROW_ERROR("Cannot launch compute kernel, too many groups: [" +
-                     std::to_string(nGroupsX) + " " +
-                     std::to_string(nGroupsY) + " " +
-                     std::to_string(nGroupsZ) + "] > [" +
-                     std::to_string(deviceInfo.maxGroupsX) + " " +
-                     std::to_string(deviceInfo.maxGroupsY) + " " +
-                     std::to_string(deviceInfo.maxGroupsZ) + "]");
-    vkCmdDispatch(command_buffer, nGroupsX, nGroupsY, nGroupsZ);
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute dispatch groups exceed the device limit (pipeline='{}', groups=[{},{},{}], maxComputeWorkGroupCount=[{},{},{}], dims=[{}/{},{}/{},{}/{}])",
+                pipeline.diagnostic_name,
+                nGroupsX,
+                nGroupsY,
+                nGroupsZ,
+                deviceInfo.maxGroupsX,
+                deviceInfo.maxGroupsY,
+                deviceInfo.maxGroupsZ,
+                dims[0].first,
+                dims[0].second,
+                dims[1].first,
+                dims[1].second,
+                dims[2].first,
+                dims[2].second),
+            LFS_SOURCE_SITE_CURRENT());
+    vulkan_dispatch_.cmd_dispatch(command_buffer, nGroupsX, nGroupsY, nGroupsZ);
 }
 
-void VulkanGSPipeline::executeComputeIndirect(
+void VulkanGSPipeline::recordComputeDispatchIndirect(
     const _VulkanBuffer& indirect_buffer,
     VkDeviceSize indirect_offset,
     const void* uniformsPtr, size_t uniformSize,
     _ComputePipeline& pipeline,
     const std::vector<_VulkanBuffer>& buffers) {
-    if (uniformSize > MAX_UNIFORM_SIZE)
-        _THROW_ERROR("Maximum uniform size exceeded");
-    if (indirect_buffer.buffer == VK_NULL_HANDLE)
-        _CHECK_FATAL("Indirect dispatch buffer is NULL");
+    if (vulkan_dispatch_.cmd_bind_pipeline == nullptr ||
+        vulkan_dispatch_.cmd_push_constants == nullptr ||
+        vulkan_dispatch_.cmd_dispatch_indirect == nullptr) {
+        throwRendererContractViolation(
+            "executeComputeIndirect requires VulkanDispatch cmd_bind_pipeline, "
+            "cmd_push_constants, and cmd_dispatch_indirect",
+            LFS_SOURCE_SITE_CURRENT());
+    }
 
-    DEVICE_GUARD;
-
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
+    vulkan_dispatch_.cmd_bind_pipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline.pipeline);
 
     const std::size_t num_buffers = pipeline.buffer_layouts.size();
     std::vector<VkDescriptorBufferInfo> buffer_infos(num_buffers);
     std::vector<VkWriteDescriptorSet> writes(num_buffers);
     for (std::size_t idx = 0; idx < num_buffers; ++idx) {
         const int binding = pipeline.buffer_layouts[idx];
-        if (buffers[binding].buffer == VK_NULL_HANDLE)
-            _CHECK_FATAL("Buffer " + std::to_string(binding) + " is NULL");
+        if (binding < 0 || static_cast<std::size_t>(binding) >= buffers.size()) {
+            lfs::rendering::throw_renderer_contract(
+                std::format(
+                    "executeComputeIndirect binding index is outside the supplied buffer array (pipeline='{}', binding={}, buffer_count={}, descriptor_index={})",
+                    pipeline.diagnostic_name,
+                    binding,
+                    buffers.size(),
+                    idx),
+                LFS_SOURCE_SITE_CURRENT());
+        }
+        const VkDeviceSize range = buffers[binding].size != 0
+                                       ? buffers[binding].size
+                                       : buffers[binding].capacity;
+        validateBufferRange(buffers[binding], 0, range, "executeComputeIndirect descriptor binding");
         buffer_infos[idx].buffer = buffers[binding].buffer;
         buffer_infos[idx].offset = buffers[binding].offset;
         // Bind the in-use [offset, offset+size) range. For owned buffers size
         // is set by resizeDeviceBuffer / createBuffer to match the requested
         // allocation; for coalesced views into a parent allocation it's the
-        // sub-region's payload byte count. Falling back to allocSize when size
+        // sub-region's payload byte count. Falling back to the view capacity when size
         // is zero keeps any (rare) legacy callers working without surprises.
-        buffer_infos[idx].range = buffers[binding].size != 0
-                                      ? buffers[binding].size
-                                      : buffers[binding].allocSize;
+        buffer_infos[idx].range = range;
 
         writes[idx].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[idx].dstSet = VK_NULL_HANDLE;
@@ -1001,14 +2251,184 @@ void VulkanGSPipeline::executeComputeIndirect(
                                 writes.data());
 
     if (uniformsPtr) {
-        vkCmdPushConstants(
+        vulkan_dispatch_.cmd_push_constants(
             command_buffer,
             pipeline.pipeline_layout,
             VK_SHADER_STAGE_COMPUTE_BIT,
             0, (uint32_t)uniformSize, uniformsPtr);
     }
 
-    vkCmdDispatchIndirect(command_buffer, indirect_buffer.buffer, indirect_buffer.offset + indirect_offset);
+    vulkan_dispatch_.cmd_dispatch_indirect(
+        command_buffer, indirect_buffer.buffer, indirect_buffer.offset + indirect_offset);
+}
+
+void VulkanGSPipeline::executeCompute(
+    std::vector<std::pair<size_t, size_t>> dims,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<_VulkanBuffer>& buffers) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    // Epic #1496 §3.4: untagged path invalidates every bound buffer (mixed-mode safety).
+    for (const auto& buffer : buffers) {
+        barrier_planner_.invalidate(buffer.buffer);
+    }
+
+    DEVICE_GUARD;
+    recordComputeDispatch(std::move(dims), uniformsPtr, uniformSize, pipeline, buffers);
+}
+
+void VulkanGSPipeline::executeCompute(
+    std::vector<std::pair<size_t, size_t>> dims,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<TaggedBinding>& bindings) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeCompute requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    // Dense ordered list: same indexing as the untagged buffer array.
+    std::vector<_VulkanBuffer> buffers;
+    buffers.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        buffers.push_back(binding.buffer);
+    }
+
+    std::vector<lfs::rendering::vulkan::DeclaredAccess> accesses;
+    accesses.reserve(bindings.size());
+    for (std::size_t i = 0; i < bindings.size(); ++i) {
+        accesses.push_back(lfs::rendering::vulkan::DeclaredAccess{
+            .buffer = &buffers[i],
+            .use = bindings[i].use,
+        });
+    }
+
+    DEVICE_GUARD;
+
+    const auto planned = barrier_planner_.plan(accesses);
+    // Coalescing: one barrier2 for the whole planned set (0 or 1 emission).
+    emitPlannedBufferBarriers(planned);
+#ifndef NDEBUG
+    // Spec §2.6: each tagged dispatch emits ≤ 1 vkCmdPipelineBarrier2 call.
+    const int barrier2_emissions = planned.empty() ? 0 : 1;
+    assert(barrier2_emissions <= 1);
+#endif
+
+    recordComputeDispatch(std::move(dims), uniformsPtr, uniformSize, pipeline, buffers);
+}
+
+void VulkanGSPipeline::executeComputeIndirect(
+    const _VulkanBuffer& indirect_buffer,
+    VkDeviceSize indirect_offset,
+    const void* uniformsPtr, size_t uniformSize,
+    _ComputePipeline& pipeline,
+    const std::vector<TaggedBinding>& bindings) {
+    if (uniformSize > MAX_UNIFORM_SIZE || (uniformSize > 0 && uniformsPtr == nullptr)) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect push constants require a valid pointer within the VkSplat limit (pipeline='{}', pointer={:#x}, requested_bytes={}, max_bytes={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(uniformsPtr),
+                uniformSize,
+                MAX_UNIFORM_SIZE),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    if ((indirect_offset & 3u) != 0) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect requires a four-byte-aligned VkDispatchIndirectCommand offset (pipeline='{}', buffer={:#x}, base_offset={}, relative_offset={}, relative_offset_mod4={})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(indirect_buffer.buffer),
+                indirect_buffer.offset,
+                indirect_offset,
+                indirect_offset & 3u),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+    validateBufferRange(indirect_buffer,
+                        indirect_offset,
+                        sizeof(VkDispatchIndirectCommand),
+                        "executeComputeIndirect dispatch arguments");
+    if (pipeline.pipeline == VK_NULL_HANDLE || pipeline.pipeline_layout == VK_NULL_HANDLE ||
+        vk_cmd_push_descriptor_set_ == nullptr) {
+        lfs::rendering::throw_renderer_contract(
+            std::format(
+                "executeComputeIndirect requires a complete compute pipeline (pipeline='{}', pipeline_handle={:#x}, layout={:#x}, push_descriptor_proc={:#x})",
+                pipeline.diagnostic_name,
+                lfs::rendering::vkHandleValue(pipeline.pipeline),
+                lfs::rendering::vkHandleValue(pipeline.pipeline_layout),
+                lfs::rendering::vkHandleValue(vk_cmd_push_descriptor_set_)),
+            LFS_SOURCE_SITE_CURRENT());
+    }
+
+    std::vector<_VulkanBuffer> buffers;
+    buffers.reserve(bindings.size());
+    for (const auto& binding : bindings) {
+        buffers.push_back(binding.buffer);
+    }
+
+    std::vector<lfs::rendering::vulkan::DeclaredAccess> accesses;
+    accesses.reserve(bindings.size() + 1);
+    for (std::size_t i = 0; i < bindings.size(); ++i) {
+        accesses.push_back(lfs::rendering::vulkan::DeclaredAccess{
+            .buffer = &buffers[i],
+            .use = bindings[i].use,
+        });
+    }
+    // Implicit IndirectRead on the dispatch-args buffer (spec §3.1).
+    accesses.push_back(lfs::rendering::vulkan::DeclaredAccess{
+        .buffer = &indirect_buffer,
+        .use = lfs::rendering::vulkan::BufferUse::IndirectRead,
+    });
+
+    DEVICE_GUARD;
+
+    const auto planned = barrier_planner_.plan(accesses);
+    emitPlannedBufferBarriers(planned);
+#ifndef NDEBUG
+    const int barrier2_emissions = planned.empty() ? 0 : 1;
+    assert(barrier2_emissions <= 1);
+#endif
+
+    recordComputeDispatchIndirect(
+        indirect_buffer, indirect_offset, uniformsPtr, uniformSize, pipeline, buffers);
 }
 
 void VulkanGSPipeline::destroyComputePipeline(_ComputePipeline& pipeline) {

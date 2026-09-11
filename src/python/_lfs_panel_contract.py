@@ -23,7 +23,7 @@ class Panel:
     style: str = ''
     height_mode: PanelHeightMode = DEFAULT_HEIGHT_MODE
     update_interval_ms: int = 100
-    update_policy: str = 'interval'
+    update_policy: str = 'dirty'
 
     @classmethod
     def _class_id(cls) -> str:
@@ -58,6 +58,14 @@ class Panel:
 
     def on_scene_changed(self, doc):
         del doc
+
+    def capture_chrome(self):
+        '''Optional per-panel GUIL payload. Return a dict or None.'''
+        return None
+
+    def apply_chrome(self, payload):
+        '''Restore capture_chrome() output. Missing keys keep defaults.'''
+        del payload
 """
 
 

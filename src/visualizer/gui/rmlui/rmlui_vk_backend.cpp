@@ -3,34 +3,37 @@
  * SPDX-License-Identifier: MIT */
 
 #include "gui/rmlui/rmlui_vk_backend.hpp"
+#include "core/error.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "gui/rmlui/vulkan/rmlui_shaders_spv.hpp"
 #include "internal/resource_paths.hpp"
+#include "io/project_container.hpp"
 #include "python/python_runtime.hpp"
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/FileInterface.h>
 #include <RmlUi/Core/Log.h>
 #include <RmlUi/Core/Math.h>
-#include <RmlUi/Core/Platform.h>
 #include <RmlUi/Core/Profiling.h>
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
-#include <semaphore>
 #include <stb_image.h>
 #include <string.h>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 
 // AlignUp(314, 256) = 512
 template <typename T>
@@ -38,12 +41,24 @@ static T AlignUp(T val, T alignment) {
     return (val + alignment - (T)1) & ~(alignment - (T)1);
 }
 
-VkValidationFeaturesEXT debug_validation_features_ext = {};
-VkValidationFeatureEnableEXT debug_validation_features_ext_requested[] = {
-    VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
-    VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
-    VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
-};
+static bool SupportsHostImageCopyDestinationLayout(VkPhysicalDevice physical_device,
+                                                   VkImageLayout layout) {
+    VkPhysicalDeviceHostImageCopyPropertiesEXT host_copy_properties{};
+    host_copy_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES_EXT;
+
+    VkPhysicalDeviceProperties2 properties{};
+    properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    properties.pNext = &host_copy_properties;
+    vkGetPhysicalDeviceProperties2(physical_device, &properties);
+
+    std::vector<VkImageLayout> destination_layouts(host_copy_properties.copyDstLayoutCount);
+    host_copy_properties.pCopyDstLayouts = destination_layouts.data();
+    vkGetPhysicalDeviceProperties2(physical_device, &properties);
+    destination_layouts.resize(host_copy_properties.copyDstLayoutCount);
+
+    return std::find(destination_layouts.begin(), destination_layouts.end(), layout) !=
+           destination_layouts.end();
+}
 
 #ifdef RMLUI_VK_DEBUG
 static Rml::String FormatByteSize(VkDeviceSize size) noexcept {
@@ -55,25 +70,6 @@ static Rml::String FormatByteSize(VkDeviceSize size) noexcept {
     return Rml::CreateString("%g MB", double(size) / double(K * K));
 }
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL MyDebugReportCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severityFlags,
-                                                            VkDebugUtilsMessageTypeFlagsEXT /*messageTypeFlags*/, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* /*pUserData*/) {
-    if (severityFlags & VkDebugUtilsMessageSeverityFlagBitsEXT::VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-        return VK_FALSE;
-    }
-
-#ifdef RMLUI_PLATFORM_WIN32
-    if (severityFlags & VkDebugUtilsMessageSeverityFlagBitsEXT::VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        // some logs are not passed to our UI, because of early calling for explicity I put native log output
-        OutputDebugString(TEXT("\n"));
-        OutputDebugStringA(pCallbackData->pMessage);
-    }
-#endif
-
-    Rml::Log::Message(Rml::Log::LT_ERROR, "[Vulkan][VALIDATION] %s ", pCallbackData->pMessage);
-
-    return VK_FALSE;
-}
-
 static void InsertDebugUtilsLabel(VkDevice device, VkCommandBuffer command_buffer, const VkDebugUtilsLabelEXT& label) noexcept {
     auto* const fn = reinterpret_cast<PFN_vkCmdInsertDebugUtilsLabelEXT>(
         vkGetDeviceProcAddr(device, "vkCmdInsertDebugUtilsLabelEXT"));
@@ -81,12 +77,6 @@ static void InsertDebugUtilsLabel(VkDevice device, VkCommandBuffer command_buffe
         fn(command_buffer, &label);
 }
 
-static void SetDebugUtilsObjectName(VkDevice device, const VkDebugUtilsObjectNameInfoEXT& name_info) noexcept {
-    auto* const fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
-        vkGetDeviceProcAddr(device, "vkSetDebugUtilsObjectNameEXT"));
-    if (fn)
-        (void)fn(device, &name_info);
-}
 #endif
 
 namespace {
@@ -94,6 +84,7 @@ namespace {
     struct PreviewTextureRequest {
         std::filesystem::path path;
         int max_size = 0;
+        bool embedded_project_preview = false;
     };
 
     bool IsPreviewTextureSource(std::string_view source) {
@@ -215,6 +206,8 @@ namespace {
                 const std::string_view value = part.substr(eq + 1);
                 if (key == "path") {
                     request.path = lfs::core::utf8_to_path(PercentDecode(value));
+                } else if (key == "kind") {
+                    request.embedded_project_preview = value == "licht";
                 } else if (key == "thumb") {
                     thumb_size = ParseIntParam(value);
                 } else if (key == "pmw") {
@@ -269,17 +262,10 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_is_use_stencil_pipeline{false},
                                            m_width{},
                                            m_height{},
-                                           m_queue_index_present{},
                                            m_queue_index_graphics{},
-                                           m_queue_index_compute{},
-                                           m_semaphore_index{},
-                                           m_semaphore_index_previous{},
-                                           m_image_index{},
                                            m_p_instance{},
                                            m_p_device{},
                                            m_p_physical_device{},
-                                           m_p_surface{},
-                                           m_p_swapchain{},
                                            m_p_pipeline_cache{},
                                            m_p_allocator{},
                                            m_p_current_command_buffer{},
@@ -295,24 +281,19 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
                                            m_p_sampler_linear{},
                                            m_p_sampler_nearest{},
                                            m_scissor{},
+                                           m_scissor_requested{},
                                            m_scissor_original{},
                                            m_viewport{},
-                                           m_p_queue_present{},
                                            m_p_queue_graphics{},
-                                           m_p_queue_compute{},
-#ifdef RMLUI_VK_DEBUG
-                                           m_debug_messenger{},
-#endif
                                            m_swapchain_format{},
                                            m_depth_stencil_format{},
-                                           m_texture_depthstencil{},
                                            m_pending_for_deletion_textures_by_frames{},
+                                           m_live_textures{},
                                            m_render_layers{},
                                            m_external_swapchain_image{},
                                            m_external_swapchain_image_view{},
                                            m_external_depth_stencil_image_view{},
                                            m_external_swapchain_layout{VK_IMAGE_LAYOUT_UNDEFINED},
-                                           m_depth_stencil_layout{VK_IMAGE_LAYOUT_UNDEFINED},
                                            m_active_render_target{active_render_target_t::None},
                                            m_active_layer{},
                                            m_render_layer_stack_size{} {
@@ -320,7 +301,9 @@ RenderInterface_VK::RenderInterface_VK() : m_is_transform_enabled{false},
     m_rml_transform = Rml::Matrix4f::Identity();
 }
 
-RenderInterface_VK::~RenderInterface_VK() {}
+RenderInterface_VK::~RenderInterface_VK() {
+    StopPreviewWorkerPool();
+}
 
 std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view, VkSampler sampler,
                                                           int width, int height) {
@@ -333,6 +316,41 @@ std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view
                   static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
                   width, height);
     return std::string(buf);
+}
+
+void RenderInterface_VK::SetTextureDebugName(const Rml::TextureHandle texture_handle,
+                                             const std::string_view debug_name) const {
+    const auto* texture = reinterpret_cast<const texture_data_t*>(texture_handle);
+    if (!texture || debug_name.empty())
+        return;
+
+    const std::string image_name = std::format("rmlui.cache[{}].image", debug_name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)texture->m_p_vk_image,
+                                  image_name.c_str());
+    const std::string view_name = std::format("rmlui.cache[{}].view", debug_name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)texture->m_p_vk_image_view,
+                                  view_name.c_str());
+}
+
+RenderInterface_VK::VmaStatistics RenderInterface_VK::QueryVmaStatistics() const {
+    VmaStatistics result{};
+    if (m_p_allocator == VK_NULL_HANDLE || m_p_physical_device == VK_NULL_HANDLE)
+        return result;
+
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    vkGetPhysicalDeviceMemoryProperties(m_p_physical_device, &memory_properties);
+
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(m_p_allocator, budgets.data());
+    for (std::uint32_t i = 0; i < memory_properties.memoryHeapCount; ++i) {
+        if ((memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0)
+            continue;
+        result.block_bytes += budgets[i].statistics.blockBytes;
+        result.allocation_bytes += budgets[i].statistics.allocationBytes;
+    }
+    return result;
 }
 
 Rml::CompiledGeometryHandle RenderInterface_VK::CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) {
@@ -492,13 +510,27 @@ void RenderInterface_VK::EnableScissorRegion(bool enable) {
     if (m_is_use_scissor_specified == false) {
         m_is_transformed_scissor_enabled = false;
         m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
-        m_scissor = ContextClipScissor();
+        m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
         vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
     }
 }
 
 void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
     if (m_is_use_scissor_specified) {
+        const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
+        const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
+        const float right_f = left_f + static_cast<float>(region.Width());
+        const float bottom_f = top_f + static_cast<float>(region.Height());
+        const int requested_left = static_cast<int>(std::floor(left_f));
+        const int requested_top = static_cast<int>(std::floor(top_f));
+        const int requested_right = static_cast<int>(std::ceil(right_f));
+        const int requested_bottom = static_cast<int>(std::ceil(bottom_f));
+        m_scissor_requested.offset = {requested_left, requested_top};
+        m_scissor_requested.extent = {
+            static_cast<uint32_t>(std::max(0, requested_right - requested_left)),
+            static_cast<uint32_t>(std::max(0, requested_bottom - requested_top)),
+        };
+
         if (m_is_transform_enabled) {
             Rml::Vertex vertices[4];
 
@@ -510,7 +542,7 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
             int indices[6] = {0, 2, 1, 0, 3, 2};
 
             m_is_use_stencil_pipeline = true;
-            m_scissor = ContextClipScissor();
+            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
             vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
 
 #ifdef RMLUI_VK_DEBUG
@@ -537,8 +569,10 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
 
             VkClearRect clear_rect = {};
             clear_rect.layerCount = 1;
-            clear_rect.rect.extent.width = m_width;
-            clear_rect.rect.extent.height = m_height;
+            clear_rect.rect = ClampToCacheCaptureArea(VkRect2D{
+                {0, 0},
+                {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)},
+            });
 
             vkCmdClearAttachments(m_p_current_command_buffer, 1, &clear_attachment, 1, &clear_rect);
 
@@ -551,25 +585,21 @@ void RenderInterface_VK::SetScissorRegion(Rml::Rectanglei region) {
 
             m_is_transformed_scissor_enabled = true;
             m_is_apply_to_regular_geometry_stencil = true;
-            m_scissor = ContextClipScissor();
+            m_scissor = ClampToCacheCaptureArea(ContextClipScissor());
             vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor);
         } else {
             m_is_transformed_scissor_enabled = false;
             m_is_apply_to_regular_geometry_stencil = m_is_clip_mask_enabled;
             // Enclose the translated rect; fractional panel offsets otherwise clip text edges.
-            const float left_f = static_cast<float>(region.Left()) + m_context_offset.x;
-            const float top_f = static_cast<float>(region.Top()) + m_context_offset.y;
-            const float right_f = left_f + static_cast<float>(region.Width());
-            const float bottom_f = top_f + static_cast<float>(region.Height());
-            const int left = Rml::Math::Clamp(static_cast<int>(std::floor(left_f)), 0, m_width);
-            const int top = Rml::Math::Clamp(static_cast<int>(std::floor(top_f)), 0, m_height);
-            const int right = Rml::Math::Clamp(static_cast<int>(std::ceil(right_f)), 0, m_width);
-            const int bottom = Rml::Math::Clamp(static_cast<int>(std::ceil(bottom_f)), 0, m_height);
+            const int left = Rml::Math::Clamp(requested_left, 0, m_width);
+            const int top = Rml::Math::Clamp(requested_top, 0, m_height);
+            const int right = Rml::Math::Clamp(requested_right, 0, m_width);
+            const int bottom = Rml::Math::Clamp(requested_bottom, 0, m_height);
             m_scissor.offset.x = left;
             m_scissor.offset.y = top;
             m_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
             m_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-            m_scissor = IntersectContextClip(m_scissor);
+            m_scissor = ClampToCacheCaptureArea(IntersectContextClip(m_scissor));
 
 #ifdef RMLUI_VK_DEBUG
             VkDebugUtilsLabelEXT info{};
@@ -608,8 +638,10 @@ void RenderInterface_VK::RenderToClipMask(Rml::ClipMaskOperation operation, Rml:
 
     VkClearRect clear_rect = {};
     clear_rect.layerCount = 1;
-    clear_rect.rect.extent.width = m_width;
-    clear_rect.rect.extent.height = m_height;
+    clear_rect.rect = ClampToCacheCaptureArea(VkRect2D{
+        {0, 0},
+        {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height)},
+    });
 
     // Match RmlUi's legacy compatibility behavior for intersect until the Vulkan renderer has
     // stencil increment/decrement pipelines for true nested clip-mask intersections.
@@ -676,7 +708,7 @@ void RenderInterface_VK::CompositeLayers(Rml::LayerHandle source, Rml::LayerHand
     }
 
     EndActiveRendering();
-    TransitionImageLayout(source_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
+    TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     source_layer->m_color_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
@@ -715,113 +747,190 @@ Rml::TextureHandle RenderInterface_VK::SaveLayerAsTexture() {
     if (m_p_current_command_buffer == nullptr || m_render_layer_stack_size <= 0)
         return {};
 
+    const render_layer_t* source_layer = GetRenderLayer(static_cast<Rml::LayerHandle>(m_render_layer_stack_size));
+    if (!source_layer || source_layer->width <= 0 || source_layer->height <= 0)
+        return {};
+
+    const VkRect2D declared_bounds = m_is_use_scissor_specified
+                                         ? m_scissor_requested
+                                         : VkRect2D{{0, 0}, {static_cast<uint32_t>(source_layer->width), static_cast<uint32_t>(source_layer->height)}};
+    return SaveLayerRegionAsTexture(declared_bounds, {});
+}
+
+Rml::TextureHandle RenderInterface_VK::SaveLayerRegionAsTexture(const VkRect2D region,
+                                                                const Rml::TextureHandle reuse_texture) {
+    if (m_p_current_command_buffer == nullptr || m_render_layer_stack_size <= 0)
+        return {};
+
     render_layer_t* source_layer = GetRenderLayer(static_cast<Rml::LayerHandle>(m_render_layer_stack_size));
     if (!source_layer)
         return {};
     if (source_layer->width <= 0 || source_layer->height <= 0)
         return {};
 
-    VkRect2D bounds = m_is_use_scissor_specified ? m_scissor : ContextClipScissor();
-    bounds = IntersectContextClip(bounds);
-    bounds.offset.x = Rml::Math::Clamp(bounds.offset.x, 0, source_layer->width);
-    bounds.offset.y = Rml::Math::Clamp(bounds.offset.y, 0, source_layer->height);
-    if (bounds.offset.x + static_cast<int>(bounds.extent.width) > source_layer->width)
-        bounds.extent.width = static_cast<uint32_t>(source_layer->width - bounds.offset.x);
-    if (bounds.offset.y + static_cast<int>(bounds.extent.height) > source_layer->height)
-        bounds.extent.height = static_cast<uint32_t>(source_layer->height - bounds.offset.y);
-    if (bounds.extent.width == 0 || bounds.extent.height == 0)
+    VkRect2D declared_bounds = region;
+    const int declared_left = Rml::Math::Clamp(declared_bounds.offset.x, 0, source_layer->width);
+    const int declared_top = Rml::Math::Clamp(declared_bounds.offset.y, 0, source_layer->height);
+    const int declared_right = Rml::Math::Clamp(
+        declared_bounds.offset.x + static_cast<int>(declared_bounds.extent.width), 0, source_layer->width);
+    const int declared_bottom = Rml::Math::Clamp(
+        declared_bounds.offset.y + static_cast<int>(declared_bounds.extent.height), 0, source_layer->height);
+    declared_bounds.offset = {declared_left, declared_top};
+    declared_bounds.extent = {
+        static_cast<uint32_t>(std::max(0, declared_right - declared_left)),
+        static_cast<uint32_t>(std::max(0, declared_bottom - declared_top)),
+    };
+    if (declared_bounds.extent.width == 0 || declared_bounds.extent.height == 0)
         return {};
 
     EndActiveRendering();
 
-    auto* texture = new texture_data_t{};
-    const VkFormat format = m_swapchain_format.format;
-    const VkExtent3D extent{bounds.extent.width, bounds.extent.height, 1};
+    VkRect2D capture_bounds = IntersectContextClip(declared_bounds);
+    capture_bounds = ClampToCacheCaptureArea(capture_bounds);
+    const bool capture_covers_declared =
+        capture_bounds.offset.x == declared_bounds.offset.x &&
+        capture_bounds.offset.y == declared_bounds.offset.y &&
+        capture_bounds.extent.width == declared_bounds.extent.width &&
+        capture_bounds.extent.height == declared_bounds.extent.height;
 
-    VkImageCreateInfo image_info{};
-    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    image_info.imageType = VK_IMAGE_TYPE_2D;
-    image_info.format = format;
-    image_info.extent = extent;
-    image_info.mipLevels = 1;
-    image_info.arrayLayers = 1;
-    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    const int declared_w = static_cast<int>(declared_bounds.extent.width);
+    const int declared_h = static_cast<int>(declared_bounds.extent.height);
+    const VkExtent3D extent{declared_bounds.extent.width, declared_bounds.extent.height, 1};
 
-    VmaAllocationCreateInfo allocation_info{};
-    allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-
-    VmaAllocationInfo allocation_stats{};
-    VkResult status = vmaCreateImage(m_p_allocator,
-                                     &image_info,
-                                     &allocation_info,
-                                     &texture->m_p_vk_image,
-                                     &texture->m_p_vma_allocation,
-                                     &allocation_stats);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture");
-    if (status != VK_SUCCESS) {
-        delete texture;
-        return {};
+    texture_data_t* texture = nullptr;
+    bool reusing = false;
+    if (reuse_texture != 0) {
+        auto* candidate = reinterpret_cast<texture_data_t*>(reuse_texture);
+        if (candidate && candidate->m_p_vk_image != VK_NULL_HANDLE && candidate->m_p_vk_image_view != VK_NULL_HANDLE &&
+            candidate->m_width == declared_w && candidate->m_height == declared_h) {
+            texture = candidate;
+            reusing = true;
+        }
     }
-    texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
-    texture->m_vram_label = TextureVramLabel("saved_layer",
-                                             "clip",
-                                             static_cast<int>(bounds.extent.width),
-                                             static_cast<int>(bounds.extent.height),
-                                             texture);
-    texture->m_vram_allocation_size = allocation_stats.size;
-    RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, texture->m_vram_allocation_size);
 
-    VkImageViewCreateInfo view_info{};
-    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    view_info.image = texture->m_p_vk_image;
-    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    view_info.format = format;
-    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    view_info.subresourceRange.baseMipLevel = 0;
-    view_info.subresourceRange.levelCount = 1;
-    view_info.subresourceRange.baseArrayLayer = 0;
-    view_info.subresourceRange.layerCount = 1;
-    status = vkCreateImageView(m_p_device, &view_info, nullptr, &texture->m_p_vk_image_view);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture view");
-    if (status != VK_SUCCESS) {
-        if (!texture->m_vram_scope.empty() && !texture->m_vram_label.empty())
-            RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, 0);
-        vmaDestroyImage(m_p_allocator, texture->m_p_vk_image, texture->m_p_vma_allocation);
-        delete texture;
-        return {};
+    if (!reusing) {
+        texture = new texture_data_t{};
+        const VkFormat format = m_swapchain_format.format;
+
+        VkImageCreateInfo image_info{};
+        image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        image_info.imageType = VK_IMAGE_TYPE_2D;
+        image_info.format = format;
+        image_info.extent = extent;
+        image_info.mipLevels = 1;
+        image_info.arrayLayers = 1;
+        image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+        image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+        image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VmaAllocationCreateInfo allocation_info{};
+        allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+
+        VmaAllocationInfo allocation_stats{};
+        VkResult status = vmaCreateImage(m_p_allocator,
+                                         &image_info,
+                                         &allocation_info,
+                                         &texture->m_p_vk_image,
+                                         &texture->m_p_vma_allocation,
+                                         &allocation_stats);
+        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture");
+        if (status != VK_SUCCESS) {
+            delete texture;
+            return {};
+        }
+        (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                      (uint64_t)texture->m_p_vk_image,
+                                      "rmlui.saved-layer.image");
+        vmaSetAllocationName(m_p_allocator,
+                             texture->m_p_vma_allocation,
+                             "RmlUi saved layer texture");
+        texture->m_barrier_generation = ++m_image_barrier_generation;
+        texture->m_width = declared_w;
+        texture->m_height = declared_h;
+        texture->m_vram_scope = "vulkan.rmlui.saved_layer_texture";
+        texture->m_vram_label = TextureVramLabel("saved_layer",
+                                                 "clip",
+                                                 declared_w,
+                                                 declared_h,
+                                                 texture);
+        texture->m_vram_allocation_size = allocation_stats.size;
+        RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, texture->m_vram_allocation_size);
+
+        VkImageViewCreateInfo view_info{};
+        view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        view_info.image = texture->m_p_vk_image;
+        view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        view_info.format = format;
+        view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        view_info.subresourceRange.baseMipLevel = 0;
+        view_info.subresourceRange.levelCount = 1;
+        view_info.subresourceRange.baseArrayLayer = 0;
+        view_info.subresourceRange.layerCount = 1;
+        status = vkCreateImageView(m_p_device, &view_info, nullptr, &texture->m_p_vk_image_view);
+        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create saved RmlUi layer texture view");
+        if (status != VK_SUCCESS) {
+            if (!texture->m_vram_scope.empty() && !texture->m_vram_label.empty())
+                RecordRmlUiVram(texture->m_vram_scope, texture->m_vram_label, 0);
+            vmaDestroyImage(m_p_allocator, texture->m_p_vk_image, texture->m_p_vma_allocation);
+            delete texture;
+            return {};
+        }
+        (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                      (uint64_t)texture->m_p_vk_image_view,
+                                      "rmlui.saved-layer.view");
+        texture->m_p_vk_sampler = m_p_sampler_linear;
     }
-    texture->m_p_vk_sampler = m_p_sampler_linear;
 
-    TransitionImageLayout(source_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
-                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    source_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    if (capture_bounds.extent.width > 0 && capture_bounds.extent.height > 0) {
+        TransitionImageLayout(source_layer->m_color.m_p_vk_image, source_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, source_layer->m_color_layout,
+                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        source_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    }
 
-    TransitionImageLayout(texture->m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    // Fresh images: UNDEFINED → TRANSFER_DST (discard). Reused cache textures were last in
+    // SHADER_READ_ONLY after composite sampling; WAR against those fragment reads on this queue.
+    const VkImageLayout dst_old_layout =
+        reusing ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, dst_old_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-    VkImageCopy copy_region{};
-    copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy_region.srcSubresource.mipLevel = 0;
-    copy_region.srcSubresource.baseArrayLayer = 0;
-    copy_region.srcSubresource.layerCount = 1;
-    copy_region.srcOffset = {bounds.offset.x, bounds.offset.y, 0};
-    copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copy_region.dstSubresource.mipLevel = 0;
-    copy_region.dstSubresource.baseArrayLayer = 0;
-    copy_region.dstSubresource.layerCount = 1;
-    copy_region.dstOffset = {0, 0, 0};
-    copy_region.extent = extent;
+    if (!capture_covers_declared) {
+        VkClearColorValue clear_color{};
+        VkImageSubresourceRange clear_range{};
+        clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        clear_range.levelCount = 1;
+        clear_range.layerCount = 1;
+        vkCmdClearColorImage(m_p_current_command_buffer, texture->m_p_vk_image,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &clear_range);
+    }
 
-    vkCmdCopyImage(m_p_current_command_buffer, source_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                   texture->m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    if (capture_bounds.extent.width > 0 && capture_bounds.extent.height > 0) {
+        VkImageCopy copy_region{};
+        copy_region.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.srcSubresource.mipLevel = 0;
+        copy_region.srcSubresource.baseArrayLayer = 0;
+        copy_region.srcSubresource.layerCount = 1;
+        copy_region.srcOffset = {capture_bounds.offset.x, capture_bounds.offset.y, 0};
+        copy_region.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copy_region.dstSubresource.mipLevel = 0;
+        copy_region.dstSubresource.baseArrayLayer = 0;
+        copy_region.dstSubresource.layerCount = 1;
+        copy_region.dstOffset = {capture_bounds.offset.x - declared_bounds.offset.x,
+                                 capture_bounds.offset.y - declared_bounds.offset.y, 0};
+        copy_region.extent = {capture_bounds.extent.width, capture_bounds.extent.height, 1};
 
-    TransitionImageLayout(texture->m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        vkCmdCopyImage(m_p_current_command_buffer, source_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       texture->m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
+    }
+
+    TransitionImageLayout(texture->m_p_vk_image, texture->m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     BeginLayerRendering(static_cast<Rml::LayerHandle>(m_render_layer_stack_size), false);
 
+    if (!reusing)
+        RegisterLiveTexture(texture);
     return reinterpret_cast<Rml::TextureHandle>(texture);
 }
 
@@ -857,6 +966,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         texture->m_p_vma_allocation = VK_NULL_HANDLE;
         texture_dimensions.x = vk_request->width;
         texture_dimensions.y = vk_request->height;
+        RegisterLiveTexture(texture);
         return reinterpret_cast<Rml::TextureHandle>(texture);
     }
 
@@ -925,7 +1035,7 @@ Rml::TextureHandle RenderInterface_VK::LoadTexture(Rml::Vector2i& texture_dimens
         try {
             const auto path = lfs::vis::getAssetPath(asset_name);
             if (std::filesystem::exists(path))
-                return load_with_stbi(path.string());
+                return load_with_stbi(lfs::core::path_to_utf8(path));
         } catch (...) {
         }
         return 0;
@@ -1049,55 +1159,166 @@ Rml::TextureHandle RenderInterface_VK::LoadAsyncPreviewTexture(Rml::Vector2i& te
     m_async_preview_textures.push_back(state);
 
     try {
-        std::thread([state, path = request->path, max_size = request->max_size]() mutable {
-            auto result = DecodePreviewTexture(std::move(path), max_size);
-            {
-                std::lock_guard lock(state->mutex);
-                state->result = std::move(result);
-            }
-            state->ready.store(true, std::memory_order_release);
-            lfs::python::request_redraw();
-        }).detach();
+        EnsurePreviewWorkerPool();
+        EnqueuePreviewWork(preview_work_t{
+            state, request->path, request->max_size, request->embedded_project_preview});
     } catch (const std::exception& e) {
-        LOG_WARN("Failed to start async preview texture worker for '{}': {}", lfs::core::path_to_utf8(request->path), e.what());
+        LOG_WARN("Failed to queue async preview texture worker for '{}': {}",
+                 lfs::core::path_to_utf8(request->path), e.what());
         DropAsyncPreviewTexture(texture);
     }
 
     return handle;
 }
 
-RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewTexture(std::filesystem::path path, const int max_size) {
-    static std::counting_semaphore<4> decode_slots(4);
-    struct DecodeSlotGuard {
-        std::counting_semaphore<4>& slots;
-        explicit DecodeSlotGuard(std::counting_semaphore<4>& s) : slots(s) { slots.acquire(); }
-        ~DecodeSlotGuard() { slots.release(); }
-    };
+void RenderInterface_VK::EnsurePreviewWorkerPool() {
+    std::lock_guard lock(m_preview_queue_mutex);
+    if (!m_preview_workers.empty())
+        return;
+    m_preview_workers_stopping = false;
+    constexpr std::size_t kWorkerCount = 3;
+    for (std::size_t i = 0; i < kWorkerCount; ++i) {
+        m_preview_workers.emplace_back([this] {
+            for (;;) {
+                preview_work_t work;
+                {
+                    std::unique_lock queue_lock(m_preview_queue_mutex);
+                    m_preview_queue_cv.wait(queue_lock, [this] {
+                        return m_preview_workers_stopping || !m_preview_queue.empty();
+                    });
+                    if (m_preview_workers_stopping && m_preview_queue.empty())
+                        return;
+                    work = std::move(m_preview_queue.front());
+                    m_preview_queue.pop_front();
+                }
+                if (!work.state || work.state->cancelled.load(std::memory_order_acquire))
+                    continue;
+                auto result = DecodePreviewTexture(
+                    std::move(work.path), work.max_size, work.embedded_project_preview);
+                if (work.state->cancelled.load(std::memory_order_acquire))
+                    continue;
+                {
+                    std::lock_guard result_lock(work.state->mutex);
+                    work.state->result = std::move(result);
+                }
+                work.state->ready.store(true, std::memory_order_release);
+                lfs::python::request_redraw();
+            }
+        });
+    }
+}
 
-    DecodeSlotGuard guard(decode_slots);
+void RenderInterface_VK::EnqueuePreviewWork(preview_work_t work) {
+    {
+        std::lock_guard lock(m_preview_queue_mutex);
+        if (m_preview_workers_stopping)
+            throw std::runtime_error("preview worker pool is stopping");
+        m_preview_queue.emplace_back(std::move(work));
+    }
+    m_preview_queue_cv.notify_one();
+}
 
+void RenderInterface_VK::StopPreviewWorkerPool() noexcept {
+    {
+        std::lock_guard lock(m_preview_queue_mutex);
+        m_preview_workers_stopping = true;
+        m_preview_queue.clear();
+    }
+    m_preview_queue_cv.notify_all();
+    for (auto& worker : m_preview_workers) {
+        if (worker.joinable())
+            worker.join();
+    }
+    m_preview_workers.clear();
+}
+
+RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewTexture(
+    std::filesystem::path path,
+    const int max_size,
+    const bool embedded_project_preview) {
     async_preview_result_t result;
     unsigned char* data = nullptr;
     try {
-        auto [pixels, width, height, channels] = lfs::core::load_image(path, -1, max_size);
+        int width = 0;
+        int height = 0;
+        int channels = 0;
+        unsigned char* pixels = nullptr;
+        if (embedded_project_preview) {
+            auto reader = lfs::io::project::ProjectReader::open(path);
+            if (!reader) {
+                LOG_WARN("Failed to inspect embedded project preview '{}': {}",
+                         lfs::core::path_to_utf8(path),
+                         lfs::format_for_developer(reader.error()));
+                return result;
+            }
+            auto preview = reader->read_preview();
+            if (!preview) {
+                LOG_WARN("Failed to read embedded project preview '{}': {}",
+                         lfs::core::path_to_utf8(path),
+                         lfs::format_for_developer(preview.error()));
+                return result;
+            }
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(preview->data());
+            std::tie(pixels, width, height, channels) =
+                lfs::core::load_image_from_memory(bytes, preview->size());
+        } else {
+            std::tie(pixels, width, height, channels) =
+                lfs::core::load_image_thumbnail(path, max_size);
+        }
         data = pixels;
         if (pixels && width > 0 && height > 0 && channels > 0) {
-            const std::size_t pixel_count = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
-            result.pixels.resize(pixel_count * 4u);
-            for (std::size_t i = 0; i < pixel_count; ++i) {
-                const unsigned char* src = pixels + i * static_cast<std::size_t>(channels);
-                const unsigned char r = src[0];
-                const unsigned char g = channels > 1 ? src[1] : r;
-                const unsigned char b = channels > 2 ? src[2] : r;
-                const unsigned char a = channels > 3 ? src[3] : 255;
-                Rml::byte* dst = result.pixels.data() + i * 4u;
-                dst[0] = static_cast<Rml::byte>((static_cast<unsigned int>(r) * a + 127u) / 255u);
-                dst[1] = static_cast<Rml::byte>((static_cast<unsigned int>(g) * a + 127u) / 255u);
-                dst[2] = static_cast<Rml::byte>((static_cast<unsigned int>(b) * a + 127u) / 255u);
-                dst[3] = static_cast<Rml::byte>(a);
+            int output_width = width;
+            int output_height = height;
+            if (embedded_project_preview && max_size > 0 &&
+                std::max(width, height) > max_size) {
+                const double scale = static_cast<double>(max_size) /
+                                     static_cast<double>(std::max(width, height));
+                output_width = std::max(1, static_cast<int>(std::lround(width * scale)));
+                output_height = std::max(1, static_cast<int>(std::lround(height * scale)));
             }
-            result.width = width;
-            result.height = height;
+            const std::size_t pixel_count =
+                static_cast<std::size_t>(output_width) *
+                static_cast<std::size_t>(output_height);
+            result.pixels.resize(pixel_count * 4u);
+            const auto sample = [&](const double x, const double y, const int channel) {
+                const double sx = std::clamp(x, 0.0, static_cast<double>(width - 1));
+                const double sy = std::clamp(y, 0.0, static_cast<double>(height - 1));
+                const int x0 = static_cast<int>(sx);
+                const int y0 = static_cast<int>(sy);
+                const int x1 = std::min(width - 1, x0 + 1);
+                const int y1 = std::min(height - 1, y0 + 1);
+                const double fx = sx - x0;
+                const double fy = sy - y0;
+                const auto at = [&](const int px, const int py) {
+                    return static_cast<double>(pixels[(static_cast<std::size_t>(py) * width + px) * channels + channel]);
+                };
+                return (at(x0, y0) * (1.0 - fx) + at(x1, y0) * fx) * (1.0 - fy) +
+                       (at(x0, y1) * (1.0 - fx) + at(x1, y1) * fx) * fy;
+            };
+            for (int y = 0; y < output_height; ++y) {
+                for (int x = 0; x < output_width; ++x) {
+                    const double source_x = (x + 0.5) * width / output_width - 0.5;
+                    const double source_y = (y + 0.5) * height / output_height - 0.5;
+                    const unsigned char r = static_cast<unsigned char>(std::lround(sample(source_x, source_y, 0)));
+                    const unsigned char g = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 1 ? 1 : 0)));
+                    const unsigned char b = static_cast<unsigned char>(std::lround(sample(source_x, source_y, channels > 2 ? 2 : 0)));
+                    const unsigned char a = channels > 3 ? static_cast<unsigned char>(std::lround(sample(source_x, source_y, 3))) : 255;
+                    Rml::byte* dst = result.pixels.data() +
+                                     (static_cast<std::size_t>(y) *
+                                          static_cast<std::size_t>(output_width) +
+                                      static_cast<std::size_t>(x)) *
+                                         4u;
+                    dst[0] = static_cast<Rml::byte>(
+                        (static_cast<unsigned int>(r) * a + 127u) / 255u);
+                    dst[1] = static_cast<Rml::byte>(
+                        (static_cast<unsigned int>(g) * a + 127u) / 255u);
+                    dst[2] = static_cast<Rml::byte>(
+                        (static_cast<unsigned int>(b) * a + 127u) / 255u);
+                    dst[3] = static_cast<Rml::byte>(a);
+                }
+            }
+            result.width = output_width;
+            result.height = output_height;
         }
     } catch (const std::exception& e) {
         LOG_WARN("Failed to decode preview texture '{}': {}", lfs::core::path_to_utf8(path), e.what());
@@ -1108,8 +1329,10 @@ RenderInterface_VK::async_preview_result_t RenderInterface_VK::DecodePreviewText
 }
 
 void RenderInterface_VK::QueueTextureForDeferredDeletion(texture_data_t* texture) {
-    if (texture)
+    if (texture) {
+        UnregisterLiveTexture(texture);
         m_pending_for_deletion_textures_by_frames[ActiveResourceSlot()].push_back(texture);
+    }
 }
 
 void RenderInterface_VK::DropAsyncPreviewTexture(texture_data_t* texture) {
@@ -1118,6 +1341,7 @@ void RenderInterface_VK::DropAsyncPreviewTexture(texture_data_t* texture) {
     m_async_preview_textures.erase(std::remove_if(m_async_preview_textures.begin(), m_async_preview_textures.end(),
                                                   [texture](const std::shared_ptr<async_preview_state_t>& state) {
                                                       if (state && state->texture == texture) {
+                                                          state->cancelled.store(true, std::memory_order_release);
                                                           state->texture = nullptr;
                                                           return true;
                                                       }
@@ -1164,6 +1388,7 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
                 replacement->m_is_async_preview = true;
                 QueueTextureForDeferredDeletion(new texture_data_t(*state->texture));
                 *state->texture = *replacement;
+                UnregisterLiveTexture(replacement);
                 delete replacement;
                 --uploads_remaining;
                 uploaded_any = true;
@@ -1180,42 +1405,36 @@ void RenderInterface_VK::ProcessAsyncPreviewUploads() {
 }
 
 Rml::TextureHandle RenderInterface_VK::GenerateTexture(Rml::Span<const Rml::byte> source_data, Rml::Vector2i source_dimensions) {
-    RMLUI_ASSERT(source_data.data() && source_data.size() == size_t(source_dimensions.x * source_dimensions.y * 4));
     Rml::String source_name = "generated-texture";
     return CreateTexture(source_data, source_dimensions, source_name, m_p_sampler_nearest);
 }
 
-/*
-    How vulkan works with textures efficiently?
-
-    You need to create buffer that has CPU memory accessibility it means it uses your RAM memory for storing data and it has only CPU visibility (RAM)
-    After you create buffer that has GPU memory accessibility it means it uses by your video hardware and it has only VRAM (Video RAM) visibility
-
-    So you copy data to CPU_buffer and after you copy that thing to GPU_buffer, but delete CPU_buffer
-
-    So it means you "uploaded" data to GPU
-
-    Again, you need to "write" data into CPU buffer after you need to copy that data from buffer to GPU buffer and after that buffer go to GPU.
-
-    RAW_POINTER_DATA_BYTES_LITERALLY->COPY_TO->CPU->COPY_TO->GPU->Releasing_CPU <= that's how works uploading textures in Vulkan if you want to have
-    efficient handling otherwise it is cpu_to_gpu visibility and it means you create only ONE buffer that is accessible for CPU and for GPU, but it
-    will cause the worst performance...
-*/
 Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> source, Rml::Vector2i dimensions, const Rml::String& name,
                                                      VkSampler sampler) {
     RMLUI_ZoneScopedN("Vulkan - GenerateTexture");
 
-    RMLUI_VK_ASSERTMSG(!source.empty(), "you pushed not valid data for copying to buffer");
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you have to initialize Vma Allocator for this method");
+    const int width = dimensions.x;
+    const int height = dimensions.y;
+    const VkSampler texture_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
+    const bool size_overflows =
+        width > 0 && height > 0 &&
+        static_cast<std::size_t>(width) >
+            std::numeric_limits<std::size_t>::max() / static_cast<std::size_t>(height) / 4u;
+    const std::size_t expected_size =
+        width > 0 && height > 0 && !size_overflows
+            ? static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u
+            : 0u;
+    if (m_p_device == VK_NULL_HANDLE || m_p_allocator == VK_NULL_HANDLE ||
+        texture_sampler == VK_NULL_HANDLE || source.data() == nullptr || source.empty() ||
+        width <= 0 || height <= 0 || size_overflows || source.size() != expected_size) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Refusing invalid RmlUi texture '%s' (%dx%d, %zu bytes).",
+                          name.c_str(), width, height, source.size());
+        return {};
+    }
 
-    int width = dimensions.x;
-    int height = dimensions.y;
-
-    RMLUI_VK_ASSERTMSG(width, "invalid width");
-    RMLUI_VK_ASSERTMSG(height, "invalid height");
-
-    VkDeviceSize image_size = source.size();
-    VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
+    const VkDeviceSize image_size = source.size();
+    const VkFormat format = VkFormat::VK_FORMAT_R8G8B8A8_UNORM;
 
     const bool use_host_image_copy =
         m_pfn_copy_memory_to_image != nullptr && m_pfn_transition_image_layout != nullptr;
@@ -1225,7 +1444,7 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     extent_image.height = static_cast<uint32_t>(height);
     extent_image.depth = 1;
 
-    auto* p_texture = new texture_data_t{};
+    auto p_texture = std::make_unique<texture_data_t>();
 
     VkImageCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -1244,12 +1463,17 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     VmaAllocationCreateInfo info_allocation = {};
     info_allocation.usage = VMA_MEMORY_USAGE_GPU_ONLY;
 
-    VkImage p_image = nullptr;
-    VmaAllocation p_allocation = nullptr;
+    VkImage p_image = VK_NULL_HANDLE;
+    VmaAllocation p_allocation = VK_NULL_HANDLE;
 
     VmaAllocationInfo info_stats = {};
     VkResult status = vmaCreateImage(m_p_allocator, &info, &info_allocation, &p_image, &p_allocation, &info_stats);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateImage");
+    if (status != VK_SUCCESS || p_image == VK_NULL_HANDLE || p_allocation == VK_NULL_HANDLE) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to allocate RmlUi texture '%s' (%d).",
+                          name.c_str(), static_cast<int>(status));
+        return {};
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "Created texture '%s' [%dx%d, %s]", name.c_str(), dimensions.x, dimensions.y,
@@ -1258,27 +1482,54 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
     p_texture->m_p_vk_image = p_image;
     p_texture->m_p_vma_allocation = p_allocation;
+    p_texture->m_barrier_generation = ++m_image_barrier_generation;
+    const std::string image_debug_name = std::format("rmlui.texture.image[{}]", name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)p_texture->m_p_vk_image,
+                                  image_debug_name.c_str());
     p_texture->m_vram_scope = "vulkan.rmlui.texture";
-    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture);
+    p_texture->m_vram_label = TextureVramLabel("texture", name, width, height, p_texture.get());
     p_texture->m_vram_allocation_size = info_stats.size;
     RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, p_texture->m_vram_allocation_size);
 
-#ifdef RMLUI_VK_DEBUG
+    const auto fail_texture = [&](const char* operation, const VkResult result) -> Rml::TextureHandle {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to %s for RmlUi texture '%s' (%d).",
+                          operation, name.c_str(), static_cast<int>(result));
+        if (p_texture->m_p_vk_image_view != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_p_device, p_texture->m_p_vk_image_view, nullptr);
+            p_texture->m_p_vk_image_view = VK_NULL_HANDLE;
+        }
+        if (!p_texture->m_vram_scope.empty() && !p_texture->m_vram_label.empty()) {
+            RecordRmlUiVram(p_texture->m_vram_scope, p_texture->m_vram_label, 0);
+        }
+        if (p_texture->m_p_vk_image != VK_NULL_HANDLE &&
+            p_texture->m_p_vma_allocation != VK_NULL_HANDLE) {
+            vmaDestroyImage(m_p_allocator,
+                            p_texture->m_p_vk_image,
+                            p_texture->m_p_vma_allocation);
+            p_texture->m_p_vk_image = VK_NULL_HANDLE;
+            p_texture->m_p_vma_allocation = VK_NULL_HANDLE;
+        }
+        return {};
+    };
+
     vmaSetAllocationName(m_p_allocator, p_allocation, name.c_str());
-#endif
 
     if (use_host_image_copy) {
-        VkHostImageLayoutTransitionInfoEXT to_dst{};
-        to_dst.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
-        to_dst.image = p_image;
-        to_dst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_dst.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        to_dst.subresourceRange.baseMipLevel = 0;
-        to_dst.subresourceRange.levelCount = 1;
-        to_dst.subresourceRange.baseArrayLayer = 0;
-        to_dst.subresourceRange.layerCount = 1;
-        m_pfn_transition_image_layout(m_p_device, 1, &to_dst);
+        VkHostImageLayoutTransitionInfoEXT to_sampled{};
+        to_sampled.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
+        to_sampled.image = p_image;
+        to_sampled.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_sampled.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        to_sampled.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        to_sampled.subresourceRange.baseMipLevel = 0;
+        to_sampled.subresourceRange.levelCount = 1;
+        to_sampled.subresourceRange.baseArrayLayer = 0;
+        to_sampled.subresourceRange.layerCount = 1;
+        status = m_pfn_transition_image_layout(m_p_device, 1, &to_sampled);
+        if (status != VK_SUCCESS)
+            return fail_texture("transition host image for shader reads", status);
 
         VkMemoryToImageCopyEXT region{};
         region.sType = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY_EXT;
@@ -1292,33 +1543,40 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
         VkCopyMemoryToImageInfoEXT copy_info{};
         copy_info.sType = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO_EXT;
         copy_info.dstImage = p_image;
-        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        copy_info.dstImageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         copy_info.regionCount = 1;
         copy_info.pRegions = &region;
-        m_pfn_copy_memory_to_image(m_p_device, &copy_info);
-
-        VkHostImageLayoutTransitionInfoEXT to_read{};
-        to_read.sType = VK_STRUCTURE_TYPE_HOST_IMAGE_LAYOUT_TRANSITION_INFO_EXT;
-        to_read.image = p_image;
-        to_read.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        to_read.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        to_read.subresourceRange.baseMipLevel = 0;
-        to_read.subresourceRange.levelCount = 1;
-        to_read.subresourceRange.baseArrayLayer = 0;
-        to_read.subresourceRange.layerCount = 1;
-        m_pfn_transition_image_layout(m_p_device, 1, &to_read);
+        status = m_pfn_copy_memory_to_image(m_p_device, &copy_info);
+        if (status != VK_SUCCESS)
+            return fail_texture("copy host memory to image", status);
     } else {
         buffer_data_t cpu_buffer = CreateResource_StagingBuffer(image_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        void* data;
-        vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        if (cpu_buffer.m_p_vk_buffer == VK_NULL_HANDLE ||
+            cpu_buffer.m_p_vma_allocation == VK_NULL_HANDLE) {
+            return fail_texture("allocate texture staging buffer", VK_ERROR_OUT_OF_HOST_MEMORY);
+        }
+        void* data = nullptr;
+        status = vmaMapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation, &data);
+        if (status != VK_SUCCESS || data == nullptr) {
+            DestroyResource_StagingBuffer(cpu_buffer);
+            return fail_texture("map texture staging buffer", status);
+        }
         memcpy(data, source.data(), static_cast<size_t>(image_size));
+        status = vmaFlushAllocation(m_p_allocator,
+                                    cpu_buffer.m_p_vma_allocation,
+                                    0,
+                                    image_size);
         vmaUnmapMemory(m_p_allocator, cpu_buffer.m_p_vma_allocation);
+        if (status != VK_SUCCESS) {
+            DestroyResource_StagingBuffer(cpu_buffer);
+            return fail_texture("flush texture staging buffer", status);
+        }
 
-        m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
+        const bool uploaded = m_upload_manager.UploadToGPU([p_image, extent_image, cpu_buffer](VkCommandBuffer p_cmd) {
             lfs::vis::VulkanImageBarrierTracker upload_barriers;
-            upload_barriers.registerImage(p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            constexpr std::uint64_t kUploadGeneration = 1;
+            upload_barriers.registerImage(p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
+            upload_barriers.transitionImage(p_cmd, p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
             VkBufferImageCopy region = {};
             region.bufferOffset = 0;
@@ -1333,10 +1591,12 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
 
             vkCmdCopyBufferToImage(p_cmd, cpu_buffer.m_p_vk_buffer, p_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-            upload_barriers.transitionImage(p_cmd, p_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            upload_barriers.transitionImage(p_cmd, p_image, kUploadGeneration, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         });
 
         DestroyResource_StagingBuffer(cpu_buffer);
+        if (!uploaded)
+            return fail_texture("submit texture staging upload", VK_ERROR_UNKNOWN);
     }
 
     VkImageViewCreateInfo info_image_view = {};
@@ -1351,14 +1611,20 @@ Rml::TextureHandle RenderInterface_VK::CreateTexture(Rml::Span<const Rml::byte> 
     info_image_view.subresourceRange.layerCount = 1;
     info_image_view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
 
-    VkImageView p_image_view = nullptr;
+    VkImageView p_image_view = VK_NULL_HANDLE;
     status = vkCreateImageView(m_p_device, &info_image_view, nullptr, &p_image_view);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
+    if (status != VK_SUCCESS || p_image_view == VK_NULL_HANDLE)
+        return fail_texture("create image view", status);
 
     p_texture->m_p_vk_image_view = p_image_view;
-    p_texture->m_p_vk_sampler = sampler != VK_NULL_HANDLE ? sampler : m_p_sampler_linear;
+    const std::string view_debug_name = std::format("rmlui.texture.view[{}]", name);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)p_texture->m_p_vk_image_view,
+                                  view_debug_name.c_str());
+    p_texture->m_p_vk_sampler = texture_sampler;
 
-    return reinterpret_cast<Rml::TextureHandle>(p_texture);
+    RegisterLiveTexture(p_texture.get());
+    return reinterpret_cast<Rml::TextureHandle>(p_texture.release());
 }
 
 void RenderInterface_VK::ReleaseTexture(Rml::TextureHandle texture_handle) {
@@ -1384,12 +1650,41 @@ void RenderInterface_VK::SetContextOffset(float offset_x, float offset_y) {
     ApplyTransformState();
 }
 
+void RenderInterface_VK::BeginCacheCapture(const int x, const int y, const int width, const int height) {
+    if (width <= 0 || height <= 0) {
+        EndCacheCapture();
+        return;
+    }
+
+    const int left = Rml::Math::Clamp(x, 0, m_width);
+    const int top = Rml::Math::Clamp(y, 0, m_height);
+    const int right = Rml::Math::Clamp(x + width, 0, m_width);
+    const int bottom = Rml::Math::Clamp(y + height, 0, m_height);
+    if (right <= left || bottom <= top) {
+        EndCacheCapture();
+        return;
+    }
+
+    m_cache_capture_active = true;
+    m_cache_capture_render_area.offset.x = left;
+    m_cache_capture_render_area.offset.y = top;
+    m_cache_capture_render_area.extent.width = static_cast<uint32_t>(right - left);
+    m_cache_capture_render_area.extent.height = static_cast<uint32_t>(bottom - top);
+}
+
+void RenderInterface_VK::EndCacheCapture() {
+    m_cache_capture_active = false;
+    m_cache_capture_render_area = {};
+}
+
 void RenderInterface_VK::SetContextClipRect(float x1, float y1, float x2, float y2) {
     if (x2 <= x1 || y2 <= y1) {
         m_context_clip_enabled = true;
         m_context_clip_scissor = {};
-        if (m_p_current_command_buffer)
-            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_context_clip_scissor);
+        if (m_p_current_command_buffer) {
+            VkRect2D empty = ClampToCacheCaptureArea(m_context_clip_scissor);
+            vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &empty);
+        }
         return;
     }
 
@@ -1403,8 +1698,10 @@ void RenderInterface_VK::SetContextClipRect(float x1, float y1, float x2, float 
     m_context_clip_scissor.offset.y = top;
     m_context_clip_scissor.extent.width = static_cast<uint32_t>(std::max(0, right - left));
     m_context_clip_scissor.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
-    if (m_p_current_command_buffer)
-        vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_context_clip_scissor);
+    if (m_p_current_command_buffer) {
+        VkRect2D scissor = ClampToCacheCaptureArea(m_context_clip_scissor);
+        vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
+    }
 }
 
 void RenderInterface_VK::ApplyTransformState() {
@@ -1460,6 +1757,203 @@ void RenderInterface_VK::RenderTextureQuad(Rml::TextureHandle texture, const flo
     m_context_offset = context_offset;
 }
 
+bool RenderInterface_VK::RenderFrostedGlass(
+    const Rml::Span<const FrostedGlassRegion> regions) {
+    if (!m_external_context || !m_p_current_command_buffer ||
+        !m_external_swapchain_image || regions.size() == 0 ||
+        m_active_render_target != active_render_target_t::Swapchain ||
+        !EnsureFrostedGlassBackdrop()) {
+        return false;
+    }
+
+    auto& backdrop = m_frosted_glass_backdrop;
+    EndActiveRendering();
+
+    TransitionImageLayout(m_external_swapchain_image,
+                          m_external_swapchain_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          m_external_swapchain_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    const auto blit = [this](const VkImage source,
+                             const VkImageLayout source_layout,
+                             const int source_width,
+                             const int source_height,
+                             const VkImage destination,
+                             const VkImageLayout destination_layout,
+                             const int destination_width,
+                             const int destination_height) {
+        VkImageBlit image_blit{};
+        image_blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_blit.srcSubresource.mipLevel = 0;
+        image_blit.srcSubresource.baseArrayLayer = 0;
+        image_blit.srcSubresource.layerCount = 1;
+        image_blit.srcOffsets[1] = {source_width, source_height, 1};
+        image_blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        image_blit.dstSubresource.mipLevel = 0;
+        image_blit.dstSubresource.baseArrayLayer = 0;
+        image_blit.dstSubresource.layerCount = 1;
+        image_blit.dstOffsets[1] = {destination_width, destination_height, 1};
+        vkCmdBlitImage(m_p_current_command_buffer,
+                       source, source_layout,
+                       destination, destination_layout,
+                       1, &image_blit, VK_FILTER_LINEAR);
+    };
+
+    blit(m_external_swapchain_image,
+         m_external_swapchain_layout,
+         m_width, m_height,
+         backdrop.primary.m_p_vk_image,
+         backdrop.primary_layout,
+         backdrop.primary_width, backdrop.primary_height);
+
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    TransitionImageLayout(backdrop.secondary.m_p_vk_image,
+                          backdrop.secondary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.secondary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    backdrop.secondary_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    blit(backdrop.primary.m_p_vk_image,
+         backdrop.primary_layout,
+         backdrop.primary_width, backdrop.primary_height,
+         backdrop.secondary.m_p_vk_image,
+         backdrop.secondary_layout,
+         backdrop.secondary_width, backdrop.secondary_height);
+
+    TransitionImageLayout(backdrop.secondary.m_p_vk_image,
+                          backdrop.secondary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.secondary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    backdrop.secondary_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    blit(backdrop.secondary.m_p_vk_image,
+         backdrop.secondary_layout,
+         backdrop.secondary_width, backdrop.secondary_height,
+         backdrop.primary.m_p_vk_image,
+         backdrop.primary_layout,
+         backdrop.primary_width, backdrop.primary_height);
+
+    TransitionImageLayout(backdrop.primary.m_p_vk_image,
+                          backdrop.primary.m_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          backdrop.primary_layout,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    backdrop.primary_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    TransitionImageLayout(m_external_swapchain_image,
+                          m_external_swapchain_barrier_generation,
+                          VK_IMAGE_ASPECT_COLOR_BIT,
+                          m_external_swapchain_layout,
+                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_LOAD, VK_ATTACHMENT_LOAD_OP_LOAD);
+    ResetContextRenderState();
+
+    const auto draw_backdrop = [this, &backdrop](const float x1,
+                                                 const float y1,
+                                                 const float x2,
+                                                 const float y2) {
+        if (x2 <= x1 || y2 <= y1)
+            return;
+        SetContextClipRect(x1, y1, x2, y2);
+        RenderFrostedGlassQuad(backdrop.primary);
+    };
+
+    for (const FrostedGlassRegion& region : regions) {
+        const float left = std::clamp(region.x, 0.0f, static_cast<float>(m_width));
+        const float top = std::clamp(region.y, 0.0f, static_cast<float>(m_height));
+        const float right = std::clamp(region.x + region.width,
+                                       0.0f, static_cast<float>(m_width));
+        const float bottom = std::clamp(region.y + region.height,
+                                        0.0f, static_cast<float>(m_height));
+        const float radius = std::clamp(region.radius,
+                                        0.0f,
+                                        0.5f * std::min(right - left, bottom - top));
+        if (radius < 1.0f) {
+            draw_backdrop(left, top, right, bottom);
+            continue;
+        }
+        // Two intersecting rectangles approximate the rounded clip; the exact
+        // anti-aliased radius and themed border are drawn by RmlUi above it.
+        draw_backdrop(left + radius, top, right - radius, bottom);
+        draw_backdrop(left, top + radius, right, bottom - radius);
+    }
+    ResetContextRenderState();
+    return true;
+}
+
+void RenderInterface_VK::RenderFrostedGlassQuad(texture_data_t& texture) {
+    if (!m_p_current_command_buffer || !texture.m_p_vk_image_view ||
+        m_width <= 0 || m_height <= 0) {
+        return;
+    }
+
+    // Slightly enlarge the sampled backdrop. The tiny refraction is visible on
+    // high-contrast scene edges without introducing a second shader pipeline.
+    constexpr float REFRACTION_INSET = 1.25f;
+    if (!m_frosted_glass_quad_geometry ||
+        m_frosted_glass_quad_width != m_width ||
+        m_frosted_glass_quad_height != m_height) {
+        if (m_frosted_glass_quad_geometry)
+            ReleaseGeometry(m_frosted_glass_quad_geometry);
+
+        const float x = -REFRACTION_INSET;
+        const float y = -REFRACTION_INSET;
+        const float width = static_cast<float>(m_width) + 2.0f * REFRACTION_INSET;
+        const float height = static_cast<float>(m_height) + 2.0f * REFRACTION_INSET;
+        Rml::Vertex vertices[4];
+        vertices[0].position = {x, y};
+        vertices[0].tex_coord = {0.0f, 0.0f};
+        vertices[1].position = {x + width, y};
+        vertices[1].tex_coord = {1.0f, 0.0f};
+        vertices[2].position = {x + width, y + height};
+        vertices[2].tex_coord = {1.0f, 1.0f};
+        vertices[3].position = {x, y + height};
+        vertices[3].tex_coord = {0.0f, 1.0f};
+        for (Rml::Vertex& vertex : vertices)
+            vertex.colour = Rml::ColourbPremultiplied(255, 255, 255, 255);
+        static constexpr int indices[6] = {0, 1, 2, 0, 2, 3};
+        m_frosted_glass_quad_geometry = CompileGeometry({vertices, 4}, {indices, 6});
+        m_frosted_glass_quad_width = m_width;
+        m_frosted_glass_quad_height = m_height;
+    }
+
+    const bool transform_enabled = m_is_transform_enabled;
+    const shader_vertex_user_data_t user_data = m_user_data_for_vertex_shader;
+    const Rml::Matrix4f rml_transform = m_rml_transform;
+    const Rml::Matrix4f context_transform = m_context_transform;
+    const Rml::Vector2f context_offset = m_context_offset;
+    SetTransform(nullptr);
+    if (m_frosted_glass_quad_geometry) {
+        RenderGeometry(m_frosted_glass_quad_geometry,
+                       {}, reinterpret_cast<Rml::TextureHandle>(&texture));
+    }
+    m_is_transform_enabled = transform_enabled;
+    m_user_data_for_vertex_shader = user_data;
+    m_rml_transform = rml_transform;
+    m_context_transform = context_transform;
+    m_context_offset = context_offset;
+}
+
 VkRect2D RenderInterface_VK::ContextClipScissor() const noexcept {
     return m_context_clip_enabled ? m_context_clip_scissor : m_scissor_original;
 }
@@ -1482,146 +1976,24 @@ VkRect2D RenderInterface_VK::IntersectContextClip(VkRect2D scissor) const noexce
     return scissor;
 }
 
-void RenderInterface_VK::BeginFrame() {
-    Wait();
+VkRect2D RenderInterface_VK::ClampToCacheCaptureArea(VkRect2D rect) const noexcept {
+    if (!m_cache_capture_active)
+        return rect;
 
-    m_reclaim_resource_slot = m_semaphore_index_previous;
-    m_resource_slot = m_semaphore_index;
-    FreeTransientShaderAllocations(m_reclaim_resource_slot);
-    Update_PendingForDeletion_Textures_By_Frame(m_reclaim_resource_slot);
-    Update_PendingForDeletion_Geometries(m_reclaim_resource_slot);
-    ProcessAsyncPreviewUploads();
+    const int left = std::max(rect.offset.x, m_cache_capture_render_area.offset.x);
+    const int top = std::max(rect.offset.y, m_cache_capture_render_area.offset.y);
+    const int right = std::min(rect.offset.x + static_cast<int>(rect.extent.width),
+                               m_cache_capture_render_area.offset.x +
+                                   static_cast<int>(m_cache_capture_render_area.extent.width));
+    const int bottom = std::min(rect.offset.y + static_cast<int>(rect.extent.height),
+                                m_cache_capture_render_area.offset.y +
+                                    static_cast<int>(m_cache_capture_render_area.extent.height));
 
-    m_command_buffer_ring.OnBeginFrame();
-    m_p_current_command_buffer = m_command_buffer_ring.GetCommandBufferForActiveFrame(CommandBufferName::Primary);
-
-    VkCommandBufferBeginInfo info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    info.pInheritanceInfo = nullptr;
-    info.pNext = nullptr;
-    info.flags = VkCommandBufferUsageFlagBits::VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-    auto status = vkBeginCommandBuffer(m_p_current_command_buffer, &info);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkBeginCommandBuffer");
-
-    BeginSwapchainRendering(VK_ATTACHMENT_LOAD_OP_CLEAR, VK_ATTACHMENT_LOAD_OP_CLEAR);
-
-    m_active_render_target = active_render_target_t::Swapchain;
-    m_active_layer = {};
-    m_render_layer_stack_size = 0;
-    m_is_clip_mask_enabled = false;
-    m_is_transformed_scissor_enabled = false;
-    m_is_use_scissor_specified = false;
-    m_is_use_stencil_pipeline = false;
-    m_is_apply_to_regular_geometry_stencil = false;
-    m_current_context_used_preview_texture = false;
-    SetContextOffset(0.0f, 0.0f);
-    SetTransform(nullptr);
-    m_context_clip_enabled = false;
-}
-
-void RenderInterface_VK::EndFrame() {
-    if (m_p_current_command_buffer == nullptr)
-        return;
-
-    EndActiveRendering();
-    if (!m_external_context && m_image_index < m_swapchain_images.size()) {
-        TransitionImageLayout(m_swapchain_images[m_image_index],
-                              VK_IMAGE_ASPECT_COLOR_BIT,
-                              m_swapchain_image_layouts[m_image_index],
-                              VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
-        m_swapchain_image_layouts[m_image_index] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    }
-
-    auto status = vkEndCommandBuffer(m_p_current_command_buffer);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkEndCommandBuffer");
-
-    Submit();
-    Present();
-
-    m_p_current_command_buffer = nullptr;
-}
-
-void RenderInterface_VK::SetViewport(int width, int height) {
-    WaitForSubmittedFrames();
-
-    if (width > 0 && height > 0) {
-        m_width = width;
-        m_height = height;
-    }
-
-    if (m_p_swapchain) {
-        Destroy_Swapchain();
-        DestroyResourcesDependentOnSize();
-        m_p_swapchain = {};
-    }
-
-    VkExtent2D window_extent = GetValidSurfaceExtent();
-    if (window_extent.width == 0 || window_extent.height == 0)
-        return;
-
-#ifdef RMLUI_VK_DEBUG
-    Rml::Log::Message(Rml::Log::Type::LT_DEBUG, "Rml width: %d height: %d | Vulkan width: %d height: %d", m_width, m_height, window_extent.width,
-                      window_extent.height);
-#endif
-
-    //  we need to sync the data from Vulkan so we can't use native Rml's data about width and height so be careful otherwise we create framebuffer
-    //  with Rml's width and height but they're different to what Vulkan determines for our window (e.g. device/swapchain)
-    m_width = window_extent.width;
-    m_height = window_extent.height;
-
-    Initialize_Swapchain(window_extent);
-    CreateResourcesDependentOnSize(window_extent);
-}
-
-bool RenderInterface_VK::IsSwapchainValid() {
-    return m_p_swapchain != nullptr;
-}
-
-void RenderInterface_VK::RecreateSwapchain() {
-    SetViewport(m_width, m_height);
-}
-
-bool RenderInterface_VK::Initialize(Rml::Vector<const char*> required_extensions, CreateSurfaceCallback create_surface_callback) {
-    RMLUI_ZoneScopedN("Vulkan - Initialize");
-
-    Initialize_Instance(std::move(required_extensions));
-
-    VkPhysicalDeviceProperties physical_device_properties = {};
-    Initialize_PhysicalDevice(physical_device_properties);
-
-    Initialize_Surface(create_surface_callback);
-    Initialize_QueueIndecies();
-    Initialize_Device();
-
-    Initialize_Queues();
-    Initialize_SyncPrimitives();
-    Initialize_Allocator();
-    Initialize_Resources(physical_device_properties);
-
-    return true;
-}
-
-void RenderInterface_VK::Shutdown() {
-    RMLUI_ZoneScopedN("Vulkan - Shutdown");
-
-    auto status = vkDeviceWaitIdle(m_p_device);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "you must have a valid status here");
-
-    m_async_preview_textures.clear();
-    DestroyResourcesDependentOnSize();
-    Destroy_Resources();
-    Destroy_Allocator();
-    Destroy_SyncPrimitives();
-    Destroy_Swapchain();
-    Destroy_Surface();
-    Destroy_Device();
-    Destroy_ReportDebugCallback();
-    Destroy_Instance();
+    rect.offset.x = left;
+    rect.offset.y = top;
+    rect.extent.width = static_cast<uint32_t>(std::max(0, right - left));
+    rect.extent.height = static_cast<uint32_t>(std::max(0, bottom - top));
+    return rect;
 }
 
 bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
@@ -1638,32 +2010,52 @@ bool RenderInterface_VK::InitializeExternal(const ExternalContext& context) {
     m_p_instance = context.instance;
     m_p_physical_device = context.physical_device;
     m_p_device = context.device;
+    m_debug_name_writer.initialize(m_p_device);
     m_p_pipeline_cache = context.pipeline_cache;
 
     // On Vulkan 1.4 drivers these core-promoted entry points resolve even when
     // the hostImageCopy feature was not enabled on the device; calling them then
     // is UB. Only look them up when the owning context enabled the feature.
-    if (context.host_image_copy) {
+    if (context.host_image_copy &&
+        SupportsHostImageCopyDestinationLayout(m_p_physical_device,
+                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)) {
         m_pfn_copy_memory_to_image = reinterpret_cast<PFN_vkCopyMemoryToImageEXT>(
             vkGetDeviceProcAddr(m_p_device, "vkCopyMemoryToImageEXT"));
         m_pfn_transition_image_layout = reinterpret_cast<PFN_vkTransitionImageLayoutEXT>(
             vkGetDeviceProcAddr(m_p_device, "vkTransitionImageLayoutEXT"));
+    } else if (context.host_image_copy) {
+        Rml::Log::Message(Rml::Log::LT_INFO,
+                          "[Vulkan] Host image copies do not support the RmlUi shader-read layout; using staging uploads.");
     }
     m_p_queue_graphics = context.graphics_queue;
-    m_p_queue_present = context.graphics_queue;
-    m_p_queue_compute = context.graphics_queue;
     m_queue_index_graphics = context.graphics_queue_family;
-    m_queue_index_present = context.graphics_queue_family;
-    m_queue_index_compute = context.graphics_queue_family;
     m_swapchain_format.format = context.color_format;
     m_depth_stencil_format = context.depth_stencil_format;
     m_width = static_cast<int>(context.extent.width);
     m_height = static_cast<int>(context.extent.height);
 
+    VkFormatProperties color_format_properties{};
+    vkGetPhysicalDeviceFormatProperties(m_p_physical_device,
+                                        m_swapchain_format.format,
+                                        &color_format_properties);
+    constexpr VkFormatFeatureFlags required_blit_features =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+        VK_FORMAT_FEATURE_BLIT_DST_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    m_frosted_glass_blit_supported =
+        (color_format_properties.optimalTilingFeatures & required_blit_features) ==
+        required_blit_features;
+
     VkPhysicalDeviceProperties physical_device_properties = {};
     vkGetPhysicalDeviceProperties(m_p_physical_device, &physical_device_properties);
 
     Initialize_Allocator();
+    if (m_p_allocator == VK_NULL_HANDLE) {
+        Rml::Log::Message(Rml::Log::LT_ERROR,
+                          "[Vulkan] Failed to initialize the external RmlUi VMA allocator.");
+        return false;
+    }
     Initialize_Resources(physical_device_properties);
     UpdateViewportState(context.extent);
     Create_Pipelines();
@@ -1679,22 +2071,25 @@ void RenderInterface_VK::ShutdownExternal() {
     if (m_p_device)
         vkDeviceWaitIdle(m_p_device);
 
+    StopPreviewWorkerPool();
     m_async_preview_textures.clear();
+    DestroyFrostedGlassBackdrop(false);
     DestroyRenderLayers();
     Destroy_Pipelines();
     Destroy_Resources();
     Destroy_Allocator();
 
+    m_debug_name_writer.reset();
+
     m_p_instance = VK_NULL_HANDLE;
     m_p_physical_device = VK_NULL_HANDLE;
     m_p_device = VK_NULL_HANDLE;
     m_p_queue_graphics = VK_NULL_HANDLE;
-    m_p_queue_present = VK_NULL_HANDLE;
-    m_p_queue_compute = VK_NULL_HANDLE;
     m_external_swapchain_image = VK_NULL_HANDLE;
     m_external_swapchain_image_view = VK_NULL_HANDLE;
     m_external_depth_stencil_image_view = VK_NULL_HANDLE;
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    m_frosted_glass_blit_supported = false;
     m_external_context = false;
 }
 
@@ -1714,9 +2109,6 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
         UpdateViewportState(extent);
     }
 
-    m_semaphore_index_previous = m_semaphore_index;
-    m_semaphore_index = ((m_semaphore_index + 1) % kSwapchainBackBufferCount);
-
     m_resource_slot = static_cast<uint32_t>(frame_slot % kSwapchainBackBufferCount);
     m_reclaim_resource_slot = m_resource_slot;
     FreeTransientShaderAllocations(m_reclaim_resource_slot);
@@ -1729,6 +2121,7 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     m_external_swapchain_image_view = swapchain_image_view;
     m_external_depth_stencil_image_view = depth_stencil_image_view;
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    m_external_swapchain_barrier_generation = ++m_image_barrier_generation;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor_original);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
@@ -1743,6 +2136,7 @@ void RenderInterface_VK::BeginExternalFrame(const VkCommandBuffer command_buffer
     SetContextOffset(0.0f, 0.0f);
     SetTransform(nullptr);
     m_context_clip_enabled = false;
+    EndCacheCapture();
 }
 
 void RenderInterface_VK::EndExternalFrame() {
@@ -1758,6 +2152,7 @@ void RenderInterface_VK::EndExternalFrame() {
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_UNDEFINED;
     m_active_render_target = active_render_target_t::None;
     m_p_current_command_buffer = nullptr;
+    EndCacheCapture();
 }
 
 void RenderInterface_VK::ResetContextRenderState() {
@@ -1772,311 +2167,15 @@ void RenderInterface_VK::ResetContextRenderState() {
     SetContextOffset(0.0f, 0.0f);
     SetTransform(nullptr);
     m_context_clip_enabled = false;
+    // Do not clear cache-capture mode here: manager may call Reset between
+    // BeginCacheCapture and PushLayer/Render.
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
-    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &m_scissor_original);
+    VkRect2D scissor = ClampToCacheCaptureArea(m_scissor_original);
+    vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
 }
 
-void RenderInterface_VK::Initialize_Instance(Rml::Vector<const char*> required_extensions) noexcept {
-    uint32_t required_version = GetRequiredVersionAndValidateMachine();
-
-    VkApplicationInfo info = {};
-    info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    info.pNext = nullptr;
-    info.pApplicationName = "RmlUi Shell";
-    info.applicationVersion = 50;
-    info.pEngineName = "RmlUi";
-    info.apiVersion = required_version;
-
-    Rml::Vector<const char*> instance_layer_names;
-    Rml::Vector<const char*> instance_extension_names = std::move(required_extensions);
-    CreatePropertiesFor_Instance(instance_layer_names, instance_extension_names);
-
-    VkInstanceCreateInfo info_instance = {};
-    info_instance.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    info_instance.pNext = &debug_validation_features_ext;
-    info_instance.flags = 0;
-    info_instance.pApplicationInfo = &info;
-    info_instance.enabledExtensionCount = static_cast<uint32_t>(instance_extension_names.size());
-    info_instance.ppEnabledExtensionNames = instance_extension_names.data();
-    info_instance.enabledLayerCount = static_cast<uint32_t>(instance_layer_names.size());
-    info_instance.ppEnabledLayerNames = instance_layer_names.data();
-
-    VkResult status = vkCreateInstance(&info_instance, nullptr, &m_p_instance);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateInstance");
-
-    CreateReportDebugCallback();
-}
-
-void RenderInterface_VK::Initialize_Device() noexcept {
-    ExtensionPropertiesList device_extension_properties;
-    CreatePropertiesFor_Device(device_extension_properties);
-
-    Rml::Vector<const char*> device_extension_names;
-    AddExtensionToDevice(device_extension_names, device_extension_properties, VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    AddExtensionToDevice(device_extension_names, device_extension_properties, VK_EXT_SCALAR_BLOCK_LAYOUT_EXTENSION_NAME);
-
-#ifdef RMLUI_VK_DEBUG
-    AddExtensionToDevice(device_extension_names, device_extension_properties, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-#endif
-
-    float queue_priorities[1] = {0.0f};
-
-    VkDeviceQueueCreateInfo info_queue[2] = {};
-
-    info_queue[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    info_queue[0].pNext = nullptr;
-    info_queue[0].queueCount = 1;
-    info_queue[0].pQueuePriorities = queue_priorities;
-    info_queue[0].queueFamilyIndex = m_queue_index_graphics;
-
-    info_queue[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    info_queue[1].pNext = nullptr;
-    info_queue[1].queueCount = 1;
-    info_queue[1].pQueuePriorities = queue_priorities;
-    info_queue[1].queueFamilyIndex = m_queue_index_compute;
-
-    VkPhysicalDeviceFeatures features_physical_device = {};
-
-    features_physical_device.fillModeNonSolid = true;
-    features_physical_device.pipelineStatisticsQuery = true;
-    features_physical_device.fragmentStoresAndAtomics = true;
-    features_physical_device.vertexPipelineStoresAndAtomics = true;
-    features_physical_device.shaderImageGatherExtended = true;
-    features_physical_device.wideLines = true;
-
-    VkPhysicalDeviceShaderSubgroupExtendedTypesFeaturesKHR shader_subgroup_extended_type = {};
-
-    shader_subgroup_extended_type.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_SUBGROUP_EXTENDED_TYPES_FEATURES_KHR;
-    shader_subgroup_extended_type.pNext = nullptr;
-    shader_subgroup_extended_type.shaderSubgroupExtendedTypes = VK_TRUE;
-
-    VkPhysicalDeviceFeatures2 features_physical_device2 = {};
-
-    features_physical_device2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features_physical_device2.features = features_physical_device;
-    features_physical_device2.pNext = &shader_subgroup_extended_type;
-
-    VkDeviceCreateInfo info_device = {};
-
-    info_device.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    info_device.pNext = &features_physical_device2;
-    info_device.queueCreateInfoCount = m_queue_index_compute != m_queue_index_graphics ? 2 : 1;
-    info_device.pQueueCreateInfos = info_queue;
-    info_device.enabledExtensionCount = static_cast<uint32_t>(device_extension_names.size());
-    info_device.ppEnabledExtensionNames = info_device.enabledExtensionCount ? device_extension_names.data() : nullptr;
-    info_device.pEnabledFeatures = nullptr;
-
-    VkResult status = vkCreateDevice(m_p_physical_device, &info_device, nullptr, &m_p_device);
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateDevice");
-}
-
-void RenderInterface_VK::Initialize_PhysicalDevice(VkPhysicalDeviceProperties& out_physical_device_properties) noexcept {
-    PhysicalDeviceWrapperList physical_devices;
-    CollectPhysicalDevices(physical_devices);
-
-    const PhysicalDeviceWrapper* selected_physical_device =
-        ChoosePhysicalDevice(physical_devices, VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU);
-
-    if (!selected_physical_device) {
-        Rml::Log::Message(Rml::Log::LT_WARNING, "Failed to pick the discrete gpu, now trying to pick integrated GPU");
-        selected_physical_device = ChoosePhysicalDevice(physical_devices, VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU);
-
-        if (!selected_physical_device) {
-            Rml::Log::Message(Rml::Log::LT_WARNING, "Failed to pick the integrated gpu, now trying to pick the CPU");
-            selected_physical_device = ChoosePhysicalDevice(physical_devices, VkPhysicalDeviceType::VK_PHYSICAL_DEVICE_TYPE_CPU);
-        }
-    }
-
-    RMLUI_VK_ASSERTMSG(selected_physical_device, "there's no suitable physical device for rendering, abort this application");
-
-    m_p_physical_device = selected_physical_device->m_p_physical_device;
-    vkGetPhysicalDeviceProperties(m_p_physical_device, &out_physical_device_properties);
-
-#ifdef RMLUI_VK_DEBUG
-    const auto& properties = selected_physical_device->m_physical_device_properties;
-    Rml::Log::Message(Rml::Log::LT_DEBUG, "Picked physical device: %s", properties.deviceName);
-#endif
-}
-
-void RenderInterface_VK::Initialize_Swapchain(VkExtent2D window_extent) noexcept {
-    m_swapchain_format = ChooseSwapchainFormat();
-
-    VkSwapchainCreateInfoKHR info = {};
-    info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-    info.pNext = nullptr;
-    info.surface = m_p_surface;
-    info.imageFormat = m_swapchain_format.format;
-    info.minImageCount = Choose_SwapchainImageCount();
-    info.imageColorSpace = m_swapchain_format.colorSpace;
-    info.imageExtent = window_extent;
-    info.preTransform = CreatePretransformSwapchain();
-    info.compositeAlpha = ChooseSwapchainCompositeAlpha();
-    info.imageArrayLayers = 1;
-    info.presentMode = GetPresentMode();
-    info.oldSwapchain = nullptr;
-    info.clipped = true;
-    info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    info.queueFamilyIndexCount = 0;
-    info.pQueueFamilyIndices = nullptr;
-
-    uint32_t queue_family_index_present = m_queue_index_present;
-    uint32_t queue_family_index_graphics = m_queue_index_graphics;
-
-    if (queue_family_index_graphics != queue_family_index_present) {
-        uint32_t p_indecies[2] = {queue_family_index_graphics, queue_family_index_present};
-
-        info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        info.queueFamilyIndexCount = sizeof(p_indecies) / sizeof(p_indecies[0]);
-        info.pQueueFamilyIndices = p_indecies;
-    }
-
-    VkResult status = vkCreateSwapchainKHR(m_p_device, &info, nullptr, &m_p_swapchain);
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateSwapchainKHR");
-}
-
-void RenderInterface_VK::Initialize_Surface(CreateSurfaceCallback create_surface_callback) noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_instance, "you must initialize your VkInstance");
-
-    bool result = create_surface_callback(m_p_instance, &m_p_surface);
-    RMLUI_VK_ASSERTMSG(result && m_p_surface, "failed to call create_surface_callback");
-}
-
-void RenderInterface_VK::Initialize_QueueIndecies() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must initialize your physical device");
-    RMLUI_VK_ASSERTMSG(m_p_surface, "you must initialize VkSurfaceKHR before calling this method");
-
-    uint32_t queue_family_count = 0;
-
-    vkGetPhysicalDeviceQueueFamilyProperties(m_p_physical_device, &queue_family_count, nullptr);
-
-    RMLUI_VK_ASSERTMSG(queue_family_count >= 1, "failed to vkGetPhysicalDeviceQueueFamilyProperties (getting count)");
-
-    Rml::Vector<VkQueueFamilyProperties> queue_props;
-    queue_props.resize(queue_family_count);
-
-    vkGetPhysicalDeviceQueueFamilyProperties(m_p_physical_device, &queue_family_count, queue_props.data());
-
-    RMLUI_VK_ASSERTMSG(queue_family_count >= 1, "failed to vkGetPhysicalDeviceQueueFamilyProperties (filling vector of VkQueueFamilyProperties)");
-
-    constexpr uint32_t kUint32Undefined = uint32_t(-1);
-
-    m_queue_index_compute = kUint32Undefined;
-    m_queue_index_graphics = kUint32Undefined;
-    m_queue_index_present = kUint32Undefined;
-
-    for (uint32_t i = 0; i < queue_family_count; ++i) {
-        if ((queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
-            if (m_queue_index_graphics == kUint32Undefined)
-                m_queue_index_graphics = i;
-
-            VkBool32 is_support_present;
-
-            vkGetPhysicalDeviceSurfaceSupportKHR(m_p_physical_device, i, m_p_surface, &is_support_present);
-
-            // User's videocard may have same index for two queues like graphics and present
-
-            if (is_support_present == VK_TRUE) {
-                m_queue_index_graphics = i;
-                m_queue_index_present = m_queue_index_graphics;
-                break;
-            }
-        }
-    }
-
-    if (m_queue_index_present == static_cast<uint32_t>(-1)) {
-        Rml::Log::Message(Rml::Log::LT_WARNING, "[Vulkan] User doesn't have one index for two queues, so we need to find for present queue index");
-
-        for (uint32_t i = 0; i < queue_family_count; ++i) {
-            VkBool32 is_support_present;
-
-            vkGetPhysicalDeviceSurfaceSupportKHR(m_p_physical_device, i, m_p_surface, &is_support_present);
-
-            if (is_support_present == VK_TRUE) {
-                m_queue_index_present = i;
-                break;
-            }
-        }
-    }
-
-    for (uint32_t i = 0; i < queue_family_count; ++i) {
-        if ((queue_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0) {
-            if (m_queue_index_compute == kUint32Undefined)
-                m_queue_index_compute = i;
-
-            if (i != m_queue_index_graphics) {
-                m_queue_index_compute = i;
-                break;
-            }
-        }
-    }
-
-#ifdef RMLUI_VK_DEBUG
-    Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan] User family queues indecies: Graphics[%d] Present[%d] Compute[%d]", m_queue_index_graphics,
-                      m_queue_index_present, m_queue_index_compute);
-#endif
-}
-
-void RenderInterface_VK::Initialize_Queues() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize VkDevice before using this method");
-
-    vkGetDeviceQueue(m_p_device, m_queue_index_graphics, 0, &m_p_queue_graphics);
-
-    if (m_queue_index_graphics == m_queue_index_present) {
-        m_p_queue_present = m_p_queue_graphics;
-    } else {
-        vkGetDeviceQueue(m_p_device, m_queue_index_present, 0, &m_p_queue_present);
-    }
-
-    constexpr uint32_t kUint32Undefined = uint32_t(-1);
-
-    if (m_queue_index_compute != kUint32Undefined) {
-        vkGetDeviceQueue(m_p_device, m_queue_index_compute, 0, &m_p_queue_compute);
-    }
-}
-
-void RenderInterface_VK::Initialize_SyncPrimitives() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize your device");
-
-    m_executed_fences.resize(kSwapchainBackBufferCount);
-    m_semaphores_finished_render.resize(kSwapchainBackBufferCount);
-    m_semaphores_image_available.resize(kSwapchainBackBufferCount);
-
-    VkResult status = VK_SUCCESS;
-
-    for (uint32_t i = 0; i < kSwapchainBackBufferCount; ++i) {
-        VkFenceCreateInfo info_fence = {};
-
-        info_fence.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        info_fence.pNext = nullptr;
-        info_fence.flags = VK_FENCE_CREATE_SIGNALED_BIT;
-
-        status = vkCreateFence(m_p_device, &info_fence, nullptr, &m_executed_fences[i]);
-
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateFence");
-
-        VkSemaphoreCreateInfo info_semaphore = {};
-
-        info_semaphore.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-        info_semaphore.pNext = nullptr;
-        info_semaphore.flags = 0;
-
-        status = vkCreateSemaphore(m_p_device, &info_semaphore, nullptr, &m_semaphores_image_available[i]);
-
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateSemaphore");
-
-        status = vkCreateSemaphore(m_p_device, &info_semaphore, nullptr, &m_semaphores_finished_render[i]);
-
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateSemaphore");
-    }
-}
-
 void RenderInterface_VK::Initialize_Resources(const VkPhysicalDeviceProperties& physical_device_properties) noexcept {
-    m_command_buffer_ring.Initialize(m_p_device, m_queue_index_graphics);
-
     const VkDeviceSize min_buffer_alignment = physical_device_properties.limits.minUniformBufferOffsetAlignment;
     m_memory_pool.Initialize(kVideoMemoryForAllocation, min_buffer_alignment, m_p_allocator, m_p_device);
 
@@ -2091,9 +2190,11 @@ void RenderInterface_VK::Initialize_Resources(const VkPhysicalDeviceProperties& 
 }
 
 void RenderInterface_VK::Initialize_Allocator() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must have a valid VkDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must have a valid VkPhysicalDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_instance, "you must have a valid VkInstance here");
+    m_p_allocator = VK_NULL_HANDLE;
+    if (m_p_device == VK_NULL_HANDLE || m_p_physical_device == VK_NULL_HANDLE ||
+        m_p_instance == VK_NULL_HANDLE) {
+        return;
+    }
 
     VmaVulkanFunctions vulkanFunctions = {};
     vulkanFunctions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -2107,45 +2208,11 @@ void RenderInterface_VK::Initialize_Allocator() noexcept {
     info.physicalDevice = m_p_physical_device;
     info.pVulkanFunctions = &vulkanFunctions;
 
-    auto status = vmaCreateAllocator(&info, &m_p_allocator);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateAllocator");
-}
-
-void RenderInterface_VK::Destroy_Instance() noexcept {
-    vkDestroyInstance(m_p_instance, nullptr);
-}
-
-void RenderInterface_VK::Destroy_Device() noexcept {
-    vkDestroyDevice(m_p_device, nullptr);
-}
-
-void RenderInterface_VK::Destroy_Swapchain() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize device");
-
-    vkDestroySwapchainKHR(m_p_device, m_p_swapchain, nullptr);
-}
-
-void RenderInterface_VK::Destroy_Surface() noexcept {
-    vkDestroySurfaceKHR(m_p_instance, m_p_surface, nullptr);
-}
-
-void RenderInterface_VK::Destroy_SyncPrimitives() noexcept {
-    for (auto& p_fence : m_executed_fences) {
-        vkDestroyFence(m_p_device, p_fence, nullptr);
-    }
-
-    for (auto& p_semaphore : m_semaphores_image_available) {
-        vkDestroySemaphore(m_p_device, p_semaphore, nullptr);
-    }
-
-    for (auto& p_semaphore : m_semaphores_finished_render) {
-        vkDestroySemaphore(m_p_device, p_semaphore, nullptr);
-    }
+    if (vmaCreateAllocator(&info, &m_p_allocator) != VK_SUCCESS)
+        m_p_allocator = VK_NULL_HANDLE;
 }
 
 void RenderInterface_VK::Destroy_Resources() noexcept {
-    m_command_buffer_ring.Shutdown();
     m_upload_manager.Shutdown();
 
     if (m_p_descriptor_set) {
@@ -2163,502 +2230,16 @@ void RenderInterface_VK::Destroy_Resources() noexcept {
 
     DestroySamplers();
     Destroy_Textures();
+    Destroy_LiveTextures();
     Destroy_Geometries();
 
     m_manager_descriptors.Shutdown(m_p_device);
 }
 
 void RenderInterface_VK::Destroy_Allocator() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you must have an initialized allocator for deleting");
-
-    vmaDestroyAllocator(m_p_allocator);
-
-    m_p_allocator = nullptr;
-}
-
-void RenderInterface_VK::QueryInstanceLayers(LayerPropertiesList& result) noexcept {
-    uint32_t instance_layer_properties_count = 0;
-    VkResult status = vkEnumerateInstanceLayerProperties(&instance_layer_properties_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceLayerProperties (getting count)");
-
-    if (instance_layer_properties_count) {
-        result.resize(instance_layer_properties_count);
-        status = vkEnumerateInstanceLayerProperties(&instance_layer_properties_count, result.data());
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceLayerProperties (filling vector of VkLayerProperties)");
-    }
-}
-
-void RenderInterface_VK::QueryInstanceExtensions(ExtensionPropertiesList& result, const LayerPropertiesList& instance_layer_properties) noexcept {
-    uint32_t instance_extension_property_count = 0;
-    VkResult status = vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_property_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceExtensionProperties (getting count)");
-
-    if (instance_extension_property_count) {
-        result.resize(instance_extension_property_count);
-        status = vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_property_count, result.data());
-
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceExtensionProperties (filling vector of VkExtensionProperties)");
-    }
-
-    uint32_t count = 0;
-
-    // without first argument in vkEnumerateInstanceExtensionProperties
-    // it doesn't collect information well so we need brute-force
-    // and pass through everything what use has
-    for (const auto& layer_property : instance_layer_properties) {
-        status = vkEnumerateInstanceExtensionProperties(layer_property.layerName, &count, nullptr);
-
-        if (status == VK_SUCCESS) {
-            if (count) {
-                ExtensionPropertiesList props;
-                props.resize(count);
-                status = vkEnumerateInstanceExtensionProperties(layer_property.layerName, &count, props.data());
-
-                if (status == VK_SUCCESS) {
-#ifdef RMLUI_VK_DEBUG
-                    Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan] obtained extensions for layer: %s, count: %zu", layer_property.layerName,
-                                      props.size());
-#endif
-
-                    for (const auto& extension : props) {
-                        if (IsExtensionPresent(result, extension.extensionName) == false) {
-#ifdef RMLUI_VK_DEBUG
-                            Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan] new extension is added: %s", extension.extensionName);
-#endif
-
-                            result.push_back(extension);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-bool RenderInterface_VK::AddLayerToInstance(Rml::Vector<const char*>& result, const LayerPropertiesList& instance_layer_properties,
-                                            const char* p_instance_layer_name) noexcept {
-    if (p_instance_layer_name == nullptr) {
-        RMLUI_VK_ASSERTMSG(p_instance_layer_name, "you have an invalid layer");
-        return false;
-    }
-
-    if (IsLayerPresent(instance_layer_properties, p_instance_layer_name)) {
-        result.push_back(p_instance_layer_name);
-        return true;
-    }
-
-    Rml::Log::Message(Rml::Log::LT_WARNING, "[Vulkan] can't add layer %s", p_instance_layer_name);
-
-    return false;
-}
-
-bool RenderInterface_VK::AddExtensionToInstance(Rml::Vector<const char*>& result, const ExtensionPropertiesList& instance_extension_properties,
-                                                const char* p_instance_extension_name) noexcept {
-    if (p_instance_extension_name == nullptr) {
-        RMLUI_VK_ASSERTMSG(p_instance_extension_name, "you have an invalid extension");
-        return false;
-    }
-
-    if (IsExtensionPresent(instance_extension_properties, p_instance_extension_name)) {
-        result.push_back(p_instance_extension_name);
-        return true;
-    }
-
-    Rml::Log::Message(Rml::Log::LT_WARNING, "[Vulkan] can't add extension %s", p_instance_extension_name);
-
-    return false;
-}
-
-void RenderInterface_VK::CreatePropertiesFor_Instance(Rml::Vector<const char*>& instance_layer_names,
-                                                      Rml::Vector<const char*>& instance_extension_names) noexcept {
-    ExtensionPropertiesList instance_extension_properties;
-    LayerPropertiesList instance_layer_properties;
-
-    QueryInstanceLayers(instance_layer_properties);
-    QueryInstanceExtensions(instance_extension_properties, instance_layer_properties);
-
-    AddExtensionToInstance(instance_extension_names, instance_extension_properties, "VK_EXT_debug_utils");
-    AddExtensionToInstance(instance_extension_names, instance_extension_properties, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
-
-#ifdef RMLUI_VK_DEBUG
-    AddLayerToInstance(instance_layer_names, instance_layer_properties, "VK_LAYER_LUNARG_monitor");
-
-    bool is_cpu_validation = AddLayerToInstance(instance_layer_names, instance_layer_properties, "VK_LAYER_KHRONOS_validation") &&
-                             AddExtensionToInstance(instance_extension_names, instance_extension_properties, VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-
-    if (is_cpu_validation) {
-        Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan] CPU validation is enabled");
-
-        Rml::Array<const char*, 1> requested_extensions_for_gpu = {VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME};
-
-        for (const auto& extension_name : requested_extensions_for_gpu) {
-            AddExtensionToInstance(instance_extension_names, instance_extension_properties, extension_name);
-        }
-
-        debug_validation_features_ext.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
-        debug_validation_features_ext.pNext = nullptr;
-        debug_validation_features_ext.enabledValidationFeatureCount =
-            sizeof(debug_validation_features_ext_requested) / sizeof(debug_validation_features_ext_requested[0]);
-        debug_validation_features_ext.pEnabledValidationFeatures = debug_validation_features_ext_requested;
-    }
-
-#else
-    (void)instance_layer_names;
-
-#endif
-}
-
-bool RenderInterface_VK::IsLayerPresent(const LayerPropertiesList& properties, const char* p_layer_name) noexcept {
-    if (properties.empty())
-        return false;
-
-    if (p_layer_name == nullptr)
-        return false;
-
-    return std::find_if(properties.cbegin(), properties.cend(),
-                        [p_layer_name](const VkLayerProperties& prop) -> bool { return strcmp(prop.layerName, p_layer_name) == 0; }) != properties.cend();
-}
-
-bool RenderInterface_VK::IsExtensionPresent(const ExtensionPropertiesList& properties, const char* p_extension_name) noexcept {
-    if (properties.empty())
-        return false;
-
-    if (p_extension_name == nullptr)
-        return false;
-
-    return std::find_if(properties.cbegin(), properties.cend(), [p_extension_name](const VkExtensionProperties& prop) -> bool {
-               return strcmp(prop.extensionName, p_extension_name) == 0;
-           }) != properties.cend();
-}
-
-bool RenderInterface_VK::AddExtensionToDevice(Rml::Vector<const char*>& result, const ExtensionPropertiesList& device_extension_properties,
-                                              const char* p_device_extension_name) noexcept {
-    if (IsExtensionPresent(device_extension_properties, p_device_extension_name)) {
-        result.push_back(p_device_extension_name);
-        return true;
-    }
-
-    return false;
-}
-
-void RenderInterface_VK::CreatePropertiesFor_Device(ExtensionPropertiesList& result) noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must initialize your physical device. Call InitializePhysicalDevice first");
-
-    uint32_t extension_count = 0;
-    VkResult status = vkEnumerateDeviceExtensionProperties(m_p_physical_device, nullptr, &extension_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateDeviceExtensionProperties (getting count)");
-
-    result.resize(extension_count);
-    status = vkEnumerateDeviceExtensionProperties(m_p_physical_device, nullptr, &extension_count, result.data());
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateDeviceExtensionProperties (filling vector of VkExtensionProperties)");
-
-    uint32_t instance_layer_property_count = 0;
-    status = vkEnumerateInstanceLayerProperties(&instance_layer_property_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceLayerProperties (getting count)");
-
-    LayerPropertiesList layers;
-    layers.resize(instance_layer_property_count);
-
-    // On different OS Vulkan acts strange, so we can't get our extensions to just iterate through default functions
-    // We need to deeply analyze our layers and get specified extensions which pass user
-    // So we collect all extensions that are presented in physical device
-    // And add when they exist to extension_names so we don't pass properties
-
-    if (instance_layer_property_count) {
-        status = vkEnumerateInstanceLayerProperties(&instance_layer_property_count, layers.data());
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceLayerProperties (filling vector of VkLayerProperties)");
-
-        for (const auto& layer : layers) {
-            extension_count = 0;
-            status = vkEnumerateDeviceExtensionProperties(m_p_physical_device, layer.layerName, &extension_count, nullptr);
-            RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateDeviceExtensionProperties (getting count)");
-
-            if (extension_count) {
-                ExtensionPropertiesList new_extensions;
-                new_extensions.resize(extension_count);
-
-                status = vkEnumerateDeviceExtensionProperties(m_p_physical_device, layer.layerName, &extension_count, new_extensions.data());
-                RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateDeviceExtensionProperties (filling vector of VkExtensionProperties)");
-
-                for (const auto& extension : new_extensions) {
-                    if (IsExtensionPresent(result, extension.extensionName) == false) {
-#ifdef RMLUI_VK_DEBUG
-                        Rml::Log::Message(Rml::Log::LT_DEBUG, "[Vulkan] obtained new device extension from layer[%s]: %s", layer.layerName,
-                                          extension.extensionName);
-#endif
-
-                        result.push_back(extension);
-                    }
-                }
-            }
-        }
-    }
-}
-
-void RenderInterface_VK::CreateReportDebugCallback() noexcept {
-#ifdef RMLUI_VK_DEBUG
-    VkDebugUtilsMessengerCreateInfoEXT info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-    info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
-    info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-    info.pfnUserCallback = MyDebugReportCallback;
-
-    PFN_vkCreateDebugUtilsMessengerEXT p_callback_creation = VK_NULL_HANDLE;
-
-    p_callback_creation = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(m_p_instance, "vkCreateDebugUtilsMessengerEXT"));
-    VkResult status = p_callback_creation(m_p_instance, &info, nullptr, &m_debug_messenger);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkCreateDebugUtilsMessengerEXT");
-#endif
-}
-
-void RenderInterface_VK::Destroy_ReportDebugCallback() noexcept {
-#ifdef RMLUI_VK_DEBUG
-    PFN_vkDestroyDebugUtilsMessengerEXT p_destroy_callback =
-        reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(m_p_instance, "vkDestroyDebugUtilsMessengerEXT"));
-
-    if (m_debug_messenger) {
-        p_destroy_callback(m_p_instance, m_debug_messenger, nullptr);
-        m_debug_messenger = VK_NULL_HANDLE;
-    }
-#endif
-}
-
-uint32_t RenderInterface_VK::GetUserAPIVersion() const noexcept {
-    uint32_t result = RMLUI_VK_API_VERSION;
-
-#if defined VK_VERSION_1_1
-    VkResult status = vkEnumerateInstanceVersion(&result);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumerateInstanceVersion, See Status");
-#endif
-
-    return result;
-}
-
-uint32_t RenderInterface_VK::GetRequiredVersionAndValidateMachine() noexcept {
-    constexpr uint32_t kRequiredVersion = RMLUI_VK_API_VERSION;
-    const uint32_t user_version = GetUserAPIVersion();
-
-    RMLUI_VK_ASSERTMSG(kRequiredVersion <= user_version, "Your machine doesn't support Vulkan");
-
-    return kRequiredVersion;
-}
-
-void RenderInterface_VK::CollectPhysicalDevices(PhysicalDeviceWrapperList& out_physical_devices) noexcept {
-    uint32_t gpu_count = 1;
-    Rml::Vector<VkPhysicalDevice> temp_devices;
-
-    VkResult status = vkEnumeratePhysicalDevices(m_p_instance, &gpu_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumeratePhysicalDevices (getting count)");
-
-    temp_devices.resize(gpu_count);
-    status = vkEnumeratePhysicalDevices(m_p_instance, &gpu_count, temp_devices.data());
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkEnumeratePhysicalDevices (filling the vector of VkPhysicalDevice)");
-    RMLUI_VK_ASSERTMSG(temp_devices.empty() == false, "you must have one videocard at least!");
-
-    out_physical_devices.resize(temp_devices.size());
-    for (size_t i = 0; i < out_physical_devices.size(); i++) {
-        out_physical_devices[i].m_p_physical_device = temp_devices[i];
-        vkGetPhysicalDeviceProperties(out_physical_devices[i].m_p_physical_device, &out_physical_devices[i].m_physical_device_properties);
-    }
-}
-
-const RenderInterface_VK::PhysicalDeviceWrapper* RenderInterface_VK::ChoosePhysicalDevice(const PhysicalDeviceWrapperList& physical_devices,
-                                                                                          VkPhysicalDeviceType device_type) noexcept {
-    RMLUI_VK_ASSERTMSG(physical_devices.empty() == false,
-                       "you must have one videocard at least or early calling of this method, try call this after CollectPhysicalDevices");
-
-    for (const auto& device : physical_devices) {
-        if (device.m_physical_device_properties.deviceType == device_type)
-            return &device;
-    }
-
-    return nullptr;
-}
-
-VkSurfaceFormatKHR RenderInterface_VK::ChooseSwapchainFormat() noexcept {
-    static constexpr VkFormat UNORM_FORMATS[] = {
-        VK_FORMAT_R4G4_UNORM_PACK8,
-        VK_FORMAT_R4G4B4A4_UNORM_PACK16,
-        VK_FORMAT_B4G4R4A4_UNORM_PACK16,
-        VK_FORMAT_R5G6B5_UNORM_PACK16,
-        VK_FORMAT_B5G6R5_UNORM_PACK16,
-        VK_FORMAT_R5G5B5A1_UNORM_PACK16,
-        VK_FORMAT_B5G5R5A1_UNORM_PACK16,
-        VK_FORMAT_A1R5G5B5_UNORM_PACK16,
-        VK_FORMAT_R8_UNORM,
-        VK_FORMAT_R8G8_UNORM,
-        VK_FORMAT_R8G8B8_UNORM,
-        VK_FORMAT_B8G8R8_UNORM,
-        VK_FORMAT_R8G8B8A8_UNORM,
-        VK_FORMAT_B8G8R8A8_UNORM,
-        VK_FORMAT_A8B8G8R8_UNORM_PACK32,
-        VK_FORMAT_A2R10G10B10_UNORM_PACK32,
-        VK_FORMAT_A2B10G10R10_UNORM_PACK32,
-        VK_FORMAT_R16_UNORM,
-        VK_FORMAT_R16G16_UNORM,
-        VK_FORMAT_R16G16B16_UNORM,
-        VK_FORMAT_R16G16B16A16_UNORM,
-        VK_FORMAT_D16_UNORM,
-        VK_FORMAT_X8_D24_UNORM_PACK32,
-        VK_FORMAT_D16_UNORM_S8_UINT,
-        VK_FORMAT_D24_UNORM_S8_UINT,
-        VK_FORMAT_BC1_RGB_UNORM_BLOCK,
-        VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
-        VK_FORMAT_BC2_UNORM_BLOCK,
-        VK_FORMAT_BC3_UNORM_BLOCK,
-        VK_FORMAT_BC4_UNORM_BLOCK,
-        VK_FORMAT_BC5_UNORM_BLOCK,
-        VK_FORMAT_BC7_UNORM_BLOCK,
-        VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK,
-        VK_FORMAT_ETC2_R8G8B8A1_UNORM_BLOCK,
-        VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
-        VK_FORMAT_EAC_R11_UNORM_BLOCK,
-        VK_FORMAT_EAC_R11G11_UNORM_BLOCK,
-        VK_FORMAT_ASTC_4x4_UNORM_BLOCK,
-        VK_FORMAT_ASTC_5x4_UNORM_BLOCK,
-        VK_FORMAT_ASTC_5x5_UNORM_BLOCK,
-        VK_FORMAT_ASTC_6x5_UNORM_BLOCK,
-        VK_FORMAT_ASTC_6x6_UNORM_BLOCK,
-        VK_FORMAT_ASTC_8x5_UNORM_BLOCK,
-        VK_FORMAT_ASTC_8x6_UNORM_BLOCK,
-        VK_FORMAT_ASTC_8x8_UNORM_BLOCK,
-        VK_FORMAT_ASTC_10x5_UNORM_BLOCK,
-        VK_FORMAT_ASTC_10x6_UNORM_BLOCK,
-        VK_FORMAT_ASTC_10x8_UNORM_BLOCK,
-        VK_FORMAT_ASTC_10x10_UNORM_BLOCK,
-        VK_FORMAT_ASTC_12x10_UNORM_BLOCK,
-        VK_FORMAT_ASTC_12x12_UNORM_BLOCK,
-    };
-
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must initialize your physical device, before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_surface, "you must initialize your surface, before calling this method");
-
-    uint32_t surface_count = 0;
-    VkResult status = vkGetPhysicalDeviceSurfaceFormatsKHR(m_p_physical_device, m_p_surface, &surface_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkGetPhysicalDeviceSurfaceFormatsKHR (getting count)");
-
-    Rml::Vector<VkSurfaceFormatKHR> formats(surface_count);
-    status = vkGetPhysicalDeviceSurfaceFormatsKHR(m_p_physical_device, m_p_surface, &surface_count, formats.data());
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkGetPhysicalDeviceSurfaceFormatsKHR (filling vector of VkSurfaceFormatKHR)");
-
-    // Prefer UNORM formats
-    for (auto& format : formats) {
-        for (auto ufmt : UNORM_FORMATS) {
-            if (ufmt == format.format)
-                return format;
-        }
-    }
-
-    return formats.front();
-}
-
-VkExtent2D RenderInterface_VK::GetValidSurfaceExtent() noexcept {
-    VkSurfaceCapabilitiesKHR caps = GetSurfaceCapabilities();
-    VkExtent2D result = {(uint32_t)m_width, (uint32_t)m_height};
-
-    /*
-        https://www.khronos.org/registry/vulkan/specs/1.2-extensions/man/html/VkSurfaceCapabilitiesKHR.html
-    */
-    if (caps.currentExtent.width == 0xFFFFFFFF) {
-        result.width = Rml::Math::Clamp(result.width, caps.minImageExtent.width, caps.maxImageExtent.width);
-        result.height = Rml::Math::Clamp(result.height, caps.minImageExtent.height, caps.maxImageExtent.height);
-    } else {
-        result = caps.currentExtent;
-    }
-
-    return result;
-}
-
-VkSurfaceTransformFlagBitsKHR RenderInterface_VK::CreatePretransformSwapchain() noexcept {
-    auto caps = GetSurfaceCapabilities();
-
-    VkSurfaceTransformFlagBitsKHR result =
-        (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
-
-    return result;
-}
-
-VkCompositeAlphaFlagBitsKHR RenderInterface_VK::ChooseSwapchainCompositeAlpha() noexcept {
-    auto caps = GetSurfaceCapabilities();
-
-    VkCompositeAlphaFlagBitsKHR result = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-
-    VkCompositeAlphaFlagBitsKHR composite_alpha_flags[4] = {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-                                                            VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR};
-
-    for (uint32_t i = 0; i < sizeof(composite_alpha_flags); ++i) {
-        if (caps.supportedCompositeAlpha & composite_alpha_flags[i]) {
-            result = composite_alpha_flags[i];
-            break;
-        }
-    }
-
-    return result;
-}
-
-int RenderInterface_VK::Choose_SwapchainImageCount(uint32_t user_swapchain_count_for_creation, bool if_failed_choose_min) noexcept {
-    auto caps = GetSurfaceCapabilities();
-
-    // don't worry if you get this assert just ignore it the method will fix the count ;)
-    RMLUI_VK_ASSERTMSG(user_swapchain_count_for_creation >= caps.minImageCount,
-                       "can't be, you must have a valid count that bounds from minImageCount to maxImageCount! Otherwise you will get a validation error that "
-                       "specifies that you created a swapchain with invalid image count");
-    RMLUI_VK_ASSERTMSG(user_swapchain_count_for_creation <= caps.maxImageCount,
-                       "can't be, you must have a valid count that bounds from minImageCount to maxImageCount! Otherwise you will get a validation error that "
-                       "specifies that you created a swapchain with invalid image count");
-
-    int result = 0;
-
-    if (user_swapchain_count_for_creation < caps.minImageCount || user_swapchain_count_for_creation > caps.maxImageCount)
-        result = if_failed_choose_min ? caps.minImageCount : caps.maxImageCount;
-    else
-        result = user_swapchain_count_for_creation;
-
-    return result;
-}
-
-// https://www.khronos.org/registry/vulkan/specs/1.2-extensions/man/html/VkPresentModeKHR.html
-// VK_PRESENT_MODE_FIFO_KHR system must support this mode at least so by default we want to use it otherwise user can specify his mode
-VkPresentModeKHR RenderInterface_VK::GetPresentMode(VkPresentModeKHR required) noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "[Vulkan] you must initialize your device, before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "[Vulkan] you must initialize your physical device, before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_surface, "[Vulkan] you must initialize your surface, before calling this method");
-
-    VkPresentModeKHR result = required;
-
-    uint32_t present_modes_count = 0;
-    VkResult status = vkGetPhysicalDeviceSurfacePresentModesKHR(m_p_physical_device, m_p_surface, &present_modes_count, nullptr);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkGetPhysicalDeviceSurfacePresentModesKHR (getting count)");
-
-    Rml::Vector<VkPresentModeKHR> present_modes(present_modes_count);
-    status = vkGetPhysicalDeviceSurfacePresentModesKHR(m_p_physical_device, m_p_surface, &present_modes_count, present_modes.data());
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkGetPhysicalDeviceSurfacePresentModesKHR (filling vector of VkPresentModeKHR)");
-
-    for (const auto& mode : present_modes) {
-        if (mode == required)
-            return result;
-    }
-
-    Rml::Log::Message(Rml::Log::LT_WARNING,
-                      "[Vulkan] WARNING system can't detect your type of present mode so we choose the first from vector front");
-
-    return present_modes.front();
-}
-
-VkSurfaceCapabilitiesKHR RenderInterface_VK::GetSurfaceCapabilities() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "[Vulkan] you must initialize your device, before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "[Vulkan] you must initialize your physical device, before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_surface, "[Vulkan] you must initialize your surface, before calling this method");
-
-    VkSurfaceCapabilitiesKHR result;
-    VkResult status = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_p_physical_device, m_p_surface, &result);
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkGetPhysicalDeviceSurfaceCapabilitiesKHR");
-
-    return result;
+    if (m_p_allocator != VK_NULL_HANDLE)
+        vmaDestroyAllocator(m_p_allocator);
+    m_p_allocator = VK_NULL_HANDLE;
 }
 
 void RenderInterface_VK::CreateShaders() noexcept {
@@ -2989,162 +2570,25 @@ void RenderInterface_VK::Create_Pipelines() noexcept {
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateGraphicsPipelines");
 
 #ifdef RMLUI_VK_DEBUG
-    VkDebugUtilsObjectNameInfoEXT info_debug = {};
-
-    info_debug.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
-    info_debug.pObjectName = "pipeline_stencil for region where geometry will be drawn";
-    info_debug.objectType = VkObjectType::VK_OBJECT_TYPE_PIPELINE;
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_stencil_for_region_where_geometry_will_be_drawn;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_without_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_without_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
-
-    info_debug.pObjectName = "pipeline_with_textures";
-    info_debug.objectHandle = (uint64_t)m_p_pipeline_with_textures;
-
-    SetDebugUtilsObjectName(m_p_device, info_debug);
+    (void)m_debug_name_writer.set(
+        VK_OBJECT_TYPE_PIPELINE,
+        (uint64_t)m_p_pipeline_stencil_for_region_where_geometry_will_be_drawn,
+        "pipeline_stencil for region where geometry will be drawn");
+    (void)m_debug_name_writer.set(
+        VK_OBJECT_TYPE_PIPELINE,
+        (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures,
+        "pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures");
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_PIPELINE,
+                                  (uint64_t)m_p_pipeline_without_textures,
+                                  "pipeline_without_textures");
+    (void)m_debug_name_writer.set(
+        VK_OBJECT_TYPE_PIPELINE,
+        (uint64_t)m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures,
+        "pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures");
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_PIPELINE,
+                                  (uint64_t)m_p_pipeline_with_textures,
+                                  "pipeline_with_textures");
 #endif
-}
-
-void RenderInterface_VK::CreateSwapchainImages() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "[Vulkan] you must initialize VkDevice before calling this method");
-    RMLUI_VK_ASSERTMSG(m_p_swapchain, "[Vulkan] you must initialize VkSwapchainKHR before calling this method");
-
-    uint32_t count = 0;
-    auto status = vkGetSwapchainImagesKHR(m_p_device, m_p_swapchain, &count, nullptr);
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkGetSwapchainImagesKHR (get count)");
-
-    m_swapchain_images.resize(count);
-
-    status = vkGetSwapchainImagesKHR(m_p_device, m_p_swapchain, &count, m_swapchain_images.data());
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkGetSwapchainImagesKHR (filling vector)");
-    m_swapchain_image_layouts.assign(count, VK_IMAGE_LAYOUT_UNDEFINED);
-}
-
-void RenderInterface_VK::CreateSwapchainImageViews() noexcept {
-    CreateSwapchainImages();
-
-    m_swapchain_image_views.resize(m_swapchain_images.size());
-
-    uint32_t index = 0;
-    VkImageViewCreateInfo info = {};
-    VkResult status = VkResult::VK_SUCCESS;
-
-    for (auto p_image : m_swapchain_images) {
-        info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        info.pNext = nullptr;
-        info.format = m_swapchain_format.format;
-        info.components.r = VK_COMPONENT_SWIZZLE_R;
-        info.components.g = VK_COMPONENT_SWIZZLE_G;
-        info.components.b = VK_COMPONENT_SWIZZLE_B;
-        info.components.a = VK_COMPONENT_SWIZZLE_A;
-        info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        info.subresourceRange.baseMipLevel = 0;
-        info.subresourceRange.levelCount = 1;
-        info.subresourceRange.baseArrayLayer = 0;
-        info.subresourceRange.layerCount = 1;
-        info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        info.flags = 0;
-        info.image = p_image;
-
-        status = vkCreateImageView(m_p_device, &info, nullptr, &m_swapchain_image_views[index]);
-        ++index;
-
-        RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "[Vulkan] failed to vkCreateImageView (creating swapchain views)");
-    }
-}
-
-void RenderInterface_VK::Create_DepthStencilImage() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize your VkDevice here");
-    RMLUI_VK_ASSERTMSG(m_p_allocator, "you must initialize your VMA allcator");
-    RMLUI_VK_ASSERTMSG(m_texture_depthstencil.m_p_vk_image == nullptr, "you should delete texture before create it");
-
-    VkImageCreateInfo info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    info.imageType = VK_IMAGE_TYPE_2D;
-    if (m_depth_stencil_format == VK_FORMAT_UNDEFINED)
-        m_depth_stencil_format = Get_SupportedDepthFormat();
-    info.format = m_depth_stencil_format;
-    info.extent = {static_cast<uint32_t>(m_width), static_cast<uint32_t>(m_height), 1};
-    info.mipLevels = 1;
-    info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
-    info.tiling = VK_IMAGE_TILING_OPTIMAL;
-    info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-
-    VmaAllocation p_allocation = {};
-    VkImage p_image = {};
-
-    VmaAllocationCreateInfo info_alloc = {};
-    auto p_commentary = "our depth stencil image";
-
-    info_alloc.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-    info_alloc.flags = VMA_ALLOCATION_CREATE_USER_DATA_COPY_STRING_BIT;
-    info_alloc.pUserData = const_cast<char*>(p_commentary);
-
-    VmaAllocationInfo allocation_stats{};
-    VkResult status = vmaCreateImage(m_p_allocator, &info, &info_alloc, &p_image, &p_allocation, &allocation_stats);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateImage");
-
-    m_texture_depthstencil.m_p_vk_image = p_image;
-    m_texture_depthstencil.m_p_vma_allocation = p_allocation;
-    m_texture_depthstencil.m_vram_scope = "vulkan.rmlui.depth_stencil";
-    m_texture_depthstencil.m_vram_label = TextureVramLabel("depth_stencil",
-                                                           "swapchain",
-                                                           m_width,
-                                                           m_height,
-                                                           &m_texture_depthstencil);
-    m_texture_depthstencil.m_vram_allocation_size = allocation_stats.size;
-    RecordRmlUiVram(m_texture_depthstencil.m_vram_scope,
-                    m_texture_depthstencil.m_vram_label,
-                    m_texture_depthstencil.m_vram_allocation_size);
-    m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-}
-
-void RenderInterface_VK::Create_DepthStencilImageViews() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize your VkDevice here");
-    RMLUI_VK_ASSERTMSG(m_texture_depthstencil.m_p_vk_image_view == nullptr, "you should delete it before creating");
-    RMLUI_VK_ASSERTMSG(m_texture_depthstencil.m_p_vk_image, "you must initialize VkImage before create this");
-
-    VkImageViewCreateInfo info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    info.image = m_texture_depthstencil.m_p_vk_image;
-    if (m_depth_stencil_format == VK_FORMAT_UNDEFINED)
-        m_depth_stencil_format = Get_SupportedDepthFormat();
-    info.format = m_depth_stencil_format;
-    info.subresourceRange.baseMipLevel = 0;
-    info.subresourceRange.levelCount = 1;
-    info.subresourceRange.baseArrayLayer = 0;
-    info.subresourceRange.layerCount = 1;
-    info.subresourceRange.aspectMask = DepthStencilAspectMask();
-
-    VkImageView p_image_view = {};
-
-    VkResult status = vkCreateImageView(m_p_device, &info, nullptr, &p_image_view);
-
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkCreateImageView");
-
-    m_texture_depthstencil.m_p_vk_image_view = p_image_view;
 }
 
 void RenderInterface_VK::UpdateViewportState(const VkExtent2D& real_render_image_size) noexcept {
@@ -3174,15 +2618,6 @@ void RenderInterface_VK::UpdateViewportState(const VkExtent2D& real_render_image
     SetTransform(nullptr);
 }
 
-void RenderInterface_VK::CreateResourcesDependentOnSize(const VkExtent2D& real_render_image_size) noexcept {
-    UpdateViewportState(real_render_image_size);
-
-    CreateSwapchainImageViews();
-    Create_DepthStencilImage();
-    Create_DepthStencilImageViews();
-    Create_Pipelines();
-}
-
 RenderInterface_VK::buffer_data_t RenderInterface_VK::CreateResource_StagingBuffer(VkDeviceSize size, VkBufferUsageFlags flags) noexcept {
     VkBufferCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -3199,6 +2634,9 @@ RenderInterface_VK::buffer_data_t RenderInterface_VK::CreateResource_StagingBuff
 
     VkResult status = vmaCreateBuffer(m_p_allocator, &info, &info_allocation, &p_buffer, &p_allocation, &info_stats);
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
+    if (status == VkResult::VK_SUCCESS && p_allocation != VK_NULL_HANDLE) {
+        vmaSetAllocationName(m_p_allocator, p_allocation, "RmlUi staging buffer");
+    }
 
 #ifdef RMLUI_VK_DEBUG
     Rml::Log::Message(Rml::Log::LT_DEBUG, "Allocated buffer [%s]", FormatByteSize(info_stats.size).c_str());
@@ -3222,6 +2660,7 @@ void RenderInterface_VK::DestroyResource_StagingBuffer(const buffer_data_t& data
 void RenderInterface_VK::Destroy_Textures() noexcept {
     for (auto& textures : m_pending_for_deletion_textures_by_frames) {
         for (texture_data_t* p_data : textures) {
+            UnregisterLiveTexture(p_data);
             Destroy_Texture(*p_data);
             delete p_data;
         }
@@ -3230,26 +2669,30 @@ void RenderInterface_VK::Destroy_Textures() noexcept {
     }
 }
 
-uint32_t RenderInterface_VK::ActiveResourceSlot() const noexcept {
-    return m_resource_slot % kSwapchainBackBufferCount;
+void RenderInterface_VK::Destroy_LiveTextures() noexcept {
+    auto live_textures = std::move(m_live_textures);
+    m_live_textures.clear();
+
+    for (texture_data_t* texture : live_textures) {
+        if (!texture)
+            continue;
+        Destroy_Texture(*texture);
+        delete texture;
+    }
 }
 
-void RenderInterface_VK::WaitForSubmittedFrames() noexcept {
-    if (!m_p_device || m_executed_fences.empty())
-        return;
+void RenderInterface_VK::RegisterLiveTexture(texture_data_t* texture) {
+    if (texture)
+        m_live_textures.insert(texture);
+}
 
-    Rml::Vector<VkFence> fences;
-    fences.reserve(m_executed_fences.size());
-    for (const VkFence fence : m_executed_fences) {
-        if (fence)
-            fences.push_back(fence);
-    }
-    if (fences.empty())
-        return;
+void RenderInterface_VK::UnregisterLiveTexture(texture_data_t* texture) {
+    if (texture)
+        m_live_textures.erase(texture);
+}
 
-    const VkResult status = vkWaitForFences(
-        m_p_device, static_cast<uint32_t>(fences.size()), fences.data(), VK_TRUE, std::numeric_limits<uint64_t>::max());
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to wait for submitted RmlUi Vulkan frames");
+uint32_t RenderInterface_VK::ActiveResourceSlot() const noexcept {
+    return m_resource_slot % kSwapchainBackBufferCount;
 }
 
 void RenderInterface_VK::FreeTransientShaderAllocations(const uint32_t resource_slot) noexcept {
@@ -3265,6 +2708,10 @@ void RenderInterface_VK::FreeAllTransientShaderAllocations() noexcept {
 }
 
 void RenderInterface_VK::Destroy_Geometries() noexcept {
+    if (m_frosted_glass_quad_geometry) {
+        ReleaseGeometry(m_frosted_glass_quad_geometry);
+        m_frosted_glass_quad_geometry = {};
+    }
     if (m_texture_quad_geometry) {
         ReleaseGeometry(m_texture_quad_geometry);
         m_texture_quad_geometry = {};
@@ -3279,42 +2726,17 @@ void RenderInterface_VK::Destroy_Texture(const texture_data_t& texture) noexcept
     RMLUI_VK_ASSERTMSG(m_p_allocator, "you must have initialized VmaAllocator");
     RMLUI_VK_ASSERTMSG(m_p_device, "you must have initialized VkDevice");
 
+    if (VkDescriptorSet p_set = texture.m_p_vk_descriptor_set; p_set)
+        m_manager_descriptors.Free_Descriptors(m_p_device, &p_set);
+
     if (texture.m_p_vma_allocation) {
         if (!texture.m_vram_scope.empty() && !texture.m_vram_label.empty())
             RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label, 0);
-        m_image_barriers.forgetImage(texture.m_p_vk_image);
+        m_image_barriers.forgetImage(texture.m_p_vk_image, texture.m_barrier_generation);
+        if (texture.m_p_vk_image_view)
+            vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
         vmaDestroyImage(m_p_allocator, texture.m_p_vk_image, texture.m_p_vma_allocation);
-        vkDestroyImageView(m_p_device, texture.m_p_vk_image_view, nullptr);
     }
-
-    if (VkDescriptorSet p_set = texture.m_p_vk_descriptor_set; p_set) {
-        m_manager_descriptors.Free_Descriptors(m_p_device, &p_set);
-    }
-}
-
-void RenderInterface_VK::DestroyResourcesDependentOnSize() noexcept {
-    DestroyRenderLayers();
-    Destroy_Pipelines();
-    DestroySwapchainImageViews();
-
-    Destroy_Texture(m_texture_depthstencil);
-    m_texture_depthstencil.m_p_vk_image = nullptr;
-    m_texture_depthstencil.m_p_vk_image_view = nullptr;
-    m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
-    m_image_barriers.reset();
-}
-
-void RenderInterface_VK::DestroySwapchainImageViews() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "[Vulkan] you must initialize VkDevice before calling this method");
-
-    m_swapchain_images.clear();
-    m_swapchain_image_layouts.clear();
-
-    for (auto p_view : m_swapchain_image_views) {
-        vkDestroyImageView(m_p_device, p_view, nullptr);
-    }
-
-    m_swapchain_image_views.clear();
 }
 
 void RenderInterface_VK::Destroy_Pipelines() noexcept {
@@ -3326,10 +2748,6 @@ void RenderInterface_VK::Destroy_Pipelines() noexcept {
     vkDestroyPipeline(m_p_device, m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_with_textures, nullptr);
     vkDestroyPipeline(m_p_device, m_p_pipeline_stencil_for_regular_geometry_that_applied_to_region_without_textures, nullptr);
 }
-
-void RenderInterface_VK::DestroyDescriptorSets() noexcept {}
-
-void RenderInterface_VK::DestroyPipelineLayout() noexcept {}
 
 void RenderInterface_VK::DestroySamplers() noexcept {
     RMLUI_VK_ASSERTMSG(m_p_device, "must exist here");
@@ -3348,6 +2766,138 @@ VkImageAspectFlags RenderInterface_VK::DepthStencilAspectMask() const noexcept {
     case VK_FORMAT_D32_SFLOAT_S8_UINT: return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     default: return VK_IMAGE_ASPECT_DEPTH_BIT;
     }
+}
+
+bool RenderInterface_VK::CreateFrostedGlassTexture(texture_data_t& texture,
+                                                   const int width,
+                                                   const int height,
+                                                   const std::string_view label) {
+    if (!m_p_allocator || width <= 0 || height <= 0)
+        return false;
+
+    VkImageCreateInfo image_info{};
+    image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    image_info.imageType = VK_IMAGE_TYPE_2D;
+    image_info.format = m_swapchain_format.format;
+    image_info.extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
+    image_info.mipLevels = 1;
+    image_info.arrayLayers = 1;
+    image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+    image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+    image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                       VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo allocation_info{};
+    allocation_info.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    VmaAllocationInfo allocation_stats{};
+    const VkResult image_status = vmaCreateImage(m_p_allocator,
+                                                 &image_info,
+                                                 &allocation_info,
+                                                 &texture.m_p_vk_image,
+                                                 &texture.m_p_vma_allocation,
+                                                 &allocation_stats);
+    if (image_status != VK_SUCCESS) {
+        Rml::Log::Message(Rml::Log::LT_WARNING,
+                          "[Vulkan] Failed to allocate frosted glass texture '%.*s' (%d).",
+                          static_cast<int>(label.size()), label.data(), static_cast<int>(image_status));
+        texture = {};
+        return false;
+    }
+
+    texture.m_width = width;
+    texture.m_height = height;
+    texture.m_p_vk_sampler = m_p_sampler_linear;
+    texture.m_barrier_generation = ++m_image_barrier_generation;
+    texture.m_vram_scope = "vulkan.rmlui.frosted_glass";
+    texture.m_vram_label = TextureVramLabel("backdrop", label, width, height, &texture);
+    texture.m_vram_allocation_size = allocation_stats.size;
+    RecordRmlUiVram(texture.m_vram_scope, texture.m_vram_label,
+                    texture.m_vram_allocation_size);
+
+    const std::string image_name = std::format("rmlui.frosted_glass.{}.image", label);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)texture.m_p_vk_image,
+                                  image_name.c_str());
+    vmaSetAllocationName(m_p_allocator, texture.m_p_vma_allocation, image_name.c_str());
+
+    VkImageViewCreateInfo view_info{};
+    view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    view_info.image = texture.m_p_vk_image;
+    view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    view_info.format = m_swapchain_format.format;
+    view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    view_info.subresourceRange.baseMipLevel = 0;
+    view_info.subresourceRange.levelCount = 1;
+    view_info.subresourceRange.baseArrayLayer = 0;
+    view_info.subresourceRange.layerCount = 1;
+    const VkResult view_status = vkCreateImageView(m_p_device,
+                                                   &view_info,
+                                                   nullptr,
+                                                   &texture.m_p_vk_image_view);
+    if (view_status != VK_SUCCESS) {
+        Rml::Log::Message(Rml::Log::LT_WARNING,
+                          "[Vulkan] Failed to create frosted glass texture view '%.*s' (%d).",
+                          static_cast<int>(label.size()), label.data(), static_cast<int>(view_status));
+        Destroy_Texture(texture);
+        texture = {};
+        return false;
+    }
+    const std::string view_name = std::format("rmlui.frosted_glass.{}.view", label);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)texture.m_p_vk_image_view,
+                                  view_name.c_str());
+    return true;
+}
+
+void RenderInterface_VK::DestroyFrostedGlassBackdrop(const bool deferred) noexcept {
+    const auto release = [this, deferred](texture_data_t& texture) {
+        if (!texture.m_p_vk_image)
+            return;
+        if (deferred)
+            QueueTextureForDeferredDeletion(new texture_data_t(texture));
+        else
+            Destroy_Texture(texture);
+        texture = {};
+    };
+    release(m_frosted_glass_backdrop.primary);
+    release(m_frosted_glass_backdrop.secondary);
+    m_frosted_glass_backdrop = {};
+}
+
+bool RenderInterface_VK::EnsureFrostedGlassBackdrop() {
+    if (!m_frosted_glass_blit_supported || m_width <= 0 || m_height <= 0)
+        return false;
+
+    const int primary_width = std::max(1, m_width / 4);
+    const int primary_height = std::max(1, m_height / 4);
+    const int secondary_width = std::max(1, m_width / 8);
+    const int secondary_height = std::max(1, m_height / 8);
+    const bool size_matches =
+        m_frosted_glass_backdrop.primary.m_p_vk_image &&
+        m_frosted_glass_backdrop.secondary.m_p_vk_image &&
+        m_frosted_glass_backdrop.primary_width == primary_width &&
+        m_frosted_glass_backdrop.primary_height == primary_height &&
+        m_frosted_glass_backdrop.secondary_width == secondary_width &&
+        m_frosted_glass_backdrop.secondary_height == secondary_height;
+    if (size_matches)
+        return true;
+
+    DestroyFrostedGlassBackdrop(true);
+    if (!CreateFrostedGlassTexture(m_frosted_glass_backdrop.primary,
+                                   primary_width, primary_height, "primary") ||
+        !CreateFrostedGlassTexture(m_frosted_glass_backdrop.secondary,
+                                   secondary_width, secondary_height, "secondary")) {
+        DestroyFrostedGlassBackdrop(true);
+        m_frosted_glass_blit_supported = false;
+        return false;
+    }
+    m_frosted_glass_backdrop.primary_width = primary_width;
+    m_frosted_glass_backdrop.primary_height = primary_height;
+    m_frosted_glass_backdrop.secondary_width = secondary_width;
+    m_frosted_glass_backdrop.secondary_height = secondary_height;
+    return true;
 }
 
 void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
@@ -3395,6 +2945,13 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     VkResult status = vmaCreateImage(m_p_allocator, &color_info, &allocation_info, &layer.m_color.m_p_vk_image,
                                      &layer.m_color.m_p_vma_allocation, &color_allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer color image");
+    const std::string color_image_name = std::format("rmlui.layer[{}].color.image", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)layer.m_color.m_p_vk_image,
+                                  color_image_name.c_str());
+    vmaSetAllocationName(m_p_allocator,
+                         layer.m_color.m_p_vma_allocation,
+                         color_image_name.c_str());
     layer.m_color.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_color.m_vram_label = TextureVramLabel("layer_color", "rmlui", m_width, m_height, &layer.m_color);
     layer.m_color.m_vram_allocation_size = color_allocation_stats.size;
@@ -3414,8 +2971,13 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     color_view_info.subresourceRange.layerCount = 1;
     status = vkCreateImageView(m_p_device, &color_view_info, nullptr, &layer.m_color.m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer color image view");
+    const std::string color_view_name = std::format("rmlui.layer[{}].color.view", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)layer.m_color.m_p_vk_image_view,
+                                  color_view_name.c_str());
     layer.m_color.m_p_vk_sampler = m_p_sampler_linear;
     layer.m_color_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layer.m_color.m_barrier_generation = ++m_image_barrier_generation;
 
     VkImageCreateInfo depth_info{};
     depth_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -3433,6 +2995,13 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     status = vmaCreateImage(m_p_allocator, &depth_info, &allocation_info, &layer.m_depth_stencil.m_p_vk_image,
                             &layer.m_depth_stencil.m_p_vma_allocation, &depth_allocation_stats);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image");
+    const std::string depth_image_name = std::format("rmlui.layer[{}].depth-stencil.image", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE,
+                                  (uint64_t)layer.m_depth_stencil.m_p_vk_image,
+                                  depth_image_name.c_str());
+    vmaSetAllocationName(m_p_allocator,
+                         layer.m_depth_stencil.m_p_vma_allocation,
+                         depth_image_name.c_str());
     layer.m_depth_stencil.m_vram_scope = "vulkan.rmlui.render_layer";
     layer.m_depth_stencil.m_vram_label = TextureVramLabel("layer_depth", "rmlui", m_width, m_height, &layer.m_depth_stencil);
     layer.m_depth_stencil.m_vram_allocation_size = depth_allocation_stats.size;
@@ -3452,7 +3021,12 @@ void RenderInterface_VK::EnsureRenderLayer(Rml::LayerHandle layer_handle) {
     depth_view_info.subresourceRange.layerCount = 1;
     status = vkCreateImageView(m_p_device, &depth_view_info, nullptr, &layer.m_depth_stencil.m_p_vk_image_view);
     RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to create RmlUi Vulkan layer depth/stencil image view");
+    const std::string depth_view_name = std::format("rmlui.layer[{}].depth-stencil.view", index);
+    (void)m_debug_name_writer.set(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                  (uint64_t)layer.m_depth_stencil.m_p_vk_image_view,
+                                  depth_view_name.c_str());
     layer.m_depth_stencil_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+    layer.m_depth_stencil.m_barrier_generation = ++m_image_barrier_generation;
     layer.width = m_width;
     layer.height = m_height;
 }
@@ -3471,12 +3045,12 @@ const RenderInterface_VK::render_layer_t* RenderInterface_VK::GetRenderLayer(Rml
     return index < m_render_layers.size() ? &m_render_layers[index] : nullptr;
 }
 
-void RenderInterface_VK::TransitionImageLayout(VkImage image, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout) {
+void RenderInterface_VK::TransitionImageLayout(VkImage image, std::uint64_t generation, VkImageAspectFlags aspect_mask, VkImageLayout old_layout, VkImageLayout new_layout) {
     if (!m_p_current_command_buffer || !image || old_layout == new_layout)
         return;
 
-    m_image_barriers.registerImage(image, aspect_mask, old_layout);
-    m_image_barriers.transitionImage(m_p_current_command_buffer, image, aspect_mask, new_layout);
+    m_image_barriers.registerImage(image, generation, aspect_mask, old_layout);
+    m_image_barriers.transitionImage(m_p_current_command_buffer, image, generation, aspect_mask, new_layout);
 }
 
 void RenderInterface_VK::ResetDynamicRenderState() {
@@ -3484,7 +3058,7 @@ void RenderInterface_VK::ResetDynamicRenderState() {
         return;
     vkCmdSetViewport(m_p_current_command_buffer, 0, 1, &m_viewport);
     VkRect2D scissor = (m_is_use_scissor_specified && !m_is_transformed_scissor_enabled) ? m_scissor : ContextClipScissor();
-    scissor = IntersectContextClip(scissor);
+    scissor = ClampToCacheCaptureArea(IntersectContextClip(scissor));
     vkCmdSetScissor(m_p_current_command_buffer, 0, 1, &scissor);
     vkCmdSetStencilReference(m_p_current_command_buffer, VK_STENCIL_FACE_FRONT_AND_BACK, 1);
 }
@@ -3498,10 +3072,10 @@ void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool
     if (layer->width <= 0 || layer->height <= 0)
         return;
 
-    TransitionImageLayout(layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, layer->m_color_layout,
+    TransitionImageLayout(layer->m_color.m_p_vk_image, layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, layer->m_color_layout,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     layer->m_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    TransitionImageLayout(layer->m_depth_stencil.m_p_vk_image, DepthStencilAspectMask(), layer->m_depth_stencil_layout,
+    TransitionImageLayout(layer->m_depth_stencil.m_p_vk_image, layer->m_depth_stencil.m_barrier_generation, DepthStencilAspectMask(), layer->m_depth_stencil_layout,
                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
     layer->m_depth_stencil_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
@@ -3526,11 +3100,24 @@ void RenderInterface_VK::BeginLayerRendering(Rml::LayerHandle layer_handle, bool
     depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     depth_attachment.clearValue = depth_clear;
 
+    // Full-layer default; during cache capture, restrict renderArea so loadOp CLEAR
+    // only touches the panel region (scissors are clamped to the same rect).
+    VkRect2D render_area{};
+    render_area.offset = {0, 0};
+    render_area.extent = {static_cast<uint32_t>(layer->width), static_cast<uint32_t>(layer->height)};
+    if (m_cache_capture_active) {
+        render_area = ClampToCacheCaptureArea(render_area);
+        // Empty capture area would make begin-rendering illegal; fall back to full layer.
+        if (render_area.extent.width == 0 || render_area.extent.height == 0) {
+            render_area.offset = {0, 0};
+            render_area.extent = {static_cast<uint32_t>(layer->width),
+                                  static_cast<uint32_t>(layer->height)};
+        }
+    }
+
     VkRenderingInfo rendering_info{};
     rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
-    rendering_info.renderArea.offset = {0, 0};
-    rendering_info.renderArea.extent = {static_cast<uint32_t>(layer->width),
-                                        static_cast<uint32_t>(layer->height)};
+    rendering_info.renderArea = render_area;
     rendering_info.layerCount = 1;
     rendering_info.colorAttachmentCount = 1;
     rendering_info.pColorAttachments = &color_attachment;
@@ -3554,28 +3141,12 @@ void RenderInterface_VK::BeginSwapchainRendering(VkAttachmentLoadOp color_load_o
         depth_view = m_external_depth_stencil_image_view;
         if (m_external_swapchain_image != VK_NULL_HANDLE && m_external_swapchain_layout != VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) {
             TransitionImageLayout(m_external_swapchain_image,
+                                  m_external_swapchain_barrier_generation,
                                   VK_IMAGE_ASPECT_COLOR_BIT,
                                   m_external_swapchain_layout,
                                   VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
             m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         }
-    } else {
-        if (m_image_index >= m_swapchain_image_views.size() || m_image_index >= m_swapchain_images.size() ||
-            m_image_index >= m_swapchain_image_layouts.size()) {
-            return;
-        }
-        color_view = m_swapchain_image_views[m_image_index];
-        depth_view = m_texture_depthstencil.m_p_vk_image_view;
-        TransitionImageLayout(m_swapchain_images[m_image_index],
-                              VK_IMAGE_ASPECT_COLOR_BIT,
-                              m_swapchain_image_layouts[m_image_index],
-                              VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        m_swapchain_image_layouts[m_image_index] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        TransitionImageLayout(m_texture_depthstencil.m_p_vk_image,
-                              DepthStencilAspectMask(),
-                              m_depth_stencil_layout,
-                              VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-        m_depth_stencil_layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     }
 
     if (!color_view || !depth_view)
@@ -3640,10 +3211,10 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
 
     EndActiveRendering();
 
-    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
+    TransitionImageLayout(m_external_swapchain_image, m_external_swapchain_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, destination_layer->m_color_layout,
+    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, destination_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, destination_layer->m_color_layout,
                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
     destination_layer->m_color_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 
@@ -3660,10 +3231,10 @@ bool RenderInterface_VK::CopySwapchainToLayer(Rml::LayerHandle destination) {
     vkCmdCopyImage(m_p_current_command_buffer, m_external_swapchain_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    destination_layer->m_color.m_p_vk_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy_region);
 
-    TransitionImageLayout(m_external_swapchain_image, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
+    TransitionImageLayout(m_external_swapchain_image, m_external_swapchain_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, m_external_swapchain_layout,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     m_external_swapchain_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    TransitionImageLayout(destination_layer->m_color.m_p_vk_image, destination_layer->m_color.m_barrier_generation, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     destination_layer->m_color_layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
@@ -3715,26 +3286,6 @@ void RenderInterface_VK::DestroyRenderLayers() noexcept {
     m_active_layer = {};
 }
 
-void RenderInterface_VK::Wait() noexcept {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize device");
-    RMLUI_VK_ASSERTMSG(m_p_swapchain, "you must initialize swapchain");
-
-    constexpr uint64_t kMaxUint64 = std::numeric_limits<uint64_t>::max();
-
-    auto status =
-        vkAcquireNextImageKHR(m_p_device, m_p_swapchain, kMaxUint64, m_semaphores_image_available[m_semaphore_index], nullptr, &m_image_index);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkAcquireNextImageKHR (see status)");
-
-    m_semaphore_index_previous = m_semaphore_index;
-    m_semaphore_index = ((m_semaphore_index + 1) % kSwapchainBackBufferCount);
-
-    status = vkWaitForFences(m_p_device, 1, &m_executed_fences[m_semaphore_index_previous], VK_TRUE, kMaxUint64);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkWaitForFences (see status)");
-
-    status = vkResetFences(m_p_device, 1, &m_executed_fences[m_semaphore_index_previous]);
-    RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkResetFences (see status)");
-}
-
 void RenderInterface_VK::Update_PendingForDeletion_Textures_By_Frame(const uint32_t resource_slot) noexcept {
     auto& textures_for_previous_frame = m_pending_for_deletion_textures_by_frames[resource_slot % kSwapchainBackBufferCount];
 
@@ -3754,151 +3305,6 @@ void RenderInterface_VK::Update_PendingForDeletion_Geometries(const uint32_t res
     }
 
     geometries.clear();
-}
-
-void RenderInterface_VK::Submit() noexcept {
-    const VkSemaphore p_semaphores_wait[] = {m_semaphores_image_available[m_semaphore_index_previous]};
-    const VkSemaphore p_semaphores_signal[] = {m_semaphores_finished_render[m_semaphore_index]};
-
-    VkFence p_fence = m_executed_fences[m_semaphore_index];
-
-    VkPipelineStageFlags submit_wait_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-    VkSubmitInfo info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    info.pNext = nullptr;
-    info.waitSemaphoreCount = 1;
-    info.pWaitSemaphores = p_semaphores_wait;
-    info.pWaitDstStageMask = &submit_wait_stage;
-    info.signalSemaphoreCount = 1;
-    info.pSignalSemaphores = p_semaphores_signal;
-    info.commandBufferCount = 1;
-    info.pCommandBuffers = &m_p_current_command_buffer;
-
-    VkResult status = vkQueueSubmit(m_p_queue_graphics, 1, &info, p_fence);
-
-    RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkQueueSubmit");
-}
-
-void RenderInterface_VK::Present() noexcept {
-    VkPresentInfoKHR info = {};
-
-    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-    info.pNext = nullptr;
-    info.waitSemaphoreCount = 1;
-    info.pWaitSemaphores = &(m_semaphores_finished_render[m_semaphore_index]);
-    info.swapchainCount = 1;
-    info.pSwapchains = &m_p_swapchain;
-    info.pImageIndices = &m_image_index;
-    info.pResults = nullptr;
-
-    VkResult status = vkQueuePresentKHR(m_p_queue_present, &info);
-
-    if (!(status == VK_SUCCESS)) {
-        if (status == VK_ERROR_OUT_OF_DATE_KHR || status == VK_SUBOPTIMAL_KHR) {
-            RecreateSwapchain();
-        } else {
-            RMLUI_VK_ASSERTMSG(status == VK_SUCCESS, "failed to vkQueuePresentKHR");
-        }
-    }
-}
-
-VkFormat RenderInterface_VK::Get_SupportedDepthFormat() {
-    RMLUI_VK_ASSERTMSG(m_p_physical_device, "you must initialize and pick physical device for your renderer");
-
-    Rml::Array<VkFormat, 5> formats = {VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT,
-                                       VK_FORMAT_D16_UNORM};
-
-    VkFormatProperties properties;
-    for (const auto& format : formats) {
-        vkGetPhysicalDeviceFormatProperties(m_p_physical_device, format, &properties);
-
-        if (properties.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
-            return format;
-        }
-    }
-
-    return VkFormat::VK_FORMAT_UNDEFINED;
-}
-
-RenderInterface_VK::CommandBufferRing::CommandBufferRing() : m_p_device{},
-                                                             m_frame_index{},
-                                                             m_p_current_frame{},
-                                                             m_frames{} {}
-
-void RenderInterface_VK::CommandBufferRing::Initialize(VkDevice p_device, uint32_t queue_index_graphics) noexcept {
-    RMLUI_VK_ASSERTMSG(p_device, "you can't pass an invalid VkDevice here");
-    RMLUI_VK_ASSERTMSG(!m_p_device, "already initialized");
-
-    m_p_device = p_device;
-
-    for (CommandBuffersPerFrame& current_buffer : m_frames) {
-        for (uint32_t command_buffer_index = 0; command_buffer_index < kNumCommandBuffersPerFrame; ++command_buffer_index) {
-            VkCommandPoolCreateInfo info_pool = {};
-            info_pool.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-            info_pool.pNext = nullptr;
-            info_pool.queueFamilyIndex = queue_index_graphics;
-            info_pool.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
-
-            VkCommandPool p_pool = nullptr;
-            auto status = vkCreateCommandPool(p_device, &info_pool, nullptr, &p_pool);
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "can't create command pool");
-
-            current_buffer.m_command_pools[command_buffer_index] = p_pool;
-
-            VkCommandBufferAllocateInfo info_buffer = {};
-            info_buffer.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-            info_buffer.pNext = nullptr;
-            info_buffer.commandPool = p_pool;
-            info_buffer.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-            info_buffer.commandBufferCount = 1;
-
-            VkCommandBuffer p_buffer = nullptr;
-            status = vkAllocateCommandBuffers(p_device, &info_buffer, &p_buffer);
-            RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to fill command buffers");
-
-            current_buffer.m_command_buffers[command_buffer_index] = p_buffer;
-        }
-    }
-
-    m_frame_index = 0;
-    m_p_current_frame = &m_frames[m_frame_index];
-}
-
-void RenderInterface_VK::CommandBufferRing::Shutdown() {
-    RMLUI_VK_ASSERTMSG(m_p_device, "you can't have an uninitialized VkDevice");
-
-    for (CommandBuffersPerFrame& current_buffer : m_frames) {
-        for (uint32_t i = 0; i < kNumCommandBuffersPerFrame; ++i) {
-            vkFreeCommandBuffers(m_p_device, current_buffer.m_command_pools[i], 1, &current_buffer.m_command_buffers[i]);
-            vkDestroyCommandPool(m_p_device, current_buffer.m_command_pools[i], nullptr);
-        }
-    }
-}
-
-void RenderInterface_VK::CommandBufferRing::OnBeginFrame() {
-    m_frame_index = ((m_frame_index + 1) % kNumFramesToBuffer);
-    m_p_current_frame = &m_frames[m_frame_index];
-
-    // Reset all command pools of the current frame.
-    for (VkCommandPool command_pool : m_p_current_frame->m_command_pools) {
-        auto status = vkResetCommandPool(m_p_device, command_pool, 0);
-        RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vkResetCommandPool");
-    }
-}
-
-VkCommandBuffer RenderInterface_VK::CommandBufferRing::GetCommandBufferForActiveFrame(CommandBufferName named_command_buffer) {
-    RMLUI_VK_ASSERTMSG(m_p_current_frame, "must be valid");
-    RMLUI_VK_ASSERTMSG(m_p_device, "you must initialize your VkDevice field with valid pointer or it's uninitialized field");
-    RMLUI_VK_ASSERTMSG((int)named_command_buffer < (int)CommandBufferName::Count, "overflow, please use one of the named command lists");
-
-    const uint32_t list_index = static_cast<uint32_t>(named_command_buffer);
-
-    VkCommandBuffer result = m_p_current_frame->m_command_buffers[list_index];
-    RMLUI_VK_ASSERTMSG(result, "your VkCommandBuffer must be valid otherwise debug your command list class for frame");
-
-    return result;
 }
 
 RenderInterface_VK::MemoryPool::MemoryPool() : m_memory_total_size{},
@@ -3947,6 +3353,14 @@ void RenderInterface_VK::MemoryPool::Initialize(VkDeviceSize byte_size, VkDevice
     auto status = vmaCreateBuffer(m_p_vk_allocator, &info, &info_alloc, &m_p_buffer, &m_p_buffer_alloc, &info_stats);
 
     RMLUI_VK_ASSERTMSG(status == VkResult::VK_SUCCESS, "failed to vmaCreateBuffer");
+    if (status == VkResult::VK_SUCCESS && m_p_buffer_alloc != VK_NULL_HANDLE) {
+        vmaSetAllocationName(m_p_vk_allocator,
+                             m_p_buffer_alloc,
+                             "RmlUi geometry memory pool");
+        RecordRmlUiVram("vulkan.rmlui.geometry_pool",
+                        "vertex_index_uniform",
+                        info_stats.size);
+    }
 
     VmaVirtualBlockCreateInfo info_virtual_block = {};
     info_virtual_block.size = m_memory_total_size;
@@ -3975,6 +3389,7 @@ void RenderInterface_VK::MemoryPool::Shutdown() noexcept {
 
     vmaUnmapMemory(m_p_vk_allocator, m_p_buffer_alloc);
     vmaDestroyVirtualBlock(m_p_block);
+    RecordRmlUiVram("vulkan.rmlui.geometry_pool", "vertex_index_uniform", 0);
     vmaDestroyBuffer(m_p_vk_allocator, m_p_buffer, m_p_buffer_alloc);
 }
 

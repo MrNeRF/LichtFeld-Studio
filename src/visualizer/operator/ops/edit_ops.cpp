@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "edit_ops.hpp"
+#include "core/property_registry.hpp"
 #include "core/services.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
-#include "operator/property_schema.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -44,6 +44,9 @@ namespace lfs::vis::op {
     }
 
     OperatorResult UndoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            scene_manager->completePendingSelectionCounts();
+        }
         const auto result = undoHistory().undo();
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::ALL);
@@ -68,6 +71,9 @@ namespace lfs::vis::op {
     }
 
     OperatorResult RedoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
+        if (auto* const scene_manager = services().sceneOrNull()) {
+            scene_manager->completePendingSelectionCounts();
+        }
         const auto result = undoHistory().redo();
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::ALL);
@@ -106,38 +112,26 @@ namespace lfs::vis::op {
         }
 
         const bool keep_children = props.get_or<bool>("keep_children", false);
-        props.set("resolved_node_names", nodes);
         props.set("keep_children", keep_children);
-        for (const auto& name : nodes) {
-            ctx.scene().removePLY(name, keep_children);
+        props.set("resolved_node_names", nodes);
+        if (const auto result = ctx.scene().removeNodesWithResult(nodes, keep_children); !result) {
+            props.set("error", result.error());
+            return OperatorResult::CANCELLED;
         }
 
         return OperatorResult::FINISHED;
     }
 
     void registerEditOperators() {
-        const auto make_schema = [](std::string name, std::string description, PropertyType type) {
-            PropertySchema schema{};
-            schema.name = std::move(name);
-            schema.description = std::move(description);
-            schema.type = type;
-            return schema;
-        };
-
-        propertySchemas().registerSchema(
-            UndoOperator::DESCRIPTOR.id(),
-            {});
-        propertySchemas().registerSchema(
-            RedoOperator::DESCRIPTOR.id(),
-            {});
-        propertySchemas().registerSchema(
+        auto& properties = core::prop::PropertyRegistry::instance();
+        properties.register_operator_args(UndoOperator::DESCRIPTOR.id(), {});
+        properties.register_operator_args(RedoOperator::DESCRIPTOR.id(), {});
+        properties.register_operator_args(
             DeleteOperator::DESCRIPTOR.id(),
             {
-                make_schema("name", "Optional node name; defaults to the current selected node(s)",
-                            PropertyType::STRING),
-                make_schema("keep_children",
-                            "Keep the children and reparent them to the removed node's parent",
-                            PropertyType::BOOL),
+                core::prop::arg_string("name", "Optional node name; defaults to the current selected node(s)"),
+                core::prop::arg_bool("keep_children",
+                                     "Keep the children and reparent them to the removed node's parent"),
             });
         operators().registerOperator(BuiltinOp::Undo, UndoOperator::DESCRIPTOR,
                                      [] { return std::make_unique<UndoOperator>(); });
@@ -151,9 +145,10 @@ namespace lfs::vis::op {
         operators().unregisterOperator(BuiltinOp::Undo);
         operators().unregisterOperator(BuiltinOp::Redo);
         operators().unregisterOperator(BuiltinOp::Delete);
-        propertySchemas().unregisterSchema(UndoOperator::DESCRIPTOR.id());
-        propertySchemas().unregisterSchema(RedoOperator::DESCRIPTOR.id());
-        propertySchemas().unregisterSchema(DeleteOperator::DESCRIPTOR.id());
+        auto& properties = core::prop::PropertyRegistry::instance();
+        properties.unregister_operator_args(UndoOperator::DESCRIPTOR.id());
+        properties.unregister_operator_args(RedoOperator::DESCRIPTOR.id());
+        properties.unregister_operator_args(DeleteOperator::DESCRIPTOR.id());
     }
 
 } // namespace lfs::vis::op

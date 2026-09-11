@@ -21,7 +21,6 @@
 namespace lfs::core {
     class SplatData;
     struct PointCloud;
-    struct MeshData;
     class Camera;
     class Tensor;
 } // namespace lfs::core
@@ -30,6 +29,14 @@ namespace lfs::rendering {
 
     // Import Tensor into this namespace for convenience
     using lfs::core::Tensor;
+
+    // A mesh layer rasterized ahead of the composite. Defined here rather than beside
+    // its GPU producer in lfs::vis so this layer does not have to include a header from
+    // the layer above it.
+    struct MeshLayer {
+        Tensor rgba;       // [4,H,W] float32; alpha is 1 where a mesh was drawn.
+        Tensor view_depth; // [H,W] float32; positive linear view depth or +INF.
+    };
 
     // Error handling with std::expected (C++23)
     template <typename T>
@@ -93,6 +100,8 @@ namespace lfs::rendering {
     struct GaussianFilterState {
         std::optional<GaussianScopedBoxFilter> crop_region;
         std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
+        std::vector<GaussianScopedBoxFilter> crop_regions;
+        std::vector<GaussianScopedEllipsoidFilter> ellipsoid_regions;
         std::optional<BoundingBox> view_volume;
         bool cull_outside_view_volume = false;
     };
@@ -155,6 +164,10 @@ namespace lfs::rendering {
         GaussianMarkerOverlayState markers;
         GaussianCursorOverlayState cursor;
         GaussianEmphasisOverlayState emphasis;
+        // Host-side non-empty committed selection for this frame snapshot.
+        // Independent of emphasis.mask pointer validity so an empty/stale mask
+        // tensor cannot keep the slow overlay raster path pinned.
+        bool has_selection = false;
         std::array<glm::vec4, kSelectionColorTableCount> selection_colors = defaultSelectionColorTable();
     };
 
@@ -208,7 +221,7 @@ namespace lfs::rendering {
         uint64_t lod_generation = 0;
         const uint32_t* lod_touched_chunks = nullptr;
         size_t lod_touched_chunk_count = 0;
-        GaussianLodGpuTraversalState lod_gpu_traversal;
+        GaussianLodGpuTraversalState lod_gpu_traversal = {};
         bool lod_debug_mode = false;
     };
 
@@ -220,6 +233,7 @@ namespace lfs::rendering {
 
     struct PointCloudFilterState {
         std::optional<BoundingBox> crop_box;
+        std::optional<Ellipsoid> crop_ellipsoid;
         bool crop_inverse = false;
         bool crop_desaturate = false;
     };
@@ -261,13 +275,11 @@ namespace lfs::rendering {
         bool valid = false;
         // Depth conversion parameters (needed for proper depth buffer writing)
         bool depth_is_ndc = false; // True if depth is already normalized device depth (0-1).
-        glm::vec2 depth_texcoord_scale{1.0f, 1.0f};
         // Presentation orientation for the screen quad.
         bool flip_y = false;
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;
-        bool color_has_alpha = false;
 
         [[nodiscard]] const std::shared_ptr<lfs::core::Tensor>& primaryDepth() const {
             return depth_panels[0].depth;
@@ -341,13 +353,6 @@ namespace lfs::rendering {
         glm::ivec2 content_size{0, 0};
     };
 
-    struct SplitViewRequest {
-        std::array<SplitViewPanel, 2> panels;
-        SplitViewCompositeState composite;
-        SplitViewPresentationState presentation;
-        bool prefer_batched_gaussian_render = false;
-    };
-
     // Render modes
     enum class RenderMode {
         RGB = 0,
@@ -382,18 +387,12 @@ namespace lfs::rendering {
         bool equirectangular = false;
     };
 
-    struct MeshFrameItem {
-        const lfs::core::MeshData* mesh = nullptr;
-        glm::mat4 transform{1.0f};
-        MeshRenderOptions options{};
-    };
-
     struct VideoCompositeFrameRequest {
         ViewportData viewport;
         FrameView frame_view;
         glm::vec3 background_color{0.0f};
         EnvironmentRenderOptions environment;
-        std::vector<MeshFrameItem> meshes;
+        const MeshLayer* prerendered_meshes = nullptr;
     };
 
     struct CameraFrustumPickRequest {

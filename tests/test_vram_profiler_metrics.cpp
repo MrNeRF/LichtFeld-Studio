@@ -7,7 +7,11 @@
 #include "diagnostics/vram_profiler.hpp"
 
 #include <gtest/gtest.h>
+
+#include <string>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 using lfs::diagnostics::VramAllocationMethod;
 using lfs::diagnostics::VramProfiler;
@@ -34,11 +38,25 @@ namespace {
         p.setGauge("model.capacity", 100000.0);
 
         const auto snap = p.snapshot();
-        ASSERT_EQ(snap.gauges.size(), 2u);
-        EXPECT_EQ(snap.gauges[0].key, "model.capacity");
-        EXPECT_DOUBLE_EQ(snap.gauges[0].value, 100000.0);
-        EXPECT_EQ(snap.gauges[1].key, "model.gaussians");
-        EXPECT_DOUBLE_EQ(snap.gauges[1].value, 23456.0);
+        // Snapshot always injects vram.audit.pool.bucket_live_rounding_waste.
+        std::unordered_map<std::string, double> by_key;
+        for (const auto& g : snap.gauges) {
+            by_key[g.key] = g.value;
+        }
+        ASSERT_TRUE(by_key.count("model.capacity"));
+        ASSERT_TRUE(by_key.count("model.gaussians"));
+        EXPECT_DOUBLE_EQ(by_key["model.capacity"], 100000.0);
+        EXPECT_DOUBLE_EQ(by_key["model.gaussians"], 23456.0);
+    }
+
+    TEST_F(VramProfilerMetricsTest, PinnedHostMemoryRoundTripsThroughSnapshot) {
+        auto& p = VramProfiler::instance();
+        p.setPinnedHostMemory(11, 22, 44);
+
+        const auto snap = p.snapshot();
+        EXPECT_EQ(snap.process.pinned_host_used, 11u);
+        EXPECT_EQ(snap.process.pinned_host_cached, 22u);
+        EXPECT_EQ(snap.process.pinned_host_peak, 44u);
     }
 
     TEST_F(VramProfilerMetricsTest, IterCounterResetsOnBeginIteration) {
@@ -85,10 +103,16 @@ namespace {
         p.recordCurrentBytes("test.medium", "tensor", 1024 * 1024, VramAllocationMethod::External);
 
         const auto snap = p.snapshot();
-        ASSERT_GE(snap.top_live.size(), 3u);
-        EXPECT_EQ(snap.top_live[0].scope, "test.large");
-        EXPECT_EQ(snap.top_live[1].scope, "test.medium");
-        EXPECT_EQ(snap.top_live[2].scope, "test.small");
+        std::vector<std::string> test_scopes;
+        for (const auto& entry : snap.top_live) {
+            if (entry.scope.starts_with("test.")) {
+                test_scopes.push_back(entry.scope);
+            }
+        }
+        ASSERT_EQ(test_scopes.size(), 3u);
+        EXPECT_EQ(test_scopes[0], "test.large");
+        EXPECT_EQ(test_scopes[1], "test.medium");
+        EXPECT_EQ(test_scopes[2], "test.small");
     }
 
     TEST_F(VramProfilerMetricsTest, TimerSampleFillsWallPercentiles) {
@@ -150,7 +174,10 @@ namespace {
         p.setEnabled(false);
         p.setEnabled(true);
         const auto snap = p.snapshot();
-        EXPECT_TRUE(snap.gauges.empty());
+        // User gauges are wiped; snapshot may still inject the pool audit gauge.
+        for (const auto& g : snap.gauges) {
+            EXPECT_NE(g.key, "g");
+        }
         EXPECT_TRUE(snap.iter_counters.empty());
         EXPECT_TRUE(snap.total_counters.empty());
         EXPECT_TRUE(snap.histograms.empty());
@@ -163,7 +190,9 @@ namespace {
         p.addCounter("c", 5, true);
         p.recordHistogram("h", 1.0);
         const auto snap = p.snapshot();
-        EXPECT_TRUE(snap.gauges.empty());
+        for (const auto& g : snap.gauges) {
+            EXPECT_NE(g.key, "g");
+        }
         EXPECT_TRUE(snap.iter_counters.empty());
         EXPECT_TRUE(snap.histograms.empty());
     }

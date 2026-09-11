@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/camera.hpp"
 #include "core/event_bridge/event_bridge.hpp"
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
@@ -12,17 +13,25 @@
 #include "operation/undo_history.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "training/trainer.hpp"
+#include "training/training_manager.hpp"
+#include "visualizer/app_store.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <algorithm>
 #include <any>
 #include <condition_variable>
+#include <cstdint>
+#include <filesystem>
 #include <future>
 #include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <ranges>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -109,9 +118,10 @@ namespace {
 
     class TensorResidencyEntry final : public lfs::vis::op::UndoEntry {
     public:
-        explicit TensorResidencyEntry(std::string name)
+        explicit TensorResidencyEntry(std::string name, const size_t estimated_bytes = 0)
             : name_(std::move(name)),
-              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)) {}
+              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)),
+              estimated_bytes_(estimated_bytes == 0 ? tensor_.bytes() : estimated_bytes) {}
 
         void undo() override {
             undo_device_ = tensor_.device();
@@ -122,7 +132,7 @@ namespace {
         }
 
         [[nodiscard]] std::string name() const override { return name_; }
-        [[nodiscard]] size_t estimatedBytes() const override { return tensor_.bytes(); }
+        [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
         [[nodiscard]] lfs::vis::op::UndoMemoryBreakdown memoryBreakdown() const override {
             return tensor_.device() == Device::CUDA
                        ? lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = 0, .gpu_bytes = tensor_.bytes()}
@@ -145,6 +155,7 @@ namespace {
     private:
         std::string name_;
         Tensor tensor_;
+        size_t estimated_bytes_ = 0;
         Device undo_device_ = Device::CPU;
         Device redo_device_ = Device::CPU;
     };
@@ -185,6 +196,43 @@ namespace {
         return make_test_splat(xyz);
     }
 
+    std::unique_ptr<lfs::core::SplatData> make_patterned_sh_rest_splat(const size_t count) {
+        std::vector<float> means;
+        means.reserve(count * 3);
+        std::vector<float> shN;
+        shN.reserve(count * 3 * 3);
+        for (size_t row = 0; row < count; ++row) {
+            means.push_back(static_cast<float>(row));
+            means.push_back(0.0f);
+            means.push_back(0.0f);
+            for (size_t coeff = 0; coeff < 3; ++coeff) {
+                for (size_t channel = 0; channel < 3; ++channel) {
+                    shN.push_back(static_cast<float>(100 * row + 10 * coeff + channel));
+                }
+            }
+        }
+
+        auto sh0 = Tensor::zeros({count, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+        auto scaling = Tensor::zeros({count, size_t{3}}, Device::CUDA, DataType::Float32);
+        std::vector<float> rotation_data(count * 4, 0.0f);
+        for (size_t i = 0; i < count; ++i) {
+            rotation_data[i * 4] = 1.0f;
+        }
+        auto opacity = Tensor::zeros({count, size_t{1}}, Device::CUDA, DataType::Float32);
+
+        auto result = std::make_unique<lfs::core::SplatData>(
+            1,
+            Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            std::move(sh0),
+            Tensor::from_vector(shN, {count, size_t{3}, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            std::move(scaling),
+            Tensor::from_vector(rotation_data, {count, size_t{4}}, Device::CUDA).to(DataType::Float32),
+            std::move(opacity),
+            1.0f);
+        result->set_active_sh_degree(1);
+        return result;
+    }
+
     std::vector<bool> deleted_mask_values(const lfs::core::SplatData& splat) {
         if (!splat.has_deleted_mask()) {
             return {};
@@ -204,6 +252,44 @@ namespace {
             return {};
         }
         return mask->cpu().to_vector_uint8();
+    }
+
+    std::vector<float> mean_x_values(const lfs::core::SplatData& splat) {
+        const auto means = splat.means_raw().cpu().to_vector();
+        std::vector<float> xs;
+        xs.reserve(static_cast<size_t>(splat.size()));
+        for (size_t i = 0; i < static_cast<size_t>(splat.size()); ++i) {
+            xs.push_back(means[i * 3]);
+        }
+        return xs;
+    }
+
+    std::vector<float> sh_rest_row_values(const lfs::core::SplatData& splat, const size_t row) {
+        const auto shN = splat.shN_canonical_cpu().contiguous();
+        const auto flat = shN.to_vector();
+        const size_t stride = static_cast<size_t>(shN.size(1) * shN.size(2));
+        return std::vector<float>(
+            flat.begin() + static_cast<ptrdiff_t>(row * stride),
+            flat.begin() + static_cast<ptrdiff_t>((row + 1) * stride));
+    }
+
+    std::shared_ptr<lfs::core::Camera> make_test_camera(const std::string& image_name, const int uid) {
+        return std::make_shared<lfs::core::Camera>(
+            Tensor::eye(3, Device::CPU),
+            Tensor::zeros({3}, Device::CPU),
+            100.0f,
+            100.0f,
+            32.0f,
+            32.0f,
+            Tensor{},
+            Tensor{},
+            lfs::core::CameraModelType::PINHOLE,
+            image_name,
+            std::filesystem::path{},
+            std::filesystem::path{},
+            64,
+            64,
+            uid);
     }
 
 } // namespace
@@ -372,6 +458,21 @@ TEST_F(UndoHistoryTest, OversizedSingleUndoEntryIsRetained) {
     EXPECT_EQ(history.undoBytes(), 600ull * 1024ull * 1024ull);
 }
 
+TEST_F(UndoHistoryTest, OversizedSingleUndoEntryIsDemotedToCpu) {
+    auto& history = lfs::vis::op::undoHistory();
+    auto entry = std::make_unique<TensorResidencyEntry>(
+        "huge.tensor.entry", lfs::vis::op::UndoHistory::MAX_BYTES + 1);
+    auto* entry_ptr = entry.get();
+
+    history.push(std::move(entry));
+
+    ASSERT_NE(entry_ptr, nullptr);
+    EXPECT_EQ(history.undoCount(), 1u);
+    EXPECT_EQ(entry_ptr->device(), Device::CPU);
+    EXPECT_EQ(history.undoMemory().gpu_bytes, 0u);
+    EXPECT_GT(history.undoMemory().cpu_bytes, 0u);
+}
+
 TEST_F(UndoHistoryTest, UndoAndRedoNamesReturnNewestFirst) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
@@ -428,6 +529,26 @@ TEST_F(UndoHistoryTest, PropertyChangesCoalesceOnUndoStack) {
 
     const auto redo_result = history.redo();
     EXPECT_TRUE(redo_result.success);
+    EXPECT_FLOAT_EQ(value, 1.0f);
+}
+
+TEST_F(UndoHistoryTest, PropertyChangeRejectsTopologyChangedReplayWithoutCallingApplier) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    ASSERT_NE(scene_manager->getScene().addGroup("original"), lfs::core::NULL_NODE);
+
+    float value = 1.0f;
+    lfs::vis::op::PropertyChangeUndoEntry entry(
+        "scene_node.original.opacity",
+        0.0f,
+        1.0f,
+        [&value](const std::any& applied) {
+            value = std::any_cast<float>(applied);
+        },
+        scene_manager.get());
+    ASSERT_NE(scene_manager->getScene().addGroup("unexpected"), lfs::core::NULL_NODE);
+
+    EXPECT_THROW(entry.undo(), lfs::vis::op::HistoryCorruptionError);
     EXPECT_FLOAT_EQ(value, 1.0f);
 }
 
@@ -790,6 +911,38 @@ TEST_F(UndoHistoryTest, TensorUndoEntryRestoresTensorRoundTrip) {
     EXPECT_TRUE((node->model->sh0() == after).all().item<bool>());
 }
 
+TEST_F(UndoHistoryTest, TensorUndoEntryRejectsTopologyChangedReplayWithoutMutatingTensor) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    auto entry = std::make_unique<lfs::vis::op::TensorUndoEntry>(
+        "tensor.edit",
+        lfs::vis::op::UndoMetadata{
+            .id = "tensor.edit",
+            .label = "Tensor Edit",
+            .source = "operator",
+            .scope = "tensor",
+        },
+        "model.sh0",
+        node->model->sh0().clone(),
+        [&]() -> Tensor* { return &node->model->sh0(); },
+        scene_manager.get());
+
+    node->model->sh0() =
+        Tensor::ones({2, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+    entry->captureAfter();
+    const auto tensor_before_replay = node->model->sh0().clone();
+    ASSERT_NE(scene_manager->getScene().addGroup("unexpected"), lfs::core::NULL_NODE);
+
+    EXPECT_THROW(entry->undo(), lfs::vis::op::HistoryCorruptionError);
+    EXPECT_TRUE((node->model->sh0() == tensor_before_replay).all().item<bool>());
+}
+
 TEST_F(UndoHistoryTest, ObserversReceiveNotificationsUntilUnsubscribed) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
@@ -847,6 +1000,9 @@ TEST_F(UndoHistoryTest, SceneGraphMetadataEntryRollsBackEarlierDiffsOnFailure) {
     auto second_after = before[1];
     second_after.name = "second_renamed";
     second_after.parent_name = "missing_parent";
+    do {
+        second_after.parent_uuid = lfs::core::generate_uuid_v4();
+    } while (scene_manager->getScene().getNodeByUuid(second_after.parent_uuid));
 
     lfs::vis::op::SceneGraphMetadataEntry entry(
         *scene_manager,
@@ -863,7 +1019,36 @@ TEST_F(UndoHistoryTest, SceneGraphMetadataEntryRollsBackEarlierDiffsOnFailure) {
     EXPECT_EQ(scene_manager->getScene().getNode("second_renamed"), nullptr);
 }
 
-TEST_F(UndoHistoryTest, SparseSelectionUndoClearsAfterTopologyChange) {
+TEST_F(UndoHistoryTest, SceneGraphMetadataEntryRejectsTopologyChangedReplayBeforeMutation) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto model_id = scene.addSplat("model", make_linear_test_splat(1));
+    ASSERT_NE(model_id, lfs::core::NULL_NODE);
+    auto before =
+        lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"model"});
+    ASSERT_EQ(before.size(), 1u);
+    scene.setNodeVisibility(model_id, false);
+    auto after =
+        lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"model"});
+    ASSERT_EQ(after.size(), 1u);
+
+    lfs::vis::op::SceneGraphMetadataEntry entry(
+        *scene_manager,
+        "visibility.change",
+        {lfs::vis::op::SceneGraphNodeMetadataDiff{
+            .before = std::move(before.front()),
+            .after = std::move(after.front()),
+        }});
+    ASSERT_NE(scene.addGroup("unexpected"), lfs::core::NULL_NODE);
+
+    EXPECT_THROW(entry.undo(), lfs::vis::op::HistoryCorruptionError);
+    ASSERT_NE(scene.getNode("model"), nullptr);
+    EXPECT_FALSE(scene.getNode("model")->visible);
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotRejectsTopologyChangedReplayWithoutMutatingSelection) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     lfs::vis::services().set(scene_manager.get());
 
@@ -882,12 +1067,19 @@ TEST_F(UndoHistoryTest, SparseSelectionUndoClearsAfterTopologyChange) {
 
     scene_manager->getScene().removeNode("model", false);
     scene_manager->getScene().addSplat("model_replaced", make_linear_test_splat(48));
+    scene_manager->getScene().setSelectionMask(std::make_shared<Tensor>(make_uint8_mask(
+        [] {
+            std::vector<uint8_t> values(48, 0);
+            values[17] = 9;
+            return values;
+        }())));
+    const auto selection_before_replay = selection_mask_values(scene_manager->getScene());
 
-    EXPECT_NO_THROW(snapshot->undo());
-    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+    EXPECT_THROW(snapshot->undo(), lfs::vis::op::HistoryCorruptionError);
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()), selection_before_replay);
 }
 
-TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndHandlesDeletedNode) {
+TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndRejectsDeletedNodeReplay) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -923,11 +1115,10 @@ TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndHandlesDeletedNode) {
     auto changed_data = before_data;
     changed_data.min = glm::vec3(-2.0f);
     changed_data.max = glm::vec3(3.0f);
+    changed_data.enabled = true;
     scene_manager->getScene().setCropBoxData(cropbox_id, changed_data);
     scene_manager->setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
-    crop_settings.show_crop_box = false;
-    crop_settings.use_crop_box = true;
-    rendering_manager->updateSettings(crop_settings);
+    scene_manager->setNodeVisibility(cropbox_id, false);
 
     lfs::vis::op::CropBoxUndoEntry entry(
         *scene_manager,
@@ -945,6 +1136,7 @@ TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndHandlesDeletedNode) {
     EXPECT_EQ(cropbox_node->cropbox->inverse, before_data.inverse);
     EXPECT_EQ(cropbox_node->cropbox->enabled, before_data.enabled);
     EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), before_transform);
+    EXPECT_TRUE(cropbox_node->visible);
     crop_settings = rendering_manager->getSettings();
     EXPECT_TRUE(crop_settings.show_crop_box);
     EXPECT_FALSE(crop_settings.use_crop_box);
@@ -954,16 +1146,17 @@ TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndHandlesDeletedNode) {
     EXPECT_EQ(cropbox_node->cropbox->max, changed_data.max);
     EXPECT_EQ(cropbox_node->cropbox->inverse, changed_data.inverse);
     EXPECT_EQ(cropbox_node->cropbox->enabled, changed_data.enabled);
+    EXPECT_FALSE(cropbox_node->visible);
     crop_settings = rendering_manager->getSettings();
     EXPECT_FALSE(crop_settings.show_crop_box);
     EXPECT_TRUE(crop_settings.use_crop_box);
 
     scene_manager->getScene().removeNode(cropbox_node->name, false);
-    entry.undo();
-    entry.redo();
+    EXPECT_THROW(entry.undo(), lfs::vis::op::HistoryCorruptionError);
+    EXPECT_THROW(entry.redo(), lfs::vis::op::HistoryCorruptionError);
 }
 
-TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndHandlesDeletedNode) {
+TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndRejectsDeletedNodeReplay) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -998,11 +1191,10 @@ TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndHandlesDeletedNode) {
 
     auto changed_data = before_data;
     changed_data.radii = glm::vec3(4.0f, 5.0f, 6.0f);
+    changed_data.enabled = true;
     scene_manager->getScene().setEllipsoidData(ellipsoid_id, changed_data);
     scene_manager->setNodeTransform(ellipsoid_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 1.0f)));
-    ellipsoid_settings.show_ellipsoid = false;
-    ellipsoid_settings.use_ellipsoid = true;
-    rendering_manager->updateSettings(ellipsoid_settings);
+    scene_manager->setNodeVisibility(ellipsoid_id, false);
 
     lfs::vis::op::EllipsoidUndoEntry entry(
         *scene_manager,
@@ -1019,6 +1211,7 @@ TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndHandlesDeletedNode) {
     EXPECT_EQ(ellipsoid_node->ellipsoid->inverse, before_data.inverse);
     EXPECT_EQ(ellipsoid_node->ellipsoid->enabled, before_data.enabled);
     EXPECT_EQ(scene_manager->getNodeTransform(ellipsoid_node->name), before_transform);
+    EXPECT_TRUE(ellipsoid_node->visible);
     ellipsoid_settings = rendering_manager->getSettings();
     EXPECT_TRUE(ellipsoid_settings.show_ellipsoid);
     EXPECT_FALSE(ellipsoid_settings.use_ellipsoid);
@@ -1027,13 +1220,14 @@ TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndHandlesDeletedNode) {
     EXPECT_EQ(ellipsoid_node->ellipsoid->radii, changed_data.radii);
     EXPECT_EQ(ellipsoid_node->ellipsoid->inverse, changed_data.inverse);
     EXPECT_EQ(ellipsoid_node->ellipsoid->enabled, changed_data.enabled);
+    EXPECT_FALSE(ellipsoid_node->visible);
     ellipsoid_settings = rendering_manager->getSettings();
     EXPECT_FALSE(ellipsoid_settings.show_ellipsoid);
     EXPECT_TRUE(ellipsoid_settings.use_ellipsoid);
 
     scene_manager->getScene().removeNode(ellipsoid_node->name, false);
-    entry.undo();
-    entry.redo();
+    EXPECT_THROW(entry.undo(), lfs::vis::op::HistoryCorruptionError);
+    EXPECT_THROW(entry.redo(), lfs::vis::op::HistoryCorruptionError);
 }
 
 TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
@@ -1078,7 +1272,161 @@ TEST_F(UndoHistoryTest, GaussianFieldWritePushesUndoableTensorEntries) {
     EXPECT_TRUE((node->model->means_raw() == original_means).all().item<bool>());
 }
 
-TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresRenderSettings) {
+TEST_F(UndoHistoryTest, GaussianFieldWriteRejectsInvalidRawStateWithoutMutation) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    const auto original_opacity = node->model->opacity_raw().clone();
+    const auto original_scaling = node->model->scaling_raw().clone();
+    const auto original_rotation = node->model->rotation_raw().clone();
+    const auto original_means = node->model->means_raw().clone();
+
+    auto result = lfs::vis::cap::writeGaussianField(
+        *scene_manager,
+        rendering_manager.get(),
+        "model",
+        "opacity_raw",
+        {0},
+        {std::numeric_limits<float>::quiet_NaN()});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("finite"), std::string::npos);
+
+    result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "scaling_raw", {0}, {81.0f, 0.0f, 0.0f});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("safe range"), std::string::npos);
+
+    result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "rotation_raw", {0}, {0.0f, 0.0f, 0.0f, 0.0f});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("non-zero"), std::string::npos);
+
+    result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "means", {0, 0}, {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f});
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.error().find("duplicates"), std::string::npos);
+
+    EXPECT_TRUE((node->model->opacity_raw() == original_opacity).all().item<bool>());
+    EXPECT_TRUE((node->model->scaling_raw() == original_scaling).all().item<bool>());
+    EXPECT_TRUE((node->model->rotation_raw() == original_rotation).all().item<bool>());
+    EXPECT_TRUE((node->model->means_raw() == original_means).all().item<bool>());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(UndoHistoryTest, GaussianShWriteScattersOnlySelectedRowsAndIsUndoable) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_patterned_sh_rest_splat(40));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    const auto untouched_before = sh_rest_row_values(*node->model, 2);
+    const auto row_one_before = sh_rest_row_values(*node->model, 1);
+    const auto row_thirty_three_before = sh_rest_row_values(*node->model, 33);
+    std::vector<float> replacement(18);
+    for (size_t i = 0; i < replacement.size(); ++i)
+        replacement[i] = -100.0f - static_cast<float>(i);
+
+    const auto result = lfs::vis::cap::writeGaussianField(
+        *scene_manager, rendering_manager.get(), "model", "shN", {1, 33}, replacement);
+    ASSERT_TRUE(result) << result.error();
+    EXPECT_EQ(sh_rest_row_values(*node->model, 2), untouched_before);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 1),
+              std::vector<float>(replacement.begin(), replacement.begin() + 9));
+    EXPECT_EQ(sh_rest_row_values(*node->model, 33),
+              std::vector<float>(replacement.begin() + 9, replacement.end()));
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 1), row_one_before);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 33), row_thirty_three_before);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 2), untouched_before);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(sh_rest_row_values(*node->model, 1),
+              std::vector<float>(replacement.begin(), replacement.begin() + 9));
+    EXPECT_EQ(sh_rest_row_values(*node->model, 33),
+              std::vector<float>(replacement.begin() + 9, replacement.end()));
+}
+
+TEST_F(UndoHistoryTest, DeleteSplatUndoRestoresVisibleCropBox) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto splat_id = scene.addSplat("model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto cropbox_id = scene.addCropBox("model_cropbox", splat_id);
+    ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    scene.setNodeVisibility(cropbox_id, true);
+    auto* cropbox = scene.getMutableNode("model_cropbox");
+    ASSERT_NE(cropbox, nullptr);
+    ASSERT_NE(cropbox->cropbox, nullptr);
+    cropbox->cropbox->enabled = true;
+    const auto expected_data = *cropbox->cropbox;
+
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(splat_id));
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+
+    const auto* restored_splat = scene.getNode("model");
+    ASSERT_NE(restored_splat, nullptr);
+    const auto restored_cropbox_id = scene.getCropBoxForSplat(restored_splat->id);
+    ASSERT_NE(restored_cropbox_id, lfs::core::NULL_NODE);
+    const auto* restored_cropbox = scene.getNodeById(restored_cropbox_id);
+    ASSERT_NE(restored_cropbox, nullptr);
+    ASSERT_NE(restored_cropbox->cropbox, nullptr);
+    EXPECT_TRUE(restored_cropbox->visible);
+    EXPECT_EQ(restored_cropbox->cropbox->min, expected_data.min);
+    EXPECT_EQ(restored_cropbox->cropbox->max, expected_data.max);
+    EXPECT_EQ(restored_cropbox->cropbox->inverse, expected_data.inverse);
+    EXPECT_EQ(restored_cropbox->cropbox->enabled, expected_data.enabled);
+}
+
+TEST_F(UndoHistoryTest, CropBoxIsAppliedWhenMergingGroup) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group_id = scene.addGroup("group");
+    const auto splat_id = scene.addSplat(
+        "model",
+        make_test_splat({-2.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 0.0f, 0.0f}),
+        group_id);
+    const auto cropbox_id = scene.addCropBox("model_cropbox", splat_id);
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    ASSERT_NE(splat_id, lfs::core::NULL_NODE);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    auto* cropbox = scene.getMutableNode("model_cropbox");
+    ASSERT_NE(cropbox, nullptr);
+    ASSERT_NE(cropbox->cropbox, nullptr);
+    cropbox->cropbox->min = glm::vec3(-0.5f);
+    cropbox->cropbox->max = glm::vec3(0.5f);
+    cropbox->cropbox->enabled = true;
+
+    ASSERT_EQ(scene_manager->mergeGroupNode(group_id), "group");
+    const auto* merged = scene.getNode("group");
+    ASSERT_NE(merged, nullptr);
+    ASSERT_NE(merged->model, nullptr);
+    EXPECT_EQ(merged->model->size(), 1);
+    EXPECT_EQ(merged->model->means_raw().cpu().to_vector(),
+              (std::vector<float>{0.0f, 0.0f, 0.0f}));
+}
+
+TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresNodeVisibilityAndEnabledState) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -1107,21 +1455,30 @@ TEST_F(UndoHistoryTest, CropBoxCapabilityUndoRestoresRenderSettings) {
     settings = rendering_manager->getSettings();
     EXPECT_FALSE(settings.show_crop_box);
     EXPECT_TRUE(settings.use_crop_box);
+    const auto* cropbox_node = scene_manager->getScene().getNodeById(cropbox_id);
+    ASSERT_NE(cropbox_node, nullptr);
+    ASSERT_NE(cropbox_node->cropbox, nullptr);
+    EXPECT_FALSE(cropbox_node->visible);
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
 
     auto undo_result = lfs::vis::op::undoHistory().undo();
     EXPECT_TRUE(undo_result.success);
     settings = rendering_manager->getSettings();
     EXPECT_TRUE(settings.show_crop_box);
     EXPECT_FALSE(settings.use_crop_box);
+    EXPECT_TRUE(cropbox_node->visible);
+    EXPECT_FALSE(cropbox_node->cropbox->enabled);
 
     auto redo_result = lfs::vis::op::undoHistory().redo();
     EXPECT_TRUE(redo_result.success);
     settings = rendering_manager->getSettings();
     EXPECT_FALSE(settings.show_crop_box);
     EXPECT_TRUE(settings.use_crop_box);
+    EXPECT_FALSE(cropbox_node->visible);
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
 }
 
-TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresUseToggle) {
+TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresBoundsAndTransform) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -1140,19 +1497,45 @@ TEST_F(UndoHistoryTest, CropBoxResetUndoRestoresUseToggle) {
 
     auto* cropbox_node = scene_manager->getScene().getMutableNode("model_cropbox");
     ASSERT_NE(cropbox_node, nullptr);
-    scene_manager->setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f)));
+    ASSERT_NE(cropbox_node->cropbox, nullptr);
+    const glm::vec3 original_min(-2.0f, -3.0f, -4.0f);
+    const glm::vec3 original_max(2.0f, 3.0f, 4.0f);
+    const auto original_transform = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f));
+    cropbox_node->cropbox->min = original_min;
+    cropbox_node->cropbox->max = original_max;
+    cropbox_node->cropbox->inverse = true;
+    cropbox_node->cropbox->enabled = true;
+    scene_manager->setNodeTransform(cropbox_node->name, original_transform);
 
     auto reset_result = lfs::vis::cap::resetCropBox(*scene_manager, rendering_manager.get(), cropbox_id);
     ASSERT_TRUE(reset_result) << reset_result.error();
     settings = rendering_manager->getSettings();
-    EXPECT_FALSE(settings.use_crop_box);
+    EXPECT_TRUE(settings.use_crop_box);
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
+    EXPECT_EQ(cropbox_node->cropbox->min, glm::vec3(-1.0f));
+    EXPECT_EQ(cropbox_node->cropbox->max, glm::vec3(1.0f));
+    EXPECT_FALSE(cropbox_node->cropbox->inverse);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), glm::mat4(1.0f));
 
     auto undo_result = lfs::vis::op::undoHistory().undo();
     EXPECT_TRUE(undo_result.success);
     settings = rendering_manager->getSettings();
     EXPECT_TRUE(settings.use_crop_box);
-    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name),
-              glm::translate(glm::mat4(1.0f), glm::vec3(0.5f, 0.0f, 0.0f)));
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
+    EXPECT_EQ(cropbox_node->cropbox->min, original_min);
+    EXPECT_EQ(cropbox_node->cropbox->max, original_max);
+    EXPECT_TRUE(cropbox_node->cropbox->inverse);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), original_transform);
+
+    auto redo_result = lfs::vis::op::undoHistory().redo();
+    EXPECT_TRUE(redo_result.success);
+    settings = rendering_manager->getSettings();
+    EXPECT_TRUE(settings.use_crop_box);
+    EXPECT_TRUE(cropbox_node->cropbox->enabled);
+    EXPECT_EQ(cropbox_node->cropbox->min, glm::vec3(-1.0f));
+    EXPECT_EQ(cropbox_node->cropbox->max, glm::vec3(1.0f));
+    EXPECT_FALSE(cropbox_node->cropbox->inverse);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), glm::mat4(1.0f));
 }
 
 TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {
@@ -1187,6 +1570,260 @@ TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {
 
     lfs::vis::op::undoHistory().redo();
     EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false}));
+}
+
+TEST_F(UndoHistoryTest, CropMarksPayloadDivergedAndUndoRedoRestoresFlag) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    ASSERT_FALSE(node->payload_diverged);
+
+    lfs::core::events::cmd::CropPLYEllipsoid{
+        .world_transform = glm::mat4(1.0f),
+        .radii = glm::vec3(0.5f),
+        .inverse = false,
+    }
+        .emit();
+
+    EXPECT_TRUE(node->payload_diverged);
+    EXPECT_EQ(node->model->visible_count(), 1u);
+
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    EXPECT_FALSE(node->payload_diverged);
+    EXPECT_EQ(node->model->visible_count(), 3u);
+
+    const auto redo = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo.success) << redo.error;
+    EXPECT_TRUE(node->payload_diverged);
+    EXPECT_EQ(node->model->visible_count(), 1u);
+}
+
+TEST_F(UndoHistoryTest, CutSelectedGaussiansCopiesAndUndoRestoresDelete) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat(
+        "model",
+        make_test_splat({
+            0.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            0.0f,
+            0.0f,
+        }));
+
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 0})));
+
+    EXPECT_TRUE(scene_manager->cutSelectedGaussians());
+    EXPECT_TRUE(scene_manager->hasGaussianClipboard());
+
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false}));
+
+    auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_FALSE(node->model->has_deleted_mask());
+    EXPECT_TRUE(scene_manager->hasGaussianClipboard());
+}
+
+TEST_F(UndoHistoryTest, GaussianSelectionIgnoresSoftDeletedRowsForAllSelectionSources) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(4));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0, 1}).to(DataType::Bool));
+
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 1, 1})));
+
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()), (std::vector<uint8_t>{1, 0, 1, 0}));
+    EXPECT_TRUE(scene_manager->copySelectedGaussians());
+
+    const auto pasted = scene_manager->pasteGaussians();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(pasted_node->model->size(), 2);
+    EXPECT_FALSE(pasted_node->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*pasted_node->model), (std::vector<float>{0.0f, 2.0f}));
+}
+
+TEST_F(UndoHistoryTest, NodeCopyPasteExcludesSoftDeletedRows) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(4));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0, 1}).to(DataType::Bool));
+
+    scene_manager->selectNode("model");
+    EXPECT_TRUE(scene_manager->copySelectedNodes());
+
+    const auto pasted = scene_manager->pasteNodes();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(pasted_node->model->size(), 2);
+    EXPECT_FALSE(pasted_node->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*pasted_node->model), (std::vector<float>{0.0f, 2.0f}));
+}
+
+TEST_F(UndoHistoryTest, NodeCopyPasteWithoutDeletionsKeepsAllRows) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->selectNode("model");
+    EXPECT_TRUE(scene_manager->copySelectedNodes());
+
+    const auto pasted = scene_manager->pasteNodes();
+    ASSERT_EQ(pasted.size(), 1u);
+    const auto* pasted_node = scene_manager->getScene().getNode(pasted.front());
+    ASSERT_NE(pasted_node, nullptr);
+    ASSERT_NE(pasted_node->model, nullptr);
+    EXPECT_EQ(pasted_node->model->size(), 3);
+    EXPECT_FALSE(pasted_node->model->has_deleted_mask());
+}
+
+TEST_F(UndoHistoryTest, PasteNodesCreatesUndoableSceneGraphEntry) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->selectNode("model");
+    EXPECT_TRUE(scene_manager->copySelectedNodes());
+
+    const auto pasted = scene_manager->pasteNodes();
+    ASSERT_EQ(pasted.size(), 1u);
+    EXPECT_NE(scene_manager->getScene().getNode(pasted.front()), nullptr);
+
+    auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_EQ(scene_manager->getScene().getNode(pasted.front()), nullptr);
+
+    auto redo_result = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo_result.success) << redo_result.error;
+    EXPECT_NE(scene_manager->getScene().getNode(pasted.front()), nullptr);
+}
+
+TEST_F(UndoHistoryTest, PasteGaussiansCreatesUndoableSceneGraphEntry) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(3));
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 0})));
+
+    EXPECT_TRUE(scene_manager->copySelectedGaussians());
+    const auto pasted = scene_manager->pasteGaussians();
+    ASSERT_EQ(pasted.size(), 1u);
+    EXPECT_NE(scene_manager->getScene().getNode(pasted.front()), nullptr);
+
+    auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_EQ(scene_manager->getScene().getNode(pasted.front()), nullptr);
+}
+
+TEST_F(UndoHistoryTest, NodeCopyWithAllRowsDeletedProducesNoClipboard) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    node->model->soft_delete(make_uint8_mask({1, 1}).to(DataType::Bool));
+
+    scene_manager->selectNode("model");
+    EXPECT_FALSE(scene_manager->copySelectedNodes());
+    EXPECT_FALSE(scene_manager->hasClipboard());
+}
+
+TEST_F(UndoHistoryTest, SelectingOnlySoftDeletedRowsClearsSelectionAndClipboard) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(4));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0, 1}).to(DataType::Bool));
+
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 1, 0, 1})));
+
+    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+    EXPECT_FALSE(scene_manager->copySelectedGaussians());
+    EXPECT_FALSE(scene_manager->hasGaussianClipboard());
+}
+
+TEST_F(UndoHistoryTest, DeleteAndMirrorUseOnlyLiveRowsFromMixedSelection) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("delete_model", make_linear_test_splat(3));
+    auto* delete_node = scene_manager->getScene().getNode("delete_model");
+    ASSERT_NE(delete_node, nullptr);
+    ASSERT_NE(delete_node->model, nullptr);
+    delete_node->model->soft_delete(make_uint8_mask({0, 1, 0}).to(DataType::Bool));
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 1, 1})));
+
+    scene_manager->deleteSelectedGaussians();
+
+    EXPECT_EQ(deleted_mask_values(*delete_node->model), (std::vector<bool>{false, true, true}));
+
+    auto mirror_scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto mirror_rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(mirror_scene_manager.get());
+    lfs::vis::services().set(mirror_rendering_manager.get());
+
+    mirror_scene_manager->getScene().addSplat("mirror_model", make_linear_test_splat(3));
+    auto* mirror_node = mirror_scene_manager->getScene().getNode("mirror_model");
+    ASSERT_NE(mirror_node, nullptr);
+    ASSERT_NE(mirror_node->model, nullptr);
+    mirror_node->model->soft_delete(make_uint8_mask({0, 1, 0}).to(DataType::Bool));
+    mirror_scene_manager->selectNodes({"mirror_model"});
+    mirror_scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 1})));
+
+    EXPECT_TRUE(mirror_scene_manager->executeMirror(lfs::core::MirrorAxis::X));
+
+    EXPECT_EQ(mean_x_values(*mirror_node->model), (std::vector<float>{2.0f, 1.0f, 0.0f}));
 }
 
 TEST_F(UndoHistoryTest, TopologyUndoRoundTripsVisibleNodeDeleteWithHiddenSibling) {
@@ -1257,7 +1894,7 @@ TEST_F(UndoHistoryTest, FullNodeGaussianDeleteRemovesNodeAndUndoRestoresIt) {
     EXPECT_EQ(scene_manager->getScene().getNode("model"), nullptr);
 }
 
-TEST_F(UndoHistoryTest, PipelineDeleteAllVisibleNodeGaussiansRestoresPastStaleSelectionStroke) {
+TEST_F(UndoHistoryTest, PipelineDeleteRestoresThenStaleSelectionReplayFailsClosed) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
     lfs::vis::services().set(scene_manager.get());
@@ -1304,9 +1941,14 @@ TEST_F(UndoHistoryTest, PipelineDeleteAllVisibleNodeGaussiansRestoresPastStaleSe
     auto undo_visibility = lfs::vis::op::undoHistory().undo();
     ASSERT_TRUE(undo_visibility.success) << undo_visibility.error;
 
+    const auto selection_before_stale_replay =
+        selection_mask_values(scene_manager->getScene());
     auto undo_stale_selection = lfs::vis::op::undoHistory().undo();
-    ASSERT_TRUE(undo_stale_selection.success) << undo_stale_selection.error;
-    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+    EXPECT_FALSE(undo_stale_selection.success);
+    EXPECT_NE(undo_stale_selection.error.find("topology changed"),
+              std::string::npos);
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()),
+              selection_before_stale_replay);
 }
 
 TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseSelectionMasks) {
@@ -1471,7 +2113,9 @@ TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresen
     node->model->soft_delete(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}).to(DataType::Bool));
     snapshot->captureAfter();
 
-    EXPECT_LT(snapshot->estimatedBytes(), 16u);
+    EXPECT_LE(snapshot->estimatedBytes(),
+              16u + sizeof(bool) +
+                  2u * (sizeof(lfs::core::Uuid) + sizeof(bool)));
 
     lfs::vis::op::undoHistory().push(std::move(snapshot));
     EXPECT_TRUE(node->model->has_deleted_mask());
@@ -1484,6 +2128,106 @@ TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresen
     EXPECT_EQ(deleted_mask_values(*node->model),
               (std::vector<bool>{false, false, false, false, false, true, false, false,
                                  false, false, false, false, false, false, false, false}));
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotTransformReplayUsesUuidAcrossRename) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto node_id = scene.addGroup("Transform Target");
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    const auto node_uuid = scene.getNodeUuid(node_id);
+    const glm::mat4 before{1.0f};
+    const glm::mat4 after = glm::translate(glm::mat4{1.0f}, {3.0f, -2.0f, 5.0f});
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "transform.uuid");
+    snapshot->captureTransforms({"Transform Target"});
+    scene.setNodeTransform(node_id, after);
+    ASSERT_TRUE(scene.renameNode(node_id, "Renamed Transform Target"));
+    snapshot->captureAfter();
+    ASSERT_TRUE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(snapshot)));
+
+    lfs::vis::op::undoHistory().undo();
+    const auto* restored = scene.getNodeByUuid(node_uuid);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->name, "Renamed Transform Target");
+    EXPECT_EQ(scene.getNodeTransform(restored->id), before);
+
+    lfs::vis::op::undoHistory().redo();
+    EXPECT_EQ(scene.getNodeTransform(scene.getNodeIdByUuid(node_uuid)), after);
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotTopologyReplayUsesUuidAcrossRename) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto node_id = scene.addSplat("Topology Target", make_test_splat({0.0f, 0.0f, 0.0f,
+                                                                            1.0f, 0.0f, 0.0f,
+                                                                            2.0f, 0.0f, 0.0f}));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+    const auto node_uuid = scene.getNodeUuid(node_id);
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "topology.uuid");
+    snapshot->captureTopology();
+    auto* node = scene.getNodeByUuid(node_uuid);
+    ASSERT_NE(node, nullptr);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0}).to(DataType::Bool));
+    scene.markPayloadDiverged(node_id);
+    ASSERT_TRUE(scene.renameNode(node_id, "Renamed Topology Target"));
+    snapshot->captureAfter();
+    ASSERT_TRUE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(snapshot)));
+
+    lfs::vis::op::undoHistory().undo();
+    node = scene.getNodeByUuid(node_uuid);
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->name, "Renamed Topology Target");
+    EXPECT_FALSE(node->model->has_deleted_mask());
+    EXPECT_FALSE(node->payload_diverged);
+
+    lfs::vis::op::undoHistory().redo();
+    node = scene.getNodeByUuid(node_uuid);
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(node->model->has_deleted_mask());
+    EXPECT_TRUE(node->payload_diverged);
+}
+
+TEST_F(UndoHistoryTest, UuidKeyedPlyPathAndTrainingBindingSurviveRenameDeleteUndo) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(model_id, lfs::core::NULL_NODE);
+    ASSERT_NE(scene.addGroup("Keeper"), lfs::core::NULL_NODE);
+    const auto model_uuid = scene.getNodeUuid(model_id);
+    const std::filesystem::path source_path = "history-model.ply";
+    scene_manager->setPlyPath(model_uuid, source_path);
+    scene.setTrainingModelNode(model_id);
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    ASSERT_TRUE(scene_manager->renamePLY("Model", "Renamed Model"));
+    scene_manager->removePLY("Renamed Model");
+    ASSERT_EQ(scene.getNodeByUuid(model_uuid), nullptr);
+    EXPECT_TRUE(scene.getTrainingModelNodeUuid().is_nil());
+    EXPECT_FALSE(scene_manager->getPlyPath(model_uuid).has_value());
+
+    lfs::vis::op::undoHistory().undo();
+    const auto* restored = scene.getNodeByUuid(model_uuid);
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->name, "Renamed Model");
+    EXPECT_EQ(scene.getTrainingModelNodeUuid(), model_uuid);
+    EXPECT_EQ(scene.getTrainingModelNodeId(), restored->id);
+    EXPECT_EQ(scene.getTrainingModel(), restored->model.get());
+    ASSERT_TRUE(scene_manager->getPlyPath(model_uuid).has_value());
+    EXPECT_EQ(*scene_manager->getPlyPath(model_uuid), source_path);
 }
 
 TEST_F(UndoHistoryTest, SceneResetClearsHistory) {
@@ -1502,6 +2246,426 @@ TEST_F(UndoHistoryTest, SceneResetClearsHistory) {
     EXPECT_EQ(lfs::vis::op::undoHistory().redoCount(), 0u);
 }
 
+TEST_F(UndoHistoryTest, DeleteUndoRedoUndoPreservesNodeUuid) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    ASSERT_NE(scene.addGroup("sentinel"), lfs::core::NULL_NODE);
+    const auto original_id = scene.addGroup("A");
+    ASSERT_NE(original_id, lfs::core::NULL_NODE);
+    const auto uuid = scene.getNodeUuid(original_id);
+    ASSERT_FALSE(uuid.is_nil());
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager->removePLY("A");
+    EXPECT_EQ(scene.getNodeIdByUuid(uuid), lfs::core::NULL_NODE);
+
+    auto result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    const auto first_restored_id = scene.getNodeIdByUuid(uuid);
+    ASSERT_NE(first_restored_id, lfs::core::NULL_NODE);
+    EXPECT_EQ(scene.getNodeByUuid(uuid)->uuid, uuid);
+
+    result = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(scene.getNodeIdByUuid(uuid), lfs::core::NULL_NODE);
+
+    result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    const auto second_restored_id = scene.getNodeIdByUuid(uuid);
+    ASSERT_NE(second_restored_id, lfs::core::NULL_NODE);
+    EXPECT_NE(first_restored_id, second_restored_id);
+    EXPECT_EQ(scene.getNodeByUuid(uuid)->uuid, uuid);
+}
+
+TEST_F(UndoHistoryTest, UndoDeleteFailsClosedWhenDeletedNameWasReused) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    ASSERT_NE(scene.addGroup("sentinel"), lfs::core::NULL_NODE);
+    const auto a_id = scene.addGroup("A");
+    ASSERT_NE(a_id, lfs::core::NULL_NODE);
+    const auto a_uuid = scene.getNodeUuid(a_id);
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager->removePLY("A");
+    ASSERT_EQ(scene.getNodeIdByUuid(a_uuid), lfs::core::NULL_NODE);
+
+    const auto b_id = scene.addGroup("A");
+    ASSERT_NE(b_id, lfs::core::NULL_NODE);
+    const auto b_uuid = scene.getNodeUuid(b_id);
+
+    const auto result = lfs::vis::op::undoHistory().undo();
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.error.find("topology changed"), std::string::npos);
+    EXPECT_EQ(scene.getNodeByUuid(a_uuid), nullptr);
+
+    const auto* untouched_b = scene.getNodeById(b_id);
+    ASSERT_NE(untouched_b, nullptr);
+    EXPECT_EQ(untouched_b->name, "A");
+    EXPECT_EQ(untouched_b->uuid, b_uuid);
+    EXPECT_EQ(scene.getNodeIdByUuid(b_uuid), b_id);
+}
+
+TEST_F(UndoHistoryTest, SceneGraphPrevalidationRejectsMidTreeMissingPayloadBeforeRemoval) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto root_id = scene.addGroup("root");
+    const auto first_id = scene.addSplat("first", make_linear_test_splat(1), root_id);
+    const auto second_id = scene.addSplat("second", make_linear_test_splat(1), root_id);
+    ASSERT_NE(root_id, lfs::core::NULL_NODE);
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+
+    const auto root_uuid = scene.getNodeUuid(root_id);
+    const auto first_uuid = scene.getNodeUuid(first_id);
+    const auto second_uuid = scene.getNodeUuid(second_id);
+    const auto options = lfs::vis::op::SceneGraphCaptureOptions{
+        .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+        .include_selected_nodes = false,
+        .include_scene_context = false,
+    };
+    auto desired = lfs::vis::op::SceneGraphPatchEntry::captureState(
+        *scene_manager, {"root"}, options);
+    ASSERT_EQ(desired.roots.size(), 1u);
+    ASSERT_EQ(desired.roots.front().children.size(), 2u);
+    desired.roots.front().children[1].type = lfs::core::NodeType::POINTCLOUD;
+    desired.roots.front().children[1].model.reset();
+    desired.roots.front().children[1].point_cloud.reset();
+
+    lfs::vis::op::SceneGraphPatchEntry entry(
+        *scene_manager,
+        "corrupt snapshot",
+        std::move(desired),
+        lfs::vis::op::SceneGraphStateSnapshot{});
+
+    EXPECT_THROW(entry.undo(), lfs::vis::op::HistoryCorruptionError);
+
+    EXPECT_EQ(scene.getNodeCount(), 3u);
+    EXPECT_EQ(scene.getNodeIdByUuid(root_uuid), root_id);
+    EXPECT_EQ(scene.getNodeIdByUuid(first_uuid), first_id);
+    EXPECT_EQ(scene.getNodeIdByUuid(second_uuid), second_id);
+    ASSERT_NE(scene.getNodeById(root_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(root_id)->children,
+              (std::vector<lfs::core::NodeId>{first_id, second_id}));
+}
+
+TEST_F(UndoHistoryTest, TopologyUndoRefillsNodeSelectionByUuid) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    ASSERT_NE(scene.addGroup("sentinel"), lfs::core::NULL_NODE);
+    const auto parent_id = scene.addGroup("parent");
+    const auto child_id = scene.addGroup("child", parent_id);
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_id, lfs::core::NULL_NODE);
+    const auto parent_uuid = scene.getNodeUuid(parent_id);
+    const auto child_uuid = scene.getNodeUuid(child_id);
+    scene_manager->selectNodesById({parent_id, child_id});
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager->removePLY("parent");
+    EXPECT_FALSE(scene_manager->hasSelectedNode());
+
+    const auto result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+
+    const auto restored_parent_id = scene.getNodeIdByUuid(parent_uuid);
+    const auto restored_child_id = scene.getNodeIdByUuid(child_uuid);
+    ASSERT_NE(restored_parent_id, lfs::core::NULL_NODE);
+    ASSERT_NE(restored_child_id, lfs::core::NULL_NODE);
+    EXPECT_NE(restored_parent_id, parent_id);
+    EXPECT_NE(restored_child_id, child_id);
+    EXPECT_EQ(scene.getNodeById(restored_child_id)->parent_id, restored_parent_id);
+    EXPECT_TRUE(scene_manager->selectionState().isNodeSelected(restored_parent_id));
+    EXPECT_TRUE(scene_manager->selectionState().isNodeSelected(restored_child_id));
+    EXPECT_FALSE(scene_manager->selectionState().isNodeSelected(parent_id));
+    EXPECT_FALSE(scene_manager->selectionState().isNodeSelected(child_id));
+}
+
+TEST_F(UndoHistoryTest, TopologyUndoRestoresPerNodeSelectionSlicesAndPreservesOtherRanges) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto first_id = scene.addSplat("First", make_linear_test_splat(2));
+    const auto second_id = scene.addSplat("Second", make_linear_test_splat(2));
+    const auto hidden_id = scene.addSplat("Hidden", make_linear_test_splat(2));
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    ASSERT_NE(hidden_id, lfs::core::NULL_NODE);
+    const auto first_uuid = scene.getNodeUuid(first_id);
+    const auto hidden_uuid = scene.getNodeUuid(hidden_id);
+    scene.setNodeVisibility(hidden_id, false);
+    scene.setSelectionMask(std::make_shared<Tensor>(
+        make_uint8_mask({1, 0, 0, 0, 0, 3})));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    scene_manager->removePLY("First");
+    EXPECT_EQ(scene.getNodeIdByUuid(first_uuid), lfs::core::NULL_NODE);
+    EXPECT_EQ(selection_mask_values(scene),
+              (std::vector<uint8_t>{0, 0, 0, 3}));
+
+    const auto result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+
+    const auto restored_first_id = scene.getNodeIdByUuid(first_uuid);
+    ASSERT_NE(restored_first_id, lfs::core::NULL_NODE);
+    EXPECT_NE(restored_first_id, first_id);
+    EXPECT_EQ(selection_mask_values(scene),
+              (std::vector<uint8_t>{0, 0, 0, 3, 1, 0}));
+
+    const auto slices = scene.capturePerNodeSelectionSlices();
+    ASSERT_TRUE(slices.contains(first_uuid));
+    ASSERT_TRUE(slices.contains(hidden_uuid));
+    EXPECT_EQ(slices.at(first_uuid).cpu().to_vector_uint8(),
+              (std::vector<uint8_t>{1, 0}));
+    EXPECT_EQ(slices.at(hidden_uuid).cpu().to_vector_uint8(),
+              (std::vector<uint8_t>{0, 3}));
+}
+
+TEST_F(UndoHistoryTest, TopologyUndoAfterModelSwapRestoresSnapshotSelectionSlice) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto model_id = scene.addSplat("Model", make_linear_test_splat(3));
+    ASSERT_NE(model_id, lfs::core::NULL_NODE);
+    const auto model_uuid = scene.getNodeUuid(model_id);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({1, 0, 2})));
+
+    const auto options = lfs::vis::op::SceneGraphCaptureOptions{
+        .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+        .include_selected_nodes = false,
+        .include_scene_context = false,
+    };
+    auto before = lfs::vis::op::SceneGraphPatchEntry::captureState(
+        *scene_manager, {"Model"}, options);
+
+    auto previous = scene.swapNodeModel("Model", make_linear_test_splat(5));
+    ASSERT_NE(previous, nullptr);
+    scene.setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 4, 0, 5, 0})));
+    auto after = lfs::vis::op::SceneGraphPatchEntry::captureState(
+        *scene_manager, {"Model"}, options);
+
+    lfs::vis::op::SceneGraphPatchEntry entry(
+        *scene_manager, "swap topology", std::move(before), std::move(after));
+    EXPECT_NO_THROW(entry.undo());
+
+    const auto* restored = scene.getNodeByUuid(model_uuid);
+    ASSERT_NE(restored, nullptr);
+    ASSERT_NE(restored->model, nullptr);
+    EXPECT_EQ(restored->model->size(), 3);
+    EXPECT_EQ(selection_mask_values(scene),
+              (std::vector<uint8_t>{1, 0, 2}));
+}
+
+TEST_F(UndoHistoryTest, SceneGraphPatchEntryRejectsTopologyChangedReplayBeforeMutation) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    ASSERT_NE(scene.addSplat("Model", make_linear_test_splat(1)),
+              lfs::core::NULL_NODE);
+    const auto options = lfs::vis::op::SceneGraphCaptureOptions{
+        .mode = lfs::vis::op::SceneGraphCaptureMode::FULL,
+        .include_selected_nodes = false,
+        .include_scene_context = false,
+    };
+    auto before = lfs::vis::op::SceneGraphPatchEntry::captureState(
+        *scene_manager, {"Model"}, options);
+    const auto after_transform =
+        glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 4.0f, 5.0f));
+    scene_manager->setNodeTransform("Model", after_transform);
+    auto after = lfs::vis::op::SceneGraphPatchEntry::captureState(
+        *scene_manager, {"Model"}, options);
+
+    lfs::vis::op::SceneGraphPatchEntry entry(
+        *scene_manager,
+        "transform.change",
+        std::move(before),
+        std::move(after));
+    ASSERT_NE(scene.addGroup("unexpected"), lfs::core::NULL_NODE);
+
+    EXPECT_THROW(entry.undo(), lfs::vis::op::HistoryCorruptionError);
+    EXPECT_EQ(scene_manager->getNodeTransform("Model"), after_transform);
+}
+
+TEST_F(UndoHistoryTest, DuplicateSelectedNodeClonesSliceUnderNewUuid) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto source_id = scene.addSplat("Model", make_linear_test_splat(3));
+    ASSERT_NE(source_id, lfs::core::NULL_NODE);
+    const auto source_uuid = scene.getNodeUuid(source_id);
+    scene.setSelectionMask(std::make_shared<Tensor>(make_uint8_mask({0, 6, 0})));
+
+    const std::string duplicate_name = scene_manager->duplicateNodeTree("Model");
+    ASSERT_FALSE(duplicate_name.empty());
+    const auto* duplicate = scene.getNode(duplicate_name);
+    ASSERT_NE(duplicate, nullptr);
+    const auto duplicate_uuid = duplicate->uuid;
+    EXPECT_NE(duplicate_uuid, source_uuid);
+    EXPECT_EQ(selection_mask_values(scene),
+              (std::vector<uint8_t>{0, 6, 0, 0, 6, 0}));
+
+    auto slices = scene.capturePerNodeSelectionSlices();
+    ASSERT_TRUE(slices.contains(source_uuid));
+    ASSERT_TRUE(slices.contains(duplicate_uuid));
+    EXPECT_EQ(slices.at(source_uuid).cpu().to_vector_uint8(),
+              slices.at(duplicate_uuid).cpu().to_vector_uint8());
+
+    auto result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_EQ(scene.getNodeByUuid(duplicate_uuid), nullptr);
+    EXPECT_EQ(selection_mask_values(scene),
+              (std::vector<uint8_t>{0, 6, 0}));
+
+    result = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(result.success) << result.error;
+    ASSERT_NE(scene.getNodeByUuid(duplicate_uuid), nullptr);
+    EXPECT_EQ(selection_mask_values(scene),
+              (std::vector<uint8_t>{0, 6, 0, 0, 6, 0}));
+}
+
+TEST_F(UndoHistoryTest, SceneGraphPatchPayloadCaptureIsOperationScoped) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto payload_bytes = [](const lfs::core::SplatData& model) {
+        return model.means_raw().bytes() + model.sh0_raw().bytes() + model.shN_raw().bytes() +
+               model.scaling_raw().bytes() + model.rotation_raw().bytes() + model.opacity_raw().bytes() +
+               (model.has_deleted_mask() ? model.deleted().bytes() : 0u) +
+               (model._densification_info.is_valid() ? model._densification_info.bytes() : 0u);
+    };
+
+    const auto graph_signature = [&] {
+        std::vector<std::string> result;
+        const auto visit = [&](const auto& self, const lfs::core::NodeId id) -> void {
+            const auto* node = scene.getNodeById(id);
+            if (!node) {
+                return;
+            }
+            const auto parent_uuid = node->parent_id == lfs::core::NULL_NODE
+                                         ? lfs::core::Uuid{}
+                                         : scene.getNodeUuid(node->parent_id);
+            std::string row = node->uuid.to_string() + "|" + parent_uuid.to_string() + "|" + node->name + "|" +
+                              std::to_string(static_cast<int>(node->type)) + "|";
+            if (node->model) {
+                const auto means = node->model->means_raw().cpu().to_vector();
+                row += std::to_string(node->model->size()) + "|";
+                if (!means.empty()) {
+                    row += std::to_string(means.front()) + "|" + std::to_string(means[means.size() - 3]);
+                }
+                if (node->model->has_deleted_mask()) {
+                    row += "|" + std::to_string(node->model->deleted().count_nonzero());
+                }
+            }
+            result.push_back(std::move(row));
+            for (const auto child_id : node->children) {
+                self(self, child_id);
+            }
+        };
+        for (const auto root_id : scene.getRootNodes()) {
+            visit(visit, root_id);
+        }
+        return result;
+    };
+
+    const auto check_round_trip = [&](const std::vector<std::string>& before,
+                                      const std::vector<std::string>& after) {
+        auto result = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(graph_signature(), before);
+        result = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(graph_signature(), after);
+        result = lfs::vis::op::undoHistory().undo();
+        ASSERT_TRUE(result.success) << result.error;
+        EXPECT_EQ(graph_signature(), before);
+        result = lfs::vis::op::undoHistory().redo();
+        ASSERT_TRUE(result.success) << result.error;
+    };
+
+    std::vector<lfs::core::NodeId> node_ids;
+    node_ids.reserve(10);
+    for (int i = 0; i < 10; ++i) {
+        const auto id = scene.addSplat("model_" + std::to_string(i), make_linear_test_splat(10000));
+        ASSERT_NE(id, lfs::core::NULL_NODE);
+        node_ids.push_back(id);
+    }
+
+    const auto empty_group = scene.addGroup("empty_group");
+    ASSERT_NE(empty_group, lfs::core::NULL_NODE);
+    const auto empty_group_before = graph_signature();
+    ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({empty_group}, false));
+    const auto empty_group_after = graph_signature();
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoItems().back().metadata.label, "Delete Nodes");
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(empty_group_before, empty_group_after);
+
+    const auto* deleted_node = scene.getNodeById(node_ids.front());
+    ASSERT_NE(deleted_node, nullptr);
+    ASSERT_NE(deleted_node->model, nullptr);
+    const size_t deleted_payload_bytes = payload_bytes(*deleted_node->model);
+    const auto delete_before = graph_signature();
+    ASSERT_TRUE(scene_manager->removeNodesByIdsWithResult({node_ids.front()}, false));
+    const auto delete_after = graph_signature();
+    EXPECT_LE(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes,
+              deleted_payload_bytes * 3 / 2);
+    check_round_trip(delete_before, delete_after);
+
+    const auto* duplicate_source = scene.getNodeById(node_ids[1]);
+    ASSERT_NE(duplicate_source, nullptr);
+    ASSERT_NE(duplicate_source->model, nullptr);
+    const size_t duplicate_payload_bytes = payload_bytes(*duplicate_source->model);
+    const auto duplicate_before = graph_signature();
+    ASSERT_FALSE(scene_manager->duplicateNodeTree(node_ids[1]).empty());
+    const auto duplicate_after = graph_signature();
+    EXPECT_LE(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes,
+              duplicate_payload_bytes * 3 / 2);
+    check_round_trip(duplicate_before, duplicate_after);
+
+    const auto group_before = graph_signature();
+    ASSERT_TRUE(scene_manager->groupNodes({node_ids[2], node_ids[3]}));
+    const auto group_after = graph_signature();
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(group_before, group_after);
+
+    const auto grouped_id = [&] {
+        for (const auto* node : scene.getNodes()) {
+            if (node && node->type == lfs::core::NodeType::GROUP &&
+                std::ranges::find(node->children, node_ids[2]) != node->children.end()) {
+                return node->id;
+            }
+        }
+        return lfs::core::NULL_NODE;
+    }();
+    ASSERT_NE(grouped_id, lfs::core::NULL_NODE);
+    const auto ungroup_before = graph_signature();
+    ASSERT_TRUE(scene_manager->ungroupNode(grouped_id));
+    const auto ungroup_after = graph_signature();
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(ungroup_before, ungroup_after);
+
+    const auto target_group = scene.addGroup("target_group");
+    ASSERT_NE(target_group, lfs::core::NULL_NODE);
+    const auto move_before = graph_signature();
+    ASSERT_TRUE(scene_manager->moveNodes({node_ids[4]}, target_group, -1));
+    const auto move_after = graph_signature();
+    EXPECT_LT(lfs::vis::op::undoHistory().undoItems().back().estimated_bytes, 64u * 1024u);
+    check_round_trip(move_before, move_after);
+}
+
 TEST_F(UndoHistoryTest, DeletingLastNodeRemainsUndoable) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -1509,6 +2673,7 @@ TEST_F(UndoHistoryTest, DeletingLastNodeRemainsUndoable) {
     lfs::vis::services().set(rendering_manager.get());
 
     scene_manager->getScene().addSplat("model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    scene_manager->getScene().markPayloadDiverged(scene_manager->getScene().getNodeIdByName("model"));
     scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
 
     scene_manager->removePLY("model");
@@ -1518,7 +2683,9 @@ TEST_F(UndoHistoryTest, DeletingLastNodeRemainsUndoable) {
     ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
 
     lfs::vis::op::undoHistory().undo();
-    EXPECT_NE(scene_manager->getScene().getNode("model"), nullptr);
+    const auto* restored = scene_manager->getScene().getNode("model");
+    ASSERT_NE(restored, nullptr);
+    EXPECT_TRUE(restored->payload_diverged);
     EXPECT_EQ(scene_manager->getContentType(), lfs::vis::SceneManager::ContentType::SplatFiles);
 
     lfs::vis::op::undoHistory().redo();
@@ -1557,6 +2724,288 @@ TEST_F(UndoHistoryTest, DeleteKeepChildrenRestoresHierarchyOnUndo) {
     EXPECT_EQ(child->parent_id, lfs::core::NULL_NODE);
 }
 
+TEST_F(UndoHistoryTest, MergeGroupNodeHandlesNameReferenceFromGroupNode) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto group_id = scene.addGroup("group");
+    ASSERT_NE(group_id, lfs::core::NULL_NODE);
+    const auto child_a_id = scene.addSplat("child_a", make_test_splat({0.0f, 0.0f, 0.0f}), group_id);
+    const auto child_b_id = scene.addSplat(
+        "child_b",
+        make_test_splat({
+            1.0f,
+            0.0f,
+            0.0f,
+            2.0f,
+            0.0f,
+            0.0f,
+        }),
+        group_id);
+    ASSERT_NE(child_a_id, lfs::core::NULL_NODE);
+    ASSERT_NE(child_b_id, lfs::core::NULL_NODE);
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto* group = scene.getNodeById(group_id);
+    ASSERT_NE(group, nullptr);
+
+    const auto merged_name = scene_manager->mergeGroupNode(group->name);
+
+    EXPECT_EQ(merged_name, "group");
+    const auto* merged = scene.getNode("group");
+    ASSERT_NE(merged, nullptr);
+    EXPECT_EQ(merged->type, lfs::core::NodeType::SPLAT);
+    EXPECT_EQ(scene.getNodeById(child_a_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(child_b_id), nullptr);
+    EXPECT_EQ(merged->gaussian_count.load(std::memory_order_acquire), 3u);
+    EXPECT_EQ(scene.getTotalGaussianCount(), 3u);
+}
+
+TEST_F(UndoHistoryTest, DeleteResultHonorsTrainingRemovalPolicy) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto root_id = scene.addGroup("root");
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}), root_id);
+    const auto unrelated_id = scene.addSplat("unrelated", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    const auto val_group_id = scene.addCameraGroup("Validation", cameras_id, 1);
+    const auto train_camera_id =
+        scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    const auto val_camera_id =
+        scene.addCamera("val.png", val_group_id, make_test_camera("val.png", 2));
+    scene.setCameraTrainingEnabled(val_camera_id, false);
+    scene.setTrainingModelNode("Model");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    const auto model_result = scene_manager->removePLYWithResult("Model");
+    EXPECT_FALSE(model_result);
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+
+    const auto ancestor_result = scene_manager->canRemoveNode(root_id);
+    EXPECT_FALSE(ancestor_result);
+    EXPECT_NE(scene.getNodeById(root_id), nullptr);
+
+    const auto training_camera_result = scene_manager->removeNodeWithResult(train_camera_id);
+    EXPECT_FALSE(training_camera_result);
+    EXPECT_NE(scene.getNodeById(train_camera_id), nullptr);
+
+    const auto validation_camera_result = scene_manager->removeNodeWithResult(val_camera_id);
+    EXPECT_TRUE(validation_camera_result);
+    EXPECT_EQ(scene.getNodeById(val_camera_id), nullptr);
+
+    const auto unrelated_result = scene_manager->removeNodeWithResult(unrelated_id);
+    EXPECT_TRUE(unrelated_result);
+    EXPECT_EQ(scene.getNodeById(unrelated_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, RemoveNodesWithResultValidatesAllBeforeDeletingAny) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto free_id = scene.addSplat("free", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    scene.setTrainingModelNode("Model");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    const auto blocked = scene_manager->removeNodesWithResult({"free", "Model"}, false);
+    EXPECT_FALSE(blocked);
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+    EXPECT_NE(scene.getNodeById(free_id), nullptr);
+
+    const auto parent_id = scene.addGroup("parent");
+    const auto child_id = scene.addSplat("child", make_test_splat({2.0f, 0.0f, 0.0f}), parent_id);
+    ASSERT_NE(scene.getNodeById(parent_id), nullptr);
+    ASSERT_NE(scene.getNodeById(child_id), nullptr);
+
+    const auto cascaded = scene_manager->removeNodesWithResult({"parent", "child"}, false);
+    EXPECT_TRUE(cascaded) << (cascaded ? "" : cascaded.error());
+    EXPECT_EQ(scene.getNodeById(parent_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(child_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, RemoveNodesWithResultUsesStableIdsForDuplicateNames) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto first_id = scene.restoreNodeWithUuid(lfs::core::Scene::RestoreNodeDesc{
+        .uuid = lfs::core::generate_uuid_v4(),
+        .type = lfs::core::NodeType::GROUP,
+        .name = "duplicate",
+    });
+    const auto second_id = scene.restoreNodeWithUuid(lfs::core::Scene::RestoreNodeDesc{
+        .uuid = lfs::core::generate_uuid_v4(),
+        .type = lfs::core::NodeType::GROUP,
+        .name = "duplicate",
+    });
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    ASSERT_NE(first_id, second_id);
+    const auto first_child_id = scene.addSplat("first-child", make_test_splat({0.0f, 0.0f, 0.0f}), first_id);
+    const auto second_child_id = scene.addSplat("second-child", make_test_splat({1.0f, 0.0f, 0.0f}), second_id);
+    const auto first_uuid = scene.getNodeById(first_id)->uuid;
+    const auto second_uuid = scene.getNodeById(second_id)->uuid;
+    const auto first_child_uuid = scene.getNodeById(first_child_id)->uuid;
+    const auto second_child_uuid = scene.getNodeById(second_child_id)->uuid;
+
+    const auto result = scene_manager->removeNodesByIdsWithResult(
+        std::vector<lfs::core::NodeId>{second_id}, false);
+    ASSERT_TRUE(result) << (result ? "" : result.error());
+    EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(first_child_uuid), nullptr);
+    EXPECT_EQ(scene.getNodeByUuid(second_uuid), nullptr);
+    EXPECT_EQ(scene.getNodeByUuid(second_child_uuid), nullptr);
+
+    const auto undo_result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo_result.success) << undo_result.error;
+    EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(first_child_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(second_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(second_child_uuid), nullptr);
+}
+
+TEST_F(UndoHistoryTest, RemoveNodesByIdValidatesWholeBatchBeforeDeletingAny) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    auto trainer_manager = std::make_unique<lfs::vis::TrainerManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+    lfs::vis::services().set(trainer_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto model_id = scene.addSplat("Model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    const auto free_id = scene.addSplat("free", make_test_splat({1.0f, 0.0f, 0.0f}));
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 1);
+    scene.addCamera("train.png", train_group_id, make_test_camera("train.png", 1));
+    scene.setTrainingModelNode("Model");
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    trainer_manager->setScene(&scene);
+    trainer_manager->setTrainerFromCheckpoint(std::make_unique<lfs::training::Trainer>(scene), 0);
+    ASSERT_FALSE(trainer_manager->canPerform(lfs::vis::TrainingAction::DeleteTrainingNode));
+
+    const auto result = scene_manager->removeNodesByIdsWithResult(
+        std::vector<lfs::core::NodeId>{free_id, model_id}, false);
+    EXPECT_FALSE(result);
+    EXPECT_NE(scene.getNodeById(free_id), nullptr);
+    EXPECT_NE(scene.getNodeById(model_id), nullptr);
+}
+
+TEST_F(UndoHistoryTest, CameraDeleteUndoRepublishesCameraCount) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto train_group_id = scene.addCameraGroup("Training", cameras_id, 2);
+    const auto cam_a = scene.addCamera("a.png", train_group_id, make_test_camera("a.png", 1));
+    const auto cam_b = scene.addCamera("b.png", train_group_id, make_test_camera("b.png", 2));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::Dataset);
+
+    ASSERT_EQ(scene_manager->publishLiveCameraCount(), 2u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 2u);
+
+    const auto* cam_a_node = scene.getNodeById(cam_a);
+    ASSERT_NE(cam_a_node, nullptr);
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(cam_a));
+    EXPECT_EQ(scene.getNodeById(cam_a), nullptr);
+    EXPECT_NE(scene.getNodeById(cam_b), nullptr);
+    EXPECT_EQ(scene.getAllCameras().size(), 1u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().canUndo());
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+    EXPECT_NE(scene.getNode("a.png"), nullptr);
+    EXPECT_EQ(scene.getAllCameras().size(), 2u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 2u);
+
+    ASSERT_TRUE(lfs::vis::op::undoHistory().canRedo());
+    ASSERT_TRUE(lfs::vis::op::undoHistory().redo().success);
+    EXPECT_EQ(scene.getNode("a.png"), nullptr);
+    EXPECT_EQ(scene.getAllCameras().size(), 1u);
+    EXPECT_EQ(lfs::vis::app_store().import_overlay_state.get().num_images, 1u);
+}
+
+TEST_F(UndoHistoryTest, CameraBatchDeleteUndoRestoresOrderAndId) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    auto& scene = scene_manager->getScene();
+    const auto cameras_id = scene.addGroup("Cameras");
+    const auto training_id = scene.addCameraGroup("Training", cameras_id, 3);
+    const auto first_id = scene.addCamera("first.png", training_id, make_test_camera("first.png", 1));
+    const auto second_id = scene.addCamera("second.png", training_id, make_test_camera("second.png", 2));
+    const auto third_id = scene.addCamera("third.png", training_id, make_test_camera("third.png", 3));
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    ASSERT_NE(third_id, lfs::core::NULL_NODE);
+    const auto expected_children = scene.getNodeById(training_id)->children;
+
+    const auto remove_result = scene_manager->removeNodesByIdsWithResult({first_id}, false);
+    ASSERT_TRUE(remove_result) << (remove_result ? "" : remove_result.error());
+    ASSERT_TRUE(lfs::vis::op::undoHistory().undo().success);
+
+    ASSERT_NE(scene.getNodeById(first_id), nullptr);
+    EXPECT_EQ(scene.getNodeById(training_id)->children, expected_children);
+    EXPECT_EQ(scene.getNodeById(second_id)->parent_id, training_id);
+    EXPECT_EQ(scene.getNodeById(third_id)->parent_id, training_id);
+}
+
+TEST_F(UndoHistoryTest, DeleteUndoEntriesReplayAfterFreshIdRestore) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+    auto& scene = scene_manager->getScene();
+
+    const auto first_id = scene.addGroup("first");
+    const auto second_id = scene.addGroup("second");
+    ASSERT_NE(first_id, lfs::core::NULL_NODE);
+    ASSERT_NE(second_id, lfs::core::NULL_NODE);
+    const auto first_uuid = scene.getNodeUuid(first_id);
+    const auto second_uuid = scene.getNodeUuid(second_id);
+
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(first_id));
+    ASSERT_TRUE(scene_manager->removeNodeWithResult(second_id));
+    auto result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    result = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(result.success) << result.error;
+    EXPECT_NE(scene.getNodeByUuid(first_uuid), nullptr);
+    EXPECT_NE(scene.getNodeByUuid(second_uuid), nullptr);
+}
+
 TEST_F(UndoHistoryTest, RenameNodeCreatesUndoableSceneGraphEntry) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -1578,6 +3027,34 @@ TEST_F(UndoHistoryTest, RenameNodeCreatesUndoableSceneGraphEntry) {
     lfs::vis::op::undoHistory().redo();
     EXPECT_EQ(scene_manager->getScene().getNode("old_name"), nullptr);
     EXPECT_NE(scene_manager->getScene().getNode("new_name"), nullptr);
+}
+
+TEST_F(UndoHistoryTest, SceneGraphMetadataUndoRedoRestoresPayloadDivergence) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    const auto node_id = scene_manager->getScene().addSplat(
+        "model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    auto before = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"model"});
+    ASSERT_EQ(before.size(), 1u);
+
+    scene_manager->getScene().markPayloadDiverged(node_id);
+    auto after = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"model"});
+    ASSERT_EQ(after.size(), 1u);
+
+    std::vector<lfs::vis::op::SceneGraphNodeMetadataDiff> diffs;
+    diffs.push_back({.before = std::move(before.front()), .after = std::move(after.front())});
+    lfs::vis::op::undoHistory().push(std::make_unique<lfs::vis::op::SceneGraphMetadataEntry>(
+        *scene_manager, "payload.diverged", std::move(diffs)));
+
+    ASSERT_TRUE(scene_manager->getScene().getNode("model")->payload_diverged);
+    const auto undo = lfs::vis::op::undoHistory().undo();
+    ASSERT_TRUE(undo.success) << undo.error;
+    EXPECT_FALSE(scene_manager->getScene().getNode("model")->payload_diverged);
+
+    const auto redo = lfs::vis::op::undoHistory().redo();
+    ASSERT_TRUE(redo.success) << redo.error;
+    EXPECT_TRUE(scene_manager->getScene().getNode("model")->payload_diverged);
 }
 
 TEST_F(UndoHistoryTest, ReparentNodeCreatesUndoableSceneGraphEntry) {
@@ -1671,6 +3148,51 @@ TEST_F(UndoHistoryTest, RapidVisibilityChangesMergeIntoSingleUndoStep) {
     EXPECT_FALSE(static_cast<bool>(node->visible));
 }
 
+TEST_F(UndoHistoryTest, RapidVisibilityCommandsMergeIntoSingleUndoStep) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    const auto node_id = scene_manager->getScene().addSplat(
+        "model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = false}
+        .emit();
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = true}
+        .emit();
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = false}
+        .emit();
+
+    ASSERT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoName(), "Set Visibility");
+}
+
+TEST_F(UndoHistoryTest, VisibilityCommandsOutsideMergeWindowStaySeparate) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    const auto node_id = scene_manager->getScene().addSplat(
+        "model", make_test_splat({0.0f, 0.0f, 0.0f}));
+    ASSERT_NE(node_id, lfs::core::NULL_NODE);
+
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = false}
+        .emit();
+    std::this_thread::sleep_for(std::chrono::milliseconds(650));
+    lfs::core::events::cmd::SetNodeVisibilityById{.node_id = static_cast<std::int32_t>(node_id),
+                                                  .visible = true}
+        .emit();
+
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 2u);
+}
+
 TEST_F(UndoHistoryTest, RapidLockChangesMergeIntoSingleUndoStep) {
     auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
     auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
@@ -1715,6 +3237,74 @@ TEST_F(UndoHistoryTest, DuplicateNodeCreatesUndoableSceneGraphEntry) {
 
     lfs::vis::op::undoHistory().redo();
     EXPECT_NE(scene_manager->getScene().getNode(duplicate_name), nullptr);
+}
+
+TEST_F(UndoHistoryTest, DuplicateNodeCompactsSoftDeletedSplats) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_patterned_sh_rest_splat(4));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    const auto expected_sh_rest_row_0 = sh_rest_row_values(*node->model, 0);
+    const auto expected_sh_rest_row_2 = sh_rest_row_values(*node->model, 2);
+    node->model->soft_delete(make_uint8_mask({0, 1, 0, 1}).to(DataType::Bool));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto duplicate_name = scene_manager->duplicateNodeTree("model");
+    ASSERT_FALSE(duplicate_name.empty());
+
+    auto* duplicate = scene_manager->getScene().getNode(duplicate_name);
+    ASSERT_NE(duplicate, nullptr);
+    ASSERT_NE(duplicate->model, nullptr);
+    EXPECT_EQ(duplicate->model->size(), 2);
+    EXPECT_FALSE(duplicate->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*duplicate->model), (std::vector<float>{0.0f, 2.0f}));
+    EXPECT_EQ(sh_rest_row_values(*duplicate->model, 0), expected_sh_rest_row_0);
+    EXPECT_EQ(sh_rest_row_values(*duplicate->model, 1), expected_sh_rest_row_2);
+
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_EQ(scene_manager->getScene().getNode(duplicate_name), nullptr);
+
+    lfs::vis::op::undoHistory().redo();
+    auto* restored_duplicate = scene_manager->getScene().getNode(duplicate_name);
+    ASSERT_NE(restored_duplicate, nullptr);
+    ASSERT_NE(restored_duplicate->model, nullptr);
+    EXPECT_EQ(restored_duplicate->model->size(), 2);
+    EXPECT_FALSE(restored_duplicate->model->has_deleted_mask());
+    EXPECT_EQ(mean_x_values(*restored_duplicate->model), (std::vector<float>{0.0f, 2.0f}));
+    EXPECT_EQ(sh_rest_row_values(*restored_duplicate->model, 0), expected_sh_rest_row_0);
+    EXPECT_EQ(sh_rest_row_values(*restored_duplicate->model, 1), expected_sh_rest_row_2);
+}
+
+TEST_F(UndoHistoryTest, DuplicateFullySoftDeletedSplatDoesNotPromoteChildren) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addSplat("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+    const auto model_id = node->id;
+    const auto cropbox_id = scene_manager->getScene().addCropBox("cropbox", model_id);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    node->model->soft_delete(make_uint8_mask({1, 1}).to(DataType::Bool));
+    scene_manager->changeContentType(lfs::vis::SceneManager::ContentType::SplatFiles);
+
+    const auto duplicate_name = scene_manager->duplicateNodeTree("model");
+    EXPECT_TRUE(duplicate_name.empty());
+    EXPECT_EQ(scene_manager->getScene().getNode("model_copy"), nullptr);
+    EXPECT_EQ(scene_manager->getScene().getNode("cropbox_copy"), nullptr);
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+
+    const auto* original_child = scene_manager->getScene().getNode("cropbox");
+    ASSERT_NE(original_child, nullptr);
+    EXPECT_EQ(original_child->parent_id, model_id);
 }
 
 TEST_F(UndoHistoryTest, SelectionSnapshotRestoresSelectionGroupsAndActiveGroup) {

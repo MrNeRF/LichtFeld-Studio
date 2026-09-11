@@ -100,8 +100,7 @@ namespace lfs::io {
         LOG_INFO("Loading SOG file: {}", lfs::core::path_to_utf8(path));
         auto splat_result = load_sog(path);
         if (!splat_result) {
-            return make_error(ErrorCode::CORRUPTED_DATA,
-                              std::format("Failed to load SOG: {}", splat_result.error()), path);
+            return std::unexpected(splat_result.error());
         }
 
         if (options.progress) {
@@ -117,7 +116,8 @@ namespace lfs::io {
             .scene_center = Tensor::zeros({3}, Device::CPU),
             .loader_used = name(),
             .load_time = load_time,
-            .warnings = {}};
+            .warnings = {},
+            .georeference = std::nullopt};
 
         LOG_INFO("SOG loaded successfully in {}ms", load_time.count());
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "config.slang"
+#include "indirect_layout.inc"
 
 import utils;
 
@@ -24,7 +25,6 @@ import utils;
 #define LFS_RASTER_OVERLAYS 0
 #endif
 
-#define TILE_BATCH_ENTRY_COUNTS 1
 #define TILE_BATCH_ENTRY_DESCRIPTORS 2
 #define TILE_BATCH_ENTRY_RASTERIZE 3
 #define TILE_BATCH_ENTRY_COMPOSE 4
@@ -39,31 +39,7 @@ float4 update_pixel_state(float4 pixel_state_t_nm1, float4 gauss_rgba_t_n)
     return float4(color_t_n, transmittance_t_n);
 }
 
-#if TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_COUNTS
-
-layout(binding=0) StructuredBuffer<int32_t> tile_ranges;
-layout(binding=1) RWStructuredBuffer<int32_t> out_tile_batch_counts;
-
-[shader("compute")]
-[numthreads(256, 1, 1)]
-void main(uint3 dispatchThreadID : SV_DispatchThreadID,
-          uniform Uniforms uniforms)
-{
-    uint tile_idx = dispatchThreadID.x;
-    uint num_tiles = uniforms.grid_height * uniforms.grid_width;
-    if (tile_idx >= num_tiles)
-        return;
-
-    int32_t range_start = tile_ranges[tile_idx];
-    int32_t range_end = tile_ranges[tile_idx + 1u];
-    uint tile_count = uint(max(range_end - range_start, 0));
-    out_tile_batch_counts[tile_idx] =
-        tile_count > RASTER_DENSE_TILE_THRESHOLD
-            ? int32_t((tile_count + RASTER_BATCH_SIZE - 1u) / RASTER_BATCH_SIZE)
-            : 0;
-}
-
-#elif TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_DESCRIPTORS
+#if TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_DESCRIPTORS
 
 layout(binding=0) StructuredBuffer<int32_t> tile_ranges;
 layout(binding=1) StructuredBuffer<int32_t> tile_batch_offsets;
@@ -82,9 +58,10 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID,
         uint total_batches = num_tiles > 0u
             ? uint(max(tile_batch_offsets[num_tiles - 1u], 0))
             : 0u;
-        out_dispatch_args[0] = total_batches;
-        out_dispatch_args[1] = 1u;
-        out_dispatch_args[2] = 1u;
+        const uint raster = LFS_VK_TILE_BATCH_DISPATCH_RASTER_WORD_OFFSET;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_X_WORD_OFFSET] = total_batches;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_Y_WORD_OFFSET] = 1u;
+        out_dispatch_args[raster + LFS_VK_DISPATCH_Z_WORD_OFFSET] = 1u;
     }
 
     if (tile_idx >= num_tiles)
@@ -112,9 +89,11 @@ void main(uint3 dispatchThreadID : SV_DispatchThreadID,
 #elif TILE_BATCH_ENTRY == TILE_BATCH_ENTRY_RASTERIZE
 
 groupshared Splat_2D_AlphaBlend collected_splats[TILE_SIZE];
-groupshared uint32_t collected_idx[TILE_SIZE];
+groupshared uint32_t active_subgroups[TILE_SIZE / SUBGROUP_SIZE];
 #if LFS_RASTER_OVERLAYS
 groupshared uint32_t collected_gauss_idx[TILE_SIZE];
+// Packed flags | selection_byte | preview_byte per staged splat.
+groupshared uint32_t collected_overlay[TILE_SIZE];
 #endif
 
 layout(binding=0) StructuredBuffer<int32_t> sorted_gauss_idx;
@@ -128,7 +107,7 @@ layout(binding=6) RWStructuredBuffer<int32_t> tile_batch_n_contributors;
 layout(binding=7) ByteAddressBuffer selection_mask;
 layout(binding=8) ByteAddressBuffer preview_mask;
 layout(binding=9) StructuredBuffer<float4> selection_colors;
-layout(binding=10) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=10) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=11) StructuredBuffer<float4> overlay_params;
 #endif
 
@@ -159,20 +138,25 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
     uint shared_memory_rounds =
         (splats_to_process + TILE_SIZE - 1u) / TILE_SIZE;
 
+  #if LFS_RASTER_OVERLAYS
+    const OverlayUniformState overlay_state = load_overlay_uniform_state(overlay_params);
+  #endif
+
     for (uint round = 0u; round < shared_memory_rounds; ++round) {
-        uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
-        uint32_t thread_active_u = uint32_t(WaveActiveAnyTrue(thread_active));
+        const uint subgroup_idx = thread_rank / SUBGROUP_SIZE;
+        const uint32_t subgroup_has_active_thread =
+            uint32_t(WaveActiveAnyTrue(thread_active));
         if (WaveIsFirstLane())
-            collected_idx[subgroup_idx] = thread_active_u;
+            active_subgroups[subgroup_idx] = subgroup_has_active_thread;
         GroupMemoryBarrierWithGroupSync();
         if (thread_rank == 0u) {
             uint32_t any_active = 0u;
             for (uint s = 0u; s < TILE_SIZE / SUBGROUP_SIZE; ++s)
-                any_active |= collected_idx[s];
-            collected_idx[0] = any_active;
+                any_active |= active_subgroups[s];
+            active_subgroups[0] = any_active;
         }
         GroupMemoryBarrierWithGroupSync();
-        if (collected_idx[0] == 0u)
+        if (active_subgroups[0] == 0u)
             break;
 
         uint splat_pointer_offset = round * TILE_SIZE + thread_rank;
@@ -183,6 +167,8 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 load_splat_alphablend(int32_t(splat_id), xy_vs, inv_cov_vs_opacity, rgb);
             #if LFS_RASTER_OVERLAYS
             collected_gauss_idx[thread_rank] = splat_id;
+            collected_overlay[thread_rank] = load_overlay_per_splat_pack(
+                splat_id, gaussian_overlay_flags, selection_mask, preview_mask, overlay_state);
             #endif
         }
         GroupMemoryBarrierWithGroupSync();
@@ -199,27 +185,29 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
 
                 #if LFS_RASTER_OVERLAYS
                 uint32_t splat_id = collected_gauss_idx[j];
-                uint flags = gaussian_overlay_flags[splat_id];
+                const uint overlay_pack = collected_overlay[j];
+                const uint flags = unpack_overlay_flags(overlay_pack);
                 uint sel_status = selection_status(g.xy_vs,
                                                    splat_id,
                                                    flags,
-                                                   selection_mask,
-                                                   preview_mask,
-                                                   overlay_params);
+                                                   unpack_overlay_selection_byte(overlay_pack),
+                                                   unpack_overlay_preview_byte(overlay_pack),
+                                                   overlay_state);
                 bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
                 gauss_rgba = apply_projection_overlay_color(gauss_rgba,
                                                             g.xy_vs,
                                                             flags,
-                                                            overlay_params);
+                                                            overlay_state);
                 gauss_rgba = apply_ring_overlay(gauss_rgba,
                                                 g,
                                                 center_pix_coord,
                                                 sel_status,
                                                 flags,
-                                                overlay_params,
+                                                overlay_state.show_rings,
+                                                overlay_state.ring_width,
                                                 selection_colors);
 
-                if (overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y) && selectable) {
+                if (overlay_state.show_center_markers && selectable) {
                     const float INNER_RADIUS_SQ = 2.25f;
                     const float OUTER_RADIUS_SQ = 6.25f;
                     const float OUTLINE_DARKEN = 0.4f;
@@ -238,7 +226,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 }
 
                 gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
+                gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
                 #endif
 
                 float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
@@ -250,6 +238,7 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
                 curr_pixel_state = new_pixel_state;
             }
         }
+        GroupMemoryBarrierWithGroupSync();
     }
 
     uint partial_idx = batch_idx * TILE_SIZE + thread_rank;
@@ -277,7 +266,7 @@ layout(binding=11) RWStructuredBuffer<int32_t> final_n_contributors;
 layout(binding=12) ByteAddressBuffer selection_mask;
 layout(binding=13) ByteAddressBuffer preview_mask;
 layout(binding=14) StructuredBuffer<float4> selection_colors;
-layout(binding=15) StructuredBuffer<uint> gaussian_overlay_flags;
+layout(binding=15) ByteAddressBuffer gaussian_overlay_flags;
 layout(binding=16) StructuredBuffer<float4> overlay_params;
 #endif
 
@@ -285,6 +274,9 @@ layout(binding=16) StructuredBuffer<float4> overlay_params;
 void replay_batch(uint range_start,
                   uint range_end,
                   float2 center_pix_coord,
+#if LFS_RASTER_OVERLAYS
+                  OverlayUniformState overlay_state,
+#endif
                   inout float4 curr_pixel_state,
                   inout float median_depth,
                   inout int32_t local_n_contrib,
@@ -302,27 +294,32 @@ void replay_batch(uint range_start,
         float splat_depth = read_t1_float(splat_id, depths);
 
         #if LFS_RASTER_OVERLAYS
-        uint flags = gaussian_overlay_flags[splat_id];
+        // Compose path streams splats (no cooperative stage); still use
+        // hoisted uniforms and a single packed per-splat load.
+        const uint overlay_pack = load_overlay_per_splat_pack(
+            splat_id, gaussian_overlay_flags, selection_mask, preview_mask, overlay_state);
+        const uint flags = unpack_overlay_flags(overlay_pack);
         uint sel_status = selection_status(g.xy_vs,
                                            splat_id,
                                            flags,
-                                           selection_mask,
-                                           preview_mask,
-                                           overlay_params);
+                                           unpack_overlay_selection_byte(overlay_pack),
+                                           unpack_overlay_preview_byte(overlay_pack),
+                                           overlay_state);
         bool selectable = (flags & OVERLAY_FLAG_NONSELECTABLE) == 0u;
         gauss_rgba = apply_projection_overlay_color(gauss_rgba,
                                                     g.xy_vs,
                                                     flags,
-                                                    overlay_params);
+                                                    overlay_state);
         gauss_rgba = apply_ring_overlay(gauss_rgba,
                                         g,
                                         center_pix_coord,
                                         sel_status,
                                         flags,
-                                        overlay_params,
+                                        overlay_state.show_rings,
+                                        overlay_state.ring_width,
                                         selection_colors);
 
-        if (overlay_enabled(overlay_params[OVERLAY_PARAM_MARKER_FLAGS].y) && selectable) {
+        if (overlay_state.show_center_markers && selectable) {
             const float INNER_RADIUS_SQ = 2.25f;
             const float OUTER_RADIUS_SQ = 6.25f;
             const float OUTLINE_DARKEN = 0.4f;
@@ -344,7 +341,7 @@ void replay_batch(uint range_start,
         }
 
         gauss_rgba = apply_selection_overlay(gauss_rgba, sel_status, selection_colors);
-        gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_params);
+        gauss_rgba = apply_flash_overlay(gauss_rgba, flags, overlay_state.flash_intensity);
         #endif
 
         float4 new_pixel_state = update_pixel_state(curr_pixel_state, gauss_rgba);
@@ -385,10 +382,20 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         return;
 
     float2 center_pix_coord = float2(pix_coord);
+    uint pix_id = pix_coord.y * uniforms.image_width + pix_coord.x;
     float4 curr_pixel_state = float4(0.0f, 0.0f, 0.0f, 1.0f);
     float median_depth = FAR_DEPTH;
     int32_t local_n_contrib = 0;
-    bool thread_active = true;
+    if (uniforms.depth_wave > 0u) {
+        curr_pixel_state = final_pixel_state[pix_id];
+        median_depth = final_pixel_depth[pix_id];
+        local_n_contrib = final_n_contributors[pix_id];
+    }
+    bool thread_active = curr_pixel_state.a >= 0.0001f;
+
+  #if LFS_RASTER_OVERLAYS
+    const OverlayUniformState overlay_state = load_overlay_uniform_state(overlay_params);
+  #endif
 
     for (uint desc_idx = desc_begin; desc_idx < desc_end && thread_active; ++desc_idx) {
         uint partial_idx = desc_idx * TILE_SIZE + thread_rank;
@@ -407,6 +414,9 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             replay_batch(descriptor.y,
                          descriptor.z,
                          center_pix_coord,
+                      #if LFS_RASTER_OVERLAYS
+                         overlay_state,
+                      #endif
                          curr_pixel_state,
                          median_depth,
                          local_n_contrib,
@@ -422,6 +432,9 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
             replay_batch(descriptor.y,
                          descriptor.z,
                          center_pix_coord,
+                      #if LFS_RASTER_OVERLAYS
+                         overlay_state,
+                      #endif
                          replay_state,
                          replay_median_depth,
                          replay_n_contrib,
@@ -435,7 +448,6 @@ void main(uint3 groupThreadID : SV_GroupThreadID,
         local_n_contrib += partial_n_contrib;
     }
 
-    uint pix_id = pix_coord.y * uniforms.image_width + pix_coord.x;
     final_n_contributors[pix_id] = local_n_contrib;
     final_pixel_state[pix_id] = curr_pixel_state;
     final_pixel_depth[pix_id] = median_depth;

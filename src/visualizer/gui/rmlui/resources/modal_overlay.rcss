@@ -100,7 +100,13 @@ body {
     display: block;
     margin: 2dp 0;
 }
-
-.content-label {
-    display: inline;
+.details-block {
+    display: block;
+    font-family: "JetBrains Mono";
+    font-size: 11dp;
+    text-align: left;
+    margin-top: 8dp;
+    padding: 8dp;
+    max-height: 260dp;
+    overflow-y: auto;
 }

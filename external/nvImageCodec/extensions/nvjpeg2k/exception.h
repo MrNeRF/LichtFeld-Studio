@@ -30,15 +30,16 @@ class NvJpeg2kException : public std::exception {
 public:
     static NvJpeg2kException FromNvJpeg2kError(nvjpeg2kStatus_t status, const std::string& where);
     static NvJpeg2kException FromCUDAError(cudaError_t status, const std::string& where);
+    NvJpeg2kException(nvimgcodecStatus_t status, std::string info) noexcept
+        : std::exception(), status_(status), info_(info) {}
 
-    inline virtual ~NvJpeg2kException() throw() {}
+    inline virtual ~NvJpeg2kException() noexcept {}
 
-    virtual const char* what() const throw() { return info_.c_str(); }
+    virtual const char* what() const noexcept { return info_.c_str(); }
     const std::string& info() const { return info_; }
     nvimgcodecStatus_t nvimgcodecStatus() const { return status_; }
 
 private:
-    NvJpeg2kException() = default;
     nvimgcodecStatus_t status_ = NVIMGCODEC_STATUS_SUCCESS;
     std::string info_;
 };

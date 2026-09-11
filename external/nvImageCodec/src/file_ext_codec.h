@@ -23,7 +23,21 @@
 namespace nvimgcodec {
 
     std::string file_ext_to_codec(const std::string& file_ext) {
-        static std::map<std::string, std::string> ext2codec = {{".bmp", "bmp"}, {".j2c", "jpeg2k"}, {".j2k", "jpeg2k"}, {".jp2", "jpeg2k"}, {".tiff", "tiff"}, {".tif", "tiff"}, {".jpg", "jpeg"}, {".jpeg", "jpeg"}, {".ppm", "pnm"}, {".pgm", "pnm"}, {".pbm", "pnm"}, {".webp", "webp"}};
+        static std::map<std::string, std::string> ext2codec = {
+            {".bmp", "bmp"},
+            {".j2c", "jpeg2k"},
+            {".j2k", "jpeg2k"},
+            {".jp2", "jpeg2k"},
+            {".tiff", "tiff"},
+            {".tif", "tiff"},
+            {".jpg", "jpeg"},
+            {".jpeg", "jpeg"},
+            {".ppm", "pnm"},
+            {".pgm", "pnm"},
+            {".pbm", "pnm"},
+            {".pnm", "pnm"},
+            {".webp", "webp"},
+            {".png", "png"}};
         std::string codec_name{};
         auto it = ext2codec.find(file_ext);
         if (it != ext2codec.end()) {

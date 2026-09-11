@@ -5,6 +5,13 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def clear_property_callbacks(lf):
+    """Keep process-global property subscriptions isolated per test."""
+    yield
+    lf._clear_property_callbacks()
+
+
 class TestOptimizationParams:
     """Tests for lf.optimization_params() and property introspection."""
 
@@ -49,6 +56,8 @@ class TestOptimizationParams:
         assert isinstance(params.use_bilateral_grid, bool)
         assert isinstance(params.invert_masks, bool)
         assert isinstance(params.use_depth_loss, bool)
+        assert isinstance(params.use_normal_loss, bool)
+        assert isinstance(params.normal_auto_generate, bool)
         assert isinstance(params.random, bool)
         assert isinstance(params.enable_sparsity, bool)
 
@@ -62,16 +71,57 @@ class TestOptimizationParams:
 
         try:
             params.use_depth_loss = True
-            params.depth_loss_mode = "adaptive-warped-l1"
+            params.depth_loss_mode = "ssi-depth"
             params.depth_loss_weight = 3.25
 
             assert params.use_depth_loss is True
-            assert params.depth_loss_mode == "adaptive-warped-l1"
+            assert params.depth_loss_mode == "ssi-depth"
             assert params.depth_loss_weight == pytest.approx(3.25)
         finally:
             params.use_depth_loss = original_enabled
             params.depth_loss_mode = original_mode
             params.depth_loss_weight = original_weight
+
+    def test_normal_loss_properties_are_editable(self, lf):
+        """Normal loading/loss controls should be exposed through Python params."""
+        params = lf.optimization_params()
+
+        original_enabled = params.use_normal_loss
+        original_auto = params.normal_auto_generate
+        original_weight = params.normal_loss_weight
+        original_consistency = params.normal_consistency_weight
+        original_flatten = params.normal_flatten_weight
+        original_start = params.normal_start_fraction
+        original_end = params.normal_end_fraction
+        original_space = params.normal_loss_space
+
+        try:
+            params.use_normal_loss = True
+            params.normal_auto_generate = False
+            params.normal_loss_weight = 0.75
+            params.normal_consistency_weight = 0.25
+            params.normal_flatten_weight = 5.0
+            params.normal_start_fraction = 0.3
+            params.normal_end_fraction = 0.9
+            params.normal_loss_space = "world"
+
+            assert params.use_normal_loss is True
+            assert params.normal_auto_generate is False
+            assert params.normal_loss_weight == pytest.approx(0.75)
+            assert params.normal_consistency_weight == pytest.approx(0.25)
+            assert params.normal_flatten_weight == pytest.approx(5.0)
+            assert params.normal_start_fraction == pytest.approx(0.3)
+            assert params.normal_end_fraction == pytest.approx(0.9)
+            assert params.normal_loss_space == "world"
+        finally:
+            params.use_normal_loss = original_enabled
+            params.normal_auto_generate = original_auto
+            params.normal_loss_weight = original_weight
+            params.normal_consistency_weight = original_consistency
+            params.normal_flatten_weight = original_flatten
+            params.normal_start_fraction = original_start
+            params.normal_end_fraction = original_end
+            params.normal_loss_space = original_space
 
     def test_get_string_property(self, lf):
         """Should be able to read strategy string property."""
@@ -79,7 +129,22 @@ class TestOptimizationParams:
 
         strategy = params.strategy
         assert isinstance(strategy, str)
-        assert strategy in ("mcmc", "adc", "")
+        assert strategy in ("mcmc", "mrnf", "igs+")
+
+    def test_registry_strategy_setter_switches_the_strategy_defaults(self, lf):
+        """Generic registry writes must preserve strategy-slot semantics."""
+        params = lf.optimization_params()
+
+        try:
+            params.set_strategy("mrnf")
+            params.set("strategy", "igs+")
+
+            assert params.strategy == "igs+"
+            assert params.max_cap == 4_000_000
+            assert params.means_lr == pytest.approx(1.6e-5)
+            assert params.scaling_lr == pytest.approx(0.02)
+        finally:
+            params.set_strategy("mrnf")
 
     def test_properties_list(self, lf):
         """properties() should return list of property info dicts."""
@@ -146,6 +211,44 @@ class TestOptimizationParams:
         assert "live_update" in info
         assert info["live_update"] is True
 
+    def test_cropbox_lr_scale_property(self, lf):
+        """Crop-box damping should be exposed as a live bounded float."""
+        params = lf.optimization_params()
+        info = params.prop_info("cropbox_lr_scale")
+
+        assert info["name"] == "Rejected splat LR scale"
+        assert info["type"] == "float"
+        assert info["min"] == pytest.approx(0.0)
+        assert info["max"] == pytest.approx(1.0)
+        assert info["default"] == pytest.approx(0.1)
+        assert info["live_update"] is True
+
+        original = params.cropbox_lr_scale
+        try:
+            params.cropbox_lr_scale = 0.25
+            assert params.cropbox_lr_scale == pytest.approx(0.25)
+        finally:
+            params.cropbox_lr_scale = original
+
+    def test_cropbox_loss_weight_property(self, lf):
+        """Crop-box loss weighting should be exposed as a live bounded float."""
+        params = lf.optimization_params()
+        info = params.prop_info("cropbox_loss_weight")
+
+        assert info["name"] == "Outside ROI loss weight"
+        assert info["type"] == "float"
+        assert info["min"] == pytest.approx(0.0)
+        assert info["max"] == pytest.approx(1.0)
+        assert info["default"] == pytest.approx(0.1)
+        assert info["live_update"] is True
+
+        original = params.cropbox_loss_weight
+        try:
+            params.cropbox_loss_weight = 0.4
+            assert params.cropbox_loss_weight == pytest.approx(0.4)
+        finally:
+            params.cropbox_loss_weight = original
+
     def test_prop_info_needs_restart(self, lf):
         """prop_info should indicate needs_restart for certain properties."""
         params = lf.optimization_params()
@@ -184,6 +287,13 @@ class TestOptimizationParams:
 
         with pytest.raises(AttributeError):
             params.headless = True
+
+    def test_reset_readonly_raises(self, lf):
+        """Resetting readonly property should match set() semantics."""
+        params = lf.optimization_params()
+
+        with pytest.raises(RuntimeError, match="read-only"):
+            params.reset("headless")
 
     def test_apply_step_scaling_updates_mrnf_growth_horizon(self, lf):
         """apply_step_scaling() should scale MRNF's grow_until_iter alongside stop_refine."""
@@ -227,24 +337,6 @@ class TestOptimizationParams:
             params.set("grow_until_iter", original["grow_until_iter"])
 
 
-class TestPanelPrefix:
-    """Tests for the unified Panel API."""
-
-    def test_panel_class_registers(self, lf):
-        """Panel subclass should register correctly."""
-
-        class TestPanel(lf.ui.Panel):
-            label = "Test Panel"
-            space = lf.ui.PanelSpace.SIDE_PANEL
-            order = 50
-
-            def draw(self, layout):
-                layout.label("Hello")
-
-        lf.register_class(TestPanel)
-        lf.unregister_class(TestPanel)
-
-
 class TestPanelRegistry:
     """Tests for panel registration and lifecycle."""
 
@@ -252,6 +344,7 @@ class TestPanelRegistry:
         """Basic register/unregister cycle."""
 
         class SimplePanel(lf.ui.Panel):
+            id = "tests.simple_panel"
             label = "Simple"
             space = lf.ui.PanelSpace.MAIN_PANEL_TAB
 
@@ -259,12 +352,18 @@ class TestPanelRegistry:
                 pass
 
         lf.register_class(SimplePanel)
+        info = lf.ui.get_panel("tests.simple_panel")
+        assert info is not None
+        assert info.label == "Simple"
+        lf.unregister_class(SimplePanel)
+        assert lf.ui.get_panel("tests.simple_panel") is None
         lf.unregister_class(SimplePanel)
 
     def test_duplicate_register_updates(self, lf):
         """Re-registering a panel with same label should update it."""
 
         class UpdatePanel(lf.ui.Panel):
+            id = "tests.update_panel"
             label = "Updatable"
             space = lf.ui.PanelSpace.SIDE_PANEL
 
@@ -275,27 +374,20 @@ class TestPanelRegistry:
 
         # Re-register with updated draw
         class UpdatePanel(lf.ui.Panel):
+            id = "tests.update_panel"
             label = "Updatable"
             space = lf.ui.PanelSpace.SIDE_PANEL
 
             def draw(self, layout):
                 layout.label("Version 2")
 
-        lf.register_class(UpdatePanel)  # Should not raise
-        lf.unregister_class(UpdatePanel)
-
-    def test_unregister_nonexistent_is_safe(self, lf):
-        """Unregistering a non-registered panel should not crash."""
-
-        class NeverRegistered(lf.ui.Panel):
-            label = "Never"
-            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
-
-            def draw(self, layout):
-                pass
-
-        # Should not raise
-        lf.unregister_class(NeverRegistered)
+        lf.register_class(UpdatePanel)
+        try:
+            info = lf.ui.get_panel("tests.update_panel")
+            assert info is not None
+            assert info.label == "Updatable"
+        finally:
+            lf.unregister_class(UpdatePanel)
 
     def test_typed_panel_attributes_register(self, lf):
         class TypedPanel(lf.ui.Panel):
@@ -327,6 +419,23 @@ class TestPanelRegistry:
             assert any(tab.id == "tests.typed_panel" for tab in tabs)
         finally:
             lf.unregister_class(TypedPanel)
+
+    def test_missing_label_falls_back_to_panel_id(self, lf):
+        class NoLabelPanel(lf.ui.Panel):
+            id = "tests.no_label_panel"
+            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
+
+            def draw(self, layout):
+                del layout
+
+        lf.register_class(NoLabelPanel)
+        try:
+            info = lf.ui.get_panel("tests.no_label_panel")
+            assert info is not None
+            assert info.id == "tests.no_label_panel"
+            assert info.label == "tests.no_label_panel"
+        finally:
+            lf.unregister_class(NoLabelPanel)
 
     def test_invalid_panel_space_raises(self, lf):
         class InvalidSpacePanel(lf.ui.Panel):
@@ -402,10 +511,13 @@ class TestPropertyCallbacks:
         # Trigger change
         params = lf.optimization_params()
         old = params.means_lr
-        params.means_lr = 0.00001
+        new = old * 0.5 if old else 0.00001
+        params.means_lr = new
 
-        # Note: callback fires synchronously when property changes
-        # Restore original
+        assert callback_called
+        assert callback_called[0][0] == pytest.approx(old)
+        assert callback_called[0][1] == pytest.approx(new)
+
         params.means_lr = old
 
         # Cleanup
@@ -423,7 +535,13 @@ class TestPropertyCallbacks:
         # Trigger change
         params = lf.optimization_params()
         old = params.means_lr
-        params.means_lr = 0.00001
+        new = old * 0.5 if old else 0.00001
+        params.means_lr = new
+
+        assert callback_called
+        assert callback_called[0][0] == pytest.approx(old)
+        assert callback_called[0][1] == pytest.approx(new)
+
         params.means_lr = old
 
         # Note: decorator doesn't provide a way to unsubscribe
@@ -445,28 +563,13 @@ class TestPropertyCallbacks:
 
 
 class TestUILayout:
-    """Tests for PyUILayout methods (without ImGui context)."""
+    """Tests for PyUILayout methods (without an active panel draw context)."""
 
     # Note: These tests cannot actually call layout methods since they
-    # require an active ImGui context. We can only test that the bindings exist.
+    # require an active im-mode / panel draw context. We can only test that
+    # the bindings exist.
 
     def test_layout_class_exists(self, lf):
         """UILayout class should exist in ui submodule."""
         assert hasattr(lf.ui, "UILayout")
-        # Can't instantiate directly without ImGui context
-
-    def test_panel_registration_implies_layout_works(self, lf):
-        """Register/unregister panel verifies layout binding works."""
-        class LayoutTestPanel(lf.ui.Panel):
-            label = "Layout Test"
-            space = lf.ui.PanelSpace.MAIN_PANEL_TAB
-
-            def draw(self, layout):
-                # These would work if we had ImGui context:
-                # layout.label("Test")
-                # layout.button("Click")
-                # layout.prop(params, "means_lr")
-                pass
-
-        lf.register_class(LayoutTestPanel)
-        lf.unregister_class(LayoutTestPanel)
+        # Can't instantiate directly without an active panel draw context

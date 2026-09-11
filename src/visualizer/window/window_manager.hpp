@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "input/frame_input_buffer.hpp"
 #include "input/input_router.hpp"
 #include "visualizer/visualizer.hpp"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -22,8 +24,16 @@ namespace lfs::vis {
     class InputController;
     class VulkanContext;
 
-    class WindowManager {
+    class LFS_VIS_API WindowManager {
     public:
+        struct PersistentWindowState {
+            int x = 0;
+            int y = 0;
+            int width = 1280;
+            int height = 720;
+            bool maximized = false;
+        };
+
         enum class ResizeIntent {
             Interactive,
             Exact,
@@ -47,16 +57,21 @@ namespace lfs::vis {
 
         bool init();
 
+        void setInitialWindowState(PersistentWindowState state);
+        [[nodiscard]] PersistentWindowState persistentWindowState() const;
+        [[nodiscard]] bool resetPersistentWindowState();
+
         void showWindow();
         void updateWindowSize(const char* reason = "manual",
                               ResizeIntent intent = ResizeIntent::Exact);
-        void swapBuffers();
         void pollEvents();
         void waitEvents(double timeout_seconds);
         bool shouldClose() const;
         void requestClose() { should_close_ = true; }
         void cancelClose();
         void wakeEventLoop();
+        void refreshResizeCursor();
+        [[nodiscard]] unsigned manualResizeEdgeMask() const;
 
         SDL_Window* getWindow() const { return window_; }
         VulkanContext* getVulkanContext() const { return vulkan_context_.get(); }
@@ -82,6 +97,16 @@ namespace lfs::vis {
 
     private:
         void processEvent(const ::SDL_Event& event);
+        [[nodiscard]] bool shouldSuppressGuiRoutingForResize(const ::SDL_Event& event,
+                                                             unsigned int main_window_id) const;
+
+        enum class ResizeEdge : unsigned {
+            NoEdge = 0,
+            Left = 1u << 0,
+            Right = 1u << 1,
+            Top = 1u << 2,
+            Bottom = 1u << 3,
+        };
 
         SDL_Window* window_ = nullptr;
         std::unique_ptr<VulkanContext> vulkan_context_;
@@ -106,9 +131,14 @@ namespace lfs::vis {
         glm::ivec2 titlebar_drag_start_global_{0, 0};
         glm::ivec2 titlebar_drag_start_local_{0, 0};
         glm::ivec2 titlebar_drag_window_offset_{0, 0};
+        ResizeEdge manual_resize_edge_ = ResizeEdge::NoEdge;
+        glm::ivec2 manual_resize_start_global_{0, 0};
+        glm::ivec2 manual_resize_start_pos_{0, 0};
+        glm::ivec2 manual_resize_start_size_{0, 0};
         bool is_borderless_maximized_ = false;
         glm::ivec2 borderless_restore_pos_{0, 0};
         glm::ivec2 borderless_restore_size_{1280, 720};
+        std::optional<PersistentWindowState> initial_window_state_;
         bool should_close_ = false;
 
         static void* callback_handler_;
@@ -118,6 +148,15 @@ namespace lfs::vis {
         std::vector<std::string> pending_drop_files_;
 
         void beginTitlebarNativeMove();
+        void installX11ErrorHandlers();
+        [[nodiscard]] ResizeEdge resizeEdgeAt(int x, int y) const;
+        void setResizeCursorForEdge(ResizeEdge edge);
+        void updateResizeCursor(int x, int y);
+        void beginManualResize(ResizeEdge edge);
+        void updateManualResize();
+        void finishManualResize();
+        void suppressFrameInputForManualResize();
+        [[nodiscard]] bool isManualResizeActive() const { return manual_resize_edge_ != ResizeEdge::NoEdge; }
         void beginTitlebarDrag(int local_x, int local_y);
         void updateTitlebarDrag();
         void finishTitlebarDrag();

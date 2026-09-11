@@ -50,10 +50,20 @@ body {
 .toolbar-row {
     display: flex;
     align-items: center;
-    width: 100%;
+    flex: 1;
     height: 24dp;
     min-width: 0;
-    padding-left: 2dp;
+    padding: 0 4dp 0 2dp;
+    gap: 4dp;
+    overflow: hidden;
+}
+
+.toolbar-actions {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    height: 24dp;
     gap: 4dp;
     overflow: hidden;
 }
@@ -64,12 +74,6 @@ body {
     min-width: 0;
     gap: 4dp;
 }
-
-.toolbar-spacer {
-    flex: 1;
-    min-width: 12dp;
-}
-
 button {
     height: 24dp;
     min-width: 0;
@@ -100,6 +104,21 @@ button {
 
 #python-console-toolbar button:hover {
     background-color: rgb(38, 42, 54);
+}
+
+#close-panel-button {
+    flex: 0 0 28dp;
+    flex-shrink: 0;
+    width: 28dp;
+    min-width: 28dp;
+    max-width: 28dp;
+    height: 24dp;
+    padding: 0;
+    margin-left: 0;
+    margin-right: 0;
+    font-size: 18dp;
+    line-height: 22dp;
+    text-align: center;
 }
 
 #python-console-toolbar button:active,
@@ -161,23 +180,6 @@ button {
 .btn-clear {
     width: 30dp;
 }
-
-.btn-sm {
-    width: 54dp;
-}
-
-.btn-md {
-    width: 66dp;
-}
-
-.btn-lg {
-    width: 78dp;
-}
-
-.btn-xl {
-    width: 104dp;
-}
-
 button:hover {
     background-color: rgb(58, 58, 58);
 }
@@ -289,16 +291,6 @@ button.disabled {
 #syntax-status.status-error {
     color: rgb(221, 94, 94);
 }
-
-.font-group {
-    margin-left: auto;
-}
-
-.font-button {
-    width: 28dp;
-    padding: 0;
-}
-
 #font-status {
     display: none;
     width: 58dp;
@@ -418,6 +410,7 @@ button.disabled {
 #python-splitter {
     height: 6dp;
     flex-shrink: 0;
+    cursor: ns-resize;
     background-color: rgb(40, 40, 40);
     border-top-width: 1dp;
     border-top-color: rgb(54, 54, 54);
@@ -426,7 +419,7 @@ button.disabled {
 }
 
 #python-splitter:hover {
-    background-color: rgb(58, 70, 82);
+    border-top-color: rgb(84, 126, 170);
 }
 
 #bottom-panel {
@@ -439,8 +432,10 @@ button.disabled {
 
 #tabbar {
     display: flex;
-    align-items: flex-end;
-    height: 28dp;
+    align-items: center;
+    height: 30dp;
+    padding: 0 4dp;
+    gap: 2dp;
     border-bottom-width: 1dp;
     border-bottom-color: rgb(54, 54, 54);
     background-color: rgb(31, 31, 31);
@@ -448,15 +443,17 @@ button.disabled {
 }
 
 #tabbar button {
-    height: 27dp;
+    height: 24dp;
     min-width: 88dp;
     margin: 0;
-    border-radius: 0;
-    border-width: 0;
-    border-right-width: 1dp;
-    border-right-color: rgb(54, 54, 54);
+    padding: 0 10dp;
+    border-radius: 4dp;
+    border-width: 1dp;
+    border-color: rgb(54, 54, 54);
     background-color: rgb(36, 36, 36);
     color: rgb(170, 170, 170);
+    line-height: 24dp;
+    text-align: center;
 }
 
 #tabbar button:hover {

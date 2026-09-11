@@ -7,12 +7,45 @@
 #include "py_ui.hpp"
 #include "python/gil.hpp"
 #include "python/python_runtime.hpp"
+#include "python_panel_chrome.hpp"
 
 #include <RmlUi/Core/ElementDocument.h>
 #include <cassert>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
+    namespace {
+        lfs::python::MouseState makeMouseState(const std::optional<PanelInputState>& input,
+                                               float prev_mouse_x, float prev_mouse_y,
+                                               bool have_prev_mouse,
+                                               bool& have_left_click_time,
+                                               std::chrono::steady_clock::time_point& last_left_click_at) {
+            lfs::python::MouseState mouse;
+            if (!input) {
+                mouse.pos_x = prev_mouse_x;
+                mouse.pos_y = prev_mouse_y;
+                return mouse;
+            }
+
+            mouse.pos_x = input->mouse_x;
+            mouse.pos_y = input->mouse_y;
+            if (have_prev_mouse) {
+                mouse.delta_x = mouse.pos_x - prev_mouse_x;
+                mouse.delta_y = mouse.pos_y - prev_mouse_y;
+            }
+            mouse.wheel = input->mouse_wheel;
+            mouse.right_clicked = input->mouse_clicked[1];
+            if (input->mouse_clicked[0]) {
+                constexpr auto kDoubleClickWindow = std::chrono::milliseconds(350);
+                const auto now = std::chrono::steady_clock::now();
+                mouse.double_clicked =
+                    have_left_click_time && (now - last_left_click_at) <= kDoubleClickWindow;
+                last_left_click_at = now;
+                have_left_click_time = true;
+            }
+            mouse.dragging = input->mouse_down[0];
+            return mouse;
+        }
+    } // namespace
 
     RmlImModePanelAdapter::RmlImModePanelAdapter(void* manager, nb::object panel_instance,
                                                  const bool has_poll,
@@ -45,6 +78,8 @@ namespace lfs::vis::gui {
 
         if (host_ && ops.set_height_mode)
             ops.set_height_mode(host_, 1);
+        if (host_ && ops.set_floating)
+            ops.set_floating(host_, floating_);
     }
 
     void RmlImModePanelAdapter::drawLayout(const PanelDrawContext* ctx) {
@@ -68,34 +103,9 @@ namespace lfs::vis::gui {
 
         const lfs::python::GilAcquire gil;
 
-        lfs::python::MouseState mouse;
-        if (current_input_) {
-            mouse.pos_x = current_input_->mouse_x;
-            mouse.pos_y = current_input_->mouse_y;
-            if (have_prev_mouse_) {
-                mouse.delta_x = mouse.pos_x - prev_mouse_x_;
-                mouse.delta_y = mouse.pos_y - prev_mouse_y_;
-            }
-            mouse.wheel = current_input_->mouse_wheel;
-            if (current_input_->mouse_clicked[0]) {
-                constexpr auto kDoubleClickWindow = std::chrono::milliseconds(350);
-                const auto now = std::chrono::steady_clock::now();
-                mouse.double_clicked =
-                    have_left_click_time_ && (now - last_left_click_at_) <= kDoubleClickWindow;
-                last_left_click_at_ = now;
-                have_left_click_time_ = true;
-            }
-            mouse.dragging = current_input_->mouse_down[0];
-        } else {
-            auto& io = ImGui::GetIO();
-            mouse.pos_x = io.MousePos.x;
-            mouse.pos_y = io.MousePos.y;
-            mouse.delta_x = io.MouseDelta.x;
-            mouse.delta_y = io.MouseDelta.y;
-            mouse.wheel = io.MouseWheel;
-            mouse.double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-            mouse.dragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
-        }
+        const lfs::python::MouseState mouse = makeMouseState(
+            current_input_, prev_mouse_x_, prev_mouse_y_, have_prev_mouse_,
+            have_left_click_time_, last_left_click_at_);
         prev_mouse_x_ = mouse.pos_x;
         prev_mouse_y_ = mouse.pos_y;
         have_prev_mouse_ = true;
@@ -125,6 +135,48 @@ namespace lfs::vis::gui {
         drawLayout(&ctx);
 
         ops.draw(host_, &ctx);
+    }
+
+    PanelDirectRenderResult RmlImModePanelAdapter::renderDirect(
+        const PanelDirectRenderRequest& request,
+        const PanelDrawContext& ctx) {
+        setPanelSpace(request.space);
+        if (request.mode == PanelDirectRenderMode::Measure)
+            return {.handled = true, .height = getDirectDrawHeight()};
+
+        setInputClipY(request.clip_y_min, request.clip_y_max);
+        setInput(request.input);
+        setForcedHeight(request.forced_height);
+
+        bool handled = true;
+        try {
+            switch (request.mode) {
+            case PanelDirectRenderMode::Measure:
+                break;
+            case PanelDirectRenderMode::Draw:
+                drawDirect(request.x, request.y, request.width, request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Cached:
+                handled = drawDirectCached(request.x, request.y, request.width,
+                                           request.height, ctx);
+                break;
+            case PanelDirectRenderMode::Preload:
+                preloadDirect(request.width, request.height, ctx,
+                              request.clip_y_min, request.clip_y_max, request.input);
+                break;
+            }
+        } catch (...) {
+            setForcedHeight(0.0f);
+            setInput(nullptr);
+            setInputClipY(-1.0f, -1.0f);
+            throw;
+        }
+
+        const float height = getDirectDrawHeight();
+        setForcedHeight(0.0f);
+        setInput(nullptr);
+        setInputClipY(-1.0f, -1.0f);
+        return {.handled = handled, .height = height};
     }
 
     void RmlImModePanelAdapter::preloadDirect(float w, float h, const PanelDrawContext& ctx,
@@ -216,11 +268,36 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlImModePanelAdapter::setPanelSpace(const PanelSpace space) {
+        const bool floating = space == PanelSpace::Floating;
+        if (floating_ == floating)
+            return;
+
+        floating_ = floating;
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_floating)
+                ops.set_floating(host_, floating_);
+        }
+    }
+
     bool RmlImModePanelAdapter::needsAnimationFrame() const {
         if (!host_)
             return false;
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         return ops.needs_animation ? ops.needs_animation(host_) : false;
+    }
+
+    std::optional<double> RmlImModePanelAdapter::nextScheduledAnimationDelay() const {
+        if (!host_)
+            return std::nullopt;
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!ops.next_scheduled_update_delay)
+            return std::nullopt;
+        double host_delay = 0.0;
+        if (!ops.next_scheduled_update_delay(host_, &host_delay))
+            return std::nullopt;
+        return host_delay;
     }
 
     void RmlImModePanelAdapter::reloadRmlResources() {
@@ -251,6 +328,14 @@ namespace lfs::vis::gui {
             lfs::python::bridge().prepare_ui();
         const lfs::python::GilAcquire gil;
         return nb::cast<bool>(panel_instance_.attr("poll")(lfs::python::get_app_context()));
+    }
+
+    std::string RmlImModePanelAdapter::captureChromeJson() const {
+        return capture_python_panel_chrome(panel_instance_);
+    }
+
+    void RmlImModePanelAdapter::applyChromeJson(const std::string_view json) {
+        apply_python_panel_chrome(panel_instance_, json);
     }
 
 } // namespace lfs::vis::gui

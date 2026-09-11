@@ -5,8 +5,11 @@
 #include "py_prop_registry.hpp"
 #include "core/logger.hpp"
 #include "core/property_registry.hpp"
+#include "py_prop_traits.hpp"
 
+#include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
@@ -34,31 +37,66 @@ namespace lfs::python {
             } else if (cls_name == "EnumProperty") {
                 return core::prop::PropType::Enum;
             } else if (cls_name == "FloatVectorProperty") {
-                // Check subtype first for colors
+                int size = 3;
+                if (nb::hasattr(descriptor, "size")) {
+                    size = nb::cast<int>(descriptor.attr("size"));
+                }
                 if (nb::hasattr(descriptor, "subtype")) {
                     std::string subtype = nb::cast<std::string>(descriptor.attr("subtype"));
                     if (subtype == "COLOR" || subtype == "COLOR_GAMMA") {
-                        int size = 3;
-                        if (nb::hasattr(descriptor, "size")) {
-                            size = nb::cast<int>(descriptor.attr("size"));
-                        }
-                        return (size == 4) ? core::prop::PropType::Color4 : core::prop::PropType::Color3;
+                        if (size == 3)
+                            return core::prop::PropType::Color3;
+                        if (size == 4)
+                            return core::prop::PropType::Color4;
+                        return core::prop::PropType::FloatVector;
                     }
                 }
-                // Fall back to Vec types based on size
-                if (nb::hasattr(descriptor, "size")) {
-                    int size = nb::cast<int>(descriptor.attr("size"));
-                    if (size == 2)
-                        return core::prop::PropType::Vec2;
-                    if (size == 4)
-                        return core::prop::PropType::Vec4;
-                }
-                return core::prop::PropType::Vec3;
+                if (size == 2)
+                    return core::prop::PropType::Vec2;
+                if (size == 3)
+                    return core::prop::PropType::Vec3;
+                if (size == 4)
+                    return core::prop::PropType::Vec4;
+                return core::prop::PropType::FloatVector;
+            } else if (cls_name == "IntVectorProperty") {
+                return core::prop::PropType::IntVector;
             } else if (cls_name == "TensorProperty") {
                 return core::prop::PropType::Tensor;
             }
 
             return core::prop::PropType::Float;
+        }
+
+        bool is_legacy_operator_arg_descriptor(nb::object descriptor) {
+            if (!descriptor.is_valid() || !nb::hasattr(descriptor, "_attr_name")) {
+                return false;
+            }
+
+            const std::string type_name =
+                nb::cast<std::string>(descriptor.attr("__class__").attr("__name__"));
+            if (type_name == "FloatProperty" || type_name == "IntProperty" ||
+                type_name == "BoolProperty" || type_name == "StringProperty" ||
+                type_name == "FloatVectorProperty" || type_name == "IntVectorProperty" ||
+                type_name == "TensorProperty") {
+                return true;
+            }
+            if (type_name != "EnumProperty" || !nb::hasattr(descriptor, "items")) {
+                return false;
+            }
+
+            for (const auto item : descriptor.attr("items")) {
+                if (!nb::isinstance<nb::tuple>(item)) {
+                    return false;
+                }
+                const auto tuple = nb::cast<nb::tuple>(item);
+                if (tuple.size() != 3 ||
+                    !nb::isinstance<nb::str>(tuple[0]) ||
+                    !nb::isinstance<nb::str>(tuple[1]) ||
+                    !nb::isinstance<nb::str>(tuple[2])) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         core::prop::PropUIHint infer_ui_hint(nb::object descriptor) {
@@ -79,12 +117,21 @@ namespace lfs::python {
 
     } // namespace
 
-    core::prop::PropertyMeta python_property_to_meta(nb::object descriptor, const std::string& prop_id) {
+    static core::prop::PropertyMeta python_property_to_meta(nb::object descriptor, const std::string& prop_id,
+                                                            const bool operator_arg) {
         core::prop::PropertyMeta meta;
         meta.id = prop_id;
         meta.source = core::prop::PropSource::PYTHON;
         meta.type = infer_prop_type(descriptor);
         meta.ui_hint = infer_ui_hint(descriptor);
+        if (operator_arg) {
+            meta.flags |= core::prop::PROP_OPERATOR_ARG;
+        }
+        if ((meta.type == core::prop::PropType::FloatVector ||
+             meta.type == core::prop::PropType::IntVector) &&
+            nb::hasattr(descriptor, "size")) {
+            meta.vector_size = nb::cast<int>(descriptor.attr("size"));
+        }
 
         // Extract common attributes
         if (nb::hasattr(descriptor, "name")) {
@@ -101,13 +148,19 @@ namespace lfs::python {
         if (nb::hasattr(descriptor, "min")) {
             nb::object min_val = descriptor.attr("min");
             if (!min_val.is_none()) {
-                meta.min_value = nb::cast<double>(min_val);
+                const double value = nb::cast<double>(min_val);
+                if (std::abs(value) < 1e30) {
+                    meta.min_value = value;
+                }
             }
         }
         if (nb::hasattr(descriptor, "max")) {
             nb::object max_val = descriptor.attr("max");
             if (!max_val.is_none()) {
-                meta.max_value = nb::cast<double>(max_val);
+                const double value = nb::cast<double>(max_val);
+                if (std::abs(value) < 1e30) {
+                    meta.max_value = value;
+                }
             }
         }
         if (nb::hasattr(descriptor, "soft_min")) {
@@ -129,54 +182,6 @@ namespace lfs::python {
             }
         }
 
-        // Extract default value
-        if (nb::hasattr(descriptor, "default")) {
-            nb::object default_val = descriptor.attr("default");
-            if (!default_val.is_none()) {
-                switch (meta.type) {
-                case core::prop::PropType::Float:
-                    meta.default_value = nb::cast<double>(default_val);
-                    break;
-                case core::prop::PropType::Int:
-                    meta.default_value = static_cast<double>(nb::cast<int>(default_val));
-                    break;
-                case core::prop::PropType::Bool:
-                    meta.default_value = nb::cast<bool>(default_val) ? 1.0 : 0.0;
-                    break;
-                case core::prop::PropType::String:
-                    meta.default_string = nb::cast<std::string>(default_val);
-                    break;
-                case core::prop::PropType::Vec2:
-                case core::prop::PropType::Vec3:
-                case core::prop::PropType::Vec4:
-                case core::prop::PropType::Color3:
-                case core::prop::PropType::Color4:
-                    if (nb::isinstance<nb::tuple>(default_val)) {
-                        nb::tuple t = nb::cast<nb::tuple>(default_val);
-                        size_t sz = t.size();
-                        if (sz >= 2) {
-                            meta.default_vec2[0] = nb::cast<double>(t[0]);
-                            meta.default_vec2[1] = nb::cast<double>(t[1]);
-                        }
-                        if (sz >= 3) {
-                            meta.default_vec3[0] = nb::cast<double>(t[0]);
-                            meta.default_vec3[1] = nb::cast<double>(t[1]);
-                            meta.default_vec3[2] = nb::cast<double>(t[2]);
-                        }
-                        if (sz >= 4) {
-                            meta.default_vec4[0] = nb::cast<double>(t[0]);
-                            meta.default_vec4[1] = nb::cast<double>(t[1]);
-                            meta.default_vec4[2] = nb::cast<double>(t[2]);
-                            meta.default_vec4[3] = nb::cast<double>(t[3]);
-                        }
-                    }
-                    break;
-                default:
-                    break;
-                }
-            }
-        }
-
         // Extract enum items
         if (meta.type == core::prop::PropType::Enum && nb::hasattr(descriptor, "items")) {
             nb::object items = descriptor.attr("items");
@@ -194,6 +199,60 @@ namespace lfs::python {
                         }
                     }
                     ++idx;
+                }
+            }
+        }
+
+        if (!operator_arg && nb::hasattr(descriptor, "default")) {
+            nb::object default_val = descriptor.attr("default");
+            if (!default_val.is_none()) {
+                switch (meta.type) {
+                case core::prop::PropType::Float:
+                    meta.default_value = nb::cast<double>(default_val);
+                    break;
+                case core::prop::PropType::Int:
+                    meta.default_value = static_cast<int64_t>(nb::cast<int>(default_val));
+                    break;
+                case core::prop::PropType::Bool:
+                    meta.default_value = nb::cast<bool>(default_val);
+                    break;
+                case core::prop::PropType::String:
+                    meta.default_value = nb::cast<std::string>(default_val);
+                    break;
+                case core::prop::PropType::Enum: {
+                    const std::string identifier = nb::cast<std::string>(default_val);
+                    const auto item = std::ranges::find_if(meta.enum_items, [&](const auto& enum_item) {
+                        return enum_item.identifier == identifier;
+                    });
+                    if (item != meta.enum_items.end()) {
+                        meta.default_value = static_cast<int64_t>(item->value);
+                    }
+                    break;
+                }
+                case core::prop::PropType::Vec2: {
+                    const auto values = nb::cast<nb::tuple>(default_val);
+                    meta.default_value = std::array<double, 2>{
+                        nb::cast<double>(values[0]), nb::cast<double>(values[1])};
+                    break;
+                }
+                case core::prop::PropType::Vec3:
+                case core::prop::PropType::Color3: {
+                    const auto values = nb::cast<nb::tuple>(default_val);
+                    meta.default_value = std::array<double, 3>{
+                        nb::cast<double>(values[0]), nb::cast<double>(values[1]),
+                        nb::cast<double>(values[2])};
+                    break;
+                }
+                case core::prop::PropType::Vec4:
+                case core::prop::PropType::Color4: {
+                    const auto values = nb::cast<nb::tuple>(default_val);
+                    meta.default_value = std::array<double, 4>{
+                        nb::cast<double>(values[0]), nb::cast<double>(values[1]),
+                        nb::cast<double>(values[2]), nb::cast<double>(values[3])};
+                    break;
+                }
+                default:
+                    break;
                 }
             }
         }
@@ -247,6 +306,10 @@ namespace lfs::python {
                     }
                     return arr;
                 }
+                case core::prop::PropType::FloatVector:
+                    return nb::cast<std::vector<float>>(val);
+                case core::prop::PropType::IntVector:
+                    return nb::cast<std::vector<int>>(val);
                 case core::prop::PropType::Tensor:
                     return val;
                 default:
@@ -296,6 +359,12 @@ namespace lfs::python {
                     py_obj->attr(id_copy.c_str()) = nb::make_tuple(arr[0], arr[1], arr[2], arr[3]);
                     break;
                 }
+                case core::prop::PropType::FloatVector:
+                    py_obj->attr(id_copy.c_str()) = nb::cast(std::any_cast<std::vector<float>>(value));
+                    break;
+                case core::prop::PropType::IntVector:
+                    py_obj->attr(id_copy.c_str()) = nb::cast(std::any_cast<std::vector<int>>(value));
+                    break;
                 case core::prop::PropType::Tensor:
                     py_obj->attr(id_copy.c_str()) = std::any_cast<nb::object>(value);
                     break;
@@ -334,8 +403,14 @@ namespace lfs::python {
             return;
         }
 
-        if (descriptors.size() == 0) {
+        const bool operator_group = group_id.starts_with("operator.");
+        if (descriptors.size() == 0 && !operator_group) {
             return;
+        }
+        nb::dict class_dict;
+        if (operator_group && nb::hasattr(property_group_class, "__dict__")) {
+            class_dict = nb::cast<nb::dict>(
+                nb::module_::import_("builtins").attr("dict")(property_group_class.attr("__dict__")));
         }
 
         core::prop::PropertyGroup group;
@@ -345,14 +420,20 @@ namespace lfs::python {
         for (auto [key, value] : descriptors) {
             try {
                 std::string prop_id = nb::cast<std::string>(key);
-                auto meta = python_property_to_meta(nb::cast<nb::object>(value), prop_id);
+                auto descriptor = nb::cast<nb::object>(value);
+                const bool direct_descriptor =
+                    operator_group && class_dict.contains(key) &&
+                    nb::cast<nb::object>(class_dict[key]).is(descriptor);
+                const bool operator_arg =
+                    direct_descriptor && is_legacy_operator_arg_descriptor(descriptor);
+                auto meta = python_property_to_meta(std::move(descriptor), prop_id, operator_arg);
                 group.properties.push_back(std::move(meta));
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to convert property '{}': {}", group_id, e.what());
             }
         }
 
-        if (!group.properties.empty()) {
+        if (!group.properties.empty() || operator_group) {
             const size_t prop_count = group.properties.size();
             core::prop::PropertyRegistry::instance().register_group(std::move(group));
             LOG_INFO("Registered Python property group '{}' with {} properties", group_id, prop_count);
@@ -362,6 +443,64 @@ namespace lfs::python {
     void unregister_python_property_group(const std::string& group_id) {
         core::prop::PropertyRegistry::instance().unregister_group(group_id);
         LOG_INFO("Unregistered Python property group '{}'", group_id);
+    }
+
+    nb::dict property_group_info(const std::string& group_id) {
+        const auto group = core::prop::PropertyRegistry::instance().get_group_snapshot(group_id);
+        if (!group) {
+            return nb::dict();
+        }
+
+        nb::dict info;
+        info["id"] = group->id;
+        info["name"] = group->name;
+        nb::list properties;
+        for (const auto& meta : group->properties) {
+            nb::dict property;
+            property["id"] = meta.id;
+            property["name"] = meta.name;
+            property["description"] = meta.description;
+            property["type"] = prop_type_string(meta.type);
+            property["flags"] = meta.flags;
+            property["operator_arg"] = meta.has_flag(core::prop::PROP_OPERATOR_ARG);
+            property["advanced"] = meta.is_advanced();
+            property["locale_key"] = meta.ui_locale_key;
+            property["tooltip_key"] = meta.ui_tooltip_key;
+            property["step"] = meta.step;
+            if (meta.ui_precision) {
+                property["precision"] = *meta.ui_precision;
+            }
+            if (meta.vector_size) {
+                property["vector_size"] = *meta.vector_size;
+            }
+            if (meta.min_value) {
+                property["min"] = *meta.min_value;
+            }
+            if (meta.max_value) {
+                property["max"] = *meta.max_value;
+            }
+            if (meta.default_value) {
+                property["default"] = prop_default_to_python(*meta.default_value);
+            }
+            if (!meta.strategies.empty()) {
+                property["strategies"] = meta.strategies;
+            }
+            if (!meta.enum_items.empty()) {
+                nb::list items;
+                for (const auto& enum_item : meta.enum_items) {
+                    nb::dict item;
+                    item["name"] = enum_item.name;
+                    item["identifier"] = enum_item.identifier;
+                    item["value"] = enum_item.value;
+                    item["locale_key"] = enum_item.locale_key;
+                    items.append(std::move(item));
+                }
+                property["items"] = std::move(items);
+            }
+            properties.append(std::move(property));
+        }
+        info["properties"] = std::move(properties);
+        return info;
     }
 
 } // namespace lfs::python

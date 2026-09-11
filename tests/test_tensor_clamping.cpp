@@ -399,6 +399,26 @@ TEST_F(TensorClampTest, ClampWithInfinity) {
     compare_tensors(result2_custom, result2_torch, 1e-5f, 1e-7f, "ClampInfMin");
 }
 
+TEST_F(TensorClampTest, ClampPreservesNaNLikeTorch) {
+    const std::vector<float> data = {
+        std::numeric_limits<float>::quiet_NaN(),
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        0.0f};
+
+    const auto torch_cpu = torch::tensor(data);
+    const auto expected_cpu = torch_cpu.clamp(-10.0f, 10.0f);
+    const auto custom_cpu = Tensor::from_vector(data, {4}, Device::CPU);
+    compare_tensors(custom_cpu.clamp(-10.0f, 10.0f), expected_cpu,
+                    1e-5f, 1e-7f, "ClampNaNCpu");
+
+    if (torch::cuda::is_available()) {
+        const auto custom_cuda = custom_cpu.cuda().clamp(-10.0f, 10.0f);
+        compare_tensors(custom_cuda, expected_cpu.cuda(),
+                        1e-5f, 1e-7f, "ClampNaNCuda");
+    }
+}
+
 TEST_F(TensorClampTest, ClampEmptyTensor) {
     std::vector<float> empty_data;
 
@@ -527,44 +547,6 @@ TEST_F(TensorClampTest, ClampGradient) {
     // Verify no NaNs or Infs
     EXPECT_FALSE(clamped_custom.has_nan());
     EXPECT_FALSE(clamped_custom.has_inf());
-}
-
-// ============= Performance Test =============
-
-TEST_F(TensorClampTest, ClampLargeScale) {
-    if (!is_cuda_available()) {
-        GTEST_SKIP() << "CUDA not available, skipping test";
-    }
-
-    // Generate same random data for both
-    std::vector<float> data;
-    std::mt19937 gen(42);
-    std::normal_distribution<float> dist(0.0f, 2.0f);
-    for (size_t i = 0; i < 1000 * 1000; ++i) {
-        data.push_back(dist(gen));
-    }
-
-    auto t_custom = Tensor::from_vector(data, {1000, 1000}, Device::CUDA);
-    auto t_torch = torch::tensor(data, torch::kCUDA).reshape({1000, 1000});
-
-    auto result_custom = t_custom.clamp(-1.0f, 1.0f);
-    auto result_torch = t_torch.clamp(-1.0f, 1.0f);
-
-    ASSERT_TRUE(result_custom.is_valid());
-    EXPECT_EQ(result_custom.shape(), t_custom.shape());
-
-    // Sample check (compare subset to avoid huge memory copy)
-    auto cpu_custom = result_custom.cpu();
-    auto cpu_torch = result_torch.cpu();
-
-    auto sample_custom = cpu_custom.debug_values(100);
-    auto sample_torch_ptr = cpu_torch.data_ptr<float>();
-
-    for (size_t i = 0; i < std::min(sample_custom.size(), size_t(100)); ++i) {
-        EXPECT_GE(sample_custom[i], -1.0f);
-        EXPECT_LE(sample_custom[i], 1.0f);
-        EXPECT_FLOAT_EQ(sample_custom[i], sample_torch_ptr[i]);
-    }
 }
 
 // ============= Special Values =============

@@ -5,6 +5,72 @@ body,
     color: @{text};
 }
 
+#status-row {
+    @{chrome.status_decor};
+}
+
+.safe-mode #status-row {
+    background-color: @{blend(surface,warning,0.20)};
+}
+
+#safe-mode-badge {
+    color: @{text};
+    background-color: @{blend(surface,warning,0.42)};
+}
+
+#mcp-chip {
+    background-color: @{alpha(surface_bright,0.35)};
+    border-color: @{alpha(text_dim,0.55)};
+}
+
+#mcp-chip:hover,
+#mcp-chip.expanded {
+    background-color: @{alpha(surface_bright,0.45)};
+    border-color: @{text_dim};
+}
+
+#mcp-popup {
+    color: @{text};
+    background-color: @{surface};
+    border-color: @{border};
+}
+
+.mcp-success {
+    color: @{success};
+}
+
+.mcp-error {
+    color: @{error};
+}
+
+.mcp-switch-track {
+    border-color: @{border};
+    background-color: @{surface_bright};
+}
+
+.mcp-switch-knob {
+    background-color: @{text_dim};
+}
+
+#mcp-toggle.is-on .mcp-switch-track {
+    border-color: @{success};
+}
+
+#mcp-toggle.is-on .mcp-switch-knob {
+    background-color: @{success};
+}
+
+.mcp-edit-button {
+    color: @{text};
+    background-color: @{blend(surface,primary,button.tint_normal)};
+    border-color: @{blend(surface,primary,button.tint_normal)};
+}
+
+.mcp-edit-button:hover {
+    background-color: @{blend(surface,primary,button.tint_hover)};
+    border-color: @{blend(surface,primary,button.tint_hover)};
+}
+
 .dim,
 .separator {
     color: @{text_dim};
@@ -15,7 +81,35 @@ body,
 }
 
 #progress-fill {
-    background-color: @{primary};
+    @{statusbar.progress_fill_decor};
+}
+
+.progress-marker {
+    background-color: @{statusbar.progress_marker};
+}
+
+.progress-marker.is-past {
+    background-color: @{statusbar.progress_marker_past};
+}
+
+.progress-marker.is-hovered,
+.progress-marker.is-preview {
+    background-color: @{statusbar.progress_marker_active};
+}
+
+#account-chip {
+    background-color: @{alpha(surface_bright,0.35)};
+    border-color: @{alpha(text_dim,0.55)};
+}
+
+#account-chip:hover {
+    background-color: @{alpha(surface_bright,0.70)};
+    border-color: @{text_dim};
+}
+
+#account-chip.warning {
+    background-color: @{blend(surface,warning,0.14)};
+    border-color: @{warning};
 }
 
 #gpu-icon {

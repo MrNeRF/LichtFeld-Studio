@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "pruning_kernels.hpp"
 #include <cuda_runtime.h>
 
@@ -52,6 +53,7 @@ namespace lfs::training::pruning {
             dead_mask,
             N,
             min_opacity);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.pruning.dead_mask");
     }
 
     __global__ void compute_near_zero_rotation_mask_kernel(
@@ -86,6 +88,7 @@ namespace lfs::training::pruning {
             rotations,
             mask,
             N);
+        LFS_CUDA_LAUNCH_CHECK(cuda_stream, "training.pruning.near_zero_rotation_mask");
     }
 
 } // namespace lfs::training::pruning

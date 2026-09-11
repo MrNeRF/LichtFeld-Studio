@@ -8,6 +8,23 @@
 
 namespace lfs::io::cuda {
 
+    // Fill a byte buffer with a deterministic, seed-specific high-entropy pattern.
+    // Used to prove that an asynchronous decoder actually overwrote its destination.
+    void launch_fill_u8_sentinel(
+        uint8_t* output,
+        size_t byte_count,
+        uint32_t seed,
+        cudaStream_t stream = nullptr);
+
+    // Set *unchanged to zero if any destination byte differs from the sentinel
+    // pattern. The caller initializes *unchanged to a nonzero value before launch.
+    void launch_flag_u8_sentinel_unchanged(
+        const uint8_t* input,
+        size_t byte_count,
+        uint32_t seed,
+        uint32_t* unchanged,
+        cudaStream_t stream = nullptr);
+
     // Fused kernel: uint8 HWC -> float32 CHW normalized [0,1]
     void launch_uint8_hwc_to_float32_chw(
         const uint8_t* input,
@@ -17,9 +34,95 @@ namespace lfs::io::cuda {
         size_t channels,
         cudaStream_t stream = nullptr);
 
+    // Fused kernel: uint8 CHW -> float32 CHW normalized [0,1]
+    void launch_uint8_chw_to_float32_chw(
+        const uint8_t* input,
+        float* output,
+        size_t elements,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: uint16 HWC -> float32 CHW normalized [0,1]
+    void launch_uint16_hwc_to_float32_chw(
+        const uint16_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        size_t channels,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: float32 HWC [0,1] -> uint16 HWC [0, 65535]
+    void launch_float32_hwc_to_uint16_hwc(
+        const float* input,
+        uint16_t* output,
+        size_t height,
+        size_t width,
+        size_t channels,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: uint16 HWC [0, 65535] -> float32 HWC [0,1]
+    void launch_uint16_hwc_to_float32_hwc(
+        const uint16_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        size_t channels,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: float32 CHW normals [-1,1] -> float32 HWC [0,1]
+    void launch_normal_chw_to_jpeg2k_hwc(
+        const float* input,
+        float* output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: float32 HWC [0,1] -> float32 CHW normals [-1,1]
+    void launch_jpeg2k_hwc_to_normal_chw(
+        const float* input,
+        float* output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream = nullptr);
+
+    // Decode-side transform parameters for normal priors (v = n*0.5 + 0.5 file encoding).
+    struct NormalPriorTransform {
+        bool srgb = false;
+        bool flip_yz = false;
+        bool world_to_camera = false;
+        float w2c[9] = {};
+    };
+
+    // Fused kernel: RGB HWC (uint8) -> float32 CHW normals in [-1, 1], with optional
+    // sRGB->linear, Y/Z flip, and world->camera rotation applied per pixel.
+    void launch_normal_prior_u8_hwc_to_float32_chw(
+        const uint8_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        const NormalPriorTransform& transform,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: RGB HWC (uint16) -> float32 CHW normals in [-1, 1].
+    void launch_normal_prior_u16_hwc_to_float32_chw(
+        const uint16_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        const NormalPriorTransform& transform,
+        cudaStream_t stream = nullptr);
+
     // Fused kernel: uint8 HWC -> uint8 CHW
     void launch_uint8_hwc_to_uint8_chw(
         const uint8_t* input,
+        uint8_t* output,
+        size_t height,
+        size_t width,
+        size_t channels,
+        cudaStream_t stream = nullptr);
+
+    // Fused kernel: uint16 HWC -> uint8 CHW
+    void launch_uint16_hwc_to_uint8_chw(
+        const uint16_t* input,
         uint8_t* output,
         size_t height,
         size_t width,

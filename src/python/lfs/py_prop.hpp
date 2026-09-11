@@ -76,12 +76,17 @@ namespace lfs::python {
             info["type"] = prop_type_string(meta->type);
             info["readonly"] = meta->is_readonly();
             info["animatable"] = meta->is_animatable();
-            info["is_collection"] = meta->is_collection;
+            info["flags"] = meta->flags;
+            info["operator_arg"] = meta->has_flag(core::prop::PROP_OPERATOR_ARG);
 
-            if (!meta->is_collection) {
-                info["min"] = meta->min_value;
-                info["max"] = meta->max_value;
-                info["default"] = meta->default_value;
+            if (meta->min_value) {
+                info["min"] = *meta->min_value;
+            }
+            if (meta->max_value) {
+                info["max"] = *meta->max_value;
+            }
+            if (meta->default_value) {
+                info["default"] = prop_default_to_python(*meta->default_value);
             }
 
             return info;

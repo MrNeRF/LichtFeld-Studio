@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "rendering/scene_upscaler_registry.hpp"
 #include "vulkan_depth_blit_pass.hpp"
 #include "vulkan_environment_pass.hpp"
 #include "vulkan_mesh_pass.hpp"
@@ -97,6 +98,14 @@ namespace lfs::vis {
         std::uint32_t instance_count = 0;
     };
 
+    struct VulkanViewportFrustumOverlayData {
+        std::uint64_t generation = 0;
+        std::vector<VulkanViewportOverlayVertex> overlay_triangles;
+        std::vector<VulkanViewportTexturedOverlay> textured_overlays;
+        std::vector<VulkanViewportFrustumInstance> frustum_instances;
+        std::vector<VulkanViewportFrustumBatch> frustum_batches;
+    };
+
     struct VulkanViewportPassParams {
         std::size_t frame_slot = 0;
         glm::vec2 viewport_pos{0.0f, 0.0f};
@@ -106,11 +115,18 @@ namespace lfs::vis {
 
         std::shared_ptr<const lfs::core::Tensor> scene_image;
         glm::ivec2 scene_image_size{0, 0};
+        // Bucketed VkImage extent for padded output slots (defaults to size).
+        glm::ivec2 scene_image_alloc_size{0, 0};
         bool scene_image_flip_y = false;
         VkImage external_scene_image = VK_NULL_HANDLE;
         VkImageView external_scene_image_view = VK_NULL_HANDLE;
         VkImageLayout external_scene_image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         std::uint64_t external_scene_image_generation = 0;
+        // Interactive resize deliberately keeps the last complete interop image
+        // until the render extent settles. Do not replace that binding with an
+        // incompletely prepared image during the deferral window.
+        bool preserve_scene_image_binding = false;
+        SceneUpscalerBackend scene_upscaler = SceneUpscalerBackend::Native;
 
         bool grid_enabled = false;
         glm::mat4 grid_view{1.0f};
@@ -134,11 +150,17 @@ namespace lfs::vis {
         std::uint32_t post_ui_overlay_vertex_count = 0;
         std::vector<VulkanViewportPivotOverlay> pivot_overlays;
         std::vector<VulkanViewportTexturedOverlay> textured_overlays;
+        // Textured overlays drawn in the UI phase (after ui_shape_overlay): screen-space
+        // text and icons that must layer above overlay fills and gizmo shapes.
+        std::vector<VulkanViewportTexturedOverlay> ui_textured_overlays;
+        // Immutable for the duration of prepare/record. GUI frustum caches keep
+        // this shared block alive so an idle frame does not copy 1740 entries.
+        std::shared_ptr<const VulkanViewportFrustumOverlayData> frustum_overlay_data;
         std::vector<VulkanViewportFrustumInstance> frustum_instances;
         std::vector<VulkanViewportFrustumBatch> frustum_batches;
 
         // GPU-rendered meshes drawn into the same color/depth attachments as the
-        // viewport pass. Replaces the old CPU `rasterizeMeshTriangle` fallback path.
+        // viewport pass.
         glm::mat4 mesh_view_projection{1.0f};
         glm::vec3 mesh_camera_position{0.0f};
         std::vector<VulkanMeshDrawItem> mesh_items;
@@ -170,6 +192,7 @@ namespace lfs::vis {
         void record(VkCommandBuffer command_buffer,
                     VkExtent2D framebuffer_extent,
                     const VulkanViewportPassParams& params);
+        [[nodiscard]] SceneUpscalerSelection sceneUpscalerSelection() const;
         void shutdown();
 
     private:

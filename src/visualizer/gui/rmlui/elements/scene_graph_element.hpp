@@ -8,6 +8,7 @@
 #include <RmlUi/Core/EventListener.h>
 #include <core/scene.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -27,18 +28,56 @@ namespace lfs::vis::gui {
 
     class SceneGraphElement : public Rml::Element {
     public:
+        struct SelectionActionState {
+            size_t count = 0;
+            bool all_visible = false;
+            bool any_visible = false;
+            bool all_training_compatible = false;
+            bool all_training_enabled = false;
+            bool any_training_enabled = false;
+            bool all_delete_enabled = false;
+        };
+
         explicit SceneGraphElement(const Rml::String& tag);
 
         void setPanelScreenOffset(float x, float y);
         void setFilterText(std::string_view text);
+        void setSelectionMarkersVisible(bool visible);
+        [[nodiscard]] bool selectionMarkersVisible() const { return selection_markers_visible_; }
         [[nodiscard]] bool syncFromScene(const PanelDrawContext& ctx);
         [[nodiscard]] bool executeContextMenuAction(std::string_view action);
+        [[nodiscard]] bool needsAnimationFrame() const {
+            return (drag_source_id_ != core::NULL_NODE &&
+                    auto_expand_deadline_ != std::chrono::steady_clock::time_point{}) ||
+                   !just_moved_ids_.empty();
+        }
 
         [[nodiscard]] size_t rootCount() const { return root_count_; }
+        [[nodiscard]] size_t modelCount() const { return model_count_; }
         [[nodiscard]] size_t nodeCount() const { return node_snapshots_.size(); }
         [[nodiscard]] size_t selectedCount() const { return selected_ids_.size(); }
+        [[nodiscard]] std::unordered_set<int> visibleCameraUids() const;
+        [[nodiscard]] SelectionActionState selectionActionState() const;
+        void setSelectedVisibility(bool visible);
+        void setSelectedTrainingEnabled(bool enabled);
+        void requestDeleteSelection();
+        [[nodiscard]] bool selectAllIfFocused();
+        [[nodiscard]] bool toggleSelectedVisibilityIfFocused();
+        [[nodiscard]] bool toggleSelectedTrainingIfFocused();
+        void clearSelectedNodes();
         [[nodiscard]] const std::string& filterText() const { return filter_text_; }
         [[nodiscard]] bool hasNodes() const { return scene_has_nodes_; }
+        [[nodiscard]] bool modelsCollapsed() const { return false; }
+        void cancelDrag();
+        void setModelsCollapsed(bool collapsed);
+        [[nodiscard]] const std::unordered_set<core::NodeId>& collapsedIds() const {
+            return collapsed_ids_;
+        }
+        void applySessionCollapseUuids(const std::vector<std::string>& uuids);
+        void clearSessionCollapseUuids();
+        [[nodiscard]] bool hasSessionCollapseUuids() const {
+            return session_collapse_pending_;
+        }
 
         [[nodiscard]] static bool ownsContextMenuAction(std::string_view action);
 
@@ -71,10 +110,19 @@ namespace lfs::vis::gui {
             bool camera_frustum_container = false;
             bool has_children = false;
             bool training_enabled = true;
+            bool training_mixed = false;
+            size_t training_enabled_count = 0;
+            size_t training_total_count = 0;
+            bool can_toggle_training = false;
             std::string label;
+            bool locked = false;
             bool draggable = false;
             bool has_mask = false;
-            bool deletable = false;
+            bool can_delete = false;
+            bool delete_enabled = false;
+            bool can_rename = false;
+            bool rename_enabled = false;
+            int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
         };
 
@@ -87,21 +135,31 @@ namespace lfs::vis::gui {
             bool collapsed = false;
             bool draggable = false;
             bool training_enabled = true;
+            bool training_mixed = false;
+            size_t training_enabled_count = 0;
+            size_t training_total_count = 0;
+            bool can_toggle_training = false;
             std::string name;
             std::string label;
             std::string node_id_text;
             std::string encoded_label;
             std::string padding_left_dp;
             bool has_mask = false;
-            bool deletable = false;
+            bool can_delete = false;
+            bool delete_enabled = false;
+            bool can_rename = false;
+            bool rename_enabled = false;
             std::optional<std::string> camera_loss_icon_color;
         };
 
         struct RowSlot {
             Rml::Element* root = nullptr;
             Rml::Element* content = nullptr;
+            Rml::Element* selection_checkbox = nullptr;
             Rml::Element* vis_icon = nullptr;
             Rml::Element* delete_icon = nullptr;
+            Rml::Element* training_toggle_icon = nullptr;
+            Rml::Element* training_mixed_mark = nullptr;
             Rml::Element* type_icon = nullptr;
             Rml::Element* unicode_icon = nullptr;
             Rml::Element* mask_icon = nullptr;
@@ -129,8 +187,6 @@ namespace lfs::vis::gui {
         bool syncCameraFrustumVisibility();
         void appendSnapshotRows(core::NodeId node_id, int depth, std::vector<FlatRow>& rows,
                                 const std::string& filter_text_lower) const;
-        void appendVisibleSubtreeRows(core::NodeId node_id, int depth,
-                                      std::vector<FlatRow>& rows) const;
         void rebuildIndex();
         void syncVisibleRows(bool force);
         void bindRow(RowSlot& slot, const FlatRow& row, size_t absolute_index);
@@ -144,10 +200,19 @@ namespace lfs::vis::gui {
         void confirmRename();
         void cancelRename();
         void handleInlineAction(const std::string& action, core::NodeId node_id);
+        [[nodiscard]] std::pair<bool, bool> checkboxState(core::NodeId node_id) const;
+        void collectCheckboxSelectionIds(core::NodeId node_id,
+                                         std::vector<core::NodeId>& ids) const;
+        void toggleCheckboxSelection(core::NodeId node_id);
+        void selectHierarchyFromSelection();
+        void selectHierarchy(core::NodeId node_id);
+        void collectHierarchyIds(core::NodeId node_id,
+                                 std::unordered_set<core::NodeId>& ids) const;
         void handlePrimaryClick(core::NodeId node_id);
         void handleSecondaryClick(core::NodeId node_id, float mouse_x, float mouse_y);
         bool activateNode(core::NodeId node_id);
-        bool moveSelection(int delta, bool extend);
+        bool selectKeyboardRow(size_t row_index, bool extend, bool toggle);
+        bool moveSelectionCursor(int delta, bool extend, bool toggle);
         std::vector<core::NodeId> rangeSelectionIds(core::NodeId a, core::NodeId b) const;
         core::NodeId selectionCursor() const;
         bool isTextInputTarget(Rml::Element* target) const;
@@ -156,23 +221,30 @@ namespace lfs::vis::gui {
         core::NodeId nodeIdFromTarget(Rml::Element* target) const;
         void toggleExpand(core::NodeId node_id);
         void toggleModelsSection();
-        void updateDropTarget(RowSlot* hovered_slot, core::NodeId hovered_id, float mouse_y);
+        void updateDropTarget(RowSlot* hovered_slot, core::NodeId hovered_id, float mouse_y,
+                              bool allow_empty_root_end);
         void clearDropState();
         void commitDrop();
         void showDragGhost(core::NodeId node_id, float mouse_x, float mouse_y);
         void moveDragGhost(float mouse_x, float mouse_y);
         void hideDragGhost();
         void handleDragEvent(Rml::Event& event);
+        void updateDragAutoScroll(float mouse_y);
+        void updateDragAutoExpand(core::NodeId hovered_id);
+        [[nodiscard]] std::vector<core::NodeId> draggedNodeIds() const;
+        [[nodiscard]] std::vector<core::NodeId> selectedDraggableNodeIds() const;
         [[nodiscard]] bool isValidDropContainer(core::NodeId container_id) const;
         [[nodiscard]] int siblingIndexOf(core::NodeId node_id) const;
         void showContextMenu(core::NodeId node_id, float mouse_x, float mouse_y);
         void showModelsHeaderContextMenu(float mouse_x, float mouse_y);
         bool isModelsHeaderTarget(Rml::Element* target) const;
-        std::vector<core::NodeId> deletableSelectedNodeIds() const;
+        void requestDeleteNodes(const std::vector<core::NodeId>& node_ids);
         void deleteSelectedNodes();
         void toggleChildrenTraining(core::NodeId group_id, bool enabled);
         void toggleSelectedTraining(bool enabled);
         void executeAction(const std::string& action);
+        void groupSelectedNodes();
+        void ungroupSelectedNode();
 
         Rml::Element* content_el_ = nullptr;
         Rml::Element* header_el_ = nullptr;
@@ -186,30 +258,53 @@ namespace lfs::vis::gui {
         std::unordered_map<core::NodeId, size_t> flat_index_by_id_;
         std::unordered_set<core::NodeId> collapsed_ids_;
         std::unordered_set<core::NodeId> selected_ids_;
+        bool selection_markers_visible_ = false;
         core::NodeId pending_reveal_node_id_ = core::NULL_NODE;
 
         std::string filter_text_;
         std::string last_training_model_node_name_;
         core::NodeId click_anchor_id_ = core::NULL_NODE;
+        core::NodeId keyboard_cursor_id_ = core::NULL_NODE;
+        bool camera_preview_navigation_active_ = false;
         core::NodeId rename_node_id_ = core::NULL_NODE;
         std::string rename_buffer_;
+        bool rename_conflict_modal_pending_ = false;
         RenameInputListener rename_input_listener_;
         DragListener drag_listener_;
         core::NodeId context_menu_node_id_ = core::NULL_NODE;
         core::NodeId drag_source_id_ = core::NULL_NODE;
+        std::vector<core::NodeId> drag_node_ids_;
         core::NodeId drop_into_group_id_ = core::NULL_NODE;
         core::NodeId drop_parent_id_ = core::NULL_NODE;
         int drop_index_ = -1;
         bool drop_valid_ = false;
         Rml::Element* insertion_line_ = nullptr;
+        Rml::Element* insertion_line_dot_ = nullptr;
         Rml::Element* drag_ghost_ = nullptr;
+        Rml::Element* drag_ghost_icon_ = nullptr;
+        Rml::Element* drag_ghost_name_ = nullptr;
+        Rml::Element* drag_ghost_badge_ = nullptr;
+        core::NodeId auto_expanded_group_id_ = core::NULL_NODE;
+        core::NodeId auto_expand_hovered_group_id_ = core::NULL_NODE;
+        core::NodeId dropped_into_auto_expanded_group_id_ = core::NULL_NODE;
+        std::chrono::steady_clock::time_point auto_expand_deadline_{};
+        std::chrono::steady_clock::time_point last_drag_scroll_time_{};
+        bool ghost_fade_pending_ = false;
+        bool drag_cancelled_ = false;
+        core::NodeId drag_hovered_id_ = core::NULL_NODE;
+        std::unordered_set<core::NodeId> just_moved_ids_;
+        std::chrono::steady_clock::time_point just_moved_deadline_{};
         bool models_collapsed_ = false;
+        bool session_collapse_pending_ = false;
+        std::unordered_set<std::string> session_collapsed_uuids_;
         bool scene_has_nodes_ = false;
         size_t root_count_ = 0;
+        size_t model_count_ = 0;
         bool invert_masks_ = false;
         bool dom_dirty_ = true;
         bool tree_rebuild_needed_ = true;
         bool rename_focus_pending_ = false;
+        bool last_delete_training_node_allowed_ = true;
         uint64_t last_scene_generation_ = 0;
         uint64_t state_revision_ = 1;
         uint64_t last_bound_revision_ = 0;
@@ -220,17 +315,12 @@ namespace lfs::vis::gui {
         float last_bound_dp_ratio_ = -1.0f;
         float last_client_height_ = -1.0f;
         float last_content_height_ = -1.0f;
-        std::string last_header_text_;
         std::vector<std::string> row_top_dp_cache_;
-        bool last_header_visible_ = false;
-        bool last_header_expanded_ = true;
         float panel_screen_x_ = 0.0f;
         float panel_screen_y_ = 0.0f;
 
         static constexpr int kRowHeightDpInt = 20;
-        static constexpr int kHeaderHeightDpInt = 24;
         static constexpr float kRowHeightDp = 20.0f;
-        static constexpr float kHeaderHeightDp = 24.0f;
         static constexpr int kOverscanRows = 12;
         static constexpr int kAutoCollapseCameraGroupThreshold = 25;
     };

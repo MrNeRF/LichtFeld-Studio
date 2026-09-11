@@ -15,6 +15,10 @@ class PluginDependencyError(PluginError):
     """Failed to install dependencies."""
 
 
+class PluginLoadCancelled(PluginError):
+    """Plugin loading was cancelled by the host."""
+
+
 class PluginVersionError(PluginError):
     """Plugin version incompatible with current LichtFeld."""
 

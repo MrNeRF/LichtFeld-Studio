@@ -52,20 +52,20 @@ TEST(RmlStaticStyleBoundaries, ImportDialogsShareOneStaticStylesheet) {
     EXPECT_FALSE(std::filesystem::exists(resource_dir / "dataset_import_panel.rcss"));
     EXPECT_FALSE(std::filesystem::exists(resource_dir / "resume_checkpoint_panel.rcss"));
 
-    const std::string dataset_rml = readText(resource_dir / "dataset_import_panel.rml");
+    const std::string new_project_rml = readText(resource_dir / "new_project_panel.rml");
     const std::string resume_rml = readText(resource_dir / "resume_checkpoint_panel.rml");
 
-    EXPECT_NE(dataset_rml.find("import_dialog.rcss"), std::string::npos);
+    EXPECT_NE(new_project_rml.find("import_dialog.rcss"), std::string::npos);
     EXPECT_NE(resume_rml.find("import_dialog.rcss"), std::string::npos);
 
-    const auto dataset_stylesheets =
+    const auto new_project_stylesheets =
         lfs::vis::gui::rml_documents::loadLinkedStylesheetPaths(
-            resource_dir / "dataset_import_panel.rml");
+            resource_dir / "new_project_panel.rml");
     const auto resume_stylesheets =
         lfs::vis::gui::rml_documents::loadLinkedStylesheetPaths(
             resource_dir / "resume_checkpoint_panel.rml");
 
-    EXPECT_TRUE(containsPath(dataset_stylesheets, import_dialog_rcss));
+    EXPECT_TRUE(containsPath(new_project_stylesheets, import_dialog_rcss));
     EXPECT_TRUE(containsPath(resume_stylesheets, import_dialog_rcss));
 }
 

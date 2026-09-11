@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "transform_ops.hpp"
+#include "core/property_registry.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
-#include "operator/property_schema.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 namespace lfs::vis::op {
@@ -195,50 +195,34 @@ namespace lfs::vis::op {
     }
 
     void registerTransformOperators() {
-        const auto make_schema = [](std::string name, std::string description, PropertyType type,
-                                    std::optional<int> size = std::nullopt) {
-            PropertySchema schema{};
-            schema.name = std::move(name);
-            schema.description = std::move(description);
-            schema.type = type;
-            schema.size = size;
-            return schema;
-        };
-
-        propertySchemas().registerSchema(
+        auto& properties = core::prop::PropertyRegistry::instance();
+        properties.register_operator_args(
             TransformSetOperator::DESCRIPTOR.id(),
             {
-                make_schema("node", "Optional node name; defaults to the current selected node(s)",
-                            PropertyType::STRING),
-                make_schema("translation", "Optional visualizer-world XYZ translation", PropertyType::FLOAT_VECTOR, 3),
-                make_schema("rotation", "Optional visualizer-world XYZ Euler rotation in radians",
-                            PropertyType::FLOAT_VECTOR, 3),
-                make_schema("scale", "Optional visualizer-world XYZ scale", PropertyType::FLOAT_VECTOR, 3),
+                core::prop::arg_string("node", "Optional node name; defaults to the current selected node(s)"),
+                core::prop::arg_float_vector("translation", "Optional visualizer-world XYZ translation", 3),
+                core::prop::arg_float_vector("rotation", "Optional visualizer-world XYZ Euler rotation in radians", 3),
+                core::prop::arg_float_vector("scale", "Optional visualizer-world XYZ scale", 3),
             });
-        propertySchemas().registerSchema(
+        properties.register_operator_args(
             TransformTranslateOperator::DESCRIPTOR.id(),
             {
-                make_schema("node", "Optional node name; defaults to the current selected node(s)",
-                            PropertyType::STRING),
-                make_schema("value", "Visualizer-world XYZ translation delta", PropertyType::FLOAT_VECTOR, 3),
+                core::prop::arg_string("node", "Optional node name; defaults to the current selected node(s)"),
+                core::prop::arg_float_vector("value", "Visualizer-world XYZ translation delta", 3),
             });
-        propertySchemas().registerSchema(
+        properties.register_operator_args(
             TransformRotateOperator::DESCRIPTOR.id(),
             {
-                make_schema("node", "Optional node name; defaults to the current selected node(s)",
-                            PropertyType::STRING),
-                make_schema("value", "Visualizer-world XYZ Euler delta in radians", PropertyType::FLOAT_VECTOR, 3),
+                core::prop::arg_string("node", "Optional node name; defaults to the current selected node(s)"),
+                core::prop::arg_float_vector("value", "Visualizer-world XYZ Euler delta in radians", 3),
             });
-        propertySchemas().registerSchema(
+        properties.register_operator_args(
             TransformScaleOperator::DESCRIPTOR.id(),
             {
-                make_schema("node", "Optional node name; defaults to the current selected node(s)",
-                            PropertyType::STRING),
-                make_schema("value", "Visualizer-world XYZ scale multiplier", PropertyType::FLOAT_VECTOR, 3),
+                core::prop::arg_string("node", "Optional node name; defaults to the current selected node(s)"),
+                core::prop::arg_float_vector("value", "Visualizer-world XYZ scale multiplier", 3),
             });
-        propertySchemas().registerSchema(
-            TransformApplyBatchOperator::DESCRIPTOR.id(),
-            {});
+        properties.register_operator_args(TransformApplyBatchOperator::DESCRIPTOR.id(), {});
         operators().registerOperator(BuiltinOp::TransformSet, TransformSetOperator::DESCRIPTOR,
                                      [] { return std::make_unique<TransformSetOperator>(); });
         operators().registerOperator(BuiltinOp::TransformTranslate, TransformTranslateOperator::DESCRIPTOR,
@@ -257,11 +241,12 @@ namespace lfs::vis::op {
         operators().unregisterOperator(BuiltinOp::TransformRotate);
         operators().unregisterOperator(BuiltinOp::TransformScale);
         operators().unregisterOperator(BuiltinOp::TransformApplyBatch);
-        propertySchemas().unregisterSchema(TransformSetOperator::DESCRIPTOR.id());
-        propertySchemas().unregisterSchema(TransformTranslateOperator::DESCRIPTOR.id());
-        propertySchemas().unregisterSchema(TransformRotateOperator::DESCRIPTOR.id());
-        propertySchemas().unregisterSchema(TransformScaleOperator::DESCRIPTOR.id());
-        propertySchemas().unregisterSchema(TransformApplyBatchOperator::DESCRIPTOR.id());
+        auto& properties = core::prop::PropertyRegistry::instance();
+        properties.unregister_operator_args(TransformSetOperator::DESCRIPTOR.id());
+        properties.unregister_operator_args(TransformTranslateOperator::DESCRIPTOR.id());
+        properties.unregister_operator_args(TransformRotateOperator::DESCRIPTOR.id());
+        properties.unregister_operator_args(TransformScaleOperator::DESCRIPTOR.id());
+        properties.unregister_operator_args(TransformApplyBatchOperator::DESCRIPTOR.id());
     }
 
 } // namespace lfs::vis::op

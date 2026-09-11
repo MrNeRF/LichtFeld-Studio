@@ -53,9 +53,7 @@ namespace lfs::training {
         // Serialization for checkpoints
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is);
-
-        // Accessors for state
-        double get_gamma() const { return gamma_; }
+        void adopt_checkpoint_state(ExponentialLR& loaded) noexcept;
 
     private:
         AdamOptimizer& optimizer_;
@@ -108,6 +106,7 @@ namespace lfs::training {
         // Serialization for checkpoints
         void serialize(std::ostream& os) const;
         void deserialize(std::istream& is);
+        void adopt_checkpoint_state(WarmupExponentialLR& loaded) noexcept;
 
         // Accessors for state
         double get_gamma() const { return gamma_; }

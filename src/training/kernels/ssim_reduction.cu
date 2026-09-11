@@ -2,6 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_error.hpp"
 #include "lfs/core/warp_reduce.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
@@ -201,6 +202,7 @@ namespace lfs::training::kernels {
             }
 
             loss_sum = lfs::core::warp_ops::block_reduce_sum(loss_sum);
+            __syncthreads();
             mask_sum = lfs::core::warp_ops::block_reduce_sum(mask_sum);
             if (threadIdx.x == 0) {
                 const float normalized_mask_sum = mask_sum * static_cast<float>(C) + SSIM_EPSILON;
@@ -229,9 +231,11 @@ namespace lfs::training::kernels {
 
         fused_ssim_mean_kernel<<<num_blocks, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             ssim_map, temp_buffer, N, C, H, W, apply_valid_padding);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.fused_mean");
 
         final_mean_reduce_kernel<<<1, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             temp_buffer, result_buffer, num_blocks, total_valid_pixels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.final_mean");
     }
 
     template <typename TargetT>
@@ -256,9 +260,11 @@ namespace lfs::training::kernels {
 
         fused_l1_ssim_sum_kernel<TargetT><<<num_blocks, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             img1, img2, ssim_map, temp_buffer, ssim_weight, N, C, H, W, apply_valid_padding);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.fused_l1_sum");
 
         final_mean_reduce_kernel<<<1, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             temp_buffer, result_buffer, num_blocks, total_valid_pixels);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.final_mean");
     }
 
     void launch_fused_l1_ssim_mean_device(
@@ -315,11 +321,13 @@ namespace lfs::training::kernels {
         const int loss_num_blocks = reduction_num_blocks(total_loss_pixels);
         masked_fused_l1_ssim_sum_kernel<TargetT, MaskT><<<loss_num_blocks, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             img1, img2, ssim_map, mask, loss_temp_buffer, ssim_weight, N, C, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.masked_l1_sum");
 
         const size_t total_mask_pixels = static_cast<size_t>(H) * W;
         const int mask_num_blocks = reduction_num_blocks(total_mask_pixels);
         mask_sum_kernel<MaskT><<<mask_num_blocks, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             mask, mask_temp_buffer, H, W);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.mask_sum");
 
         final_masked_mean_reduce_kernel<<<1, REDUCTION_BLOCK_SIZE, 0, stream>>>(
             loss_temp_buffer,
@@ -329,6 +337,7 @@ namespace lfs::training::kernels {
             loss_num_blocks,
             mask_num_blocks,
             C);
+        LFS_CUDA_LAUNCH_CHECK(stream, "training.ssim_reduction.final_masked_mean");
     }
 
     void launch_masked_fused_l1_ssim_mean_device(

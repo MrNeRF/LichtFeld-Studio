@@ -88,14 +88,6 @@ namespace lfs::vis::gui {
         };
     }
 
-    OverlayColor overlayColorWithAlpha(const OverlayColor color, const float alpha) {
-        const int r = static_cast<int>(color & 0xFFu);
-        const int g = static_cast<int>((color >> 8u) & 0xFFu);
-        const int b = static_cast<int>((color >> 16u) & 0xFFu);
-        const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-        return overlayColor(r, g, b, a);
-    }
-
     void NativeOverlayDrawList::PushClipRect(const glm::vec2 min,
                                              const glm::vec2 max,
                                              const bool intersect_with_current_clip) {
@@ -194,20 +186,6 @@ namespace lfs::vis::gui {
             {min.x, max.y},
         };
         AddConvexPolyFilled(points, 4, color);
-    }
-
-    void NativeOverlayDrawList::AddRect(const glm::vec2 min,
-                                        const glm::vec2 max,
-                                        const OverlayColor color,
-                                        const float,
-                                        const float thickness) {
-        const glm::vec2 points[4] = {
-            {min.x, min.y},
-            {max.x, min.y},
-            {max.x, max.y},
-            {min.x, max.y},
-        };
-        AddPolyline(points, 4, color, true, thickness);
     }
 
     void NativeOverlayDrawList::AddCircleFilled(const glm::vec2 center,

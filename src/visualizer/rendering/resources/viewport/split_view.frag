@@ -13,7 +13,7 @@ layout(push_constant) uniform Push {
     // x = split_position (0..1 in viewport space)
     // y = left_flip_y (0/1)
     // z = right_flip_y (0/1)
-    // w = divider_color_rgb_packed (unused; split into two vec4 below)
+    // w = padding
     vec4 split;
 
     // Viewport pixel rect (x, y, width, height) — letterboxed content extent.
@@ -22,7 +22,7 @@ layout(push_constant) uniform Push {
     // Panel x-range in viewport-uv space: (left_start, left_end, right_start, right_end).
     // When normalize_x_to_panel is true on either side, sampling uses (u - start) / (end - start).
     vec4 panel_norm;
-    // Per-panel "normalize_x_to_panel" flags packed as (left, right, _, _).
+    // Per-panel flags packed as (left normalize, right normalize, left filter, right filter).
     vec4 panel_flags;
 
     // Background color for letterboxed regions.
@@ -33,16 +33,41 @@ layout(push_constant) uniform Push {
     vec4 divider;
     // Grip line config: spacing, half-width, half-length, line count (rounded up).
     vec4 grip;
+
+    // Per-panel valid-region UV: left scale, left clamp, right scale, right clamp.
+    vec4 left_uv_scale_clamp;  // xy = scale, zw = clamp max
+    vec4 right_uv_scale_clamp;
+    // Per-panel mapping from full-content UVs into the clipped render target.
+    vec4 left_texcoord_scale_offset;  // xy = scale, zw = offset
+    vec4 right_texcoord_scale_offset;
 } pc;
 
-vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y) {
+vec3 sample_panel(sampler2D tex, vec2 uv, float start, float end, float normalize, float flip_y,
+                  float spatial_filter, vec2 uv_scale, vec2 uv_clamp_max,
+                  vec2 texcoord_scale, vec2 texcoord_offset) {
     float u = uv.x;
     if (normalize > 0.5) {
         float span = max(end - start, 1e-6);
         u = (uv.x - start) / span;
     }
     float v = flip_y > 0.5 ? 1.0 - uv.y : uv.y;
-    return texture(tex, vec2(u, v)).rgb;
+    vec2 st = min((vec2(u, v) * texcoord_scale + texcoord_offset) * uv_scale, uv_clamp_max);
+    vec3 center = texture(tex, st).rgb;
+    if (spatial_filter < 0.5) {
+        return center;
+    }
+
+    const float strength = 0.18;
+    vec2 texel = 1.0 / vec2(textureSize(tex, 0));
+    vec3 left = texture(tex, clamp(st - vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 right = texture(tex, clamp(st + vec2(texel.x, 0.0), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 up = texture(tex, clamp(st - vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 down = texture(tex, clamp(st + vec2(0.0, texel.y), vec2(0.0), uv_clamp_max)).rgb;
+    vec3 sharpened = center * (1.0 + 4.0 * strength) -
+                     (left + right + up + down) * strength;
+    vec3 neighborhood_min = min(center, min(min(left, right), min(up, down)));
+    vec3 neighborhood_max = max(center, max(max(left, right), max(up, down)));
+    return clamp(sharpened, neighborhood_min, neighborhood_max);
 }
 
 void main() {
@@ -67,9 +92,13 @@ void main() {
 
     vec3 color = use_left
         ? sample_panel(u_left, content_uv, pc.panel_norm.x, pc.panel_norm.y,
-                       pc.panel_flags.x, pc.split.y)
+                       pc.panel_flags.x, pc.split.y, pc.panel_flags.z,
+                       pc.left_uv_scale_clamp.xy, pc.left_uv_scale_clamp.zw,
+                       pc.left_texcoord_scale_offset.xy, pc.left_texcoord_scale_offset.zw)
         : sample_panel(u_right, content_uv, pc.panel_norm.z, pc.panel_norm.w,
-                       pc.panel_flags.y, pc.split.z);
+                       pc.panel_flags.y, pc.split.z, pc.panel_flags.w,
+                       pc.right_uv_scale_clamp.xy, pc.right_uv_scale_clamp.zw,
+                       pc.right_texcoord_scale_offset.xy, pc.right_texcoord_scale_offset.zw);
 
     // Divider/handle/grip overlay. Mirrors compositeSplitImages CPU geometry
     // pixel-for-pixel: vertical bar + rounded handle + horizontal grip lines.

@@ -1,6 +1,7 @@
 #include "zep/filesystem.h"
 #include "zep/editor.h" // FOR ZEP_UNUSED
 
+#include <cstdio>
 #include <fstream>
 
 #include "zep/mcommon/logger.h"
@@ -23,7 +24,7 @@ namespace Zep {
         // Use the config path
         m_configPath = configPath;
 
-        m_workingDirectory = fs::path(cpp_fs::current_path().string());
+        m_workingDirectory = cpp_fs::current_path();
 
         // Didn't find the config path, try the working directory
         if (!Exists(m_configPath)) {
@@ -42,7 +43,7 @@ namespace Zep {
             return;
         }
         // Set the file system's current working directory too.
-        cpp_fs::current_path(path.string());
+        cpp_fs::current_path(path);
         m_workingDirectory = path;
     }
 
@@ -62,11 +63,11 @@ namespace Zep {
         if (!Exists(path)) {
             return false;
         }
-        return cpp_fs::is_directory(path.string());
+        return cpp_fs::is_directory(path);
     }
 
     bool ZepFileSystemCPP::IsReadOnly(const fs::path& path) const {
-        auto perms = cpp_fs::status(path.string()).permissions();
+        auto perms = cpp_fs::status(path).permissions();
         if ((perms & cpp_fs::perms::owner_write) == cpp_fs::perms::owner_write) {
             return false;
         }
@@ -91,7 +92,11 @@ namespace Zep {
 
     bool ZepFileSystemCPP::Write(const fs::path& fileName, const void* pData, size_t size) {
         FILE* pFile;
+#ifdef _WIN32
+        pFile = _wfopen(fileName.wstring().c_str(), L"wb");
+#else
         pFile = fopen(fileName.string().c_str(), "wb");
+#endif
         if (!pFile) {
             return false;
         }
@@ -104,10 +109,10 @@ namespace Zep {
     }
 
     void ZepFileSystemCPP::ScanDirectory(const fs::path& path, std::function<bool(const fs::path& path, bool& dont_recurse)> fnScan) const {
-        for (auto itr = cpp_fs::recursive_directory_iterator(path.string());
+        for (auto itr = cpp_fs::recursive_directory_iterator(path);
              itr != cpp_fs::recursive_directory_iterator();
              itr++) {
-            auto p = fs::path(itr->path().string());
+            auto p = itr->path();
 
             bool recurse = true;
             if (!fnScan(p, recurse))
@@ -121,7 +126,7 @@ namespace Zep {
 
     bool ZepFileSystemCPP::Exists(const fs::path& path) const {
         try {
-            return cpp_fs::exists(path.string());
+            return cpp_fs::exists(path);
         } catch (cpp_fs::filesystem_error& err) {
             ZEP_UNUSED(err);
             ZLOG(ERROR, "Exception: " << err.what());
@@ -132,10 +137,10 @@ namespace Zep {
     bool ZepFileSystemCPP::Equivalent(const fs::path& path1, const fs::path& path2) const {
         try {
             // The below API expects existing files!  Best we can do is direct compare of paths
-            if (!cpp_fs::exists(path1.string()) || !cpp_fs::exists(path2.string())) {
-                return Canonical(path1).string() == Canonical(path2).string();
+            if (!cpp_fs::exists(path1) || !cpp_fs::exists(path2)) {
+                return Canonical(path1) == Canonical(path2);
             }
-            return cpp_fs::equivalent(path1.string(), path2.string());
+            return cpp_fs::equivalent(path1, path2);
         } catch (cpp_fs::filesystem_error& err) {
             ZEP_UNUSED(err);
             ZLOG(ERROR, "Exception: " << err.what());
@@ -148,9 +153,9 @@ namespace Zep {
 #ifdef __unix__
             // TODO: Remove when unix doesn't need <experimental/filesystem>
             // I can't remember why weakly_connical is used....
-            return fs::path(cpp_fs::canonical(path.string()).string());
+            return cpp_fs::canonical(path);
 #else
-            return fs::path(cpp_fs::weakly_canonical(path.string()).string());
+            return cpp_fs::weakly_canonical(path);
 #endif
         } catch (cpp_fs::filesystem_error& err) {
             ZEP_UNUSED(err);

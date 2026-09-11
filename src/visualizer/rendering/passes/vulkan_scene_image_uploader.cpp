@@ -10,6 +10,7 @@
 #include "vulkan_viewport_pass.hpp"
 #include "window/vulkan_context.hpp"
 #include "window/vulkan_image_barrier_tracker.hpp"
+#include "window/vulkan_result.hpp"
 
 #include <format>
 #include <string>
@@ -30,6 +31,7 @@ namespace lfs::vis {
         const lfs::core::Tensor* uploaded_scene_tensor = nullptr;
         bool scene_image_external = false;
         std::uint64_t scene_image_external_generation = 0;
+        std::uint64_t owned_image_generation = 0;
 
         [[nodiscard]] bool init(VulkanContext& vulkan_context, const VkSampler sampler) {
             if (device != VK_NULL_HANDLE) {
@@ -40,8 +42,13 @@ namespace lfs::vis {
             allocator = vulkan_context.allocator();
             scene_sampler = sampler;
             if (device == VK_NULL_HANDLE || allocator == VK_NULL_HANDLE || scene_sampler == VK_NULL_HANDLE) {
-                LOG_ERROR("Vulkan scene image uploader requires an initialized Vulkan context");
-                return false;
+                return logVkFailure(std::format(
+                    "Vulkan scene image uploader requires a live device, allocator, and sampler (device={:#x}, allocator={:#x}, scene_sampler={:#x}) ({}:{})",
+                    vkHandleValue(device),
+                    reinterpret_cast<std::uintptr_t>(allocator),
+                    vkHandleValue(scene_sampler),
+                    __FILE__,
+                    __LINE__));
             }
             return true;
         }
@@ -55,7 +62,9 @@ namespace lfs::vis {
         }
 
         void clearSceneImageBinding() {
-            scene_image_barriers.forgetImage(scene_image);
+            const std::uint64_t forget_gen =
+                scene_image_external ? scene_image_external_generation : owned_image_generation;
+            scene_image_barriers.forgetImage(scene_image, forget_gen);
             scene_image = VK_NULL_HANDLE;
             scene_image_allocation = VK_NULL_HANDLE;
             scene_image_view = VK_NULL_HANDLE;
@@ -106,66 +115,6 @@ namespace lfs::vis {
             clearSceneImageBinding();
         }
 
-        [[nodiscard]] bool ensureSceneImage(const glm::ivec2 size, const VkDescriptorSet scene_descriptor_set) {
-            if (scene_image != VK_NULL_HANDLE && scene_image_size == size) {
-                updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-                return true;
-            }
-            destroySceneImage();
-
-            VkImageCreateInfo image_info{};
-            image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-            image_info.imageType = VK_IMAGE_TYPE_2D;
-            image_info.extent = {static_cast<std::uint32_t>(size.x), static_cast<std::uint32_t>(size.y), 1};
-            image_info.mipLevels = 1;
-            image_info.arrayLayers = 1;
-            image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-            image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-            image_info.samples = VK_SAMPLE_COUNT_1_BIT;
-            image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-            VmaAllocationCreateInfo allocation_info{};
-            allocation_info.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
-            VmaAllocationInfo created_allocation_info{};
-            if (vmaCreateImage(allocator,
-                               &image_info,
-                               &allocation_info,
-                               &scene_image,
-                               &scene_image_allocation,
-                               &created_allocation_info) != VK_SUCCESS) {
-                destroySceneImage();
-                return false;
-            }
-            vmaSetAllocationName(allocator, scene_image_allocation, "Viewport scene image");
-            scene_image_vram_label = std::format("rgba8:{}x{}", size.x, size.y);
-            lfs::diagnostics::VramProfiler::instance().recordCurrentBytes(
-                "vulkan.scene_image.image",
-                scene_image_vram_label,
-                static_cast<std::size_t>(created_allocation_info.size));
-
-            VkImageViewCreateInfo view_info{};
-            view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            view_info.image = scene_image;
-            view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            view_info.format = VK_FORMAT_R8G8B8A8_UNORM;
-            view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            view_info.subresourceRange.baseMipLevel = 0;
-            view_info.subresourceRange.levelCount = 1;
-            view_info.subresourceRange.baseArrayLayer = 0;
-            view_info.subresourceRange.layerCount = 1;
-            if (vkCreateImageView(device, &view_info, nullptr, &scene_image_view) != VK_SUCCESS) {
-                destroySceneImage();
-                return false;
-            }
-
-            scene_image_size = size;
-            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED);
-            updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            return true;
-        }
-
         [[nodiscard]] bool bindExternalSceneImage(const VulkanViewportPassParams& params,
                                                   const VkDescriptorSet scene_descriptor_set) {
             if (params.external_scene_image == VK_NULL_HANDLE ||
@@ -178,7 +127,7 @@ namespace lfs::vis {
                 scene_image == params.external_scene_image &&
                 scene_image_view == params.external_scene_image_view &&
                 scene_image_size == params.scene_image_size &&
-                scene_image_barriers.imageLayout(scene_image, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
+                scene_image_barriers.imageLayout(scene_image, params.external_scene_image_generation, VK_IMAGE_LAYOUT_UNDEFINED) == params.external_scene_image_layout &&
                 scene_image_external_generation == params.external_scene_image_generation) {
                 updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 return true;
@@ -191,12 +140,23 @@ namespace lfs::vis {
             uploaded_scene_tensor = params.scene_image.get();
             scene_image_external = true;
             scene_image_external_generation = params.external_scene_image_generation;
-            scene_image_barriers.registerImage(scene_image, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE,
+                                         scene_image,
+                                         "viewport.scene.external[{}].image",
+                                         scene_image_external_generation);
+            context->setDebugObjectNamef(VK_OBJECT_TYPE_IMAGE_VIEW,
+                                         scene_image_view,
+                                         "viewport.scene.external[{}].view",
+                                         scene_image_external_generation);
+            scene_image_barriers.registerImage(scene_image, scene_image_external_generation, VK_IMAGE_ASPECT_COLOR_BIT, params.external_scene_image_layout);
             updateSceneDescriptor(scene_descriptor_set, scene_image_view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             return true;
         }
 
         void upload(const VulkanViewportPassParams& params, const VkDescriptorSet scene_descriptor_set) {
+            if (params.preserve_scene_image_binding) {
+                return;
+            }
             const bool has_external_image =
                 params.external_scene_image != VK_NULL_HANDLE &&
                 params.external_scene_image_view != VK_NULL_HANDLE;

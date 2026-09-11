@@ -21,20 +21,6 @@ namespace lfs::vis::gui::panels {
         return instance;
     }
 
-    void PythonScriptManagerState::addScript(const std::filesystem::path& path) {
-        std::uint64_t generation = 0;
-        {
-            std::lock_guard lock(mutex_);
-            for (const auto& s : scripts_) {
-                if (s.path == path)
-                    return;
-            }
-            scripts_.push_back({path, true, false, ""});
-            generation = ++generation_;
-        }
-        publishScriptsGeneration(generation);
-    }
-
     void PythonScriptManagerState::setScripts(const std::vector<std::filesystem::path>& paths) {
         std::uint64_t generation = 0;
         {
@@ -99,11 +85,10 @@ namespace lfs::vis::gui::panels {
         std::uint64_t generation = 0;
         {
             std::lock_guard lock(mutex_);
-            if (!scripts_.empty() || needs_reload_) {
+            if (!scripts_.empty()) {
                 generation = ++generation_;
             }
             scripts_.clear();
-            needs_reload_ = false;
         }
         publishScriptsGeneration(generation);
     }
