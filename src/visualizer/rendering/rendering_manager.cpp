@@ -89,12 +89,6 @@ namespace lfs::vis {
             state.far_plane = std::clamp(state.far_plane, state.near_plane + kDepthNearMin, kDepthMax);
         }
 
-        [[nodiscard]] bool projectionNearFarChanged(const RenderSettings& before,
-                                                    const RenderSettings& after) {
-            return before.depth_filter_min.z != after.depth_filter_min.z ||
-                   before.depth_filter_max.z != after.depth_filter_max.z;
-        }
-
         void applyDepthWindowToProjection(RenderSettings& settings, const DepthWindowState& state) {
             settings.depth_filter_scale_x = state.scale_x;
             settings.depth_filter_scale_y = state.scale_y;
@@ -1039,12 +1033,7 @@ namespace lfs::vis {
         split_view_service_.setFocusedPanel(panel);
         if (split_view_service_.isIndependentDualActive(settings_)) {
             settings_.grid_plane = panel_grid_planes_[splitViewPanelIndex(panel)];
-            const RenderSettings before_projection = settings_;
-            applyDepthWindowToProjection(settings_,
-                                         panel_depth_windows_[splitViewPanelIndex(panel)]);
-            if (projectionNearFarChanged(before_projection, settings_)) {
-                ++depth_window_projection_generation_;
-            }
+            applyDepthWindowProjectionLocked(panel_depth_windows_[splitViewPanelIndex(panel)]);
         }
     }
 
@@ -1099,11 +1088,12 @@ namespace lfs::vis {
         }
         const size_t index = splitViewPanelIndex(panel);
         const size_t other_index = index == 0 ? 1 : 0;
+        const bool owns_addressed_slot = depth_window_pin_owners_[index] == drag_token;
         bool wrote = false;
         // Under one lock, restore only slots still owned by this drag.
         // Skip slots whose ownership was cleared by a newer write or taken by another
         // drag, preserving their newer values.
-        if (depth_window_pin_owners_[index] == drag_token) {
+        if (owns_addressed_slot) {
             applyDepthWindowForPanelLocked(panel, clamped_own, /*restore_mode=*/true);
             wrote = true;
         }
@@ -1118,7 +1108,7 @@ namespace lfs::vis {
         if (wrote) {
             markDirty(DirtyFlag::ALL);
         }
-        return true;
+        return owns_addressed_slot;
     }
 
     void RenderingManager::releaseIdleDepthWindowBackupsLocked() {
@@ -1151,13 +1141,7 @@ namespace lfs::vis {
                                         split_view_service_.focusedPanel() == panel ||
                                         (restore_mode && !independent_dual);
         if (updates_projection) {
-            const float previous_depth_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_max_z = settings_.depth_filter_max.z;
-            applyDepthWindowToProjection(settings_, clamped);
-            if (settings_.depth_filter_min.z != previous_depth_min_z ||
-                settings_.depth_filter_max.z != previous_depth_max_z) {
-                ++depth_window_projection_generation_;
-            }
+            applyDepthWindowProjectionLocked(clamped);
         }
         return fan_out;
     }
@@ -1198,20 +1182,6 @@ namespace lfs::vis {
             return false;
         }
         applyDepthWindowForPanelLocked(panel, clamped);
-        markDirty(DirtyFlag::ALL);
-        return true;
-    }
-
-    bool RenderingManager::restoreDepthWindowForPanelIfEpoch(const SplitViewPanelId panel,
-                                                             const DepthWindowState& state,
-                                                             const uint64_t expected_epoch) {
-        DepthWindowState clamped = state;
-        clampDepthWindowState(clamped);
-        std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (depth_window_mode_epoch_ != expected_epoch) {
-            return false;
-        }
-        applyDepthWindowForPanelLocked(panel, clamped, /*restore_mode=*/true);
         markDirty(DirtyFlag::ALL);
         return true;
     }
@@ -1444,6 +1414,16 @@ namespace lfs::vis {
         return depth_window_mode_epoch_;
     }
 
+    void RenderingManager::applyDepthWindowProjectionLocked(const DepthWindowState& state) {
+        const float previous_depth_min_z = settings_.depth_filter_min.z;
+        const float previous_depth_max_z = settings_.depth_filter_max.z;
+        applyDepthWindowToProjection(settings_, state);
+        if (settings_.depth_filter_min.z != previous_depth_min_z ||
+            settings_.depth_filter_max.z != previous_depth_max_z) {
+            ++depth_window_projection_generation_;
+        }
+    }
+
     void RenderingManager::restoreDepthWindowStateLocked(
         const std::array<DepthWindowState, 2>& panels,
         const bool sync,
@@ -1453,13 +1433,7 @@ namespace lfs::vis {
         // Undo/redo and project restore replace both slots with valid state.
         // Discard stale backups only for unowned slots with a zero drag count.
         releaseIdleDepthWindowBackupsLocked();
-        const float previous_depth_min_z = settings_.depth_filter_min.z;
-        const float previous_depth_max_z = settings_.depth_filter_max.z;
-        applyDepthWindowToProjection(settings_, projection);
-        if (settings_.depth_filter_min.z != previous_depth_min_z ||
-            settings_.depth_filter_max.z != previous_depth_max_z) {
-            ++depth_window_projection_generation_;
-        }
+        applyDepthWindowProjectionLocked(projection);
     }
 
     void RenderingManager::applyDepthWindowModeTransitionLocked(
@@ -1503,11 +1477,7 @@ namespace lfs::vis {
             // Parking sets projection below from pre-transition focus or an explicit boundary
             // write. Events may have reset current focus; direct updateSettings keeps it.
             if (index == focused_index && !park_dormant_panels) {
-                const RenderSettings before_projection = settings_;
-                applyDepthWindowToProjection(settings_, backup_window);
-                if (projectionNearFarChanged(before_projection, settings_)) {
-                    ++depth_window_projection_generation_;
-                }
+                applyDepthWindowProjectionLocked(backup_window);
             }
             depth_window_drag_backups_[index].reset();
         }
@@ -1524,13 +1494,7 @@ namespace lfs::vis {
             if (!boundary_carries_global_depth_write) {
                 const auto parked_focused_window =
                     panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
-                const float previous_depth_min_z = settings_.depth_filter_min.z;
-                const float previous_depth_max_z = settings_.depth_filter_max.z;
-                applyDepthWindowToProjection(settings_, parked_focused_window);
-                if (settings_.depth_filter_min.z != previous_depth_min_z ||
-                    settings_.depth_filter_max.z != previous_depth_max_z) {
-                    ++depth_window_projection_generation_;
-                }
+                applyDepthWindowProjectionLocked(parked_focused_window);
             }
         } else if (restore_dormant_panels) {
             // On independent entry, restore the exact retained pair over slot values from
@@ -1540,13 +1504,7 @@ namespace lfs::vis {
             panel_depth_windows_ = *depth_window_dormant_panels_;
             const auto focused_window =
                 panel_depth_windows_[splitViewPanelIndex(split_view_service_.focusedPanel())];
-            const float previous_depth_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_max_z = settings_.depth_filter_max.z;
-            applyDepthWindowToProjection(settings_, focused_window);
-            if (settings_.depth_filter_min.z != previous_depth_min_z ||
-                settings_.depth_filter_max.z != previous_depth_max_z) {
-                ++depth_window_projection_generation_;
-            }
+            applyDepthWindowProjectionLocked(focused_window);
         } else if (splitViewUsesGTComparison(previous_mode) && new_mode == SplitViewMode::Disabled) {
             // Disabled drags back up live slots, so align both with the global projection.
             // Keep the retained pair separate for the next independent entry.
@@ -1564,14 +1522,8 @@ namespace lfs::vis {
                                           DepthWindowLineageKind::LeaveCollapse);
             const auto collapsed =
                 panel_depth_windows_[splitViewPanelIndex(pre_transition_focus)];
-            const float previous_depth_min_z = settings_.depth_filter_min.z;
-            const float previous_depth_max_z = settings_.depth_filter_max.z;
-            applyDepthWindowToProjection(settings_, collapsed);
+            applyDepthWindowProjectionLocked(collapsed);
             panel_depth_windows_ = {collapsed, collapsed};
-            if (settings_.depth_filter_min.z != previous_depth_min_z ||
-                settings_.depth_filter_max.z != previous_depth_max_z) {
-                ++depth_window_projection_generation_;
-            }
         }
 
         // GT -> Disabled and repeated GT entry retain the original pair until

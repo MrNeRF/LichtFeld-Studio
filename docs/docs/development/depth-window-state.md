@@ -34,7 +34,9 @@ guard. A request refused by drag ownership cannot discard the pair.
 
 Compare geometry across all six fields exactly after the writing path's existing
 normalization. A drag commit compares with its committed pre-drag backup, not the
-preview. Equal normalized geometry, enable/viz-only changes and cancelled or
+preview. Releasing an existing handle within 0.001 screen pixel of its press
+restores the exact owned pre-drag state without committing or adding undo.
+Equal normalized geometry, enable/viz-only changes and cancelled or
 subthreshold drags preserve retention. GT-time global writes preserve it too.
 
 An explicit-panel window setter during a parked GT session returns refusal before

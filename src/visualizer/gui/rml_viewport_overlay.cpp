@@ -1033,10 +1033,11 @@ namespace lfs::vis::gui {
         const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
                                       input.key_alt, input.key_super);
         const auto release_owned_buttons = [&](const glm::vec2 origin) {
-            if (rml_input::replayButtonEvents(
-                    *rml_context_, pointer_down_delivered_, input.mouse_button_events,
-                    origin, vp_size_, mods, false,
-                    [](const Rml::Element*) { return false; }, false)) {
+            (void)rml_input::replayButtonEvents(
+                *rml_context_, pointer_down_delivered_, input.mouse_button_events,
+                origin, vp_size_, mods, false,
+                [](const Rml::Element*) { return false; }, false);
+            if (!input.mouse_button_events.empty()) {
                 markRenderNeeded(RenderReason::PointerButton);
             }
             // Only real event-point moves were delivered. Frame-end hover and
@@ -1087,8 +1088,8 @@ namespace lfs::vis::gui {
             !input.keys_pressed.empty() || !input.keys_released.empty() ||
             !input.keys_repeated.empty() || !input.text_codepoints.empty() ||
             !input.text_inputs.empty() || input.has_text_editing;
-        const bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
-        const bool toolbar_drag_capture = toolbar_drag_active_;
+        bool vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        bool toolbar_drag_capture = toolbar_drag_active_;
         auto* const focused_before = rml_context_->GetFocusElement();
         const bool focused_text_target = rml_input::wantsTextInput(focused_before);
         if (mouse_pos_valid_ && !mouse_moved && !pointer_event && !pointer_drag &&
@@ -1192,6 +1193,21 @@ namespace lfs::vis::gui {
             release_owned_buttons(vp_pos_);
             return;
         }
+        // Replay canonical events at their own coordinates, in arrival order.
+        // rml_pointer_dispatch.hpp exposes the loop for tests with their own context.
+        const bool replayed_button_events = rml_input::replayButtonEvents(
+            *rml_context_, pointer_down_delivered_, input.mouse_button_events, vp_pos_, vp_size_,
+            mods, false,
+            [this](const Rml::Element* const element) {
+                return (vram_hud_ && vram_hud_->isCapturingPointer()) ||
+                       toolbar_drag_active_ || viewportOverlayHoverRoot(element) != nullptr;
+            });
+        vram_drag_capture = vram_hud_ && vram_hud_->isCapturingPointer();
+        toolbar_drag_capture = toolbar_drag_active_;
+        // Cancellation changes control state without delivering the replacement press.
+        if (!input.mouse_button_events.empty())
+            markRenderNeeded(RenderReason::PointerButton);
+
         const bool should_process_mouse_move =
             (mouse_moved || pointer_event) &&
             (was_inside || is_inside || vram_drag_capture || toolbar_drag_capture) &&
@@ -1235,17 +1251,6 @@ namespace lfs::vis::gui {
         const auto* const hover_root = viewportOverlayHoverRoot(hover);
         const bool over_interactive = is_inside && hover_root != nullptr;
         hovered_interactive_ = over_interactive;
-
-        // Replay canonical events at their own coordinates, in arrival order.
-        // rml_pointer_dispatch.hpp exposes the loop for tests with their own context.
-        const bool replayed_button_events = rml_input::replayButtonEvents(
-            *rml_context_, pointer_down_delivered_, input.mouse_button_events, vp_pos_, vp_size_,
-            mods, vram_drag_capture || toolbar_drag_capture,
-            [](const Rml::Element* const element) {
-                return viewportOverlayHoverRoot(element) != nullptr;
-            });
-        if (replayed_button_events)
-            markRenderNeeded(RenderReason::PointerButton);
 
         if (over_interactive || vram_drag_capture || toolbar_drag_capture ||
             replayed_button_events) {

@@ -31,15 +31,25 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/ElementInstancer.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/EventListener.h>
+#include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/RenderInterface.h>
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <functional>
+#include <future>
 #include <gtest/gtest.h>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -2850,6 +2860,18 @@ namespace lfs::vis {
             dragger_ = nullptr;
         }
 
+        template <typename OwnsElementFn>
+        bool replay(bool (&down)[3], const std::vector<FrameMouseButtonEvent>& events,
+                    const OwnsElementFn& owns, const bool capture = false) {
+            return gui::rml_input::replayButtonEvents(*context_, down, events, {0.f, 0.f},
+                                                      {400.f, 300.f}, 0, capture, owns);
+        }
+
+        void press(const int x, const int y) {
+            context_->ProcessMouseMove(x, y, 0);
+            context_->ProcessMouseButtonDown(0, 0);
+        }
+
         static inline NullRenderInterface* render_interface_ = nullptr;
         Rml::Context* context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
@@ -2902,10 +2924,7 @@ namespace lfs::vis {
         buffer.beginFrame();
         pressAt(buffer, SDL_BUTTON_LEFT, 50.0f, 50.0f, /*gui_owned=*/false); // alpha
 
-        const bool replayed = gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_}));
+        const bool replayed = replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_}));
         EXPECT_TRUE(replayed);
 
         const auto trace = recorder_.joined();
@@ -2924,10 +2943,7 @@ namespace lfs::vis {
         pressAt(buffer, SDL_BUTTON_RIGHT, 50.0f, 200.0f, /*gui_owned=*/false); // dragger
         pressAt(buffer, SDL_BUTTON_LEFT, 250.0f, 50.0f, /*gui_owned=*/false);  // beta
 
-        const bool replayed = gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_}));
+        const bool replayed = replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_}));
         EXPECT_TRUE(replayed);
 
         const auto trace = recorder_.joined();
@@ -2941,11 +2957,7 @@ namespace lfs::vis {
         lfs::vis::FrameInputBuffer outside;
         outside.beginFrame();
         pressAt(outside, SDL_BUTTON_LEFT, 900.0f, 900.0f, /*gui_owned=*/false);
-        EXPECT_FALSE(gui::rml_input::replayButtonEvents(
-            *context_, outside_state.down_delivered, outside.mouse_button_events,
-            glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_FALSE(replay(outside_state.down_delivered, outside.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
         EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
     }
 
@@ -2958,10 +2970,7 @@ namespace lfs::vis {
         buffer.beginFrame();
         pressAt(buffer, SDL_BUTTON_LEFT, 50.0f, 200.0f, /*gui_owned=*/false); // dragger
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/true,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_}), /*capture=*/true));
         EXPECT_EQ(recorder_.countOfWithButton("dragger:mousedown", 0), 1)
             << recorder_.joined();
     }
@@ -2975,10 +2984,7 @@ namespace lfs::vis {
         pressAt(buffer, SDL_BUTTON_RIGHT, 250.0f, 50.0f, /*gui_owned=*/false); // beta
         pressAt(buffer, SDL_BUTTON_LEFT, 50.0f, 200.0f, /*gui_owned=*/false);  // dragger
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_, dragger_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_, dragger_})));
 
         const auto trace = recorder_.joined();
         const int right_down = recorder_.indexOf("beta:mousedown");
@@ -3002,10 +3008,7 @@ namespace lfs::vis {
         pressAt(buffer, SDL_BUTTON_LEFT, 50.0f, 50.0f, /*gui_owned=*/false);   // alpha
         pressAt(buffer, SDL_BUTTON_RIGHT, 250.0f, 50.0f, /*gui_owned=*/false); // beta
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
 
         const auto trace = recorder_.joined();
         const int left_down = recorder_.indexOf("alpha:mousedown");
@@ -3027,10 +3030,7 @@ namespace lfs::vis {
         pressAt(buffer, SDL_BUTTON_LEFT, 50.0f, 50.0f, /*gui_owned=*/false); // alpha
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 200.0f));   // dragger
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
 
         const auto trace = recorder_.joined();
         EXPECT_EQ(recorder_.countOfWithButton("alpha:mousedown", 0), 1) << trace;
@@ -3049,10 +3049,7 @@ namespace lfs::vis {
         lfs::vis::FrameInputBuffer bare;
         bare.beginFrame();
         bare.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 50.0f)); // over alpha
-        EXPECT_FALSE(gui::rml_input::replayButtonEvents(
-            *context_, bare_state.down_delivered, bare.mouse_button_events,
-            glm::vec2(0.0f, 0.0f), glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_FALSE(replay(bare_state.down_delivered, bare.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
         EXPECT_EQ(recorder_.countOf("alpha:mouseup"), 0) << recorder_.joined();
 
         // (b) a press this host REFUSED, released over chrome it owns. The
@@ -3063,10 +3060,7 @@ namespace lfs::vis {
         refused.beginFrame();
         pressAt(refused, SDL_BUTTON_LEFT, 50.0f, 200.0f, /*gui_owned=*/false); // dragger
         refused.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 50.0f));     // alpha
-        EXPECT_FALSE(gui::rml_input::replayButtonEvents(
-            *context_, refused_state.down_delivered, refused.mouse_button_events,
-            glm::vec2(0.0f, 0.0f), glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_FALSE(replay(refused_state.down_delivered, refused.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
         EXPECT_TRUE(recorder_.log().empty())
             << "a release with no delivered press of its own was replayed: "
             << recorder_.joined();
@@ -3081,10 +3075,7 @@ namespace lfs::vis {
         stale.beginFrame();
         pressAt(stale, SDL_BUTTON_LEFT, 50.0f, 200.0f, /*gui_owned=*/false); // dragger, refused
         stale.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 200.0f));
-        EXPECT_FALSE(gui::rml_input::replayButtonEvents(
-            *context_, stale_state.down_delivered, stale.mouse_button_events,
-            glm::vec2(0.0f, 0.0f), glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_FALSE(replay(stale_state.down_delivered, stale.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
         EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
         EXPECT_FALSE(stale_state.down_delivered[0]);
     }
@@ -3112,10 +3103,7 @@ namespace lfs::vis {
         context_->ProcessMouseMove(50, 50, 0);
         recorder_.clear();
 
-        EXPECT_FALSE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, input.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_FALSE(replay(state.down_delivered, input.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
         EXPECT_EQ(recorder_.countOf("alpha:mousedown"), 0)
             << "a press on something else was manufactured on chrome: "
             << recorder_.joined();
@@ -3136,10 +3124,7 @@ namespace lfs::vis {
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 200.0f));
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_RIGHT, 250.0f, 50.0f));
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
 
         const auto trace = recorder_.joined();
         EXPECT_EQ(recorder_.countOf("dragger:mousedown"), 0)
@@ -3160,10 +3145,7 @@ namespace lfs::vis {
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_RIGHT, 50.0f, 50.0f));     // over alpha
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 50.0f));
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
 
         const auto trace = recorder_.joined();
         EXPECT_EQ(recorder_.countOfWithButton("alpha:mousedown", 0), 1) << trace;
@@ -3186,10 +3168,7 @@ namespace lfs::vis {
         pressAt(buffer, SDL_BUTTON_LEFT, 50.0f, 50.0f, /*gui_owned=*/false);   // alpha
         pressAt(buffer, SDL_BUTTON_RIGHT, 250.0f, 50.0f, /*gui_owned=*/false); // beta
 
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
         EXPECT_TRUE(state.down_delivered[0]);
         EXPECT_TRUE(state.down_delivered[1]);
 
@@ -3198,10 +3177,7 @@ namespace lfs::vis {
         buffer.beginFrame();
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_RIGHT, 50.0f, 200.0f)); // dragger
         buffer.processEvent(mouseUpEvent(SDL_BUTTON_LEFT, 50.0f, 200.0f));  // dragger
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, buffer.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false,
-            ownsOverlayBox({alpha_, beta_})));
+        EXPECT_TRUE(replay(state.down_delivered, buffer.mouse_button_events, ownsOverlayBox({alpha_, beta_})));
 
         const auto trace = recorder_.joined();
         EXPECT_EQ(recorder_.countOfWithButton("dragger:mouseup", 1), 1)
@@ -3337,9 +3313,7 @@ namespace lfs::vis {
 
         // --- the COMPLETE GUI-DELIVERY SEQUENCE ------------------------------
         ReplayState state;
-        EXPECT_TRUE(gui::rml_input::replayButtonEvents(
-            *context_, state.down_delivered, input.mouse_button_events, glm::vec2(0.0f, 0.0f),
-            glm::vec2(400.0f, 300.0f), 0, /*capture_active=*/false, owns));
+        EXPECT_TRUE(replay(state.down_delivered, input.mouse_button_events, owns));
 
         const auto trace = recorder_.joined();
         // The owned press is delivered whole, at its own point; the unowned one
@@ -3374,6 +3348,15 @@ namespace lfs::vis {
     // fixture access; ownership, coordinates and delivery are production code.
     class RmlViewportInputRoutingTest : public RmlPointerReplayTest {
     protected:
+        void seedToolbarCaptureForCancel() {
+            overlay_->viewport_toolbar_position_ = "free";
+            overlay_->toolbar_drag_active_ = true;
+            // No preference write: this probe never moves the toolbar itself.
+            overlay_->toolbar_drag_moved_ = false;
+            bar_->AddEventListener(Rml::EventId::Dragend, &overlay_->toolbar_drag_listener_);
+        }
+        bool toolbarCaptureActive() const { return overlay_->toolbar_drag_active_; }
+
         void SetUp() override {
             RmlPointerReplayTest::SetUp();
             gui::guiFocusState().reset();
@@ -3400,7 +3383,7 @@ namespace lfs::vis {
             ASSERT_NE(range_, nullptr);
             ASSERT_NE(text_, nullptr);
             ASSERT_NE(button_, nullptr);
-            bar_ = findBar(range_);
+            bar_ = findElementByTag(range_, "sliderbar");
             ASSERT_NE(bar_, nullptr);
             bar_->SetId("range-bar");
             const auto bar_offset = bar_->GetAbsoluteOffset();
@@ -3432,12 +3415,12 @@ namespace lfs::vis {
             RmlPointerReplayTest::TearDown();
         }
 
-        static Rml::Element* findBar(Rml::Element* element) {
-            if (element->GetTagName() == "sliderbar")
+        static Rml::Element* findElementByTag(Rml::Element* element, const Rml::String& tag) {
+            if (element->GetTagName() == tag)
                 return element;
             for (int i = 0; i < element->GetNumChildren(true); ++i) {
-                if (auto* bar = findBar(element->GetChild(i)))
-                    return bar;
+                if (auto* found = findElementByTag(element->GetChild(i), tag))
+                    return found;
             }
             return nullptr;
         }
@@ -3595,10 +3578,11 @@ namespace lfs::vis {
         input.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
         route(input, {.modal = true});
         EXPECT_FALSE(owns());
-        EXPECT_TRUE(recorder_.log().empty()) << recorder_.joined();
-        // A replacement DOWN revokes ownership. The old Rml press is the
-        // disclosed supersession residual; its UP cannot be borrowed here.
-        EXPECT_TRUE(button_->IsPseudoClassSet("active"));
+        EXPECT_EQ(recorder_.countOf("action:click"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("action:mouseup"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("action:mousedown"), 0) << recorder_.joined();
+        // A replacement DOWN cancels the old press without borrowing its UP.
+        EXPECT_FALSE(button_->IsPseudoClassSet("active"));
         EXPECT_TRUE(overlay_->leftPressClassifications().empty());
     }
 
@@ -3742,5 +3726,528 @@ namespace lfs::vis {
         route(input);
         EXPECT_NE(text_->GetValue(), value);
     }
+
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    TEST_F(RmlViewportInputRoutingTest, RefusedSameButtonDownMustCancelRangeWithoutHoverEdits) {
+        arm(range_point_);
+        gui::guiFocusState().reset();
+        ASSERT_TRUE(bar_->IsPseudoClassSet("active"));
+        const auto before = range_->GetValue();
+        const glm::vec2 bare{350.0f, 270.0f};
+        auto input = inputAt(bare);
+        input.mouse_button_events = {transition(true, bare), transition(false, bare)};
+        input.mouse_button_events[0].gui_owned = false;
+        input.mouse_button_events[1].gui_owned = false;
+        route(input);
+        EXPECT_FALSE(overlay_->wantsInput());
+        EXPECT_FALSE(gui::guiFocusState().want_capture_mouse);
+        ASSERT_EQ(overlay_->leftPressClassifications().size(), 1);
+        EXPECT_FALSE(overlay_->leftPressClassifications()[0].on_interactive_control);
+        EXPECT_FALSE(owns());
+        EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
+        recorder_.clear();
+        route(inputAt({range_point_.x + 60.0f, range_point_.y}));
+        EXPECT_EQ(range_->GetValue(), before);
+        EXPECT_EQ(recorder_.countOf("range:change"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:dragstart"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:drag"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:click"), 0) << recorder_.joined();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, StartedRangeReplacementCancelsBeforeFrameEndMove) {
+        arm(range_point_);
+        auto moved = inputAt(range_point_ + glm::vec2(20.0f, 0.0f));
+        moved.mouse_down[0] = true;
+        route(moved);
+        ASSERT_GT(recorder_.countOf("range:change"), 0) << recorder_.joined();
+        const auto before = range_->GetValue();
+        recorder_.clear();
+        const glm::vec2 bare{350.0f, 270.0f};
+        auto replacement = inputAt({5.0f, 270.0f});
+        replacement.mouse_button_events = {transition(true, bare), transition(false, bare)};
+        for (auto& event : replacement.mouse_button_events)
+            event.gui_owned = false;
+        route(replacement);
+        context_->ProcessMouseButtonCancel(0, 0); // Repeated cancellation must stay inert.
+        EXPECT_EQ(range_->GetValue(), before);
+        EXPECT_EQ(recorder_.countOf("range:change"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:dragend"), 1) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:dragdrop"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:click"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("range-bar:mouseup"), 0) << recorder_.joined();
+        expectRangeInert();
+
+        context_->Update();
+        const auto offset = bar_->GetAbsoluteOffset();
+        const glm::vec2 current{offset.x + bar_->GetOffsetWidth() / 2, offset.y + bar_->GetOffsetHeight() / 2};
+        arm(current);
+        moved = inputAt(current - glm::vec2(20.0f, 0.0f));
+        moved.mouse_down[0] = true;
+        route(moved);
+        EXPECT_NE(range_->GetValue(), before);
+        moved.mouse_down[0] = false;
+        moved.mouse_button_events = {transition(false, current - glm::vec2(20.0f, 0.0f))};
+        route(moved);
+        expectRangeInert();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, AcceptedReplacementClicksOnlyNewPress) {
+        arm(button_point_);
+        auto replacement = inputAt(button_point_);
+        replacement.mouse_button_events = {transition(true, button_point_), transition(false, button_point_)};
+        route(replacement);
+        EXPECT_FALSE(owns());
+        EXPECT_FALSE(button_->IsPseudoClassSet("active"));
+        EXPECT_EQ(recorder_.countOf("action:mousedown"), 1) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("action:mouseup"), 1) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("action:click"), 1) << recorder_.joined();
+    }
+
+    TEST_F(RmlViewportInputRoutingTest, CancellationMustRefreshToolbarCaptureBeforeRefusingReplacement) {
+        arm(range_point_);
+        auto drag = inputAt({range_point_.x + 20.0f, range_point_.y});
+        drag.mouse_down[0] = true;
+        route(drag);
+        ASSERT_TRUE(bar_->IsPseudoClassSet("active"));
+        seedToolbarCaptureForCancel();
+        ASSERT_TRUE(toolbarCaptureActive());
+        PointerEventRecorder counts;
+        auto* body = range_->GetParentNode();
+        for (auto id : {Rml::EventId::Mousedown, Rml::EventId::Mouseup, Rml::EventId::Click})
+            body->AddEventListener(id, &counts);
+        gui::guiFocusState().reset();
+        const glm::vec2 bare{350, 270};
+        auto replacement = inputAt(bare);
+        replacement.mouse_button_events = {transition(true, bare), transition(false, bare)};
+        for (auto& event : replacement.mouse_button_events)
+            event.gui_owned = false;
+        route(replacement);
+        // The real toolbar Dragend handler ran during cancellation and released capture.
+        ASSERT_FALSE(toolbarCaptureActive());
+        EXPECT_TRUE(counts.log().empty()) << counts.joined();
+        EXPECT_FALSE(overlay_->wantsInput());
+        EXPECT_FALSE(gui::guiFocusState().want_capture_mouse);
+        EXPECT_FALSE(owns());
+        for (auto id : {Rml::EventId::Mousedown, Rml::EventId::Mouseup, Rml::EventId::Click})
+            body->RemoveEventListener(id, &counts);
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+
+    class DepthWindowReturnTest : public DepthWindowPanelsInteractionTest {
+    protected:
+        void parkPair() {
+            if (!rendering_manager_->isIndependentSplitViewActive()) {
+                enterIndependentDual();
+            }
+            rendering_manager_->setDepthWindowSync(false);
+            rendering_manager_->setDepthWindowForPanel(SplitViewPanelId::Left,
+                                                       makeWindow(1.125f, 77.25f, .4137f, .5279f, .1317f, -.2813f));
+            rendering_manager_->setDepthWindowForPanel(SplitViewPanelId::Right,
+                                                       makeWindow(2.25f, 88.5f, .3719f, .6173f, -.2391f, .1837f));
+            rendering_manager_->setFocusedSplitPanel(SplitViewPanelId::Left);
+            pair_ = rendering_manager_->depthWindowSnapshot().panels;
+            lfs::core::events::cmd::ToggleGTComparison{}.emit();
+            lfs::core::events::cmd::ToggleGTComparison{}.emit();
+            ASSERT_EQ(rendering_manager_->getSplitViewMode(), SplitViewMode::Disabled);
+            op::undoHistory().clear();
+        }
+
+        void startHandle(glm::dvec2& press, const glm::vec4 bounds = {0.f, 0.f, 400.f, 200.f},
+                         const glm::dvec2 grab_offset = {}, const bool center = false) {
+            const auto window = projectionDepthWindow(*rendering_manager_);
+            const auto panel = rendering_manager_->resolveViewerPanel(viewer_->getViewport(),
+                                                                      {bounds.x, bounds.y}, {bounds.z, bounds.w},
+                                                                      glm::vec2{bounds.x + bounds.z * .25f, bounds.y + bounds.w * .5f});
+            ASSERT_TRUE(panel.has_value());
+            const op::DepthWindowPanelMapping mapping{panel->panel, panel->x, panel->y,
+                                                      panel->width, panel->height, panel->render_width, panel->render_height};
+            const auto handles = op::depthWindowHandleGeometry(op::depthWindowScreenRect(mapping,
+                                                                                         window.scale_x, window.scale_y, window.offset_x, window.offset_y));
+            press = glm::dvec2(center ? handles.center : handles.corners[2]) + grab_offset;
+            auto props = depthDragProps(press.x, press.y);
+            props.set("viewport_x", bounds.x);
+            props.set("viewport_y", bounds.y);
+            props.set("viewport_width", bounds.z);
+            props.set("viewport_height", bounds.w);
+            ASSERT_EQ(op::operators().invoke(op::BuiltinOp::DepthWindowDrag, &props).status,
+                      OperatorResult::RUNNING_MODAL);
+            ASSERT_EQ(op::depthWindowOverlayState().hovered_handle,
+                      center ? op::DepthWindowHandle::Center : op::DepthWindowHandle::BottomRight);
+        }
+
+        std::array<DepthWindowState, 2> pair_{};
+    };
+
+    TEST_F(DepthWindowReturnTest, ReturnedHandleRestoresExactStateAndRetainedPair) {
+        for (const auto offset : {glm::dvec2{}, glm::dvec2{.04, .02}}) {
+            ASSERT_NO_FATAL_FAILURE(parkPair());
+            const auto before = rendering_manager_->depthWindowSnapshot();
+            const auto publication = app_store().depth_window_draw_generation.get();
+            glm::dvec2 press;
+            ASSERT_NO_FATAL_FAILURE(startHandle(press, {137.25f, 83.5f, 1234.5f, 703.25f}, offset));
+            ASSERT_EQ(op::operators().dispatchModalEvent(mouse_move(press.x + 17., press.y + 13.)),
+                      OperatorResult::RUNNING_MODAL);
+            ASSERT_NE(rendering_manager_->depthWindowSnapshot().panels, before.panels);
+            if (offset.x == 0.) {
+                ASSERT_EQ(op::operators().dispatchModalEvent(mouse_move(press.x, press.y)),
+                          OperatorResult::RUNNING_MODAL);
+            }
+            EXPECT_EQ(op::operators().dispatchModalEvent(mouse_release(press.x, press.y)),
+                      OperatorResult::FINISHED);
+            const auto after = rendering_manager_->depthWindowSnapshot();
+            EXPECT_EQ(after.panels, before.panels);
+            EXPECT_EQ(after.projection, before.projection);
+            EXPECT_EQ(op::undoHistory().undoCount(), 0u);
+            EXPECT_EQ(app_store().depth_window_draw_generation.get(), publication);
+            EXPECT_FALSE(op::operators().hasModalOperator());
+            EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+            enterIndependentDual();
+            EXPECT_EQ(rendering_manager_->depthWindowSnapshot().panels, pair_);
+        }
+    }
+
+    TEST_F(DepthWindowReturnTest, RadiusUsesOriginalDoubleScreenCoordinates) {
+        for (const double displacement : {.00075, .00125}) {
+            ASSERT_NO_FATAL_FAILURE(parkPair());
+            const auto before = rendering_manager_->depthWindowSnapshot();
+            glm::dvec2 press;
+            ASSERT_NO_FATAL_FAILURE(startHandle(press, {8192.f, 0.f, 400.f, 200.f}, {.00001, 0.}));
+            ASSERT_EQ(op::operators().dispatchModalEvent(mouse_move(press.x + 17., press.y + 13.)),
+                      OperatorResult::RUNNING_MODAL);
+            EXPECT_EQ(op::operators().dispatchModalEvent(mouse_release(press.x + displacement, press.y)),
+                      OperatorResult::FINISHED);
+            const auto after = rendering_manager_->depthWindowSnapshot();
+            if (displacement < .001) {
+                EXPECT_EQ(after.panels, before.panels);
+                EXPECT_EQ(after.projection, before.projection);
+                EXPECT_EQ(op::undoHistory().undoCount(), 0u);
+            } else {
+                EXPECT_NE(after.panels, before.panels);
+                EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+            }
+        }
+    }
+
+    TEST_F(DepthWindowReturnTest, FloatRepresentableReleaseOutsideRadiusRemainsEdit) {
+        ASSERT_NO_FATAL_FAILURE(parkPair());
+        const auto before = rendering_manager_->depthWindowSnapshot();
+        glm::dvec2 press;
+        ASSERT_NO_FATAL_FAILURE(startHandle(press, {0.f, 0.f, 300.75f, 200.f}));
+        float release_x = static_cast<float>(press.x);
+        while (static_cast<double>(release_x) - press.x <= .001) {
+            release_x = std::nextafter(release_x, std::numeric_limits<float>::infinity());
+        }
+        ASSERT_GT(static_cast<double>(release_x) - press.x, .001);
+        ASSERT_EQ(op::operators().dispatchModalEvent(mouse_move(press.x + 17., press.y + 13.)),
+                  OperatorResult::RUNNING_MODAL);
+        EXPECT_EQ(op::operators().dispatchModalEvent(mouse_release(release_x, press.y)), OperatorResult::FINISHED);
+        EXPECT_NE(rendering_manager_->depthWindowSnapshot().panels, before.panels);
+        EXPECT_EQ(op::undoHistory().undoCount(), 1u);
+    }
+
+    TEST_F(DepthWindowReturnTest, SmallCenterMoveKeepsExactUndoRedo) {
+        ASSERT_NO_FATAL_FAILURE(parkPair());
+        const auto before = rendering_manager_->depthWindowSnapshot();
+        glm::dvec2 press;
+        ASSERT_NO_FATAL_FAILURE(startHandle(press, {0.f, 0.f, 400.f, 200.f}, {}, true));
+        ASSERT_EQ(op::operators().dispatchModalEvent(mouse_release(press.x + .01, press.y)),
+                  OperatorResult::FINISHED);
+        const auto after = rendering_manager_->depthWindowSnapshot();
+        EXPECT_NE(after.panels, before.panels);
+        ASSERT_EQ(op::undoHistory().undoCount(), 1u);
+        ASSERT_TRUE(op::undoHistory().undo().success);
+        EXPECT_EQ(rendering_manager_->depthWindowSnapshot().panels, before.panels);
+        ASSERT_TRUE(op::undoHistory().redo().success);
+        EXPECT_EQ(rendering_manager_->depthWindowSnapshot().panels, after.panels);
+    }
+
+    TEST_F(DepthWindowReturnTest, SameEpochSupersessionCancelsAndRestoresOtherOwnedSlot) {
+        enterIndependentDual();
+        rendering_manager_->setDepthWindowSync(true);
+        rendering_manager_->setDepthWindowForPanel(SplitViewPanelId::Left,
+                                                   makeWindow(1.125f, 77.25f, .4137f, .5279f, .1317f, -.2813f));
+        op::undoHistory().clear();
+        const auto before = rendering_manager_->depthWindowSnapshot();
+        const auto publication = app_store().depth_window_draw_generation.get();
+        glm::dvec2 press;
+        ASSERT_NO_FATAL_FAILURE(startHandle(press));
+        ASSERT_EQ(op::operators().dispatchModalEvent(mouse_move(press.x + 17., press.y + 13.)),
+                  OperatorResult::RUNNING_MODAL);
+        // A same-epoch sync-history restore preserves pins while allowing a one-slot setter.
+        auto unsynced = rendering_manager_->depthWindowSnapshot();
+        unsynced.sync = false;
+        ASSERT_TRUE(rendering_manager_->restoreDepthWindowSnapshotIfEpoch(unsynced, before.mode_epoch, true));
+        const auto preview = rendering_manager_->depthWindowSnapshot();
+        auto transition = rendering_manager_->acquireDepthWindowTransitionLock();
+        auto release = std::async(std::launch::async, [&] {
+            return op::operators().dispatchModalEvent(mouse_release(press.x, press.y));
+        });
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool final_preview_seen = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (rendering_manager_->depthWindowSnapshot().panels != preview.panels) {
+                final_preview_seen = true;
+                break;
+            }
+            std::this_thread::yield();
+        }
+        // Avoid fatal assertions until the lock is released and the worker is joined.
+        EXPECT_TRUE(final_preview_seen);
+        const auto newer = makeWindow(3.25f, 91.75f, .731f, .621f, .191f, -.331f);
+        EXPECT_TRUE(rendering_manager_->setDepthWindowForPanel(SplitViewPanelId::Left, newer));
+        transition.unlock();
+        EXPECT_EQ(release.get(), OperatorResult::CANCELLED);
+        const auto after = rendering_manager_->depthWindowSnapshot();
+        EXPECT_EQ(after.panels[0], newer);
+        EXPECT_EQ(after.panels[1], before.panels[1]);
+        EXPECT_EQ(after.projection, newer);
+        EXPECT_EQ(after.mode_epoch, before.mode_epoch);
+        EXPECT_EQ(op::undoHistory().undoCount(), 0u);
+        EXPECT_EQ(app_store().depth_window_draw_generation.get(), publication);
+        EXPECT_FALSE(op::operators().hasModalOperator());
+        EXPECT_FALSE(rendering_manager_->depthWindowDragPreview());
+    }
+
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    class CancelPseudoElement final : public Rml::Element {
+    public:
+        explicit CancelPseudoElement(const Rml::String& tag) : Rml::Element(tag) {}
+        std::function<void()> on_deactivate;
+        void OnPseudoClassChange(const Rml::String& pseudo, const bool activate) override {
+            if (pseudo == "active" && !activate && on_deactivate) {
+                auto callback = std::move(on_deactivate);
+                callback();
+            }
+        }
+    };
+
+    enum class CancelCallbackAction { Move,
+                                      Up,
+                                      FreshDown,
+                                      Remove };
+    class RmlCancelCallbackTest : public RmlPointerReplayTest,
+                                  public ::testing::WithParamInterface<CancelCallbackAction> {
+    protected:
+        void SetUp() override {
+            RmlPointerReplayTest::SetUp();
+            Rml::Factory::RegisterElementInstancer("cancel-probe", &instancer_);
+            auto element = Rml::Factory::InstanceElement(document_, "cancel-probe", "cancel-probe", {});
+            probe_ = static_cast<CancelPseudoElement*>(element.get());
+            probe_->SetId("cancel-probe");
+            for (const auto& [name, value] : {std::pair{"position", "absolute"}, {"left", "200px"}, {"top", "150px"}, {"width", "100px"}, {"height", "100px"}, {"drag", "drag"}})
+                probe_->SetProperty(name, value);
+            document_->AppendChild(std::move(element));
+            context_->Update();
+            ASSERT_EQ(context_->GetElementAtPoint({250.f, 200.f}), probe_);
+            recorder_.listen(probe_);
+            press(250, 200);
+            ASSERT_TRUE(probe_->IsPseudoClassSet("active"));
+            recorder_.clear();
+        }
+        void TearDown() override {
+            if (probe_)
+                probe_->on_deactivate = {};
+            RmlPointerReplayTest::TearDown();
+        }
+        static inline Rml::ElementInstancerGeneric<CancelPseudoElement> instancer_;
+        CancelPseudoElement* probe_ = nullptr;
+    };
+
+    TEST_P(RmlCancelCallbackTest, DetachesOldPressBeforeActiveCallback) {
+        bool invoked = false;
+        probe_->on_deactivate = [&] {
+            invoked = true;
+            switch (GetParam()) {
+            case CancelCallbackAction::Move: context_->ProcessMouseMove(260, 200, 0); break;
+            case CancelCallbackAction::Up: context_->ProcessMouseButtonUp(0, 0); break;
+            case CancelCallbackAction::FreshDown:
+                press(250, 200);
+                break;
+            case CancelCallbackAction::Remove: {
+                auto* old = probe_;
+                probe_ = nullptr;
+                old->GetParentNode()->RemoveChild(old).reset();
+                break;
+            }
+            }
+        };
+        context_->ProcessMouseButtonCancel(0, 0);
+        EXPECT_TRUE(invoked);
+        EXPECT_EQ(recorder_.countOf("cancel-probe:dragstart"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("cancel-probe:drag"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf("cancel-probe:click"), 0) << recorder_.joined();
+        if (GetParam() == CancelCallbackAction::FreshDown) {
+            ASSERT_NE(probe_, nullptr);
+            EXPECT_EQ(context_->GetHoverElement(), probe_);
+            EXPECT_TRUE(probe_->IsPseudoClassSet("hover"));
+            EXPECT_TRUE(probe_->IsPseudoClassSet("active"));
+            context_->ProcessMouseMove(260, 200, 0);
+            context_->ProcessMouseButtonUp(0, 0);
+            EXPECT_EQ(recorder_.countOf("cancel-probe:dragstart"), 1) << recorder_.joined();
+            EXPECT_EQ(recorder_.countOf("cancel-probe:click"), 1) << recorder_.joined();
+        } else {
+            press(50, 50);
+            context_->ProcessMouseButtonUp(0, 0);
+            EXPECT_EQ(recorder_.countOf("alpha:click"), 1) << recorder_.joined();
+        }
+    }
+    INSTANTIATE_TEST_SUITE_P(ReentrantInput, RmlCancelCallbackTest,
+                             ::testing::Values(CancelCallbackAction::Move, CancelCallbackAction::Up,
+                                               CancelCallbackAction::FreshDown, CancelCallbackAction::Remove));
+
+    class CancelTestClock final : public Rml::SystemInterface {
+    public:
+        double GetElapsedTime() override { return now; }
+        double now = 0;
+    };
+    class RmlDisabledCancelTest : public RmlViewportInputRoutingTest,
+                                  public ::testing::WithParamInterface<bool> {
+    protected:
+        static void SetUpTestSuite() {
+            Rml::SetSystemInterface(&clock_);
+            RmlPointerReplayTest::SetUpTestSuite();
+        }
+        static void TearDownTestSuite() {
+            RmlPointerReplayTest::TearDownTestSuite();
+            Rml::SetSystemInterface(nullptr);
+        }
+
+        static inline CancelTestClock clock_;
+    };
+    TEST_P(RmlDisabledCancelTest, DisabledSliderTerminatesAndRemainsUsable) {
+        const bool arrow_press = GetParam();
+        auto* arrow = findElementByTag(range_, "sliderarrowinc");
+        ASSERT_NE(arrow, nullptr);
+        if (arrow_press) {
+            arrow->SetId("cancel-arrow");
+            recorder_.listen(arrow);
+            arrow->SetProperty("width", "20px");
+            arrow->SetProperty("height", "24px");
+            context_->Update();
+        }
+        const auto offset = arrow->GetAbsoluteOffset();
+        const int x = arrow_press ? int(offset.x + arrow->GetOffsetWidth() / 2) : int(range_point_.x + 65);
+        const int y = arrow_press ? int(offset.y + arrow->GetOffsetHeight() / 2) : int(range_point_.y);
+        press(x, y);
+        if (!arrow_press) {
+            context_->ProcessMouseMove(x + 20, y, 0);
+            ASSERT_TRUE(bar_->IsPseudoClassSet("active"));
+        }
+        const auto before = range_->GetValue();
+        ASSERT_NE(before, "50.000000");
+        range_->SetDisabled(true);
+        recorder_.clear();
+        context_->ProcessMouseButtonCancel(0, 0);
+        clock_.now += 1.0;
+        context_->Update();
+        EXPECT_EQ(range_->GetValue(), before);
+        EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
+        EXPECT_EQ(recorder_.countOf("range:change"), 0) << recorder_.joined();
+        const char* target = arrow_press ? "cancel-arrow" : "range-bar";
+        EXPECT_EQ(recorder_.countOf(Rml::String(target) + ":click"), 0) << recorder_.joined();
+        EXPECT_EQ(recorder_.countOf(Rml::String(target) + ":mouseup"), 0) << recorder_.joined();
+        range_->SetDisabled(false);
+        clock_.now += 1.0;
+        context_->Update();
+        EXPECT_EQ(range_->GetValue(), before);
+        if (arrow_press) {
+            press(x, y);
+            context_->ProcessMouseButtonUp(0, 0);
+        } else {
+            const auto at = bar_->GetAbsoluteOffset();
+            const int bx = int(at.x + bar_->GetOffsetWidth() / 2);
+            press(bx, y);
+            context_->ProcessMouseMove(bx - 20, y, 0);
+            context_->ProcessMouseButtonUp(0, 0);
+        }
+        EXPECT_NE(range_->GetValue(), before);
+        EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
+    }
+    INSTANTIATE_TEST_SUITE_P(SliderParts, RmlDisabledCancelTest, ::testing::Bool());
+
+    TEST_F(RmlPointerReplayTest, CancellationBalancesDragTargetWithoutDrop) {
+        dragger_->SetProperty("drag", "drag-drop");
+        context_->Update();
+        PointerEventRecorder listener;
+        for (const auto id : {Rml::EventId::Dragover, Rml::EventId::Dragout, Rml::EventId::Dragdrop})
+            beta_->AddEventListener(id, &listener);
+        const auto start_drag = [&] {
+            press(50, 200);
+            context_->ProcessMouseMove(250, 50, 0);
+        };
+        start_drag();
+        ASSERT_FALSE(listener.log().empty());
+        ASSERT_EQ(listener.log().back(), "beta:dragover");
+        context_->ProcessMouseButtonCancel(0, 0);
+        EXPECT_EQ(listener.log(), (std::vector<Rml::String>{"beta:dragover", "beta:dragout"}));
+        start_drag();
+        ASSERT_FALSE(listener.log().empty());
+        ASSERT_EQ(listener.log().back(), "beta:dragover");
+        context_->ProcessMouseButtonUp(0, 0);
+        EXPECT_EQ(listener.log(), (std::vector<Rml::String>{"beta:dragover", "beta:dragout",
+                                                            "beta:dragover", "beta:dragdrop", "beta:dragout"}));
+        for (const auto id : {Rml::EventId::Dragover, Rml::EventId::Dragout, Rml::EventId::Dragdrop})
+            beta_->RemoveEventListener(id, &listener);
+    }
+} // namespace lfs::vis
+
+namespace lfs::vis {
+    class SliderCancelCallback final : public Rml::EventListener {
+    public:
+        std::function<void(Rml::Event&)> fn;
+        void ProcessEvent(Rml::Event& event) override { fn(event); }
+    };
+    class RmlSharedSliderCancelTest : public RmlViewportInputRoutingTest,
+                                      public ::testing::WithParamInterface<bool> {};
+
+    TEST_P(RmlSharedSliderCancelTest, CancellationPreservesFreshInteractionOnOtherSliderPart) {
+        const bool fresh_track = GetParam();
+        const auto phase = fresh_track ? Rml::EventId::Dragend : Rml::EventId::Mouseout;
+        const int old_x = int(range_point_.x) + (fresh_track ? 0 : 65);
+        const int y = int(range_point_.y);
+        press(old_x, y);
+        context_->ProcessMouseMove(old_x + 20, y, 0);
+        ASSERT_TRUE(bar_->IsPseudoClassSet("active"));
+        SliderCancelCallback callback;
+        int callbacks = 0, releases = 0, clicks = 0, drops = 0, new_x = 0;
+        callback.fn = [&](Rml::Event& event) {
+            releases += event.GetId() == Rml::EventId::Mouseup;
+            clicks += event.GetId() == Rml::EventId::Click;
+            drops += event.GetId() == Rml::EventId::Dragdrop;
+            if (event.GetId() != phase || callbacks)
+                return;
+            ++callbacks;
+            context_->Update();
+            const auto at = bar_->GetAbsoluteOffset();
+            new_x = fresh_track ? 290 : int(at.x + bar_->GetOffsetWidth() / 2);
+            context_->ProcessMouseMove(new_x, y, 0);
+            EXPECT_EQ(context_->GetHoverElement() == bar_, !fresh_track);
+            context_->ProcessMouseButtonDown(0, 0);
+            context_->ProcessMouseMove(new_x - 10, y, 0);
+            EXPECT_TRUE(bar_->IsPseudoClassSet("active"));
+        };
+        for (const auto id : {phase, Rml::EventId::Mouseup, Rml::EventId::Click, Rml::EventId::Dragdrop})
+            range_->AddEventListener(id, &callback);
+        context_->ProcessMouseButtonCancel(0, 0);
+        EXPECT_EQ(callbacks, 1);
+        EXPECT_EQ(releases, 0);
+        EXPECT_EQ(clicks, 0);
+        EXPECT_EQ(drops, 0);
+        EXPECT_TRUE(bar_->IsPseudoClassSet("active"));
+        const auto before = range_->GetValue();
+        context_->ProcessMouseMove(new_x - 30, y, 0);
+        EXPECT_NE(range_->GetValue(), before);
+        for (const auto id : {phase, Rml::EventId::Mouseup, Rml::EventId::Click, Rml::EventId::Dragdrop})
+            range_->RemoveEventListener(id, &callback);
+        context_->ProcessMouseButtonUp(0, 0);
+        EXPECT_FALSE(bar_->IsPseudoClassSet("active"));
+    }
+    INSTANTIATE_TEST_SUITE_P(CleanupCallbacks, RmlSharedSliderCancelTest, ::testing::Bool());
 
 } // namespace lfs::vis

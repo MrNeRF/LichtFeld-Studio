@@ -4133,34 +4133,36 @@ def test_a_cycle_hidden_by_invisible_controls_reconciles_on_resume(
     assert panel._ref_scale_x["shared"] == pytest.approx(0.20)
 
 
-def test_a_no_op_mode_change_keeps_a_legitimate_typed_buffer(
-    selection_controls_module,
+@pytest.mark.parametrize("generation", [0, None, -1], ids=["unchanged", "unavailable", "reset"])
+def test_a_no_op_mode_change_retargets_only_for_lineage_invalidation(
+    selection_controls_module, generation,
 ):
-    """Without a retained pair, Disabled/PLYComparison does not alter depth state.
-
-    No collapse, seed or epoch bump occurs in this setup. The field addresses the same
-    window, so preserve its legitimate edit buffer.
-    """
+    """A mode no-op preserves drafts unless lineage invalidates their target."""
     module, state = selection_controls_module
     panel, model, doc = _mounted_panel(module, state)
+    panel._ref_scale_x["shared"] = 0.70
+    panel._ref_scale_y["shared"] = 0.70
+    expected_near = state.depth_near if generation == -1 else 3.75
 
     doc.near.emit("focus")
     model.bound_binds["selection_depth_near_str"][1]("3.75")
 
     state.split_view_mode = "ply_comparison"
+    state.depth_window_collapse_generation = generation
+    writes_before = len(state.window_calls)
     panel.update(doc)
 
     assert panel._split_mode == "ply_comparison"
-    assert panel._depth_text_bufs["selection_depth_near_str"] == "3.75", (
-        "a no-op mode change replaced a legitimate buffer with canonical text"
-    )
+    assert panel._depth_text_bufs["selection_depth_near_str"] == str(expected_near)
+    assert model.bound_binds["selection_depth_scale_value"][0]() == "50"
+    assert len(state.window_calls) == writes_before
 
     writes_before = len(state.window_calls)
     doc.near.emit("change", _InputEventStub(linebreak=True))
 
     assert len(state.window_calls) == writes_before + 1
-    assert state.window_calls[-1][1] == pytest.approx(3.75)
-    assert state.depth_near == pytest.approx(3.75)
+    assert state.window_calls[-1][1] == pytest.approx(expected_near)
+    assert state.depth_near == pytest.approx(expected_near)
 
 
 def test_the_sync_toggle_pre_reads_the_focused_canonical_and_stays_idempotent(

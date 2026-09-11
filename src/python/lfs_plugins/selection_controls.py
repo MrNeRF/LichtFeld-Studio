@@ -348,11 +348,8 @@ class SelectionControlsController:
         self._focused_panel = _PANEL_LEFT
         self._split_mode = "none"
         self._depth_sync = False
-        # Cache the atomic lineage triple. Delta detects missed invalidations;
-        # kind selects recovery. Older bindings use source-only behavior.
-        self._collapse_source = None
+        # Retain the consumed generation to detect invalidations between polls.
         self._collapse_generation = None
-        self._collapse_kind = None
         # An exhausted refresh leaves cached state untouched and forbids writes.
         self._context_read_exhausted = False
         self._offset_x = _DEFAULT_WINDOW_OFFSET
@@ -651,18 +648,23 @@ class SelectionControlsController:
         self._split_mode = split_mode
         self._focused_panel = focused_panel
         self._depth_sync = depth_sync
-        (
-            self._collapse_source,
-            self._collapse_generation,
-            self._collapse_kind,
-        ) = record
+        source, self._collapse_generation, kind = record
+        delta = (
+            None
+            if previous_generation is None or self._collapse_generation is None
+            else self._collapse_generation - previous_generation
+        )
         self._reconcile_panel_references(
-            previous_panel, previous_sync, previous_mode, previous_generation
+            previous_panel, previous_sync, previous_mode, previous_generation,
+            source=source, kind=kind, delta=delta,
         )
         # Mode/lineage can change the edited window without changing observed focus:
         # a coalesced focus move and mode leave may reset focus to its cached value.
         # Retarget even same-panel edits so stale text cannot reach the surviving window.
-        mode_boundary = self._mode_boundary_edge(previous_mode, previous_generation)
+        mode_boundary = (
+            _split_mode_touches_depth_window(previous_mode, self._split_mode)
+            or delta not in (None, 0)
+        )
         if self._focused_panel != previous_panel or mode_boundary:
             # Read current window values before producing the retargeted canonical text.
             self._refresh_depth_state()
@@ -670,24 +672,6 @@ class SelectionControlsController:
             # retargeting regardless of the edit's recorded panel.
             self._cancel_foreign_depth_text_edits(force=mode_boundary)
         return previous_panel, previous_sync, previous_mode
-
-    def _mode_boundary_edge(self, previous_mode, previous_generation):
-        """Detect a native mode boundary or lineage advance affecting a live edit.
-
-        No-op mode changes preserve typed buffers; hidden writes can still stamp.
-        """
-        if _split_mode_touches_depth_window(previous_mode, self._split_mode):
-            return True
-        return self._lineage_delta(previous_generation) not in (None, 0)
-
-    def _lineage_delta(self, previous_generation):
-        """Return the number of invalidating writes since the previous read.
-
-        None means an older binding; callers retain source-only recovery.
-        """
-        if previous_generation is None or self._collapse_generation is None:
-            return None
-        return self._collapse_generation - previous_generation
 
     def _refresh_state(self):
         self._active_mode = self._get_active_mode()
@@ -885,7 +869,8 @@ class SelectionControlsController:
         self._seed_all_references(scale_x, scale_y)
 
     def _reconcile_panel_references(
-        self, previous_panel, previous_sync, previous_mode, previous_generation=None
+        self, previous_panel, previous_sync, previous_mode, previous_generation=None,
+        *, source, kind, delta,
     ):
         """Reconcile endpoint changes and every native reference-lineage advance.
 
@@ -908,7 +893,6 @@ class SelectionControlsController:
         )
         # Check every lineage advance: hidden leave/enter, sync cycles or restores
         # can invalidate references without changing the observed endpoint.
-        delta = self._lineage_delta(previous_generation)
         if delta not in (None, 0) or previous_sync != self._depth_sync:
             self._retained_reference_generation = None
             self._gt_baseline_pending = False
@@ -953,15 +937,15 @@ class SelectionControlsController:
         explained = (
             observed_leave
             and delta == 1
-            and self._collapse_kind in (None, _LINEAGE_LEAVE_COLLAPSE)
+            and kind in (None, _LINEAGE_LEAVE_COLLAPSE)
         )
         if delta is not None and delta > 0 and not explained:
-            if delta == 1 and self._collapse_kind == _LINEAGE_SYNC_COPY:
+            if delta == 1 and kind == _LINEAGE_SYNC_COPY:
                 # One sync copy preserves the recorded source's reference: that window
                 # now occupies both slots and shared.
                 source = (
-                    self._collapse_source
-                    if self._collapse_source in (_PANEL_LEFT, _PANEL_RIGHT)
+                    source
+                    if source in (_PANEL_LEFT, _PANEL_RIGHT)
                     else self._focused_panel
                 )
                 self._seed_all_references(
@@ -994,7 +978,7 @@ class SelectionControlsController:
             if observed_leave:
                 # Focus may reset on leave, and cached focus can miss an earlier change.
                 # The native collapse source is authoritative; cache is the older-binding fallback.
-                candidate = self._collapse_source or previous_panel
+                candidate = source or previous_panel
             else:
                 # Sync copies the focus at set time. In this fallback, use refreshed focus
                 # rather than the previous poll's value when focus and sync change together.

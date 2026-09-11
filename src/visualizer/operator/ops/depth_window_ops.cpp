@@ -338,6 +338,7 @@ namespace lfs::vis::op {
             glm::vec2 press_render_{0.0f};
             glm::vec2 press_threshold_render_{0.0f};
             glm::vec2 anchor_render_{0.0f};
+            glm::dvec2 press_screen_{0.0};
             glm::vec2 last_screen_{0.0f};
             float aspect_px_ = 1.0f;
             int drag_button_ = static_cast<int>(input::AppMouseButton::LEFT);
@@ -362,8 +363,8 @@ namespace lfs::vis::op {
             // reject writes/restores and ignore per-slot release; end still decrements
             // the drag count.
             std::uint64_t drag_token_ = 0;
-            // A refused epoch write means the transition owns the state; exit without
-            // restoring the expired drag.
+            // An epoch or ownership refusal means a newer writer owns the state;
+            // exit without further restoration by the expired or superseded drag.
             bool epoch_lost_ = false;
         };
 
@@ -395,10 +396,11 @@ namespace lfs::vis::op {
                 return OperatorResult::CANCELLED;
             }
 
-            last_screen_ = {
-                static_cast<float>(props.get_or<double>("x", 0.0)),
-                static_cast<float>(props.get_or<double>("y", 0.0)),
+            press_screen_ = {
+                props.get_or<double>("x", 0.0),
+                props.get_or<double>("y", 0.0),
             };
+            last_screen_ = glm::vec2(press_screen_);
             viewport_bounds_ = {
                 props.get_or<float>("viewport_x", 0.0f),
                 props.get_or<float>("viewport_y", 0.0f),
@@ -413,10 +415,8 @@ namespace lfs::vis::op {
             rendering_manager_->setFocusedSplitPanel(panel_.panel);
             const auto start_snapshot = rendering_manager_->depthWindowSnapshot();
             start_epoch_ = start_snapshot.mode_epoch;
-            undo_baseline_ = captureDepthWindowSettings(start_snapshot, panel_.panel);
             const size_t start_own_index = splitViewPanelIndex(panel_.panel);
             restore_window_ = start_snapshot.panels[start_own_index];
-            restore_other_window_ = start_snapshot.panels[start_own_index == 0 ? 1u : 0u];
             applied_window_ = restore_window_;
 
             drag_button_ = props.get_or<int>(
@@ -846,6 +846,15 @@ namespace lfs::vis::op {
                 // releasing the latch so a sync toggle cannot reorder history.
                 auto transition_lock = rendering_manager_->acquireDepthWindowTransitionLock();
 
+                // Compare original screen coordinates; returning a handle restores its
+                // exact before-state.
+                constexpr double kHandleReturnRadiusPx = 0.001;
+                if (drag_kind_ != DragKind::Draw &&
+                    glm::length(mouse_button->position - press_screen_) <= kHandleReturnRadiusPx) {
+                    cancel(ctx);
+                    return epoch_lost_ ? OperatorResult::CANCELLED : OperatorResult::FINISHED;
+                }
+
                 DepthWindowModeSnapshot after_snapshot{};
                 if (!rendering_manager_->commitDepthWindowForPanelIfEpoch(
                         panel_.panel, applied_window_, start_epoch_, drag_token_,
@@ -854,20 +863,14 @@ namespace lfs::vis::op {
                     cancel(ctx);
                     return OperatorResult::CANCELLED;
                 }
-                // Fail closed if a future transition bypasses the mutex.
-                const bool epoch_intact =
-                    rendering_manager_->depthWindowModeEpoch() == start_epoch_;
-                if (!epoch_intact) {
-                    epoch_lost_ = true;
-                }
                 const auto after = captureDepthWindowSettings(after_snapshot, panel_.panel);
-                if (epoch_intact && after != undo_baseline_) {
+                if (after != undo_baseline_) {
                     undoHistory().push(std::make_unique<DepthWindowSettingsUndoEntry>(
                         *rendering_manager_, undo_baseline_, after,
                         drag_kind_ == DragKind::Draw));
                 }
                 finishLatch();
-                if (epoch_intact && drag_kind_ == DragKind::Draw) {
+                if (drag_kind_ == DragKind::Draw) {
                     publish_depth_window_draw_commit(panel_.panel);
                 }
                 transition_lock.unlock();

@@ -39,9 +39,8 @@ namespace lfs::vis::gui::rml_input {
     //   when `allow_new_presses` is true.
     // `owns_element`: host hit predicate; receives nullptr outside the rectangle.
     // `allow_new_presses`: false when the underlay is blocked. Still process every
-    //   event: refused DOWN clears that button's ownership; owned UP uses its real point.
-    // Returns whether any event was delivered. Mark pointer-button repaint once;
-    // its single-bit reason makes repeated marks equivalent.
+    //   event: replacement primary DOWN cancels the old press; owned UP uses its real point.
+    // Returns whether a DOWN/UP was delivered; cancellation alone returns false.
     template <typename OwnsElementFn>
     [[nodiscard]] inline bool replayButtonEvents(Rml::Context& context,
                                                  bool (&down_delivered)[3],
@@ -57,6 +56,11 @@ namespace lfs::vis::gui::rml_input {
             if (event.button >= 3)
                 continue;
             const auto slot = static_cast<std::size_t>(event.button);
+            if (event.down && down_delivered[slot]) {
+                down_delivered[slot] = false;
+                context.ProcessMouseButtonCancel(event.button, mods);
+            }
+
             const float event_x = event.x - viewport_pos.x;
             const float event_y = event.y - viewport_pos.y;
             const bool event_inside = event_x >= 0.0f && event_x < viewport_size.x &&

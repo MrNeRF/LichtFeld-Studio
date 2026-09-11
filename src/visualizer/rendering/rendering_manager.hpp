@@ -346,14 +346,10 @@ namespace lfs::vis {
                                              const DepthWindowState& state,
                                              uint64_t expected_epoch,
                                              uint64_t drag_token);
-        // Restore one slot without sync fan-out; update the projection when
-        // focused or outside independent view.
-        bool restoreDepthWindowForPanelIfEpoch(SplitViewPanelId panel,
-                                               const DepthWindowState& state,
-                                               uint64_t expected_epoch);
         // Restore each still-owned slot independently under one lock. States
         // are the pre-drag values; other_state exists only for a fan-out drag.
-        // Returns false if the epoch expired.
+        // Returns true only if the epoch matches and the addressed slot is still owned.
+        // A superseded addressed slot does not prevent restoring the other owned slot.
         bool restorePinnedDepthWindowSlots(SplitViewPanelId panel,
                                            const DepthWindowState& own_state,
                                            const std::optional<DepthWindowState>& other_state,
@@ -916,6 +912,7 @@ namespace lfs::vis {
         [[nodiscard]] static int clampGridPlane(int plane);
         void syncGridPlanesLocked(int plane);
         [[nodiscard]] op::DepthWindowModeSnapshot depthWindowSnapshotLocked() const;
+        void applyDepthWindowProjectionLocked(const DepthWindowState& state);
         void restoreDepthWindowStateLocked(const std::array<DepthWindowState, 2>& panels,
                                            bool sync,
                                            const DepthWindowState& projection);
