@@ -475,6 +475,7 @@ set(TEST_FILES
     test_fastgs_kernels.cpp
     test_camera_pose_photometric.cpp
     test_camera_pose_controller.cpp
+    test_camera_pose_session.cpp
     fastgs_visibility_readback_cuda.cu
     test_fastgs_fuzz.cpp
     test_fastgs_tile_culling_boundary.cpp

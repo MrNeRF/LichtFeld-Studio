@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 
 from check_camera_pose_gate import GRADIENT, RECOVERY, SUITE, TESTS, inspect_gate
 from check_camera_pose_gate import CONTROLLER_RECOVERY, CONTROLLER_SUITE, CONTROLLER_TESTS, inspect_controller_gate
+from check_camera_pose_gate import SESSION_SUITE, SESSION_TESTS, inspect_session_gate
 
 
 def valid_report():
@@ -41,6 +42,44 @@ def valid_controller_report():
     for name in CONTROLLER_TESTS:
         ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
     return root
+
+
+class CameraPoseSessionGateReportTests(unittest.TestCase):
+    def report(self):
+        root = valid_controller_report()
+        suite = ET.SubElement(root, "testsuite", name=SESSION_SUITE)
+        for name in sorted(SESSION_TESTS):
+            ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        return root
+
+    def test_accepts_all_25_tests(self):
+        self.assertEqual(inspect_session_gate(self.report())["tests"], 25)
+
+    def test_rejects_missing_session_and_missing_previous_gate(self):
+        with self.assertRaises(ValueError):
+            inspect_session_gate(valid_controller_report())
+        root = self.report()
+        root.remove(root.find(f"testsuite[@name='{CONTROLLER_SUITE}']"))
+        with self.assertRaises(ValueError):
+            inspect_session_gate(root)
+
+    def test_rejects_invalid_session_evidence(self):
+        for mutation in ("missing", "duplicate", "unknown", "failure", "error", "skipped", "notrun"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{SESSION_SUITE}']")
+            case = suite.find("testcase")
+            if mutation == "missing":
+                suite.remove(case)
+            elif mutation == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif mutation == "unknown":
+                case.set("name", "Unknown")
+            elif mutation == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                inspect_session_gate(root)
 
 
 class CameraPoseControllerGateReportTests(unittest.TestCase):

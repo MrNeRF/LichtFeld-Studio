@@ -195,6 +195,48 @@ or rolling-shutter correction from a rigid six-DoF pose optimizer.
 
 ## Validation status
 
+### Multi-camera session: native contract validation passed
+
+`PoseRefinementSession` now owns UID-keyed controllers with immutable source
+poses, per-camera visit cadence, warmup/final freeze, pause/reset and bounded
+bursts. Cancellation or evaluator exceptions discard the whole burst's pose,
+history and cadence changes. The observed training iteration is not rolled back.
+Candidate counts cover completed/cancelled visits, not visits that throw.
+The caller must keep the model and image objective fixed throughout each burst
+and advance `model_revision` whenever either changes. Membership is immutable;
+a different dataset/split requires a new session and owner-assigned generation.
+
+Two full reference poses are fixed, excluding evaluation cameras. Automatic
+selection uses the lowest training UID and its farthest source-camera center;
+explicit references are supported. This is conservative and overconstrains the
+minimal similarity gauge: it can retain anchor errors and is not a quality
+ranking. Degenerate baselines, fewer than three training cameras and duplicate
+UIDs are rejected. The caller supplies an immutable scene scale.
+
+Immutable UID-sorted snapshots are published at most every 250 ms during visits,
+with forced publication for pause/reset. Viewport and Scene Graph are intended
+to consume these same snapshots: source/current poses, measured displacement,
+accepted/rejected counts and descriptive states. `updated` is not `converged`;
+`rejected` does not establish bad calibration. Extra frustums/badges must remain
+distinct from reconstruction-loss coloring. Publication alone does not move
+camera geometry: Trainer, persistence, picking/focus and both UI consumers are
+not wired yet. The cadence/default costs also need runtime measurement.
+
+The user's 2026-09-12 18:13:49 XML passed the strict validator: all 25 A+B+session
+tests completed without skips. The agent verified the report, not a native rerun.
+After the user's next compilation, one combined run checks all 25 A+B+session
+tests; reports belong outside the repository:
+
+```powershell
+lfsdev
+.\build\tests\lichtfeld_tests.exe --gtest_filter="CameraPosePhotometricTest.*:CameraPoseControllerTest.*:CameraPoseSessionTest.*" "--gtest_output=xml:$env:TEMP/camera-pose-session.xml"
+lfspython tools/check_camera_pose_gate.py "$env:TEMP/camera-pose-session.xml" --session
+```
+
+Expected: 25 passed, no skips, validator `passed: true`. This is not yet the
+real-dataset quality experiment or a GUI validation. A stale binary without
+session tests must fail the validator rather than produce a false green result.
+
 The user's 2026-09-12 native run executed all eight tests: seven passed, and
 `AnisotropicSH3MatchesSixAxisFiniteDifferences` failed with 12.4438% relative
 gradient error against the 7% limit. Fixed-geometry recovery passed all three

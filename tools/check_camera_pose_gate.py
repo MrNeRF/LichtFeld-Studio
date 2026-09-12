@@ -155,13 +155,44 @@ def inspect_gate(root: ET.Element) -> dict:
     }
 
 
+SESSION_SUITE = "CameraPoseSessionTest"
+SESSION_TESTS = {
+    "DeterministicAnchorsExcludeEvaluationAndSortByUid",
+    "RejectsAmbiguousMembershipAndDegenerateGauge",
+    "ExplicitAnchorsAndIndependentCameraCadence",
+    "WarmupPauseAndFinalFreezeDoNotEvaluate",
+    "PublishedSnapshotsRemainImmutableAcrossUpdateAndReset",
+    "CancellationRollsBackWholeBurstAndPreservesRetryCadence",
+    "EvaluatorExceptionRollsBackPoseHistoryAndCadence",
+    "RejectionAndZeroGradientDoNotClaimConvergence",
+}
+
+
+def inspect_session_gate(root: ET.Element) -> dict:
+    suites = [node for node in root.iter("testsuite") if node.get("name") == SESSION_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Expected exactly one camera pose session suite")
+    cases = suites[0].findall("testcase")
+    names = [case.get("name") for case in cases]
+    if len(names) != len(set(names)) or set(names) != SESSION_TESTS:
+        raise ValueError("Wrong camera pose session test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Session test not successfully executed: {case.get('name')}")
+    result = inspect_controller_gate(root)
+    result.update(gate="multi_camera_session_contracts", tests=result["tests"] + len(cases))
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="gtest XML generated from the current camera-pose sources")
     parser.add_argument("--controller", action="store_true", help="Require checkpoint B controller tests and image-driven recovery as well")
+    parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (25 tests)")
     args = parser.parse_args()
     try:
-        inspect = inspect_controller_gate if args.controller else inspect_gate
+        inspect = inspect_session_gate if args.session else inspect_controller_gate if args.controller else inspect_gate
         result = inspect(ET.parse(args.report).getroot())
     except (OSError, ET.ParseError, ValueError) as error:
         print(f"CAMERA POSE GATE FAILED: {error}", file=sys.stderr)
