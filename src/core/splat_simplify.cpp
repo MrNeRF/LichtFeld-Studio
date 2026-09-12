@@ -269,20 +269,6 @@ namespace lfs::core {
             return out;
         }
 
-        [[nodiscard]] float strict_add(const float a, const float b) {
-            volatile float out = a + b;
-            return out;
-        }
-
-        [[nodiscard]] float strict_sub(const float a, const float b) {
-            volatile float out = a - b;
-            return out;
-        }
-
-        [[nodiscard]] float strict_prod3(const float a, const float b, const float c) {
-            return strict_mul(strict_mul(a, b), c);
-        }
-
         [[nodiscard]] float fma_dot3(const float a0,
                                      const float b0,
                                      const float a1,

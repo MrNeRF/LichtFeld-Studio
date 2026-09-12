@@ -574,7 +574,7 @@ namespace lfs::io {
                 return false;
             }
 
-            struct stat st {};
+            struct stat st{};
             if (fstat(fd, &st) < 0) {
                 return false;
             }
@@ -595,10 +595,6 @@ namespace lfs::io {
             return true;
         }
 #endif
-
-        [[nodiscard]] std::span<const char> as_span() const {
-            return std::span{static_cast<const char*>(data), size};
-        }
     };
 
     [[nodiscard]] std::expected<std::pair<size_t, FastPropertyLayout>, std::string>
@@ -1521,19 +1517,6 @@ namespace lfs::io {
         bool has_pending_cuda_work_ = false;
         bool has_pending_vulkan_work_ = false;
     };
-
-    // Single property extraction to host memory
-    void extract_property_to_host(const char* vertex_data, const FastPropertyLayout& layout,
-                                  const std::span<const size_t> rows,
-                                  size_t property_offset, float* output) {
-        if (property_offset == SIZE_MAX)
-            return;
-
-        const size_t stride = layout.vertex_stride;
-        parallel_for_ply_rows(layout.vertex_count, rows, ply_constants::BLOCK_SIZE_LARGE, [&](const size_t output_row, const size_t source_row) {
-            output[output_row] = read_unaligned_float32(vertex_data + source_row * stride + property_offset);
-        });
-    }
 
     void extract_opacity_to_host(const char* vertex_data,
                                  const FastPropertyLayout& layout,

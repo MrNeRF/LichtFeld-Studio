@@ -151,11 +151,6 @@ namespace lfs::training {
 
     MCMC::MCMC(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
 
-    lfs::core::Tensor MCMC::multinomial_sample(const lfs::core::Tensor& weights, int n, bool replacement) {
-        // Use the tensor library's built-in multinomial sampling
-        return lfs::core::Tensor::multinomial(weights, n, replacement);
-    }
-
     void MCMC::update_optimizer_for_relocate(
         const lfs::core::Tensor& sampled_indices,
         const lfs::core::Tensor& dead_indices,

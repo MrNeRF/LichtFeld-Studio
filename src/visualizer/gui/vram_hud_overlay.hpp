@@ -47,8 +47,6 @@ namespace lfs::vis::gui {
         }
         [[nodiscard]] bool isCapturingPointer() const noexcept { return pointer_captured_; }
 
-        [[nodiscard]] bool isDueForProcessSample(std::chrono::milliseconds interval);
-
     private:
         struct ClickListener final : Rml::EventListener {
             VramHudOverlay* owner = nullptr;
@@ -319,10 +317,8 @@ namespace lfs::vis::gui {
         bool dragging_header_ = false;
         bool dragging_resize_ = false;
         bool pointer_captured_ = false;
-        bool geometry_dirty_ = false;
         bool persistence_dirty_ = false;
 
-        std::chrono::steady_clock::time_point last_process_sample_{};
         std::chrono::steady_clock::time_point last_sparkline_sample_{};
 
         static constexpr std::size_t kSparklineSamples = 60;

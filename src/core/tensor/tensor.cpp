@@ -122,11 +122,6 @@ namespace lfs::core {
             return dtype_size(dtype) != 0;
         }
 
-        [[nodiscard]] std::string_view tensor_debug_name(const Tensor& tensor) noexcept {
-            return tensor.name().empty() ? std::string_view{"<unnamed>"}
-                                         : std::string_view{tensor.name()};
-        }
-
         struct NamedTensorContractOperand {
             std::string_view role;
             const Tensor* tensor;
@@ -647,25 +642,6 @@ namespace lfs::core {
         LFS_ASSERT_MSG(!data_ || is_view_ || data_owner_,
                        "Tensor::materialize_deferred_slow produced unowned storage");
 #endif
-    }
-
-    // ============= Helper Functions =============
-
-    // Check if strides represent contiguous memory layout (row-major)
-    static bool check_contiguous(const TensorShape& shape, std::span<const size_t> strides) {
-        if (strides.empty())
-            return true;
-        if (strides.size() != shape.rank())
-            return false;
-
-        // Check if strides match row-major contiguous layout
-        size_t expected_stride = 1;
-        for (int i = static_cast<int>(shape.rank()) - 1; i >= 0; --i) {
-            if (strides[static_cast<size_t>(i)] != expected_stride)
-                return false;
-            expected_stride *= shape[static_cast<size_t>(i)];
-        }
-        return true;
     }
 
     // ============= Constructors & Destructor =============

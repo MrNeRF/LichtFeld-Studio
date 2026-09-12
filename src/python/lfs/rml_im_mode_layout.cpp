@@ -28,7 +28,6 @@
 #include <functional>
 #include <limits>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -72,14 +71,6 @@ namespace {
 
     Rml::String step_to_string(float step) {
         return Rml::String(std::format("{:.6g}", step));
-    }
-
-    Rml::String float_attribute_string(const float value) {
-        return Rml::String(std::to_string(value));
-    }
-
-    Rml::String int_attribute_string(const int value) {
-        return Rml::String(std::to_string(value));
     }
 
     void update_values_deque(nb::object values, std::deque<float>& out) {
@@ -148,71 +139,6 @@ namespace {
             element->GetAttribute<Rml::String>(name, "") == value)
             return false;
         element->SetAttribute(name, value);
-        return true;
-    }
-
-    template <typename T>
-    bool numeric_attribute_equals(const Rml::Element* element, const char* name,
-                                  const T value) {
-        assert(element);
-        if (!element->HasAttribute(name))
-            return false;
-
-        if constexpr (std::is_integral_v<T>) {
-            return element->GetAttribute<int>(name, 0) == value;
-        } else {
-            const float current = element->GetAttribute<float>(
-                name, std::numeric_limits<float>::quiet_NaN());
-            const float expected = static_cast<float>(value);
-            if (current == expected)
-                return true;
-            if (!std::isfinite(current) || !std::isfinite(expected))
-                return false;
-            const float scale =
-                std::max({1.0f, std::fabs(current), std::fabs(expected)});
-            return std::fabs(current - expected) <=
-                   std::numeric_limits<float>::epsilon() * 8.0f * scale;
-        }
-    }
-
-    template <typename T, typename Formatter>
-    bool set_numeric_attribute_if_changed(Rml::Element* element, const char* name,
-                                          const T value, Formatter&& formatter) {
-        if (numeric_attribute_equals(element, name, value))
-            return false;
-        element->SetAttribute(
-            name, std::invoke(std::forward<Formatter>(formatter), value));
-        return true;
-    }
-
-    template <typename T, typename Formatter>
-    bool set_slot_numeric_attribute_if_changed(
-        lfs::python::Slot& slot, const size_t index, Rml::Element* element,
-        const char* name, const T value, Formatter&& formatter) {
-        assert(index < slot.numeric_content.size());
-        const double numeric_value = static_cast<double>(value);
-        if (slot.numeric_content[index] &&
-            *slot.numeric_content[index] == numeric_value)
-            return false;
-        const bool changed = set_numeric_attribute_if_changed(
-            element, name, value, std::forward<Formatter>(formatter));
-        slot.numeric_content[index] = numeric_value;
-        return changed;
-    }
-
-    template <typename T, typename Formatter>
-    bool set_slot_numeric_property_if_changed(
-        lfs::python::Slot& slot, const size_t index, Rml::Element* element,
-        const char* name, const T value, Formatter&& formatter) {
-        assert(element);
-        assert(index < slot.numeric_content.size());
-        const double numeric_value = static_cast<double>(value);
-        if (slot.numeric_content[index] &&
-            *slot.numeric_content[index] == numeric_value)
-            return false;
-        element->SetProperty(
-            name, std::invoke(std::forward<Formatter>(formatter), value));
-        slot.numeric_content[index] = numeric_value;
         return true;
     }
 

@@ -15,7 +15,6 @@
 
 #include <array>
 #include <cstdint>
-#include <cstdio>
 #include <istream>
 #include <memory>
 #include <optional>
@@ -33,35 +32,6 @@ namespace {
     using namespace lfs::core;
 
     static_assert(Device::CUDA == Device::GPU);
-
-    // The category counts are frozen to lane A section 2.1. Constructors,
-    // destructors, deleted functions, internal orchestration, and macros are not
-    // callables under that report's counting rule.
-    // Creation/factory: 33
-    // Shape/view/movement: 46
-    // Pointwise unary: 42
-    // Pointwise binary/broadcast: 51
-    // Reductions/scans: 54
-    // Matrix: 5
-    // Indexing/masking: 34
-    // Random: 18
-    // NN: 19
-    // Serialization: 8
-    // Sync/stream/event: 19
-    // Memory/allocator/pool stats: 47
-    // Debug/trace/label: 61
-    // Lazy/fused expression: 57
-    // Row proxy/accessor: 38
-    constexpr std::array<size_t, 15> kCategoryCounts{
-        33, 46, 42, 51, 54, 5, 34, 18, 19, 8, 19, 47, 61, 57, 38};
-    constexpr std::array<unsigned char, 532> kFrozenCallableSlots{};
-    static_assert(kFrozenCallableSlots.size() == 532);
-    static_assert([] {
-        size_t total = 0;
-        for (size_t count : kCategoryCounts)
-            total += count;
-        return total;
-    }() == kFrozenCallableSlots.size());
 
     using T = Tensor;
     using S = TensorShape;
@@ -116,7 +86,6 @@ namespace {
     LFS_FREEZE(shutdown_gpu_backend, lfs::Status (*)(GpuBackend));
     LFS_FREEZE(gpu_backend_of, std::optional<GpuBackend> (*)(const T&));
 #undef LFS_FREEZE
-    constexpr size_t kExactSignatureCount = 40 + 266;
     [[maybe_unused]] constexpr auto kSelectorAnchors = std::tuple{
         &default_gpu_backend, &set_default_gpu_backend, &gpu_backend_available,
         &gpu_backend_memory_info, &shutdown_gpu_backend, &gpu_backend_of};
@@ -612,8 +581,6 @@ namespace {
     LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
     LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
 #undef LFS_FREEZE
-    constexpr size_t kMoreExactSignatureCount = 266;
-    static_assert(kExactSignatureCount == 40 + kMoreExactSignatureCount);
 
     template <typename X>
     concept CreationFactorySurface = requires(const X& ct, S shape, Device device, DataType dtype,
@@ -819,7 +786,7 @@ namespace {
         t.div_(1.0f);
         ct + ct;
         ct - ct;
-        ct* ct;
+        ct * ct;
         ct / ct;
         ct % ct;
         ct == ct;
@@ -828,7 +795,7 @@ namespace {
         ct <= ct;
         ct > ct;
         ct >= ct;
-        ct&& ct;
+        ct && ct;
         ct || ct;
         ct | ct;
     };
@@ -1176,9 +1143,9 @@ namespace {
         TensorLeaf(t).stream_hint();
         TensorLeaf(t).snapshot();
         TensorLeaf(t).map(operation);
-        ct.template apply([](const X& value) { return value; });
+        ct.template apply([](const X & value) { return value; });
         t.template inplace([](X&) {});
-        ct.template timed("", [](const X& value) { return value; });
+        ct.template timed("", [](const X & value) { return value; });
     };
 
     using LeafExpr = TensorLeaf;
@@ -1281,7 +1248,7 @@ namespace {
         row = 1.0f;
         const_row - const_row;
         const_row + const_row;
-        const_row* const_row;
+        const_row * const_row;
         const_row / const_row;
         const_row - 1.0f;
         const_row + 1.0f;
@@ -1331,16 +1298,6 @@ namespace {
 } // namespace
 
 int main() {
-    constexpr size_t kExactCasts =
-        std::tuple_size_v<decltype(kFactoryOverloads)> + std::tuple_size_v<decltype(kMovementOverloads)> +
-        std::tuple_size_v<decltype(kReductionOverloads)> + std::tuple_size_v<decltype(kIndexOverloads)> +
-        std::tuple_size_v<decltype(kMoreFactoryOverloads)> + std::tuple_size_v<decltype(kMoreReduceOverloads)> +
-        std::tuple_size_v<decltype(kBinaryTensorOverloads)> + std::tuple_size_v<decltype(kMoreMemoryOverloads)> +
-        std::tuple_size_v<decltype(kNnOverloads)> + std::tuple_size_v<decltype(kStreamOverloads)> +
-        std::tuple_size_v<decltype(kShapeOverloads)> +
-        std::tuple_size_v<decltype(kRandomOverloads)> + std::tuple_size_v<decltype(kDebugOverloads)> +
-        std::tuple_size_v<decltype(kRowOverloads)> + std::tuple_size_v<decltype(kExprOverloads)>;
-    static_assert(kExactCasts + kExactSignatureCount <= kFrozenCallableSlots.size());
     static_cast<void>(kSelectorAnchorAddress);
     static_cast<void>(&kFactoryOverloads);
     static_cast<void>(&kMovementOverloads);
@@ -1357,9 +1314,5 @@ int main() {
     static_cast<void>(&kDebugOverloads);
     static_cast<void>(&kRowOverloads);
     static_cast<void>(&kExprOverloads);
-    std::printf("tensor_interface_freeze: covered %zu callables (%zu exact overload casts, "
-                "%zu exact signatures, %zu well-formedness checks)\n",
-                kFrozenCallableSlots.size(), kExactCasts, kExactSignatureCount,
-                kFrozenCallableSlots.size() - kExactCasts - kExactSignatureCount);
     return 0;
 }

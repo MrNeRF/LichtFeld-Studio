@@ -1443,45 +1443,6 @@ namespace lfs::training {
         }
     }
 
-    std::expected<PPISPFileMetadata, std::string> Trainer::build_ppisp_sidecar_metadata() const {
-        if (!ppisp_ || !ppisp_->isFinalized()) {
-            return std::unexpected("Cannot build PPISP sidecar metadata before PPISP is initialized");
-        }
-        if (!train_dataset_) {
-            return std::unexpected("Cannot build PPISP sidecar metadata without an active training dataset");
-        }
-
-        PPISPFileMetadata metadata;
-        metadata.dataset_path_utf8 = lfs::core::path_to_utf8(params_.dataset.data_path);
-        metadata.images_folder = params_.dataset.images;
-        metadata.camera_ids = ppisp_->ordered_camera_ids();
-
-        for (const auto& cam : train_dataset_->get_cameras()) {
-            if (!cam) {
-                continue;
-            }
-            metadata.frame_image_names.push_back(cam->image_name());
-            metadata.frame_camera_ids.push_back(cam->camera_id());
-        }
-
-        if (static_cast<int>(metadata.frame_image_names.size()) != ppisp_->num_frames() ||
-            static_cast<int>(metadata.frame_camera_ids.size()) != ppisp_->num_frames()) {
-            return std::unexpected(std::format(
-                "PPISP metadata frame mismatch: metadata has {} names / {} camera ids but PPISP has {} frames",
-                metadata.frame_image_names.size(),
-                metadata.frame_camera_ids.size(),
-                ppisp_->num_frames()));
-        }
-        if (static_cast<int>(metadata.camera_ids.size()) != ppisp_->num_cameras()) {
-            return std::unexpected(std::format(
-                "PPISP metadata camera mismatch: metadata has {} camera ids but PPISP has {} cameras",
-                metadata.camera_ids.size(),
-                ppisp_->num_cameras()));
-        }
-
-        return metadata;
-    }
-
     std::expected<Trainer::PPISPSidecarMappings, std::string> Trainer::build_ppisp_sidecar_mappings(
         const PPISP& loaded_ppisp,
         const PPISPFileMetadata& metadata,

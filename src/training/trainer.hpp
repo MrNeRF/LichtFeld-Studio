@@ -616,7 +616,6 @@ namespace lfs::training {
         std::expected<void, std::string> initialize_ppisp();
         std::expected<void, std::string> initialize_ppisp_controller();
         std::expected<void, std::string> apply_ppisp_sidecar_if_configured();
-        std::expected<PPISPFileMetadata, std::string> build_ppisp_sidecar_metadata() const;
         struct PPISPSidecarMappings {
             std::vector<int> frame_mapping;
             std::vector<int> camera_mapping;

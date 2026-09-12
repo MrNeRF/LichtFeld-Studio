@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "rendering/selection_ops.hpp"
 
@@ -10,7 +9,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -134,75 +132,6 @@ namespace {
                            "public arange");
     }
 
-    void sync_tensor(const Tensor& tensor) {
-        internal::backend_ops_for(tensor).synchronize_stream(
-            internal::ExecContext{tensor.stream()});
-    }
-
-    double elapsed_us(const std::chrono::steady_clock::time_point start,
-                      const std::chrono::steady_clock::time_point stop) {
-        return std::chrono::duration<double, std::micro>(stop - start).count();
-    }
-
-    void print_sample_stats(const char* const backend,
-                            const char* const what,
-                            const std::vector<double>& samples) {
-        if (samples.empty()) {
-            return;
-        }
-        std::vector<double> sorted = samples;
-        std::sort(sorted.begin(), sorted.end());
-        const double first = samples.front();
-        const double min_us = sorted.front();
-        const double median_us = sorted[sorted.size() / 2];
-        std::printf("TensorAsyncConsts bench-detail %s %s first=%.3f us min=%.3f us median=%.3f us n=%zu\n",
-                    backend, what, first, min_us, median_us, samples.size());
-    }
-
-    void print_factory_bench(const char* const backend) {
-        constexpr size_t kCount = 87040;
-        constexpr int kIters = 200;
-        double ones_us = 0.0;
-        double bool_us = 0.0;
-        double arange_us = 0.0;
-        std::vector<double> ones_samples;
-        std::vector<double> bool_samples;
-        std::vector<double> arange_samples;
-        ones_samples.reserve(static_cast<size_t>(kIters));
-        bool_samples.reserve(static_cast<size_t>(kIters));
-        arange_samples.reserve(static_cast<size_t>(kIters));
-        for (int iter = 0; iter < kIters; ++iter) {
-            const auto t0 = std::chrono::steady_clock::now();
-            Tensor ones = Tensor::ones({kCount}, Device::GPU, DataType::Int32);
-            sync_tensor(ones);
-            const auto t1 = std::chrono::steady_clock::now();
-            Tensor flags = Tensor::full_bool({kCount}, true, Device::GPU);
-            sync_tensor(flags);
-            const auto t2 = std::chrono::steady_clock::now();
-            Tensor seq = Tensor::arange(0.0f, static_cast<float>(kCount));
-            sync_tensor(seq);
-            const auto t3 = std::chrono::steady_clock::now();
-            const double ones_iter = elapsed_us(t0, t1);
-            const double bool_iter = elapsed_us(t1, t2);
-            const double arange_iter = elapsed_us(t2, t3);
-            ones_us += ones_iter;
-            bool_us += bool_iter;
-            arange_us += arange_iter;
-            ones_samples.push_back(ones_iter);
-            bool_samples.push_back(bool_iter);
-            arange_samples.push_back(arange_iter);
-        }
-        std::printf(
-            "TensorAsyncConsts bench %s ones_int32=%.3f us full_bool=%.3f us arange=%.3f us\n",
-            backend,
-            ones_us / kIters,
-            bool_us / kIters,
-            arange_us / kIters);
-        print_sample_stats(backend, "ones_int32", ones_samples);
-        print_sample_stats(backend, "full_bool", bool_samples);
-        print_sample_stats(backend, "arange", arange_samples);
-    }
-
     Tensor random_group_mask(const size_t n, const uint32_t seed) {
         std::mt19937 rng(seed);
         std::uniform_int_distribution<int> dist(0, 7);
@@ -212,27 +141,6 @@ namespace {
             data[i] = static_cast<uint8_t>(dist(rng));
         }
         return cpu.to(Device::GPU);
-    }
-
-    void print_hover_bench(const char* const backend) {
-        constexpr size_t kCount = 87040;
-        constexpr int kIters = 100;
-        Tensor mask = random_group_mask(kCount, 20260906);
-        Tensor scratch;
-        std::array<int, 257> host{};
-        double us = 0.0;
-        for (int iter = 0; iter < kIters; ++iter) {
-            const auto t0 = std::chrono::steady_clock::now();
-            lfs::rendering::count_selection_groups_async(mask, scratch);
-            lfs::rendering::SelectionCountTicket ticket;
-            lfs::rendering::enqueue_selection_group_count_read(
-                scratch, host.data(), nullptr, &ticket);
-            while (!lfs::rendering::poll_selection_group_count_readback(ticket, host.data())) {
-            }
-            const auto t1 = std::chrono::steady_clock::now();
-            us += std::chrono::duration<double, std::micro>(t1 - t0).count();
-        }
-        std::printf("TensorAsyncConsts hover %s %.3f us/call\n", backend, us / kIters);
     }
 
 } // namespace
@@ -277,24 +185,6 @@ TEST(TensorAsyncConsts, TrimLeavesInFlightWorkReadableOnVulkan) {
     Tensor::trim_memory_pool();
     expect_bytes_equal(live, Tensor::ones({87040}, Device::CPU, DataType::Int32),
                        "vulkan trim live");
-}
-
-TEST(TensorAsyncConsts, FactoryMicrobenchDefaultBackend) {
-    SKIP_IF_BACKEND_UNAVAILABLE(default_gpu_backend());
-    GpuBackendScope scope(GpuBackend::CUDA);
-    print_factory_bench("cuda");
-}
-
-TEST(TensorAsyncConsts, FactoryMicrobenchVulkan) {
-    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
-    GpuBackendScope scope(GpuBackend::Vulkan);
-    print_factory_bench("vulkan");
-}
-
-TEST(TensorAsyncConsts, HoverMicrobenchVulkan) {
-    SKIP_IF_BACKEND_UNAVAILABLE(GpuBackend::Vulkan);
-    GpuBackendScope scope(GpuBackend::Vulkan);
-    print_hover_bench("vulkan");
 }
 
 TEST(SelectionGroupCount, AsyncReadbackMatchesCountSelectionGroupsOnVulkan) {

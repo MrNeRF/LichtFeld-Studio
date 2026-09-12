@@ -895,61 +895,6 @@ namespace lfs::core {
             return result;
         }
 
-        // Generic functor-based scalar operation (zero enum overhead)
-        template <typename Op>
-        Tensor scalar_op_generic(float scalar, Op op, DataType out_dtype = DataType::Float32) const {
-            validate_unary_op();
-            tensor_contract::require_dtype(
-                *this, {DataType::Float32, DataType::Int32}, "scalar operation", "input",
-                LFS_SOURCE_SITE_CURRENT());
-            LFS_ASSERT_MSG(out_dtype == DataType::Float32 || out_dtype == DataType::Int32 ||
-                               out_dtype == DataType::Bool,
-                           "scalar operation requested an unsupported output dtype");
-
-            auto result = internal::allocate_like(*this, shape_, out_dtype);
-
-            if (device_ == Device::GPU) {
-                auto program = internal::pointwise_program(dtype_, out_dtype, op);
-                program.scalar = dtype_ == DataType::Int32
-                                     ? internal::scalar_operand(static_cast<int32_t>(scalar))
-                                     : internal::scalar_operand(scalar);
-                internal::backend_ops_for(*this).scalar(
-                    program, internal::storage_ref(*this), internal::storage_ref(result),
-                    numel(), internal::ExecContext{result.stream()});
-                // No sync needed - operations are async
-            } else {
-                // CPU implementation
-                if (dtype_ == DataType::Int32) {
-                    const int* src = ptr<int>();
-                    int scalar_int = static_cast<int>(scalar);
-                    if (out_dtype == DataType::Bool) {
-                        unsigned char* dst = result.ptr<unsigned char>();
-                        for (size_t i = 0; i < numel(); ++i) {
-                            dst[i] = op(src[i], scalar_int);
-                        }
-                    } else {
-                        int* dst = result.ptr<int>();
-                        for (size_t i = 0; i < numel(); ++i) {
-                            dst[i] = op(src[i], scalar_int);
-                        }
-                    }
-                } else { // Float32
-                    const float* src = ptr<float>();
-                    if (out_dtype == DataType::Bool) {
-                        unsigned char* dst = result.ptr<unsigned char>();
-                        for (size_t i = 0; i < numel(); ++i) {
-                            dst[i] = op(src[i], scalar);
-                        }
-                    } else {
-                        float* dst = result.ptr<float>();
-                        apply_unary_cpu(src, dst, numel(), ops::scalar_right_op<Op, float>(scalar));
-                    }
-                }
-            }
-
-            return result;
-        }
-
         // Generic functor-based in-place scalar operation (zero enum overhead)
         template <typename Op>
         Tensor& scalar_op_inplace_generic(float scalar, Op op) {
@@ -1525,8 +1470,6 @@ namespace lfs::core {
         }
 
         std::vector<size_t> resolve_dims(std::span<const int> dims) const;
-        bool is_contiguous_slice(const std::vector<size_t>& starts,
-                                 const std::vector<size_t>& ends) const;
         size_t calculate_offset(const std::vector<size_t>& indices) const;
         Tensor copy_slice(const std::vector<size_t>& starts,
                           const std::vector<size_t>& ends,

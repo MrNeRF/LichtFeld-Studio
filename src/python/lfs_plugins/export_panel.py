@@ -655,11 +655,6 @@ class ExportPanel(Panel):
         self._rebuild_model_records(self._get_splat_nodes())
         self._dirty_model("can_export", "export_label", "export_error_text")
 
-    def _on_export(self, _handle, _ev, _args):
-        if not self._can_export():
-            return
-        self._do_export()
-
     def _on_export_submit(self, ev):
         if self._can_export():
             self._do_export()

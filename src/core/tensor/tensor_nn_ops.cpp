@@ -144,15 +144,6 @@ namespace lfs::core {
             }
         }
 
-        void cpu_bias_relu(const float* input, const float* bias, float* output,
-                           int total, int channels, int spatial) {
-            for (int i = 0; i < total; ++i) {
-                const int c = (i / spatial) % channels;
-                const float val = input[i] + bias[c];
-                output[i] = val > 0.0f ? val : 0.0f;
-            }
-        }
-
     } // namespace
 
     Tensor Tensor::conv1x1(const Tensor& weight) const {

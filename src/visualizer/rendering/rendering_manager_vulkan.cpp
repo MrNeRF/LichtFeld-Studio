@@ -706,7 +706,6 @@ namespace lfs::vis {
                                         : 0.0f;
                     const bool use_left = x < divider;
                     const auto& panel = use_left ? left_panel : right_panel;
-                    const auto& data = use_left ? *left_data : *right_data;
                     float panel_u = u;
                     if (panel.normalize_x_to_panel) {
                         const float span = std::max(panel.end_position - panel.start_position, 1e-6f);
@@ -1626,8 +1625,8 @@ namespace lfs::vis {
         if (context.viewport_region) {
             current_size = framebuffer_region.size;
         }
-        // Minimized / zero-extent: no presentable viewport work. Never hold a
-        // resize training pause, never start model reads, and never publish
+        // Minimized / zero-extent: no presentable viewport work. Never start
+        // model reads or publish
         // new viewer borrows â€” the trainer continues headless on the existing
         // handshake fences only. Restore re-enters the normal frame path
         // (first frame may block once for a stable model, same as cold start).
@@ -1635,7 +1634,6 @@ namespace lfs::vis {
             if (vksplat_viewport_renderer_) {
                 vksplat_viewport_renderer_->setLiveSubmitCallback({});
             }
-            releaseResizeTrainingPause();
             return {.image = vulkan_viewport_image_,
                     .size = vulkan_viewport_image_size_,
                     .flip_y = vulkan_viewport_image_flip_y_};

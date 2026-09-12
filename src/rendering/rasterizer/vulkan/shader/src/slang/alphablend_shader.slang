@@ -47,14 +47,6 @@ float4 update_pixel_state(float4 pixel_state_t_nm1, float4 gauss_rgba_t_n)
     return float4(color_t_n, transmittance_t_n);
 }
 
-[ForceInline]
-float4 undo_pixel_state(float4 pixel_state_t_n, float4 gauss_rgba_t_n)
-{
-    float transmittance_t_nm1 = pixel_state_t_n.a / (float(1) - gauss_rgba_t_n.a);
-    float3 color_t_nm1 = pixel_state_t_n.rgb - gauss_rgba_t_n.rgb * transmittance_t_nm1;
-    return float4(color_t_nm1, transmittance_t_nm1);
-}
-
 static const float FAR_DEPTH = 1.0e10f;
 
 #if SUBTILE_SIZE > 0
@@ -106,7 +98,6 @@ uint32_t computeTileOverlapBitmask(bool exact, float2 g_xy, float4 g_inv_cov_opa
 
 
 // forward
-#if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
 #if SHARED_STRUCT
 #if LFS_3DGUT_RASTERIZE
@@ -551,28 +542,6 @@ void main(
     }
 }
 
-#endif // #if EXPORT_MODE == EXPORT_MODE_VULKAN_FORWARD
 
 
 // backward
-#if EXPORT_MODE != EXPORT_MODE_VULKAN_FORWARD
-
-#define BACKWARD_MODE_PER_PIXEL 0
-#define BACKWARD_MODE_PER_SPLAT 1
-#define BACKWARD_MODE_TENSOR 2
-
-#ifndef BACKWARD_MODE
-    // #define BACKWARD_MODE BACKWARD_MODE_TENSOR
-    #define BACKWARD_MODE BACKWARD_MODE_PER_SPLAT
-    // #define BACKWARD_MODE BACKWARD_MODE_PER_PIXEL
-#endif // #ifndef BACKWARD_MODE
-
-#if BACKWARD_MODE == BACKWARD_MODE_PER_PIXEL
-    #include "alphablend_shader_bwd_per_pixel.slang"
-#elif BACKWARD_MODE == BACKWARD_MODE_PER_SPLAT
-    #include "alphablend_shader_bwd_per_splat.slang"
-#elif BACKWARD_MODE == BACKWARD_MODE_TENSOR
-    #include "alphablend_shader_bwd_tensor.slang"
-#endif
-
-#endif

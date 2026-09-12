@@ -3538,17 +3538,4 @@ void RenderInterface_VK::MemoryPool::Free_GeometryHandle(geometry_handle_t* p_va
     p_valid_geometry_handle->m_num_indices = 0;
 }
 
-void RenderInterface_VK::MemoryPool::Free_GeometryHandle_ShaderDataOnly(geometry_handle_t* p_valid_geometry_handle) noexcept {
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle,
-                       "you must pass a VALID pointer to geometry_handle_t, otherwise something is wrong and debug your code");
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle->m_p_vertex_allocation, "you must have a VALID pointer of VmaAllocation for vertex buffer");
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle->m_p_index_allocation, "you must have a VALID pointer of VmaAllocation for index buffer");
-    RMLUI_VK_ASSERTMSG(p_valid_geometry_handle->m_p_shader_allocation,
-                       "you must have a VALID pointer of VmaAllocation for shader operations (like uniforms and etc)");
-    RMLUI_VK_ASSERTMSG(m_p_block, "you have to allocate the virtual block before do this operation...");
-
-    Free_Allocation(p_valid_geometry_handle->m_p_shader_allocation);
-    p_valid_geometry_handle->m_p_shader_allocation = nullptr;
-}
-
 #include <vk_mem_alloc.h>

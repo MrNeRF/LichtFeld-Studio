@@ -69,10 +69,6 @@ namespace {
             return reinterpret_cast<uint*>(base + 3 * per_buffer_bytes());
         }
 
-        [[nodiscard]] uint* retained_indices() const noexcept {
-            return reinterpret_cast<uint*>(base);
-        }
-
         [[nodiscard]] void* cub_workspace() const noexcept {
             return base ? base + cub_workspace_offset_bytes : nullptr;
         }

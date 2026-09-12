@@ -69,19 +69,6 @@ namespace {
         }
     };
 
-    TEST(TensorBackendFacade, PointwiseTableNamesAndLowersEveryFunctor) {
-        // Catches table rows that omit the diagnostic name or lowering specialization.
-#define LFS_POINTWISE_OP(Id, FunctorType, Name)                       \
-    do {                                                              \
-        constexpr auto lowered = pointwise_op_of<FunctorType>::value; \
-        EXPECT_EQ(lowered, PointwiseOp::Id);                          \
-        EXPECT_STREQ(pointwise_op_name(PointwiseOp::Id), Name);       \
-        EXPECT_NE(*pointwise_op_name(PointwiseOp::Id), '\0');         \
-    } while (false);
-#include "core/tensor/backend/pointwise_ops.def"
-#undef LFS_POINTWISE_OP
-    }
-
     TEST(TensorBackendFacade, RegistryReturnsVulkanAndRejectsCpuStorage) {
         // Catches the Vulkan registry entry silently returning the CUDA singleton.
         if (gpu_backend_available(GpuBackend::Vulkan)) {

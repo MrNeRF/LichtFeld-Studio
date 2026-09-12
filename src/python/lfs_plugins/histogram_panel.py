@@ -3522,25 +3522,6 @@ class HistogramPanel(Panel):
             self._on_delete_marked(None, None, None)
             event.stop_propagation()
 
-    @staticmethod
-    def _percentile_from_sorted(sorted_values: lf.Tensor, percentile: float) -> float:
-        count = int(sorted_values.shape[0])
-        if count <= 0:
-            return 0.0
-        if count == 1:
-            return sorted_values[0].item()
-
-        position = (count - 1) * max(0.0, min(percentile, 100.0)) / 100.0
-        lower = int(math.floor(position))
-        upper = int(math.ceil(position))
-        if lower == upper:
-            return sorted_values[lower].item()
-
-        weight = position - lower
-        lower_value = sorted_values[lower].item()
-        upper_value = sorted_values[upper].item()
-        return lower_value + (upper_value - lower_value) * weight
-
     def _on_chart_mousedown(self, event):
         if not self._show_chart or self._chart_el is None or self._hist_edges is None:
             return

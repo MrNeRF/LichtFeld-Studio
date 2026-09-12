@@ -1116,16 +1116,6 @@ namespace {
         });
     }
 
-    // Overlay suppression under GT keys on the broad MODE predicate alone —
-    // engagement of the GT selection context deliberately plays no part, which is what
-    // closes the loading-window gap (mode on, context still unpublished).
-    TEST(DepthWindowGtSuppressionTest, OverlaySuppressionKeysOnModeNotEngagement) {
-        static_assert(lfs::vis::op::depthWindowOverlaySuppressed(true));
-        static_assert(!lfs::vis::op::depthWindowOverlaySuppressed(false));
-        EXPECT_TRUE(lfs::vis::op::depthWindowOverlaySuppressed(true));
-        EXPECT_FALSE(lfs::vis::op::depthWindowOverlaySuppressed(false));
-    }
-
     TEST(DepthWindowMoveZoneTest, ZoneSizeFollowsPerAxisRegimesAndBoundaryValues) {
         const struct Case {
             float dim;

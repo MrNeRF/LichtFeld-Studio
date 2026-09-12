@@ -56,15 +56,6 @@ namespace lfs::training::kernels {
         R[8] = 1.0f - 2.0f * (x * x + y * y); // r22
     }
 
-    /**
-     * @brief Matrix-vector multiply: out = R * v (where R is 3x3, v is 3x1)
-     */
-    __device__ inline void matvec_3x3(const float* R, const float* v, float* out) {
-        out[0] = R[0] * v[0] + R[1] * v[1] + R[2] * v[2];
-        out[1] = R[3] * v[0] + R[4] * v[1] + R[5] * v[2];
-        out[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
-    }
-
     // ============================================================================
     // Duplicate Gaussians Kernels (Split into two to avoid warp divergence)
     // ============================================================================
