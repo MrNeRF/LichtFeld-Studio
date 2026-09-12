@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cub/device/device_reduce.cuh>
 #include <cub/device/device_segmented_reduce.cuh>
 #include <cuda_fp16.h>
@@ -1758,6 +1759,56 @@ namespace lfs::core::tensor_ops {
         }
     }
 
+    __global__ void load_arange_f32_kernel(float* __restrict__ output,
+                                           const float start,
+                                           const float step,
+                                           const size_t n) {
+        const size_t block_id = blockIdx.y * gridDim.x + blockIdx.x;
+        const size_t i = block_id * blockDim.x + threadIdx.x;
+        if (i < n) {
+            output[i] = __fadd_rn(start, __fmul_rn(static_cast<float>(i), step));
+        }
+    }
+
+    __global__ void load_arange_i32_kernel(int* __restrict__ output,
+                                           const float start,
+                                           const float step,
+                                           const size_t n) {
+        const size_t block_id = blockIdx.y * gridDim.x + blockIdx.x;
+        const size_t i = block_id * blockDim.x + threadIdx.x;
+        if (i < n) {
+            output[i] = static_cast<int>(
+                __fadd_rn(start, __fmul_rn(static_cast<float>(i), step)));
+        }
+    }
+
+    void launch_load_arange(void* output, const size_t count, const float start,
+                            const float step, const DataType dtype,
+                            const cudaStream_t stream) {
+        if (count == 0 || output == nullptr) {
+            return;
+        }
+        constexpr int kBlock = 256;
+        const size_t num_blocks = (count + kBlock - 1) / kBlock;
+        constexpr size_t kMaxBlocksX = 65535;
+        dim3 grid(static_cast<unsigned>(std::min(num_blocks, kMaxBlocksX)),
+                  static_cast<unsigned>((num_blocks + kMaxBlocksX - 1) / kMaxBlocksX));
+        if (num_blocks <= kMaxBlocksX) {
+            grid = dim3(static_cast<unsigned>(num_blocks), 1);
+        }
+        if (dtype == DataType::Float32) {
+            load_arange_f32_kernel<<<grid, kBlock, 0, stream>>>(
+                static_cast<float*>(output), start, step, count);
+            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.load_arange_f32");
+            return;
+        }
+        LFS_ASSERT_MSG(dtype == DataType::Int32,
+                       "load_arange supports Float32 and Int32");
+        load_arange_i32_kernel<<<grid, kBlock, 0, stream>>>(
+            static_cast<int*>(output), start, step, count);
+        LFS_CUDA_LAUNCH_CHECK(stream, "tensor.ops.load_arange_i32");
+    }
+
     // ============= OPTIMIZED CUMULATIVE SUM =============
 
     template <typename T>
@@ -3378,6 +3429,12 @@ namespace lfs::core::tensor_ops {
         int*, int, const std::vector<size_t>&, const std::vector<size_t>&, size_t, size_t, cudaStream_t);
     template void launch_fill_strided<unsigned char>(
         unsigned char*, unsigned char, const std::vector<size_t>&, const std::vector<size_t>&, size_t, size_t, cudaStream_t);
+    template void launch_fill_strided<__half>(
+        __half*, __half, const std::vector<size_t>&, const std::vector<size_t>&, size_t, size_t, cudaStream_t);
+    template void launch_fill_strided<int64_t>(
+        int64_t*, int64_t, const std::vector<size_t>&, const std::vector<size_t>&, size_t, size_t, cudaStream_t);
+    template void launch_fill_strided<uint32_t>(
+        uint32_t*, uint32_t, const std::vector<size_t>&, const std::vector<size_t>&, size_t, size_t, cudaStream_t);
 
     // ============= FAST GPU-BASED SPECIAL-VALUE CHECK =============
     // Returns immediately if the requested special value is found (early exit via atomic)

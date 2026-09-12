@@ -65,6 +65,7 @@ endfunction()
 set(LFS_TENSOR_SHADER_EMBED_ARGS)
 
 _tensor_add_slang_kernel(fill fill.slang)
+_tensor_add_slang_kernel(arange arange.slang)
 _tensor_add_slang_kernel(pointwise pointwise.slang)
 _tensor_add_slang_kernel(pointwise_half pointwise_half.slang)
 _tensor_add_slang_kernel(broadcast broadcast.slang)

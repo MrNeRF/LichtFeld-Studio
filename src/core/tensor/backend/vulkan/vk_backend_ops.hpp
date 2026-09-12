@@ -28,6 +28,7 @@ namespace lfs::core::internal {
         void convert_type(StorageRef, StorageRef, size_t, ExecContext) override;
         void fill_strided(StorageRef, const StridedLayout&, ScalarOperand, ExecContext) override;
         void load_fill(StorageRef, size_t, ScalarOperand, ExecContext) override;
+        void load_arange(StorageRef, size_t, ScalarOperand, ScalarOperand, ExecContext) override;
 
         float sum_scalar(StorageRef, size_t, ExecContext) override;
         float mean_scalar(StorageRef, size_t, ExecContext) override;
@@ -128,6 +129,8 @@ namespace lfs::core::internal {
         void copy_device_to_host(const CopyRequest&) override;
         void copy_device_to_device(const CopyRequest&) override;
         void memset(const FillRequest&) override;
+        ReadbackTicket enqueue_readback(StorageRef, size_t, ExecContext) override;
+        bool readback_poll(const ReadbackTicket&, void*) override;
         void synchronize_stream(ExecContext) override;
         void synchronize_device() override;
         void wait_for(SyncToken) override;

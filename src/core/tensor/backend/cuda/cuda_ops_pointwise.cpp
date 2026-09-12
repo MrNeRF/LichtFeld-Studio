@@ -786,6 +786,36 @@ namespace lfs::core::internal {
                 output, layout,
                 static_cast<unsigned char>(value.value.bool_value ? 1 : 0), context);
             return;
+        case DataType::Float16:
+            LFS_ASSERT_MSG(value.kind == ScalarKind::Float,
+                           "Float16 fill requires a float scalar");
+            launch_strided_fill(
+                output, layout, __float2half(value.value.float_value), context);
+            return;
+        case DataType::Int64: {
+            const int64_t fill =
+                value.kind == ScalarKind::Int64
+                    ? value.value.int64_value
+                    : static_cast<int64_t>(value.value.int32_value);
+            launch_strided_fill(output, layout, fill, context);
+            return;
+        }
+        case DataType::UInt8:
+            launch_strided_fill(
+                output, layout,
+                static_cast<unsigned char>(value.kind == ScalarKind::Int32
+                                               ? value.value.int32_value
+                                               : static_cast<int>(value.value.int64_value)),
+                context);
+            return;
+        case DataType::UInt32: {
+            const uint32_t fill =
+                value.kind == ScalarKind::Int64
+                    ? static_cast<uint32_t>(value.value.int64_value)
+                    : static_cast<uint32_t>(value.value.int32_value);
+            launch_strided_fill(output, layout, fill, context);
+            return;
+        }
         default:
             LFS_ASSERT_MSG(false, "strided fill dtype has no CUDA instantiation");
         }
@@ -795,14 +825,39 @@ namespace lfs::core::internal {
         const StorageRef output, const size_t count,
         const ScalarOperand value, const ExecContext context) {
         LFS_FACADE_TRACE(load_fill);
-        LFS_ASSERT_MSG(output.dtype == DataType::Float32 &&
-                           value.kind == ScalarKind::Float,
-                       "CUDA load fill supports only Float32");
-        const size_t shape[] = {count};
-        const float fill_value = value.value.float_value;
-        tensor_ops::launch_load_op(
-            cuda_pointer<float>(output), shape, 1, LoadOp::Const,
-            &fill_value, output.dtype, context.cuda_stream);
+        if (count == 0) {
+            return;
+        }
+        if (output.dtype == DataType::Float32 && value.kind == ScalarKind::Float) {
+            const size_t shape[] = {count};
+            const float fill_value = value.value.float_value;
+            tensor_ops::launch_load_op(
+                cuda_pointer<float>(output), shape, 1, LoadOp::Const,
+                &fill_value, output.dtype, context.cuda_stream);
+            return;
+        }
+        StridedLayout layout{};
+        layout.rank = 1;
+        layout.dims[0] = count;
+        layout.strides[0] = 1;
+        layout.element_count = count;
+        fill_strided(output, layout, value, context);
+    }
+
+    void CudaBackendOps::load_arange(
+        const StorageRef output, const size_t count,
+        const ScalarOperand start, const ScalarOperand step,
+        const ExecContext context) {
+        LFS_FACADE_TRACE(load_arange);
+        LFS_ASSERT_MSG(output.dtype == DataType::Float32 ||
+                           output.dtype == DataType::Int32,
+                       "CUDA load_arange supports Float32 and Int32");
+        LFS_ASSERT_MSG(start.kind == ScalarKind::Float &&
+                           step.kind == ScalarKind::Float,
+                       "CUDA load_arange start and step are float scalars");
+        tensor_ops::launch_load_arange(
+            cuda_pointer<unsigned char>(output), count, start.value.float_value,
+            step.value.float_value, output.dtype, context.cuda_stream);
     }
 
 } // namespace lfs::core::internal

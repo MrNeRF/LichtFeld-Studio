@@ -229,9 +229,24 @@ namespace lfs::rendering {
         const Tensor* model_transforms,
         const Tensor* transform_indices);
     void prepare_cuda_selection_group_counts_scratch(Tensor& counts_scratch);
+    struct SelectionCountTicket {
+        uint64_t id = 0;
+        uint64_t timeline_value = 0;
+        size_t bytes = 0;
+    };
+
+    // CUDA completion is reported by ready_event. Without a Vulkan ticket,
+    // Vulkan counts are copied to the destination before this call returns.
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* pinned_host_counts,
                                             cudaEvent_t ready_event);
+    // A non-null Vulkan ticket must be consumed with the poll function below.
+    void enqueue_selection_group_count_read(const Tensor& counts_scratch,
+                                            int* pinned_host_counts,
+                                            cudaEvent_t ready_event,
+                                            SelectionCountTicket* vulkan_ticket);
+    [[nodiscard]] bool poll_selection_group_count_readback(
+        const SelectionCountTicket& ticket, int* pinned_host_counts);
     [[nodiscard]] SelectionGroupCountResult read_selection_group_count_result(
         const Tensor& counts_scratch);
     [[nodiscard]] SelectionGroupDeltaResult read_selection_group_delta_result(

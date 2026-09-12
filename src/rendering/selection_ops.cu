@@ -8,6 +8,7 @@
 #include "core/gpu_backend_fwd.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "rendering/render_constants.hpp"
 
 #include <algorithm>
@@ -1183,21 +1184,43 @@ namespace lfs::rendering {
     void enqueue_selection_group_count_read(const Tensor& counts_scratch,
                                             int* const pinned_host_counts,
                                             const cudaEvent_t ready_event) {
+        enqueue_selection_group_count_read(
+            counts_scratch, pinned_host_counts, ready_event, nullptr);
+    }
+
+    void enqueue_selection_group_count_read(const Tensor& counts_scratch,
+                                            int* const pinned_host_counts,
+                                            const cudaEvent_t ready_event,
+                                            SelectionCountTicket* const vulkan_ticket) {
         if (!counts_scratch.is_valid() || pinned_host_counts == nullptr) {
             throw std::runtime_error("invalid asynchronous selection-count destination");
         }
+        if (counts_scratch.device() != lfs::core::Device::GPU ||
+            counts_scratch.dtype() != lfs::core::DataType::Int32 ||
+            !counts_scratch.is_contiguous() ||
+            counts_scratch.numel() < kSelectionGroupScratchWords) {
+            throw std::runtime_error("invalid asynchronous selection-count scratch");
+        }
         if (lfs::core::gpu_backend_of(counts_scratch) == lfs::core::GpuBackend::Vulkan) {
-            const Tensor host = counts_scratch.cpu().contiguous();
-            if (!host.is_valid() || host.numel() < kSelectionGroupScratchWords ||
-                host.ptr<int>() == nullptr) {
-                throw std::runtime_error("invalid Vulkan selection-count scratch");
+            if (vulkan_ticket == nullptr) {
+                // The original overload has no way to return or poll a Vulkan
+                // ticket. Preserve its completed-host-copy contract.
+                const Tensor host = counts_scratch.cpu();
+                std::memcpy(pinned_host_counts, host.ptr<int>(),
+                            kSelectionGroupScratchWords * sizeof(int));
+                if (ready_event != nullptr) {
+                    LFS_CUDA_CHECK(cudaEventRecord(ready_event, nullptr));
+                }
+                return;
             }
-            std::memcpy(pinned_host_counts,
-                        host.ptr<int>(),
-                        kSelectionGroupScratchWords * sizeof(int));
-            if (ready_event != nullptr) {
-                LFS_CUDA_CHECK(cudaEventRecord(ready_event, nullptr));
-            }
+            auto& ops = lfs::core::internal::backend_ops_for(counts_scratch);
+            const lfs::core::internal::ReadbackTicket ticket = ops.enqueue_readback(
+                lfs::core::internal::storage_ref(counts_scratch),
+                kSelectionGroupScratchWords * sizeof(int),
+                lfs::core::internal::ExecContext{});
+            vulkan_ticket->id = ticket.id;
+            vulkan_ticket->timeline_value = ticket.timeline_value;
+            vulkan_ticket->bytes = ticket.bytes;
             return;
         }
         if (ready_event == nullptr) {
@@ -1210,6 +1233,24 @@ namespace lfs::rendering {
                                        cudaMemcpyDeviceToHost,
                                        stream));
         LFS_CUDA_CHECK(cudaEventRecord(ready_event, stream));
+    }
+
+    bool poll_selection_group_count_readback(const SelectionCountTicket& ticket,
+                                             int* const pinned_host_counts) {
+        if (ticket.id == 0) {
+            return true;
+        }
+        if (pinned_host_counts == nullptr) {
+            return false;
+        }
+        const lfs::core::internal::ReadbackTicket backend_ticket{
+            .backend = lfs::core::GpuBackend::Vulkan,
+            .timeline_value = ticket.timeline_value,
+            .id = ticket.id,
+            .bytes = ticket.bytes,
+        };
+        return lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
+            .readback_poll(backend_ticket, pinned_host_counts);
     }
 
     std::array<size_t, 256> count_selection_groups(

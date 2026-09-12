@@ -15,6 +15,7 @@
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/gpu_backend_ops.hpp"
 #include "core/tensor_backend.hpp"
 #include "io/error.hpp"
 #include "io/ply_export_internal.hpp"
@@ -1418,6 +1419,15 @@ namespace lfs::io {
         CudaUploadBatch& operator=(const CudaUploadBatch&) = delete;
 
         ~CudaUploadBatch() {
+            if (has_pending_vulkan_work_) {
+                try {
+                    lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
+                        .synchronize_stream(lfs::core::internal::ExecContext{});
+                } catch (const std::exception& error) {
+                    LOG_ERROR("PLY Vulkan upload cleanup failed: {}", error.what());
+                }
+                has_pending_vulkan_work_ = false;
+            }
             if (!has_pending_cuda_work_) {
                 return;
             }
@@ -1440,13 +1450,20 @@ namespace lfs::io {
             }
 
             if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan) {
-                Tensor host = Tensor::empty(tensor.shape(), Device::CPU, tensor.dtype());
-                LFS_ASSERT_MSG(host.bytes() == data.size_bytes(),
+                LFS_ASSERT_MSG(tensor.bytes() == data.size_bytes(),
                                std::format("PLY Vulkan upload size must match the destination "
                                            "(name='{}', dest_bytes={}, staging_bytes={})",
-                                           name, host.bytes(), data.size_bytes()));
-                std::memcpy(host.data_ptr(), data.data(), data.size_bytes());
-                tensor.copy_from(host);
+                                           name, tensor.bytes(), data.size_bytes()));
+                lfs::core::internal::backend_ops_for(tensor).copy_host_to_device(
+                    lfs::core::internal::CopyRequest{
+                        .src = lfs::core::internal::raw_storage_ref(
+                            const_cast<float*>(data.data()), tensor.dtype()),
+                        .dst = lfs::core::internal::storage_ref(tensor),
+                        .bytes = data.size_bytes(),
+                        .synchronous = false,
+                        .context = lfs::core::internal::ExecContext{tensor.stream()},
+                    });
+                has_pending_vulkan_work_ = true;
                 return;
             }
 
@@ -1476,6 +1493,11 @@ namespace lfs::io {
         }
 
         void wait() {
+            if (has_pending_vulkan_work_) {
+                lfs::core::internal::backend_ops(lfs::core::GpuBackend::Vulkan)
+                    .synchronize_stream(lfs::core::internal::ExecContext{});
+                has_pending_vulkan_work_ = false;
+            }
             if (!has_pending_cuda_work_) {
                 return;
             }
@@ -1497,6 +1519,7 @@ namespace lfs::io {
     private:
         cudaStream_t stream_ = nullptr;
         bool has_pending_cuda_work_ = false;
+        bool has_pending_vulkan_work_ = false;
     };
 
     // Single property extraction to host memory

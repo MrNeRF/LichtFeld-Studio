@@ -157,6 +157,10 @@ TEST(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     ASSERT_EQ(vk_bounds.numel(), cu_bounds.numel());
     ASSERT_EQ(vk_bounds.bytes(), cu_bounds.bytes());
     EXPECT_EQ(std::memcmp(vk_bounds.data_ptr(), cu_bounds.data_ptr(), vk_bounds.bytes()), 0);
+
+    SplatData model2 = load_splat(viewer_load_options());
+    ASSERT_TRUE(model2.means_raw().is_valid());
+    EXPECT_FLOAT_EQ(model.means_raw().mean_scalar(), model2.means_raw().mean_scalar());
 }
 
 TEST(ViewerVulkanLoad, PlyCudaDefaultKeepsQ16) {
@@ -176,4 +180,8 @@ TEST(ViewerVulkanLoad, PlyCudaDefaultKeepsQ16) {
     expect_backend(model.opacity_raw(), GpuBackend::CUDA, "opacity");
     expect_backend(model.shN_raw(), GpuBackend::CUDA, "shN");
     expect_means_match_cpu_ply(model);
+
+    SplatData model2 = load_splat(viewer_load_options());
+    ASSERT_TRUE(model2.means_raw().is_valid());
+    EXPECT_FLOAT_EQ(model.means_raw().mean_scalar(), model2.means_raw().mean_scalar());
 }
