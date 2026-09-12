@@ -6,6 +6,7 @@
 #include "core/assert.hpp"
 #include "core/error.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "vk_memory.hpp"
 #include "vk_pipelines.hpp"
