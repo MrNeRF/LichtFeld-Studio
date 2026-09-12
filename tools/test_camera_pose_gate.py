@@ -68,8 +68,8 @@ class CameraPoseSessionGateReportTests(unittest.TestCase):
             ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
         return root
 
-    def test_accepts_all_25_tests(self):
-        self.assertEqual(inspect_session_gate(self.report())["tests"], 25)
+    def test_accepts_all_28_tests(self):
+        self.assertEqual(inspect_session_gate(self.report())["tests"], 28)
 
     def test_rejects_missing_session_and_missing_previous_gate(self):
         with self.assertRaises(ValueError):

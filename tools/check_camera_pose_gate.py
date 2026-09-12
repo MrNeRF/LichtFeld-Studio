@@ -165,6 +165,9 @@ SESSION_TESTS = {
     "CancellationRollsBackWholeBurstAndPreservesRetryCadence",
     "EvaluatorExceptionRollsBackPoseHistoryAndCadence",
     "RejectionAndZeroGradientDoNotClaimConvergence",
+    "DurableStateRoundTripPreservesPosesPauseAndCadence",
+    "CorruptDurableStateNeverPartiallyChangesLiveSession",
+    "DurableStateCannotMoveAnchorsOrEvaluationCameras",
 }
 
 
@@ -195,8 +198,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="gtest XML generated from the current camera-pose sources")
     parser.add_argument("--controller", action="store_true", help="Require checkpoint B controller tests and image-driven recovery as well")
-    parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (25 tests)")
-    parser.add_argument("--evaluator", action="store_true", help="Require all 25 tests using the production FastGS pose evaluator")
+    parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (28 tests)")
+    parser.add_argument("--evaluator", action="store_true", help="Require all 28 tests using the production FastGS pose evaluator")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate

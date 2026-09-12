@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <nlohmann/json_fwd.hpp>
 #include <stop_token>
 #include <string_view>
 #include <unordered_map>
@@ -84,6 +85,10 @@ namespace lfs::training::camera_pose {
             std::stop_token stop = {});
         void set_paused(bool paused);
         void reset();
+        // Training-thread only, independent of throttled display publication.
+        // Restore requires identical settings, source poses, UIDs and roles.
+        [[nodiscard]] nlohmann::json save_state() const;
+        void restore_state(const nlohmann::json& state);
         void publish(bool force = false);
         [[nodiscard]] std::shared_ptr<const PoseSessionSnapshot> published_snapshot() const noexcept;
 
@@ -96,6 +101,8 @@ namespace lfs::training::camera_pose {
             std::uint64_t renders = 0;
         };
         [[nodiscard]] bool in_window() const noexcept;
+        [[nodiscard]] std::shared_ptr<const PoseSessionSnapshot> make_snapshot(
+            const std::vector<Entry>& entries, int iteration, bool paused, std::uint64_t sequence) const;
         PoseSessionConfig config_;
         std::uint64_t generation_;
         std::uint64_t sequence_ = 0;

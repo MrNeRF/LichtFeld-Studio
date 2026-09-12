@@ -1,0 +1,113 @@
+/* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "pose_refinement_session.hpp"
+#include <limits>
+#include <nlohmann/json.hpp>
+#include <stdexcept>
+#include <utility>
+
+namespace lfs::training::camera_pose {
+    namespace {
+        using Json = nlohmann::json;
+
+        Json settings(const PoseSessionConfig& config) {
+            const auto& opt = config.optimizer;
+            return {{"total_iterations", config.total_iterations}, {"warmup_iterations", config.warmup_iterations}, {"freeze_fraction", config.freeze_fraction}, {"visits_between_updates", config.visits_between_updates}, {"steps_per_visit", config.steps_per_visit}, {"choose_anchors", config.choose_anchors}, {"optimizer", {{"scene_scale", opt.scene_scale}, {"max_center_fraction", opt.max_center_fraction}, {"max_rotation_radians", opt.max_rotation_radians}, {"step_center_fraction", opt.step_center_fraction}, {"step_rotation_radians", opt.step_rotation_radians}, {"center_prior", opt.center_prior}, {"rotation_prior", opt.rotation_prior}, {"min_relative_improvement", opt.min_relative_improvement}, {"max_backtracks", opt.max_backtracks}}}};
+        }
+
+        std::uint64_t counter(const Json& value) {
+            if (!value.is_number_integer() ||
+                (!value.is_number_unsigned() && value.get<std::int64_t>() < 0))
+                throw std::invalid_argument("Camera pose state requires nonnegative integer counters");
+            const auto result = value.get<std::uint64_t>();
+            if (result == std::numeric_limits<std::uint64_t>::max())
+                throw std::invalid_argument("Camera pose counter has no increment headroom");
+            return result;
+        }
+
+        int integer(const Json& value) {
+            const auto result = counter(value);
+            if (result > static_cast<std::uint64_t>(std::numeric_limits<int>::max()))
+                throw std::invalid_argument("Camera pose integer out of range");
+            return static_cast<int>(result);
+        }
+
+        Matrix4 matrix(const Json& value) {
+            if (!value.is_array() || value.size() != 16)
+                throw std::invalid_argument("Camera pose matrix requires exactly 16 numbers");
+            Matrix4 result{};
+            for (size_t i = 0; i < result.size(); ++i) {
+                if (!value[i].is_number())
+                    throw std::invalid_argument("Camera pose matrix contains a non-number");
+                result[i] = value[i].get<float>();
+            }
+            return result;
+        }
+    } // namespace
+
+    nlohmann::json PoseRefinementSession::save_state() const {
+        auto cameras = Json::array();
+        for (const auto& entry : entries_) {
+            const auto pose = entry.optimizer.snapshot();
+            cameras.push_back({{"uid", pose.uid}, {"role", static_cast<int>(entry.role)}, {"source", pose.source}, {"current", pose.current}, {"revision", pose.revision}, {"accepted_steps", pose.accepted_steps}, {"rejected_steps", pose.rejected_steps}, {"display_state", static_cast<int>(entry.state)}, {"eligible_visits", entry.visits}, {"candidate_renders", entry.renders}});
+        }
+        return {{"version", 1}, {"settings", settings(config_)}, {"iteration", iteration_}, {"paused", paused_}, {"cameras", std::move(cameras)}};
+    }
+
+    void PoseRefinementSession::restore_state(const nlohmann::json& state) {
+        // Parse and validate on copies; no live pose, cadence, generation or
+        // snapshot changes until every camera and the new snapshot are ready.
+        if (!state.is_object() || state.size() != 5 || integer(state.at("version")) != 1 ||
+            state.at("settings") != settings(config_) || !state.at("paused").is_boolean())
+            throw std::invalid_argument("Camera pose state version or configuration mismatch");
+        const int iteration = integer(state.at("iteration"));
+        if (iteration > config_.total_iterations)
+            throw std::invalid_argument("Saved pose iteration exceeds the training schedule");
+        const bool paused = state.at("paused").get<bool>();
+        const auto& cameras = state.at("cameras");
+        if (!cameras.is_array() || cameras.size() != entries_.size())
+            throw std::invalid_argument("Camera pose state membership mismatch");
+        auto working = entries_;
+        std::vector<bool> seen(working.size(), false);
+        for (const auto& camera : cameras) {
+            if (!camera.is_object() || camera.size() != 10)
+                throw std::invalid_argument("Invalid saved camera pose record");
+            const int uid = integer(camera.at("uid"));
+            const auto found = index_.find(uid);
+            if (found == index_.end() || seen[found->second])
+                throw std::invalid_argument("Saved camera pose UID missing or duplicated");
+            seen[found->second] = true;
+            auto& entry = working[found->second];
+            if (integer(camera.at("role")) != static_cast<int>(entry.role))
+                throw std::invalid_argument("Camera pose split or reference role changed");
+            PoseSnapshot pose;
+            pose.uid = uid;
+            pose.source = matrix(camera.at("source"));
+            pose.current = matrix(camera.at("current"));
+            pose.revision = counter(camera.at("revision"));
+            pose.accepted_steps = counter(camera.at("accepted_steps"));
+            pose.rejected_steps = counter(camera.at("rejected_steps"));
+            entry.optimizer.restore(pose);
+            const int display = integer(camera.at("display_state"));
+            // Only internal last-attempt states are durable; role/freeze states
+            // are derived from role and schedule when snapshots are published.
+            if (display > static_cast<int>(PoseDisplayState::Rejected))
+                throw std::invalid_argument("Invalid durable camera pose display state");
+            entry.state = static_cast<PoseDisplayState>(display);
+            entry.visits = counter(camera.at("eligible_visits"));
+            entry.renders = counter(camera.at("candidate_renders"));
+            if (entry.renders < pose.accepted_steps)
+                throw std::invalid_argument("Saved pose accepted steps exceed candidate renders");
+        }
+        if (sequence_ == std::numeric_limits<std::uint64_t>::max())
+            throw std::invalid_argument("Camera pose snapshot sequence exhausted");
+        const auto snapshot = make_snapshot(working, iteration, paused, sequence_ + 1);
+        entries_ = std::move(working);
+        iteration_ = iteration;
+        paused_ = paused;
+        ++sequence_;
+        published_.store(snapshot, std::memory_order_release);
+        dirty_ = false;
+        next_publish_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    }
+} // namespace lfs::training::camera_pose

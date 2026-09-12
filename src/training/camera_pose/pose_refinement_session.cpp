@@ -190,31 +190,38 @@ namespace lfs::training::camera_pose {
         publish(true);
     }
 
-    void PoseRefinementSession::publish(bool force) {
-        const auto now = std::chrono::steady_clock::now();
-        if (!force && (!dirty_ || now < next_publish_))
-            return;
+    std::shared_ptr<const PoseSessionSnapshot> PoseRefinementSession::make_snapshot(
+        const std::vector<Entry>& entries, int iteration, bool paused, std::uint64_t sequence) const {
         auto snapshot = std::make_shared<PoseSessionSnapshot>();
         snapshot->generation = generation_;
-        snapshot->sequence = ++sequence_;
-        snapshot->iteration = iteration_;
-        snapshot->paused = paused_;
-        snapshot->cameras.reserve(entries_.size());
-        for (const auto& entry : entries_) {
+        snapshot->sequence = sequence;
+        snapshot->iteration = iteration;
+        snapshot->paused = paused;
+        snapshot->cameras.reserve(entries.size());
+        for (const auto& entry : entries) {
             auto state = entry.state;
             if (entry.role == PoseRole::Anchor)
                 state = PoseDisplayState::Anchor;
             else if (entry.role == PoseRole::Evaluation)
                 state = PoseDisplayState::Evaluation;
-            else if (paused_ || iteration_ >= static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction)))
+            else if (paused || iteration >= static_cast<int>(std::floor(config_.total_iterations * config_.freeze_fraction)))
                 state = PoseDisplayState::Frozen;
-            else if (iteration_ < config_.warmup_iterations)
+            else if (iteration < config_.warmup_iterations)
                 state = PoseDisplayState::Waiting;
             else if (state == PoseDisplayState::Waiting)
                 state = PoseDisplayState::Ready;
             snapshot->cameras.push_back({entry.optimizer.snapshot(), state, entry.visits, entry.renders});
         }
-        published_.store(std::move(snapshot), std::memory_order_release);
+        return snapshot;
+    }
+
+    void PoseRefinementSession::publish(bool force) {
+        const auto now = std::chrono::steady_clock::now();
+        if (!force && (!dirty_ || now < next_publish_))
+            return;
+        const auto snapshot = make_snapshot(entries_, iteration_, paused_, sequence_ + 1);
+        ++sequence_;
+        published_.store(snapshot, std::memory_order_release);
         dirty_ = false;
         next_publish_ = now + std::chrono::milliseconds(250);
     }

@@ -4,6 +4,7 @@
 #include "bounded_pose_optimizer.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <stdexcept>
 #include <utility>
@@ -98,6 +99,26 @@ namespace lfs::training::camera_pose {
         ++state_.revision; // Do not make old baseline evaluations valid again.
         state_.accepted_steps = state_.rejected_steps = 0;
         state_.center_displacement = state_.rotation_displacement = 0;
+        model_revision_ = 0;
+        clear_history();
+    }
+
+    void BoundedPoseOptimizer::restore(const PoseSnapshot& saved) {
+        const auto limit = std::numeric_limits<std::uint64_t>::max();
+        if (saved.uid != state_.uid || saved.source != state_.source || !rigid(saved.current) ||
+            saved.revision == limit || state_.revision == limit || saved.rejected_steps == limit ||
+            saved.accepted_steps > saved.revision ||
+            (saved.accepted_steps == 0 && saved.current != state_.source) ||
+            (role_ != PoseRole::Train && (saved.current != state_.source || saved.accepted_steps != 0)))
+            throw std::invalid_argument("Saved camera pose does not match source, role or revision contract");
+        auto restored = saved;
+        restored.center_displacement = center_distance(saved.current, state_.source);
+        restored.rotation_displacement = rotation_distance(saved.current, state_.source);
+        if (restored.center_displacement > config_.max_center_fraction * config_.scene_scale ||
+            restored.rotation_displacement > config_.max_rotation_radians)
+            throw std::invalid_argument("Saved camera pose exceeds configured displacement limits");
+        restored.revision = std::max(state_.revision, saved.revision) + 1;
+        state_ = restored;
         model_revision_ = 0;
         clear_history();
     }

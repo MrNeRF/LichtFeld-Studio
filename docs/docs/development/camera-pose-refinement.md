@@ -119,6 +119,30 @@ The owning training thread must keep them alive and hold the appropriate
 training safe point throughout a visit. The evaluator does not acquire model
 locks or mutate source Camera tensors.
 
+## Durable session state
+
+The session exposes JSON state serialization independently of display snapshot
+timing. It retains scheduling configuration, iteration, pause state, camera UIDs,
+roles, source/current poses, revisions and update/candidate counters. Serialized
+camera order is not significant.
+
+Restoration requires an exact match with the current session's configuration,
+membership, source matrices and reference/evaluation roles. Non-rigid transforms,
+out-of-bounds displacements, invalid counters and moved fixed/evaluation cameras
+are rejected. Displacement is recomputed from poses rather than trusted from
+stored metadata. All records and the replacement snapshot are prepared before
+installing the new state, so a malformed record cannot partially restore cameras.
+
+The receiving session retains its own generation and advances snapshot and pose
+revisions, invalidating earlier evaluations. Poses, pause state and per-camera
+cadence are preserved; inverse-BFGS history is restarted because its model/objective
+identity cannot be inferred from pose metadata. This is a controlled warm restart,
+not an identical continuation of optimizer internals.
+
+This serialization API does not itself read or write files. Embedding the state
+in project storage alongside the matching Gaussian model, dataset and training
+iteration remains a responsibility of the project/Trainer integration.
+
 ## Shared pose state and visualization
 
 Session mutation has one training-thread owner. Cross-thread readers use only

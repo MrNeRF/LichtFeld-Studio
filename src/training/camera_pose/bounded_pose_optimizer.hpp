@@ -70,6 +70,9 @@ namespace lfs::training::camera_pose {
         [[nodiscard]] PoseSnapshot snapshot() const noexcept;
         void set_frozen(bool frozen) noexcept;
         void reset() noexcept;
+        // Restore durable pose/counters, invalidate old evaluations and restart
+        // curvature history. Source and role belong to the current dataset.
+        void restore(const PoseSnapshot& saved);
 
         // Candidate callback must only render/evaluate; it must not update
         // Gaussian/appearance optimizers. At most max_backtracks callbacks.

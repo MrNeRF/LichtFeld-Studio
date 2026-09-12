@@ -1,7 +1,9 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "training/camera_pose/pose_refinement_session.hpp"
+#include <algorithm>
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 #include <stdexcept>
 
 namespace {
@@ -162,5 +164,80 @@ namespace {
         session.publish(true);
         EXPECT_EQ(session.published_snapshot()->cameras[2].state, PoseDisplayState::Ready);
         EXPECT_EQ(pose_display_state_name(PoseDisplayState::Updated), "updated");
+    }
+    TEST(CameraPoseSessionTest, DurableStateRoundTripPreservesPosesPauseAndCadence) {
+        PoseRefinementSession original(1, cameras(), config());
+        ASSERT_GT(original.visit(30, 10, 1, evaluate, loss).accepted_steps, 0);
+        original.set_paused(true);
+        // Save must use live state, not depend on the 250 ms display publisher.
+        auto serialized = nlohmann::json::parse(original.save_state().dump());
+        std::reverse(serialized["cameras"].begin(), serialized["cameras"].end());
+        PoseRefinementSession restored(99, cameras(), config());
+        const auto before = restored.published_snapshot();
+        restored.restore_state(serialized);
+        const auto after = restored.published_snapshot();
+        EXPECT_EQ(after->generation, 99u);
+        EXPECT_GT(after->sequence, before->sequence);
+        EXPECT_TRUE(after->paused);
+        EXPECT_EQ(after->iteration, 10);
+        EXPECT_EQ(restored.current_pose(30), original.current_pose(30));
+        EXPECT_GT(after->cameras[2].pose.revision, original.published_snapshot()->cameras[2].pose.revision);
+        EXPECT_EQ(after->cameras[2].eligible_visits, 1u);
+        EXPECT_EQ(before->cameras[2].pose.current, identity_transform());
+        EXPECT_FALSE(restored.visit(30, 10, 2, {}, {}).scheduled);
+        restored.set_paused(false);
+        EXPECT_FALSE(restored.visit(30, 11, 2, evaluate, loss).scheduled);
+        EXPECT_FALSE(restored.visit(30, 12, 2, evaluate, loss).scheduled);
+        EXPECT_GT(restored.visit(30, 13, 2, evaluate, loss).accepted_steps, 0);
+        restored.reset();
+        EXPECT_EQ(restored.current_pose(30), identity_transform());
+    }
+
+    TEST(CameraPoseSessionTest, CorruptDurableStateNeverPartiallyChangesLiveSession) {
+        PoseRefinementSession session(1, cameras(), config());
+        ASSERT_GT(session.visit(30, 10, 1, evaluate, loss).accepted_steps, 0);
+        const auto saved = session.save_state();
+        const auto snapshot = session.published_snapshot();
+        using Json = nlohmann::json;
+        const std::vector<std::function<void(Json&)>> corruptions{
+            [](Json& j) { j["version"] = 2; },
+            [](Json& j) { j["settings"]["steps_per_visit"] = 8; },
+            [](Json& j) { j["iteration"] = 101; },
+            [](Json& j) { j["paused"] = 1; },
+            [](Json& j) { j["cameras"][2]["uid"] = 10; },
+            [](Json& j) { j["cameras"][2]["role"] = static_cast<int>(PoseRole::Evaluation); },
+            [](Json& j) { j["cameras"][2]["source"][3] = 0.01; },
+            [](Json& j) { j["cameras"][2]["current"][3] = 10.0; },
+            [](Json& j) { j["cameras"][2]["current"][15] = 0; },
+            [](Json& j) { j["cameras"][2]["current"][0] = nullptr; },
+            [](Json& j) { j["cameras"][2]["eligible_visits"] = -1; },
+            [](Json& j) { j["cameras"][2]["eligible_visits"] = 1.5; },
+            [](Json& j) { j["cameras"][2]["candidate_renders"] = 0; },
+            [](Json& j) { j["cameras"][2]["revision"] = 0; },
+            [](Json& j) { j["cameras"][2]["display_state"] = 99; },
+            [](Json& j) { j["cameras"][2].erase("current"); },
+            [](Json& j) { j["cameras"].erase(0); },
+        };
+        for (size_t i = 0; i < corruptions.size(); ++i) {
+            SCOPED_TRACE(i);
+            auto bad = saved;
+            corruptions[i](bad);
+            EXPECT_ANY_THROW(session.restore_state(bad));
+            EXPECT_EQ(session.save_state(), saved);
+            EXPECT_EQ(session.published_snapshot(), snapshot);
+        }
+    }
+
+    TEST(CameraPoseSessionTest, DurableStateCannotMoveAnchorsOrEvaluationCameras) {
+        PoseRefinementSession session(1, cameras(), config());
+        const auto saved = session.save_state();
+        for (const size_t index : {0u, 1u, 3u}) {
+            auto bad = saved;
+            auto& camera = bad["cameras"][index];
+            camera["current"][3] = camera["current"][3].get<float>() + 0.001f;
+            camera["accepted_steps"] = camera["revision"] = camera["candidate_renders"] = 1;
+            EXPECT_THROW(session.restore_state(bad), std::invalid_argument);
+            EXPECT_EQ(session.save_state(), saved);
+        }
     }
 } // namespace
