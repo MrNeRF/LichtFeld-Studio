@@ -28,7 +28,7 @@ namespace {
     TEST_F(PPISPControllerTest, ForwardPassShape) {
         lfs::training::PPISPController controller(10000);
 
-        auto input = lfs::core::Tensor::randn({1, 3, 99, 99}, lfs::core::Device::CUDA);
+        auto input = lfs::core::Tensor::randn({1, 3, 99, 99}, lfs::core::Device::GPU);
 
         auto output = controller.predict(input, 1.0f);
 
@@ -40,11 +40,11 @@ namespace {
     TEST_F(PPISPControllerTest, ForwardPassDifferentInputSizes) {
         lfs::training::PPISPController controller(10000);
 
-        auto input_small = lfs::core::Tensor::randn({1, 3, 30, 30}, lfs::core::Device::CUDA);
+        auto input_small = lfs::core::Tensor::randn({1, 3, 30, 30}, lfs::core::Device::GPU);
         auto output_small = controller.predict(input_small, 1.0f);
         EXPECT_EQ(output_small.shape()[1], 9);
 
-        auto input_large = lfs::core::Tensor::randn({1, 3, 256, 256}, lfs::core::Device::CUDA);
+        auto input_large = lfs::core::Tensor::randn({1, 3, 256, 256}, lfs::core::Device::GPU);
         auto output_large = controller.predict(input_large, 1.0f);
         EXPECT_EQ(output_large.shape()[1], 9);
     }
@@ -56,7 +56,7 @@ namespace {
         ppisp.finalize();
 
         const auto input = lfs::core::Tensor::uniform(
-            {3, 16, 16}, 0.1f, 0.9f, lfs::core::Device::CUDA);
+            {3, 16, 16}, 0.1f, 0.9f, lfs::core::Device::GPU);
         const auto controller_params = controller.predict(input.unsqueeze(0), 1.0f);
         const auto corrected = ppisp.apply_with_controller_params(input, controller_params, 0);
         const auto controller_gradient = ppisp.backward_with_controller_params(
@@ -73,12 +73,12 @@ namespace {
     TEST_F(PPISPControllerTest, OptimizerStepChangesWeights) {
         lfs::training::PPISPController controller(10000);
 
-        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::CUDA);
+        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::GPU);
 
         auto output1 = controller.predict(input, 1.0f);
         auto output1_cpu = output1.cpu().to_vector();
 
-        auto grad_output = lfs::core::Tensor::ones({1, 9}, lfs::core::Device::CUDA);
+        auto grad_output = lfs::core::Tensor::ones({1, 9}, lfs::core::Device::GPU);
         controller.backward(grad_output);
         controller.optimizer_step();
 
@@ -121,14 +121,14 @@ namespace {
     TEST_F(PPISPControllerTest, ZeroGradClearsGradients) {
         lfs::training::PPISPController controller(10000);
 
-        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::CUDA);
+        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::GPU);
         controller.predict(input, 1.0f);
 
-        auto grad = lfs::core::Tensor::ones({1, 9}, lfs::core::Device::CUDA);
+        auto grad = lfs::core::Tensor::ones({1, 9}, lfs::core::Device::GPU);
         controller.backward(grad);
         controller.zero_grad();
 
-        auto input2 = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::CUDA);
+        auto input2 = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::GPU);
         auto output1 = controller.predict(input2, 1.0f);
         auto output1_cpu = output1.cpu().to_vector();
 
@@ -152,11 +152,11 @@ namespace {
         config.lr = 0.003;
         lfs::training::PPISPController controller1(10000, config);
 
-        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::CUDA);
+        auto input = lfs::core::Tensor::randn({1, 3, 64, 64}, lfs::core::Device::GPU);
         auto output1 = controller1.predict(input, 1.0f);
 
         for (int i = 0; i < 10; ++i) {
-            auto grad = lfs::core::Tensor::randn({1, 9}, lfs::core::Device::CUDA);
+            auto grad = lfs::core::Tensor::randn({1, 9}, lfs::core::Device::GPU);
             controller1.backward(grad);
             controller1.optimizer_step();
             controller1.zero_grad();
@@ -190,8 +190,8 @@ namespace {
         config.warmup_steps = 10;
         lfs::training::PPISPController controller(1000, config);
 
-        auto input = lfs::core::Tensor::randn({1, 3, 48, 48}, lfs::core::Device::CUDA);
-        auto target = lfs::core::Tensor::randn({1, 9}, lfs::core::Device::CUDA);
+        auto input = lfs::core::Tensor::randn({1, 3, 48, 48}, lfs::core::Device::GPU);
+        auto target = lfs::core::Tensor::randn({1, 9}, lfs::core::Device::GPU);
 
         float initial_loss = 0.0f;
         float final_loss = 0.0f;

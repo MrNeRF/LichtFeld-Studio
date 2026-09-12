@@ -736,7 +736,7 @@ namespace lfs::vis::gui {
             (selection && selection->is_valid() && selection->numel() == selection_count)
                 ? std::make_shared<core::Tensor>(selection->clone())
                 : std::make_shared<core::Tensor>(
-                      core::Tensor::zeros({selection_count}, core::Device::CUDA, core::DataType::Bool));
+                      core::Tensor::zeros({selection_count}, core::Device::GPU, core::DataType::Bool));
     }
 
     bool GizmoManager::applySelectionVolumeFromGizmo(const bool push_undo) {

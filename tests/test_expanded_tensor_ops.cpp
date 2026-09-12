@@ -32,9 +32,9 @@ protected:
 
 TEST_F(ExpandedTensorOpsTest, StackDim2_Correctness) {
     const size_t H = 4, W = 3;
-    auto r = Tensor::full({H, W}, 0.25f, Device::CUDA);
-    auto g = Tensor::full({H, W}, 0.50f, Device::CUDA);
-    auto b = Tensor::full({H, W}, 0.75f, Device::CUDA);
+    auto r = Tensor::full({H, W}, 0.25f, Device::GPU);
+    auto g = Tensor::full({H, W}, 0.50f, Device::GPU);
+    auto b = Tensor::full({H, W}, 0.75f, Device::GPU);
 
     auto stacked = Tensor::stack({r, g, b}, 2);
     assert_cuda_ok("stack dim=2");
@@ -59,9 +59,9 @@ TEST_F(ExpandedTensorOpsTest, StackDim2_Correctness) {
 }
 
 TEST_F(ExpandedTensorOpsTest, StackDim2_256x256) {
-    auto r = Tensor::full({256, 256}, 0.1f, Device::CUDA);
-    auto g = Tensor::full({256, 256}, 0.5f, Device::CUDA);
-    auto b = Tensor::full({256, 256}, 0.9f, Device::CUDA);
+    auto r = Tensor::full({256, 256}, 0.1f, Device::GPU);
+    auto g = Tensor::full({256, 256}, 0.5f, Device::GPU);
+    auto b = Tensor::full({256, 256}, 0.9f, Device::GPU);
 
     auto stacked = Tensor::stack({r, g, b}, 2);
     assert_cuda_ok("stack dim=2 256x256");
@@ -82,8 +82,8 @@ TEST_F(ExpandedTensorOpsTest, StackDim2_256x256) {
 }
 
 TEST_F(ExpandedTensorOpsTest, StackDim1_Correctness) {
-    auto a = Tensor::full({3, 4}, 1.0f, Device::CUDA);
-    auto b = Tensor::full({3, 4}, 2.0f, Device::CUDA);
+    auto a = Tensor::full({3, 4}, 1.0f, Device::GPU);
+    auto b = Tensor::full({3, 4}, 2.0f, Device::GPU);
 
     auto stacked = Tensor::stack({a, b}, 1);
     assert_cuda_ok("stack dim=1");
@@ -107,12 +107,12 @@ TEST_F(ExpandedTensorOpsTest, StackDim1_Correctness) {
 TEST_F(ExpandedTensorOpsTest, PlasmaPatternFullPipeline) {
     const size_t H = 256, W = 256;
 
-    auto y = Tensor::linspace(-1.0f, 1.0f, H, Device::CUDA)
+    auto y = Tensor::linspace(-1.0f, 1.0f, H, Device::GPU)
                  .reshape({static_cast<int>(H), 1})
                  .expand({static_cast<int>(H), static_cast<int>(W)});
     assert_cuda_ok("create y grid");
 
-    auto x = Tensor::linspace(-1.0f, 1.0f, W, Device::CUDA)
+    auto x = Tensor::linspace(-1.0f, 1.0f, W, Device::GPU)
                  .reshape({1, static_cast<int>(W)})
                  .expand({static_cast<int>(H), static_cast<int>(W)});
     assert_cuda_ok("create x grid");
@@ -137,7 +137,7 @@ TEST_F(ExpandedTensorOpsTest, PlasmaPatternFullPipeline) {
     ASSERT_EQ(image.size(2), 3);
 
     // Interop scatter path
-    auto rgba = Tensor::empty({H, W, 4}, Device::CUDA);
+    auto rgba = Tensor::empty({H, W, 4}, Device::GPU);
     rgba.slice(2, 0, 3).copy_from(image);
     assert_cuda_ok("scatter RGB into RGBA");
 
@@ -158,9 +158,9 @@ TEST_F(ExpandedTensorOpsTest, PlasmaPatternFullPipeline) {
 // ===== Stack with various dim values =====
 
 TEST_F(ExpandedTensorOpsTest, StackDim0) {
-    auto a = Tensor::full({2, 3}, 1.0f, Device::CUDA);
-    auto b = Tensor::full({2, 3}, 2.0f, Device::CUDA);
-    auto c = Tensor::full({2, 3}, 3.0f, Device::CUDA);
+    auto a = Tensor::full({2, 3}, 1.0f, Device::GPU);
+    auto b = Tensor::full({2, 3}, 2.0f, Device::GPU);
+    auto c = Tensor::full({2, 3}, 3.0f, Device::GPU);
 
     auto stacked = Tensor::stack({a, b, c}, 0);
     assert_cuda_ok("stack dim=0");
@@ -179,8 +179,8 @@ TEST_F(ExpandedTensorOpsTest, StackDim0) {
 // ===== Scatter into RGBA (from strided fill test, re-validated with new stack) =====
 
 TEST_F(ExpandedTensorOpsTest, ScatterToRGBA) {
-    auto rgb = Tensor::full({256, 256, 3}, 0.5f, Device::CUDA);
-    auto rgba = Tensor::zeros({256, 256, 4}, Device::CUDA);
+    auto rgb = Tensor::full({256, 256, 3}, 0.5f, Device::GPU);
+    auto rgba = Tensor::zeros({256, 256, 4}, Device::GPU);
 
     rgba.slice(2, 0, 3).copy_from(rgb);
     assert_cuda_ok("scatter RGB to RGBA");
@@ -280,7 +280,7 @@ TEST(ExpandedTensorOps, EmptyZeroDimTensorPtrIsSafe) {
 TEST(ExpandedTensorOps, CpuTaggedDeviceStorageRejectedOnPtr) {
     using namespace lfs::core;
     auto device_src = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f, 4.f},
-                                          TensorShape({4}), Device::CUDA);
+                                          TensorShape({4}), Device::GPU);
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     // Non-owning blob: deliberately lie about device.

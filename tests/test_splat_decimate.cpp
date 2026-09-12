@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "../src/io/cuda/splat_decimate_internal.hpp"
+#include "core/tensor_backend.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -96,6 +97,28 @@ TEST(SplatDecimate, ExactTargetCount) {
         }
         EXPECT_NE(same->means().ptr<float>(), input.means().ptr<float>());
     }
+}
+
+TEST(SplatDecimate, VulkanInputMaterializesCudaStorageForGpuKernels) {
+    if (!gpu_backend_available(GpuBackend::Vulkan))
+        GTEST_SKIP() << "Vulkan backend unavailable";
+    const GpuBackendScope vulkan_scope(GpuBackend::Vulkan);
+    auto input = splats(make_decimate_data(256, 1), 1);
+    ASSERT_EQ(gpu_backend_of(input.means()), GpuBackend::Vulkan);
+    for (const bool use_gpu : {false, true}) {
+        for (const size_t target : {size_t{128}, size_t{256}}) {
+            DecimateOptions options;
+            options.target_count = target;
+            options.use_gpu = use_gpu;
+            auto result = decimate_splats(input, options);
+            ASSERT_TRUE(result) << result.error().message;
+            EXPECT_EQ(result->size(), target);
+            EXPECT_EQ(gpu_backend_of(result->means()), GpuBackend::CUDA);
+            finite(*result);
+        }
+    }
+    EXPECT_EQ(gpu_backend_of(input.means()), GpuBackend::Vulkan);
+    EXPECT_EQ(input.size(), 256);
 }
 
 TEST(SplatDecimate, GpuMatchesCpuReference) {

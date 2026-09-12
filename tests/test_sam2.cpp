@@ -137,7 +137,7 @@ namespace {
             nchw,
             lfs::core::TensorShape(std::vector<std::size_t>{1, 3, static_cast<std::size_t>(h),
                                                             static_cast<std::size_t>(w)}),
-            lfs::core::Device::CUDA);
+            lfs::core::Device::GPU);
     }
 
     float max_abs_at(const std::vector<float>& got, const nlohmann::json& node) {
@@ -215,7 +215,7 @@ TEST(Sam2Test, FullModelParityIsOptIn) {
     ASSERT_EQ(cudaGetDeviceCount(&devices), cudaSuccess);
     ASSERT_GT(devices, 0);
 
-    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::GPU,
                                                    lfs::core::DataType::Float32);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
 
@@ -442,7 +442,7 @@ TEST(Sam2Test, FullModelParityIsOptIn) {
     EXPECT_EQ(probe_sign_mismatch, 0);
     EXPECT_LE(probe_linf, kProbeLinf);
 
-    auto model16 = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::CUDA,
+    auto model16 = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::GPU,
                                                      lfs::core::DataType::Float16);
     ASSERT_TRUE(model16.has_value()) << std::string(model16.error().detail());
     ASSERT_EQ(cudaEventRecord(ev0), cudaSuccess);
@@ -596,7 +596,7 @@ TEST(Sam2Test, DeviceFootprintStaysUnderBudget) {
     std::size_t total = 0;
     ASSERT_EQ(cudaMemGetInfo(&free0, &total), cudaSuccess);
 
-    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::CUDA,
+    auto model = lfs::core::nn::models::Sam2::load(weights, lfs::core::Device::GPU,
                                                    lfs::core::DataType::Float16);
     ASSERT_TRUE(model.has_value()) << std::string(model.error().detail());
     auto image = make_fixture_image();

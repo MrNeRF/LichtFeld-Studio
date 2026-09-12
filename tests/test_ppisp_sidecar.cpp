@@ -28,12 +28,12 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = base + 0.01f * static_cast<float>(i);
         }
-        return Tensor::from_vector(values, {3, 4, 4}, Device::CUDA);
+        return Tensor::from_vector(values, {3, 4, 4}, Device::GPU);
     }
 
     Tensor make_grad(float value) {
         std::vector<float> values(3 * 4 * 4, value);
-        return Tensor::from_vector(values, {3, 4, 4}, Device::CUDA);
+        return Tensor::from_vector(values, {3, 4, 4}, Device::GPU);
     }
 
     Tensor make_controller_input(float base) {
@@ -41,12 +41,12 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = base + 0.001f * static_cast<float>(i);
         }
-        return Tensor::from_vector(values, {1, 3, 48, 48}, Device::CUDA);
+        return Tensor::from_vector(values, {1, 3, 48, 48}, Device::GPU);
     }
 
     Tensor make_controller_grad(float value) {
         std::vector<float> values(9, value);
-        return Tensor::from_vector(values, {1, 9}, Device::CUDA);
+        return Tensor::from_vector(values, {1, 9}, Device::GPU);
     }
 
     void update_ppisp(PPISP& ppisp, int camera_id, int uid, float input_base, float grad_value, int steps) {

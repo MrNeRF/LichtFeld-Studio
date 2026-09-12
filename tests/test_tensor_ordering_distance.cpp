@@ -13,7 +13,7 @@ using namespace lfs::core;
 
 TEST(TensorOrderingTest, Float32SortReturnsValuesAndSourceIndices) {
     const auto input = Tensor::from_vector(
-        std::vector<float>{3.0f, 1.0f, 4.0f, 2.0f}, {4}, Device::CUDA);
+        std::vector<float>{3.0f, 1.0f, 4.0f, 2.0f}, {4}, Device::GPU);
 
     const auto [ascending, ascending_indices] = input.sort(0);
     EXPECT_EQ(ascending_indices.dtype(), DataType::Int64);
@@ -64,7 +64,7 @@ TEST(TensorOrderingTest, CpuSortPreservesInt64IndicesAcrossRanks) {
 TEST(TensorOrderingTest, Float32SortAlongSecondDimension) {
     const auto input = Tensor::from_vector(
         std::vector<float>{3.0f, 1.0f, 2.0f, 4.0f, 6.0f, 5.0f},
-        {2, 3}, Device::CUDA);
+        {2, 3}, Device::GPU);
 
     const auto [values, indices] = input.sort(1, true);
     EXPECT_EQ(values.cpu().to_vector(),
@@ -74,7 +74,7 @@ TEST(TensorOrderingTest, Float32SortAlongSecondDimension) {
 }
 
 TEST(TensorOrderingTest, MinMaxWithIndicesReturnValuesAndLocations) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         const auto input = Tensor::from_vector(
             std::vector<float>{3.0f, 1.0f, 2.0f, 4.0f, 6.0f, 5.0f},
             {2, 3}, device);
@@ -93,9 +93,9 @@ TEST(TensorOrderingTest, MinMaxWithIndicesReturnValuesAndLocations) {
 
 TEST(TensorDistanceTest, CdistL1AndL2HaveExactValues) {
     const auto lhs = Tensor::from_vector(
-        std::vector<float>{0.0f, 0.0f, 3.0f, 4.0f}, {2, 2}, Device::CUDA);
+        std::vector<float>{0.0f, 0.0f, 3.0f, 4.0f}, {2, 2}, Device::GPU);
     const auto rhs = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, -2.0f, 0.0f}, {2, 2}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, -2.0f, 0.0f}, {2, 2}, Device::GPU);
 
     const auto l1 = lhs.cdist(rhs, 1.0f).cpu().to_vector();
     EXPECT_EQ(l1, (std::vector<float>{3.0f, 2.0f, 4.0f, 9.0f}));

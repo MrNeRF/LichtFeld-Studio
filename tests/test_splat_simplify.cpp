@@ -239,14 +239,14 @@ namespace {
 
         auto result = std::make_unique<SplatData>(
             max_sh_degree,
-            Tensor::from_vector(means, {count, size_t{3}}, Device::CUDA).to(DataType::Float32),
-            Tensor::from_vector(sh0, {count, size_t{1}, size_t{3}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(means, {count, size_t{3}}, Device::GPU).to(DataType::Float32),
+            Tensor::from_vector(sh0, {count, size_t{1}, size_t{3}}, Device::GPU).to(DataType::Float32),
             shn_coeffs > 0
-                ? Tensor::from_vector(shN, {count, static_cast<size_t>(shn_coeffs), size_t{3}}, Device::CUDA).to(DataType::Float32)
+                ? Tensor::from_vector(shN, {count, static_cast<size_t>(shn_coeffs), size_t{3}}, Device::GPU).to(DataType::Float32)
                 : Tensor{},
-            Tensor::from_vector(scaling, {count, size_t{3}}, Device::CUDA).to(DataType::Float32),
-            Tensor::from_vector(rotation, {count, size_t{4}}, Device::CUDA).to(DataType::Float32),
-            Tensor::from_vector(opacity, {count, size_t{1}}, Device::CUDA).to(DataType::Float32),
+            Tensor::from_vector(scaling, {count, size_t{3}}, Device::GPU).to(DataType::Float32),
+            Tensor::from_vector(rotation, {count, size_t{4}}, Device::GPU).to(DataType::Float32),
+            Tensor::from_vector(opacity, {count, size_t{1}}, Device::GPU).to(DataType::Float32),
             1.0f);
         result->set_active_sh_degree(max_sh_degree);
         result->set_max_sh_degree(max_sh_degree);
@@ -1145,12 +1145,12 @@ TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
     constexpr int kShDegree = 3;
     constexpr size_t kRest = 15;
 
-    auto means = Tensor::zeros({kN, size_t{3}}, Device::CUDA, DataType::Float32);
-    auto sh0 = Tensor::zeros({kN, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-    auto shN_can = Tensor::zeros({kN, kRest, size_t{3}}, Device::CUDA, DataType::Float32);
-    auto scaling = Tensor::zeros({kN, size_t{3}}, Device::CUDA, DataType::Float32);
-    auto rotation = Tensor::zeros({kN, size_t{4}}, Device::CUDA, DataType::Float32);
-    auto opacity = Tensor::zeros({kN, size_t{1}}, Device::CUDA, DataType::Float32);
+    auto means = Tensor::zeros({kN, size_t{3}}, Device::GPU, DataType::Float32);
+    auto sh0 = Tensor::zeros({kN, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+    auto shN_can = Tensor::zeros({kN, kRest, size_t{3}}, Device::GPU, DataType::Float32);
+    auto scaling = Tensor::zeros({kN, size_t{3}}, Device::GPU, DataType::Float32);
+    auto rotation = Tensor::zeros({kN, size_t{4}}, Device::GPU, DataType::Float32);
+    auto opacity = Tensor::zeros({kN, size_t{1}}, Device::GPU, DataType::Float32);
 
     {
         auto means_cpu = means.cpu();
@@ -1158,7 +1158,7 @@ TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
         for (size_t i = 0; i < kN; ++i) {
             m[i * 3 + 0] = static_cast<float>(i) * 0.25f;
         }
-        means = means_cpu.to(Device::CUDA);
+        means = means_cpu.to(Device::GPU);
 
         auto shN_cpu = shN_can.cpu();
         auto* p = shN_cpu.ptr<float>();
@@ -1166,13 +1166,13 @@ TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
             for (size_t c = 0; c < kRest * 3; ++c)
                 p[i * kRest * 3 + c] = static_cast<float>(i) * 0.01f + static_cast<float>(c) * 0.001f;
         }
-        shN_can = shN_cpu.to(Device::CUDA);
+        shN_can = shN_cpu.to(Device::GPU);
 
         auto rot_cpu = rotation.cpu();
         auto* r = rot_cpu.ptr<float>();
         for (size_t i = 0; i < kN; ++i)
             r[i * 4] = 1.0f;
-        rotation = rot_cpu.to(Device::CUDA);
+        rotation = rot_cpu.to(Device::GPU);
 
         opacity.fill_(2.0f);
         scaling.fill_(std::log(0.1f));
@@ -1192,7 +1192,7 @@ TEST(SplatSimplify, Q16DeletedMaskPreservesCanonicalSH) {
     deleted[1] = true;
     deleted[17] = true;
     deleted[63] = true;
-    source->deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+    source->deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::GPU);
     source->refresh_deleted_count();
     ASSERT_TRUE(source->has_deleted_mask());
     ASSERT_EQ(source->deleted_count(), 3u);

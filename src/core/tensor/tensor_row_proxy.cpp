@@ -4,33 +4,35 @@
 #include "internal/tensor_impl.hpp"
 #include <cmath>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <format>
 #include <string_view>
 #include <vector>
 
 namespace lfs::core {
     namespace {
-        void cuda_copy_async_sync(void* dst, const void* src, size_t bytes, cudaMemcpyKind kind,
-                                  cudaStream_t stream, const char* context) {
-            LFS_CUDA_CHECK_MSG_STREAM_ARGS(
-                cudaMemcpyAsync(dst, src, bytes, kind, stream),
-                stream,
-                reinterpret_cast<uintptr_t>(dst),
-                reinterpret_cast<uintptr_t>(src),
-                bytes,
-                "{} copy (bytes={}, copy_kind={}, destination_pointer={}, "
-                "source_pointer={}, stream={})",
-                context, bytes, static_cast<int>(kind), dst, src,
-                static_cast<const void*>(stream));
-            LFS_CUDA_CHECK_MSG_STREAM_ARGS(
-                cudaStreamSynchronize(stream),
-                stream,
-                reinterpret_cast<uintptr_t>(dst),
-                reinterpret_cast<uintptr_t>(src),
-                bytes,
-                "{} synchronization (bytes={}, destination_pointer={}, source_pointer={}, stream={})",
-                context, bytes, dst, src, static_cast<const void*>(stream));
+        void copy_scalar_to_cuda(Tensor& tensor, const size_t element_index,
+                                 const void* const source, const size_t bytes) {
+            internal::preserve_lazy_snapshots_before_write(tensor);
+            internal::backend_ops_for(tensor).copy_host_to_device(internal::CopyRequest{
+                .src = internal::raw_storage_ref(const_cast<void*>(source), tensor.dtype()),
+                .dst = internal::offset_storage_ref(
+                    internal::storage_ref(tensor), element_index * bytes),
+                .bytes = bytes,
+                .synchronous = true,
+                .context = internal::ExecContext{tensor.stream()},
+            });
+        }
+
+        void copy_scalar_from_cuda(const Tensor& tensor, const size_t element_index,
+                                   void* const destination, const size_t bytes) {
+            internal::backend_ops_for(tensor).copy_device_to_host(internal::CopyRequest{
+                .src = internal::offset_storage_ref(
+                    internal::storage_ref(tensor), element_index * bytes),
+                .dst = internal::raw_storage_ref(destination, tensor.dtype()),
+                .bytes = bytes,
+                .synchronous = true,
+                .context = internal::ExecContext{tensor.stream()},
+            });
         }
 
         void assert_proxy_tensor(const Tensor* tensor,
@@ -50,7 +52,7 @@ namespace lfs::core {
         if (cuda_staging_slots_.empty()) {
             return;
         }
-        if (!tensor_ || !tensor_->is_valid() || tensor_->device() != Device::CUDA) {
+        if (!tensor_ || !tensor_->is_valid() || tensor_->device() != Device::GPU) {
             return;
         }
         if (tensor_->dtype() != DataType::Float32) {
@@ -58,13 +60,7 @@ namespace lfs::core {
         }
 
         for (const auto& slot : cuda_staging_slots_) {
-            cuda_copy_async_sync(
-                tensor_->ptr<float>() + slot.linear_index,
-                &slot.value,
-                sizeof(float),
-                cudaMemcpyHostToDevice,
-                tensor_->stream(),
-                "TensorRowProxy::flush_cuda_staging");
+            copy_scalar_to_cuda(*tensor_, slot.linear_index, &slot.value, sizeof(float));
         }
     }
 
@@ -102,13 +98,7 @@ namespace lfs::core {
 
             cuda_staging_slots_.push_back(CudaStagingSlot{.linear_index = linear_idx});
             auto& slot = cuda_staging_slots_.back();
-            cuda_copy_async_sync(
-                &slot.value,
-                tensor_->ptr<float>() + linear_idx,
-                sizeof(float),
-                cudaMemcpyDeviceToHost,
-                tensor_->stream(),
-                "TensorRowProxy::operator[]");
+            copy_scalar_from_cuda(*tensor_, linear_idx, &slot.value, sizeof(float));
             return slot.value;
         }
 
@@ -128,15 +118,9 @@ namespace lfs::core {
         // Use actual strides for proper indexing on non-contiguous tensors
         size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
-        if (tensor_->device() == Device::CUDA) {
+        if (tensor_->device() == Device::GPU) {
             float value = 0.0f;
-            cuda_copy_async_sync(
-                &value,
-                tensor_->ptr<float>() + linear_idx,
-                sizeof(float),
-                cudaMemcpyDeviceToHost,
-                tensor_->stream(),
-                "TensorRowProxy::operator[] const");
+            copy_scalar_from_cuda(*tensor_, linear_idx, &value, sizeof(float));
             return value;
         } else {
             return tensor_->ptr<float>()[linear_idx];
@@ -164,15 +148,9 @@ namespace lfs::core {
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);
 
-        if (tensor_->device() == Device::CUDA) {
+        if (tensor_->device() == Device::GPU) {
             float value = 0.0f;
-            cuda_copy_async_sync(
-                &value,
-                tensor_->ptr<float>() + linear_idx,
-                sizeof(float),
-                cudaMemcpyDeviceToHost,
-                tensor_->stream(),
-                "TensorRowProxy::item()");
+            copy_scalar_from_cuda(*tensor_, linear_idx, &value, sizeof(float));
             return value;
         } else {
             return tensor_->ptr<float>()[linear_idx];
@@ -225,6 +203,8 @@ namespace lfs::core {
                        "TensorRowProxy assignment requires a valid source tensor");
         LFS_ASSERT_MSG(other.dtype() == tensor_->dtype(),
                        "TensorRowProxy assignment requires matching dtypes");
+        internal::require_same_gpu_backend(
+            *tensor_, other, "TensorRowProxy assignment");
         flush_cuda_staging();
 
         if (tensor_->shape().rank() > 1) {
@@ -245,9 +225,15 @@ namespace lfs::core {
                                other.shape() == row_slice.shape(),
                            "TensorRowProxy assignment source shape does not match the row");
 
-            auto other_copy = (other.device() == tensor_->device())
-                                  ? other.clone()
-                                  : other.to(tensor_->device());
+            Tensor other_copy;
+            if (other.device() == tensor_->device()) {
+                other_copy = other.clone();
+            } else if (tensor_->device() == Device::GPU) {
+                other_copy = internal::copy_to_backend(
+                    other, gpu_backend_of(*tensor_).value());
+            } else {
+                other_copy = other.to(Device::CPU);
+            }
             LFS_ASSERT_MSG(other_copy.is_valid(),
                            "TensorRowProxy failed to convert its assignment source");
 
@@ -303,14 +289,8 @@ namespace lfs::core {
             // Use stride for proper indexing on non-contiguous 1D tensors
             size_t linear_idx = row_index_ * tensor_->stride(0);
 
-            if (tensor_->device() == Device::CUDA) {
-                cuda_copy_async_sync(
-                    tensor_->ptr<float>() + linear_idx,
-                    &val,
-                    sizeof(float),
-                    cudaMemcpyHostToDevice,
-                    tensor_->stream(),
-                    "TensorRowProxy scalar assignment from tensor");
+            if (tensor_->device() == Device::GPU) {
+                copy_scalar_to_cuda(*tensor_, linear_idx, &val, sizeof(float));
             } else {
                 tensor_->ptr<float>()[linear_idx] = val;
             }
@@ -331,14 +311,8 @@ namespace lfs::core {
         // Use stride for proper indexing on non-contiguous 1D tensors
         size_t linear_idx = row_index_ * tensor_->stride(0);
 
-        if (tensor_->device() == Device::CUDA) {
-            cuda_copy_async_sync(
-                tensor_->ptr<float>() + linear_idx,
-                &value,
-                sizeof(float),
-                cudaMemcpyHostToDevice,
-                tensor_->stream(),
-                "TensorRowProxy scalar assignment");
+        if (tensor_->device() == Device::GPU) {
+            copy_scalar_to_cuda(*tensor_, linear_idx, &value, sizeof(float));
         } else {
             tensor_->ptr<float>()[linear_idx] = value;
         }

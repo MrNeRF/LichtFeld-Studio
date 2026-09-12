@@ -90,7 +90,7 @@ protected:
 };
 
 TEST_F(BoolAnyAllTest, SumReturnsInt64CountOnCpuAndCuda) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         const auto values = Tensor::from_vector(
             std::vector<bool>{true, false, true, true}, {4}, device);
 
@@ -102,7 +102,7 @@ TEST_F(BoolAnyAllTest, SumReturnsInt64CountOnCpuAndCuda) {
 }
 
 TEST_F(BoolAnyAllTest, AnyScalarReturnsHostBoolOnCpuAndCuda) {
-    for (const auto device : {Device::CPU, Device::CUDA}) {
+    for (const auto device : {Device::CPU, Device::GPU}) {
         const auto all_false = Tensor::full_bool({4}, false, device);
         auto one_true = all_false.clone();
         one_true.set_bool({2}, true);
@@ -115,8 +115,8 @@ TEST_F(BoolAnyAllTest, AnyScalarReturnsHostBoolOnCpuAndCuda) {
 TEST_F(BoolAnyAllTest, LargeBoolSumPreservesDensificationCounts) {
     constexpr size_t count = 5'000'000;
 
-    const auto all_false = Tensor::full_bool({count}, false, Device::CUDA);
-    const auto all_true = Tensor::full_bool({count}, true, Device::CUDA);
+    const auto all_false = Tensor::full_bool({count}, false, Device::GPU);
+    const auto all_true = Tensor::full_bool({count}, true, Device::GPU);
 
     EXPECT_EQ(all_false.sum().item<int64_t>(), 0);
     EXPECT_EQ(all_true.sum().item<int64_t>(), static_cast<int64_t>(count));
@@ -133,7 +133,7 @@ TEST_F(BoolAnyAllTest, GetBoolSupportsRanksSpansAndCuda) {
     const std::array<size_t, 3> index = {1, 1, 0};
     EXPECT_TRUE(cpu.get_bool(std::span<const size_t>(index)));
 
-    const auto cuda = cpu.to(Device::CUDA);
+    const auto cuda = cpu.to(Device::GPU);
     EXPECT_TRUE(cuda.get_bool({0, 0, 1}));
     EXPECT_TRUE(cuda.get_bool({1, 1, 0}));
     EXPECT_FALSE(cuda.get_bool({0, 1, 1}));
@@ -540,7 +540,7 @@ TEST_F(BoolAnyAllTest, Any_NonContiguousSlice_AxisReduction) {
 
 TEST_F(BoolAnyAllTest, CUDA_Any_FullReduction) {
     auto cpu_tensor = random_bool_tensor({5, 6, 7}, 0.3f);
-    auto cuda_tensor = cpu_tensor.to(Device::CUDA);
+    auto cuda_tensor = cpu_tensor.to(Device::GPU);
     auto torch_tensor = lfs_to_torch_bool(cpu_tensor).to(torch::kCUDA);
 
     auto lfs_result = cuda_tensor.any();
@@ -554,7 +554,7 @@ TEST_F(BoolAnyAllTest, CUDA_Any_FullReduction) {
 
 TEST_F(BoolAnyAllTest, CUDA_All_FullReduction) {
     auto cpu_tensor = random_bool_tensor({5, 6, 7}, 0.9f);
-    auto cuda_tensor = cpu_tensor.to(Device::CUDA);
+    auto cuda_tensor = cpu_tensor.to(Device::GPU);
     auto torch_tensor = lfs_to_torch_bool(cpu_tensor).to(torch::kCUDA);
 
     auto lfs_result = cuda_tensor.all();
@@ -568,7 +568,7 @@ TEST_F(BoolAnyAllTest, CUDA_All_FullReduction) {
 
 TEST_F(BoolAnyAllTest, CUDA_Any_AxisReduction) {
     auto cpu_tensor = random_bool_tensor({4, 5, 6}, 0.3f);
-    auto cuda_tensor = cpu_tensor.to(Device::CUDA);
+    auto cuda_tensor = cpu_tensor.to(Device::GPU);
     auto torch_tensor = lfs_to_torch_bool(cpu_tensor).to(torch::kCUDA);
 
     for (int dim = 0; dim < 3; ++dim) {
@@ -581,7 +581,7 @@ TEST_F(BoolAnyAllTest, CUDA_Any_AxisReduction) {
 
 TEST_F(BoolAnyAllTest, CUDA_All_AxisReduction) {
     auto cpu_tensor = random_bool_tensor({4, 5, 6}, 0.8f);
-    auto cuda_tensor = cpu_tensor.to(Device::CUDA);
+    auto cuda_tensor = cpu_tensor.to(Device::GPU);
     auto torch_tensor = lfs_to_torch_bool(cpu_tensor).to(torch::kCUDA);
 
     for (int dim = 0; dim < 3; ++dim) {
@@ -593,7 +593,7 @@ TEST_F(BoolAnyAllTest, CUDA_All_AxisReduction) {
 }
 
 TEST_F(BoolAnyAllTest, CropBoxRowsRequireAllCoordinatesInside) {
-    auto inside_coordinates = Tensor::full_bool({6, 3}, false, Device::CUDA);
+    auto inside_coordinates = Tensor::full_bool({6, 3}, false, Device::GPU);
     inside_coordinates.slice(0, 0, 2).fill_(true);
     inside_coordinates.slice(0, 2, 4).slice(1, 0, 2).fill_(true);
 

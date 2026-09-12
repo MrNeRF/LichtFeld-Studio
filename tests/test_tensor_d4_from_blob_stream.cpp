@@ -4,11 +4,11 @@
  */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_event_pool.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_event_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "tensor_hardening_test_utils.hpp"
 
 #include <array>
@@ -146,7 +146,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_DefaultHomeIsNull) {
     ASSERT_NE(buffer.get(), nullptr);
 
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32);
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32);
 
     EXPECT_EQ(blob.stream(), nullptr);
     EXPECT_FALSE(blob.owns_memory());
@@ -166,7 +166,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_StreamMetadata) {
     ASSERT_NE(retagged_home.get(), nullptr);
 
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32, home.get());
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32, home.get());
     ASSERT_EQ(blob.stream(), home.get());
 
     auto copy = blob;
@@ -191,7 +191,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_ViewInheritsStream)
     ASSERT_NE(home.get(), nullptr);
 
     auto blob = Tensor::from_blob(
-        buffer.get(), {64, 64}, Device::CUDA, DataType::Float32, home.get());
+        buffer.get(), {64, 64}, Device::GPU, DataType::Float32, home.get());
     auto sliced = blob.slice(0, 0, 32);
     auto reshaped = blob.reshape({16, 256});
     auto unsqueezed = blob.unsqueeze(0);
@@ -216,7 +216,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_WithHome_SyncToStreamOrdersR
 
     primeAndEnqueueZero(producer, buffer);
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32, producer.get());
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32, producer.get());
 
     blob.sync_to_stream(consumer.get());
     ASSERT_EQ(cudaMemcpyAsync(values.data(), buffer.get(), kValueBytes,
@@ -237,7 +237,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FromBlobCuda_NullHome_RecordStreamIsStill
     ASSERT_NE(buffer.get(), nullptr);
 
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32);
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32);
 
     EXPECT_NO_THROW(blob.record_stream(reader.get()));
     EXPECT_EQ(blob.stream(), nullptr);
@@ -257,7 +257,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest,
     ASSERT_NE(buffer.get(), nullptr);
 
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32, home.get());
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32, home.get());
 
     EXPECT_NO_THROW(blob.record_stream(reader.get()));
     EXPECT_EQ(blob.stream(), home.get());
@@ -289,7 +289,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, GsplatContract_ArenaViewStamp_Unit) {
 
     primeAndEnqueueZero(frame_stream, buffer);
     auto arena_view = Tensor::from_blob(
-        buffer.get(), {1, 64, 64, 1}, Device::CUDA, DataType::Float32,
+        buffer.get(), {1, 64, 64, 1}, Device::GPU, DataType::Float32,
         frame_stream.get());
 
     const cudaStream_t execution =
@@ -314,7 +314,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, CpuOfStampedBlobOrdersAfterProducer) {
 
     primeAndEnqueueZero(producer, buffer);
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32, producer.get());
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32, producer.get());
 
     const auto host = blob.cpu();
     EXPECT_EQ(host.to_vector(), std::vector<float>(kValueCount, 0.0f));
@@ -335,7 +335,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, ItemTypedDrainsStampedHome) {
     ASSERT_EQ(cudaMemsetAsync(buffer.get(), 0, buffer.bytes(), producer.get()),
               cudaSuccess);
     auto blob = Tensor::from_blob(
-        buffer.get(), {1}, Device::CUDA, DataType::Int32, producer.get());
+        buffer.get(), {1}, Device::GPU, DataType::Int32, producer.get());
 
     EXPECT_EQ(blob.item<int>(), 0);
 }
@@ -355,7 +355,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, FloatItemSynchronizesRegardlessOfHome) {
     ASSERT_EQ(cudaMemsetAsync(buffer.get(), 0, buffer.bytes(), producer.get()),
               cudaSuccess);
     auto blob = Tensor::from_blob(
-        buffer.get(), {1}, Device::CUDA, DataType::Float32);
+        buffer.get(), {1}, Device::GPU, DataType::Float32);
 
     EXPECT_FLOAT_EQ(blob.item(), 0.0f);
 }
@@ -371,7 +371,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest, PinOperandsOnNonOwningIsNoop) {
     ASSERT_NE(buffer.get(), nullptr);
 
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32, home.get());
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32, home.get());
     void* const original_data = blob.data_ptr();
 
     pin_operands({&blob});
@@ -395,13 +395,13 @@ TEST_F(TensorD4FromBlobHomeStreamTest, StampedBlobThroughPinnedOpCrossStream) {
 
     primeAndEnqueueZero(producer, buffer);
     auto blob = Tensor::from_blob(
-        buffer.get(), {kValueCount}, Device::CUDA, DataType::Float32, producer.get());
+        buffer.get(), {kValueCount}, Device::GPU, DataType::Float32, producer.get());
 
     Tensor result;
     {
         CUDAStreamGuard guard(consumer.get());
         const auto bias =
-            Tensor::ones({kValueCount}, Device::CUDA, DataType::Float32);
+            Tensor::ones({kValueCount}, Device::GPU, DataType::Float32);
         result = blob.add(bias);
     }
 
@@ -419,7 +419,7 @@ TEST_F(TensorD4FromBlobHomeStreamTest,
     LazyStateReset lazy_state;
     TestStream target;
     auto deferred =
-        Tensor::ones({64}, Device::CUDA, DataType::Float32).add(1.0f);
+        Tensor::ones({64}, Device::GPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.is_deferred());
 
     deferred.set_stream(target.get());

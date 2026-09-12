@@ -146,7 +146,7 @@ namespace lfs::vis::op {
         lfs::core::Tensor indices;
         lfs::core::Tensor stored_values;
         size_t total_size = 0;
-        lfs::core::Device device = lfs::core::Device::CUDA;
+        lfs::core::Device device = lfs::core::Device::GPU;
         lfs::core::DataType dtype = lfs::core::DataType::UInt8;
         bool before_present = false;
         bool after_present = false;
@@ -183,7 +183,7 @@ namespace lfs::vis::op {
     struct TensorPresenceSnapshot {
         std::shared_ptr<lfs::core::Tensor> tensor;
         size_t total_size = 0;
-        lfs::core::Device device = lfs::core::Device::CUDA;
+        lfs::core::Device device = lfs::core::Device::GPU;
         bool present = false;
     };
 
@@ -321,7 +321,7 @@ namespace lfs::vis::op {
         lfs::core::Tensor indices_;
         lfs::core::Tensor before_rows_;
         lfs::core::Tensor after_rows_;
-        lfs::core::Device preferred_device_ = lfs::core::Device::CUDA;
+        lfs::core::Device preferred_device_ = lfs::core::Device::GPU;
         std::optional<size_t> max_index_;
         std::optional<SceneTopologyProof> expected_topology_;
     };
@@ -513,7 +513,7 @@ namespace lfs::vis::op {
         lfs::core::Tensor T;
         lfs::core::Tensor radial_distortion;
         lfs::core::Tensor tangential_distortion;
-        lfs::core::Device device = lfs::core::Device::CUDA;
+        lfs::core::Device device = lfs::core::Device::GPU;
         lfs::core::CameraModelType camera_model_type = lfs::core::CameraModelType::PINHOLE;
         std::string image_name;
         std::filesystem::path image_path;
@@ -554,8 +554,8 @@ namespace lfs::vis::op {
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
         int order_index = -1;
-        lfs::core::Device payload_device = lfs::core::Device::CUDA;
-        lfs::core::Device selection_slice_device = lfs::core::Device::CUDA;
+        lfs::core::Device payload_device = lfs::core::Device::GPU;
+        lfs::core::Device selection_slice_device = lfs::core::Device::GPU;
         std::optional<std::filesystem::path> source_path;
         std::shared_ptr<lfs::core::Tensor> selection_slice;
         std::unique_ptr<lfs::core::SplatData> model;

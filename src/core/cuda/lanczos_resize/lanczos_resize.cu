@@ -6,7 +6,7 @@
 
 #include "core/cuda_error.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/cuda_memory_guard.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_memory_guard.hpp"
 #include "lanczos_resize.hpp"
 
 #include <cmath>
@@ -379,7 +379,7 @@ namespace lfs::core {
                 TensorShape({static_cast<size_t>(channels),
                              static_cast<size_t>(output_h),
                              static_cast<size_t>(output_w)}),
-                Device::CUDA, DataType::Float32);
+                Device::GPU, DataType::Float32);
             if (output.stream() != cuda_stream) {
                 output.set_stream(cuda_stream);
             }
@@ -430,7 +430,7 @@ namespace lfs::core {
         int kernel_size,
         cudaStream_t cuda_stream) {
 
-        if (!input.is_valid() || input.device() != Device::CUDA) {
+        if (!input.is_valid() || input.device() != Device::GPU) {
             LOG_ERROR("lanczos_resize: Input must be a valid CUDA tensor");
             return Tensor();
         }
@@ -469,7 +469,7 @@ namespace lfs::core {
         int kernel_size,
         cudaStream_t cuda_stream) {
 
-        if (!input.is_valid() || input.device() != Device::CUDA) {
+        if (!input.is_valid() || input.device() != Device::GPU) {
             LOG_ERROR("lanczos_resize_grayscale: Input must be a valid CUDA tensor");
             return Tensor();
         }
@@ -499,7 +499,7 @@ namespace lfs::core {
 
         auto output = Tensor::empty(
             TensorShape({static_cast<size_t>(output_h), static_cast<size_t>(output_w)}),
-            Device::CUDA,
+            Device::GPU,
             DataType::Float32);
         if (output.stream() != cuda_stream) {
             output.set_stream(cuda_stream);
@@ -557,7 +557,7 @@ namespace lfs::core {
         int kernel_size,
         cudaStream_t cuda_stream) {
 
-        if (!input.is_valid() || input.device() != Device::CUDA) {
+        if (!input.is_valid() || input.device() != Device::GPU) {
             LOG_ERROR("lanczos_resize_float_chw: Input must be a valid CUDA tensor");
             return Tensor();
         }
@@ -592,7 +592,7 @@ namespace lfs::core {
             TensorShape({static_cast<size_t>(channels),
                          static_cast<size_t>(output_h),
                          static_cast<size_t>(output_w)}),
-            Device::CUDA, DataType::Float32);
+            Device::GPU, DataType::Float32);
         if (output.stream() != cuda_stream) {
             output.set_stream(cuda_stream);
         }

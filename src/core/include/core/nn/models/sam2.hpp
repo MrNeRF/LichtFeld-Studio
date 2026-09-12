@@ -133,7 +133,7 @@ namespace lfs::core::nn::models {
         bool image_set_ = false;
         int orig_h_ = 0;
         int orig_w_ = 0;
-        Device device_ = Device::CUDA;
+        Device device_ = Device::GPU;
         DataType compute_ = DataType::Float16;
     };
 

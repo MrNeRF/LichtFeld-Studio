@@ -24,8 +24,8 @@ namespace {
     Camera make_camera(int w, int h, float fx, float fy, float cx, float cy,
                        const std::vector<float>& R_data = {1, 0, 0, 0, 1, 0, 0, 0, 1},
                        const std::vector<float>& T_data = {0, 0, 4}) {
-        auto R = Tensor::from_blob(const_cast<float*>(R_data.data()), {3, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-        auto T = Tensor::from_blob(const_cast<float*>(T_data.data()), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        auto R = Tensor::from_blob(const_cast<float*>(R_data.data()), {3, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+        auto T = Tensor::from_blob(const_cast<float*>(T_data.data()), {3}, Device::CPU, DataType::Float32).to(Device::GPU);
         return Camera(R, T, fx, fy, cx, cy, Tensor(), Tensor(),
                       CameraModelType::PINHOLE, "test", "", std::filesystem::path{}, w, h, 0);
     }
@@ -120,7 +120,7 @@ namespace {
 class FastGSFuzzTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        bg_ = Tensor::zeros({3}, Device::CUDA);
+        bg_ = Tensor::zeros({3}, Device::GPU);
     }
 
     void TearDown() override {
@@ -137,12 +137,12 @@ protected:
 TEST_F(FastGSFuzzTest, EmptyScene_ZeroPrimitives) {
     GTEST_SKIP() << "Rasterizer does not support 0 gaussians";
 
-    auto means = Tensor::zeros({0, 3}, Device::CUDA);
-    auto sh0 = Tensor::zeros({0, 1, 3}, Device::CUDA);
-    auto shN = Tensor::zeros({0, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::zeros({0, 3}, Device::CUDA);
-    auto rotation = Tensor::zeros({0, 4}, Device::CUDA);
-    auto opacity = Tensor::zeros({0}, Device::CUDA);
+    auto means = Tensor::zeros({0, 3}, Device::GPU);
+    auto sh0 = Tensor::zeros({0, 1, 3}, Device::GPU);
+    auto shN = Tensor::zeros({0, 0, 3}, Device::GPU);
+    auto scaling = Tensor::zeros({0, 3}, Device::GPU);
+    auto rotation = Tensor::zeros({0, 4}, Device::GPU);
+    auto opacity = Tensor::zeros({0}, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -156,13 +156,13 @@ TEST_F(FastGSFuzzTest, EmptyScene_ZeroPrimitives) {
 }
 
 TEST_F(FastGSFuzzTest, SingleGaussian_Visible) {
-    auto means = Tensor::zeros({1, 3}, Device::CUDA); // at origin
-    auto sh0 = Tensor::ones({1, 1, 3}, Device::CUDA).mul(0.5f);
-    auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({1, 3}, -2.0f, Device::CUDA); // exp(-2) ~ 0.135
-    std::vector<float> rot_data = {1, 0, 0, 0};               // identity quaternion
-    auto rotation = Tensor::from_blob(rot_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({1}, 2.0f, Device::CUDA); // sigmoid(2) ~ 0.88
+    auto means = Tensor::zeros({1, 3}, Device::GPU); // at origin
+    auto sh0 = Tensor::ones({1, 1, 3}, Device::GPU).mul(0.5f);
+    auto shN = Tensor::zeros({1, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({1, 3}, -2.0f, Device::GPU); // exp(-2) ~ 0.135
+    std::vector<float> rot_data = {1, 0, 0, 0};              // identity quaternion
+    auto rotation = Tensor::from_blob(rot_data.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({1}, 2.0f, Device::GPU); // sigmoid(2) ~ 0.88
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -176,13 +176,13 @@ TEST_F(FastGSFuzzTest, SingleGaussian_Visible) {
 TEST_F(FastGSFuzzTest, SingleGaussian_VeryFarAway) {
     // Test gaussian at extreme distance - should not crash or produce NaN/Inf
     std::vector<float> pos = {0, 0, 1000}; // Very far away
-    auto means = Tensor::from_blob(pos.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::ones({1, 1, 3}, Device::CUDA);
-    auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({1, 3}, -2.0f, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::ones({1, 1, 3}, Device::GPU);
+    auto shN = Tensor::zeros({1, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({1, 3}, -2.0f, Device::GPU);
     std::vector<float> rot = {1, 0, 0, 0};
-    auto rotation = Tensor::from_blob(rot.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({1}, 2.0f, Device::CUDA);
+    auto rotation = Tensor::from_blob(rot.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({1}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -205,13 +205,13 @@ TEST_F(FastGSFuzzTest, AllGaussians_OutsideFrustum) {
         pos[i * 3 + 1] = dist(gen);
         pos[i * 3 + 2] = -5.0f; // All in front of camera (negative z in camera space = in front)
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -4.0f, Device::CUDA); // Very small
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -4.0f, Device::GPU); // Very small
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -227,13 +227,13 @@ TEST_F(FastGSFuzzTest, AllGaussians_OutsideFrustum) {
 
 TEST_F(FastGSFuzzTest, VerySmallScale) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -20.0f, Device::CUDA); // exp(-20) ~ 2e-9
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -20.0f, Device::GPU); // exp(-20) ~ 2e-9
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -246,13 +246,13 @@ TEST_F(FastGSFuzzTest, VerySmallScale) {
 
 TEST_F(FastGSFuzzTest, VeryLargeScale) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, 10.0f, Device::CUDA); // exp(10) ~ 22000
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, 10.0f, Device::GPU); // exp(10) ~ 22000
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -286,13 +286,13 @@ TEST_F(FastGSFuzzTest, ExtremePositions) {
             pos[i * 3 + 2] = 0; // At camera
         }
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -305,13 +305,13 @@ TEST_F(FastGSFuzzTest, ExtremePositions) {
 
 TEST_F(FastGSFuzzTest, ZeroOpacity) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, -100.0f, Device::CUDA); // sigmoid(-100) ~ 0
+    auto opacity = Tensor::full({n}, -100.0f, Device::GPU); // sigmoid(-100) ~ 0
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -325,13 +325,13 @@ TEST_F(FastGSFuzzTest, ZeroOpacity) {
 
 TEST_F(FastGSFuzzTest, FullOpacity) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 100.0f, Device::CUDA); // sigmoid(100) ~ 1
+    auto opacity = Tensor::full({n}, 100.0f, Device::GPU); // sigmoid(100) ~ 1
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -348,12 +348,12 @@ TEST_F(FastGSFuzzTest, FullOpacity) {
 
 TEST_F(FastGSFuzzTest, ZeroQuaternion) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::zeros({n, 4}, Device::CUDA); // All zero quaternions!
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::zeros({n, 4}, Device::GPU); // All zero quaternions!
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -367,16 +367,16 @@ TEST_F(FastGSFuzzTest, ZeroQuaternion) {
 
 TEST_F(FastGSFuzzTest, DenormalizedQuaternion) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
     // Very small quaternion components
     std::vector<float> rot(n * 4);
     for (size_t i = 0; i < n * 4; ++i)
         rot[i] = 1e-20f;
-    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -389,13 +389,13 @@ TEST_F(FastGSFuzzTest, DenormalizedQuaternion) {
 
 TEST_F(FastGSFuzzTest, MixedValidInvalid) {
     size_t n = 64;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f).sub(2.0f);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::randn({n, 3}, Device::GPU).mul(0.5f).sub(2.0f);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::randn({n}, Device::CUDA).mul(4.0f); // Mix of high/low
+    auto opacity = Tensor::randn({n}, Device::GPU).mul(4.0f); // Mix of high/low
 
     // Corrupt some entries
     auto rot_cpu = rotation.to(Device::CPU);
@@ -412,8 +412,8 @@ TEST_F(FastGSFuzzTest, MixedValidInvalid) {
         opa_ptr[i] = -1000.0f;
     }
 
-    rotation = rot_cpu.to(Device::CUDA);
-    opacity = opa_cpu.to(Device::CUDA);
+    rotation = rot_cpu.to(Device::GPU);
+    opacity = opa_cpu.to(Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -440,17 +440,17 @@ TEST_F(FastGSFuzzTest, GaussianAtTileBoundary) {
         pos[i * 3 + 1] = (tile_y - 32) / 100.0f * 4.0f;
         pos[i * 3 + 2] = 0.0f;
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::ones({n, 1, 3}, Device::CUDA).mul(0.5f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -3.0f, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::ones({n, 1, 3}, Device::GPU).mul(0.5f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -3.0f, Device::GPU);
     std::vector<float> rot(n * 4);
     for (size_t i = 0; i < n; ++i) {
         rot[i * 4] = 1;
         rot[i * 4 + 1] = rot[i * 4 + 2] = rot[i * 4 + 3] = 0;
     }
-    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -463,13 +463,13 @@ TEST_F(FastGSFuzzTest, GaussianAtTileBoundary) {
 TEST_F(FastGSFuzzTest, LargeGaussianCoveringManyTiles) {
     // Single gaussian covering entire screen
     std::vector<float> pos = {0, 0, 0};
-    auto means = Tensor::from_blob(pos.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::ones({1, 1, 3}, Device::CUDA).mul(0.5f);
-    auto shN = Tensor::zeros({1, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({1, 3}, 2.0f, Device::CUDA); // Very large
+    auto means = Tensor::from_blob(pos.data(), {1, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::ones({1, 1, 3}, Device::GPU).mul(0.5f);
+    auto shN = Tensor::zeros({1, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({1, 3}, 2.0f, Device::GPU); // Very large
     std::vector<float> rot = {1, 0, 0, 0};
-    auto rotation = Tensor::from_blob(rot.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({1}, 2.0f, Device::CUDA);
+    auto rotation = Tensor::from_blob(rot.data(), {1, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({1}, 2.0f, Device::GPU);
 
     auto camera = make_camera(128, 128, 100, 100, 64, 64);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -483,13 +483,13 @@ TEST_F(FastGSFuzzTest, LargeGaussianCoveringManyTiles) {
 TEST_F(FastGSFuzzTest, ManyGaussiansPerTile) {
     // Many gaussians all in center tile
     size_t n = 1000;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.01f); // All near origin
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -4.0f, Device::CUDA); // Small
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.01f); // All near origin
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -4.0f, Device::GPU); // Small
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 1.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 1.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -502,13 +502,13 @@ TEST_F(FastGSFuzzTest, ManyGaussiansPerTile) {
 
 TEST_F(FastGSFuzzTest, OddImageDimensions) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Odd dimensions that don't align with tile size
     auto camera = make_camera(63, 67, 100, 100, 31.5f, 33.5f);
@@ -523,13 +523,13 @@ TEST_F(FastGSFuzzTest, OddImageDimensions) {
 
 TEST_F(FastGSFuzzTest, VerySmallImage) {
     size_t n = 16;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Smaller than a tile
     auto camera = make_camera(8, 8, 10, 10, 4, 4);
@@ -542,13 +542,13 @@ TEST_F(FastGSFuzzTest, VerySmallImage) {
 
 TEST_F(FastGSFuzzTest, SinglePixelImage) {
     size_t n = 4;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.1f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.1f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(1, 1, 1, 1, 0.5f, 0.5f);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -564,13 +564,13 @@ TEST_F(FastGSFuzzTest, SinglePixelImage) {
 
 TEST_F(FastGSFuzzTest, Backward_ZeroGradient) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -596,13 +596,13 @@ TEST_F(FastGSFuzzTest, Backward_ZeroGradient) {
 
 TEST_F(FastGSFuzzTest, Backward_LargeGradient) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -628,13 +628,13 @@ TEST_F(FastGSFuzzTest, Backward_AllCulled) {
     std::vector<float> pos(n * 3);
     for (size_t i = 0; i < n * 3; ++i)
         pos[i] = 100.0f; // All far away
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -664,13 +664,13 @@ TEST_F(FastGSFuzzTest, RandomStress_SmallBatch) {
     for (int trial = 0; trial < 10; ++trial) {
         size_t n = 16 + (gen() % 64); // 16-80 gaussians
 
-        auto means = Tensor::randn({n, 3}, Device::CUDA).mul(2.0f);
-        auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.5f);
-        auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-        auto scaling = Tensor::randn({n, 3}, Device::CUDA).mul(2.0f).sub(3.0f);
-        auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+        auto means = Tensor::randn({n, 3}, Device::GPU).mul(2.0f);
+        auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.5f);
+        auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+        auto scaling = Tensor::randn({n, 3}, Device::GPU).mul(2.0f).sub(3.0f);
+        auto rotation = Tensor::randn({n, 4}, Device::GPU);
         rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-        auto opacity = Tensor::randn({n}, Device::CUDA).mul(3.0f);
+        auto opacity = Tensor::randn({n}, Device::GPU).mul(3.0f);
 
         int w = 32 + (gen() % 64);
         int h = 32 + (gen() % 64);
@@ -703,13 +703,13 @@ TEST_F(FastGSFuzzTest, RandomStress_LargeBatch) {
     for (int trial = 0; trial < 3; ++trial) {
         size_t n = 10000 + (gen() % 10000); // 10k-20k gaussians
 
-        auto means = Tensor::randn({n, 3}, Device::CUDA).mul(3.0f);
-        auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-        auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-        auto scaling = Tensor::randn({n, 3}, Device::CUDA).mul(1.5f).sub(3.0f);
-        auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+        auto means = Tensor::randn({n, 3}, Device::GPU).mul(3.0f);
+        auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+        auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+        auto scaling = Tensor::randn({n, 3}, Device::GPU).mul(1.5f).sub(3.0f);
+        auto rotation = Tensor::randn({n, 4}, Device::GPU);
         rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-        auto opacity = Tensor::randn({n}, Device::CUDA).mul(2.0f);
+        auto opacity = Tensor::randn({n}, Device::GPU).mul(2.0f);
 
         auto camera = make_camera(256, 256, 200, 200, 128, 128);
         auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -730,13 +730,13 @@ TEST_F(FastGSFuzzTest, RandomStress_LargeBatch) {
 
 TEST_F(FastGSFuzzTest, MipFilter_Enabled) {
     size_t n = 64;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -771,13 +771,13 @@ TEST_F(FastGSFuzzTest, SameDepthAllGaussians) {
         pos[i * 3 + 1] = (i / 10) * 0.1f - 0.5f;
         pos[i * 3 + 2] = 0.0f; // All same depth
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -3.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -3.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 1.5f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 1.5f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -796,17 +796,17 @@ TEST_F(FastGSFuzzTest, AtNearPlane) {
         pos[i * 3 + 1] = (i / 4) * 0.5f - 1.0f;
         pos[i * 3 + 2] = 3.9f; // Just inside near plane (camera at z=4, near ~0.1)
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
     std::vector<float> rot(n * 4);
     for (size_t i = 0; i < n; ++i) {
         rot[i * 4] = 1;
         rot[i * 4 + 1] = rot[i * 4 + 2] = rot[i * 4 + 3] = 0;
     }
-    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -822,13 +822,13 @@ TEST_F(FastGSFuzzTest, AtNearPlane) {
 
 TEST_F(FastGSFuzzTest, HigherOrderSH) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::randn({n, 15, 3}, Device::CUDA).mul(0.1f); // SH degree 3
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::randn({n, 15, 3}, Device::GPU).mul(0.1f); // SH degree 3
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -852,13 +852,13 @@ TEST_F(FastGSFuzzTest, HigherOrderSH) {
 
 TEST_F(FastGSFuzzTest, ExtremeSHCoefficients) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::full({n, 1, 3}, 100.0f, Device::CUDA); // Very large
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::full({n, 1, 3}, 100.0f, Device::GPU); // Very large
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -875,13 +875,13 @@ TEST_F(FastGSFuzzTest, ExtremeSHCoefficients) {
 
 TEST_F(FastGSFuzzTest, AsymmetricFocalLength) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Very asymmetric focal length
     auto camera = make_camera(64, 64, 50, 200, 32, 32);
@@ -894,13 +894,13 @@ TEST_F(FastGSFuzzTest, AsymmetricFocalLength) {
 
 TEST_F(FastGSFuzzTest, OffCenterPrincipalPoint) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Principal point at corner
     auto camera = make_camera(64, 64, 100, 100, 5, 60);
@@ -913,13 +913,13 @@ TEST_F(FastGSFuzzTest, OffCenterPrincipalPoint) {
 
 TEST_F(FastGSFuzzTest, VerySmallFocalLength) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Very small focal length (wide FOV)
     auto camera = make_camera(64, 64, 10, 10, 32, 32);
@@ -932,13 +932,13 @@ TEST_F(FastGSFuzzTest, VerySmallFocalLength) {
 
 TEST_F(FastGSFuzzTest, VeryLargeFocalLength) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Very large focal length (narrow FOV / telephoto)
     auto camera = make_camera(64, 64, 10000, 10000, 32, 32);
@@ -956,13 +956,13 @@ TEST_F(FastGSFuzzTest, VeryLargeFocalLength) {
 TEST_F(FastGSFuzzTest, TransmittanceSaturation) {
     // Many overlapping high-opacity gaussians to test transmittance threshold
     size_t n = 200;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.1f); // All clustered
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -1.0f, Device::CUDA); // Medium size
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.1f); // All clustered
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -1.0f, Device::GPU); // Medium size
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 5.0f, Device::CUDA); // High opacity
+    auto opacity = Tensor::full({n}, 5.0f, Device::GPU); // High opacity
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -983,20 +983,20 @@ TEST_F(FastGSFuzzTest, TransmittanceSaturation) {
 
 TEST_F(FastGSFuzzTest, NaN_InMeans) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Inject NaN into some means
     auto means_cpu = means.to(Device::CPU);
     float* ptr = means_cpu.ptr<float>();
     ptr[0] = std::numeric_limits<float>::quiet_NaN();
     ptr[10] = std::numeric_limits<float>::quiet_NaN();
-    means = means_cpu.to(Device::CUDA);
+    means = means_cpu.to(Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1009,20 +1009,20 @@ TEST_F(FastGSFuzzTest, NaN_InMeans) {
 
 TEST_F(FastGSFuzzTest, Inf_InScaling) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Inject Inf into some scales
     auto scaling_cpu = scaling.to(Device::CPU);
     float* ptr = scaling_cpu.ptr<float>();
     ptr[0] = std::numeric_limits<float>::infinity();
     ptr[15] = -std::numeric_limits<float>::infinity();
-    scaling = scaling_cpu.to(Device::CUDA);
+    scaling = scaling_cpu.to(Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1034,19 +1034,19 @@ TEST_F(FastGSFuzzTest, Inf_InScaling) {
 
 TEST_F(FastGSFuzzTest, NaN_InRotation) {
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     // Inject NaN into some rotations
     auto rot_cpu = rotation.to(Device::CPU);
     float* ptr = rot_cpu.ptr<float>();
     ptr[0] = std::numeric_limits<float>::quiet_NaN();
-    rotation = rot_cpu.to(Device::CUDA);
+    rotation = rot_cpu.to(Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1062,13 +1062,13 @@ TEST_F(FastGSFuzzTest, NaN_InRotation) {
 
 TEST_F(FastGSFuzzTest, VeryLargeBatch_100k) {
     size_t n = 100000;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(5.0f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::randn({n, 3}, Device::CUDA).mul(1.0f).sub(4.0f);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(5.0f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::randn({n, 3}, Device::GPU).mul(1.0f).sub(4.0f);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::randn({n}, Device::CUDA);
+    auto opacity = Tensor::randn({n}, Device::GPU);
 
     auto camera = make_camera(512, 512, 500, 500, 256, 256);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1090,13 +1090,13 @@ TEST_F(FastGSFuzzTest, DenormalizedFloats) {
     for (size_t i = 0; i < n * 3; ++i) {
         pos[i] = std::numeric_limits<float>::denorm_min() * (i + 1);
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1113,13 +1113,13 @@ TEST_F(FastGSFuzzTest, MaxFloatValues) {
     for (size_t i = 0; i < n * 3; ++i) {
         pos[i] = std::numeric_limits<float>::max() / 1e10f; // Large but won't overflow
     }
-    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -10.0f, Device::CUDA); // Very small
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::from_blob(pos.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -10.0f, Device::GPU); // Very small
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1136,17 +1136,17 @@ TEST_F(FastGSFuzzTest, MaxFloatValues) {
 TEST_F(FastGSFuzzTest, AllGaussiansInSinglePixel) {
     // All gaussians project to the exact same pixel
     size_t n = 100;
-    auto means = Tensor::zeros({n, 3}, Device::CUDA); // All at origin
-    auto sh0 = Tensor::ones({n, 1, 3}, Device::CUDA).mul(0.5f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -6.0f, Device::CUDA); // Very small
+    auto means = Tensor::zeros({n, 3}, Device::GPU); // All at origin
+    auto sh0 = Tensor::ones({n, 1, 3}, Device::GPU).mul(0.5f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -6.0f, Device::GPU); // Very small
     std::vector<float> rot(n * 4);
     for (size_t i = 0; i < n; ++i) {
         rot[i * 4] = 1;
         rot[i * 4 + 1] = rot[i * 4 + 2] = rot[i * 4 + 3] = 0;
     }
-    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto opacity = Tensor::full({n}, 0.5f, Device::CUDA);
+    auto rotation = Tensor::from_blob(rot.data(), {n, 4}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto opacity = Tensor::full({n}, 0.5f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);
@@ -1160,13 +1160,13 @@ TEST_F(FastGSFuzzTest, AllGaussiansInSinglePixel) {
 TEST_F(FastGSFuzzTest, GradientStability_MultipleIterations) {
     // Run forward/backward multiple times to check for accumulation issues
     size_t n = 64;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
-    auto scaling = Tensor::full({n, 3}, -2.0f, Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
+    auto scaling = Tensor::full({n, 3}, -2.0f, Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
 
@@ -1199,9 +1199,9 @@ TEST_F(FastGSFuzzTest, GradientStability_MultipleIterations) {
 TEST_F(FastGSFuzzTest, AnisotropicGaussians) {
     // Highly anisotropic gaussians (very different scales on each axis)
     size_t n = 32;
-    auto means = Tensor::randn({n, 3}, Device::CUDA).mul(0.5f);
-    auto sh0 = Tensor::randn({n, 1, 3}, Device::CUDA).mul(0.3f);
-    auto shN = Tensor::zeros({n, 0, 3}, Device::CUDA);
+    auto means = Tensor::randn({n, 3}, Device::GPU).mul(0.5f);
+    auto sh0 = Tensor::randn({n, 1, 3}, Device::GPU).mul(0.3f);
+    auto shN = Tensor::zeros({n, 0, 3}, Device::GPU);
 
     std::vector<float> scale_data(n * 3);
     for (size_t i = 0; i < n; ++i) {
@@ -1209,10 +1209,10 @@ TEST_F(FastGSFuzzTest, AnisotropicGaussians) {
         scale_data[i * 3 + 1] = 0.0f; // Normal on Y
         scale_data[i * 3 + 2] = 2.0f; // Very thick on Z
     }
-    auto scaling = Tensor::from_blob(scale_data.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
-    auto rotation = Tensor::randn({n, 4}, Device::CUDA);
+    auto scaling = Tensor::from_blob(scale_data.data(), {n, 3}, Device::CPU, DataType::Float32).to(Device::GPU);
+    auto rotation = Tensor::randn({n, 4}, Device::GPU);
     rotation = rotation / rotation.pow(2.0f).sum(-1, true).sqrt();
-    auto opacity = Tensor::full({n}, 2.0f, Device::CUDA);
+    auto opacity = Tensor::full({n}, 2.0f, Device::GPU);
 
     auto camera = make_camera(64, 64, 100, 100, 32, 32);
     auto splat = std::make_unique<SplatData>(0, means, sh0, shN, scaling, rotation, opacity, 1.0f);

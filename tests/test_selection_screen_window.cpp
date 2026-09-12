@@ -244,7 +244,7 @@ namespace {
     }
 
     Tensor cudaMeans(const std::vector<float>& points) {
-        return Tensor::from_vector(points, {points.size() / 3, std::size_t{3}}, Device::CUDA);
+        return Tensor::from_vector(points, {points.size() / 3, std::size_t{3}}, Device::GPU);
     }
 
     std::vector<bool> runCuda(
@@ -255,7 +255,7 @@ namespace {
         const Tensor* const model_transforms = nullptr,
         const Tensor* const transform_indices = nullptr) {
         const auto means = cudaMeans(points);
-        auto selection = Tensor::ones({points.size() / 3}, Device::CUDA, DataType::Bool);
+        auto selection = Tensor::ones({points.size() / 3}, Device::GPU, DataType::Bool);
         lfs::rendering::filter_selection_by_screen_window(
             selection,
             means,
@@ -367,9 +367,9 @@ namespace {
             1.0f,
         };
         const auto model_transforms = Tensor::from_vector(
-            model_transform_values, {std::size_t{2}, std::size_t{4}, std::size_t{4}}, Device::CUDA);
+            model_transform_values, {std::size_t{2}, std::size_t{4}, std::size_t{4}}, Device::GPU);
         const auto indices = Tensor::from_vector(
-            transform_indices, {transform_indices.size()}, Device::CUDA);
+            transform_indices, {transform_indices.size()}, Device::GPU);
 
         constexpr std::array models{
             ScreenWindowCameraModel::Pinhole,

@@ -578,8 +578,19 @@ class TensorProperty(Property):
         if self.dtype and str(value.dtype) != self.dtype:
             raise ValueError(f"Expected dtype '{self.dtype}', got '{value.dtype}'")
 
-        if self.device and str(value.device) != self.device:
-            raise ValueError(f"Expected device '{self.device}', got '{value.device}'")
+        if self.device:
+            expected = str(self.device)
+            actual = str(value.device)
+            gpu_names = {"cuda", "gpu"}
+            if expected in gpu_names:
+                if actual not in gpu_names:
+                    raise ValueError(
+                        f"Expected device '{self.device}', got '{value.device}'"
+                    )
+            elif actual != expected:
+                raise ValueError(
+                    f"Expected device '{self.device}', got '{value.device}'"
+                )
 
         if self.shape:
             value_shape = tuple(value.shape)

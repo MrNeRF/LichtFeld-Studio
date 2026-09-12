@@ -17,9 +17,14 @@
 namespace lfs::core {
     namespace {
 
+        // The record lives in host-mapped pinned memory: the kernel writes it
+        // through the device alias and the host reads it after the stream wait,
+        // so the checked range needs no device-to-host copy behind the kernel
+        // (that copy was scheduled 8 us late by the runtime on driver 580 and
+        // doubled the cost of small Assert-mode index reads).
         struct DeviceFaultSlot {
-            DeviceFaultRecord* device_record = nullptr; // cudaMalloc, not pool
-            DeviceFaultRecord* host_staging = nullptr;  // cudaHostAlloc pinned
+            DeviceFaultRecord* device_record = nullptr; // device alias of the mapped record
+            DeviceFaultRecord* host_staging = nullptr;  // cudaHostAlloc mapped pinned
         };
 
         std::mutex g_registry_mu;
@@ -28,12 +33,7 @@ namespace lfs::core {
         std::atomic<bool> g_registry_torn_down{false};
 
         void free_slot_buffers(DeviceFaultSlot& slot) noexcept {
-            if (slot.device_record != nullptr) {
-                LFS_CUDA_LOG_TEARDOWN(cudaFree(slot.device_record),
-                                      nullptr,
-                                      "device_fault: free dedicated device record");
-                slot.device_record = nullptr;
-            }
+            slot.device_record = nullptr;
             if (slot.host_staging != nullptr) {
                 LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(slot.host_staging),
                                       nullptr,
@@ -46,27 +46,25 @@ namespace lfs::core {
         // On failure leaves *out empty and returns the failing cudaError_t.
         [[nodiscard]] cudaError_t allocate_slot_buffers(DeviceFaultSlot& out) noexcept {
             out = {};
-            void* device_ptr = nullptr;
-            const cudaError_t device_status =
-                cudaMalloc(&device_ptr, sizeof(DeviceFaultRecord));
-            if (device_status != cudaSuccess) {
-                return device_status;
-            }
-
             void* host_ptr = nullptr;
             const cudaError_t host_status = cudaHostAlloc(
-                &host_ptr, sizeof(DeviceFaultRecord), cudaHostAllocDefault);
+                &host_ptr, sizeof(DeviceFaultRecord), cudaHostAllocMapped);
             if (host_status != cudaSuccess) {
-                LFS_CUDA_LOG_TEARDOWN(cudaFree(device_ptr),
-                                      nullptr,
-                                      "device_fault: free device record after host alloc failure");
                 return host_status;
+            }
+            void* device_ptr = nullptr;
+            const cudaError_t map_status = cudaHostGetDevicePointer(&device_ptr, host_ptr, 0);
+            if (map_status != cudaSuccess) {
+                LFS_CUDA_LOG_TEARDOWN(cudaFreeHost(host_ptr),
+                                      nullptr,
+                                      "device_fault: free host record after mapping failure");
+                return map_status;
             }
 
             out.device_record = static_cast<DeviceFaultRecord*>(device_ptr);
             out.host_staging = static_cast<DeviceFaultRecord*>(host_ptr);
-            // Host staging starts clean so a premature consume reads NoFault.
-            // Device record is zeroed by the mandatory pre-range enqueue_reset.
+            // The record starts clean so a premature consume reads NoFault; the
+            // mandatory pre-range enqueue_reset zeroes it in stream order.
             std::memset(out.host_staging, 0, sizeof(DeviceFaultRecord));
             return cudaSuccess;
         }
@@ -164,9 +162,14 @@ namespace lfs::core {
         if (acquire_status != cudaSuccess) {
             return acquire_status;
         }
-        // FIFO-ordered on `stream` before the checked kernel range (spec §1.5).
-        return cudaMemsetAsync(
-            slot->device_record, 0, sizeof(DeviceFaultRecord), stream);
+        // The record is written only by Assert-mode kernels, and every Assert
+        // operation waits on its stream and consumes the record before it
+        // returns, so no writer is in flight here: the host clears the mapped
+        // record directly. A device memset into host memory stalled the stream
+        // (training pairs at 75c01f402 lost up to 10 s in 7000 iterations).
+        std::memset(slot->host_staging, 0, sizeof(DeviceFaultRecord));
+        (void)stream;
+        return cudaSuccess;
     }
 
     cudaError_t device_fault_slot_enqueue_harvest(const cudaStream_t stream) noexcept {
@@ -182,13 +185,11 @@ namespace lfs::core {
         if (acquire_status != cudaSuccess) {
             return acquire_status;
         }
-        // Async D2H only — no synchronize (spec §1.5 step 4).
-        return cudaMemcpyAsync(
-            slot->host_staging,
-            slot->device_record,
-            sizeof(DeviceFaultRecord),
-            cudaMemcpyDeviceToHost,
-            stream);
+        // The record is host-mapped: whatever the checked range wrote is visible
+        // on the host once the caller's wait on `stream` completes (spec §1.5
+        // step 4 keeps the no-synchronize rule; there is nothing to copy).
+        (void)slot;
+        return cudaSuccess;
     }
 
     DeviceFaultRecord device_fault_slot_consume(const cudaStream_t stream) noexcept {
@@ -204,7 +205,7 @@ namespace lfs::core {
         if (it == g_slots.end() || it->second.host_staging == nullptr) {
             return clean;
         }
-        // Host memory read of staging after a wait already ordered the copy.
+        // Host read of the mapped record after the caller's wait on the stream.
         return *it->second.host_staging;
     }
 

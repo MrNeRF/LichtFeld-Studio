@@ -78,7 +78,10 @@
         "tools"
       ]
     },
-    "shader-slang",
+    {
+      "name": "shader-slang",
+      "host": true
+    },
     "xxhash",
     "zstd"
   ],

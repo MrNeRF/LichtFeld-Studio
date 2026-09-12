@@ -9,7 +9,7 @@ using namespace lfs::core;
 class TensorUInt8InversionTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ASSERT_TRUE(Tensor::zeros({1}, Device::CUDA).is_valid());
+        ASSERT_TRUE(Tensor::zeros({1}, Device::GPU).is_valid());
     }
 
     // Helper to create test mask [1,0,1,0,1]
@@ -21,7 +21,7 @@ protected:
         p[2] = 1;
         p[3] = 0;
         p[4] = 1;
-        return device == Device::CUDA ? mask.cuda() : mask;
+        return device == Device::GPU ? mask.gpu() : mask;
     }
 
     // Verify inverted pattern [0,1,0,1,0]
@@ -45,8 +45,8 @@ TEST_F(TensorUInt8InversionTest, SubtractionCPU) {
 }
 
 TEST_F(TensorUInt8InversionTest, SubtractionCUDA) {
-    const auto mask = createTestMask(Device::CUDA);
-    const auto ones = Tensor::ones({5}, Device::CUDA, DataType::UInt8);
+    const auto mask = createTestMask(Device::GPU);
+    const auto ones = Tensor::ones({5}, Device::GPU, DataType::UInt8);
     const auto inverted = (ones - mask).cpu();
 
     ASSERT_EQ(inverted.dtype(), DataType::UInt8);
@@ -54,7 +54,7 @@ TEST_F(TensorUInt8InversionTest, SubtractionCUDA) {
 }
 
 TEST_F(TensorUInt8InversionTest, LogicalNot) {
-    const auto mask = createTestMask(Device::CUDA);
+    const auto mask = createTestMask(Device::GPU);
     const auto inverted = mask.logical_not().cpu();
 
     ASSERT_EQ(inverted.dtype(), DataType::Bool);
@@ -67,7 +67,7 @@ TEST_F(TensorUInt8InversionTest, LogicalNot) {
 }
 
 TEST_F(TensorUInt8InversionTest, EqZero) {
-    const auto mask = createTestMask(Device::CUDA);
+    const auto mask = createTestMask(Device::GPU);
     const auto eq_result = mask.eq(0);
 
     ASSERT_EQ(eq_result.dtype(), DataType::Bool);
@@ -81,7 +81,7 @@ TEST_F(TensorUInt8InversionTest, EqZero) {
 }
 
 TEST_F(TensorUInt8InversionTest, BoolToUInt8Conversion) {
-    const auto mask = createTestMask(Device::CUDA);
+    const auto mask = createTestMask(Device::GPU);
     const auto inverted = mask.eq(0).to(DataType::UInt8).cpu();
 
     ASSERT_EQ(inverted.dtype(), DataType::UInt8);
@@ -95,9 +95,9 @@ TEST_F(TensorUInt8InversionTest, LargeScale) {
     auto* p = mask.ptr<uint8_t>();
     for (size_t i = 0; i < N; i += 2)
         p[i] = 1;
-    mask = mask.cuda();
+    mask = mask.gpu();
 
-    const auto ones = Tensor::ones({N}, Device::CUDA, DataType::UInt8);
+    const auto ones = Tensor::ones({N}, Device::GPU, DataType::UInt8);
     const auto inverted = ones - mask;
     const float sum = inverted.to(DataType::Float32).sum_scalar();
 

@@ -4,8 +4,8 @@
 
 #include "cuda_vulkan_interop.hpp"
 
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "image_layout.hpp"
 
 #include <algorithm>
@@ -343,8 +343,8 @@ namespace lfs::rendering {
                 prepared.dtype() != lfs::core::DataType::Float32) {
                 prepared = prepared.to(lfs::core::DataType::Float32);
             }
-            if (prepared.device() != lfs::core::Device::CUDA) {
-                prepared = prepared.to(lfs::core::Device::CUDA, stream);
+            if (prepared.device() != lfs::core::Device::GPU) {
+                prepared = prepared.to(lfs::core::Device::GPU, stream);
             }
             if (!prepared.is_contiguous()) {
                 prepared = prepared.contiguous();

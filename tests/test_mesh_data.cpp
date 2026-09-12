@@ -148,12 +148,12 @@ TEST_F(MeshDataTest, ToDeviceCPU) {
 
 TEST_F(MeshDataTest, ToDeviceCUDA) {
     auto mesh = make_triangle();
-    auto gpu_mesh = mesh.to(Device::CUDA);
+    auto gpu_mesh = mesh.to(Device::GPU);
 
     EXPECT_EQ(gpu_mesh.vertex_count(), 3);
     EXPECT_EQ(gpu_mesh.face_count(), 1);
-    EXPECT_EQ(gpu_mesh.vertices.device(), Device::CUDA);
-    EXPECT_EQ(gpu_mesh.indices.device(), Device::CUDA);
+    EXPECT_EQ(gpu_mesh.vertices.device(), Device::GPU);
+    EXPECT_EQ(gpu_mesh.indices.device(), Device::GPU);
 
     auto roundtrip = gpu_mesh.to(Device::CPU);
     auto vacc = roundtrip.vertices.accessor<float, 2>();
@@ -162,13 +162,13 @@ TEST_F(MeshDataTest, ToDeviceCUDA) {
 
 TEST_F(MeshDataTest, ComputeNormalsOnGPUMesh) {
     auto mesh = make_quad();
-    mesh = mesh.to(Device::CUDA);
-    EXPECT_EQ(mesh.vertices.device(), Device::CUDA);
+    mesh = mesh.to(Device::GPU);
+    EXPECT_EQ(mesh.vertices.device(), Device::GPU);
 
     mesh.compute_normals();
 
     EXPECT_TRUE(mesh.has_normals());
-    EXPECT_EQ(mesh.normals.device(), Device::CUDA);
+    EXPECT_EQ(mesh.normals.device(), Device::GPU);
 
     auto cpu_normals = mesh.normals.to(Device::CPU);
     auto nacc = cpu_normals.accessor<float, 2>();
@@ -206,7 +206,7 @@ TEST_F(MeshDataTest, Mesh2SplatCpuTensorConverterProducesSplatData) {
     ASSERT_NE(*result, nullptr);
     EXPECT_GT((*result)->size(), 0u);
     EXPECT_EQ((*result)->get_max_sh_degree(), 0);
-    EXPECT_EQ((*result)->means_raw().device(), Device::CUDA);
+    EXPECT_EQ((*result)->means_raw().device(), Device::GPU);
     EXPECT_EQ((*result)->means_raw().size(1), size_t{3});
     EXPECT_EQ((*result)->sh0_raw().size(1), size_t{1});
     EXPECT_EQ((*result)->sh0_raw().size(2), size_t{3});

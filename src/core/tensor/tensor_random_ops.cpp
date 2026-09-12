@@ -2,8 +2,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 #include <atomic>
 #include <curand.h>
 #include <curand_kernel.h>
@@ -113,9 +113,9 @@ namespace lfs::core {
 
     void* RandomGenerator::get_generator(Device device) {
         auto* impl = static_cast<RandomGeneratorImpl*>(impl_);
-        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "random generator received an invalid device");
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             return impl->cuda_generator_;
         } else {
             return &impl->cpu_generator_;
@@ -125,6 +125,8 @@ namespace lfs::core {
     // ============= In-place Random Operations =============
 
     Tensor& Tensor::uniform_(float low, float high) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "uniform_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
@@ -144,10 +146,18 @@ namespace lfs::core {
 
         size_t n = numel();
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             // Use kernel-based generation with advancing seed
             uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
-            tensor_ops::launch_uniform(ptr<float>(), n, low, high, seed, stream());
+            internal::backend_ops_for(*this).uniform(
+                internal::storage_ref(*this),
+                internal::RandomProgram{
+                    .count = n,
+                    .first = low,
+                    .second = high,
+                    .seed = seed,
+                },
+                internal::ExecContext{stream()});
             // No sync - in-place operation returns *this
         } else {
             // CPU uses stateful generator
@@ -165,6 +175,8 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::normal_(float mean, float std) {
+
+        preserve_lazy_snapshots_before_write();
         LFS_ASSERT_MSG(is_valid(),
                        "normal_ requires a valid tensor");
         LFS_ASSERT_MSG(dtype_ == DataType::Float32,
@@ -188,20 +200,23 @@ namespace lfs::core {
 
         size_t n = numel();
 
-        if (device_ == Device::CUDA) {
-            // curandGenerateNormal requires even number of elements
+        if (device_ == Device::GPU) {
+            const uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
+            const internal::RandomProgram program{
+                .count = n,
+                .first = mean,
+                .second = std,
+                .seed = seed};
             if (n % 2 == 1) {
-                // Generate into an n+1 scratch allocation. Writing n+1 values into
-                // the n-element destination was a one-float buffer overflow.
-                auto scratch = Tensor::empty({n + 1}, Device::CUDA, DataType::Float32);
-                RandomGenerator::instance().generate_cuda_normal(
-                    scratch.ptr<float>(), n + 1, mean, std, stream());
-                LFS_CUDA_CHECK(cudaMemcpyAsync(ptr<float>(), scratch.ptr<float>(), n * sizeof(float),
-                                               cudaMemcpyDeviceToDevice, stream()));
-                LFS_CUDA_CHECK(cudaStreamSynchronize(stream()));
+                auto scratch = internal::allocate_like(
+                    *this, TensorShape{n + 1}, DataType::Float32);
+                internal::backend_ops_for(*this).normal(
+                    internal::storage_ref(*this), internal::storage_ref(scratch),
+                    program, internal::ExecContext{stream()});
             } else {
-                RandomGenerator::instance().generate_cuda_normal(
-                    ptr<float>(), n, mean, std, stream());
+                internal::backend_ops_for(*this).normal(
+                    internal::storage_ref(*this), internal::storage_ref(*this),
+                    program, internal::ExecContext{stream()});
             }
         } else {
             // CPU uses stateful generator

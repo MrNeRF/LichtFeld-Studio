@@ -20,10 +20,10 @@ TEST(ADMMSparsityOptimizerTest, ReinitializesWhenOpacityShapeChanges) {
         .update_every = 10,
         .start_iteration = 0});
 
-    auto initial = Tensor::zeros({8, 1}, Device::CUDA, DataType::Float32);
+    auto initial = Tensor::zeros({8, 1}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(optimizer.initialize(initial).has_value());
 
-    auto grown = Tensor::zeros({12, 1}, Device::CUDA, DataType::Float32);
+    auto grown = Tensor::zeros({12, 1}, Device::GPU, DataType::Float32);
 
     auto forward = optimizer.compute_loss_forward(grown);
     ASSERT_TRUE(forward.has_value()) << forward.error();
@@ -71,7 +71,7 @@ TEST(ADMMSparsityOptimizerTest, SerializeDeserializeRoundTrip) {
 
     const auto opacities = Tensor::from_vector(
         std::vector<float>{-2.0f, -1.0f, -0.5f, 0.0f, 0.5f, 1.0f, 2.0f, 3.0f},
-        {size_t{8}, size_t{1}}, Device::CUDA);
+        {size_t{8}, size_t{1}}, Device::GPU);
     ASSERT_TRUE(source.initialize(opacities).has_value());
     ASSERT_TRUE(source.update_state(opacities).has_value());
 
@@ -115,7 +115,7 @@ TEST(ADMMSparsityOptimizerTest, LossForwardReinitializesAfterReset) {
         .update_every = 10,
         .start_iteration = 0});
 
-    auto opacities = Tensor::zeros({8, 1}, Device::CUDA, DataType::Float32);
+    auto opacities = Tensor::zeros({8, 1}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(optimizer.initialize(opacities).has_value());
 
     optimizer.reset();

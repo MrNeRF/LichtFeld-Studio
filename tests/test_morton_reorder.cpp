@@ -10,7 +10,7 @@
 #include "core/splat_data.hpp"
 #include "core/splat_exportable_storage.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "lfs/training/joint_adam_codec.hpp"
 #include "lfs/training/live_model_mutation_guard.hpp"
 #include "lfs/training/morton_reorder.hpp"
@@ -62,8 +62,8 @@ namespace {
             opacity[i] = -1.0f + 0.0005f * static_cast<float>(i);
         }
         Tensor shN = rest == 0
-                         ? Tensor::zeros({size_t{0}}, Device::CUDA)
-                         : Tensor::zeros({n, rest, size_t{3}}, Device::CUDA);
+                         ? Tensor::zeros({size_t{0}}, Device::GPU)
+                         : Tensor::zeros({n, rest, size_t{3}}, Device::GPU);
         if (rest > 0) {
             auto cpu = shN.cpu();
             auto* p = cpu.ptr<float>();
@@ -71,16 +71,16 @@ namespace {
                 p[i] = 0.02f * static_cast<float>((i % 11) + 1) *
                        (1.0f + 0.001f * static_cast<float>(i / 3));
             }
-            shN = cpu.cuda();
+            shN = cpu.gpu();
         }
         return SplatData(
             sh_degree,
-            Tensor::from_vector(means, {n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::CUDA),
+            Tensor::from_vector(means, {n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(sh0, {n, size_t{1}, size_t{3}}, Device::GPU),
             std::move(shN),
-            Tensor::from_vector(scaling, {n, size_t{3}}, Device::CUDA),
-            Tensor::from_vector(rotation, {n, size_t{4}}, Device::CUDA),
-            Tensor::from_vector(opacity, {n, size_t{1}}, Device::CUDA),
+            Tensor::from_vector(scaling, {n, size_t{3}}, Device::GPU),
+            Tensor::from_vector(rotation, {n, size_t{4}}, Device::GPU),
+            Tensor::from_vector(opacity, {n, size_t{1}}, Device::GPU),
             1.0f);
     }
 
@@ -255,7 +255,7 @@ TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
     ASSERT_TRUE(sh_value::apply_shN_value_quant(splat));
     ASSERT_TRUE(splat.shN_value_quantized());
 
-    splat._densification_info = Tensor::zeros({size_t{2}, n}, Device::CUDA);
+    splat._densification_info = Tensor::zeros({size_t{2}, n}, Device::GPU);
     {
         auto cpu = splat._densification_info.cpu();
         auto* p = cpu.ptr<float>();
@@ -263,7 +263,7 @@ TEST(MortonReorderTest, PreservesPerRowAttributesAndAdamMoments) {
             p[i] = static_cast<float>(i);
             p[n + i] = static_cast<float>(i) * 0.5f;
         }
-        splat._densification_info = cpu.cuda();
+        splat._densification_info = cpu.gpu();
     }
 
     AdamConfig cfg;
@@ -681,7 +681,7 @@ void permute_shN_old_fp32_roundtrip(
     ASSERT_EQ(live.dtype(), DataType::Float32);
     const std::size_t logical = sh_swizzled_float_count(n, rest);
     Tensor scratch = Tensor::zeros_direct(
-        TensorShape({logical}), logical, Device::CUDA, DataType::Float32);
+        TensorShape({logical}), logical, Device::GPU, DataType::Float32);
     scratch.set_stream(stream);
     if (live.stream() != stream) {
         live.set_stream(stream);
@@ -724,7 +724,7 @@ TEST(MortonReorderTest, Q16ChunkedPermuteMatchesOldRoundtripBitIdentical) {
     std::iota(perm_host.begin(), perm_host.end(), 0);
     std::mt19937 rng(20260830);
     std::shuffle(perm_host.begin(), perm_host.end(), rng);
-    auto perm = Tensor::from_vector(perm_host, TensorShape({n}), Device::CUDA)
+    auto perm = Tensor::from_vector(perm_host, TensorShape({n}), Device::GPU)
                     .to(DataType::Int64);
 
     auto splat_new = splat.clone();

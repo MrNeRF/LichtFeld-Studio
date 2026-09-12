@@ -1211,7 +1211,7 @@ namespace lfs::core {
             auto result = simplify_workset(workset, options, std::move(progress));
             if (!result)
                 return std::unexpected(result.error());
-            return make_splat_from_workset(*result, Device::CUDA);
+            return make_splat_from_workset(*result, Device::GPU);
         } catch (const std::exception& e) {
             LOG_ERROR("simplify_splats failed: {}", e.what());
             return std::unexpected(e.what());
@@ -1233,7 +1233,7 @@ namespace lfs::core {
                 return std::unexpected(result.error());
 
             SplatSimplifyResult out;
-            out.splat = make_splat_from_workset(*result, Device::CUDA);
+            out.splat = make_splat_from_workset(*result, Device::GPU);
             out.merge_tree = std::move(history.tree);
             return out;
         } catch (const std::exception& e) {

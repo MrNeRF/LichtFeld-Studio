@@ -12,8 +12,8 @@
 #include <vector>
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 
 using namespace lfs::core;
 
@@ -34,7 +34,7 @@ protected:
 };
 
 TEST_F(TensorStreamTest, DefaultStreamIsNullptr) {
-    auto t = Tensor::empty({4, 4}, Device::CUDA);
+    auto t = Tensor::empty({4, 4}, Device::GPU);
     EXPECT_EQ(t.stream(), nullptr);
 }
 
@@ -44,22 +44,22 @@ TEST_F(TensorStreamTest, FactoryPicksUpThreadLocalStream) {
 
     {
         CUDAStreamGuard guard(stream);
-        auto t = Tensor::empty({8, 8}, Device::CUDA);
+        auto t = Tensor::empty({8, 8}, Device::GPU);
         EXPECT_EQ(t.stream(), stream);
 
-        auto z = Tensor::zeros({4}, Device::CUDA);
+        auto z = Tensor::zeros({4}, Device::GPU);
         EXPECT_EQ(z.stream(), stream);
 
-        auto o = Tensor::ones({4}, Device::CUDA);
+        auto o = Tensor::ones({4}, Device::GPU);
         EXPECT_EQ(o.stream(), stream);
 
-        auto f = Tensor::full({4}, 3.14f, Device::CUDA);
+        auto f = Tensor::full({4}, 3.14f, Device::GPU);
         EXPECT_EQ(f.stream(), stream);
 
-        auto r = Tensor::rand({4}, Device::CUDA);
+        auto r = Tensor::rand({4}, Device::GPU);
         EXPECT_EQ(r.stream(), stream);
 
-        auto rn = Tensor::randn({4}, Device::CUDA);
+        auto rn = Tensor::randn({4}, Device::GPU);
         EXPECT_EQ(rn.stream(), stream);
 
         auto a = Tensor::arange(0, 10, 1);
@@ -67,7 +67,7 @@ TEST_F(TensorStreamTest, FactoryPicksUpThreadLocalStream) {
     }
 
     // After guard, back to default
-    auto t2 = Tensor::empty({4, 4}, Device::CUDA);
+    auto t2 = Tensor::empty({4, 4}, Device::GPU);
     EXPECT_EQ(t2.stream(), nullptr);
 
     destroyStreamSafely(stream);
@@ -80,7 +80,7 @@ TEST_F(TensorStreamTest, ViewInheritsStreamReshape) {
     Tensor t;
     {
         CUDAStreamGuard guard(stream);
-        t = Tensor::empty({4, 4}, Device::CUDA);
+        t = Tensor::empty({4, 4}, Device::GPU);
     }
     ASSERT_EQ(t.stream(), stream);
 
@@ -103,7 +103,7 @@ TEST_F(TensorStreamTest, ViewInheritsStreamSlice) {
     Tensor t;
     {
         CUDAStreamGuard guard(stream);
-        t = Tensor::full({10, 3}, 1.0f, Device::CUDA);
+        t = Tensor::full({10, 3}, 1.0f, Device::GPU);
     }
     ASSERT_EQ(t.stream(), stream);
 
@@ -120,7 +120,7 @@ TEST_F(TensorStreamTest, ViewInheritsStreamPermute) {
     Tensor t;
     {
         CUDAStreamGuard guard(stream);
-        t = Tensor::empty({2, 3, 4}, Device::CUDA);
+        t = Tensor::empty({2, 3, 4}, Device::GPU);
     }
     ASSERT_EQ(t.stream(), stream);
 
@@ -140,8 +140,8 @@ TEST_F(TensorStreamTest, OperationsProduceResultWithCorrectStream) {
     Tensor a, b;
     {
         CUDAStreamGuard guard(stream);
-        a = Tensor::ones({64}, Device::CUDA);
-        b = Tensor::ones({64}, Device::CUDA);
+        a = Tensor::ones({64}, Device::GPU);
+        b = Tensor::ones({64}, Device::GPU);
     }
 
     // Without an explicit guard, eager ops should inherit the producer stream so
@@ -169,7 +169,7 @@ TEST_F(TensorStreamTest, EmptyLikeInheritsStream) {
     Tensor t;
     {
         CUDAStreamGuard guard(stream);
-        t = Tensor::ones({32}, Device::CUDA);
+        t = Tensor::ones({32}, Device::GPU);
     }
     ASSERT_EQ(t.stream(), stream);
 
@@ -189,7 +189,7 @@ TEST_F(TensorStreamTest, StreamOrderingCorrectness) {
     Tensor result;
     {
         CUDAStreamGuard guard(stream);
-        auto t = Tensor::full({1024}, 1.0f, Device::CUDA);
+        auto t = Tensor::full({1024}, 1.0f, Device::GPU);
         auto added = t + t;          // 2.0
         auto mulled = added * added; // 4.0
         result = mulled;
@@ -216,7 +216,7 @@ TEST_F(TensorStreamTest, CrossStreamOrderingWithEventWait) {
     Tensor produced, consumed;
     {
         CUDAStreamGuard guard(producer);
-        auto base = Tensor::full({2048}, 2.0f, Device::CUDA);
+        auto base = Tensor::full({2048}, 2.0f, Device::GPU);
         produced = base.mul(3.0f); // 6.0
     }
 
@@ -243,7 +243,7 @@ TEST_F(TensorStreamTest, SetStreamManual) {
     cudaStream_t stream;
     ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
 
-    auto t = Tensor::empty({4}, Device::CUDA);
+    auto t = Tensor::empty({4}, Device::GPU);
     EXPECT_EQ(t.stream(), nullptr);
 
     t.set_stream(stream);
@@ -285,19 +285,19 @@ TEST_F(TensorStreamTest, InplaceOpsUseOwnStream) {
     Tensor t;
     {
         CUDAStreamGuard guard(stream);
-        t = Tensor::ones({256}, Device::CUDA);
+        t = Tensor::ones({256}, Device::GPU);
     }
     ASSERT_EQ(t.stream(), stream);
 
     // In-place scalar op should use the tensor's stream
-    t = t + Tensor::full({256}, 1.0f, Device::CUDA);
+    t = t + Tensor::full({256}, 1.0f, Device::GPU);
     // Result gets default stream since no guard active, so re-stamp
     t.set_stream(stream);
 
     // In-place binary op with guard
     {
         CUDAStreamGuard guard(stream);
-        auto other = Tensor::ones({256}, Device::CUDA);
+        auto other = Tensor::ones({256}, Device::GPU);
         t = t + other;
         EXPECT_EQ(t.stream(), stream);
     }
@@ -321,8 +321,8 @@ TEST_F(TensorStreamTest, MaskedFillRespectsTensorStreamWithoutGuard) {
     Tensor mask;
     {
         CUDAStreamGuard guard(stream);
-        t = Tensor::zeros({1 << 16}, Device::CUDA);
-        mask = Tensor::ones({1 << 16}, Device::CUDA, DataType::Bool);
+        t = Tensor::zeros({1 << 16}, Device::GPU);
+        mask = Tensor::ones({1 << 16}, Device::GPU, DataType::Bool);
         ASSERT_EQ(cudaStreamWaitEvent(stream, gate, 0), cudaSuccess);
         t.fill_(1.0f, stream);
     }
@@ -356,8 +356,8 @@ TEST_F(TensorStreamTest, GatherRespectsTensorStreamWithoutGuard) {
     Tensor idx;
     {
         CUDAStreamGuard guard(stream);
-        src = Tensor::zeros({count}, Device::CUDA);
-        idx = Tensor::from_vector(host_indices, {count}, Device::CUDA);
+        src = Tensor::zeros({count}, Device::GPU);
+        idx = Tensor::from_vector(host_indices, {count}, Device::GPU);
         ASSERT_EQ(cudaStreamWaitEvent(stream, gate, 0), cudaSuccess);
         src.fill_(3.0f, stream);
     }
@@ -389,7 +389,7 @@ TEST_F(TensorStreamTest, ToDeviceNonContiguousCpuToCudaRespectsExplicitStream) {
     ASSERT_FALSE(view.is_contiguous());
     EXPECT_EQ(view.stream(), nullptr);
 
-    auto gpu = view.to(Device::CUDA, stream);
+    auto gpu = view.to(Device::GPU, stream);
     EXPECT_EQ(gpu.stream(), stream);
     // An async reader is an additional use, not a transfer of ownership.
     EXPECT_EQ(view.stream(), nullptr);
@@ -408,7 +408,7 @@ TEST_F(TensorStreamTest, ToDeviceCudaToCpuRespectsExplicitStreamMetadata) {
     cudaStream_t stream;
     ASSERT_EQ(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking), cudaSuccess);
 
-    auto gpu = Tensor::full({1024}, 2.0f, Device::CUDA);
+    auto gpu = Tensor::full({1024}, 2.0f, Device::GPU);
     auto cpu = gpu.to(Device::CPU, stream);
     EXPECT_EQ(cpu.stream(), stream);
 
@@ -430,7 +430,7 @@ TEST_F(TensorStreamTest, DtypeConversionLaunchesOnCurrentResultStream) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     // Keep default stream busy. Conversion must still execute correctly when launched on a non-default stream.
-    auto busy = Tensor::ones({1u << 25}, Device::CUDA);
+    auto busy = Tensor::ones({1u << 25}, Device::GPU);
     for (int i = 0; i < 6; ++i) {
         busy = busy.mul(1.0001f).add(0.0001f);
     }
@@ -481,7 +481,7 @@ TEST_F(TensorStreamTest, BoolToUInt8OrderedAgainstGatedProducerStream) {
     Tensor flags;
     {
         CUDAStreamGuard guard(stream);
-        flags = Tensor::empty({N}, Device::CUDA, DataType::Bool);
+        flags = Tensor::empty({N}, Device::GPU, DataType::Bool);
         ASSERT_EQ(flags.stream(), stream);
         ASSERT_EQ(flags.dtype(), DataType::Bool);
 

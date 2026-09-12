@@ -66,11 +66,11 @@ namespace {
     }
 
     // Helper to create a tensor with sequential values
-    Tensor create_sequential_tensor(TensorShape shape, Device device = Device::CUDA) {
+    Tensor create_sequential_tensor(TensorShape shape, Device device = Device::GPU) {
         auto tensor = Tensor::empty(shape, device);
         size_t n = tensor.numel();
 
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             std::vector<float> data(n);
             for (size_t i = 0; i < n; ++i) {
                 data[i] = static_cast<float>(i);
@@ -180,8 +180,8 @@ TEST_F(TensorBroadcastTest, ScalarBroadcast) {
     std::vector<float> scalar_data = {2.0f};
     std::vector<float> target_data(12, 1.0f);
 
-    auto scalar_custom = Tensor::from_vector(scalar_data, {1}, Device::CUDA);
-    auto target_custom = Tensor::from_vector(target_data, {3, 4}, Device::CUDA);
+    auto scalar_custom = Tensor::from_vector(scalar_data, {1}, Device::GPU);
+    auto target_custom = Tensor::from_vector(target_data, {3, 4}, Device::GPU);
 
     auto scalar_torch = create_torch_tensor(scalar_data, {1});
     auto target_torch = create_torch_tensor(target_data, {3, 4});
@@ -200,8 +200,8 @@ TEST_F(TensorBroadcastTest, Broadcast1DRow) {
     std::vector<float> row_data(4, 2.0f);
     std::vector<float> matrix_data(12, 1.0f);
 
-    auto row_custom = Tensor::from_vector(row_data, {4}, Device::CUDA);
-    auto matrix_custom = Tensor::from_vector(matrix_data, {3, 4}, Device::CUDA);
+    auto row_custom = Tensor::from_vector(row_data, {4}, Device::GPU);
+    auto matrix_custom = Tensor::from_vector(matrix_data, {3, 4}, Device::GPU);
 
     auto row_torch = create_torch_tensor(row_data, {4});
     auto matrix_torch = create_torch_tensor(matrix_data, {3, 4});
@@ -218,8 +218,8 @@ TEST_F(TensorBroadcastTest, Broadcast1DColumn) {
     std::vector<float> col_data(3, 3.0f);
     std::vector<float> matrix_data(12, 2.0f);
 
-    auto col_custom = Tensor::from_vector(col_data, {3, 1}, Device::CUDA);
-    auto matrix_custom = Tensor::from_vector(matrix_data, {3, 4}, Device::CUDA);
+    auto col_custom = Tensor::from_vector(col_data, {3, 1}, Device::GPU);
+    auto matrix_custom = Tensor::from_vector(matrix_data, {3, 4}, Device::GPU);
 
     auto col_torch = create_torch_tensor(col_data, {3, 1});
     auto matrix_torch = create_torch_tensor(matrix_data, {3, 4});
@@ -235,8 +235,8 @@ TEST_F(TensorBroadcastTest, Broadcast1DColumn) {
 
 TEST_F(TensorBroadcastTest, BroadcastMatrixColumn) {
     // Create a column vector [0, 1, 2] and broadcast with a matrix
-    auto col_custom = create_sequential_tensor({3, 1}, Device::CUDA);
-    auto matrix_custom = Tensor::ones({3, 4}, Device::CUDA);
+    auto col_custom = create_sequential_tensor({3, 1}, Device::GPU);
+    auto matrix_custom = Tensor::ones({3, 4}, Device::GPU);
 
     auto col_torch = create_torch_sequential({3, 1});
     auto matrix_torch = torch::ones({3, 4}, torch::TensorOptions().device(torch::kCUDA));
@@ -250,8 +250,8 @@ TEST_F(TensorBroadcastTest, BroadcastMatrixColumn) {
 
 TEST_F(TensorBroadcastTest, BroadcastMatrixRow) {
     // Create a row vector [0, 1, 2, 3] and broadcast with a matrix
-    auto row_custom = create_sequential_tensor({1, 4}, Device::CUDA);
-    auto matrix_custom = Tensor::ones({3, 4}, Device::CUDA);
+    auto row_custom = create_sequential_tensor({1, 4}, Device::GPU);
+    auto matrix_custom = Tensor::ones({3, 4}, Device::GPU);
 
     auto row_torch = create_torch_sequential({1, 4});
     auto matrix_torch = torch::ones({3, 4}, torch::TensorOptions().device(torch::kCUDA));
@@ -270,8 +270,8 @@ TEST_F(TensorBroadcastTest, Broadcast3D) {
     std::vector<float> a_data(6, 2.0f);  // 2*1*3 = 6
     std::vector<float> b_data(24, 1.0f); // 2*4*3 = 24
 
-    auto a_custom = Tensor::from_vector(a_data, {2, 1, 3}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {2, 4, 3}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {2, 1, 3}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {2, 4, 3}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {2, 1, 3});
     auto b_torch = create_torch_tensor(b_data, {2, 4, 3});
@@ -288,8 +288,8 @@ TEST_F(TensorBroadcastTest, ComplexBroadcast3D) {
     std::vector<float> a_data(3, 5.0f); // 1*3*1 = 3
     std::vector<float> b_data(8, 3.0f); // 2*1*4 = 8
 
-    auto a_custom = Tensor::from_vector(a_data, {1, 3, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {2, 1, 4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {1, 3, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {2, 1, 4}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {1, 3, 1});
     auto b_torch = create_torch_tensor(b_data, {2, 1, 4});
@@ -307,8 +307,8 @@ TEST_F(TensorBroadcastTest, BroadcastAddition) {
     std::vector<float> a_data(3, 2.0f);
     std::vector<float> b_data(4, 3.0f);
 
-    auto a_custom = Tensor::from_vector(a_data, {3, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {3, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {3, 1});
     auto b_torch = create_torch_tensor(b_data, {1, 4});
@@ -324,8 +324,8 @@ TEST_F(TensorBroadcastTest, BroadcastSubtraction) {
     std::vector<float> a_data(6, 10.0f); // 2*3*1 = 6
     std::vector<float> b_data(12, 3.0f); // 3*4 = 12
 
-    auto a_custom = Tensor::from_vector(a_data, {2, 3, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {3, 4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {2, 3, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {3, 4}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {2, 3, 1});
     auto b_torch = create_torch_tensor(b_data, {3, 4});
@@ -338,8 +338,8 @@ TEST_F(TensorBroadcastTest, BroadcastSubtraction) {
 }
 
 TEST_F(TensorBroadcastTest, BroadcastMultiplication) {
-    auto a_custom = create_sequential_tensor({3, 1}, Device::CUDA); // [0, 1, 2]^T
-    auto b_custom = create_sequential_tensor({1, 4}, Device::CUDA); // [0, 1, 2, 3]
+    auto a_custom = create_sequential_tensor({3, 1}, Device::GPU); // [0, 1, 2]^T
+    auto b_custom = create_sequential_tensor({1, 4}, Device::GPU); // [0, 1, 2, 3]
 
     auto a_torch = create_torch_sequential({3, 1});
     auto b_torch = create_torch_sequential({1, 4});
@@ -355,8 +355,8 @@ TEST_F(TensorBroadcastTest, BroadcastDivision) {
     std::vector<float> a_data(6, 12.0f); // 2*3*1 = 6
     std::vector<float> b_data(4, 3.0f);  // 1*4 = 4
 
-    auto a_custom = Tensor::from_vector(a_data, {2, 3, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {2, 3, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {2, 3, 1});
     auto b_torch = create_torch_tensor(b_data, {1, 4});
@@ -374,8 +374,8 @@ TEST_F(TensorBroadcastTest, BroadcastWithEmpty) {
     std::vector<float> empty_data;
     std::vector<float> normal_data(12, 1.0f);
 
-    auto empty_custom = Tensor::from_vector(empty_data, {0}, Device::CUDA);
-    auto normal_custom = Tensor::from_vector(normal_data, {3, 4}, Device::CUDA);
+    auto empty_custom = Tensor::from_vector(empty_data, {0}, Device::GPU);
+    auto normal_custom = Tensor::from_vector(normal_data, {3, 4}, Device::GPU);
 
     // Broadcasting with empty tensor and incompatible shapes should throw
     EXPECT_THROW(empty_custom.add(normal_custom), std::runtime_error);
@@ -392,8 +392,8 @@ TEST_F(TensorBroadcastTest, BroadcastSingleElement) {
     std::vector<float> single_data = {5.0f};
     std::vector<float> matrix_data(60, 2.0f); // 3*4*5 = 60
 
-    auto single_custom = Tensor::from_vector(single_data, {1, 1, 1}, Device::CUDA);
-    auto matrix_custom = Tensor::from_vector(matrix_data, {3, 4, 5}, Device::CUDA);
+    auto single_custom = Tensor::from_vector(single_data, {1, 1, 1}, Device::GPU);
+    auto matrix_custom = Tensor::from_vector(matrix_data, {3, 4, 5}, Device::GPU);
 
     auto single_torch = create_torch_tensor(single_data, {1, 1, 1});
     auto matrix_torch = create_torch_tensor(matrix_data, {3, 4, 5});
@@ -410,8 +410,8 @@ TEST_F(TensorBroadcastTest, BroadcastLargeTensors) {
     std::vector<float> a_data(100, 1.0f);
     std::vector<float> b_data(200, 1.0f);
 
-    auto a_custom = Tensor::from_vector(a_data, {100, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 200}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {100, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 200}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {100, 1});
     auto b_torch = create_torch_tensor(b_data, {1, 200});
@@ -449,7 +449,7 @@ TEST_F(TensorBroadcastTest, BroadcastOnCPU) {
 TEST_F(TensorBroadcastTest, ExpandTensor) {
     std::vector<float> data(3, 2.0f);
 
-    auto tensor_custom = Tensor::from_vector(data, {3, 1}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {3, 1}, Device::GPU);
     auto tensor_torch = create_torch_tensor(data, {3, 1});
 
     auto expanded_custom = tensor_custom.expand({3, 4});
@@ -462,7 +462,7 @@ TEST_F(TensorBroadcastTest, ExpandTensor) {
 TEST_F(TensorBroadcastTest, BroadcastToTensor) {
     std::vector<float> data(3, 2.0f);
 
-    auto tensor_custom = Tensor::from_vector(data, {3, 1}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {3, 1}, Device::GPU);
     auto tensor_torch = create_torch_tensor(data, {3, 1});
 
     auto broadcasted_custom = tensor_custom.broadcast_to({3, 4});
@@ -475,7 +475,7 @@ TEST_F(TensorBroadcastTest, BroadcastToTensor) {
 TEST_F(TensorBroadcastTest, ExpandMultipleDimensions) {
     std::vector<float> data(3, 3.0f); // 1*3*1 = 3
 
-    auto tensor_custom = Tensor::from_vector(data, {1, 3, 1}, Device::CUDA);
+    auto tensor_custom = Tensor::from_vector(data, {1, 3, 1}, Device::GPU);
     auto tensor_torch = create_torch_tensor(data, {1, 3, 1});
 
     auto expanded_custom = tensor_custom.expand({2, 3, 4});
@@ -493,9 +493,9 @@ TEST_F(TensorBroadcastTest, MixedRankBroadcast) {
     std::vector<float> rank2_data(15, 2.0f); // 3*5 = 15
     std::vector<float> rank3_data(30, 3.0f); // 2*3*5 = 30
 
-    auto rank1_custom = Tensor::from_vector(rank1_data, {5}, Device::CUDA);
-    auto rank2_custom = Tensor::from_vector(rank2_data, {3, 5}, Device::CUDA);
-    auto rank3_custom = Tensor::from_vector(rank3_data, {2, 3, 5}, Device::CUDA);
+    auto rank1_custom = Tensor::from_vector(rank1_data, {5}, Device::GPU);
+    auto rank2_custom = Tensor::from_vector(rank2_data, {3, 5}, Device::GPU);
+    auto rank3_custom = Tensor::from_vector(rank3_data, {2, 3, 5}, Device::GPU);
 
     auto rank1_torch = create_torch_tensor(rank1_data, {5});
     auto rank2_torch = create_torch_tensor(rank2_data, {3, 5});
@@ -528,9 +528,9 @@ TEST_F(TensorBroadcastTest, ChainedBroadcastOperations) {
     std::vector<float> b_data(4, 3.0f);
     std::vector<float> c_data(12, 1.0f); // 3*4 = 12
 
-    auto a_custom = Tensor::from_vector(a_data, {3, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::CUDA);
-    auto c_custom = Tensor::from_vector(c_data, {3, 4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {3, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::GPU);
+    auto c_custom = Tensor::from_vector(c_data, {3, 4}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {3, 1});
     auto b_torch = create_torch_tensor(b_data, {1, 4});
@@ -546,9 +546,9 @@ TEST_F(TensorBroadcastTest, ChainedBroadcastOperations) {
 
 TEST_F(TensorBroadcastTest, ComplexBroadcastExpression) {
     // More complex expression with multiple broadcasts
-    auto a_custom = create_sequential_tensor({3, 1}, Device::CUDA); // [0, 1, 2]^T
-    auto b_custom = create_sequential_tensor({1, 4}, Device::CUDA); // [0, 1, 2, 3]
-    auto c_custom = Tensor::ones({3, 4}, Device::CUDA);
+    auto a_custom = create_sequential_tensor({3, 1}, Device::GPU); // [0, 1, 2]^T
+    auto b_custom = create_sequential_tensor({1, 4}, Device::GPU); // [0, 1, 2, 3]
+    auto c_custom = Tensor::ones({3, 4}, Device::GPU);
 
     auto a_torch = create_torch_sequential({3, 1});
     auto b_torch = create_torch_sequential({1, 4});
@@ -566,8 +566,8 @@ TEST_F(TensorBroadcastTest, ScalarMultiplication) {
     std::vector<float> scalar_data = {3.0f};
     std::vector<float> matrix_data(6, 2.0f); // 2*3 = 6
 
-    auto scalar_custom = Tensor::from_vector(scalar_data, {1}, Device::CUDA);
-    auto matrix_custom = Tensor::from_vector(matrix_data, {2, 3}, Device::CUDA);
+    auto scalar_custom = Tensor::from_vector(scalar_data, {1}, Device::GPU);
+    auto matrix_custom = Tensor::from_vector(matrix_data, {2, 3}, Device::GPU);
 
     auto scalar_torch = create_torch_tensor(scalar_data, {1});
     auto matrix_torch = create_torch_tensor(matrix_data, {2, 3});
@@ -596,8 +596,8 @@ TEST_F(TensorBroadcastTest, RandomBroadcastOperations) {
             b_data[i] = dist(gen);
         }
 
-        auto a_custom = Tensor::from_vector(a_data, {5, 1}, Device::CUDA);
-        auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::CUDA);
+        auto a_custom = Tensor::from_vector(a_data, {5, 1}, Device::GPU);
+        auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::GPU);
 
         auto a_torch = create_torch_tensor(a_data, {5, 1});
         auto b_torch = create_torch_tensor(b_data, {1, 4});
@@ -622,8 +622,8 @@ TEST_F(TensorBroadcastTest, BroadcastComparison) {
     std::vector<float> a_data = {1.0f, 2.0f, 3.0f};
     std::vector<float> b_data = {2.0f, 2.0f, 2.0f, 2.0f};
 
-    auto a_custom = Tensor::from_vector(a_data, {3, 1}, Device::CUDA);
-    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::CUDA);
+    auto a_custom = Tensor::from_vector(a_data, {3, 1}, Device::GPU);
+    auto b_custom = Tensor::from_vector(b_data, {1, 4}, Device::GPU);
 
     auto a_torch = create_torch_tensor(a_data, {3, 1});
     auto b_torch = create_torch_tensor(b_data, {1, 4});
@@ -649,8 +649,8 @@ TEST_F(TensorBroadcastTest, BroadcastComparison) {
 // ============= Broadcasting with Maximum/Minimum =============
 
 TEST_F(TensorBroadcastTest, BroadcastMaximum) {
-    auto a_custom = create_sequential_tensor({3, 1}, Device::CUDA);
-    auto b_custom = Tensor::full({1, 4}, 1.5f, Device::CUDA);
+    auto a_custom = create_sequential_tensor({3, 1}, Device::GPU);
+    auto b_custom = Tensor::full({1, 4}, 1.5f, Device::GPU);
 
     auto a_torch = create_torch_sequential({3, 1});
     auto b_torch = torch::full({1, 4}, 1.5f, torch::TensorOptions().device(torch::kCUDA));
@@ -663,8 +663,8 @@ TEST_F(TensorBroadcastTest, BroadcastMaximum) {
 }
 
 TEST_F(TensorBroadcastTest, BroadcastMinimum) {
-    auto a_custom = create_sequential_tensor({3, 1}, Device::CUDA);
-    auto b_custom = Tensor::full({1, 4}, 1.5f, Device::CUDA);
+    auto a_custom = create_sequential_tensor({3, 1}, Device::GPU);
+    auto b_custom = Tensor::full({1, 4}, 1.5f, Device::GPU);
 
     auto a_torch = create_torch_sequential({3, 1});
     auto b_torch = torch::full({1, 4}, 1.5f, torch::TensorOptions().device(torch::kCUDA));

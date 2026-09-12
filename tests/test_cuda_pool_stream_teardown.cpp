@@ -2,9 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/cuda_stream_context.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
-#include "core/tensor/internal/stream_lifetime.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/stream_lifetime.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -25,7 +25,7 @@ namespace {
 
 TEST_F(CudaPoolStreamTeardownTest,
        TensorOutlivesReleasedD2HStreamDeallocatesSafely) {
-    auto tensor = Tensor::empty({1 << 20}, Device::CUDA);
+    auto tensor = Tensor::empty({1 << 20}, Device::GPU);
 
     cudaStream_t d2h = nullptr;
     ASSERT_EQ(cudaStreamCreateWithFlags(&d2h, cudaStreamNonBlocking), cudaSuccess);
@@ -49,7 +49,7 @@ TEST_F(CudaPoolStreamTeardownTest,
 
     cudaStream_t recycled = nullptr;
     ASSERT_EQ(cudaStreamCreateWithFlags(&recycled, cudaStreamNonBlocking), cudaSuccess);
-    auto tensor = Tensor::empty({1 << 20}, Device::CUDA);
+    auto tensor = Tensor::empty({1 << 20}, Device::GPU);
     prepare_inputs_for_stream({&tensor}, recycled);
 
     EXPECT_FALSE(is_stream_retired(recycled));

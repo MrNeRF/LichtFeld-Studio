@@ -9,7 +9,7 @@
 
 #include "core/alloc_counter.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 
 #include <cmath>
 #include <cuda_runtime.h>
@@ -33,7 +33,7 @@ namespace {
         std::vector<float> host(n);
         for (size_t i = 0; i < n; ++i)
             host[i] = static_cast<float>((i % 97) + 1); // 1..97 cycle
-        return Tensor::from_vector(host, TensorShape(shape), Device::CPU).cuda();
+        return Tensor::from_vector(host, TensorShape(shape), Device::CPU).gpu();
     }
 
     /// Reference: permute reduce-dim to last, contiguous, reduce last.

@@ -349,15 +349,15 @@ namespace lfs::io {
                 const float clamped = std::clamp(value, OPACITY_EPSILON, 1.0f - OPACITY_EPSILON);
                 return std::log(clamped / (1.0f - clamped));
             });
-            Tensor shN_tensor = rest == 0 ? Tensor::zeros({count, 0, 3}, Device::CUDA, DataType::Float32)
-                                          : Tensor::from_vector(std::move(shN), {count, rest, 3}, Device::CUDA);
+            Tensor shN_tensor = rest == 0 ? Tensor::zeros({count, 0, 3}, Device::GPU, DataType::Float32)
+                                          : Tensor::from_vector(std::move(shN), {count, rest, 3}, Device::GPU);
             SplatData data(sh_degree,
-                           Tensor::from_vector(std::move(positions), {count, 3}, Device::CUDA),
-                           Tensor::from_vector(std::move(sh0), {count, 1, 3}, Device::CUDA),
+                           Tensor::from_vector(std::move(positions), {count, 3}, Device::GPU),
+                           Tensor::from_vector(std::move(sh0), {count, 1, 3}, Device::GPU),
                            std::move(shN_tensor),
-                           Tensor::from_vector(std::move(scaling_raw), {count, 3}, Device::CUDA),
-                           Tensor::from_vector(std::move(rotations), {count, 4}, Device::CUDA),
-                           Tensor::from_vector(std::move(opacity_raw), {count, 1}, Device::CUDA),
+                           Tensor::from_vector(std::move(scaling_raw), {count, 3}, Device::GPU),
+                           Tensor::from_vector(std::move(rotations), {count, 4}, Device::GPU),
+                           Tensor::from_vector(std::move(opacity_raw), {count, 1}, Device::GPU),
                            SCENE_SCALE);
 
             auto to_glm = [](const std::array<double, 16>& matrix) {

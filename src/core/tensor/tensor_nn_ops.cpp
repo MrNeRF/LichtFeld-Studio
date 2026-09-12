@@ -1,11 +1,11 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "internal/tensor_nn_ops.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_nn_ops.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 
 #include <format>
 
@@ -199,42 +199,44 @@ namespace lfs::core {
                                       : &bias;
 
         // GPU path: Output[C_out, S] = Weight[C_out, C_in] @ Input[C_in, S]
-        if (device_ == Device::CUDA && N == 1) {
+        if (device_ == Device::GPU && N == 1) {
             pin_operands({&weight_cont, &input_cont});
-            auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
+            auto output = internal::allocate_like(
+                *this, TensorShape{N, C_out, H, W}, dtype_);
 
-            tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                     output.ptr<float>(), C_out, S, C_in, stream());
+            internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
 
             if (bias.is_valid()) {
                 const int total = static_cast<int>(N * C_out * H * W);
-                tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                            output.ptr<float>(), total,
-                                            static_cast<int>(C_out), static_cast<int>(S),
-                                            stream());
+                internal::backend_ops_for(output).bias_add(
+                    internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                    internal::storage_ref(output), total, static_cast<int>(C_out),
+                    static_cast<int>(S), internal::ExecContext{stream()});
             }
 
             return output;
         }
 
         // Batched GPU path for N > 1: process each batch
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&weight_cont, &input_cont});
-            auto output = empty({N, C_out, H, W}, Device::CUDA, dtype_);
+            auto output = internal::allocate_like(
+                *this, TensorShape{N, C_out, H, W}, dtype_);
 
             for (size_t n = 0; n < N; ++n) {
-                const float* in_ptr = input_cont.ptr<float>() + n * C_in * S;
-                float* out_ptr = output.ptr<float>() + n * C_out * S;
-                tensor_ops::launch_sgemm(weight_cont.ptr<float>(), in_ptr, out_ptr,
-                                         C_out, S, C_in, stream());
+                auto input_batch = internal::storage_ref(input_cont);
+                input_batch.byte_offset += n * C_in * S * sizeof(float);
+                auto output_batch = internal::storage_ref(output);
+                output_batch.byte_offset += n * C_out * S * sizeof(float);
+                internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), input_batch, output_batch, internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
             }
 
             if (bias.is_valid()) {
                 const int total = static_cast<int>(N * C_out * H * W);
-                tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                            output.ptr<float>(), total,
-                                            static_cast<int>(C_out), static_cast<int>(S),
-                                            stream());
+                internal::backend_ops_for(output).bias_add(
+                    internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                    internal::storage_ref(output), total, static_cast<int>(C_out),
+                    static_cast<int>(S), internal::ExecContext{stream()});
             }
 
             return output;
@@ -310,14 +312,25 @@ namespace lfs::core {
                        "max_pool2d output has too many elements for its CUDA launch metadata");
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
-        auto output = empty({static_cast<size_t>(N), static_cast<size_t>(C),
-                             static_cast<size_t>(H_out), static_cast<size_t>(W_out)},
-                            device_, dtype_);
+        auto output = internal::allocate_like(
+            *this,
+            TensorShape{static_cast<size_t>(N), static_cast<size_t>(C),
+                        static_cast<size_t>(H_out), static_cast<size_t>(W_out)},
+            dtype_);
 
-        if (device_ == Device::CUDA) {
-            tensor_ops::launch_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                          N, C, H_in, W_in, H_out, W_out,
-                                          kernel_size, stride, padding, stream());
+        if (device_ == Device::GPU) {
+            const internal::PoolProgram program{
+                .batch = N,
+                .channels = C,
+                .input_height = H_in,
+                .input_width = W_in,
+                .output_height = H_out,
+                .output_width = W_out,
+                .kernel_size = kernel_size,
+                .stride = stride,
+                .padding = padding,
+            };
+            internal::backend_ops_for(input_cont).max_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
         } else {
             cpu_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
                            N, C, H_in, W_in, H_out, W_out,
@@ -348,13 +361,22 @@ namespace lfs::core {
         const int W_in = static_cast<int>(shape_[3]);
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
-        auto output = empty({static_cast<size_t>(N), static_cast<size_t>(C),
-                             static_cast<size_t>(output_h), static_cast<size_t>(output_w)},
-                            device_, dtype_);
+        auto output = internal::allocate_like(
+            *this,
+            TensorShape{static_cast<size_t>(N), static_cast<size_t>(C),
+                        static_cast<size_t>(output_h), static_cast<size_t>(output_w)},
+            dtype_);
 
-        if (device_ == Device::CUDA) {
-            tensor_ops::launch_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                                   N, C, H_in, W_in, output_h, output_w, stream());
+        if (device_ == Device::GPU) {
+            const internal::PoolProgram program{
+                .batch = N,
+                .channels = C,
+                .input_height = H_in,
+                .input_width = W_in,
+                .output_height = output_h,
+                .output_width = output_w,
+            };
+            internal::backend_ops_for(input_cont).adaptive_avg_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
         } else {
             cpu_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
                                     N, C, H_in, W_in, output_h, output_w);
@@ -409,20 +431,25 @@ namespace lfs::core {
                                       : &bias;
 
         // GPU path: Output[batch, out] = Input[batch, in] @ Weight^T[in, out]
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&input_cont, &weight_cont});
-            auto output = empty({batch_size, out_features}, Device::CUDA, dtype_);
+            auto output = internal::allocate_like(
+                *this, TensorShape{batch_size, out_features}, dtype_);
 
-            tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
-                                        output.ptr<float>(), batch_size, out_features, in_features,
-                                        stream());
+            internal::backend_ops_for(input_cont).sgemm_tn(internal::storage_ref(input_cont), internal::storage_ref(weight_cont), internal::storage_ref(output), internal::GemmProgram{
+                                                                                                                                                                     .m = batch_size,
+                                                                                                                                                                     .n = out_features,
+                                                                                                                                                                     .k = in_features,
+                                                                                                                                                                 },
+                                                           internal::ExecContext{stream()});
 
             if (bias.is_valid()) {
                 const int total = static_cast<int>(batch_size * out_features);
-                tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                            output.ptr<float>(), total,
-                                            static_cast<int>(out_features), 1,
-                                            stream());
+                internal::backend_ops_for(output).bias_add(
+                    internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                    internal::storage_ref(output), total,
+                    static_cast<int>(out_features), 1,
+                    internal::ExecContext{stream()});
             }
 
             std::vector<int> output_shape;
@@ -454,6 +481,8 @@ namespace lfs::core {
     // ========== _out variants that write into pre-allocated output tensors ==========
 
     void Tensor::conv1x1_bias_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "conv1x1_bias_out",
                                    {{"weight", &weight}, {"bias", &bias}, {"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
@@ -469,7 +498,7 @@ namespace lfs::core {
                                    "(input_channels={}, weight_input_channels={}, "
                                    "input_shape={}, weight_shape={})",
                                    shape_[1], weight.shape_[1], shape_.str(), weight.shape_.str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("conv1x1_bias_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -505,7 +534,8 @@ namespace lfs::core {
                        "conv1x1_bias_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             conv1x1_bias_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -519,34 +549,36 @@ namespace lfs::core {
         const Tensor& bias_cont = bias.contiguous_read(bias_materialized);
 
         pin_operands({&weight_cont, &input_cont});
-        tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                 output.ptr<float>(), C_out, S, C_in, stream());
+        internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
 
         const int total = static_cast<int>(N * C_out * H * W);
-        tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont.ptr<float>(),
-                                    output.ptr<float>(), total,
-                                    static_cast<int>(C_out), static_cast<int>(S),
-                                    stream());
+        internal::backend_ops_for(output).bias_add(
+            internal::storage_ref(output), internal::storage_ref(bias_cont),
+            internal::storage_ref(output), total, static_cast<int>(C_out),
+            static_cast<int>(S), internal::ExecContext{stream()});
     }
 
     void Tensor::relu_out(Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "relu_out", {{"output", &output}});
         LFS_ASSERT_MSG(numel() == output.numel(),
                        std::format("relu_out output element count must match input "
                                    "(input_numel={}, output_numel={}, input_shape={}, output_shape={})",
                                    numel(), output.numel(), shape_.str(), output.shape().str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("relu_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
         pin_operands({&input_cont, &output});
-        tensor_ops::launch_relu(input_cont.ptr<float>(), output.ptr<float>(),
-                                static_cast<int>(numel()), stream());
+        internal::backend_ops_for(input_cont).relu(internal::storage_ref(input_cont), internal::storage_ref(output), static_cast<int>(numel()), internal::ExecContext{stream()});
     }
 
     void Tensor::conv1x1_bias_relu_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "conv1x1_bias_relu_out",
                                    {{"weight", &weight}, {"bias", &bias}, {"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
@@ -562,7 +594,7 @@ namespace lfs::core {
                                    "(input_channels={}, weight_input_channels={}, "
                                    "input_shape={}, weight_shape={})",
                                    shape_[1], weight.shape_[1], shape_.str(), weight.shape_.str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("conv1x1_bias_relu_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -598,7 +630,8 @@ namespace lfs::core {
                        "conv1x1_bias_relu_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             conv1x1_bias_relu_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -615,29 +648,28 @@ namespace lfs::core {
         if (output_size >= 500000) {
             // Large outputs: use fused kernel to save memory bandwidth
             pin_operands({&weight_cont, &input_cont, &bias_cont});
-            tensor_ops::launch_sgemm_bias_relu(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                               bias_cont.ptr<float>(), output.ptr<float>(),
-                                               C_out, S, C_in, stream());
+            internal::backend_ops_for(input_cont).sgemm_bias_relu(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(bias_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
         } else {
             // Small outputs: separate kernels have less overhead
             pin_operands({&weight_cont, &input_cont, &bias_cont});
-            tensor_ops::launch_sgemm(weight_cont.ptr<float>(), input_cont.ptr<float>(),
-                                     output.ptr<float>(), C_out, S, C_in, stream());
+            internal::backend_ops_for(input_cont).sgemm(internal::storage_ref(weight_cont), internal::storage_ref(input_cont), internal::storage_ref(output), internal::GemmProgram{.m = C_out, .n = S, .k = C_in}, internal::ExecContext{stream()});
             const int total = static_cast<int>(N * C_out * H * W);
-            tensor_ops::launch_bias_relu(output.ptr<float>(), bias_cont.ptr<float>(),
-                                         output.ptr<float>(), total,
-                                         static_cast<int>(C_out), static_cast<int>(S),
-                                         stream());
+            internal::backend_ops_for(output).bias_relu(
+                internal::storage_ref(output), internal::storage_ref(bias_cont),
+                internal::storage_ref(output), total, static_cast<int>(C_out),
+                static_cast<int>(S), internal::ExecContext{stream()});
         }
     }
 
     void Tensor::max_pool2d_out(int kernel_size, int stride, int padding, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "max_pool2d_out", {{"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
                        std::format("max_pool2d_out input must be 4D [N,C,H,W] "
                                    "(input_shape={}, input_rank={})",
                                    shape_.str(), shape_.rank()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("max_pool2d_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -675,18 +707,29 @@ namespace lfs::core {
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
         pin_operands({&input_cont, &output});
-        tensor_ops::launch_max_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                      N, C, H_in, W_in, H_out, W_out,
-                                      kernel_size, stride, padding, stream());
+        const internal::PoolProgram program{
+            .batch = N,
+            .channels = C,
+            .input_height = H_in,
+            .input_width = W_in,
+            .output_height = H_out,
+            .output_width = W_out,
+            .kernel_size = kernel_size,
+            .stride = stride,
+            .padding = padding,
+        };
+        internal::backend_ops_for(input_cont).max_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
     }
 
     void Tensor::adaptive_avg_pool2d_out(int output_h, int output_w, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "adaptive_avg_pool2d_out", {{"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() == 4,
                        std::format("adaptive_avg_pool2d_out input must be 4D [N,C,H,W] "
                                    "(input_shape={}, input_rank={})",
                                    shape_.str(), shape_.rank()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("adaptive_avg_pool2d_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -714,11 +757,20 @@ namespace lfs::core {
 
         const Tensor& input_cont = is_contiguous() ? *this : contiguous();
         pin_operands({&input_cont, &output});
-        tensor_ops::launch_adaptive_avg_pool2d(input_cont.ptr<float>(), output.ptr<float>(),
-                                               N, C, H_in, W_in, output_h, output_w, stream());
+        const internal::PoolProgram program{
+            .batch = N,
+            .channels = C,
+            .input_height = H_in,
+            .input_width = W_in,
+            .output_height = output_h,
+            .output_width = output_w,
+        };
+        internal::backend_ops_for(input_cont).adaptive_avg_pool2d(internal::storage_ref(input_cont), internal::storage_ref(output), program, internal::ExecContext{stream()});
     }
 
     void Tensor::linear_bias_relu_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "linear_bias_relu_out",
                                    {{"weight", &weight}, {"bias", &bias}, {"output", &output}});
         LFS_ASSERT_MSG(shape_.rank() >= 1,
@@ -735,7 +787,7 @@ namespace lfs::core {
                                    "input_shape={}, weight_shape={})",
                                    shape_[shape_.rank() - 1], weight.shape()[1],
                                    shape_.str(), weight.shape().str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("linear_bias_relu_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -766,7 +818,8 @@ namespace lfs::core {
                        "linear_bias_relu_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             linear_bias_relu_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -782,18 +835,24 @@ namespace lfs::core {
                                       : &bias;
 
         pin_operands({&input_cont, &weight_cont});
-        tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
-                                    output.ptr<float>(), batch_size, out_features, in_features,
-                                    stream());
+        internal::backend_ops_for(input_cont).sgemm_tn(internal::storage_ref(input_cont), internal::storage_ref(weight_cont), internal::storage_ref(output), internal::GemmProgram{
+                                                                                                                                                                 .m = batch_size,
+                                                                                                                                                                 .n = out_features,
+                                                                                                                                                                 .k = in_features,
+                                                                                                                                                             },
+                                                       internal::ExecContext{stream()});
 
         const int total = static_cast<int>(batch_size * out_features);
-        tensor_ops::launch_bias_relu(output.ptr<float>(), bias_cont->ptr<float>(),
-                                     output.ptr<float>(), total,
-                                     static_cast<int>(out_features), 1,
-                                     stream());
+        internal::backend_ops_for(output).bias_relu(
+            internal::storage_ref(output), internal::storage_ref(*bias_cont),
+            internal::storage_ref(output), total,
+            static_cast<int>(out_features), 1,
+            internal::ExecContext{stream()});
     }
 
     void Tensor::linear_out(const Tensor& weight, const Tensor& bias, Tensor& output) const {
+
+        output.preserve_lazy_snapshots_before_write();
         assert_float32_same_device(*this, "linear_out",
                                    {{"weight", &weight}, {"output", &output}});
         if (bias.is_valid()) {
@@ -813,7 +872,7 @@ namespace lfs::core {
                                    "input_shape={}, weight_shape={})",
                                    shape_[shape_.rank() - 1], weight.shape()[1],
                                    shape_.str(), weight.shape().str()));
-        LFS_ASSERT_MSG(device_ == Device::CUDA,
+        LFS_ASSERT_MSG(device_ == Device::GPU,
                        std::format("linear_out requires CUDA tensors "
                                    "(input_device={}, input_shape={})",
                                    device_name(device_), shape_.str()));
@@ -846,7 +905,8 @@ namespace lfs::core {
                        "linear_out output must not overlap an input operand");
 
         if (!output.is_contiguous()) {
-            Tensor materialized_output = empty(output.shape(), output.device(), output.dtype());
+            Tensor materialized_output = internal::allocate_like(
+                output, output.shape(), output.dtype());
             linear_out(weight, bias, materialized_output);
             output.copy_from(materialized_output);
             return;
@@ -862,16 +922,20 @@ namespace lfs::core {
                                       : &bias;
 
         pin_operands({&input_cont, &weight_cont});
-        tensor_ops::launch_sgemm_tn(input_cont.ptr<float>(), weight_cont.ptr<float>(),
-                                    output.ptr<float>(), batch_size, out_features, in_features,
-                                    stream());
+        internal::backend_ops_for(input_cont).sgemm_tn(internal::storage_ref(input_cont), internal::storage_ref(weight_cont), internal::storage_ref(output), internal::GemmProgram{
+                                                                                                                                                                 .m = batch_size,
+                                                                                                                                                                 .n = out_features,
+                                                                                                                                                                 .k = in_features,
+                                                                                                                                                             },
+                                                       internal::ExecContext{stream()});
 
         if (bias.is_valid()) {
             const int total = static_cast<int>(batch_size * out_features);
-            tensor_ops::launch_bias_add(output.ptr<float>(), bias_cont->ptr<float>(),
-                                        output.ptr<float>(), total,
-                                        static_cast<int>(out_features), 1,
-                                        stream());
+            internal::backend_ops_for(output).bias_add(
+                internal::storage_ref(output), internal::storage_ref(*bias_cont),
+                internal::storage_ref(output), total,
+                static_cast<int>(out_features), 1,
+                internal::ExecContext{stream()});
         }
     }
 

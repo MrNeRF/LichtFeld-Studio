@@ -28,7 +28,7 @@ namespace {
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = 0.15f + 0.7f * std::fmod(seed * 0.173f * static_cast<float>(i + 1), 1.0f);
         }
-        return Tensor::from_vector(values, shape, Device::CUDA);
+        return Tensor::from_vector(values, shape, Device::GPU);
     }
 
     float max_abs_diff(const Tensor& a, const Tensor& b) {
@@ -65,7 +65,7 @@ namespace {
         for (size_t i = 0; i < host.size(); ++i) {
             host[i] = 0.15f * std::sin(0.31f * static_cast<float>(i + 1));
         }
-        grid.grids().copy_from(Tensor::from_vector(host, grid.grids().shape(), Device::CUDA));
+        grid.grids().copy_from(Tensor::from_vector(host, grid.grids().shape(), Device::GPU));
     }
 
     void check_finite_difference(BilateralGrid& grid, const Tensor& image,
@@ -81,7 +81,7 @@ namespace {
         constexpr float kEps = 1e-3f;
 
         auto set_grid = [&](const std::vector<float>& values) {
-            grid.grids().copy_from(Tensor::from_vector(values, grid.grids().shape(), Device::CUDA));
+            grid.grids().copy_from(Tensor::from_vector(values, grid.grids().shape(), Device::GPU));
         };
         auto loss_of = [&](const Tensor& img) {
             const auto out = cpu_copy(grid.apply(img, 0));
@@ -115,8 +115,8 @@ namespace {
             auto minus = image_host;
             plus[i] += kEps;
             minus[i] -= kEps;
-            const auto img_plus = Tensor::from_vector(plus, image.shape(), Device::CUDA);
-            const auto img_minus = Tensor::from_vector(minus, image.shape(), Device::CUDA);
+            const auto img_plus = Tensor::from_vector(plus, image.shape(), Device::GPU);
+            const auto img_minus = Tensor::from_vector(minus, image.shape(), Device::GPU);
             const float numerical = (loss_of(img_plus) - loss_of(img_minus)) / (2.0f * kEps);
             const float abs_diff = std::abs(rgb_grad[i] - numerical);
             if (std::max(std::abs(rgb_grad[i]), std::abs(numerical)) < 1e-3f && abs_diff < 1e-3f)
@@ -147,10 +147,10 @@ namespace {
             host[static_cast<size_t>(7 * cells + cell)] = -8.0f;
             host[static_cast<size_t>(8 * cells + cell)] = -8.0f;
         }
-        grid.grids().copy_from(Tensor::from_vector(host, grid.grids().shape(), Device::CUDA));
+        grid.grids().copy_from(Tensor::from_vector(host, grid.grids().shape(), Device::GPU));
 
         std::vector<float> rgb(3 * 4 * 4, 1.0f);
-        const auto image = Tensor::from_vector(rgb, {3, 4, 4}, Device::CUDA);
+        const auto image = Tensor::from_vector(rgb, {3, 4, 4}, Device::GPU);
         const auto out = grid.apply(image, 0);
         const auto out_host = cpu_copy(out);
         for (float v : out_host) {

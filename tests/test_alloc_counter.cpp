@@ -16,7 +16,7 @@ namespace {
     constexpr size_t kBucketElems = 1024 * 1024; // 4 MiB of float32
 
     void cuda_warmup() {
-        auto warm = Tensor::zeros({256}, Device::CUDA, DataType::Float32);
+        auto warm = Tensor::zeros({256}, Device::GPU, DataType::Float32);
         ASSERT_TRUE(warm.is_valid());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
         (void)warm;
@@ -42,7 +42,7 @@ TEST(AllocCounterTest, FreshLargeTensorIncrementsCounter) {
     cuda_warmup();
 
     const auto snap = alloc_counter::snapshot();
-    auto t = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);
+    auto t = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(t.is_valid());
     ASSERT_EQ(t.bytes(), kBucketElems * sizeof(float));
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -56,7 +56,7 @@ TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
 
     // Seed the bucketed cache with a free of this exact size.
     {
-        auto seed = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);
+        auto seed = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
         ASSERT_TRUE(seed.is_valid());
         ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
     }
@@ -64,7 +64,7 @@ TEST(AllocCounterTest, PoolCacheHitDoesNotIncrement) {
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
     const auto snap = alloc_counter::snapshot();
-    auto hit = Tensor::zeros({kBucketElems}, Device::CUDA, DataType::Float32);
+    auto hit = Tensor::zeros({kBucketElems}, Device::GPU, DataType::Float32);
     ASSERT_TRUE(hit.is_valid());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 
@@ -77,7 +77,7 @@ TEST(AllocCounterTest, ZerosDirectIncrementsCounter) {
 
     // zeros_direct always uses CudaStorageMode::Direct (cudaMalloc), never the pool.
     const auto snap = alloc_counter::snapshot();
-    auto t = Tensor::zeros_direct({4096, 3}, /*capacity=*/4096, Device::CUDA, DataType::Float32);
+    auto t = Tensor::zeros_direct({4096, 3}, /*capacity=*/4096, Device::GPU, DataType::Float32);
     ASSERT_TRUE(t.is_valid());
     ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 

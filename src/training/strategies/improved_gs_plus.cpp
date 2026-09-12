@@ -13,7 +13,7 @@
 #include "lfs/training/sh_value_storage.hpp"
 #include "strategy_utils.hpp"
 
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "kernels/mrnf_kernels.hpp"
@@ -53,7 +53,7 @@ namespace lfs::training {
         }
 
         void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
-            if (tensor.device() == lfs::core::Device::CUDA &&
+            if (tensor.device() == lfs::core::Device::GPU &&
                 tensor.dtype() == lfs::core::DataType::Float32 &&
                 tensor.is_valid() && tensor.numel() > 0) {
                 kernels::launch_normalize_by_positive_median(
@@ -1260,8 +1260,8 @@ namespace lfs::training {
                 free_mask.numel() > max_capacity) {
                 throw std::runtime_error("Invalid ImprovedGSPlus checkpoint: free mask has incompatible schema");
             }
-            if (_splat_data->means().device() == lfs::core::Device::CUDA) {
-                free_mask = free_mask.cuda();
+            if (_splat_data->means().device() == lfs::core::Device::GPU) {
+                free_mask = free_mask.gpu();
             }
         } else {
             const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)

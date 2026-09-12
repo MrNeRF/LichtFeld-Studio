@@ -3,9 +3,9 @@
 
 #include "internal/tensor_broadcast.hpp"
 #include "core/logger.hpp"
-#include "internal/cuda_stream_context.hpp"
+#include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
+#include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "internal/tensor_impl.hpp"
-#include "internal/tensor_ops.hpp"
 
 namespace lfs::core {
 
@@ -66,7 +66,7 @@ namespace lfs::core {
                        std::format("Cannot broadcast shape {} to {}", src.shape().str(), target.str()));
 
         if (src.numel() == 0 || target.elements() == 0) {
-            return Tensor::empty(target, src.device(), src.dtype());
+            return internal::allocate_like(src, target, src.dtype());
         }
 
         // zero-stride expand view — no device allocation.

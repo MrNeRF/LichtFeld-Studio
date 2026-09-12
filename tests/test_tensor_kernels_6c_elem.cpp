@@ -23,11 +23,11 @@ namespace {
     }
 
     Tensor f32_cuda(const std::vector<float>& host, std::initializer_list<size_t> shape) {
-        return Tensor::from_vector(host, TensorShape(shape), Device::CUDA);
+        return Tensor::from_vector(host, TensorShape(shape), Device::GPU);
     }
 
     Tensor f32_cuda(const std::vector<float>& host, size_t n) {
-        return Tensor::from_vector(host, TensorShape({n}), Device::CUDA);
+        return Tensor::from_vector(host, TensorShape({n}), Device::GPU);
     }
 
 } // namespace

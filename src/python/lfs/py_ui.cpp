@@ -233,7 +233,7 @@ namespace lfs::python {
                     throw std::invalid_argument("DynamicTexture channels must be 3 (RGB) or 4 (RGBA)");
 
                 if (t.device() == core::Device::CPU)
-                    t = t.cuda();
+                    t = t.gpu();
                 const auto orig_dtype = t.dtype();
                 if (orig_dtype != core::DataType::Float32)
                     t = t.to(core::DataType::Float32);
@@ -5261,6 +5261,30 @@ namespace lfs::python {
                 vis::clearSceneUpscalerPreference();
             },
             "Clear all saved scene reconstruction backend and preset preferences");
+
+        m.def("get_tensor_backend_preferences", [] {
+            const auto state = vis::UserPreferences::instance().tensorBackend();
+            nb::dict result;
+            result["backend"] = state.backend == core::GpuBackend::Vulkan ? "vulkan" : "cuda";
+            result["vulkan_device"] = state.options.vulkan_device;
+            result["vulkan_validation"] = state.options.vulkan_validation;
+            result["force_fp32_half"] = state.options.force_fp32_half;
+            result["force_no_atomic_float"] = state.options.force_no_atomic_float;
+            result["viewer_vulkan_inputs"] = state.options.viewer_vulkan_inputs;
+            return result; }, "Get saved tensor backend preferences; changes apply after restart");
+
+        m.def("set_tensor_backend_preferences", [](const std::string& backend, const std::string& device, int validation, bool fp32_half, bool no_atomic_float, bool viewer_inputs) {
+                  if (backend != "cuda" && backend != "vulkan")
+                      throw nb::value_error("Backend must be cuda or vulkan");
+                  if (validation < 0 || validation > 2)
+                      throw nb::value_error("Validation must be 0, 1, or 2");
+                  const vis::TensorPreferenceState state{
+                      .backend = backend == "vulkan" ? core::GpuBackend::Vulkan : core::GpuBackend::CUDA,
+                      .options = {.vulkan_device = device, .vulkan_validation = validation,
+                                  .force_fp32_half = fp32_half, .force_no_atomic_float = no_atomic_float,
+                                  .viewer_vulkan_inputs = viewer_inputs},
+                  };
+                  vis::UserPreferences::instance().setTensorBackend(state); }, nb::arg("backend") = "cuda", nb::arg("vulkan_device") = "", nb::arg("vulkan_validation") = 0, nb::arg("force_fp32_half") = false, nb::arg("force_no_atomic_float") = false, nb::arg("viewer_vulkan_inputs") = false, "Save tensor backend preferences for the next application start");
 
         m.def(
             "get_mcp_preferences",

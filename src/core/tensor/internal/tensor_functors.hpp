@@ -82,6 +82,29 @@ namespace lfs::core {
 
         // ============= UNARY OPERATIONS =============
 
+        // Wrap-around integer power. Negative exponents follow integer division:
+        // only bases 1 and -1 keep a nonzero result.
+        template <typename T>
+        HOST_DEVICE constexpr T integer_pow(const T base, const T exponent) {
+            if (exponent < T(0)) {
+                if (base == T(1))
+                    return T(1);
+                if (base == T(-1))
+                    return (exponent % T(2)) != T(0) ? T(-1) : T(1);
+                return T(0);
+            }
+            unsigned long long result = 1ull;
+            unsigned long long factor = static_cast<unsigned long long>(static_cast<long long>(base));
+            unsigned long long remaining = static_cast<unsigned long long>(exponent);
+            while (remaining != 0ull) {
+                if ((remaining & 1ull) != 0ull)
+                    result *= factor;
+                factor *= factor;
+                remaining >>= 1ull;
+            }
+            return static_cast<T>(result);
+        }
+
         struct neg_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
@@ -92,11 +115,20 @@ namespace lfs::core {
         struct abs_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>) {
+                    if constexpr (std::is_signed_v<T>) {
+                        using U = std::make_unsigned_t<T>;
+                        return x < T(0) ? static_cast<T>(U(0) - static_cast<U>(x)) : x;
+                    } else {
+                        return x;
+                    }
+                } else {
 #ifdef __CUDA_ARCH__
-                return fabsf(x);
+                    return fabsf(x);
 #else
-                return std::abs(x);
+                    return std::abs(x);
 #endif
+                }
             }
         };
 
@@ -344,11 +376,15 @@ namespace lfs::core {
         struct relu_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>) {
+                    return x < T(0) ? T(0) : x;
+                } else {
 #ifdef __CUDA_ARCH__
-                return isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0));
+                    return isnan(static_cast<float>(x)) ? x : fmaxf(x, T(0));
 #else
-                return std::isnan(static_cast<float>(x)) ? x : std::max(x, T(0));
+                    return std::isnan(static_cast<float>(x)) ? x : std::max(x, T(0));
 #endif
+                }
             }
         };
 
@@ -552,16 +588,20 @@ namespace lfs::core {
         struct pow_op {
             template <typename T>
             HOST_DEVICE constexpr T operator()(const T& a, const T& b) const {
-                // Special case: For squaring (pow 2.0), use multiplication to handle negative bases correctly
-                // powf(negative, 2.0) returns NaN because it's implemented as exp(b*log(a))
-                if (b == static_cast<T>(2.0)) {
-                    return a * a;
-                }
+                if constexpr (std::is_integral_v<T>) {
+                    return integer_pow(a, b);
+                } else {
+                    // Special case: For squaring (pow 2.0), use multiplication to handle negative bases correctly
+                    // powf(negative, 2.0) returns NaN because it's implemented as exp(b*log(a))
+                    if (b == static_cast<T>(2.0)) {
+                        return a * a;
+                    }
 #ifdef __CUDA_ARCH__
-                return powf(a, b);
+                    return powf(a, b);
 #else
-                return static_cast<T>(std::pow(a, b));
+                    return static_cast<T>(std::pow(a, b));
 #endif
+                }
             }
         };
 
@@ -1031,11 +1071,16 @@ namespace lfs::core {
             HOST_DEVICE constexpr clamp_range_op(T min_v, T max_v) : min_val(min_v),
                                                                      max_val(max_v) {}
             HOST_DEVICE constexpr T operator()(const T& x) const {
+                if constexpr (std::is_integral_v<T>) {
+                    const T lower = x < min_val ? min_val : x;
+                    return lower > max_val ? max_val : lower;
+                } else {
 #ifdef __CUDA_ARCH__
-                return fminf(fmaxf(x, min_val), max_val);
+                    return fminf(fmaxf(x, min_val), max_val);
 #else
-                return clamp_value(x, min_val, max_val);
+                    return clamp_value(x, min_val, max_val);
 #endif
+                }
             }
         };
 

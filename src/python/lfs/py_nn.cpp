@@ -6,6 +6,7 @@
 
 #include "core/nn/models/sam2.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "py_error.hpp"
 #include "py_tensor.hpp"
@@ -71,15 +72,9 @@ namespace lfs::python {
             return text;
         }
 
-        void require_cuda() {
-            int devices = 0;
-            const cudaError_t status = cudaGetDeviceCount(&devices);
-            if (status != cudaSuccess) {
-                throw std::runtime_error(
-                    std::format("SAM2 requires CUDA ({})", cudaGetErrorString(status)));
-            }
-            if (devices <= 0) {
-                throw std::runtime_error("SAM2 requires CUDA; no CUDA device is available");
+        void require_gpu() {
+            if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+                throw std::runtime_error("SAM2 requires an available GPU backend");
             }
         }
 
@@ -214,7 +209,7 @@ namespace lfs::python {
                 {
                     nb::gil_scoped_release release;
                     ensure_loaded();
-                    Tensor gpu = hwc.cuda();
+                    Tensor gpu = hwc.gpu();
                     if (gpu.dtype() == DataType::UInt8) {
                         gpu = gpu.to(DataType::Float32).mul(1.0f / 255.0f);
                     }
@@ -260,14 +255,14 @@ namespace lfs::python {
                 if (model_) {
                     return;
                 }
-                require_cuda();
+                require_gpu();
                 std::filesystem::path path;
                 if (weights_) {
                     path = *weights_;
                 } else {
                     path = lfs::preprocessing::ensure_sam2_weights();
                 }
-                auto loaded = unwrap(Sam2::load(path, Device::CUDA));
+                auto loaded = unwrap(Sam2::load(path, Device::GPU));
                 model_ = std::make_unique<Sam2>(std::move(loaded));
             }
 

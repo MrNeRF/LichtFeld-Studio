@@ -525,7 +525,7 @@ namespace lfs::training::kernels {
         if (scratch) {
             LFS_ASSERT_MSG(n <= static_cast<size_t>(std::numeric_limits<int>::max()),
                            "positive-median input exceeds CUB's int item-count limit");
-            scratch->ensure_n(n, lfs::core::Device::CUDA);
+            scratch->ensure_n(n, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(scratch->n_capacity >= n &&
                                scratch->selected.is_valid() &&
                                scratch->selected.ptr<float>() != nullptr,
@@ -550,7 +550,7 @@ namespace lfs::training::kernels {
                 cub::DeviceSelect::If(nullptr, temp_bytes, data, d_selected, d_count,
                                       n_int, PositivePred{}, stream),
                 "positive_median select size");
-            scratch->ensure_temps(temp_bytes, 0, lfs::core::Device::CUDA);
+            scratch->ensure_temps(temp_bytes, 0, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(temp_bytes == 0 ||
                                (scratch->select_temp.is_valid() &&
                                 scratch->select_temp_bytes >= temp_bytes &&
@@ -570,7 +570,7 @@ namespace lfs::training::kernels {
                 cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, d_selected, d_sorted,
                                                n_int, 0, sizeof(float) * 8, stream),
                 "positive_median sort size");
-            scratch->ensure_temps(temp_bytes, sort_bytes, lfs::core::Device::CUDA);
+            scratch->ensure_temps(temp_bytes, sort_bytes, lfs::core::Device::GPU);
             LFS_ASSERT_MSG(sort_bytes == 0 ||
                                (scratch->sort_temp.is_valid() &&
                                 scratch->sort_temp_bytes >= sort_bytes &&

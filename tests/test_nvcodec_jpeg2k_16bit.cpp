@@ -176,14 +176,14 @@ namespace {
         size_t channels) {
 
         using namespace lfs::core;
-        Tensor packed = Tensor::empty(shape, Device::CUDA, DataType::Float16);
+        Tensor packed = Tensor::empty(shape, Device::GPU, DataType::Float16);
         const cudaError_t copy_status = cudaMemcpy(
             packed.data_ptr(), input.data(), input.size() * sizeof(uint16_t), cudaMemcpyHostToDevice);
         if (copy_status != cudaSuccess) {
             throw std::runtime_error(std::string("cudaMemcpy failed: ") + cudaGetErrorString(copy_status));
         }
 
-        Tensor output = Tensor::empty(shape, Device::CUDA, DataType::Float32);
+        Tensor output = Tensor::empty(shape, Device::GPU, DataType::Float32);
         lfs::io::cuda::launch_uint16_hwc_to_float32_hwc(
             reinterpret_cast<const uint16_t*>(packed.data_ptr()),
             output.ptr<float>(),
@@ -201,7 +201,7 @@ namespace {
                                        const lfs::core::Tensor& actual,
                                        const char* label) {
         ASSERT_EQ(actual.dtype(), lfs::core::DataType::Float32) << label;
-        ASSERT_EQ(actual.device(), lfs::core::Device::CUDA) << label;
+        ASSERT_EQ(actual.device(), lfs::core::Device::GPU) << label;
         ASSERT_EQ(actual.shape(), expected.shape()) << label;
 
         const std::vector<float> expected_values = expected.cpu().to_vector();
@@ -411,7 +411,7 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, MaskRoundTripIsLossless) {
     auto host = lfs::core::Tensor::from_blob(
         values.data(), lfs::core::TensorShape({height, width}),
         lfs::core::Device::CPU, lfs::core::DataType::Float32);
-    auto input = host.to(lfs::core::Device::CUDA);
+    auto input = host.to(lfs::core::Device::GPU);
 
     lfs::io::NvCodecImageLoader::Options options;
     options.decoder_pool_size = 1;
@@ -441,7 +441,7 @@ TEST(NvCodecImageLoaderJpeg2k8Bit, RejectsNonLegacyStagingStream) {
     ASSERT_GT(device_count, 0);
 
     auto input = lfs::core::Tensor::zeros(
-        {size_t{8}, size_t{8}}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        {size_t{8}, size_t{8}}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
     lfs::io::NvCodecImageLoader::Options options;
     options.decoder_pool_size = 1;
     std::unique_ptr<lfs::io::NvCodecImageLoader> loader;
@@ -490,7 +490,7 @@ TEST(NvCodecImageLoaderJpeg, CanonicalJpegMeetsBicyclePsnrGate) {
     const auto canonical_source = lfs::core::Tensor::from_blob(
                                       grayscale.data(), lfs::core::TensorShape({size_t{3}, height, width}),
                                       lfs::core::Device::CPU, lfs::core::DataType::Float32)
-                                      .to(lfs::core::Device::CUDA);
+                                      .to(lfs::core::Device::GPU);
     constexpr int canonical_quality = 100;
     static_assert(canonical_quality >= 95);
     const auto encoded = loader->encode_to_jpeg(canonical_source, canonical_quality, nullptr);

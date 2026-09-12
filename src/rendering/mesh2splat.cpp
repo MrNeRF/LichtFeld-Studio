@@ -1559,12 +1559,12 @@ void main() {
                 c_ptr[i * 3 + 2] = (g.color.z - 0.5f) / SH_C0;
             }
 
-            means = means.to(Device::CUDA);
-            scaling_raw = scaling_raw.to(Device::CUDA);
-            rotation_raw = rotation_raw.to(Device::CUDA);
-            opacity_raw = opacity_raw.to(Device::CUDA);
-            sh0 = sh0.to(Device::CUDA);
-            auto shN = Tensor::zeros({N, 0, 3}, Device::CUDA);
+            means = means.to(Device::GPU);
+            scaling_raw = scaling_raw.to(Device::GPU);
+            rotation_raw = rotation_raw.to(Device::GPU);
+            opacity_raw = opacity_raw.to(Device::GPU);
+            sh0 = sh0.to(Device::GPU);
+            auto shN = Tensor::zeros({N, 0, 3}, Device::GPU);
 
             return std::make_unique<SplatData>(0,
                                                std::move(means),

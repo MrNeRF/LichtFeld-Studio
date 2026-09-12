@@ -12,6 +12,7 @@
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor_backend.hpp"
 #include "depth_anchor_cache.hpp"
 
 #include "io/loader.hpp"
@@ -777,7 +778,7 @@ namespace {
     class NativeMogeSession {
     public:
         explicit NativeMogeSession(const fs::path& lfw_path) {
-            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::CUDA);
+            auto loaded = lfs::core::nn::models::Moge2::load(lfw_path, lfs::core::Device::GPU);
             if (!loaded)
                 throw std::runtime_error("Failed to load native MoGe-2 weights from " +
                                          path_to_string(lfw_path) + ": " +
@@ -800,11 +801,15 @@ namespace {
             if (!input_.is_valid() || input_.dtype() != lfs::core::DataType::Float32 ||
                 input_.ndim() != 4 || input_.shape()[2] != static_cast<std::size_t>(image.height) ||
                 input_.shape()[3] != static_cast<std::size_t>(image.width)) {
-                input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::CUDA,
+                input_ = lfs::core::Tensor::empty(shape, lfs::core::Device::GPU,
                                                   lfs::core::DataType::Float32);
             }
-            LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
-                                           cudaMemcpyHostToDevice, input_.stream()));
+            if (lfs::core::gpu_backend_of(input_) == lfs::core::GpuBackend::Vulkan) {
+                input_.copy_from(lfs::core::Tensor::from_vector(chw, shape, lfs::core::Device::CPU));
+            } else {
+                LFS_CUDA_CHECK(cudaMemcpyAsync(input_.data_ptr(), chw.data(), input_.bytes(),
+                                               cudaMemcpyHostToDevice, input_.stream()));
+            }
             auto result = model_.forward(input_, num_tokens);
             if (!result)
                 throw std::runtime_error("Native MoGe-2 forward failed: " +
@@ -932,6 +937,12 @@ namespace {
         if (!needs_depth(params.mode)) {
             return;
         }
+        // This optional training cache still uses CUDA projection kernels.
+        // Vulkan inference must not hand its buffers to those raw CUDA kernels.
+        if (lfs::core::default_gpu_backend() != lfs::core::GpuBackend::CUDA) {
+            LOG_INFO("Depth anchors: CUDA training will fit and cache anchors at startup");
+            return;
+        }
         try {
             auto loader = lfs::io::Loader::create();
             lfs::io::LoadOptions options;
@@ -959,7 +970,7 @@ namespace {
                 LOG_INFO("Depth anchors: empty point cloud; skipping");
                 return;
             }
-            means = means.to(lfs::core::Device::CUDA);
+            means = means.to(lfs::core::Device::GPU);
 
             const auto fingerprint = lfs::training::computeAnchorFingerprint(scene->cameras);
 
@@ -1127,9 +1138,8 @@ namespace {
         if (!progress)
             print_plan_summary(params, plan, &model_path);
 
-        int cuda_devices = 0;
-        if (cudaGetDeviceCount(&cuda_devices) != cudaSuccess || cuda_devices <= 0) {
-            throw std::runtime_error("Native MoGe-2 inference requires a CUDA device");
+        if (!lfs::core::gpu_backend_available(lfs::core::default_gpu_backend())) {
+            throw std::runtime_error("Native MoGe-2 inference requires an available GPU backend");
         }
 
         const fs::path lfw_path = lfw_path_for_onnx(model_path);

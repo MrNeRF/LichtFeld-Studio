@@ -190,8 +190,8 @@ namespace {
         using namespace lfs::core;
         // Input [0,1,2,3,4]; single OOB index 99.
         auto input = Tensor::from_vector(std::vector<float>{0.f, 1.f, 2.f, 3.f, 4.f},
-                                         {5}, Device::CUDA);
-        auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::CUDA);
+                                         {5}, Device::GPU);
+        auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::GPU);
 
         // Assert mode drains inline (replaces the old synchronous D2H scan):
         // the op itself throws BoundsViolation; the slot is consumed by the op.
@@ -214,8 +214,8 @@ namespace {
     TEST_F(DeviceFaultTest, IndexSelectValidIndicesNoThrowRegression) {
         using namespace lfs::core;
         auto input = Tensor::from_vector(std::vector<float>{10.f, 20.f, 30.f, 40.f},
-                                         {4}, Device::CUDA);
-        auto indices = Tensor::from_vector(std::vector<int>{0, 2, 3}, {3}, Device::CUDA);
+                                         {4}, Device::GPU);
+        auto indices = Tensor::from_vector(std::vector<int>{0, 2, 3}, {3}, Device::GPU);
 
         Tensor out;
         EXPECT_NO_THROW({
@@ -297,12 +297,12 @@ namespace {
             // via the home stream. Destroying the stream first can fault in
             // cuStreamWaitEvent on CUDA 13.3.
             auto input = Tensor::from_vector(std::vector<float>{1.f, 2.f, 3.f},
-                                             {3}, Device::CUDA);
-            auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::CUDA);
+                                             {3}, Device::GPU);
+            auto indices = Tensor::from_vector(std::vector<int>{0}, {1}, Device::GPU);
             input.set_stream(stream);
             indices.set_stream(stream);
             // Materialize a result tensor on the same stream for index_select_into.
-            auto out = Tensor::zeros({1}, Device::CUDA, DataType::Float32);
+            auto out = Tensor::zeros({1}, Device::GPU, DataType::Float32);
             out.set_stream(stream);
             ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
 
@@ -360,8 +360,8 @@ namespace {
         try {
             using namespace lfs::core;
             auto input = Tensor::from_vector(std::vector<float>{0.f, 1.f, 2.f},
-                                             {3}, Device::CUDA);
-            auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::CUDA);
+                                             {3}, Device::GPU);
+            auto indices = Tensor::from_vector(std::vector<int>{99}, {1}, Device::GPU);
             (void)input.index_select(0, indices, BoundaryMode::Assert);
             // Harvest is the preferred host trap site (§1.8): records then abort.
             device_fault_await_and_consume_or_throw(
