@@ -67937,7 +67937,7 @@
     "name": "ViewerVulkanLoad.PlyCudaDefaultKeepsQ16",
     "executable": "lichtfeld_tests",
     "file": "tests/test_viewer_vulkan_load.cpp",
-    "line": 226,
+    "line": 234,
     "eligibility": "consumer",
     "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
@@ -67953,7 +67953,7 @@
     "name": "ViewerVulkanLoad.PlyLoadsOnVulkanBackendWithQ16",
     "executable": "lichtfeld_tests",
     "file": "tests/test_viewer_vulkan_load.cpp",
-    "line": 139,
+    "line": 142,
     "eligibility": "consumer",
     "reason": "includes core/sh_value_quant.hpp: reaches production code outside core/tensor; run under G7, not G2",
     "launchers": [
