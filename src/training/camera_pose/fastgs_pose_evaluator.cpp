@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #include "fastgs_pose_evaluator.hpp"
+#include "losses/photometric_loss.hpp"
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -17,17 +18,21 @@ namespace lfs::training::camera_pose {
             throw std::invalid_argument("Missing camera pose image objective");
     }
 
-    std::pair<RenderOutput, FastRasterizeContext> FastGSPoseEvaluator::forward(const Matrix4& pose) {
+    FastGSCameraPoseOverride make_fastgs_pose_override(int uid, const Matrix4& pose) {
         // Reuse the same rigid-source validation as the controller. Do not
         // silently repair arbitrary matrices or mutate source Camera tensors.
-        (void)BoundedPoseOptimizer(camera_.uid(), pose, BoundedPoseConfig{});
+        (void)BoundedPoseOptimizer(uid, pose, BoundedPoseConfig{});
         std::vector<float> center(3, 0);
         for (int j = 0; j < 3; ++j)
             for (int i = 0; i < 3; ++i)
                 center[j] -= pose[4 * i + j] * pose[4 * i + 3];
-        FastGSCameraPoseOverride tensors{
+        return {
             Tensor::from_vector(std::vector<float>(pose.begin(), pose.end()), {1, 4, 4}, Device::CUDA),
             Tensor::from_vector(center, {3}, Device::CUDA)};
+    }
+
+    std::pair<RenderOutput, FastRasterizeContext> FastGSPoseEvaluator::forward(const Matrix4& pose) {
+        auto tensors = make_fastgs_pose_override(camera_.uid(), pose);
         auto result = fast_rasterize_forward(camera_, model_, background_, 0, 0, 0, 0,
                                              false, background_image_, false, &tensors);
         if (!result)
@@ -69,6 +74,27 @@ namespace lfs::training::camera_pose {
     PoseVisitResult FastGSPoseEvaluator::visit(PoseRefinementSession& session, int iteration,
                                                std::uint64_t model_revision, std::stop_token stop) {
         return session.visit(camera_.uid(), iteration, model_revision, [this](const Matrix4& pose) { return evaluate(pose); }, [this](const Matrix4& pose) { return loss(pose); }, stop);
+    }
+
+    PoseObjective make_pose_photometric_objective(const Tensor& target, float lambda_dssim) {
+        if (!std::isfinite(lambda_dssim) || lambda_dssim < 0 || lambda_dssim > 1 ||
+            !target.is_valid() || target.device() != Device::CUDA || target.ndim() != 3 ||
+            target.shape()[0] != 3 || target.numel() == 0 ||
+            (target.dtype() != DataType::Float32 && target.dtype() != DataType::UInt8))
+            throw std::invalid_argument("Invalid pose photometric target or SSIM weight");
+        return [fixed_target = target.clone(), lambda_dssim,
+                loss = std::make_shared<losses::PhotometricLoss>()](const RenderOutput& output, bool gradients) {
+            if (output.image.stream() != fixed_target.stream())
+                throw std::invalid_argument("Pose photometric target stream differs from render");
+            auto result = loss->forward(output.image, fixed_target, {lambda_dssim});
+            if (!result)
+                throw std::runtime_error(result.error());
+            // The existing loss API also computes its gradient for candidates;
+            // camera/Gaussian backward is still omitted for candidate scoring.
+            return PoseObjectiveResult{result->first.item<float>(),
+                                       gradients ? result->second.grad_image : Tensor{},
+                                       {}};
+        };
     }
 
     PoseObjective make_pose_mse_objective(const Tensor& target) {

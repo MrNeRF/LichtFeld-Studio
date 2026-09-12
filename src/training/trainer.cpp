@@ -4,6 +4,8 @@
 
 #include "trainer.hpp"
 #include "backward.h" // BWD-A T_eff hist arm/flush
+#include "camera_pose/fastgs_pose_evaluator.hpp"
+#include "camera_pose/trainer_pose_integration.hpp"
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
 #include "components/ppisp_controller_pool.hpp"
@@ -68,6 +70,7 @@
 #include "training/kernels/roi_weight_map.hpp"
 #include "training/training_setup.hpp"
 #include "training_cropbox_mask.hpp"
+#include <nlohmann/json.hpp>
 
 #include <bit>
 #include <cstdint>
@@ -1260,6 +1263,9 @@ namespace lfs::training {
         evaluator_.reset();
 
         // Clear datasets (will be recreated)
+        camera_pose_session_.store(nullptr, std::memory_order_release);
+        camera_pose_sources_.clear();
+        camera_pose_last_visit_iteration_ = -1;
         train_dataset_.reset();
         val_dataset_.reset();
 
@@ -2999,6 +3005,7 @@ namespace lfs::training {
             }
 
             train_dataset_size_ = train_dataset_->size();
+            camera_pose_sources_ = source_cameras;
 
             // If using Scene mode and no strategy yet, create one
             if (scene_ && !strategy_) {
@@ -3242,6 +3249,13 @@ namespace lfs::training {
                     return std::unexpected(std::format("Failed to run Python scripts: {}",
                                                        lfs::format_for_developer(py_result.error())));
                 }
+            }
+
+            if (!params_.resume_checkpoint && !params_.resume_project) {
+                if (!params_.camera_pose_state_json.empty())
+                    return std::unexpected("Saved camera poses require loading their matching Gaussian checkpoint");
+                if (auto pose_result = initialize_camera_pose_refinement(camera_pose_sources_); !pose_result)
+                    return std::unexpected(lfs::format_for_developer(pose_result.error()));
             }
 
             if (auto snapshot_service =
@@ -3609,6 +3623,9 @@ namespace lfs::training {
         evaluator_.reset();
         progress_.reset();
         base_dataset_.reset();
+        camera_pose_session_.store(nullptr, std::memory_order_release);
+        camera_pose_sources_.clear();
+        camera_pose_last_visit_iteration_ = -1;
         train_dataset_.reset();
         val_dataset_.reset();
         setCameraLossHeatmap(nullptr);
@@ -3680,6 +3697,18 @@ namespace lfs::training {
         bool bg_image_path_changed = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
+            const auto& effective = pending_params_ ? *pending_params_ : params_;
+            if (camera_pose_session_.load(std::memory_order_acquire)) {
+                auto error = camera_pose::trainer_pose_incompatibility(params.optimization);
+                if (error.empty() && (params.optimization.resolved_total_iterations() != effective.optimization.resolved_total_iterations() ||
+                                      params.optimization.enable_eval != effective.optimization.enable_eval ||
+                                      params.dataset.data_path != effective.dataset.data_path || params.dataset.test_every != effective.dataset.test_every ||
+                                      params.disabled_camera_uids != effective.disabled_camera_uids ||
+                                      params.camera_pose_state_json != effective.camera_pose_state_json))
+                    error = "Camera pose membership, schedule and durable state require explicit reinitialization";
+                if (!error.empty())
+                    return lfs::Status::failure(training_parameter_update_error(error, LFS_SOURCE_SITE_CURRENT()));
+            }
             if (is_running_.load(std::memory_order_acquire)) {
                 pending_params_ = params;
                 return {};
@@ -3990,7 +4019,7 @@ namespace lfs::training {
                 callback_stream_,
             };
         const TrainingSnapshotCaptureRequest request{
-            .iteration = current_iteration_.load(),
+            .iteration = checkpoint_params.camera_pose_state_json.empty() ? current_iteration_.load() : nlohmann::json::parse(checkpoint_params.camera_pose_state_json).at("iteration").get<int>(),
             .strategy = *strategy_,
             .params = checkpoint_params,
             .bilateral_grid = bilateral_grid_.get(),
@@ -6088,6 +6117,9 @@ namespace lfs::training {
 
                 // If paused, wait. Drain requested project snapshots at the
                 // last completed iteration — the current `iter` has not run.
+                const auto pose_session = camera_pose_session_.load(std::memory_order_acquire);
+                if (pose_session && is_paused_.load())
+                    pose_session->set_paused(true);
                 while (is_paused_.load() && !stop_requested_.load() && !stop_token.stop_requested()) {
                     consume_requested_project_snapshot(
                         project_snapshot_iteration());
@@ -6098,6 +6130,17 @@ namespace lfs::training {
                 // Check stop again after potential pause
                 if (stop_requested_.load() || stop_token.stop_requested()) {
                     return StepDisposition::Stop;
+                }
+
+                if (pose_session) {
+                    if (auto error = camera_pose::trainer_pose_incompatibility(params_.optimization); !error.empty())
+                        throw std::runtime_error(error);
+                    if (get_total_iterations() != camera_pose_total_iterations_)
+                        throw std::runtime_error("Camera pose schedule cannot change during a live session");
+                    if (scene_ && resolve_training_cropbox_loss_geom(*scene_, params_.optimization.cropbox_loss_weight))
+                        throw std::runtime_error("Camera pose refinement does not yet compose cropbox ROI loss");
+                    if (pose_session->published_snapshot()->paused)
+                        pose_session->set_paused(false);
                 }
 
                 lfs::core::Tensor* bg_ptr = nullptr;
@@ -6442,6 +6485,24 @@ namespace lfs::training {
                     }
                 }
 
+                std::optional<FastGSCameraPoseOverride> refined_pose;
+                if (pose_session) {
+                    if (camera_pose_last_visit_iteration_ != iter) {
+                        // Lazy objective creation avoids cloning GT/allocating a
+                        // loss workspace on unscheduled visits and during warmup.
+                        std::unique_ptr<camera_pose::FastGSPoseEvaluator> pose_evaluator;
+                        const auto visit = pose_session->visit(cam->uid(), iter, static_cast<std::uint64_t>(iter), [&](const camera_pose::Matrix4& pose) {
+                                if (!pose_evaluator) pose_evaluator = std::make_unique<camera_pose::FastGSPoseEvaluator>(
+                                    *cam, strategy_->get_model(), strategy_->get_optimizer(), bg,
+                                    camera_pose::make_pose_photometric_objective(gt_image, params_.optimization.lambda_dssim), bg_image);
+                                return pose_evaluator->evaluate(pose); }, [&](const camera_pose::Matrix4& pose) { return pose_evaluator->loss(pose); }, stop_token);
+                        if (visit.cancelled)
+                            return StepDisposition::Stop;
+                        camera_pose_last_visit_iteration_ = iter;
+                    }
+                    refined_pose = camera_pose::make_fastgs_pose_override(cam->uid(), pose_session->current_pose(cam->uid()));
+                }
+
                 {
                     nvtxRangePush("rasterize");
 
@@ -6536,7 +6597,7 @@ namespace lfs::training {
                                     *cam, strategy_->get_model(), bg,
                                     0, 0, 0, 0,
                                     params_.optimization.mip_filter, bg_tile,
-                                    render_normal);
+                                    render_normal, refined_pose ? &*refined_pose : nullptr);
                                 if (rasterize_result) {
                                     output = std::move(rasterize_result->first);
                                     fast_ctx.emplace(std::move(rasterize_result->second));
@@ -9035,6 +9096,8 @@ namespace lfs::training {
         // makes finished-trainer saves skip the synchronous flush and wait
         // forever on a safe point.
         pause_requested_ = false;
+        if (const auto poses = camera_pose_session_.load(std::memory_order_acquire))
+            poses->set_paused(true);
         is_paused_ = false;
         {
             std::lock_guard<std::mutex> lock(params_mutex_);
@@ -9367,6 +9430,10 @@ namespace lfs::training {
 
     lfs::core::param::TrainingParameters Trainer::params_for_project_snapshot() const {
         auto params = getParams();
+        // Called during initialization or on the training safe point. Copy the
+        // live durable state, not the throttled visualization snapshot.
+        if (const auto poses = camera_pose_session_.load(std::memory_order_acquire))
+            params.camera_pose_state_json = poses->save_state().dump();
         if (scene_) {
             const auto disabled = scene_->getTrainingDisabledCameraUids();
             params.disabled_camera_uids.assign(disabled.begin(), disabled.end());
@@ -9471,12 +9538,21 @@ namespace lfs::training {
                     "Cannot seek {} to byte zero",
                     source_name));
         }
+        std::shared_ptr<camera_pose::PoseRefinementSession> restored_poses;
         auto result = lfs::training::load_checkpoint(
             source, source_bytes, *strategy_, params_,
             bilateral_grid_.get(), ppisp_.get(),
             ppisp_controller_pool_.get(),
             dynamic_cast<ADMMSparsityOptimizer*>(sparsity_optimizer_.get()),
-            splat_tensor_allocator_, source_name, preloaded_model);
+            splat_tensor_allocator_, source_name, preloaded_model,
+            [&](const lfs::core::param::TrainingParameters& loaded_params, const lfs::core::SplatData& loaded_model)
+                -> lfs::Status {
+                auto poses = make_camera_pose_session(loaded_params, loaded_model);
+                if (!poses)
+                    return lfs::Status::failure(std::move(poses).error());
+                restored_poses = std::move(poses).value();
+                return {};
+            });
         if (!result) {
             return result;
         }
@@ -9512,6 +9588,10 @@ namespace lfs::training {
         sync_strategy_optimization_params();
 
         current_iteration_ = *result;
+
+        camera_pose_last_visit_iteration_ = restored_poses ? restored_poses->published_snapshot()->iteration : -1;
+        camera_pose_total_iterations_ = get_total_iterations();
+        camera_pose_session_.store(std::move(restored_poses), std::memory_order_release);
 
         LOG_INFO("Restored training state from checkpoint at iteration {}", *result);
         return result;

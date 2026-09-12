@@ -146,6 +146,8 @@ namespace lfs::training {
             if (save_sparsity)
                 header.flags =
                     header.flags | CheckpointFlags::HAS_SPARSITY;
+            if (!params.camera_pose_state_json.empty())
+                header.flags = header.flags | CheckpointFlags::HAS_CAMERA_POSES;
 
             const auto header_pos = destination.tellp();
             if (header_pos == std::streampos(-1)) {
@@ -216,6 +218,18 @@ namespace lfs::training {
             params_json["optimization"] =
                 params.optimization.to_json();
             params_json["dataset"] = params.dataset.to_json();
+            if (!params.camera_pose_state_json.empty()) {
+                auto pose_state = nlohmann::json::parse(params.camera_pose_state_json);
+                if (!pose_state.is_object())
+                    throw std::invalid_argument("Camera pose checkpoint state must be an object");
+                if (!pose_state.at("iteration").is_number_integer() || pose_state.at("iteration") < 0 ||
+                    pose_state.at("iteration") > iteration)
+                    throw std::invalid_argument("Camera poses are ahead of the captured Gaussian checkpoint");
+                // Skipped image iterations advance the training clock without
+                // visiting a camera; preserve cadence but align the saved clock.
+                pose_state["iteration"] = iteration;
+                params_json["camera_pose_state"] = pose_state;
+            }
             if (params.init_path) {
                 params_json["init_path"] = *params.init_path;
             }
@@ -259,6 +273,10 @@ namespace lfs::training {
             }
 
             const std::string params_text = params_json.dump();
+            if (params_text.size() > lfs::core::MAX_CHECKPOINT_JSON_BYTES)
+                return checkpoint_stream_error(lfs::ErrorCode::ResourceExhausted,
+                                               "Checkpoint parameters including camera poses exceed the supported JSON size",
+                                               LFS_SOURCE_SITE_CURRENT());
             destination.write(
                 params_text.data(),
                 static_cast<std::streamsize>(params_text.size()));
@@ -352,7 +370,8 @@ namespace lfs::training {
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator,
         const std::string_view source_name,
-        lfs::core::SplatData* preloaded_model) {
+        lfs::core::SplatData* preloaded_model,
+        const CheckpointContextValidator& validate_context) {
         try {
             const auto load_started = std::chrono::steady_clock::now();
             const auto milliseconds = [](const auto begin, const auto end) {
@@ -393,6 +412,7 @@ namespace lfs::training {
             // Load params from checkpoint up front so strategy internals can be synced before deserialization.
             const auto strategy_state_pos = file.tellg();
             auto loaded_params = params;
+            loaded_params.camera_pose_state_json.clear();
             if (header.params_json_size > 0) {
                 file.seekg(static_cast<std::streamoff>(header.params_json_offset));
                 std::string params_str(header.params_json_size, '\0');
@@ -460,6 +480,8 @@ namespace lfs::training {
                 lfs::core::param::apply_explicit_training_overrides(
                     loaded_params, loaded_params.overrides);
             }
+            if (auto pose_check = lfs::core::validate_checkpoint_pose_state(header, loaded_params); !pose_check)
+                return std::unexpected(lfs::format_for_developer(pose_check.error()));
             if (loaded_params.optimization.max_cap < 0)
                 return std::unexpected("Invalid checkpoint parameters: max_cap must be nonnegative");
             if (static_cast<uint64_t>(loaded_params.optimization.max_cap) >
@@ -628,6 +650,10 @@ namespace lfs::training {
                     bilateral_grid_parameterization_name(bilateral_grid->parameterization()));
             }
 
+            if (validate_context) {
+                if (auto context = validate_context(loaded_params, loaded_model); !context)
+                    return std::unexpected(lfs::format_for_developer(context.error()));
+            }
             static_assert(std::is_nothrow_swappable_v<lfs::core::param::TrainingParameters>);
             static_assert(std::is_nothrow_move_assignable_v<lfs::core::SplatData>);
 

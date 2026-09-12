@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "camera_pose/pose_refinement_session.hpp"
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
 #include "components/ppisp.hpp"
@@ -214,6 +215,14 @@ namespace lfs::training {
 
         // Check if trainer is initialized
         bool isInitialized() const { return initialized_.load(); }
+
+        // Internal opt-in, only before initialize(), serialized by init_mutex_.
+        // No UI/Python setting until visual consumers share current poses.
+        // Dataset scale and runtime length override config. Embedded state
+        // automatically restores the saved configuration on checkpoint load.
+        lfs::Status configureCameraPoseRefinement(
+            std::optional<camera_pose::PoseSessionConfig> config);
+        [[nodiscard]] std::shared_ptr<const camera_pose::PoseSessionSnapshot> cameraPoseSnapshot() const;
 
         // Main training method with stop token support
         [[nodiscard]] lfs::Status train(std::stop_token stop_token = {});
@@ -542,6 +551,10 @@ namespace lfs::training {
         void sync_strategy_optimization_params();
         std::expected<void, std::string> initialize_camera_loss_heatmap(
             const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
+        lfs::Status initialize_camera_pose_refinement(
+            const std::vector<std::shared_ptr<lfs::core::Camera>>& cameras);
+        lfs::Result<std::shared_ptr<camera_pose::PoseRefinementSession>> make_camera_pose_session(
+            const lfs::core::param::TrainingParameters& params, const lfs::core::SplatData& model) const;
         void update_camera_loss_heatmap(const lfs::core::Camera& camera,
                                         const lfs::core::Tensor& image_loss);
         void maybe_publish_camera_loss_heatmap(int iter, bool force = false);
@@ -746,6 +759,11 @@ namespace lfs::training {
         size_t train_dataset_size_ = 0;
         size_t total_cameras_count_ = 0;
         std::shared_ptr<CameraLossHeatmapState> camera_loss_heatmap_;
+        std::optional<camera_pose::PoseSessionConfig> camera_pose_config_;
+        std::atomic<std::shared_ptr<camera_pose::PoseRefinementSession>> camera_pose_session_{};
+        int camera_pose_last_visit_iteration_ = -1;
+        std::vector<std::shared_ptr<lfs::core::Camera>> camera_pose_sources_;
+        int camera_pose_total_iterations_ = 0;
 
         // Pre-loaded mask from pipelined dataloader (used in train_step)
         // Sidecars are not ring-backed; if that changes, carry their ring lease here too.

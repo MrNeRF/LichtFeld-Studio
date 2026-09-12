@@ -6,8 +6,9 @@ unchanged. Camera movement and decreasing training loss do not, by themselves,
 establish improved reconstruction quality.
 
 The implementation consists of SE(3) operations, a bounded per-camera optimizer,
-a multi-camera session and a FastGS evaluator. Automatic Trainer invocation,
-project persistence and viewport/Scene Graph integration are not yet connected.
+a multi-camera session and a FastGS evaluator, with an internal opt-in Trainer
+integration and embedded checkpoint persistence. Viewport/Scene Graph consumers
+and user-facing activation are not yet connected.
 
 ## Pose representation
 
@@ -110,6 +111,9 @@ It must not update model, camera or appearance parameters.
 The provided RGB MSE objective clones its target once and reduces the loss on
 GPU. Scalar loss and the camera matrix gradient are transferred to the CPU.
 This objective does not implicitly replace the Trainer's L1/SSIM loss.
+The Trainer adapter instead uses the production L1/SSIM photometric objective,
+with the current SSIM weight. Its existing loss API computes image derivatives
+even for candidate scoring, but candidates do not run camera or Gaussian backward.
 PPISP/bilateral composition and tiled evaluation require additional integration.
 Allocation, synchronization and rendering costs depend on the dataset and update
 schedule; no performance improvement is guaranteed.
@@ -139,9 +143,38 @@ cadence are preserved; inverse-BFGS history is restarted because its model/objec
 identity cannot be inferred from pose metadata. This is a controlled warm restart,
 not an identical continuation of optimizer internals.
 
-This serialization API does not itself read or write files. Embedding the state
-in project storage alongside the matching Gaussian model, dataset and training
-iteration remains a responsibility of the project/Trainer integration.
+The Trainer captures live session state alongside the matching Gaussian model
+in the checkpoint parameter payload, including the CKPT chapter embedded in a
+`.licht` project. `HAS_CAMERA_POSES` marks this payload as required: older readers
+that do not recognize the flag reject the checkpoint instead of silently loading
+the model without its camera corrections. Checkpoints without this flag retain
+their existing behavior.
+
+The saved pose clock is aligned to the captured model iteration, including
+iterations that skipped an image. Loading verifies flag/payload agreement and
+the iteration. Before adopting the decoded model, the Trainer additionally
+validates the complete session against the loaded model scale, effective dataset
+membership, immutable source transforms and training schedule. A context mismatch
+rejects adoption. Loading a checkpoint without poses clears stale pose metadata.
+
+## Trainer integration
+
+`configureCameraPoseRefinement` accepts an optional session configuration before
+Trainer initialization. Refinement is disabled by default; a checkpoint containing
+pose state restores its saved configuration automatically. Runtime length and
+scene scale come from the Trainer and model. Evaluation and disabled cameras are
+excluded from the effective training membership.
+
+At scheduled visits, refinement runs before the Gaussian update with the model,
+target and background fixed for the complete burst. The normal FastGS forward
+then receives the accepted current pose. Imported Camera tensors remain unchanged.
+Objective allocation is lazy, so unscheduled visits do not clone targets or
+allocate a photometric workspace. Pause and training completion publish snapshots.
+
+This path currently supports raw RGB FastGS training without Mip Filter, masks,
+depth/normal supervision, cropbox ROI loss, appearance correction or sparsification.
+Unsupported combinations are rejected explicitly. Membership and schedule changes
+require reinitialization rather than silently reusing an incompatible session.
 
 ## Shared pose state and visualization
 
@@ -164,8 +197,9 @@ reconstruction-loss colors. Pause, reset and session replacement must not leave
 stale overlays.
 
 Snapshot publication alone does not move the application's camera geometry.
-These visual consumers, source/current pose persistence, resume behavior and
-Edit Mode ownership remain integration work.
+These visual consumers and Edit Mode ownership remain integration work. Scene
+camera records still describe the imported source poses; corrected poses are
+restored through the matching training checkpoint, not by overwriting sources.
 
 ## Scope and limitations
 

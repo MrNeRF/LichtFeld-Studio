@@ -96,7 +96,8 @@ namespace lfs::core {
 
         auto known_flags = static_cast<uint32_t>(CheckpointFlags::HAS_BILATERAL_GRID) |
                            static_cast<uint32_t>(CheckpointFlags::HAS_PPISP) |
-                           static_cast<uint32_t>(CheckpointFlags::HAS_PPISP_CONTROLLER);
+                           static_cast<uint32_t>(CheckpointFlags::HAS_PPISP_CONTROLLER) |
+                           static_cast<uint32_t>(CheckpointFlags::HAS_CAMERA_POSES);
         if (header.version >= CHECKPOINT_VERSION_HAS_SPARSITY) {
             known_flags |= static_cast<uint32_t>(CheckpointFlags::HAS_SPARSITY);
         }
@@ -226,6 +227,8 @@ namespace lfs::core {
             if (!(params.freeze_lr_scale >= 0.0f && params.freeze_lr_scale <= 1.0f))
                 return std::unexpected("Invalid checkpoint parameters: freeze_lr_scale must be within [0, 1]");
             LOG_DEBUG("Params loaded from checkpoint: {}", path_to_utf8(params.dataset.data_path));
+            if (auto pose_check = validate_checkpoint_pose_state(*header, params); !pose_check)
+                return std::unexpected(lfs::format_for_developer(pose_check.error()));
             return params;
 
         } catch (const std::exception& e) {
@@ -263,16 +266,57 @@ namespace lfs::core {
                 return std::unexpected("Invalid checkpoint dataset parameters: " + validation_error);
             if (!(params.freeze_lr_scale >= 0.0f && params.freeze_lr_scale <= 1.0f))
                 return std::unexpected("Invalid checkpoint parameters: freeze_lr_scale must be within [0, 1]");
+            if (auto pose_check = validate_checkpoint_pose_state(*header, params); !pose_check)
+                return std::unexpected(lfs::format_for_developer(pose_check.error()));
             return params;
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Load params failed: ") + e.what());
         }
     }
 
+    lfs::Status validate_checkpoint_pose_state(
+        const CheckpointHeader& header, const param::TrainingParameters& params) {
+        const auto invalid = [](std::string detail) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "The checkpoint camera poses are invalid.",
+                .detail = std::move(detail),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        };
+        if (has_flag(header.flags, CheckpointFlags::HAS_CAMERA_POSES) != !params.camera_pose_state_json.empty())
+            return invalid("Checkpoint camera pose flag and payload disagree");
+        if (params.camera_pose_state_json.empty())
+            return {};
+        try {
+            const auto state = nlohmann::json::parse(params.camera_pose_state_json);
+            if (!state.is_object() || state.at("version") != 1 ||
+                !state.at("iteration").is_number_integer() || state.at("iteration") != header.iteration ||
+                !state.at("cameras").is_array() || !state.at("settings").is_object())
+                return invalid("Checkpoint camera pose version, iteration or payload is invalid");
+        } catch (const std::exception& error) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::DataLoss,
+                .domain = lfs::ErrorDomain::Training,
+                .user_message = "The checkpoint camera poses are invalid.",
+                .detail = std::string("Invalid checkpoint camera poses: ") + error.what(),
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        return {};
+    }
+
     param::TrainingParameters parse_checkpoint_params_json(
         const std::string_view json_text,
         param::TrainingParameters base_params) {
         const auto params_json = nlohmann::json::parse(json_text);
+        base_params.camera_pose_state_json.clear();
+        if (params_json.contains("camera_pose_state")) {
+            if (!params_json.at("camera_pose_state").is_object())
+                throw std::runtime_error("Invalid camera pose checkpoint state");
+            base_params.camera_pose_state_json = params_json.at("camera_pose_state").dump();
+        }
         const auto validate_splat_composition = [](const param::TrainingParameters& params) {
             if (!params.add_splat_paths.empty() && !params.add_splat_freeze.empty() &&
                 params.add_splat_paths.size() != params.add_splat_freeze.size()) {

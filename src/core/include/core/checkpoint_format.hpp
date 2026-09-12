@@ -31,6 +31,7 @@ namespace lfs::core {
         HAS_PPISP = 1 << 1,
         HAS_PPISP_CONTROLLER = 1 << 2,
         HAS_SPARSITY = 1 << 3,
+        HAS_CAMERA_POSES = 1 << 4,
     };
 
     constexpr CheckpointFlags operator|(const CheckpointFlags a, const CheckpointFlags b) {
@@ -55,6 +56,8 @@ namespace lfs::core {
     LFS_CORE_API std::expected<void, std::string> validate_checkpoint_header(
         const CheckpointHeader& header,
         uint64_t file_size);
+    LFS_CORE_API lfs::Status validate_checkpoint_pose_state(
+        const CheckpointHeader& header, const param::TrainingParameters& params);
 
     LFS_CORE_API std::expected<CheckpointHeader, std::string> load_checkpoint_header(
         const std::filesystem::path& path);

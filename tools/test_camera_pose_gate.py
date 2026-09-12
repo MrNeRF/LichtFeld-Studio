@@ -9,6 +9,7 @@ from check_camera_pose_gate import GRADIENT, RECOVERY, SUITE, TESTS, inspect_gat
 from check_camera_pose_gate import CONTROLLER_RECOVERY, CONTROLLER_SUITE, CONTROLLER_TESTS, inspect_controller_gate
 from check_camera_pose_gate import SESSION_SUITE, SESSION_TESTS, inspect_session_gate
 from check_camera_pose_gate import require_production_evaluator
+from check_camera_pose_gate import TRAINER_SUITE, TRAINER_TESTS, inspect_trainer_gate
 
 
 def valid_report():
@@ -96,6 +97,41 @@ class CameraPoseSessionGateReportTests(unittest.TestCase):
                 ET.SubElement(case, mutation)
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 inspect_session_gate(root)
+
+
+class CameraPoseTrainerGateReportTests(unittest.TestCase):
+    def report(self):
+        root = valid_controller_report()
+        for suite_name, tests in ((SESSION_SUITE, SESSION_TESTS), (TRAINER_SUITE, TRAINER_TESTS)):
+            suite = ET.SubElement(root, "testsuite", name=suite_name)
+            for name in sorted(tests):
+                ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        props = root.find(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties")
+        ET.SubElement(props, "property", name="production_evaluator", value="1")
+        return root
+
+    def test_accepts_all_31_tests(self):
+        self.assertEqual(inspect_trainer_gate(self.report())["tests"], 31)
+
+    def test_rejects_incomplete_trainer_evidence(self):
+        for mutation in ("suite", "missing", "duplicate", "unknown", "failure", "error", "skipped", "notrun"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{TRAINER_SUITE}']")
+            case = suite.find("testcase")
+            if mutation == "suite":
+                root.remove(suite)
+            elif mutation == "missing":
+                suite.remove(case)
+            elif mutation == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif mutation == "unknown":
+                case.set("name", "Unknown")
+            elif mutation == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                inspect_trainer_gate(root)
 
 
 class CameraPoseControllerGateReportTests(unittest.TestCase):

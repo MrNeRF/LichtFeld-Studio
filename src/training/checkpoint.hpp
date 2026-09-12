@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <iosfwd>
 #include <string>
 #include <string_view>
@@ -35,6 +36,10 @@ namespace lfs::training {
         lfs::core::CheckpointHeader header;
         std::uint64_t bytes = 0;
     };
+
+    // Validate owner-specific state against the isolated decoded model before adoption.
+    using CheckpointContextValidator = std::function<lfs::Status(
+        const lfs::core::param::TrainingParameters&, const lfs::core::SplatData&)>;
 
     // Serialize the exact LFKP stream to a seekable destination for embedding
     // in a .licht CKPT chapter.
@@ -82,6 +87,7 @@ namespace lfs::training {
         ADMMSparsityOptimizer* sparsity_optimizer,
         lfs::core::SplatTensorAllocator tensor_allocator = {},
         std::string_view source_name = "embedded CKPT",
-        lfs::core::SplatData* preloaded_model = nullptr);
+        lfs::core::SplatData* preloaded_model = nullptr,
+        const CheckpointContextValidator& validate_context = {});
 
 } // namespace lfs::training

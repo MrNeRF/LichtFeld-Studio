@@ -48,6 +48,8 @@ namespace lfs::training::camera_pose {
         std::uint64_t candidate_renders = 0;
     };
 
+    [[nodiscard]] PoseSessionConfig pose_session_config_from_state(const nlohmann::json& state);
+
     struct PoseSessionSnapshot {
         std::uint64_t generation = 0; // Assigned by the owning training session.
         std::uint64_t sequence = 0;

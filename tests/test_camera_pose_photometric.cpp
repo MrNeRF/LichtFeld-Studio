@@ -7,8 +7,12 @@
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
 #include "training/camera_pose/fastgs_pose_evaluator.hpp"
 #include "training/camera_pose/se3.hpp"
+#include "training/camera_pose/trainer_pose_integration.hpp"
+#include "training/checkpoint.hpp"
+#include "training/losses/photometric_loss.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
+#include "training/strategies/mcmc.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -18,7 +22,9 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <numeric>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -165,7 +171,7 @@ namespace {
                 Tensor::from_vector(sh, {n, static_cast<size_t>(rest), 3}, Device::CUDA),
                 Tensor::from_vector(scales, {n, 3}, Device::CUDA),
                 Tensor::from_vector(rotations, {n, 4}, Device::CUDA),
-                Tensor::full({n}, 0.2f, Device::CUDA), 1.0f);
+                Tensor::full({n, 1}, 0.2f, Device::CUDA), 1.0f);
             scene->set_active_sh_degree(degree);
             scene->_densification_info = Tensor::full({2, n}, 0.125f, Device::CUDA);
             optimizer = std::make_unique<AdamOptimizer>(*scene, AdamConfig{});
@@ -627,6 +633,146 @@ namespace {
             EXPECT_LT(final_loss, initial_loss * 0.10);
             EXPECT_LT(center_error(state.current, truth), initial_center * 0.30);
             EXPECT_LT(rotation_error(state.current, truth), initial_rotation * 0.30);
+        }
+    }
+    class CameraPoseTrainerIntegrationTest : public CameraPosePhotometricTest {};
+
+    TEST_F(CameraPoseTrainerIntegrationTest, PhotometricObjectiveMatchesTrainerLoss) {
+        const auto pose = exp_se3({0.03f, -0.02f, 0.04f, 0.01f, 0.02f, -0.01f});
+        const auto target = Tensor::from_vector(render(identity_transform()), {3, HEIGHT, WIDTH}, Device::CUDA);
+        for (const float weight : {0.0f, 0.2f, 1.0f}) {
+            SCOPED_TRACE(weight);
+            losses::PhotometricLoss trainer_loss;
+            auto rendered = forward(pose);
+            auto reference = trainer_loss.forward(rendered.first.image, target, {weight});
+            ASSERT_TRUE(reference.has_value()) << reference.error();
+            const double expected_loss = reference->first.item<float>();
+            const auto upstream = values(reference->second.grad_image);
+            rendered.second.release_forward_context();
+            const auto expected_gradient = gradient(pose, upstream);
+            FastGSPoseEvaluator evaluator(*camera, *scene, *optimizer, background,
+                                          make_pose_photometric_objective(target, weight));
+            const auto image = evaluator.evaluate(pose);
+            EXPECT_NEAR(image.loss, expected_loss, 1e-7);
+            EXPECT_NEAR(evaluator.loss(pose), expected_loss, 1e-7);
+            for (int axis = 0; axis < 6; ++axis)
+                EXPECT_NEAR(image.gradient[axis], expected_gradient[axis], 1e-6 + std::abs(expected_gradient[axis]) * 1e-4);
+        }
+        EXPECT_THROW((void)make_pose_photometric_objective(target, -0.1f), std::invalid_argument);
+    }
+
+    TEST_F(CameraPoseTrainerIntegrationTest, CheckpointRestoresPoseStateWithModel) {
+        auto far = identity_transform();
+        far[3] = 1;
+        PoseSessionConfig config;
+        config.total_iterations = 100;
+        config.warmup_iterations = 0;
+        config.choose_anchors = false;
+        config.optimizer.scene_scale = scene->get_scene_scale();
+        const std::vector<PoseCameraInput> inputs{
+            {camera->uid(), identity_transform(), PoseRole::Train},
+            {camera->uid() + 1, identity_transform(), PoseRole::Anchor},
+            {camera->uid() + 2, far, PoseRole::Anchor}};
+        PoseRefinementSession session(1, inputs, config);
+        ASSERT_GT(session.visit(camera->uid(), 5, 1, [](const Matrix4& pose) {
+            const float residual = pose[3] - 0.02f;
+            return PoseImageEvaluation{residual * residual, {2*residual,0,0,0,0,0}}; }, [](const Matrix4& pose) { const double residual = pose[3]-0.02; return residual*residual; }).accepted_steps, 0);
+        lfs::core::param::TrainingParameters params;
+        params.optimization.strategy = "mcmc";
+        params.optimization.iterations = 100;
+        params.optimization.max_cap = 64;
+        params.camera_pose_state_json = session.save_state().dump();
+        auto source_model = scene->clone();
+        ASSERT_EQ(source_model.opacity_raw().dtype(), DataType::Float32);
+        ASSERT_EQ(source_model.opacity_raw().ndim(), 2);
+        ASSERT_EQ(source_model.opacity_raw().shape()[0], source_model.size());
+        ASSERT_EQ(source_model.opacity_raw().shape()[1], 1);
+        MCMC source_strategy(source_model);
+        std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+        const auto written = serialize_checkpoint(stream, 5, source_strategy, params, nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(written.has_value()) << lfs::format_for_developer(written.error());
+        EXPECT_TRUE(has_flag(written->header.flags, CheckpointFlags::HAS_CAMERA_POSES));
+        stream.seekg(0);
+        const auto metadata = load_checkpoint_params(stream, written->bytes);
+        ASSERT_TRUE(metadata.has_value()) << metadata.error();
+        EXPECT_EQ(nlohmann::json::parse(metadata->camera_pose_state_json), session.save_state());
+        auto loaded_model = scene->clone();
+        MCMC loaded_strategy(loaded_model);
+        lfs::core::param::TrainingParameters loaded_params;
+        stream.clear();
+        stream.seekg(0);
+        const auto restored = load_checkpoint(stream, written->bytes, loaded_strategy, loaded_params,
+                                              nullptr, nullptr, nullptr, nullptr);
+        ASSERT_TRUE(restored.has_value()) << restored.error();
+        EXPECT_EQ(*restored, 5);
+        const auto state = nlohmann::json::parse(loaded_params.camera_pose_state_json);
+        PoseRefinementSession resumed(2, inputs, pose_session_config_from_state(state));
+        resumed.restore_state(state);
+        EXPECT_EQ(resumed.current_pose(camera->uid()), session.current_pose(camera->uid()));
+        expect_bytes_equal(loaded_model.means(), source_model.means());
+        expect_bytes_equal(loaded_model.opacity_raw(), source_model.opacity_raw());
+        loaded_params.optimization.max_cap = 17;
+        bool context_checked = false;
+        stream.clear();
+        stream.seekg(0);
+        const auto rejected = load_checkpoint(stream, written->bytes, loaded_strategy, loaded_params,
+                                              nullptr, nullptr, nullptr, nullptr, {}, "pose context rejection", nullptr,
+                                              [&](const lfs::core::param::TrainingParameters&, const SplatData&) -> lfs::Status {
+                                                  context_checked = true;
+                                                  return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                                                      .code = lfs::ErrorCode::FailedPrecondition,
+                                                      .domain = lfs::ErrorDomain::Training,
+                                                      .user_message = "Dataset source poses do not match",
+                                                      .detail = "Dataset source poses do not match",
+                                                      .detection = LFS_SOURCE_SITE_CURRENT(),
+                                                  }));
+                                              });
+        EXPECT_TRUE(context_checked);
+        EXPECT_FALSE(rejected.has_value());
+        EXPECT_EQ(loaded_params.optimization.max_cap, 17);
+        expect_bytes_equal(loaded_model.means(), source_model.means());
+        expect_bytes_equal(loaded_model.opacity_raw(), source_model.opacity_raw());
+        auto header = written->header;
+        header.flags = CheckpointFlags::NONE;
+        EXPECT_FALSE(validate_checkpoint_pose_state(header, loaded_params).has_value());
+        header = written->header;
+        ++header.iteration;
+        EXPECT_FALSE(validate_checkpoint_pose_state(header, loaded_params).has_value());
+        loaded_params.camera_pose_state_json.clear();
+        EXPECT_FALSE(validate_checkpoint_pose_state(written->header, loaded_params).has_value());
+        loaded_params.camera_pose_state_json = params.camera_pose_state_json;
+        // Pose-free checkpoints still require valid optimization parameters.
+        // Cover both the current envelope and the legacy flat parameter form.
+        const auto optimization_json = params.optimization.to_json();
+        const nlohmann::json pose_free_checkpoint{{"optimization", optimization_json},
+                                                  {"dataset", params.dataset.to_json()}};
+        for (const auto& payload : {pose_free_checkpoint, optimization_json}) {
+            SCOPED_TRACE(payload.contains("optimization") ? "pose-free checkpoint" : "legacy flat parameters");
+            const auto plain = parse_checkpoint_params_json(payload.dump(), loaded_params);
+            EXPECT_TRUE(plain.camera_pose_state_json.empty());
+            EXPECT_EQ(plain.optimization.iterations, params.optimization.iterations);
+            EXPECT_EQ(plain.optimization.max_cap, params.optimization.max_cap);
+        }
+    }
+
+    TEST_F(CameraPoseTrainerIntegrationTest, UnsupportedTrainingCombinationsAreExplicit) {
+        lfs::core::param::OptimizationParameters params;
+        EXPECT_TRUE(trainer_pose_incompatibility(params).empty());
+        for (const int option : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
+            auto unsupported = params;
+            switch (option) {
+            case 0: unsupported.gut = true; break;
+            case 1: unsupported.mip_filter = true; break;
+            case 2: unsupported.use_depth_loss = true; break;
+            case 3: unsupported.use_normal_loss = true; break;
+            case 4: unsupported.use_ppisp = true; break;
+            case 5: unsupported.use_bilateral_grid = true; break;
+            case 6: unsupported.use_exposure_correction = true; break;
+            case 7: unsupported.enable_sparsity = true; break;
+            case 8: unsupported.mask_mode = lfs::core::param::MaskMode::Ignore; break;
+            case 9: unsupported.ppisp_use_controller = true; break;
+            }
+            EXPECT_FALSE(trainer_pose_incompatibility(unsupported).empty());
         }
     }
 } // namespace

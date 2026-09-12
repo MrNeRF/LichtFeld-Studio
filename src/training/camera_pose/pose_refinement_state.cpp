@@ -45,6 +45,32 @@ namespace lfs::training::camera_pose {
         }
     } // namespace
 
+    PoseSessionConfig pose_session_config_from_state(const nlohmann::json& state) {
+        if (integer(state.at("version")) != 1)
+            throw std::invalid_argument("Unsupported camera pose state version");
+        const auto& saved = state.at("settings");
+        const auto& opt = saved.at("optimizer");
+        PoseSessionConfig config;
+        config.total_iterations = integer(saved.at("total_iterations"));
+        config.warmup_iterations = integer(saved.at("warmup_iterations"));
+        config.freeze_fraction = saved.at("freeze_fraction").get<double>();
+        config.visits_between_updates = integer(saved.at("visits_between_updates"));
+        config.steps_per_visit = integer(saved.at("steps_per_visit"));
+        config.choose_anchors = saved.at("choose_anchors").get<bool>();
+        config.optimizer.scene_scale = opt.at("scene_scale").get<double>();
+        config.optimizer.max_center_fraction = opt.at("max_center_fraction").get<double>();
+        config.optimizer.max_rotation_radians = opt.at("max_rotation_radians").get<double>();
+        config.optimizer.step_center_fraction = opt.at("step_center_fraction").get<double>();
+        config.optimizer.step_rotation_radians = opt.at("step_rotation_radians").get<double>();
+        config.optimizer.center_prior = opt.at("center_prior").get<double>();
+        config.optimizer.rotation_prior = opt.at("rotation_prior").get<double>();
+        config.optimizer.min_relative_improvement = opt.at("min_relative_improvement").get<double>();
+        config.optimizer.max_backtracks = integer(opt.at("max_backtracks"));
+        if (saved != settings(config))
+            throw std::invalid_argument("Unknown or inconsistent camera pose settings");
+        return config; // Constructor and restore_state validate values and membership.
+    }
+
     nlohmann::json PoseRefinementSession::save_state() const {
         auto cameras = Json::array();
         for (const auto& entry : entries_) {

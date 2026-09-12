@@ -188,6 +188,33 @@ def inspect_session_gate(root: ET.Element) -> dict:
     return result
 
 
+TRAINER_SUITE = "CameraPoseTrainerIntegrationTest"
+TRAINER_TESTS = {
+    "PhotometricObjectiveMatchesTrainerLoss",
+    "CheckpointRestoresPoseStateWithModel",
+    "UnsupportedTrainingCombinationsAreExplicit",
+}
+
+
+def inspect_trainer_gate(root: ET.Element) -> dict:
+    result = inspect_session_gate(root)
+    require_production_evaluator(root)
+    suites = [node for node in root.iter("testsuite") if node.get("name") == TRAINER_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Missing or duplicated Trainer integration suite")
+    cases = suites[0].findall("testcase")
+    names = [case.get("name") for case in cases]
+    if len(names) != len(set(names)) or set(names) != TRAINER_TESTS:
+        raise ValueError("Wrong Trainer integration test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Trainer integration test not successfully executed: {case.get('name')}")
+    result.update(tests=result["tests"] + len(cases), production_evaluator=True,
+                  trainer_checkpoint_contracts=True)
+    return result
+
+
 def require_production_evaluator(root: ET.Element) -> None:
     properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
     if len(properties) != 1 or properties[0].get("value") != "1":
@@ -200,11 +227,12 @@ def main() -> int:
     parser.add_argument("--controller", action="store_true", help="Require checkpoint B controller tests and image-driven recovery as well")
     parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (28 tests)")
     parser.add_argument("--evaluator", action="store_true", help="Require all 28 tests using the production FastGS pose evaluator")
+    parser.add_argument("--trainer", action="store_true", help="Require all 31 pose, loss and checkpoint tests")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
-        result = inspect(root)
+        result = inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)
             result.update(production_evaluator=True)

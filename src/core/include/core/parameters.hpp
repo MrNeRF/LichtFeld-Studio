@@ -468,6 +468,9 @@ namespace lfs::core {
 
             // Checkpoint to resume training from
             std::optional<std::filesystem::path> resume_checkpoint = std::nullopt;
+            // Durable pose session embedded in the matching model checkpoint.
+            // Empty means no refinement; not an optimization preset or CLI flag.
+            std::string camera_pose_state_json;
 
             // Project to open as the GUI lifecycle document.
             std::optional<std::filesystem::path> project_path = std::nullopt;
