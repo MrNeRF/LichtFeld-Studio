@@ -16,7 +16,6 @@
       "src/core/scene.cpp:776",
       "src/core/scene.cpp:1607",
       "src/core/splat_data.cpp:518",
-      "src/core/splat_data.cpp:602",
       "src/core/splat_data.cpp:1827"
     ],
     "io": [
