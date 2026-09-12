@@ -326,18 +326,35 @@ namespace fast_lfs::rasterization::kernels::backward {
             dL_dmean3d_cam.z += (j11 * (factor_x * tx * dL_dj13 - dL_dj11) + j22 * (factor_y * ty * dL_dj23 - dL_dj22)) * inv_depth;
 
             if (grad_w2c != nullptr) {
-                atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x);
-                atomicAdd(&grad_w2c[1].w, dL_dmean3d_cam.y);
-                atomicAdd(&grad_w2c[2].w, dL_dmean3d_cam.z);
-                atomicAdd(&grad_w2c[0].x, dL_dmean3d_cam.x * mean3d.x);
-                atomicAdd(&grad_w2c[0].y, dL_dmean3d_cam.x * mean3d.y);
-                atomicAdd(&grad_w2c[0].z, dL_dmean3d_cam.x * mean3d.z);
-                atomicAdd(&grad_w2c[1].x, dL_dmean3d_cam.y * mean3d.x);
-                atomicAdd(&grad_w2c[1].y, dL_dmean3d_cam.y * mean3d.y);
-                atomicAdd(&grad_w2c[1].z, dL_dmean3d_cam.y * mean3d.z);
-                atomicAdd(&grad_w2c[2].x, dL_dmean3d_cam.z * mean3d.x);
-                atomicAdd(&grad_w2c[2].y, dL_dmean3d_cam.z * mean3d.y);
-                atomicAdd(&grad_w2c[2].z, dL_dmean3d_cam.z * mean3d.z);
+                // Cov2D = (J R) Cov3D (J R)^T. The center/J path above is
+                // only part of dL/dR: add the direct J^T dL/d(JR) term.
+                // It remains nonzero for camera roll of an on-axis anisotropic
+                // splat, where the center-only pose gradient is zero.
+                //
+                // SH uses mean-C, C=-R^T t on SE(3). With g=dL/d(mean-C),
+                // dL/dt = R g and dL/dR = t g^T. Together these give the
+                // correct tangent derivative under Exp(dxi)T (including the
+                // cancellation for a rotation about the fixed camera center).
+                // Gaussian gradients/Adam remain unchanged when this is null.
+                const float3 g_color = dL_dmean3d_from_color;
+                const float3 r1 = dL_dmean3d_cam.x * mean3d +
+                                  j11 * dL_djw_r1 + w2c_r1.w * g_color;
+                const float3 r2 = dL_dmean3d_cam.y * mean3d +
+                                  j22 * dL_djw_r2 + w2c_r2.w * g_color;
+                const float3 r3 = dL_dmean3d_cam.z * mean3d +
+                                  j13 * dL_djw_r1 + j23 * dL_djw_r2 + w2c_r3.w * g_color;
+                atomicAdd(&grad_w2c[0].w, dL_dmean3d_cam.x + dot(make_float3(w2c_r1), g_color));
+                atomicAdd(&grad_w2c[1].w, dL_dmean3d_cam.y + dot(make_float3(w2c_r2), g_color));
+                atomicAdd(&grad_w2c[2].w, dL_dmean3d_cam.z + dot(make_float3(w2c_r3), g_color));
+                atomicAdd(&grad_w2c[0].x, r1.x);
+                atomicAdd(&grad_w2c[0].y, r1.y);
+                atomicAdd(&grad_w2c[0].z, r1.z);
+                atomicAdd(&grad_w2c[1].x, r2.x);
+                atomicAdd(&grad_w2c[1].y, r2.y);
+                atomicAdd(&grad_w2c[1].z, r2.z);
+                atomicAdd(&grad_w2c[2].x, r3.x);
+                atomicAdd(&grad_w2c[2].y, r3.y);
+                atomicAdd(&grad_w2c[2].z, r3.z);
             }
 
             // Combine the splatting gradient with the saved SH color gradient.

@@ -80,6 +80,8 @@ add_subdirectory(depth_anchor)
 
 # Optimizer sources
 set(TRAINING_NEW_SOURCES
+    camera_pose/se3.cpp
+    camera_pose/bounded_pose_optimizer.cpp
     optimizer/adam_optimizer.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp

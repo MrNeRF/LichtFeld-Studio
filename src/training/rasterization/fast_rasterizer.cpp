@@ -13,8 +13,10 @@
 #include "training/kernels/grad_alpha.hpp"
 #include "training/rasterization/fastgs/rasterization/include/forward.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -359,7 +361,25 @@ namespace lfs::training {
         int tile_height,
         bool mip_filter,
         const core::Tensor& bg_image,
-        bool render_normal) {
+        bool render_normal,
+        const FastGSCameraPoseOverride* pose_override) {
+        if (pose_override) {
+            const auto valid_tensor = [](const core::Tensor& tensor, const core::TensorShape& shape) {
+                return tensor.is_valid() && tensor.device() == core::Device::CUDA &&
+                       tensor.dtype() == core::DataType::Float32 && tensor.is_contiguous() &&
+                       tensor.shape() == shape;
+            };
+            if (!valid_tensor(pose_override->world_view_transform, core::TensorShape({1, 4, 4})) ||
+                !valid_tensor(pose_override->cam_position, core::TensorShape({3}))) {
+                return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .user_message = "Invalid FastGS camera pose override.",
+                    .detail = "Expected contiguous CUDA float32 world_view_transform [1,4,4] and cam_position [3]",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+        }
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -394,6 +414,10 @@ namespace lfs::training {
         // Get direct GPU pointers (tensors are already contiguous on CUDA)
         const float* w2c_ptr = viewpoint_camera.world_view_transform_ptr();
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
+        if (pose_override) {
+            w2c_ptr = pose_override->world_view_transform.ptr<float>();
+            cam_position_ptr = pose_override->cam_position.ptr<float>();
+        }
 
         const int n_primitives = checked_dim_to_int(means.shape()[0], "n_primitives");
         if (n_primitives == 0) {
@@ -420,6 +444,19 @@ namespace lfs::training {
         const cudaStream_t raster_stream = lfs::core::getCurrentCUDAStream()
                                                ? lfs::core::getCurrentCUDAStream()
                                                : means.stream();
+        if (pose_override) {
+            if (pose_override->world_view_transform.stream() != raster_stream ||
+                pose_override->cam_position.stream() != raster_stream) {
+                return std::unexpected(lfs::make_error(lfs::ErrorInit{
+                    .code = lfs::ErrorCode::InvalidArgument,
+                    .domain = lfs::ErrorDomain::Rendering,
+                    .user_message = "FastGS camera pose must use the render stream.",
+                    .detail = "Transfer the pose tensors to the render stream before forward",
+                    .detection = LFS_SOURCE_SITE_CURRENT(),
+                }));
+            }
+            core::pin_operands({&pose_override->world_view_transform, &pose_override->cam_position});
+        }
 
         // Reallocate when either the shape or owning stream changes. Calling
         // Tensor::set_stream on a cache backed by a destroyed stream would try
@@ -527,8 +564,8 @@ namespace lfs::training {
                 raw_opacities,
                 sh0,
                 shN,
-                viewpoint_camera.world_view_transform(),
-                viewpoint_camera.cam_position(),
+                pose_override ? pose_override->world_view_transform : viewpoint_camera.world_view_transform(),
+                pose_override ? pose_override->cam_position : viewpoint_camera.cam_position(),
                 n_primitives,
                 active_sh_bases,
                 width,
@@ -550,8 +587,8 @@ namespace lfs::training {
                 raw_opacities,
                 sh0,
                 shN,
-                viewpoint_camera.world_view_transform(),
-                viewpoint_camera.cam_position(),
+                pose_override ? pose_override->world_view_transform : viewpoint_camera.world_view_transform(),
+                pose_override ? pose_override->cam_position : viewpoint_camera.cam_position(),
                 n_primitives,
                 active_sh_bases,
                 width,
@@ -636,6 +673,10 @@ namespace lfs::training {
         // Store camera pointers directly (tensors are managed by camera, already contiguous)
         ctx.w2c_ptr = w2c_ptr;
         ctx.cam_position_ptr = cam_position_ptr;
+        if (pose_override) {
+            ctx.pose_world_view_transform = pose_override->world_view_transform;
+            ctx.pose_cam_position = pose_override->cam_position;
+        }
 
         ctx.active_sh_bases = active_sh_bases;
         ctx.width = width;
@@ -668,7 +709,50 @@ namespace lfs::training {
         int iteration,
         const FastGSFusedExtraGradients& fused_extra_gradients,
         const core::Tensor& grad_depth,
-        const core::Tensor& grad_normal) {
+        const core::Tensor& grad_normal,
+        core::Tensor* grad_world_to_camera,
+        FastGSBackwardMode mode) {
+
+        const bool camera_only = mode == FastGSBackwardMode::CameraOnly;
+        if (camera_only && !grad_world_to_camera) {
+            throw std::invalid_argument("FastGS CameraOnly requires a camera gradient output");
+        }
+        if (grad_world_to_camera) {
+            const auto& gradient = *grad_world_to_camera;
+            if (!gradient.is_valid() || gradient.device() != core::Device::CUDA ||
+                gradient.dtype() != core::DataType::Float32 || !gradient.is_contiguous() ||
+                gradient.shape() != core::TensorShape({4, 4}) ||
+                gradient.stream() != grad_image.stream() || gradient.stream() != ctx.image.stream()) {
+                throw std::invalid_argument("FastGS camera gradient requires contiguous CUDA float32 [4,4] on the render stream");
+            }
+            if (ctx.mip_filter || (grad_normal.is_valid() && grad_normal.numel() > 0)) {
+                throw std::invalid_argument("FastGS camera gradients do not yet support Mip Filter or normal supervision");
+            }
+            const auto output_begin = reinterpret_cast<std::uintptr_t>(gradient.data_ptr());
+            const auto overlaps = [output_begin](const void* ptr, const size_t bytes) {
+                if (!ptr || bytes == 0)
+                    return false;
+                const auto begin = reinterpret_cast<std::uintptr_t>(ptr);
+                return begin <= output_begin ? output_begin - begin < bytes
+                                             : begin - output_begin < 16 * sizeof(float);
+            };
+            if (overlaps(ctx.w2c_ptr, 16 * sizeof(float)) ||
+                overlaps(ctx.cam_position_ptr, 3 * sizeof(float))) {
+                throw std::invalid_argument("FastGS camera gradient must not alias its pose");
+            }
+            const std::array<const core::Tensor*, 18> inputs{
+                &ctx.image, &ctx.alpha, &ctx.depth, &ctx.normal,
+                &ctx.means, &ctx.raw_scales, &ctx.raw_rotations, &ctx.raw_opacities,
+                &ctx.shN, &ctx.bg_color, &ctx.bg_image, &grad_image, &grad_alpha_extra,
+                &pixel_error_map, &grad_depth, &grad_normal,
+                &gaussian_model.sh0(), &gaussian_model._densification_info};
+            for (const auto* input : inputs) {
+                if (input->is_valid() && overlaps(input->data_ptr(), input->bytes())) {
+                    throw std::invalid_argument("FastGS camera gradient must not alias a backward input");
+                }
+            }
+            core::pin_operands({grad_world_to_camera});
+        }
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -767,7 +851,7 @@ namespace lfs::training {
 
         const int n_primitives = checked_dim_to_int(ctx.means.shape()[0], "n_primitives");
         // densification_info has shape [2, N]
-        const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
+        const bool update_densification_info = !camera_only && gaussian_model._densification_info.ndim() == 2 &&
                                                gaussian_model._densification_info.shape()[1] >= static_cast<size_t>(n_primitives);
         const bool use_pixel_error_densification = update_densification_info &&
                                                    pixel_error_map.is_valid() &&
@@ -797,10 +881,17 @@ namespace lfs::training {
         // loss path); do not allocate a separate pre-blend cache.
         auto raw_image = ctx.image;
 
-        const auto fused_adam = make_fastgs_fused_adam_settings(
-            optimizer.prepare_fastgs_fused_adam(iteration, stream), fused_extra_gradients);
-        if (!fused_adam.enabled) {
-            throw std::runtime_error("FastGS fused Adam state is not available");
+        fast_lfs::rasterization::FusedAdamSettings fused_adam{};
+        if (camera_only) {
+            // backward_raw requires the fused dispatch, but all per-parameter
+            // update flags, pointers and regularizers stay disabled/empty.
+            fused_adam.enabled = true;
+        } else {
+            fused_adam = make_fastgs_fused_adam_settings(
+                optimizer.prepare_fastgs_fused_adam(iteration, stream), fused_extra_gradients);
+            if (!fused_adam.enabled) {
+                throw std::runtime_error("FastGS fused Adam state is not available");
+            }
         }
 
         // the backward binds shN-rest exactly like the forward
@@ -846,7 +937,7 @@ namespace lfs::training {
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
             ctx.forward_ctx,
-            nullptr,
+            grad_world_to_camera ? grad_world_to_camera->ptr<float>() : nullptr,
             n_primitives,
             ctx.forward_ctx.n_visible,
             ctx.active_sh_bases,
@@ -858,22 +949,22 @@ namespace lfs::training {
             ctx.center_x,
             ctx.center_y,
             ctx.mip_filter,
-            densification_type,
+            camera_only ? DensificationType::None : densification_type,
             &fused_adam,
             bwd_shN_bounds_ptr,
             bwd_shN_n_cells,
             bwd_shN_bits,
             fused_adam.mean_step_far_mask,
             fused_adam.mean_step_far_mask_n,
-            fused_extra_gradients.edge_weight_map,
-            fused_extra_gradients.edge_score_out);
+            camera_only ? nullptr : fused_extra_gradients.edge_weight_map,
+            camera_only ? nullptr : fused_extra_gradients.edge_score_out);
 
         ctx.mark_forward_context_released();
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);
         }
-        if (fused_adam.enabled) {
+        if (!camera_only && fused_adam.enabled) {
             optimizer.commit_fastgs_fused_adam(iteration);
         }
     }

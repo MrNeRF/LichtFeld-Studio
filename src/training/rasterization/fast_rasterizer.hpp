@@ -16,6 +16,18 @@
 #include <utility>
 
 namespace lfs::training {
+    // Experimental seam: C = -R^T t. The caller validates SE(3) and keeps
+    // contents immutable through backward; the context retains the storage.
+    struct FastGSCameraPoseOverride {
+        lfs::core::Tensor world_view_transform; // CUDA float32 [1,4,4], row-major
+        lfs::core::Tensor cam_position;         // CUDA float32 [3]
+    };
+
+    enum class FastGSBackwardMode {
+        UpdateGaussians,
+        CameraOnly,
+    };
+
     // Forward pass context - holds intermediate buffers needed for backward
     struct FastRasterizeContext {
         FastRasterizeContext() = default;
@@ -53,6 +65,8 @@ namespace lfs::training {
 
         const float* w2c_ptr = nullptr;
         const float* cam_position_ptr = nullptr;
+        lfs::core::Tensor pose_world_view_transform;
+        lfs::core::Tensor pose_cam_position;
 
         // Forward context (contains buffer pointers, frame_id, etc.)
         fast_lfs::rasterization::ForwardContext forward_ctx = {};
@@ -113,6 +127,8 @@ namespace lfs::training {
             shN = std::move(other.shN);
             w2c_ptr = std::exchange(other.w2c_ptr, nullptr);
             cam_position_ptr = std::exchange(other.cam_position_ptr, nullptr);
+            pose_world_view_transform = std::move(other.pose_world_view_transform);
+            pose_cam_position = std::move(other.pose_cam_position);
             forward_ctx = std::exchange(other.forward_ctx, {});
             active_sh_bases = std::exchange(other.active_sh_bases, 0);
             width = std::exchange(other.width, 0);
@@ -171,7 +187,8 @@ namespace lfs::training {
         int tile_height = 0,
         bool mip_filter = false,
         const lfs::core::Tensor& bg_image = {},
-        bool render_normal = false);
+        bool render_normal = false,
+        const FastGSCameraPoseOverride* pose_override = nullptr);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
@@ -185,7 +202,12 @@ namespace lfs::training {
         int iteration = 0,
         const FastGSFusedExtraGradients& fused_extra_gradients = {},
         const lfs::core::Tensor& grad_depth = {},
-        const lfs::core::Tensor& grad_normal = {});
+        const lfs::core::Tensor& grad_normal = {},
+        // Caller-owned CUDA float32 [4,4], overwritten per backward. Sum tile
+        // gradients before one pose update. Tangent-consistent for C=-R^T t;
+        // use SE(3) retraction. Mip Filter/normal loss are not yet supported.
+        lfs::core::Tensor* grad_world_to_camera = nullptr,
+        FastGSBackwardMode mode = FastGSBackwardMode::UpdateGaussians);
 
     // Release per-thread renderer caches before the owning CUDA stream is torn down.
     bool release_fast_rasterizer_thread_local_caches() noexcept;
