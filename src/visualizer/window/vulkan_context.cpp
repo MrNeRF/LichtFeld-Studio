@@ -2777,6 +2777,17 @@ namespace lfs::vis {
         supported_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         supported_features2.pNext = &supported_features11;
         vkGetPhysicalDeviceFeatures2(physical_device_, &supported_features2);
+        const bool sh_value_quant_explicit =
+            lfs::core::environment::value("LFS_SH_VALUE_QUANT").has_value();
+        if (!sh_value_quant_explicit &&
+            (supported_features12.shaderFloat16 != VK_TRUE ||
+             supported_features11.storageBuffer16BitAccess != VK_TRUE)) {
+            if (lfs::core::environment::set_value("LFS_SH_VALUE_QUANT", "0")) {
+                LOG_INFO("Vulkan: disabling SH value quantization because shaderFloat16 or storageBuffer16BitAccess is unsupported");
+            } else {
+                return fail("Vulkan: could not disable SH value quantization after detecting unsupported shaderFloat16 or storageBuffer16BitAccess");
+            }
+        }
 
         if (opt_supported_head != nullptr) {
             VkPhysicalDeviceFeatures2 opt_query{};
@@ -2841,7 +2852,19 @@ namespace lfs::vis {
             enabled_chain_head = &swapchain_maintenance1_features;
         }
 
+        const bool conditional_rendering_explicit =
+            lfs::core::environment::value("LFS_VK_DISABLE_CONDITIONAL_RENDERING").has_value();
+        const bool disable_conditional_rendering = lfs::core::environment::flag(
+            "LFS_VK_DISABLE_CONDITIONAL_RENDERING", isPreVoltaCudaDevice(device_uuid_));
+        if (disable_conditional_rendering) {
+            LOG_INFO("Vulkan: disabling VK_EXT_conditional_rendering ({})",
+                     conditional_rendering_explicit
+                         ? "requested by LFS_VK_DISABLE_CONDITIONAL_RENDERING"
+                         : "pre-Volta compatibility default");
+        }
+
         const bool enable_conditional_rendering =
+            !disable_conditional_rendering &&
             conditional_rendering_available &&
             supported_conditional_rendering.conditionalRendering == VK_TRUE;
         VkPhysicalDeviceConditionalRenderingFeaturesEXT conditional_rendering_features{};
@@ -3628,8 +3651,8 @@ namespace lfs::vis {
         // exporter's handle. A stale handle must assert instead of being hidden
         // by the VUID-01742 suppression below.
         {
-            struct stat st_src {};
-            struct stat st_dup {};
+            struct stat st_src{};
+            struct stat st_dup{};
             const int st_src_rc = ::fstat(handle, &st_src);
             const int st_dup_rc = ::fstat(dup_fd, &st_dup);
             int kcmp_rc = 0;
