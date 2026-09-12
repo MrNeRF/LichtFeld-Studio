@@ -295,7 +295,8 @@ namespace lfs::vis {
                                                       const SelectionProjectionContext& projection_context,
                                                       const char* undo_name,
                                                       SelectionCommitOptions options = {});
-        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size);
+        [[nodiscard]] core::Tensor& resetBoolScratchBuffer(core::Tensor& buffer, size_t size,
+                                                           const core::Tensor* affinity = nullptr);
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt) const;

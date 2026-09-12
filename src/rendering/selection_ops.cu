@@ -36,6 +36,11 @@ namespace lfs::rendering {
             return static_cast<int>(value);
         }
 
+        [[nodiscard]] bool isCudaGpu(const Tensor& tensor) {
+            return tensor.is_valid() && tensor.device() == lfs::core::Device::GPU &&
+                   lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::CUDA;
+        }
+
         [[nodiscard]] cudaStream_t currentSelectionStream(const Tensor* const tensor = nullptr) {
             if (const cudaStream_t stream = lfs::core::getCurrentCUDAStream()) {
                 return stream;
@@ -847,12 +852,20 @@ namespace lfs::rendering {
             means.dtype() != lfs::core::DataType::Float32 ||
             means.ndim() != 2 ||
             means.size(1) != 3) {
-            throw std::runtime_error("project_screen_positions_tensor expects a CUDA Float32 [N, 3] means tensor");
+            throw std::runtime_error("project_screen_positions_tensor expects a GPU Float32 [N, 3] means tensor");
         }
         if (width <= 0 || height <= 0) {
             return {};
         }
+        if (!isCudaGpu(means)) {
+            return project_screen_positions_tensor_program(
+                means, width, height, view_rotation_rows, translation,
+                pixel_focal_x, pixel_focal_y, center_x, center_y,
+                camera_model, ortho_scale, model_transforms, transform_indices,
+                node_visibility_mask);
+        }
 
+        lfs::core::GpuBackendScope cuda_scope(lfs::core::GpuBackend::CUDA);
         const int n = checkedToInt(means.size(0), "screen position count exceeds int range");
         const Tensor means_contig = means.is_contiguous() ? means : means.contiguous();
         Tensor output = Tensor::empty(
@@ -867,8 +880,9 @@ namespace lfs::rendering {
             if (model_transforms_contig.dtype() != lfs::core::DataType::Float32) {
                 model_transforms_contig = model_transforms_contig.to(lfs::core::DataType::Float32);
             }
-            if (model_transforms_contig.device() != lfs::core::Device::GPU) {
-                model_transforms_contig = model_transforms_contig.gpu();
+            if (model_transforms_contig.device() != lfs::core::Device::GPU ||
+                lfs::core::gpu_backend_of(model_transforms_contig) != lfs::core::GpuBackend::CUDA) {
+                model_transforms_contig = model_transforms_contig.cpu().to(lfs::core::Device::GPU);
             }
             if (!model_transforms_contig.is_contiguous()) {
                 model_transforms_contig = model_transforms_contig.contiguous();
@@ -885,8 +899,9 @@ namespace lfs::rendering {
             if (transform_indices_contig.dtype() != lfs::core::DataType::Int32) {
                 transform_indices_contig = transform_indices_contig.to(lfs::core::DataType::Int32);
             }
-            if (transform_indices_contig.device() != lfs::core::Device::GPU) {
-                transform_indices_contig = transform_indices_contig.gpu();
+            if (transform_indices_contig.device() != lfs::core::Device::GPU ||
+                lfs::core::gpu_backend_of(transform_indices_contig) != lfs::core::GpuBackend::CUDA) {
+                transform_indices_contig = transform_indices_contig.cpu().to(lfs::core::Device::GPU);
             }
             if (!transform_indices_contig.is_contiguous()) {
                 transform_indices_contig = transform_indices_contig.contiguous();
@@ -903,7 +918,7 @@ namespace lfs::rendering {
             visibility_count = checkedToInt(node_visibility_mask.size(), "node visibility count exceeds int range");
         }
 
-        const int grid_size = std::min((n + kBlockSize - 1) / kBlockSize, kCountMaxBlocks);
+        const int grid_size = (n + kBlockSize - 1) / kBlockSize;
         const cudaStream_t stream = currentSelectionStream(&output);
         projectScreenPositionsKernel<<<grid_size, kBlockSize, 0, stream>>>(
             reinterpret_cast<const float3*>(means_contig.ptr<float>()),
@@ -940,16 +955,12 @@ namespace lfs::rendering {
         const float mouse_y,
         const float radius,
         Tensor& selection_out) {
-        if (lfs::core::gpu_backend_of(screen_positions) == lfs::core::GpuBackend::Vulkan ||
-            lfs::core::gpu_backend_of(selection_out) == lfs::core::GpuBackend::Vulkan) {
-            static bool logged = false;
-            if (!logged) {
-                logged = true;
-                LOG_WARN("Brush selection is unavailable on the Vulkan tensor backend");
-            }
+        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
             return;
         }
-        if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
+        if (!isCudaGpu(screen_positions) || !isCudaGpu(selection_out)) {
+            brush_select_tensor_program(
+                screen_positions, mouse_x, mouse_y, radius, selection_out);
             return;
         }
         const int n = checkedToInt(screen_positions.size(0), "n_primitives exceeds int range");
@@ -965,20 +976,15 @@ namespace lfs::rendering {
         const Tensor& screen_positions,
         const Tensor& polygon_vertices,
         Tensor& selection_out) {
-        if (lfs::core::gpu_backend_of(screen_positions) == lfs::core::GpuBackend::Vulkan ||
-            lfs::core::gpu_backend_of(polygon_vertices) == lfs::core::GpuBackend::Vulkan ||
-            lfs::core::gpu_backend_of(selection_out) == lfs::core::GpuBackend::Vulkan) {
-            static bool logged = false;
-            if (!logged) {
-                logged = true;
-                LOG_WARN("Polygon selection is unavailable on the Vulkan tensor backend");
-            }
-            return;
-        }
         if (!screen_positions.is_valid() || screen_positions.size(0) == 0) {
             return;
         }
         if (!polygon_vertices.is_valid() || polygon_vertices.size(0) < 3) {
+            return;
+        }
+        if (!isCudaGpu(screen_positions) || !isCudaGpu(polygon_vertices) ||
+            !isCudaGpu(selection_out)) {
+            polygon_select_tensor_program(screen_positions, polygon_vertices, selection_out);
             return;
         }
         const int num_vertices = checkedToInt(polygon_vertices.size(0), "polygon vertex count exceeds int range");
