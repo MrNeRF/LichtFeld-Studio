@@ -6,7 +6,7 @@
 #include "core/assert.hpp"
 #include "core/cuda_error.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
-#include "internal/size_bucketed_pool.hpp"
+#include "core/tensor/backend/cuda/runtime/size_bucketed_pool.hpp"
 #include "nn_kernels.hpp"
 
 #include <algorithm>

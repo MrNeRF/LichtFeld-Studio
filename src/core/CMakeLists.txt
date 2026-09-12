@@ -230,7 +230,8 @@ if(MSVC)
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
     )
-    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX
+    target_compile_definitions(lfs_core PUBLIC NOMINMAX)
+    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
     target_link_options(lfs_core PRIVATE /ignore:4217)
