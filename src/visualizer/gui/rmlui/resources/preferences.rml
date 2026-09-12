@@ -24,8 +24,8 @@
           <div class="preferences-row">
             <span class="preferences-label">@tr:preferences.tensor_backend</span>
             <select class="preferences-select" data-value="tensor_backend">
-              <option value="cuda">CUDA</option>
-              <option value="vulkan">Vulkan</option>
+              <option value="cuda">@tr:preferences.tensor_cuda</option>
+              <option value="vulkan">@tr:preferences.tensor_vulkan</option>
             </select>
           </div>
           <span class="preferences-description">@tr:preferences.tensor_restart</span>
