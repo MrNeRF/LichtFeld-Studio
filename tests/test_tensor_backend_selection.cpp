@@ -18,27 +18,10 @@ namespace {
 
     using namespace lfs::core;
 
-    void unset_backend_environment() {
-#if defined(_WIN32)
-        _putenv_s("LFS_TENSOR_BACKEND", "");
-#else
-        unsetenv("LFS_TENSOR_BACKEND");
-#endif
-    }
-
-    void set_backend_environment(const char* value) {
-#if defined(_WIN32)
-        _putenv_s("LFS_TENSOR_BACKEND", value);
-#else
-        setenv("LFS_TENSOR_BACKEND", value, 1);
-#endif
-    }
-
     TEST(TensorBackendSelection, AProcessDefaultFreezesAfterFirstResolution) {
-        unset_backend_environment();
         internal::gpu_backend_reset_for_testing();
 
-        // Catches a missing CUDA fallback when no selector or environment is set.
+        // Catches a missing CUDA fallback when no selector is set.
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
         internal::gpu_backend_reset_for_testing();
 
@@ -49,7 +32,7 @@ namespace {
             EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
         }
 
-        // Catches environment reads that override an explicit pre-resolution setter.
+        // Checks an explicit pre-resolution setter.
         const lfs::Status accepted = set_default_gpu_backend(GpuBackend::CUDA);
         ASSERT_TRUE(accepted.has_value());
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
@@ -63,16 +46,15 @@ namespace {
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
     }
 
-    TEST(TensorBackendSelection, ConfiguredDefaultPrecedesEnvironmentResolution) {
+    TEST(TensorBackendSelection, ConfiguredDefaultCanChangeBeforeResolution) {
         internal::gpu_backend_reset_for_testing();
-        set_backend_environment("vulkan");
+        ASSERT_TRUE(set_default_gpu_backend(GpuBackend::Vulkan));
 
-        // Catches deferred environment resolution overriding an explicit selector.
+        // The last explicit configuration wins until the first resolution.
         const lfs::Status accepted = set_default_gpu_backend(GpuBackend::CUDA);
         EXPECT_TRUE(accepted.has_value());
         EXPECT_EQ(default_gpu_backend(), GpuBackend::CUDA);
 
-        unset_backend_environment();
         internal::gpu_backend_reset_for_testing();
     }
 

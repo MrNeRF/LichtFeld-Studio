@@ -20,6 +20,7 @@
 #include "diagnostics/vram_profiler.hpp"
 #include "git_version.h"
 #include "lfs_core_abi_stamp.h"
+#include "preferences.hpp"
 #include "preprocessing/preprocess.hpp"
 #include "python/plugin_runner.hpp"
 #include "python/runner.hpp"
@@ -190,7 +191,8 @@ namespace {
                 // GPU app path. CLI-only modes such as --help, convert, preprocess,
                 // plugin, and mesh2splat must not create a CUDA primary context just
                 // for HUD metrics.
-                if (lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
+                    lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
                     analyzeCudaContextDistribution();
                 }
                 if (mode.params->optimization.debug_python) {
@@ -241,6 +243,21 @@ int main(int argc, char* argv[]) {
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {
         std::println(stderr, "Error: {}", result.error());
+        return 1;
+    }
+
+    bool use_default_preferences = false;
+    if (const auto* training = std::get_if<lfs::core::args::TrainingMode>(&*result)) {
+        use_default_preferences = training->params->safe_mode || training->params->reset_preferences ||
+                                  training->params->reset_all_settings;
+    }
+    const auto tensor_preferences = use_default_preferences
+                                        ? lfs::vis::TensorPreferenceState{}
+                                        : lfs::vis::UserPreferences::instance().tensorBackend();
+    const auto options_status = lfs::core::set_tensor_backend_options(tensor_preferences.options);
+    const auto backend_status = lfs::core::set_default_gpu_backend(tensor_preferences.backend);
+    if (!options_status || !backend_status) {
+        std::println(stderr, "Could not apply tensor backend preferences before startup");
         return 1;
     }
 

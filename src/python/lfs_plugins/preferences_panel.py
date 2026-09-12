@@ -56,6 +56,7 @@ class PreferencesPanel(Panel):
     }
 
     EXPANDABLE_SECTIONS = (
+        "tensor_backend",
         "language",
         "project_location",
         "appearance",
@@ -124,6 +125,13 @@ class PreferencesPanel(Panel):
             model.bind_func(
                 f"{section}_expanded",
                 lambda section=section: section in self._expanded_sections,
+            )
+        for key in ("backend", "vulkan_device", "vulkan_validation", "force_fp32_half",
+                    "force_no_atomic_float", "viewer_vulkan_inputs"):
+            model.bind(
+                f"tensor_{key}",
+                lambda key=key: lf.ui.get_tensor_backend_preferences()[key],
+                lambda value, key=key: self._set_tensor_preference(key, value),
             )
         model.bind("theme_family_idx", self._theme_family_index, self._set_theme_family_index)
         model.bind_func("theme_has_variants", self._theme_has_variants)
@@ -271,6 +279,17 @@ class PreferencesPanel(Panel):
     def _ensure_keymap_rows_if_visible(self):
         if self._section == "input" and "key_bindings" in self._expanded_sections:
             self._keymap.ensure_binding_rows()
+
+    def _set_tensor_preference(self, key, value):
+        state = dict(lf.ui.get_tensor_backend_preferences())
+        if key == "vulkan_validation":
+            value = int(value)
+        elif key in ("force_fp32_half", "force_no_atomic_float", "viewer_vulkan_inputs"):
+            value = bool(value)
+        state[key] = value
+        lf.ui.set_tensor_backend_preferences(**state)
+        if self._handle:
+            self._handle.dirty(f"tensor_{key}")
 
     def _state(self):
         return (
@@ -1201,6 +1220,10 @@ class PreferencesPanel(Panel):
     def _reset_section(self, section=None):
         section = section or self._section
         if section == "general":
+            lf.ui.set_tensor_backend_preferences()
+            if self._handle:
+                for key in lf.ui.get_tensor_backend_preferences():
+                    self._handle.dirty(f"tensor_{key}")
             lf.ui.set_language("en")
             lf.ui.clear_project_location()
             setter = getattr(lf.ui, "set_embed_dataset_by_default", None)

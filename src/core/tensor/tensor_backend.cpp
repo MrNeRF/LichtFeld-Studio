@@ -8,13 +8,12 @@
 
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <format>
+#include <mutex>
 #include <string>
 #ifdef LFS_TENSOR_VULKAN
 #include "backend/gpu_backend_ops.hpp"
@@ -34,6 +33,9 @@ namespace lfs::core {
 
         std::atomic<int> process_backend_state{kUnconfigured};
         thread_local std::optional<GpuBackend> scoped_backend;
+        std::mutex options_mutex;
+        TensorBackendOptions backend_options;
+        bool options_frozen = false;
 
         bool is_resolved(const int state) {
             return state == static_cast<int>(GpuBackend::CUDA) ||
@@ -46,28 +48,6 @@ namespace lfs::core {
 
         int configured_state(const GpuBackend backend) {
             return backend == GpuBackend::Vulkan ? kConfiguredVulkan : kConfiguredCuda;
-        }
-
-        std::optional<GpuBackend> backend_from_environment() {
-            const char* value = std::getenv("LFS_TENSOR_BACKEND");
-            if (value == nullptr) {
-                return std::nullopt;
-            }
-
-            std::string normalized(value);
-            for (char& character : normalized) {
-                character = static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(character)));
-            }
-            if (normalized == "cuda") {
-                return GpuBackend::CUDA;
-            }
-            if (normalized == "vulkan") {
-                return GpuBackend::Vulkan;
-            }
-
-            LOG_WARN("Ignoring invalid LFS_TENSOR_BACKEND='{}'; using CUDA", value);
-            return GpuBackend::CUDA;
         }
 
         [[noreturn]] void throw_backend_unavailable(const GpuBackend backend) {
@@ -88,6 +68,27 @@ namespace lfs::core {
 
     } // namespace
 
+    lfs::Status set_tensor_backend_options(const TensorBackendOptions& options) {
+        std::lock_guard lock(options_mutex);
+        if (options_frozen || options.vulkan_validation < 0 || options.vulkan_validation > 2) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::FailedPrecondition,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = options_frozen ? "Tensor backend options require a restart"
+                                               : "Invalid Vulkan validation mode",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
+        backend_options = options;
+        return {};
+    }
+
+    TensorBackendOptions tensor_backend_options() {
+        std::lock_guard lock(options_mutex);
+        options_frozen = true;
+        return backend_options;
+    }
+
     const char* gpu_backend_name(const GpuBackend backend) {
         switch (backend) {
         case GpuBackend::CUDA: return "CUDA";
@@ -104,7 +105,7 @@ namespace lfs::core {
             }
 
             const GpuBackend selected = state == kUnconfigured
-                                            ? backend_from_environment().value_or(GpuBackend::CUDA)
+                                            ? GpuBackend::CUDA
                                             : configured_backend(state);
             if (process_backend_state.compare_exchange_weak(
                     state, static_cast<int>(selected),
@@ -115,6 +116,14 @@ namespace lfs::core {
     }
 
     lfs::Status set_default_gpu_backend(const GpuBackend backend) {
+        if (backend != GpuBackend::CUDA && backend != GpuBackend::Vulkan) {
+            return lfs::Status::failure(lfs::make_error(lfs::ErrorInit{
+                .code = lfs::ErrorCode::InvalidArgument,
+                .domain = lfs::ErrorDomain::Core,
+                .user_message = "Unknown tensor GPU backend",
+                .detection = LFS_SOURCE_SITE_CURRENT(),
+            }));
+        }
         int state = process_backend_state.load(std::memory_order_acquire);
         for (;;) {
             if (is_resolved(state)) {
@@ -594,6 +603,8 @@ namespace lfs::core {
 
         LFS_CORE_API void gpu_backend_reset_for_testing() {
             process_backend_state.store(kUnconfigured, std::memory_order_release);
+            std::lock_guard lock(options_mutex);
+            options_frozen = false;
         }
 
     } // namespace internal

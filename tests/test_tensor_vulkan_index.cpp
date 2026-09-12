@@ -301,15 +301,23 @@ namespace {
     }
 
     class TensorVulkanIndexNoAtomicFloat : public TensorVulkanIndex {
+        TensorBackendOptions previous_options_;
+
     protected:
         void SetUp() override {
-            setenv("LFS_VULKAN_FORCE_NO_ATOMIC_FLOAT", "1", 1);
+            ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+            previous_options_ = tensor_backend_options();
+            internal::gpu_backend_reset_for_testing();
+            auto options = previous_options_;
+            options.force_no_atomic_float = true;
+            ASSERT_TRUE(set_tensor_backend_options(options));
             TensorVulkanIndex::SetUp();
         }
 
         void TearDown() override {
             TensorVulkanIndex::TearDown();
-            unsetenv("LFS_VULKAN_FORCE_NO_ATOMIC_FLOAT");
+            internal::gpu_backend_reset_for_testing();
+            EXPECT_TRUE(set_tensor_backend_options(previous_options_));
         }
     };
 

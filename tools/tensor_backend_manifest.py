@@ -862,7 +862,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify generated files are current")
     parser.add_argument("--trace", type=Path, default=None,
-                        help="per-test facade entry counts (JSON lines) from LFS_TENSOR_FACADE_TRACE")
+                        help="per-test facade entry counts (JSON lines) from --tensor-facade-trace")
     args = parser.parse_args()
     try:
         files, filter_counts, _ = generated_files(args.trace)
