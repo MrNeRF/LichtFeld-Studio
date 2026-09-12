@@ -388,6 +388,7 @@ set(TEST_FILES
     test_training_cropbox_mask.cpp
     test_training_parameters.cpp
     test_tensor_index_select_uint8.cpp
+    test_tensor_cuda_byte_image.cpp
     test_tensor_uint8_inversion.cpp
     test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
