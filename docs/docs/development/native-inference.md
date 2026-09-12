@@ -5,7 +5,7 @@ and Vulkan tensor backends. Select Vulkan before loading the model and creating
 its input tensors:
 
 ```sh
-LFS_TENSOR_BACKEND=vulkan ./build/LichtFeld-Studio
+./build/LichtFeld-Studio
 ```
 
 The C++ equivalent is `GpuBackendScope{GpuBackend::Vulkan}` around weight loading
@@ -17,7 +17,7 @@ does not require an available CUDA device.
 Standalone MoGe preprocessing also follows this selection:
 
 ```sh
-LFS_TENSOR_BACKEND=vulkan ./build/LichtFeld-Studio preprocess /path/to/dataset
+./build/LichtFeld-Studio preprocess /path/to/dataset
 ```
 
 It writes depth and normal maps on Vulkan. The optional depth-anchor sidecar uses
@@ -38,7 +38,7 @@ packs at most a 16 MiB target of columns per tile; these targets do not include
 model weights, activations, or every temporary tensor.
 
 The existing LPIPS and MoGe reference tests can be run against either backend
-with `LFS_TENSOR_BACKEND`. Full MoGe parity is opt-in through
+with the test runner argument `--tensor-backend=vulkan`. Full MoGe parity is opt-in through
 `LFS_MOGE2_WEIGHTS=/path/to/moge-2-vitb-normal.lfw`. SAM2 fixture tests require the
 fixtures described in `tests/test_sam2.cpp`. Keep fixture comparisons separate
 from direct comparisons between CUDA and Vulkan model outputs.
