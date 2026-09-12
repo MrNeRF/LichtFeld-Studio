@@ -460,6 +460,22 @@ namespace {
         return 0;
     }
 
+    [[nodiscard]] lfs::core::Tensor unpack_swizzled_floats_to_canonical_cpu(
+        const float* src, size_t src_floats, size_t n, size_t k);
+
+    void unpack_swizzled_into(const lfs::core::Tensor& source,
+                              lfs::core::Tensor& destination,
+                              size_t n, uint32_t rest) {
+        using namespace lfs::core;
+        if (gpu_backend_of(source) == GpuBackend::CUDA &&
+            gpu_backend_of(destination) == GpuBackend::CUDA) {
+            undo_reorder_sh_from_swizzled(source.ptr<float>(), destination.ptr<float>(), n, rest, rest);
+            return;
+        }
+        const Tensor host = source.cpu().contiguous();
+        destination.copy_from(unpack_swizzled_floats_to_canonical_cpu(host.ptr<float>(), host.numel(), n, rest));
+    }
+
     // Reorder a canonical-layout shN tensor into the swizzled `dst` buffer.
     // canonical may be [N, K, 3] or [N, K*3]. K may be smaller than the resident
     // layout; missing coefficients are zero-filled.
@@ -493,6 +509,23 @@ namespace {
                             .contiguous();
             src = truncated;
         }
+        if (gpu_backend_of(src) == GpuBackend::Vulkan ||
+            gpu_backend_of(dst_swizzled) != GpuBackend::CUDA) {
+            const Tensor host = src.cpu().contiguous();
+            Tensor packed = Tensor::zeros(dst_swizzled.shape(), Device::CPU);
+            const float* values = host.ptr<float>();
+            float* output = packed.ptr<float>();
+            tbb::parallel_for(tbb::blocked_range<size_t>(0, n_primitives),
+                              [&](const tbb::blocked_range<size_t>& range) {
+                                  for (size_t p = range.begin(); p != range.end(); ++p)
+                                      for (uint32_t c = 0; c < src_coeffs_rest * SH_CHANNELS; ++c)
+                                          output[sh_swizzled_index(p, c / 4, layout_coeffs_rest) * 4 + c % 4] =
+                                              values[p * src_coeffs_rest * SH_CHANNELS + c];
+                              });
+            dst_swizzled.copy_from(packed.to(dst_swizzled.dtype()));
+            return;
+        }
+        const GpuBackendScope cuda_scope(GpuBackend::CUDA);
         Tensor src_cuda = src.device() == Device::GPU ? src : src.gpu();
         if (!src_cuda.is_contiguous()) {
             src_cuda = src_cuda.contiguous();
@@ -572,6 +605,7 @@ namespace {
                                             uint32_t layout_coeffs_rest,
                                             uint32_t src_rest_hint = 0) {
         using namespace lfs::core;
+        const GpuBackendScope backend_scope(gpu_backend_of(shN).value_or(default_gpu_backend()));
         const size_t cap = std::max(capacity, n);
 
         // Q16 has exactly ONE writer: the sh_value codec commit under the trainer's
@@ -600,9 +634,7 @@ namespace {
                                                 DataType::Float16);
             if (shN.numel() > 0) {
                 const size_t copy_n = std::min(static_cast<size_t>(shN.numel()), need);
-                cudaMemcpyAsync(grown.data_ptr(), shN.data_ptr(),
-                                copy_n * sizeof(std::uint16_t),
-                                cudaMemcpyDeviceToDevice, shN.stream());
+                grown.slice(0, 0, copy_n).copy_from(shN.slice(0, 0, copy_n));
             }
             grown.set_name(shN.name().empty() ? "splat.shN" : shN.name());
             shN = std::move(grown);
@@ -629,11 +661,7 @@ namespace {
         Tensor old_canonical;
         if (shN.is_valid() && shN.numel() > 0 && n > 0 && old_layout_rest > 0) {
             old_canonical = Tensor::empty({n, static_cast<size_t>(old_layout_rest), SH_CHANNELS}, shN.device());
-            undo_reorder_sh_from_swizzled(shN.ptr<float>(),
-                                          old_canonical.ptr<float>(),
-                                          n,
-                                          old_layout_rest,
-                                          old_layout_rest);
+            unpack_swizzled_into(shN, old_canonical, n, old_layout_rest);
         }
 
         Tensor resized = allocate_swizzled_shN(n, cap, layout_coeffs_rest);
@@ -763,6 +791,7 @@ namespace {
         const size_t n,
         const size_t k) {
         using namespace lfs::core;
+        const GpuBackendScope cuda_scope(GpuBackend::CUDA);
         constexpr size_t kStagingBudgetBytes = size_t{128} * 1024 * 1024;
         constexpr size_t kDecodeBuffers = 1;
         const bool quantized = bounds.is_valid() && bounds.numel() > 0;
@@ -896,6 +925,7 @@ namespace lfs::core {
           _scaling(std::move(scaling_)),
           _rotation(std::move(rotation_)),
           _opacity(std::move(opacity_)) {
+        const GpuBackendScope backend_scope(gpu_backend_of(_means).value_or(default_gpu_backend()));
         _means.set_name("splat.positions");
         _sh0.set_name("splat.sh0");
         _scaling.set_name("splat.scaling");
@@ -922,11 +952,7 @@ namespace lfs::core {
                 if (stored_rest > 0 && stored_rest != layout_coeffs_rest &&
                     static_cast<size_t>(_shN.numel()) == sh_swizzled_float_count(n, stored_rest)) {
                     Tensor old_canonical = Tensor::empty({n, static_cast<size_t>(stored_rest), SH_CHANNELS}, _shN.device());
-                    undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
-                                                  old_canonical.ptr<float>(),
-                                                  n,
-                                                  stored_rest,
-                                                  stored_rest);
+                    unpack_swizzled_into(_shN, old_canonical, n, stored_rest);
                     Tensor resized = allocate_swizzled_shN(n, capacity, layout_coeffs_rest);
                     const auto copy_rest = std::min(stored_rest, layout_coeffs_rest);
                     reorder_canonical_into_swizzled(old_canonical,
@@ -1010,9 +1036,10 @@ namespace lfs::core {
                 return Tensor{};
             }
             const Tensor contiguous = source.contiguous();
-            if (contiguous.device() != Device::GPU || stream == nullptr) {
+            if (gpu_backend_of(contiguous) != GpuBackend::CUDA || stream == nullptr) {
                 return contiguous.clone();
             }
+            const GpuBackendScope cuda_scope(GpuBackend::CUDA);
             Tensor result = Tensor::empty(
                 contiguous.shape(), Device::GPU, contiguous.dtype());
             contiguous.sync_to_stream(stream);
@@ -1210,6 +1237,7 @@ namespace lfs::core {
     }
 
     Tensor SplatData::shN_canonical() const {
+        const GpuBackendScope backend_scope(gpu_backend_of(_shN).value_or(default_gpu_backend()));
         const size_t n = static_cast<size_t>(size());
         const size_t k = max_sh_coeffs_rest();
         // The swizzled buffer is CUDA-only (see allocate_swizzled_shN); align the canonical
@@ -1230,11 +1258,7 @@ namespace lfs::core {
             return out;
         }
         Tensor out = Tensor::empty({n, k, SH_CHANNELS}, dst_device);
-        undo_reorder_sh_from_swizzled(_shN.ptr<float>(),
-                                      out.ptr<float>(),
-                                      n,
-                                      static_cast<uint32_t>(k),
-                                      static_cast<uint32_t>(k));
+        unpack_swizzled_into(_shN, out, n, static_cast<uint32_t>(k));
         return out;
     }
 
@@ -1289,9 +1313,9 @@ namespace lfs::core {
 
         const bool bounds_are_gpu_compatible =
             !_shN_value_bounds.is_valid() || _shN_value_bounds.numel() == 0 ||
-            _shN_value_bounds.device() == Device::GPU;
+            gpu_backend_of(_shN_value_bounds) == GpuBackend::CUDA;
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
-            _shN.device() == Device::GPU && bounds_are_gpu_compatible) {
+            gpu_backend_of(_shN) == GpuBackend::CUDA && bounds_are_gpu_compatible) {
             return canonical_shN_from_f16_gpu(_shN, _shN_value_bounds, n, k);
         }
         return shN_canonical_cpu();
@@ -1308,7 +1332,8 @@ namespace lfs::core {
 
         if (_shN.is_valid() && _shN.dtype() == DataType::Float16 &&
             _shN_value_bounds.is_valid() && _shN_value_bounds.numel() > 0 &&
-            _shN.device() == Device::GPU && _shN_value_bounds.device() == Device::GPU) {
+            gpu_backend_of(_shN) == GpuBackend::CUDA && gpu_backend_of(_shN_value_bounds) == GpuBackend::CUDA) {
+            const GpuBackendScope cuda_scope(GpuBackend::CUDA);
             // Keep the device staging buffer at most 128 MiB. Rounding to the q16
             // block size also
             // keeps every full band aligned with its source bounds table.
@@ -2456,7 +2481,7 @@ namespace lfs::core {
                                                tensor_allocator,
                                                name);
             if (host.numel() > 0) {
-                if (dst.device() == Device::GPU && dst.dtype() == host.dtype() &&
+                if (gpu_backend_of(dst) == GpuBackend::CUDA && dst.dtype() == host.dtype() &&
                     dst.is_contiguous()) {
                     LFS_CUDA_CHECK_MSG_STREAM_ARGS(
                         cudaMemcpyAsync(dst.data_ptr(), host.data_ptr(), host.bytes(),

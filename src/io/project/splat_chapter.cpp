@@ -13,6 +13,7 @@
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/backend/cuda/runtime/cuda_stream_context.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -338,7 +339,7 @@ namespace lfs::io::project {
                 "The asynchronous splat capture is no longer available.",
                 "capture completion was requested more than once");
         }
-        if (const auto status = cudaEventSynchronize(impl_->ready);
+        if (const auto status = impl_->ready ? cudaEventSynchronize(impl_->ready) : cudaSuccess;
             status != cudaSuccess) {
             auto error = splat_error(
                 lfs::core::cuda_status_to_error_code(status),
@@ -458,11 +459,13 @@ namespace lfs::io::project {
             &model._densification_info, &model._max_screen_share};
         std::size_t device_bytes = 0;
         bool has_cuda_tensor = false;
+        bool has_gpu_tensor = false;
         for (const auto* tensor : tensors) {
             if (!tensor->is_valid() || tensor->device() != lfs::core::Device::GPU) {
                 continue;
             }
-            has_cuda_tensor = true;
+            has_gpu_tensor = true;
+            has_cuda_tensor |= lfs::core::gpu_backend_of(*tensor) == lfs::core::GpuBackend::CUDA;
             if (tensor->bytes() > std::numeric_limits<std::size_t>::max() - device_bytes) {
                 return splat_error(
                     lfs::ErrorCode::ResourceExhausted,
@@ -471,7 +474,7 @@ namespace lfs::io::project {
             }
             device_bytes += tensor->bytes();
         }
-        if (!has_cuda_tensor) {
+        if (!has_gpu_tensor) {
             return std::unique_ptr<AsyncSplatCapture>{};
         }
 
@@ -500,8 +503,9 @@ namespace lfs::io::project {
         impl->is_training_model = is_training_model;
         const auto status = splat_capture_stream_creation_failure_override.value_or(false)
                                 ? cudaErrorUnknown
-                                : cudaStreamCreateWithFlags(
-                                      &impl->stream, cudaStreamNonBlocking);
+                                : (has_cuda_tensor ? cudaStreamCreateWithFlags(
+                                                         &impl->stream, cudaStreamNonBlocking)
+                                                   : cudaSuccess);
         if (status != cudaSuccess) {
             return splat_error(
                 lfs::ErrorCode::ResourceExhausted,
@@ -512,6 +516,14 @@ namespace lfs::io::project {
         lfs::core::SplatData cloned;
         try {
             cloned = model.clone_async(impl->stream);
+            // Submit the Vulkan clone batch before handing its snapshot to a worker.
+            for (const auto* tensor : {&cloned.means(), &cloned.sh0(), &cloned.shN(),
+                                       &cloned.shN_value_bounds(), &cloned.scaling_raw(),
+                                       &cloned.rotation_raw(), &cloned.opacity_raw(), &cloned.deleted(),
+                                       &cloned._densification_info, &cloned._max_screen_share}) {
+                if (lfs::core::gpu_backend_of(*tensor) == lfs::core::GpuBackend::Vulkan)
+                    static_cast<void>(lfs::core::tensor_vulkan_buffer(*tensor));
+            }
         } catch (const std::bad_alloc& error) {
             LOG_WARN(
                 "SPLT async capture falling back to synchronous capture: "
@@ -526,8 +538,9 @@ namespace lfs::io::project {
         try {
             impl->snapshot = std::make_unique<lfs::core::SplatData>(
                 std::move(cloned));
-            if (const auto status = cudaEventCreateWithFlags(
-                    &impl->ready, cudaEventDisableTiming);
+            if (const auto status = has_cuda_tensor ? cudaEventCreateWithFlags(
+                                                          &impl->ready, cudaEventDisableTiming)
+                                                    : cudaSuccess;
                 status != cudaSuccess) {
                 return splat_error(
                     lfs::ErrorCode::ResourceExhausted,
@@ -535,7 +548,7 @@ namespace lfs::io::project {
                     std::format("CUDA event creation failed: {}",
                                 cudaGetErrorString(status)));
             }
-            if (const auto status = cudaEventRecord(impl->ready, impl->stream);
+            if (const auto status = has_cuda_tensor ? cudaEventRecord(impl->ready, impl->stream) : cudaSuccess;
                 status != cudaSuccess) {
                 return splat_error(
                     lfs::core::cuda_status_to_error_code(status),
@@ -596,6 +609,8 @@ namespace lfs::io::project {
             };
 
             auto describe = [](const std::uint32_t id, lfs::core::Tensor tensor) {
+                if (lfs::core::gpu_backend_of(tensor) == lfs::core::GpuBackend::Vulkan)
+                    tensor = tensor.to_pageable_host();
                 SourceTensor item;
                 item.id = id;
                 item.bytes = tensor.bytes();
@@ -608,7 +623,7 @@ namespace lfs::io::project {
             source.push_back(describe(0, model.means().contiguous()));
             source.push_back(describe(1, model.sh0().contiguous()));
             const auto& resident_sh = model.shN();
-            if (resident_sh.device() == lfs::core::Device::GPU &&
+            if (lfs::core::gpu_backend_of(resident_sh) == lfs::core::GpuBackend::CUDA &&
                 resident_sh.dtype() == lfs::core::DataType::Float32) {
                 SourceTensor item;
                 item.id = 2;
@@ -729,6 +744,7 @@ namespace lfs::io::project {
             }
             lfs::core::Tensor sh_scratch;
             if (std::ranges::any_of(source, &SourceTensor::sh_range)) {
+                const lfs::core::GpuBackendScope cuda_scope(lfs::core::GpuBackend::CUDA);
                 sh_scratch = lfs::core::Tensor::empty(
                     {window_bytes}, lfs::core::Device::GPU,
                     lfs::core::DataType::UInt8, false);

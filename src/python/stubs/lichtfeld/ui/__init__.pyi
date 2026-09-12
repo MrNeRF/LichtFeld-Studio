@@ -2688,10 +2688,10 @@ def reset_scene_reconstruction_preferences() -> None:
     """Clear all saved scene reconstruction backend and preset preferences"""
 
 def get_tensor_backend_preferences() -> dict:
-    """Get saved tensor backend preferences; changes apply after restart."""
+    """Get saved tensor backend preferences; changes apply after restart"""
 
-def set_tensor_backend_preferences(backend: str = "cuda", vulkan_device: str = "", vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, viewer_vulkan_inputs: bool = False) -> None:
-    """Save tensor backend preferences for the next application start."""
+def set_tensor_backend_preferences(backend: str = 'cuda', vulkan_device: str = '', vulkan_validation: int = 0, force_fp32_half: bool = False, force_no_atomic_float: bool = False, viewer_vulkan_inputs: bool = False) -> None:
+    """Save tensor backend preferences for the next application start"""
 
 def get_mcp_preferences() -> dict:
     """Get effective MCP HTTP server preferences"""

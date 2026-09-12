@@ -7,13 +7,19 @@
 #include "core/tensor_backend.hpp"
 #include "io/formats/ply.hpp"
 #include "io/loader.hpp"
+#include "io/splat_chapter.hpp"
 
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <bit>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -23,27 +29,55 @@ namespace {
 
     using namespace lfs::core;
 
+    constexpr size_t kTestSplats = 257;
+
     [[nodiscard]] std::filesystem::path splat_ply_path() {
-        const std::filesystem::path campaign{
-            "/home/paja/projects/gaussian-splatting-cuda/output/splat_1581.ply"};
-        if (std::filesystem::exists(campaign)) {
-            return campaign;
-        }
-        return std::filesystem::path(PROJECT_ROOT_PATH) / "output" / "splat_1581.ply";
+        struct FixtureFile {
+            std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                         ("lfs-viewer-backends-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ply");
+            FixtureFile() {
+                std::ofstream out(path, std::ios::binary);
+                out << "ply\nformat binary_little_endian 1.0\nelement vertex " << kTestSplats << '\n';
+                for (const char* name : {"x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2"})
+                    out << "property float " << name << '\n';
+                for (int i = 0; i < 45; ++i)
+                    out << "property float f_rest_" << i << '\n';
+                for (const char* name : {"opacity", "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"})
+                    out << "property float " << name << '\n';
+                out << "end_header\n";
+                auto write_float = [&](float value) {
+                    const auto bits = std::bit_cast<uint32_t>(value);
+                    for (int byte = 0; byte < 4; ++byte)
+                        out.put(static_cast<char>((bits >> (byte * 8)) & 0xff));
+                };
+                for (size_t row = 0; row < kTestSplats; ++row) {
+                    for (float value : {row * 0.01f, 0.0f, 1.0f, 0.1f, 0.2f, 0.3f})
+                        write_float(value);
+                    for (int coefficient = 0; coefficient < 45; ++coefficient)
+                        write_float(std::sin(float(row + coefficient) * 0.13f));
+                    for (float value : {1.0f, -3.0f, -3.0f, -3.0f, 1.0f, 0.0f, 0.0f, 0.0f})
+                        write_float(value);
+                }
+                out.close();
+                if (!out)
+                    throw std::runtime_error("Failed to write viewer PLY fixture");
+            }
+            ~FixtureFile() {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        };
+        static const FixtureFile file;
+        return file.path;
     }
 
-    void skip_if_missing_ply() {
-        if (!std::filesystem::exists(splat_ply_path())) {
-            GTEST_SKIP() << "Missing test asset: " << splat_ply_path();
+    class ViewerVulkanLoad : public ::testing::Test {
+        void SetUp() override {
+            int device_count = 0;
+            if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0)
+                GTEST_SKIP() << "CUDA device unavailable";
         }
-    }
-
-    void require_cuda() {
-        int device_count = 0;
-        if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
-            GTEST_SKIP() << "CUDA device unavailable";
-        }
-    }
+    };
 
     lfs::io::SplatTensorAllocator plain_splat_allocator() {
         return [](TensorShape shape,
@@ -102,9 +136,7 @@ namespace {
 
 } // namespace
 
-TEST(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
-    require_cuda();
-    skip_if_missing_ply();
+TEST_F(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     if (!gpu_backend_available(GpuBackend::Vulkan)) {
         GTEST_SKIP() << "Vulkan backend unavailable";
     }
@@ -121,7 +153,7 @@ TEST(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     GpuBackendScope scope(GpuBackend::Vulkan);
     SplatData model = load_splat(viewer_load_options());
     ASSERT_TRUE(model.means_raw().is_valid());
-    EXPECT_EQ(model.size(), 86976);
+    EXPECT_EQ(model.size(), kTestSplats);
     EXPECT_TRUE(model.shN_value_quantized());
     expect_backend(model.means_raw(), GpuBackend::Vulkan, "means");
     expect_backend(model.sh0_raw(), GpuBackend::Vulkan, "sh0");
@@ -157,17 +189,47 @@ TEST(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     ASSERT_EQ(vk_bounds.numel(), cu_bounds.numel());
     ASSERT_EQ(vk_bounds.bytes(), cu_bounds.bytes());
     EXPECT_EQ(std::memcmp(vk_bounds.data_ptr(), cu_bounds.data_ptr(), vk_bounds.bytes()), 0);
+
+    SplatData model2 = load_splat(viewer_load_options());
+    ASSERT_TRUE(model2.means_raw().is_valid());
+    EXPECT_FLOAT_EQ(model.means_raw().mean_scalar(), model2.means_raw().mean_scalar());
+
+    using lfs::io::project::SplatChapterPayload;
+    using lfs::io::project::SplatSourceKind;
+    auto expected = SplatChapterPayload::capture(cuda_model, SplatSourceKind::ImportedPly, false);
+    auto captured = SplatChapterPayload::capture(model, SplatSourceKind::ImportedPly, false);
+    ASSERT_TRUE(expected.has_value());
+    ASSERT_TRUE(captured.has_value());
+    ASSERT_EQ(expected->bytes().size(), captured->bytes().size());
+    EXPECT_TRUE(std::equal(expected->bytes().begin(), expected->bytes().end(), captured->bytes().begin()));
+
+    struct HeadroomGuard {
+        HeadroomGuard() { lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(false); }
+        ~HeadroomGuard() { lfs::io::project::detail::set_splat_capture_no_headroom_for_testing(std::nullopt); }
+    } headroom;
+    auto pending = SplatChapterPayload::start_async_capture(model, SplatSourceKind::ImportedPly, false);
+    ASSERT_TRUE(pending.has_value());
+    ASSERT_TRUE(*pending);
+    model.means().fill_(42.0f);
+    auto worker = std::async(std::launch::async, [snapshot = std::move(*pending)]() {
+        return snapshot->complete();
+    });
+    auto asynchronous = worker.get();
+    ASSERT_TRUE(asynchronous.has_value());
+    ASSERT_EQ(captured->bytes().size(), asynchronous->bytes().size());
+    EXPECT_TRUE(std::equal(captured->bytes().begin(), captured->bytes().end(), asynchronous->bytes().begin()));
+    auto hydrated = asynchronous->hydrate();
+    ASSERT_TRUE(hydrated.has_value());
+    expect_means_match_cpu_ply(**hydrated);
 }
 
-TEST(ViewerVulkanLoad, PlyCudaDefaultKeepsQ16) {
-    require_cuda();
-    skip_if_missing_ply();
+TEST_F(ViewerVulkanLoad, PlyCudaDefaultKeepsQ16) {
     ASSERT_TRUE(sh_value_quant::enabled());
 
     GpuBackendScope scope(GpuBackend::CUDA);
     SplatData model = load_splat(viewer_load_options());
     ASSERT_TRUE(model.means_raw().is_valid());
-    EXPECT_EQ(model.size(), 86976);
+    EXPECT_EQ(model.size(), kTestSplats);
     EXPECT_TRUE(model.shN_value_quantized());
     expect_backend(model.means_raw(), GpuBackend::CUDA, "means");
     expect_backend(model.sh0_raw(), GpuBackend::CUDA, "sh0");
