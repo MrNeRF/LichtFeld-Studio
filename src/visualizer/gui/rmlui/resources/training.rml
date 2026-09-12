@@ -193,6 +193,15 @@
           <img data-attr-src="steps_scaling_lock_icon" />
         </button>
       </div>
+      <div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="pv_show_sh_degree">
+        <span class="prop-label">{{label_sh_degree}}</span>
+        <select data-value="sh_degree_str">
+          <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
+          <option value="1" data-tooltip="training.tooltip.opt.sh_degree.1">1</option>
+          <option value="2" data-tooltip="training.tooltip.opt.sh_degree.2">2</option>
+          <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
+        </select>
+      </div>
     </div>
   </div>
   <div class="training-panel-block" data-if="pv_section_camera_visible">
@@ -706,15 +715,7 @@
         <span class="section-arrow text-accent" id="arrow-optimization">&#x25B6;</span>
         <span class="text-accent">{{pv_header_optimization}}</span>
       </div>
-      <div class="section-content collapsed" id="sec-optimization"><div data-class-disabled-overlay="live_disabled"><div class="setting-row" data-tooltip="training.tooltip.sh_degree" data-if="pv_show_sh_degree">
-        <span class="prop-label">{{label_sh_degree}}</span>
-        <select data-value="sh_degree_str">
-          <option value="0" data-tooltip="training.tooltip.opt.sh_degree.0">0</option>
-          <option value="1" data-tooltip="training.tooltip.opt.sh_degree.1">1</option>
-          <option value="2" data-tooltip="training.tooltip.opt.sh_degree.2">2</option>
-          <option value="3" data-tooltip="training.tooltip.opt.sh_degree.3">3</option>
-        </select>
-      </div></div>
+      <div class="section-content collapsed" id="sec-optimization">
         <div data-class-disabled-overlay="adv_disabled">
           <div class="setting-row" data-tooltip="training.tooltip.opt_strategy_display" data-if="pv_show_save_steps">
             <span class="prop-label">{{label_opt_strategy}}</span>

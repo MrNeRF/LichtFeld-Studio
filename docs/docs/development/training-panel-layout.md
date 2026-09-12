@@ -61,8 +61,8 @@ and Normal never share a parameter group. Evaluation owns its interval; random
 initialization owns point count and extent. Shared appearance tuning is visible
 under Exposure Correction when managed correction is enabled, otherwise under
 the enabled standalone PPISP/Grid section. These mutually exclusive views use
-the same parameter bindings and do not create additional enable controls. SH degree,
-optimization, losses, initialization and save steps live inside Advanced. No artificial enable
+the same parameter bindings and do not create additional enable controls. SH degree remains in
+Training Method for direct access; optimization, losses, initialization and save steps live inside Advanced. No artificial enable
 flag is added to always-applicable settings.
 
 Generated rows retain their property metadata, numeric editing, tooltips and

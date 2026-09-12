@@ -936,7 +936,7 @@ def test_rejected_enable_does_not_change_other_features(training_panel_module, m
 @pytest.mark.parametrize("query,section,field", [
     ("3DGS", "basic_params", "backend"),
     ("strategy", "basic_params", "strategy"),
-    ("SH_degree", "optimization", "sh_degree"),
+    ("SH_degree", "basic_params", "sh_degree"),
     ("bg_image", "background", "background_fields"),
     ("ppisp", "ppisp", "appearance"),
     ("resize_factor", "dataset", "dataset_fields"),
@@ -2756,6 +2756,12 @@ def test_enabled_features_have_independent_parameter_sections():
     assert sections["normal"].find(".//*[@data-for='row : pv_basic_depth_weight_rows']") is None
     assert sections["evaluation"].find(".//*[@data-value='test_every_str']") is not None
     assert sections["random-init"].find(".//*[@data-for='row : pv_init_random_rows']") is not None
+    basic_params = document.find(
+        ".//div[@class='training-panel-block'][@data-if='pv_section_basic_params_visible']"
+    )
+    assert basic_params is not None
+    assert basic_params.find(".//*[@data-value='sh_degree_str']") is not None
+    assert advanced.find(".//*[@data-value='sh_degree_str']") is None
     advanced_children = list(advanced)
     feature_heading = next(
         node for node in advanced_children

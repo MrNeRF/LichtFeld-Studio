@@ -519,7 +519,7 @@ class TrainingPanel(Panel):
     _BESPOKE_SEARCH = {
         "strategy": ("basic_params", "strategy mrnf igs+ mcmc", ("training_params.strategy",)),
         "backend": ("basic_params", "raster backend 3dgs 3dgut gut", ("training.backend",)),
-        "sh_degree": ("optimization", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
+        "sh_degree": ("basic_params", "sh_degree spherical harmonics", ("training_params.sh_degree",)),
         "depth_loss_mode": ("depth", "depth_loss_mode ssi disparity", ("training.tooltip.depth_loss_mode",)),
         "background_fields": ("background", "bg_color bg_image background color image", ("training.tooltip.bg_color", "training.tooltip.bg_image_path")),
         "appearance": ("ppisp", "ppisp", ("training.section.appearance",)),
