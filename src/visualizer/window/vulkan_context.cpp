@@ -13,6 +13,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/shareable_allocation_limit.hpp"
+#include "core/tensor_backend.hpp"
 #include "core/user_paths.hpp"
 #include "diagnostics/vram_profiler.hpp"
 #include "rendering/vulkan_wait.hpp"
@@ -21,6 +22,8 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -2254,7 +2257,8 @@ namespace lfs::vis {
         }
 
         std::vector<const char*> layers;
-        const bool validation_requested = validationRequestedByBuild();
+        const auto tensor_options = lfs::core::tensor_backend_options();
+        const bool validation_requested = validationRequestedByBuild() || tensor_options.vulkan_validation != 0;
         validation_errors_fatal_ = lfs::core::diagnostic_mode_enabled(lfs::core::DiagnosticMode::VkFatal);
         const bool validation_layer_available = layerAvailable(available_layers, "VK_LAYER_KHRONOS_validation");
         validation_enabled_ = validation_requested && validation_layer_available && debug_utils_enabled_;
@@ -2281,6 +2285,15 @@ namespace lfs::vis {
         VkDebugUtilsMessengerCreateInfoEXT debug_create_info{};
         if (validation_enabled_) {
             populateDebugMessengerCreateInfo(debug_create_info, &validation_errors_fatal_);
+        }
+
+        VkValidationFeatureEnableEXT synchronization_validation =
+            VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+        VkValidationFeaturesEXT validation_features{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+        if (validation_enabled_ && tensor_options.vulkan_validation == 2) {
+            validation_features.enabledValidationFeatureCount = 1;
+            validation_features.pEnabledValidationFeatures = &synchronization_validation;
+            debug_create_info.pNext = &validation_features;
         }
 
         VkInstanceCreateInfo create_info{};
@@ -2510,9 +2523,36 @@ namespace lfs::vis {
                                  count);
         devices.resize(count);
 
+        const auto requested_device = lfs::core::tensor_backend_options().vulkan_device;
+        const auto matches_requested = [&](VkPhysicalDevice device, std::size_t index) {
+            if (requested_device.empty())
+                return true;
+            std::size_t requested_index = 0;
+            const auto [end, error] = std::from_chars(requested_device.data(),
+                                                      requested_device.data() + requested_device.size(), requested_index);
+            if (error == std::errc{} && end == requested_device.data() + requested_device.size())
+                return index == requested_index;
+            VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            properties.pNext = &id;
+            vkGetPhysicalDeviceProperties2(device, &properties);
+            std::string uuid;
+            for (const auto byte : id.deviceUUID)
+                uuid += std::format("{:02x}", byte);
+            std::string requested;
+            for (const unsigned char character : requested_device) {
+                if (character != '-' && character != '{' && character != '}')
+                    requested += static_cast<char>(std::tolower(character));
+            }
+            return uuid == requested;
+        };
+
         VkPhysicalDevice fallback = VK_NULL_HANDLE;
         VkPhysicalDevice first_discrete = VK_NULL_HANDLE;
-        for (const auto device : devices) {
+        for (std::size_t index = 0; index < devices.size(); ++index) {
+            const auto device = devices[index];
+            if (!matches_requested(device, index))
+                continue;
             const QueueFamilies families = findQueueFamilies(device);
             if (!families.complete() || !deviceSupportsSwapchain(device)) {
                 continue;
@@ -2538,6 +2578,14 @@ namespace lfs::vis {
                          props.deviceName,
                          missingRequiredFeatures(feature_support));
                 continue;
+            }
+
+            if (!requested_device.empty()) {
+                if (lfs::core::default_gpu_backend() == lfs::core::GpuBackend::CUDA &&
+                    !vulkanDeviceMatchesCudaDevice(device, 0))
+                    return fail("The selected Vulkan device must match CUDA device 0 when using the CUDA tensor backend");
+                physical_device_ = device;
+                break;
             }
 
             if (fallback == VK_NULL_HANDLE) {
@@ -2569,7 +2617,7 @@ namespace lfs::vis {
             physical_device_ = fallback;
         }
         if (physical_device_ == VK_NULL_HANDLE) {
-            return fail("No Vulkan device supports graphics presentation, swapchain creation, Vulkan 1.3, and required features");
+            return fail("No selected Vulkan device supports graphics presentation, swapchain creation, Vulkan 1.3, and required features");
         }
 
         VkPhysicalDeviceProperties props{};

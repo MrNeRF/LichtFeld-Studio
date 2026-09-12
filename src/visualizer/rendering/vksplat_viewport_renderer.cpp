@@ -1928,11 +1928,7 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] bool vulkanInputsDebugEnabled() {
-            static const bool enabled = [] {
-                const char* const value = std::getenv("LFS_VKSPLAT_VULKAN_INPUTS");
-                return value != nullptr && value[0] == '1' && value[1] == '\0';
-            }();
-            return enabled;
+            return lfs::core::tensor_backend_options().viewer_vulkan_inputs;
         }
 
         [[nodiscard]] lfs::Result<_VulkanBuffer> borrowVulkanTensorBuffer(
@@ -5534,7 +5530,7 @@ namespace lfs::vis {
         return false;
     }
 
-    // Debug-only: LFS_VKSPLAT_VULKAN_INPUTS=1 copies CUDA splat tensors onto the
+    // The Vulkan viewer input diagnostic copies CUDA splat tensors onto the
     // Vulkan backend once per model input snapshot so prepareInputs binds native
     // VkBuffer storage without CUDA import.
     const VksplatViewportRenderer::VulkanDebugSplatInputs*
@@ -5584,7 +5580,7 @@ namespace lfs::vis {
             cached_key = snapshot;
             return &copies;
         } catch (const std::exception& error) {
-            LOG_WARN("VkSplat LFS_VKSPLAT_VULKAN_INPUTS copy failed: {}", error.what());
+            LOG_WARN("VkSplat diagnostic input copy failed: {}", error.what());
             cached_key = {};
             return nullptr;
         }
