@@ -79,6 +79,7 @@ namespace lfs::core::internal {
         [[nodiscard]] VkQueue queue() const noexcept { return queue_; }
         [[nodiscard]] uint32_t queue_family() const noexcept { return queue_family_; }
         [[nodiscard]] VkSemaphore timeline() const noexcept { return timeline_; }
+        [[nodiscard]] bool timeline_exportable() const noexcept { return timeline_exportable_; }
         [[nodiscard]] VkPipelineCache pipeline_cache() const noexcept {
             return pipeline_cache_;
         }
@@ -148,6 +149,7 @@ namespace lfs::core::internal {
         uint32_t device_index_ = 0;
         uint64_t context_id_ = 0;
         VkSemaphore timeline_ = VK_NULL_HANDLE;
+        bool timeline_exportable_ = false;
         VkPipelineCache pipeline_cache_ = VK_NULL_HANDLE;
         VmaAllocator allocator_ = nullptr;
         VmaAllocation fault_allocation_ = nullptr;

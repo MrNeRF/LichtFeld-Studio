@@ -199,7 +199,8 @@ namespace lfs::core::internal {
     }
 
     void VulkanCudaImportRegistry::import_timeline(const VkSemaphore semaphore) {
-        if (semaphore == VK_NULL_HANDLE || timeline_ != nullptr) {
+        std::lock_guard lock(mutex_);
+        if (shutting_down_ || semaphore == VK_NULL_HANDLE || timeline_ != nullptr) {
             return;
         }
         const auto exported = export_semaphore_handle(semaphore);
