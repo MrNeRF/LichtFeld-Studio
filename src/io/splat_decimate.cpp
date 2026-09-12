@@ -1,5 +1,6 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
+#include "core/tensor_backend.hpp"
 #include "cuda/splat_decimate_math.hpp"
 #include <algorithm>
 #include <array>
@@ -178,6 +179,8 @@ namespace lfs::io {
         using namespace decimate;
         using core::Device;
         try {
+            // The decimator's kernels and scratch allocations are CUDA-specific.
+            const core::GpuBackendScope cuda_scope(core::GpuBackend::CUDA);
             if (!o.target_count)
                 return make_error(ErrorCode::INVALID_DATASET, "decimation target must be at least 1");
             auto progress = [&](float p, const std::string& stage) { if(o.progress && !o.progress(p,stage)) throw Cancelled{}; };
@@ -214,7 +217,11 @@ namespace lfs::io {
             if (n > size_t(std::numeric_limits<int>::max()) || n * candidates_k > std::numeric_limits<uint32_t>::max())
                 return make_error(ErrorCode::INVALID_DATASET, "decimation input exceeds index capacity");
             Device device = o.use_gpu ? Device::CUDA : Device::CPU;
-            auto materialize = [&](const core::Tensor& t) { return t.device() == device ? t.contiguous() : t.to(device).contiguous(); };
+            auto materialize = [&](const core::Tensor& t) {
+                if (o.use_gpu && core::gpu_backend_of(t) == core::GpuBackend::Vulkan)
+                    return t.cpu().to(device).contiguous();
+                return t.device() == device ? t.contiguous() : t.to(device).contiguous();
+            };
             Data data{materialize(source->means()), materialize(source->rotation_raw()), materialize(source->scaling_raw()),
                       materialize(source->opacity_raw()), materialize(source->sh0()), materialize(source->shN_canonical()), n, int(source->max_sh_coeffs_rest())};
             // Establish ordering with caller-owned streams before default-stream kernels.
