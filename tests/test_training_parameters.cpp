@@ -318,7 +318,7 @@ namespace {
     TEST_F(TrainingParametersTest, BackendConflictsPreserve3DGSAndRejectUnsupportedGutFeatures) {
         using Conflict = lfs::core::param::TrainingBackendConflict;
         struct Case {
-            bool OptimizationParameters::* flag;
+            bool OptimizationParameters::*flag;
             Conflict conflict;
             const char* label;
         };
