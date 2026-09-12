@@ -22,24 +22,6 @@ uint loadByte(uint64_t address, uint64_t index)
     return (((Ptr<uint, Access.Read>)(byteAddress & ~uint64_t(3)))[0] >> shift) & 255u;
 }
 
-void storeByte(uint64_t address, uint64_t index, uint value)
-{
-    const uint64_t byteAddress = address + index;
-    const uint shift = uint(byteAddress & uint64_t(3)) * 8u;
-    const uint mask = 255u << shift;
-    Ptr<uint, Access.ReadWrite> word =
-        (Ptr<uint, Access.ReadWrite>)(byteAddress & ~uint64_t(3));
-    uint assumed = word[0];
-    uint observed;
-    do
-    {
-        const uint replacement = (assumed & ~mask) | ((value & 255u) << shift);
-        InterlockedCompareExchange(word[0], assumed, replacement, observed);
-        if (observed == assumed) return;
-        assumed = observed;
-    } while (true);
-}
-
 float loadAsFloat(uint64_t address, uint index)
 {
     if (kInputDType == 0) return ((Ptr<float, Access.Read>)address)[index];
@@ -70,11 +52,83 @@ uint torchUInt8Cast(float value)
     return uint(wrapped);
 }
 
+uint convertToByte(uint64_t inputAddress, uint index)
+{
+    if (kInputDType == kOutputDType)
+    {
+        const uint value = loadByte(inputAddress, index);
+        if (kInputDType == 5)
+            return value != 0u ? 1u : 0u;
+        return value;
+    }
+    if (kOutputDType == 4)
+    {
+        if (kInputDType == 0 || kInputDType == 1)
+            return torchUInt8Cast(loadAsFloat(inputAddress, index));
+        return uint(loadAsInt64(inputAddress, index)) & 255u;
+    }
+    return loadAsFloat(inputAddress, index) != 0.0f ? 1u : 0u;
+}
+
+void storeMaskedWord(uint64_t wordAddress, uint packed, uint mask)
+{
+    Ptr<uint, Access.ReadWrite> word =
+        (Ptr<uint, Access.ReadWrite>)wordAddress;
+    uint assumed = word[0];
+    uint observed;
+    do
+    {
+        const uint replacement = (assumed & ~mask) | packed;
+        InterlockedCompareExchange(word[0], assumed, replacement, observed);
+        if (observed == assumed) return;
+        assumed = observed;
+    } while (true);
+}
+
 [numthreads(LFS_LOCAL_SIZE_X, 1, 1)]
 void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters parameters)
 {
     const uint3 numWorkgroups = spirv_asm { result:$$uint3 = OpLoad builtin(NumWorkgroups:uint3); };
     const uint stride = numWorkgroups.x * LFS_LOCAL_SIZE_X;
+    // UInt8/Bool: one invocation owns one aligned output word. A word fully
+    // inside the output range is a direct store; a leading/trailing partial
+    // word uses CAS so neighboring bytes that are not this conversion stay
+    // intact. Host dispatch is the number of covering words, not elements.
+    if (kOutputDType == 4 || kOutputDType == 5)
+    {
+        const uint64_t start = parameters.outputAddress;
+        const uint64_t end = start + uint64_t(parameters.count);
+        const uint64_t firstWord = start & ~uint64_t(3);
+        const uint wordCount =
+            uint(((end - uint64_t(1)) >> 2) - (start >> 2) + uint64_t(1));
+        for (uint wordIndex = dispatchThreadId.x; wordIndex < wordCount;
+             wordIndex += stride)
+        {
+            const uint64_t wordAddress =
+                firstWord + uint64_t(wordIndex) * uint64_t(4);
+            uint packed = 0;
+            uint mask = 0;
+            for (uint lane = 0; lane < 4u; ++lane)
+            {
+                const uint64_t byteAddress = wordAddress + uint64_t(lane);
+                if (byteAddress >= start && byteAddress < end)
+                {
+                    const uint elementIndex = uint(byteAddress - start);
+                    packed |= (convertToByte(parameters.inputAddress, elementIndex) &
+                               255u)
+                              << (lane * 8u);
+                    mask |= 255u << (lane * 8u);
+                }
+            }
+            if (mask == 0u)
+                continue;
+            if (mask == 0xffffffffu)
+                ((Ptr<uint, Access.ReadWrite>)wordAddress)[0] = packed;
+            else
+                storeMaskedWord(wordAddress, packed, mask);
+        }
+        return;
+    }
     for (uint index = dispatchThreadId.x; index < parameters.count; index += stride)
     {
         if (kInputDType == kOutputDType)
@@ -91,15 +145,9 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
             else if (kInputDType == 3)
                 ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
                     ((Ptr<int64_t, Access.Read>)parameters.inputAddress)[index];
-            else if (kInputDType == 6)
+            else
                 ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
                     ((Ptr<uint, Access.Read>)parameters.inputAddress)[index];
-            else if (kInputDType == 5)
-                storeByte(parameters.outputAddress, index,
-                          loadByte(parameters.inputAddress, index) != 0u ? 1u : 0u);
-            else
-                storeByte(parameters.outputAddress, index,
-                          loadByte(parameters.inputAddress, index));
             continue;
         }
         if (kOutputDType == 0)
@@ -114,16 +162,6 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID, uniform Parameters param
         else if (kOutputDType == 3)
             ((Ptr<int64_t, Access.ReadWrite>)parameters.outputAddress)[index] =
                 loadAsInt64(parameters.inputAddress, index);
-        else if (kOutputDType == 4)
-        {
-            const uint value = kInputDType == 0 || kInputDType == 1
-                                   ? torchUInt8Cast(loadAsFloat(parameters.inputAddress, index))
-                                   : uint(loadAsInt64(parameters.inputAddress, index)) & 255u;
-            storeByte(parameters.outputAddress, index, value);
-        }
-        else if (kOutputDType == 5)
-            storeByte(parameters.outputAddress, index,
-                      loadAsFloat(parameters.inputAddress, index) != 0.0f ? 1u : 0u);
         else
             ((Ptr<uint, Access.ReadWrite>)parameters.outputAddress)[index] =
                 uint(loadAsInt64(parameters.inputAddress, index));
