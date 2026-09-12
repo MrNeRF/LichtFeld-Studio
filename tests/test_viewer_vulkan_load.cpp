@@ -12,6 +12,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <cmath>
@@ -20,6 +21,8 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -172,7 +175,12 @@ TEST_F(ViewerVulkanLoad, PlyLoadsOnVulkanBackendWithQ16) {
     const size_t words = vk_codes.bytes() / sizeof(std::uint16_t);
     size_t code_mismatches = 0;
     size_t first_mismatch = words;
+    const size_t cells = sh_value_quant::n_value_cells_per_prim(model.max_sh_coeffs_rest());
     for (size_t i = 0; i < words; ++i) {
+        // CUDA leaves inactive lanes of the final SH block unspecified.
+        const size_t primitive = (i / (cells * kShReorderSize)) * kShReorderSize + i % kShReorderSize;
+        if (primitive >= model.size())
+            continue;
         if (vk_u16[i] != cu_u16[i]) {
             if (code_mismatches < 8) {
                 EXPECT_EQ(vk_u16[i], cu_u16[i]) << "q16 word " << i;
