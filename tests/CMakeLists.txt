@@ -346,6 +346,7 @@ set(TEST_FILES
     test_tensor_integer_and_reduce_policy.cpp
     test_selection_attribute_ops.cpp
     test_selection_screen_ops.cpp
+    test_selection_tensor_projection.cpp
     test_export_band_pack.cpp
     test_point_cloud_merge.cpp
     test_display_tensors.cpp
@@ -1285,6 +1286,14 @@ target_link_libraries(bench_tensor_launch_overhead PRIVATE
     lfs_core
     CUDA::cudart
 )
+
+add_executable(bench_selection_tensor EXCLUDE_FROM_ALL bench_selection_tensor.cpp)
+set_target_properties(bench_selection_tensor PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+target_include_directories(bench_selection_tensor PRIVATE ${CMAKE_SOURCE_DIR}/external)
+target_link_libraries(bench_selection_tensor PRIVATE lfs_rendering CUDA::cudart)
 
 add_executable(tensor_backend_corpus
     tensor_backend_corpus.cpp

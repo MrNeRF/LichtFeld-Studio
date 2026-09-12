@@ -100,6 +100,21 @@ namespace lfs::rendering {
         const Tensor* model_transforms,
         const Tensor* transform_indices,
         const std::vector<bool>& node_visibility_mask);
+    [[nodiscard]] Tensor project_screen_positions_tensor_program(
+        const Tensor& means,
+        int width,
+        int height,
+        const std::array<float, 9>& view_rotation_rows,
+        const std::array<float, 3>& translation,
+        float pixel_focal_x,
+        float pixel_focal_y,
+        float center_x,
+        float center_y,
+        ScreenWindowCameraModel camera_model,
+        float ortho_scale,
+        const Tensor* model_transforms,
+        const Tensor* transform_indices,
+        const std::vector<bool>& node_visibility_mask);
     [[nodiscard]] int pick_projected_gaussian_tensor(
         const Tensor& screen_positions,
         float x,
@@ -112,6 +127,18 @@ namespace lfs::rendering {
         float mouse_y,
         float radius,
         Tensor& selection_out);
+    void brush_select_tensor_program(
+        const Tensor& screen_positions,
+        float mouse_x,
+        float mouse_y,
+        float radius,
+        Tensor& selection_out);
+    // Union of disks. Iterates samples; does not allocate an N x stroke matrix.
+    void brush_select_disks_tensor(
+        const Tensor& screen_positions,
+        const std::vector<float>& disk_xy,
+        float radius,
+        Tensor& selection_out);
 
     void rect_select_tensor(
         const Tensor& screen_positions,
@@ -122,6 +149,10 @@ namespace lfs::rendering {
         Tensor& selection_out);
 
     void polygon_select_tensor(
+        const Tensor& screen_positions,
+        const Tensor& polygon_vertices,
+        Tensor& selection_out);
+    void polygon_select_tensor_program(
         const Tensor& screen_positions,
         const Tensor& polygon_vertices,
         Tensor& selection_out);
