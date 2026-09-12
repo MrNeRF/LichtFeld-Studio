@@ -948,6 +948,8 @@ namespace {
         std::filesystem::path output;
         GpuBackend backend = GpuBackend::CUDA;
         std::string only;
+        TensorBackendOptions backend_options;
+        bool trace_survey = false;
         bool dump = false;
         bool time = false;
         std::filesystem::path reference;
@@ -964,7 +966,21 @@ namespace {
                 options.output = argv[++i];
             else if (arg == "--only" && i + 1 < argc)
                 options.only = argv[++i];
-            else if (arg == "--dump")
+            else if (arg == "--trace-survey")
+                options.trace_survey = true;
+            else if (arg == "--device" && i + 1 < argc)
+                options.backend_options.vulkan_device = argv[++i];
+            else if (arg == "--fp32-half")
+                options.backend_options.force_fp32_half = true;
+            else if (arg == "--no-atomic-float")
+                options.backend_options.force_no_atomic_float = true;
+            else if (arg == "--validation" && i + 1 < argc) {
+                const std::string_view mode = argv[++i];
+                if (mode != "off" && mode != "api" && mode != "sync")
+                    throw std::runtime_error("--validation must be off, api, or sync");
+                options.backend_options.vulkan_validation = mode == "sync" ? 2 : mode == "api" ? 1
+                                                                                               : 0;
+            } else if (arg == "--dump")
                 options.dump = true;
             else if (arg == "--time")
                 options.time = true;
@@ -973,7 +989,8 @@ namespace {
             else
                 throw std::runtime_error(
                     "usage: tensor_backend_corpus --backend cuda|vulkan --out DIR [--dump] "
-                    "[--time] [--only LAUNCHER_SUBSTRING] [--reference DIR]");
+                    "[--time] [--only LAUNCHER_SUBSTRING] [--reference DIR] [--trace-survey] "
+                    "[--validation off|api|sync] [--device INDEX_OR_UUID] [--fp32-half] [--no-atomic-float]");
         }
         if (backend == "vulkan")
             options.backend = GpuBackend::Vulkan;
@@ -1166,7 +1183,7 @@ namespace {
         {"has_inf_gpu", {FacadeEntry::has_inf}},
     };
 
-    std::string executed_entries(const Entry& entry,
+    std::string executed_entries(const Entry& entry, const bool trace_survey,
                                  const std::array<uint64_t, internal::kFacadeEntryCount>& before,
                                  const std::array<uint64_t, internal::kFacadeEntryCount>& after) {
         const auto expected = kExpectedEntries.find(entry.launcher);
@@ -1194,9 +1211,7 @@ namespace {
                     advanced += (advanced.empty() ? "" : ",") +
                                 std::string(internal::facade_entry_name(static_cast<FacadeEntry>(index)));
             }
-            // LFS_CORPUS_TRACE_SURVEY=1 records every mismatch in entries.txt instead of
-            // stopping at the first, so the expectation table can be corrected in one run.
-            if (std::getenv("LFS_CORPUS_TRACE_SURVEY") != nullptr)
+            if (trace_survey)
                 return "UNEXPECTED:" + (advanced.empty() ? std::string("none") : advanced);
             throw std::runtime_error(std::string(entry.launcher) +
                                      " reached none of its expected facade entries; advanced: " +
@@ -1236,7 +1251,7 @@ namespace {
                         auto outputs = run_entry(entry_index, profile, dtype, noncontiguous);
                         auto bytes = download(outputs);
                         const auto trace_after = internal::facade_trace_snapshot_for_testing();
-                        const std::string reached = executed_entries(entry, trace_before, trace_after);
+                        const std::string reached = executed_entries(entry, options.trace_survey, trace_before, trace_after);
                         if (rule == Rule::Permutation) {
                             const auto order = outputs.at(1).cpu().to_vector_int64();
                             const size_t width = entry.launcher == "launch_sort_1d" ? order.size()
@@ -1522,6 +1537,9 @@ namespace {
 int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
+        const auto configuration_status = lfs::core::set_tensor_backend_options(options.backend_options);
+        if (!configuration_status)
+            throw std::runtime_error(std::string(configuration_status.error().user_message()));
         const auto backend_status = lfs::core::set_default_gpu_backend(options.backend);
         if (!backend_status)
             throw std::runtime_error(

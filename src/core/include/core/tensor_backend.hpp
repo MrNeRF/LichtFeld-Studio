@@ -10,10 +10,23 @@
 #include <cuda_runtime.h>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace lfs::core {
 
     class MemoryInfo;
+
+    // Configure before the first backend use. UI changes apply after restart.
+    struct TensorBackendOptions {
+        std::string vulkan_device; // Empty selects automatically; otherwise index or UUID.
+        int vulkan_validation = 0; // 0: off, 1: API validation, 2: synchronization validation.
+        bool force_fp32_half = false;
+        bool force_no_atomic_float = false;
+        bool viewer_vulkan_inputs = false;
+    };
+
+    LFS_CORE_API lfs::Status set_tensor_backend_options(const TensorBackendOptions& options);
+    LFS_CORE_API TensorBackendOptions tensor_backend_options();
 
     LFS_CORE_API GpuBackend default_gpu_backend();
     LFS_CORE_API lfs::Status set_default_gpu_backend(GpuBackend backend);

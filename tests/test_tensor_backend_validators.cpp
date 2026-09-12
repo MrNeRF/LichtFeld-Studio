@@ -242,12 +242,9 @@ namespace {
     }
 
     TEST_F(TensorBackendValidators, ProcessDefaultIsReadOnceAndInvalidValuesAreRejected) {
-        // Catches the selector re-reading LFS_TENSOR_BACKEND after the first
-        // resolution, and an unknown value silently mapping to CUDA.
+        // The process default must remain frozen after its first resolution.
         const GpuBackend resolved = default_gpu_backend();
-        setenv("LFS_TENSOR_BACKEND", resolved == GpuBackend::CUDA ? "vulkan" : "cuda", 1);
         EXPECT_EQ(default_gpu_backend(), resolved);
-        unsetenv("LFS_TENSOR_BACKEND");
         const auto rejected = set_default_gpu_backend(resolved == GpuBackend::CUDA
                                                           ? GpuBackend::Vulkan
                                                           : GpuBackend::CUDA);

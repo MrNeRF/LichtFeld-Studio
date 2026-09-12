@@ -39,8 +39,7 @@ namespace lfs::core::internal {
         // Test hook: pretend the device has no float atomics so the deterministic
         // index_add fallback is exercised on hardware that has the extension.
         bool force_no_atomic_float() {
-            const char* const value = std::getenv("LFS_VULKAN_FORCE_NO_ATOMIC_FLOAT");
-            return value != nullptr && std::strcmp(value, "1") == 0;
+            return tensor_backend_options().force_no_atomic_float;
         }
 
         constexpr std::string_view kValidationLayer = "VK_LAYER_KHRONOS_validation";
@@ -60,14 +59,6 @@ namespace lfs::core::internal {
         std::mutex g_validation_mutex;
         std::vector<std::string> g_validation_messages;
         std::atomic<uint64_t> g_next_context_id{1};
-
-        bool environment_flag(const char* const name) {
-            const char* const value = std::getenv(name);
-            return value != nullptr &&
-                   (std::string_view(value) == "1" ||
-                    std::string_view(value) == "true" ||
-                    std::string_view(value) == "TRUE");
-        }
 
         bool has_layer(const std::string_view name) {
             uint32_t count = 0;
@@ -465,14 +456,9 @@ namespace lfs::core::internal {
     }
 
     void VulkanContext::create_instance() {
-        // LFS_VULKAN_VALIDATION=1 enables the Khronos layer; =sync also turns on
-        // its synchronization validation, which checks the barriers between
-        // recorded commands instead of the API usage alone.
-        const char* const validation_value = std::getenv("LFS_VULKAN_VALIDATION");
-        const bool sync_validation =
-            validation_value != nullptr && std::string_view(validation_value) == "sync";
-        const bool validation_requested =
-            sync_validation || environment_flag("LFS_VULKAN_VALIDATION");
+        const int validation = tensor_backend_options().vulkan_validation;
+        const bool sync_validation = validation == 2;
+        const bool validation_requested = validation != 0;
         const bool validation_available = has_layer(kValidationLayer);
         const bool debug_utils = has_instance_extension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         std::vector<const char*> layers;
@@ -535,11 +521,12 @@ namespace lfs::core::internal {
                  "vkEnumeratePhysicalDevices(data)");
 
         std::optional<uint32_t> selected;
-        if (const char* const override_value = std::getenv("LFS_VULKAN_DEVICE")) {
-            const std::string_view value(override_value);
+        const auto options = tensor_backend_options();
+        if (!options.vulkan_device.empty()) {
+            const std::string_view value(options.vulkan_device);
             if (const auto index = parse_device_index(value)) {
                 LFS_ASSERT_MSG(*index < devices.size(),
-                               "LFS_VULKAN_DEVICE index is out of range");
+                               "Vulkan device index is out of range");
                 selected = *index;
             } else {
                 const std::string requested = normalized_uuid(std::string(value));
@@ -552,7 +539,7 @@ namespace lfs::core::internal {
                     }
                 }
                 LFS_ASSERT_MSG(selected.has_value(),
-                               "LFS_VULKAN_DEVICE UUID did not match a Vulkan device");
+                               "Vulkan device UUID did not match a Vulkan device");
             }
         }
         if (!selected) {
