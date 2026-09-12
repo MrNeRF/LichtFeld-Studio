@@ -775,6 +775,17 @@
     "zoom": "缩放"
   },
   "preferences": {
+    "tensor_backend": "Tensor backend",
+    "tensor_restart": "Changes apply after restarting LichtFeld Studio. Vulkan supports viewing and inference; training requires CUDA.",
+    "tensor_device": "Vulkan device",
+    "tensor_device_hint": "Leave empty for automatic selection, or enter a device index or UUID. CUDA rendering must use the CUDA device.",
+    "tensor_validation": "Vulkan diagnostics",
+    "tensor_validation_off": "Off",
+    "tensor_validation_api": "API validation",
+    "tensor_validation_sync": "Synchronization validation",
+    "tensor_fp32_half": "Compute half precision in FP32",
+    "tensor_no_atomic_float": "Use deterministic float accumulation",
+    "tensor_viewer_inputs": "Copy viewer inputs to Vulkan",
     "projects": "项目",
     "project_location": "项目位置",
     "project_location_hint": "新项目和资源管理器默认文件夹：{path}",

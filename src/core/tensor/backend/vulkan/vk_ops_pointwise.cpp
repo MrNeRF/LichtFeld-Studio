@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "../facade_trace.hpp"
+#include "core/tensor_backend.hpp"
 #include "vk_backend_ops.hpp"
 
 #include "../../internal/tensor_impl.hpp"
@@ -62,8 +63,7 @@ namespace lfs::core::internal {
         static_assert(sizeof(PointwisePush) == 48);
 
         bool force_fp32_half() {
-            const char* const value = std::getenv("LFS_VULKAN_FORCE_FP32_HALF");
-            return value != nullptr && std::strcmp(value, "1") == 0;
+            return tensor_backend_options().force_fp32_half;
         }
 
         void dispatch_pointwise(const PointwiseProgram& program,
