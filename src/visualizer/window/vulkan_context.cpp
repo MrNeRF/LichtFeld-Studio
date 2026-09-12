@@ -2289,7 +2289,8 @@ namespace lfs::vis {
 
         VkValidationFeatureEnableEXT synchronization_validation =
             VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
-        VkValidationFeaturesEXT validation_features{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+        VkValidationFeaturesEXT validation_features{};
+        validation_features.sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
         if (validation_enabled_ && tensor_options.vulkan_validation == 2) {
             validation_features.enabledValidationFeatureCount = 1;
             validation_features.pEnabledValidationFeatures = &synchronization_validation;
@@ -2532,8 +2533,10 @@ namespace lfs::vis {
                                                       requested_device.data() + requested_device.size(), requested_index);
             if (error == std::errc{} && end == requested_device.data() + requested_device.size())
                 return index == requested_index;
-            VkPhysicalDeviceIDProperties id{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
-            VkPhysicalDeviceProperties2 properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            VkPhysicalDeviceIDProperties id{};
+            id.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+            VkPhysicalDeviceProperties2 properties{};
+            properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             properties.pNext = &id;
             vkGetPhysicalDeviceProperties2(device, &properties);
             std::string uuid;

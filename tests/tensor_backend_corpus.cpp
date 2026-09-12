@@ -948,7 +948,7 @@ namespace {
         std::filesystem::path output;
         GpuBackend backend = GpuBackend::CUDA;
         std::string only;
-        TensorBackendOptions backend_options;
+        lfs::core::TensorBackendOptions backend_options;
         bool trace_survey = false;
         bool dump = false;
         bool time = false;
