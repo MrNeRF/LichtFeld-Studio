@@ -6,6 +6,7 @@
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/rmlui/elements/scene_graph_drop_target.hpp"
 #include "gui/scene_tree_session.hpp"
+#include "scene/camera_pose_view.hpp"
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
@@ -760,6 +761,13 @@ namespace lfs::vis::gui {
             auto node_name = doc->CreateElement("span");
             node_name->SetClass("node-name", true);
             slot.node_name = slot.content->AppendChild(std::move(node_name));
+            auto pose_badge = doc->CreateElement("span");
+            pose_badge->SetClass("camera-pose-badge", true);
+            pose_badge->SetProperty("margin-left", "6dp");
+            pose_badge->SetProperty("flex-shrink", "0");
+            pose_badge->SetProperty("font-size", "11dp");
+            pose_badge->SetProperty("display", "none");
+            slot.pose_badge = slot.content->AppendChild(std::move(pose_badge));
 
             auto actions = doc->CreateElement("span");
             actions->SetClass("row-actions", true);
@@ -1092,6 +1100,8 @@ namespace lfs::vis::gui {
             .can_rename = snapshot.can_rename,
             .rename_enabled = snapshot.rename_enabled,
             .camera_loss_icon_color = snapshot.camera_loss_icon_color,
+            .camera_pose_label = snapshot.camera_pose_label,
+            .camera_pose_state = snapshot.camera_pose_state,
         });
         if (snapshot.has_children && !collapsed_ids_.contains(snapshot.id))
             rows.insert(rows.end(), child_rows.begin(), child_rows.end());
@@ -1199,6 +1209,7 @@ namespace lfs::vis::gui {
     bool SceneGraphElement::syncCameraLossIconColors(const core::Scene& scene,
                                                      const bool update_cached_rows) {
         std::unordered_map<core::NodeId, std::string> camera_icon_colors;
+        const auto poses = activeCameraPoses();
 
         const auto* trainer_manager = services().trainerOrNull();
         const auto* trainer = trainer_manager ? trainer_manager->getTrainer() : nullptr;
@@ -1244,14 +1255,22 @@ namespace lfs::vis::gui {
             if (const auto color_it = camera_icon_colors.find(id); color_it != camera_icon_colors.end())
                 next_color = color_it->second;
 
-            if (snapshot.camera_loss_icon_color == next_color)
+            const auto* pose = findCameraPose(poses.get(), snapshot.camera_uid);
+            const auto pose_label = cameraPoseDisplacementLabel(pose);
+            const std::string pose_state = pose ? std::string(training::camera_pose::pose_display_state_name(pose->state)) : std::string{};
+            if (snapshot.camera_loss_icon_color == next_color && snapshot.camera_pose_label == pose_label &&
+                snapshot.camera_pose_state == pose_state)
                 continue;
 
             snapshot.camera_loss_icon_color = std::move(next_color);
+            snapshot.camera_pose_label = pose_label;
+            snapshot.camera_pose_state = pose_state;
             if (update_cached_rows) {
                 if (const auto flat_it = flat_index_by_id_.find(id);
                     flat_it != flat_index_by_id_.end() && flat_it->second < flat_rows_.size()) {
                     flat_rows_[flat_it->second].camera_loss_icon_color = snapshot.camera_loss_icon_color;
+                    flat_rows_[flat_it->second].camera_pose_label = snapshot.camera_pose_label;
+                    flat_rows_[flat_it->second].camera_pose_state = snapshot.camera_pose_state;
                 }
             }
             changed = true;
@@ -1514,6 +1533,9 @@ namespace lfs::vis::gui {
         setCachedClass(slot.node_name, "training-disabled",
                        row.type == core::NodeType::CAMERA && !row.training_enabled);
         setCachedInnerRml(slot.node_name, row.encoded_label);
+        setCachedInnerRml(slot.pose_badge, encode(row.camera_pose_label));
+        setCachedAttribute(slot.pose_badge, "title", row.camera_pose_state);
+        setCachedProperty(slot.pose_badge, "display", row.camera_pose_label.empty() || renaming ? "none" : "block");
         if (renaming) {
             if (rename_buffer_.empty())
                 rename_buffer_ = snapshot.name;

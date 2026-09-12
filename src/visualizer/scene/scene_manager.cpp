@@ -27,6 +27,7 @@
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/vulkan_external_tensor.hpp"
+#include "scene/camera_pose_view.hpp"
 #include "scene/viewer_splat_quantize.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "training/checkpoint.hpp"
@@ -2348,6 +2349,7 @@ namespace lfs::vis {
         constexpr int BBOX_CORNERS = 8;
 
         std::vector<std::string> result;
+        const auto camera_poses = activeCameraPoses();
 
         const auto projectToScreen = [&](const glm::vec3& world_pos) -> glm::vec2 {
             const glm::vec4 clip = proj * view * glm::vec4(world_pos, 1.0f);
@@ -2458,24 +2460,10 @@ namespace lfs::vis {
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
-            auto R_tensor = node->camera->R();
-            auto T_tensor = node->camera->T();
-            if (!R_tensor.is_valid() || !T_tensor.is_valid())
+            const auto world_to_camera = cameraWorldToCamera(*node->camera, camera_poses.get());
+            if (!world_to_camera)
                 continue;
-
-            if (R_tensor.device() != lfs::core::Device::CPU)
-                R_tensor = R_tensor.cpu();
-            if (T_tensor.device() != lfs::core::Device::CPU)
-                T_tensor = T_tensor.cpu();
-
-            glm::mat4 w2c(1.0f);
-            auto R_acc = R_tensor.accessor<float, 2>();
-            auto T_acc = T_tensor.accessor<float, 1>();
-            for (int i = 0; i < 3; ++i) {
-                for (int j = 0; j < 3; ++j)
-                    w2c[j][i] = R_acc(i, j);
-                w2c[3][i] = T_acc(i);
-            }
+            const glm::mat4 w2c = *world_to_camera;
             glm::mat4 cam_scene_transform(1.0f);
             if (const auto transform = scene_.getCameraSceneTransformByUid(node->camera->uid())) {
                 cam_scene_transform = rendering::dataWorldTransformToVisualizerWorld(*transform);

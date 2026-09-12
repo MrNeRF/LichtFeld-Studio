@@ -887,7 +887,9 @@ namespace lfs::rendering {
                     scene_transform = request.scene_transforms[i];
                 }
 
-                const auto transform = cameraVisualizerTransform(*camera, scene_transform);
+                const auto transform = i < request.camera_world_to_camera.size() && request.camera_world_to_camera[i]
+                                           ? std::optional<glm::mat4>(scene_transform * glm::inverse(*request.camera_world_to_camera[i]) * DATA_TO_VISUALIZER_CAMERA_AXES_4)
+                                           : cameraVisualizerTransform(*camera, scene_transform);
                 if (!transform) {
                     continue;
                 }

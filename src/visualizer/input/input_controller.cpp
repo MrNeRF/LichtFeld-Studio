@@ -28,6 +28,7 @@
 #include "python/python_runtime.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/camera_pose_view.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
 #include "tools/selection_tool.hpp"
@@ -2690,15 +2691,9 @@ namespace lfs::vis {
         if (input_router_)
             input_router_->focusViewportKeyboard();
 
-        // Get rotation and translation tensors and ensure they're on CPU
-        auto R_tensor = cam_data->R().cpu();
-        auto T_tensor = cam_data->T().cpu();
-
-        // Get raw CPU pointers - safer and more efficient
-        const float* R_data = R_tensor.ptr<float>();
-        const float* T_data = T_tensor.ptr<float>();
-
-        if (!R_data || !T_data) {
+        const auto poses = activeCameraPoses();
+        const auto world_to_camera = cameraWorldToCamera(*cam_data, poses.get());
+        if (!world_to_camera) {
             LOG_ERROR("Failed to get camera R/T data pointers");
             return;
         }
@@ -2713,8 +2708,8 @@ namespace lfs::vis {
         }
 
         const auto pose = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
-            lfs::rendering::mat3FromRowMajor3x3(R_data),
-            glm::vec3(T_data[0], T_data[1], T_data[2]),
+            glm::mat3(*world_to_camera),
+            glm::vec3((*world_to_camera)[3]),
             scene_transform);
 
         float pivot_distance = glm::length(target_viewport.camera.getPivot() - target_viewport.camera.t);

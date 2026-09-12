@@ -18,6 +18,7 @@
 #include "rendering/model_renderability.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "rendering/selection_ops.hpp"
+#include "scene/camera_pose_view.hpp"
 #include "scene/scene_manager.hpp"
 #include "selection_group_mask.hpp"
 #include "training/training_manager.hpp"
@@ -620,10 +621,10 @@ namespace lfs::vis {
         }
 
         [[nodiscard]] rendering::ViewportData viewportDataFromCamera(const core::Camera& camera) {
-            const auto rotation_cpu = camera.R().cpu().to(core::DataType::Float32);
-            const auto position_cpu = camera.cam_position().cpu().to(core::DataType::Float32);
-            const float* const rotation = rotation_cpu.ptr<float>();
-            const float* const position = position_cpu.ptr<float>();
+            const auto poses = activeCameraPoses();
+            const auto world_to_camera = cameraWorldToCamera(camera, poses.get());
+            if (!world_to_camera)
+                throw std::invalid_argument("Invalid camera pose for viewport selection");
 
             glm::mat4 scene_transform(1.0f);
             if (auto* const scene_manager = services().sceneOrNull()) {
@@ -633,9 +634,9 @@ namespace lfs::vis {
                 }
             }
 
-            const auto pose = rendering::visualizerCameraPoseFromDataCameraToWorld(
-                glm::transpose(rendering::mat3FromRowMajor3x3(rotation)),
-                glm::vec3(position[0], position[1], position[2]),
+            const auto pose = rendering::visualizerCameraPoseFromDataWorldToCamera(
+                glm::mat3(*world_to_camera),
+                glm::vec3((*world_to_camera)[3]),
                 scene_transform);
 
             const int width = std::max(camera.image_width(), camera.camera_width());

@@ -61,3 +61,30 @@ def test_frustum_selection_bounds_ignore_training_image_resize():
     assert "image_width()" not in camera_bounds
     assert "image_height()" not in camera_bounds
     assert "focal2fov" not in camera_bounds
+
+
+def test_live_pose_publication_invalidates_both_frustum_caches():
+    gui = _read("src/visualizer/gui/gui_manager.cpp")
+    assert "pose_generation_ == pose_generation" in gui
+    assert "pose_sequence_ == pose_sequence" in gui
+    assert "cache.pose_generation != pose_generation" in gui
+    assert "cache.pose_sequence != pose_sequence" in gui
+    assert "geometry_changed = camera_data_changed || !cache.valid" in gui
+    assert "scene_transforms[i], poses.get()" in gui
+
+
+def test_current_pose_is_wired_to_pick_focus_selection_and_scene_graph():
+    picker = _read("src/visualizer/rendering/camera_interaction_service.cpp")
+    renderer = _read("src/rendering/raster_rendering_engine.cpp")
+    assert ".camera_world_to_camera = std::move(current_poses)" in picker
+    assert "request.camera_world_to_camera[i]" in renderer
+    for path in ("src/visualizer/input/input_controller.cpp",
+                 "src/visualizer/scene/scene_manager.cpp",
+                 "src/visualizer/selection/selection_service.cpp"):
+        source = _read(path)
+        assert "activeCameraPoses()" in source
+        assert "cameraWorldToCamera(" in source
+    graph = _read("src/visualizer/gui/rmlui/elements/scene_graph_element.cpp")
+    assert "cameraPoseDisplacementLabel(pose)" in graph
+    assert "row.camera_pose_label.empty() || renaming" in graph
+    assert 'setCachedOptionalProperty(slot.type_icon, "image-color", row.camera_loss_icon_color)' in graph

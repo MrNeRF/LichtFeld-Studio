@@ -413,6 +413,8 @@ namespace lfs::rendering {
         float scale = 0.1f;
         glm::mat4 scene_transform{1.0f};
         std::vector<glm::mat4> scene_transforms;
+        // Optional current world-to-camera poses, aligned with the camera list.
+        std::vector<std::optional<glm::mat4>> camera_world_to_camera;
     };
 
     // Main rendering engine

@@ -124,6 +124,8 @@ namespace lfs::vis::gui {
             bool rename_enabled = false;
             int camera_uid = -1;
             std::optional<std::string> camera_loss_icon_color;
+            std::string camera_pose_label;
+            std::string camera_pose_state;
         };
 
         struct FlatRow {
@@ -150,6 +152,8 @@ namespace lfs::vis::gui {
             bool can_rename = false;
             bool rename_enabled = false;
             std::optional<std::string> camera_loss_icon_color;
+            std::string camera_pose_label;
+            std::string camera_pose_state;
         };
 
         struct RowSlot {
@@ -167,6 +171,7 @@ namespace lfs::vis::gui {
             Rml::Element* leaf_spacer = nullptr;
             Rml::Element* rename_input = nullptr;
             Rml::Element* node_name = nullptr;
+            Rml::Element* pose_badge = nullptr;
             core::NodeId bound_id = core::NULL_NODE;
             bool visible = false;
         };

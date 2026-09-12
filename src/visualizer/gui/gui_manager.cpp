@@ -17,6 +17,7 @@
 #include "gui/camera_thumbnail_policy.hpp"
 #include "gui/frustum_overlay_key.hpp"
 #include "preferences.hpp"
+#include "scene/camera_pose_view.hpp"
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include "core/tensor.hpp"
@@ -2335,7 +2336,11 @@ namespace lfs::vis::gui {
 
         [[nodiscard]] std::optional<glm::mat4> cameraVisualizerTransform(
             const lfs::core::Camera& camera,
-            const glm::mat4& scene_transform) {
+            const glm::mat4& scene_transform,
+            const lfs::training::camera_pose::PoseSessionSnapshot* poses) {
+            if (const auto* pose = findCameraPose(poses, camera.uid()))
+                return scene_transform * glm::inverse(cameraPoseMatrix(pose->pose.current)) *
+                       lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
             auto rotation_tensor = camera.R();
             auto translation_tensor = camera.T();
             if (!rotation_tensor.is_valid() || !translation_tensor.is_valid()) {
@@ -2499,14 +2504,17 @@ namespace lfs::vis::gui {
         class CameraFrustumCache {
         public:
             void begin(const lfs::core::Scene& scene, const std::uint64_t scene_generation,
-                       const float frustum_scale) {
+                       const float frustum_scale, const std::uint64_t pose_generation,
+                       const std::uint64_t pose_sequence) {
                 if (scene_ == &scene && scene_generation_ == scene_generation &&
-                    scale_ == frustum_scale) {
+                    scale_ == frustum_scale && pose_generation_ == pose_generation && pose_sequence_ == pose_sequence) {
                     return;
                 }
                 scene_ = &scene;
                 scene_generation_ = scene_generation;
                 scale_ = frustum_scale;
+                pose_generation_ = pose_generation;
+                pose_sequence_ = pose_sequence;
                 entries_.clear();
             }
 
@@ -2516,11 +2524,12 @@ namespace lfs::vis::gui {
 
             [[nodiscard]] const CachedCameraFrustum& getOrBuild(
                 const lfs::core::Camera& camera,
-                const glm::mat4& scene_transform) {
+                const glm::mat4& scene_transform,
+                const lfs::training::camera_pose::PoseSessionSnapshot* poses) {
                 const auto [it, inserted] = entries_.try_emplace(camera.uid());
                 if (inserted) {
                     it->second.visualizer_camera_to_world =
-                        cameraVisualizerTransform(camera, scene_transform);
+                        cameraVisualizerTransform(camera, scene_transform, poses);
                     if (it->second.visualizer_camera_to_world) {
                         it->second.model = cameraFrustumModelMatrix(
                             camera, *it->second.visualizer_camera_to_world, scale_);
@@ -2532,6 +2541,8 @@ namespace lfs::vis::gui {
         private:
             const lfs::core::Scene* scene_ = nullptr;
             std::uint64_t scene_generation_ = 0;
+            std::uint64_t pose_generation_ = 0;
+            std::uint64_t pose_sequence_ = 0;
             float scale_ = 0.0f;
             std::unordered_map<int, CachedCameraFrustum> entries_;
         };
@@ -2551,6 +2562,8 @@ namespace lfs::vis::gui {
             const lfs::core::Scene* scene = nullptr;
             std::uint64_t camera_list_generation = 0;
             std::uint64_t scene_render_generation = 0;
+            std::uint64_t pose_generation = 0;
+            std::uint64_t pose_sequence = 0;
             std::uint64_t thumbnail_atlas_generation = 0;
             std::uint64_t training_loss_color_generation = 0;
             float frustum_scale = 0.0f;
@@ -2738,7 +2751,7 @@ namespace lfs::vis::gui {
             thumbnail_cache.beginFrame();
             const std::uint64_t camera_list_generation = scene.cameraListGeneration();
             const std::uint64_t scene_render_generation = scene.renderGeneration();
-            const bool camera_data_changed =
+            bool camera_data_changed =
                 cache.scene != &scene ||
                 cache.camera_list_generation != camera_list_generation ||
                 cache.scene_render_generation != scene_render_generation ||
@@ -2750,6 +2763,10 @@ namespace lfs::vis::gui {
                                       ? scene_manager.getTrainerManager()->getTrainer()
                                       : nullptr;
             const std::uint64_t loss_generation = trainer ? trainer->cameraLossColorGeneration() : 0;
+            const auto poses = trainer ? trainer->cameraPoseSnapshot() : nullptr;
+            const auto pose_generation = poses ? poses->generation : 0;
+            const auto pose_sequence = poses ? poses->sequence : 0;
+            camera_data_changed |= cache.pose_generation != pose_generation || cache.pose_sequence != pose_sequence;
 
             if (camera_data_changed) {
                 const auto& all_cameras = scene.getAllCamerasCached();
@@ -2761,7 +2778,7 @@ namespace lfs::vis::gui {
                 }
 
                 const auto& cameras = scene.getVisibleCamerasCached();
-                frustum_cache.begin(scene, scene_render_generation, settings.camera_frustum_scale);
+                frustum_cache.begin(scene, scene_render_generation, settings.camera_frustum_scale, pose_generation, pose_sequence);
                 const auto scene_transforms = resolveCameraSceneTransforms(scene_manager, scene_state, cameras.size());
                 const auto disabled_uids = scene.getTrainingDisabledCameraUids();
                 cache.cameras = cameras;
@@ -2785,7 +2802,7 @@ namespace lfs::vis::gui {
                         camera->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
                     cache.validation_cameras[i] = camera->image_name().find("test") != std::string::npos;
                     cache.disabled_cameras[i] = disabled_uids.contains(camera->uid());
-                    const auto& cached_frustum = frustum_cache.getOrBuild(*camera, scene_transforms[i]);
+                    const auto& cached_frustum = frustum_cache.getOrBuild(*camera, scene_transforms[i], poses.get());
                     if (!cached_frustum.visualizer_camera_to_world || !cached_frustum.model)
                         continue;
                     cache.models[i] = *cached_frustum.model;
@@ -2795,6 +2812,8 @@ namespace lfs::vis::gui {
                 cache.scene = &scene;
                 cache.camera_list_generation = camera_list_generation;
                 cache.scene_render_generation = scene_render_generation;
+                cache.pose_generation = pose_generation;
+                cache.pose_sequence = pose_sequence;
                 cache.frustum_scale = settings.camera_frustum_scale;
                 thumbnail_cache.beginDataset(&scene, camera_list_generation);
                 thumbnail_cache.pruneTo(scene_camera_uids);
@@ -2899,7 +2918,7 @@ namespace lfs::vis::gui {
                                       cache.key.training_loss_color_generation != loss_generation;
             const bool atlas_changed = cache.thumbnail_atlas_generation == thumbnail_atlas_generation &&
                                        cache.key.thumbnail_atlas_generation != thumbnail_atlas_generation;
-            const bool geometry_changed = !cache.valid ||
+            const bool geometry_changed = camera_data_changed || !cache.valid ||
                                           frustumOverlayNeedsRebuild(previous_geometry_key, geometry_key) ||
                                           (loss_changed && cache.has_equirectangular_lines);
             const bool output_rebuild = geometry_changed || loss_changed || atlas_changed;

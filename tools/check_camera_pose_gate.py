@@ -215,6 +215,27 @@ def inspect_trainer_gate(root: ET.Element) -> dict:
     return result
 
 
+VIEW_SUITE = "CameraPoseViewTest"
+VIEW_TESTS = {"CurrentPoseUsesUIDAndKeepsSourceImmutable", "FrustumAndFocusSharePoseAndSceneAxes",
+              "DisplacementLabelClearsAndUsesNetMovement"}
+
+
+def inspect_view_gate(root: ET.Element) -> dict:
+    result = inspect_trainer_gate(root)
+    suites = [node for node in root.iter("testsuite") if node.get("name") == VIEW_SUITE]
+    if len(suites) != 1:
+        raise ValueError("Missing or duplicated camera pose view suite")
+    cases = suites[0].findall("testcase")
+    if len(cases) != len(VIEW_TESTS) or {case.get("name") for case in cases} != VIEW_TESTS:
+        raise ValueError("Wrong camera pose view test inventory")
+    for case in cases:
+        if (case.get("status") != "run" or case.get("result") != "completed"
+                or any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))):
+            raise ValueError(f"Camera pose view test not successfully executed: {case.get('name')}")
+    result.update(tests=result["tests"] + len(cases), view_pose_contracts=True)
+    return result
+
+
 def require_production_evaluator(root: ET.Element) -> None:
     properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
     if len(properties) != 1 or properties[0].get("value") != "1":
@@ -228,11 +249,12 @@ def main() -> int:
     parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (28 tests)")
     parser.add_argument("--evaluator", action="store_true", help="Require all 28 tests using the production FastGS pose evaluator")
     parser.add_argument("--trainer", action="store_true", help="Require all 31 pose, loss and checkpoint tests")
+    parser.add_argument("--view", action="store_true", help="Require all 34 pose, checkpoint and view contract tests")
     args = parser.parse_args()
     try:
         inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
         root = ET.parse(args.report).getroot()
-        result = inspect_trainer_gate(root) if args.trainer else inspect(root)
+        result = inspect_view_gate(root) if args.view else inspect_trainer_gate(root) if args.trainer else inspect(root)
         if args.evaluator:
             require_production_evaluator(root)
             result.update(production_evaluator=True)

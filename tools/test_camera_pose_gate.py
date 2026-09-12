@@ -10,6 +10,7 @@ from check_camera_pose_gate import CONTROLLER_RECOVERY, CONTROLLER_SUITE, CONTRO
 from check_camera_pose_gate import SESSION_SUITE, SESSION_TESTS, inspect_session_gate
 from check_camera_pose_gate import require_production_evaluator
 from check_camera_pose_gate import TRAINER_SUITE, TRAINER_TESTS, inspect_trainer_gate
+from check_camera_pose_gate import VIEW_SUITE, VIEW_TESTS, inspect_view_gate
 
 
 def valid_report():
@@ -132,6 +133,40 @@ class CameraPoseTrainerGateReportTests(unittest.TestCase):
                 ET.SubElement(case, mutation)
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 inspect_trainer_gate(root)
+
+
+class CameraPoseViewGateReportTests(unittest.TestCase):
+    def report(self):
+        root = CameraPoseTrainerGateReportTests().report()
+        suite = ET.SubElement(root, "testsuite", name=VIEW_SUITE)
+        for name in sorted(VIEW_TESTS):
+            ET.SubElement(suite, "testcase", name=name, status="run", result="completed")
+        return root
+
+    def test_accepts_all_34_tests(self):
+        result = inspect_view_gate(self.report())
+        self.assertEqual(result["tests"], 34)
+        self.assertTrue(result["view_pose_contracts"])
+
+    def test_rejects_incomplete_view_evidence(self):
+        for mutation in ("suite", "missing", "duplicate", "unknown", "failure", "error", "skipped", "notrun"):
+            root = self.report()
+            suite = root.find(f"testsuite[@name='{VIEW_SUITE}']")
+            case = suite.find("testcase")
+            if mutation == "suite":
+                root.remove(suite)
+            elif mutation == "missing":
+                suite.remove(case)
+            elif mutation == "duplicate":
+                ET.SubElement(suite, "testcase", **case.attrib)
+            elif mutation == "unknown":
+                case.set("name", "Unknown")
+            elif mutation == "notrun":
+                case.set("status", "notrun")
+            else:
+                ET.SubElement(case, mutation)
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                inspect_view_gate(root)
 
 
 class CameraPoseControllerGateReportTests(unittest.TestCase):

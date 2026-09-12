@@ -5,6 +5,7 @@
 #include "camera_interaction_service.hpp"
 #include "rendering/coordinate_conventions.hpp"
 #include "rendering/rendering.hpp"
+#include "scene/camera_pose_view.hpp"
 #include "scene/scene_manager.hpp"
 
 namespace lfs::vis {
@@ -47,13 +48,22 @@ namespace lfs::vis {
             transform = lfs::rendering::dataWorldTransformToVisualizerWorld(transform);
         }
 
+        std::vector<std::optional<glm::mat4>> current_poses;
+        if (const auto snapshot = activeCameraPoses()) {
+            current_poses.resize(cameras.size());
+            for (size_t i = 0; i < cameras.size(); ++i)
+                if (cameras[i])
+                    if (const auto* pose = findCameraPose(snapshot.get(), cameras[i]->uid()))
+                        current_poses[i] = cameraPoseMatrix(pose->pose.current);
+        }
         const lfs::rendering::CameraFrustumPickRequest request{
             .mouse_pos = mouse_pos,
             .viewport_pos = panel->viewport_pos,
             .viewport_size = panel->viewport_size,
             .viewport = panel->viewport_data,
             .scale = settings.camera_frustum_scale,
-            .scene_transforms = std::move(scene_transforms)};
+            .scene_transforms = std::move(scene_transforms),
+            .camera_world_to_camera = std::move(current_poses)};
 
         const auto pick_result = engine->pickCameraFrustum(cameras, request);
 

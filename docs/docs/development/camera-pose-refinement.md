@@ -7,8 +7,9 @@ establish improved reconstruction quality.
 
 The implementation consists of SE(3) operations, a bounded per-camera optimizer,
 a multi-camera session and a FastGS evaluator, with an internal opt-in Trainer
-integration and embedded checkpoint persistence. Viewport/Scene Graph consumers
-and user-facing activation are not yet connected.
+integration and embedded checkpoint persistence. Live viewport geometry and Scene
+Graph displacement indicators consume published poses. User-facing activation
+is not yet connected.
 
 ## Pose representation
 
@@ -189,17 +190,22 @@ Available states are `waiting`, `ready`, `updated`, `rejected`, `frozen`,
 An updated pose is not necessarily converged, and a rejected update does not
 establish incorrect calibration.
 
-The intended visualization uses the same current-pose snapshot for the viewport
-and Scene Graph. Picking, focus and training must agree with displayed geometry.
-Optional source-pose frustums and displacement vectors show actual movement
-without geometric exaggeration. Pose-state indicators remain separate from
-reconstruction-loss colors. Pause, reset and session replacement must not leave
-stale overlays.
+The live viewport uses current poses from the Trainer's published snapshot.
+Frustum caches track both session generation and snapshot sequence, including
+session removal and replacement. Picking, rectangular selection, camera focus
+and camera-based selection projections also resolve current poses by UID.
+Geometry uses actual displacement without visual exaggeration. Cameras absent
+from the snapshot retain their source transform.
 
-Snapshot publication alone does not move the application's camera geometry.
-These visual consumers and Edit Mode ownership remain integration work. Scene
-camera records still describe the imported source poses; corrected poses are
-restored through the matching training checkpoint, not by overwriting sources.
+Scene Graph rows show net camera-center distance in scene units and rotation in
+degrees as `delta distance / angle`, with the optimizer state on hover. This
+indicator is separate from reconstruction-loss icon colors and disappears when
+there is no matching pose. Neither distance nor state is a confidence score.
+
+Source-pose ghosts, displacement vectors, Edit Mode ownership and visualization
+without a restored Trainer remain integration work. Scene camera records still
+describe imported poses; corrected poses are restored through the matching
+training checkpoint, not by overwriting sources.
 
 ## Scope and limitations
 

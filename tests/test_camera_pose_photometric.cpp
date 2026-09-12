@@ -4,6 +4,7 @@
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "rendering/coordinate_conventions.hpp"
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
 #include "training/camera_pose/fastgs_pose_evaluator.hpp"
 #include "training/camera_pose/se3.hpp"
@@ -13,12 +14,14 @@
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
 #include "training/strategies/mcmc.hpp"
+#include "visualizer/scene/camera_pose_view.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
+#include <glm/gtc/matrix_transform.hpp>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <memory>
@@ -635,6 +638,58 @@ namespace {
             EXPECT_LT(rotation_error(state.current, truth), initial_rotation * 0.30);
         }
     }
+    class CameraPoseViewTest : public CameraPosePhotometricTest {};
+
+    TEST_F(CameraPoseViewTest, CurrentPoseUsesUIDAndKeepsSourceImmutable) {
+        const auto source = camera->world_view_transform().clone();
+        PoseSessionSnapshot snapshot;
+        snapshot.generation = 1;
+        PoseCameraDisplay display;
+        display.pose.uid = camera->uid();
+        display.pose.current = exp_se3({0.02f, -0.03f, 0.01f, 0.01f, 0.02f, 0.03f});
+        snapshot.cameras.push_back(display);
+        ASSERT_EQ(lfs::vis::findCameraPose(&snapshot, camera->uid()), &snapshot.cameras.front());
+        EXPECT_EQ(lfs::vis::findCameraPose(&snapshot, camera->uid() + 1), nullptr);
+        EXPECT_EQ(lfs::vis::findCameraPose(nullptr, camera->uid()), nullptr);
+        const auto current = lfs::vis::cameraWorldToCamera(*camera, &snapshot);
+        ASSERT_TRUE(current.has_value());
+        for (int row = 0; row < 4; ++row)
+            for (int col = 0; col < 4; ++col)
+                EXPECT_FLOAT_EQ((*current)[col][row], display.pose.current[row * 4 + col]);
+        snapshot.cameras.clear();
+        const auto fallback = lfs::vis::cameraWorldToCamera(*camera, &snapshot);
+        ASSERT_TRUE(fallback.has_value());
+        EXPECT_EQ(*fallback, glm::mat4(1.0f));
+        expect_bytes_equal(camera->world_view_transform(), source);
+    }
+
+    TEST_F(CameraPoseViewTest, FrustumAndFocusSharePoseAndSceneAxes) {
+        const auto pose = exp_se3({0.02f, -0.03f, 0.01f, 0.01f, 0.02f, 0.03f});
+        const auto w2c = lfs::vis::cameraPoseMatrix(pose);
+        const auto scene_transform = glm::translate(glm::mat4(1.0f), glm::vec3(1, 2, 3)) *
+                                     glm::rotate(glm::mat4(1.0f), 0.4f, glm::vec3(0, 0, 1));
+        const auto frustum = scene_transform * glm::inverse(w2c) * lfs::rendering::DATA_TO_VISUALIZER_CAMERA_AXES_4;
+        const auto focus = lfs::rendering::visualizerCameraPoseFromDataWorldToCamera(
+            glm::mat3(w2c), glm::vec3(w2c[3]), scene_transform);
+        for (int row = 0; row < 3; ++row) {
+            EXPECT_NEAR(frustum[3][row], focus.translation[row], 1e-6f);
+            for (int col = 0; col < 3; ++col)
+                EXPECT_NEAR(frustum[col][row], focus.rotation[col][row], 1e-6f);
+        }
+    }
+
+    TEST_F(CameraPoseViewTest, DisplacementLabelClearsAndUsesNetMovement) {
+        PoseCameraDisplay display;
+        display.pose.center_displacement = 0.125;
+        display.pose.rotation_displacement = 1.5707963267948966;
+        display.pose.accepted_steps = 999;
+        EXPECT_EQ(lfs::vis::cameraPoseDisplacementLabel(&display), "\u0394 0.125 / 90.00\u00b0");
+        EXPECT_TRUE(lfs::vis::cameraPoseDisplacementLabel(nullptr).empty());
+        display.pose.center_displacement = 0;
+        display.pose.rotation_displacement = 0;
+        EXPECT_EQ(lfs::vis::cameraPoseDisplacementLabel(&display), "\u0394 0 / 0.00\u00b0");
+    }
+
     class CameraPoseTrainerIntegrationTest : public CameraPosePhotometricTest {};
 
     TEST_F(CameraPoseTrainerIntegrationTest, PhotometricObjectiveMatchesTrainerLoss) {
