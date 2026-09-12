@@ -617,6 +617,7 @@ if(LFS_TENSOR_VULKAN)
         test_tensor_vulkan_buffer.cpp
         test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
+        test_ply_vulkan_q16_bands.cpp
         test_viewer_vulkan_load.cpp
         test_viewer_no_cuda.cpp
         test_selection_mask_ops.cpp
