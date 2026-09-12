@@ -185,15 +185,26 @@ def inspect_session_gate(root: ET.Element) -> dict:
     return result
 
 
+def require_production_evaluator(root: ET.Element) -> None:
+    properties = root.findall(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties/property[@name='production_evaluator']")
+    if len(properties) != 1 or properties[0].get("value") != "1":
+        raise ValueError("Missing production evaluator evidence; rebuild by the user is required for this gate")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="gtest XML generated from the current camera-pose sources")
     parser.add_argument("--controller", action="store_true", help="Require checkpoint B controller tests and image-driven recovery as well")
     parser.add_argument("--session", action="store_true", help="Require A+B and multi-camera session contracts (25 tests)")
+    parser.add_argument("--evaluator", action="store_true", help="Require all 25 tests using the production FastGS pose evaluator")
     args = parser.parse_args()
     try:
-        inspect = inspect_session_gate if args.session else inspect_controller_gate if args.controller else inspect_gate
-        result = inspect(ET.parse(args.report).getroot())
+        inspect = inspect_session_gate if args.session or args.evaluator else inspect_controller_gate if args.controller else inspect_gate
+        root = ET.parse(args.report).getroot()
+        result = inspect(root)
+        if args.evaluator:
+            require_production_evaluator(root)
+            result.update(production_evaluator=True)
     except (OSError, ET.ParseError, ValueError) as error:
         print(f"CAMERA POSE GATE FAILED: {error}", file=sys.stderr)
         return 1

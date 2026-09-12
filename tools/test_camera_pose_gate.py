@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 from check_camera_pose_gate import GRADIENT, RECOVERY, SUITE, TESTS, inspect_gate
 from check_camera_pose_gate import CONTROLLER_RECOVERY, CONTROLLER_SUITE, CONTROLLER_TESTS, inspect_controller_gate
 from check_camera_pose_gate import SESSION_SUITE, SESSION_TESTS, inspect_session_gate
+from check_camera_pose_gate import require_production_evaluator
 
 
 def valid_report():
@@ -45,6 +46,21 @@ def valid_controller_report():
 
 
 class CameraPoseSessionGateReportTests(unittest.TestCase):
+    def test_requires_production_evaluator_marker(self):
+        root = valid_controller_report()
+        with self.assertRaises(ValueError):
+            require_production_evaluator(root)
+        props = root.find(f".//testcase[@name='{CONTROLLER_RECOVERY}']/properties")
+        marker = ET.SubElement(props, "property", name="production_evaluator", value="1")
+        require_production_evaluator(root)
+        marker.set("value", "0")
+        with self.assertRaises(ValueError):
+            require_production_evaluator(root)
+        marker.set("value", "1")
+        ET.SubElement(props, "property", **marker.attrib)
+        with self.assertRaises(ValueError):
+            require_production_evaluator(root)
+
     def report(self):
         root = valid_controller_report()
         suite = ET.SubElement(root, "testsuite", name=SESSION_SUITE)

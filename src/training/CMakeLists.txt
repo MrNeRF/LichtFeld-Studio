@@ -83,6 +83,7 @@ set(TRAINING_NEW_SOURCES
     camera_pose/se3.cpp
     camera_pose/bounded_pose_optimizer.cpp
     camera_pose/pose_refinement_session.cpp
+    camera_pose/fastgs_pose_evaluator.cpp
     optimizer/adam_optimizer.cpp
     sh_value_codec.cpp
     sh_value_storage.cpp

@@ -5,6 +5,7 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/camera_pose/bounded_pose_optimizer.hpp"
+#include "training/camera_pose/fastgs_pose_evaluator.hpp"
 #include "training/camera_pose/se3.hpp"
 #include "training/optimizer/adam_optimizer.hpp"
 #include "training/rasterization/fast_rasterizer.hpp"
@@ -349,6 +350,34 @@ namespace {
         const auto second = gradient(pose, spatial_weights());
         for (int axis = 0; axis < 6; ++axis)
             EXPECT_NEAR(first[axis], second[axis], 1.0e-7);
+        const auto target = Tensor::from_vector(render(identity_transform()), {3, HEIGHT, WIDTH}, Device::CUDA);
+        FastGSPoseEvaluator evaluator(*camera, *scene, *optimizer, background, make_pose_mse_objective(target));
+        const auto image = evaluator.evaluate(pose);
+        EXPECT_NEAR(image.loss, evaluator.loss(pose), 1.0e-9);
+        EXPECT_GT(image.loss, 0.0);
+        const auto current = render(pose);
+        const auto target_values = values(target);
+        std::vector<float> upstream(PIXELS);
+        for (int p = 0; p < PIXELS; ++p)
+            upstream[p] = 2.0f * (current[p] - target_values[p]) / PIXELS;
+        const auto reference = gradient(pose, upstream);
+        for (int axis = 0; axis < 6; ++axis)
+            EXPECT_NEAR(image.gradient[axis], reference[axis], 1.0e-7 + std::abs(reference[axis]) * 1.0e-5);
+        auto invalid_pose = pose;
+        invalid_pose[0] = 10;
+        EXPECT_THROW((void)evaluator.evaluate(invalid_pose), std::invalid_argument);
+        FastGSPoseEvaluator invalid_objective(*camera, *scene, *optimizer, background,
+                                              [](const RenderOutput&, bool) { return PoseObjectiveResult{}; });
+        EXPECT_THROW((void)invalid_objective.evaluate(pose), std::invalid_argument);
+        auto reference_pose = identity_transform();
+        reference_pose[3] = 1;
+        PoseSessionConfig settings;
+        settings.choose_anchors = false;
+        settings.optimizer.scene_scale = 3;
+        PoseRefinementSession session(1, {{camera->uid(), pose, PoseRole::Train}, {camera->uid() + 1, identity_transform(), PoseRole::Anchor}, {camera->uid() + 2, reference_pose, PoseRole::Anchor}}, settings);
+        const auto visit = evaluator.visit(session, settings.warmup_iterations, 1);
+        EXPECT_GT(visit.accepted_steps, 0);
+        EXPECT_LT(evaluator.loss(session.current_pose(camera->uid())), image.loss);
         expect_bytes_equal(scene->means(), before.means());
         expect_bytes_equal(scene->scaling_raw(), before.scaling_raw());
         expect_bytes_equal(scene->rotation_raw(), before.rotation_raw());
@@ -545,6 +574,9 @@ namespace {
     TEST_F(CameraPosePhotometricTest, BoundedControllerRecoversPoseFromImages) {
         const auto truth = exp_se3({0.03f, -0.02f, 0.04f, 0.025f, -0.018f, 0.012f});
         const auto target = render(truth);
+        const auto target_tensor = Tensor::from_vector(target, {3, HEIGHT, WIDTH}, Device::CUDA);
+        FastGSPoseEvaluator evaluator(*camera, *scene, *optimizer, background, make_pose_mse_objective(target_tensor));
+        RecordProperty("production_evaluator", 1);
         const std::array<Twist, 3> perturbations{{{0.035f, -0.025f, 0.03f, 0.012f, -0.01f, 0.018f},
                                                   {-0.025f, 0.02f, -0.035f, -0.015f, 0.012f, -0.012f},
                                                   {0.018f, 0.03f, -0.025f, 0.018f, 0.008f, -0.015f}}};
@@ -563,20 +595,14 @@ namespace {
             // 8 candidate renders per step. Same model for all evaluations.
             for (int iteration = 0; iteration < 80; ++iteration) {
                 const auto state = controller.snapshot();
-                const auto current = render(state.current);
-                const double loss = squared_loss(current, target);
+                const auto image = evaluator.evaluate(state.current);
+                const double loss = image.loss;
                 if (loss < initial_loss * 1.0e-4)
                     break;
-                std::vector<float> upstream(PIXELS);
-                for (int p = 0; p < PIXELS; ++p)
-                    upstream[p] = 2.0f * (current[p] - target[p]) / PIXELS;
-                const auto g = gradient(state.current, upstream);
-                PoseEvaluation evaluation{state.uid, 1, state.revision, loss, {}};
-                for (int axis = 0; axis < 6; ++axis)
-                    evaluation.image_gradient[axis] = static_cast<float>(g[axis]);
+                PoseEvaluation evaluation{state.uid, 1, state.revision, loss, image.gradient};
                 const auto result = controller.step(evaluation, [&](const Matrix4& candidate) {
                     ++renders;
-                    return squared_loss(render(candidate), target);
+                    return evaluator.loss(candidate);
                 });
                 ASSERT_LE(result.evaluations, config.max_backtracks);
                 if (result.status != PoseStepStatus::Accepted)
