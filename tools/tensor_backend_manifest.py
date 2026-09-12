@@ -531,15 +531,19 @@ def includes_application_headers(path: Path) -> str | None:
             continue
         visited.add(current)
         for line in current.read_text(errors="replace").splitlines():
-            match = re.match(r'\s*#\s*include\s*"([^"]+)"', line)
+            match = re.match(r'\s*#\s*include\s*(["<])([^">]+)[">]', line)
             if not match:
                 continue
-            include = match.group(1)
-            local = current.parent / include
-            if local.suffix in {".hpp", ".h", ".hh"} and local.is_file():
+            include = match.group(2)
+            if include.startswith(TENSOR_LIBRARY_INCLUDES):
+                continue
+            local = (current.parent / include).resolve()
+            if local.is_file() and local.is_relative_to(TESTS):
                 pending.append(local)
                 continue
-            if include.startswith(TENSOR_LIBRARY_INCLUDES):
+            if match.group(1) == "<" and not include.startswith(
+                ("core/", "io/", "rendering/", "training/", "visualizer/", "geometry/")
+            ):
                 continue
             return include if current == path else f"{include} (via {current.name})"
     return None
@@ -667,6 +671,7 @@ def classify(registration: Registration, fragments: list[Fragment], launchers: l
             r"\bassert_device_storage_matches_tag\b|device-tag mismatch",
             r"\bfrom_blob\s*\([^;]*(?:\.data_ptr\s*\(|\.ptr\s*<)",
             r"\bErrorDomain::CUDA\b",
+            r"\bcudaPointerGetAttributes\s*\(",
         ),
     )
     if backend_assertion:
