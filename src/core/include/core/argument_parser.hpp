@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "core/gpu_backend_fwd.hpp"
 
 #include "core/parameters.hpp"
 #include <expected>
@@ -53,6 +54,9 @@ namespace lfs::core::args {
     struct HelpMode {};
     struct VersionMode {};
     struct WarmupMode {}; // JIT compile PTX kernels and exit
+    struct TensorBackendSelftestMode {
+        GpuBackend backend;
+    };
     struct PluginMode {
         enum class Command { CREATE,
                              CHECK,
@@ -61,7 +65,7 @@ namespace lfs::core::args {
         std::string name;
     };
 
-    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, PluginMode>;
+    using ParsedArgs = std::variant<TrainingMode, ConvertMode, Mesh2SplatMode, PreprocessMode, HelpMode, VersionMode, WarmupMode, TensorBackendSelftestMode, PluginMode>;
 
     LFS_CORE_API std::expected<ParsedArgs, std::string> parse_args(int argc, const char* const argv[]);
 

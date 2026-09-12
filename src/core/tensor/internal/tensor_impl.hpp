@@ -561,6 +561,9 @@ namespace lfs::core {
 
 namespace lfs::core {
 
+    struct TensorVulkanBuffer;
+    LFS_CORE_API std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
+
     class LFS_CORE_API Tensor {
     private:
         friend struct internal::LazyIrTensorAccess;
@@ -570,6 +573,7 @@ namespace lfs::core {
             const Tensor& source);
         friend Tensor broadcast_to(const Tensor& src, const TensorShape& target);
         friend std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor);
+        friend std::optional<TensorVulkanBuffer> tensor_vulkan_buffer(const Tensor& tensor);
         friend internal::StorageRef internal::storage_ref(const Tensor& tensor);
         friend void internal::require_same_gpu_backend(const Tensor& reference,
                                                        const Tensor& other,
@@ -776,7 +780,11 @@ namespace lfs::core {
         }
 
         const Tensor& contiguous_read(Tensor& materialized) const {
-            if (is_contiguous()) {
+            // Deferred placeholders are stamped contiguous even when the
+            // materializer returns a broadcast or expand view. Resolve that
+            // before trusting the flag, matching contiguous().
+            materialize_if_deferred();
+            if (is_contiguous() && !has_zero_stride()) {
                 return *this;
             }
 
@@ -2072,6 +2080,7 @@ namespace lfs::core {
             return reshape(std::span<const int>(sizes));
         }
         Tensor reshape(TensorShape new_shape) const;
+        Tensor view_as(DataType dtype) const;
 
         Tensor view(std::span<const int> sizes) const { return reshape(sizes); }
         Tensor view(std::initializer_list<int> sizes) const { return reshape(sizes); }

@@ -125,23 +125,29 @@ namespace lfs::core::tensor_ops {
         return n ? direct_sum_scalar(data, n, stream) / static_cast<float>(n) : 0.0f;
     }
 
+    // The scalar entry points reduce with the same functors as every other max
+    // and min path: the first NaN wins and equal-magnitude zeros follow the sign rule.
     float direct_max_scalar(const float* data, const size_t n, const cudaStream_t stream) {
+        constexpr float identity = -std::numeric_limits<float>::infinity();
         return direct_reduce_scalar(
-            data, n, -std::numeric_limits<float>::infinity(), stream,
-            "cub::DeviceReduce::Max",
+            data, n, identity, stream,
+            "cub::DeviceReduce::Reduce(max)",
             [=](void* workspace, size_t& workspace_bytes, float* output) {
-                return cub::DeviceReduce::Max(
-                    workspace, workspace_bytes, data, output, n, stream);
+                return cub::DeviceReduce::Reduce(
+                    workspace, workspace_bytes, data, output, n,
+                    ops::max_reduce_op{}, identity, stream);
             });
     }
 
     float direct_min_scalar(const float* data, const size_t n, const cudaStream_t stream) {
+        constexpr float identity = std::numeric_limits<float>::infinity();
         return direct_reduce_scalar(
-            data, n, std::numeric_limits<float>::infinity(), stream,
-            "cub::DeviceReduce::Min",
+            data, n, identity, stream,
+            "cub::DeviceReduce::Reduce(min)",
             [=](void* workspace, size_t& workspace_bytes, float* output) {
-                return cub::DeviceReduce::Min(
-                    workspace, workspace_bytes, data, output, n, stream);
+                return cub::DeviceReduce::Reduce(
+                    workspace, workspace_bytes, data, output, n,
+                    ops::min_reduce_op{}, identity, stream);
             });
     }
 

@@ -1409,7 +1409,7 @@ namespace lfs::core::tensor_ops {
         const size_t row_start = blockIdx.y * rows_per_block;
         const size_t row_end = min(row_start + rows_per_block, M);
 
-        float val = -FLT_MAX;
+        float val = -CUDA_INFINITY;
         for (size_t row = row_start; row < row_end; row++) {
             val = ops::max_reduce_op{}(val, input[row * N + col]);
         }
@@ -1437,7 +1437,7 @@ namespace lfs::core::tensor_ops {
         const size_t row_start = blockIdx.y * rows_per_block;
         const size_t row_end = min(row_start + rows_per_block, M);
 
-        float val = FLT_MAX;
+        float val = CUDA_INFINITY;
         for (size_t row = row_start; row < row_end; row++) {
             val = ops::min_reduce_op{}(val, input[row * N + col]);
         }
@@ -1492,7 +1492,7 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Max:
             if (grid_y > 1) {
                 thrust::fill(thrust::cuda::par_nosync.on(stream),
-                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -FLT_MAX);
+                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -CUDA_INFINITY);
             }
             column_reduce_max_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_min_max");
@@ -1500,7 +1500,7 @@ namespace lfs::core::tensor_ops {
         case ReduceOp::Min:
             if (grid_y > 1) {
                 thrust::fill(thrust::cuda::par_nosync.on(stream),
-                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), FLT_MAX);
+                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), CUDA_INFINITY);
             }
             column_reduce_min_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             LFS_CUDA_LAUNCH_CHECK(stream, "tensor.warp_reduce.column_min_max");
@@ -1803,7 +1803,7 @@ namespace lfs::core::tensor_ops {
                 thrust::fill(thrust::cuda::par_nosync.on(stream),
                              thrust::device_ptr<float>(output),
                              thrust::device_ptr<float>(output + output_elems),
-                             -FLT_MAX);
+                             -CUDA_INFINITY);
             }
             strided_fast_max_kernel<<<grid, BLOCK, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
@@ -1814,7 +1814,7 @@ namespace lfs::core::tensor_ops {
                 thrust::fill(thrust::cuda::par_nosync.on(stream),
                              thrust::device_ptr<float>(output),
                              thrust::device_ptr<float>(output + output_elems),
-                             FLT_MAX);
+                             CUDA_INFINITY);
             }
             strided_fast_min_kernel<<<grid, BLOCK, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);

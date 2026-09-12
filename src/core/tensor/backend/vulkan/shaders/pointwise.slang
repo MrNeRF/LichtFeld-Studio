@@ -255,13 +255,51 @@ float applyChainOp(float value, ChainOp op, uint index)
     return value;
 }
 
+// Wrap-around integer power; negative exponents follow integer division, so
+// only bases 1 and -1 keep a nonzero result.
+int intPow(int base, int exponent)
+{
+    if (exponent < 0)
+        return base == 1 ? 1 : base == -1 ? ((exponent & 1) != 0 ? -1 : 1) : 0;
+    int result = 1;
+    int factor = base;
+    int remaining = exponent;
+    while (remaining != 0)
+    {
+        if ((remaining & 1) != 0)
+            result *= factor;
+        factor *= factor;
+        remaining >>= 1;
+    }
+    return result;
+}
+
+int64_t int64Pow(int64_t base, int64_t exponent)
+{
+    if (exponent < int64_t(0))
+        return base == int64_t(1) ? int64_t(1)
+             : base == int64_t(-1) ? ((exponent & int64_t(1)) != int64_t(0) ? int64_t(-1) : int64_t(1))
+                                   : int64_t(0);
+    int64_t result = int64_t(1);
+    int64_t factor = base;
+    int64_t remaining = exponent;
+    while (remaining != int64_t(0))
+    {
+        if ((remaining & int64_t(1)) != int64_t(0))
+            result *= factor;
+        factor *= factor;
+        remaining >>= 1;
+    }
+    return result;
+}
+
 int intBinary(int lhs, int rhs)
 {
     if (kOp == 0 || kOp == 4) return lhs + rhs;
     if (kOp == 1 || kOp == 5) return lhs - rhs;
     if (kOp == 2 || kOp == 6) return lhs * rhs;
     if (kOp == 3 || kOp == 7) return rhs == 0 ? 0 : rhs == -1 ? -lhs : lhs / rhs;
-    if (kOp == 8 || kOp == 25) return rhs == 2 ? lhs * lhs : int(pow(float(lhs), float(rhs)));
+    if (kOp == 8 || kOp == 25) return intPow(lhs, rhs);
     if (kOp == 9 || kOp == 26) return rhs == 0 || rhs == -1 ? 0 : lhs % rhs;
     if (kOp == 27 || kOp == 57) return max(lhs, rhs);
     if (kOp == 28 || kOp == 58) return min(lhs, rhs);
@@ -304,7 +342,7 @@ int64_t int64Binary(int64_t lhs, int64_t rhs)
     if (kOp == 5) return lhs - rhs;
     if (kOp == 6) return lhs * rhs;
     if (kOp == 7) return rhs == 0 ? int64_t(0) : rhs == int64_t(-1) ? -lhs : lhs / rhs;
-    if (kOp == 25) return rhs == 2 ? lhs * lhs : int64_t(pow(float(lhs), float(rhs)));
+    if (kOp == 25) return int64Pow(lhs, rhs);
     if (kOp == 26) return rhs == 0 || rhs == int64_t(-1) ? int64_t(0) : lhs % rhs;
     if (kOp == 27) return lhs < rhs ? rhs : lhs;
     if (kOp == 28) return rhs < lhs ? rhs : lhs;

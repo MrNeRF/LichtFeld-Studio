@@ -26,13 +26,6 @@ namespace lfs::core::tensor_ops {
     struct square_op {
         __device__ float operator()(float x) const { return x * x; }
     };
-    struct max_op {
-        __device__ float operator()(float a, float b) const { return fmaxf(a, b); }
-    };
-    struct min_op {
-        __device__ float operator()(float a, float b) const { return fminf(a, b); }
-    };
-
     // Stage 2: aggregate partial results (reused by all reductions)
     __global__ void reduce_partials_sum(const float* __restrict__ partials, float* __restrict__ result, int n) {
         float sum = 0.0f;
@@ -42,26 +35,6 @@ namespace lfs::core::tensor_ops {
         sum = warp_ops::block_reduce_sum(sum);
         if (threadIdx.x == 0)
             *result = sum;
-    }
-
-    __global__ void reduce_partials_max(const float* __restrict__ partials, float* __restrict__ result, int n) {
-        float val = -FLT_MAX;
-        for (int i = threadIdx.x; i < n; i += blockDim.x) {
-            val = fmaxf(val, partials[i]);
-        }
-        val = warp_ops::block_reduce_max(val);
-        if (threadIdx.x == 0)
-            *result = val;
-    }
-
-    __global__ void reduce_partials_min(const float* __restrict__ partials, float* __restrict__ result, int n) {
-        float val = FLT_MAX;
-        for (int i = threadIdx.x; i < n; i += blockDim.x) {
-            val = fminf(val, partials[i]);
-        }
-        val = warp_ops::block_reduce_min(val);
-        if (threadIdx.x == 0)
-            *result = val;
     }
 
     // Helper kernels for in-place operations
@@ -255,99 +228,6 @@ namespace lfs::core::tensor_ops {
     // MIN/MAX REDUCTIONS
     // ============================================================================
 
-    template <typename Op>
-    __global__ void minmax_stage1(const float* __restrict__ data, float* __restrict__ partials,
-                                  size_t n, float init, Op op) {
-        const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-        const size_t stride = blockDim.x * gridDim.x;
-        float val = init;
-
-        for (size_t i = tid * 4; i < n; i += stride * 4) {
-            if (i + 3 < n) {
-                float4 v = reinterpret_cast<const float4*>(data)[i / 4];
-                val = op(val, op(op(v.x, v.y), op(v.z, v.w)));
-            } else {
-                for (size_t j = i; j < n; ++j)
-                    val = op(val, data[j]);
-            }
-        }
-
-        if (init == -FLT_MAX)
-            val = warp_ops::block_reduce_max(val);
-        else
-            val = warp_ops::block_reduce_min(val);
-
-        if (threadIdx.x == 0)
-            partials[blockIdx.x] = val;
-    }
-
-    template <typename Op>
-    __global__ void minmax_small(const float* __restrict__ data, float* __restrict__ result,
-                                 int n, float init, Op op) {
-        float val = init;
-        for (int i = threadIdx.x * 4; i < n; i += blockDim.x * 4) {
-            if (i + 3 < n) {
-                float4 v = reinterpret_cast<const float4*>(data)[i / 4];
-                val = op(val, op(op(v.x, v.y), op(v.z, v.w)));
-            } else {
-                for (int j = i; j < n && j < i + 4; ++j)
-                    val = op(val, data[j]);
-            }
-        }
-
-        if (init == -FLT_MAX)
-            val = warp_ops::block_reduce_max(val);
-        else
-            val = warp_ops::block_reduce_min(val);
-
-        if (threadIdx.x == 0)
-            *result = val;
-    }
-
-    void launch_max_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
-        if (n == 0) {
-            float v = -FLT_MAX;
-            LFS_CUDA_CHECK(cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream));
-            return;
-        }
-
-        constexpr int BLOCK = 256;
-        if (n < 100000) {
-            minmax_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), -FLT_MAX, max_op{});
-            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.max_scalar");
-            return;
-        }
-
-        const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
-        float* partials = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
-        minmax_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, -FLT_MAX, max_op{});
-        reduce_partials_max<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
-    }
-
-    void launch_min_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
-        if (n == 0) {
-            float v = FLT_MAX;
-            LFS_CUDA_CHECK(cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream));
-            return;
-        }
-
-        constexpr int BLOCK = 256;
-        if (n < 100000) {
-            minmax_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), FLT_MAX, min_op{});
-            LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.min_scalar");
-            return;
-        }
-
-        const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
-        float* partials = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&partials, grid * sizeof(float), stream));
-        minmax_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, FLT_MAX, min_op{});
-        reduce_partials_min<<<1, BLOCK, 0, stream>>>(partials, result, grid);
-        LFS_CUDA_CHECK(cudaFreeAsync(partials, stream));
-    }
-
     // ============================================================================
     // COUNT NONZERO (multi-block + float4, fully device-side)
     // ============================================================================
@@ -355,7 +235,7 @@ namespace lfs::core::tensor_ops {
     // Small-n path: single block, float4 loads when aligned.
     __global__ void count_nonzero_float_small(const float* __restrict__ data,
                                               size_t* __restrict__ result, size_t n) {
-        float count = 0.0f;
+        unsigned int count = 0u;
         for (size_t i = threadIdx.x * 4; i < n; i += blockDim.x * 4) {
             if (i + 3 < n) {
                 float4 v = reinterpret_cast<const float4*>(data)[i / 4];
@@ -372,10 +252,10 @@ namespace lfs::core::tensor_ops {
 
     // Stage1: SM-capped grid-stride, float4, write per-block partial count.
     __global__ void count_nonzero_float_stage1(const float* __restrict__ data,
-                                               float* __restrict__ partials, size_t n) {
+                                               unsigned int* __restrict__ partials, size_t n) {
         const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
-        float count = 0.0f;
+        unsigned int count = 0u;
         for (size_t i = tid * 4; i < n; i += stride * 4) {
             if (i + 3 < n) {
                 float4 v = reinterpret_cast<const float4*>(data)[i / 4];
@@ -392,7 +272,7 @@ namespace lfs::core::tensor_ops {
 
     __global__ void count_nonzero_bool_small(const unsigned char* __restrict__ data,
                                              size_t* __restrict__ result, size_t n) {
-        float count = 0.0f;
+        unsigned int count = 0u;
         for (size_t i = threadIdx.x; i < n; i += blockDim.x)
             count += (data[i] != 0);
         count = warp_ops::block_reduce_sum(count);
@@ -401,10 +281,10 @@ namespace lfs::core::tensor_ops {
     }
 
     __global__ void count_nonzero_bool_stage1(const unsigned char* __restrict__ data,
-                                              float* __restrict__ partials, size_t n) {
+                                              unsigned int* __restrict__ partials, size_t n) {
         const size_t tid = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
         const size_t stride = static_cast<size_t>(blockDim.x) * gridDim.x;
-        float count = 0.0f;
+        unsigned int count = 0u;
         for (size_t i = tid; i < n; i += stride)
             count += (data[i] != 0);
         count = warp_ops::block_reduce_sum(count);
@@ -412,9 +292,9 @@ namespace lfs::core::tensor_ops {
             partials[blockIdx.x] = count;
     }
 
-    __global__ void count_partials_to_size_t(const float* __restrict__ partials,
+    __global__ void count_partials_to_size_t(const unsigned int* __restrict__ partials,
                                              size_t* __restrict__ result, int n) {
-        float sum = 0.0f;
+        unsigned long long sum = 0ull;
         for (int i = threadIdx.x; i < n; i += blockDim.x)
             sum += partials[i];
         sum = warp_ops::block_reduce_sum(sum);
@@ -436,8 +316,8 @@ namespace lfs::core::tensor_ops {
             return;
         }
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
-        float* partials = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(float), stream));
+        unsigned int* partials = nullptr;
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(unsigned int), stream));
         count_nonzero_float_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.count_nonzero_float_stage1");
         count_partials_to_size_t<<<1, BLOCK, 0, stream>>>(partials, result, grid);
@@ -458,8 +338,8 @@ namespace lfs::core::tensor_ops {
             return;
         }
         const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
-        float* partials = nullptr;
-        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(float), stream));
+        unsigned int* partials = nullptr;
+        LFS_CUDA_CHECK(cudaMallocAsync(&partials, static_cast<size_t>(grid) * sizeof(unsigned int), stream));
         count_nonzero_bool_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n);
         LFS_CUDA_LAUNCH_CHECK(stream, "tensor.dot.count_nonzero_bool_stage1");
         count_partials_to_size_t<<<1, BLOCK, 0, stream>>>(partials, result, grid);

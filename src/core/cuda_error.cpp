@@ -8,6 +8,7 @@
 #include "core/error_codes.hpp"
 #include "core/failure_report.hpp"
 #include "core/logger.hpp"
+#include "core/tensor_backend.hpp"
 
 #include <algorithm>
 #include <array>
@@ -668,9 +669,9 @@ namespace lfs::core {
         }
         try {
             Logger::get().log_internal(
-                LogLevel::Error, LFS_SOURCE_SITE_CURRENT(),
+                LogLevel::Warn, LFS_SOURCE_SITE_CURRENT(),
                 std::format(
-                    "CUDA unavailable — GPU features disabled. A driver restart may be required. ({})",
+                    "CUDA unavailable: GPU features that need NVIDIA are disabled ({})",
                     cuda_error_text(error)));
         } catch (...) {
             // LFS-CENSUS-OK(empty-catch): the CUDA-unavailable notice is best-effort;
@@ -837,6 +838,11 @@ namespace lfs::core {
                              const SourceSite location,
                              const CudaFailureDisposition disposition) {
         if (result == cudaSuccess) [[likely]] {
+            return;
+        }
+        if (is_cuda_unavailable_error(result) &&
+            !gpu_backend_available(GpuBackend::CUDA)) {
+            latch_cuda_unavailable(result);
             return;
         }
         if (disposition == CudaFailureDisposition::Throw) {

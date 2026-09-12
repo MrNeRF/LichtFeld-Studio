@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/error.hpp"
 #include "core/export.hpp"
 
 #include <array>
@@ -24,6 +25,7 @@ namespace lfs::core::internal {
     class VulkanMemory;
     class VulkanPipelines;
     class VulkanRecorderRegistry;
+    class VulkanCudaImportRegistry;
 
     struct VkDeviceCaps {
         std::array<uint8_t, VK_UUID_SIZE> device_uuid{};
@@ -41,11 +43,29 @@ namespace lfs::core::internal {
         bool memory_budget = false;
         bool host_visible_device_local = false;
         bool direct_host_uploads = false;
+        bool external_memory = false;
+        bool external_semaphore = false;
+    };
+
+    // A device the application created and keeps alive; the backend runs on it
+    // instead of creating its own. The queue is the backend's alone.
+    struct AdoptedDevice {
+        VkInstance instance = VK_NULL_HANDLE;
+        VkPhysicalDevice physical_device = VK_NULL_HANDLE;
+        VkDevice device = VK_NULL_HANDLE;
+        VkQueue queue = VK_NULL_HANDLE;
+        uint32_t queue_family = 0;
+        bool shader_atomic_float = false;
+        bool memory_budget = false;
+        bool shader_float16 = false;
+        bool external_memory = false;
+        bool external_semaphore = false;
     };
 
     class VulkanContext final {
     public:
         VulkanContext();
+        explicit VulkanContext(const AdoptedDevice& adopted);
         ~VulkanContext();
 
         VulkanContext(const VulkanContext&) = delete;
@@ -75,6 +95,19 @@ namespace lfs::core::internal {
         [[nodiscard]] bool dead() const noexcept {
             return dead_.load(std::memory_order_acquire);
         }
+        [[nodiscard]] bool adopted() const noexcept { return !owns_device_; }
+        [[nodiscard]] bool external_memory_enabled() const noexcept {
+            return caps_.external_memory;
+        }
+        [[nodiscard]] bool external_semaphore_enabled() const noexcept {
+            return caps_.external_semaphore;
+        }
+        [[nodiscard]] VulkanCudaImportRegistry* cuda_imports() noexcept {
+            return cuda_imports_.get();
+        }
+        [[nodiscard]] const VulkanCudaImportRegistry* cuda_imports() const noexcept {
+            return cuda_imports_.get();
+        }
 
         [[nodiscard]] uint64_t reserve_timeline_value();
         void submit(VkCommandBuffer command, uint64_t signal_value);
@@ -97,12 +130,15 @@ namespace lfs::core::internal {
         void create_instance();
         void select_physical_device();
         void create_device();
+        void adopt_device(const AdoptedDevice& adopted);
+        void initialize_runtime();
         void create_allocator();
         void create_pipeline_cache();
         void create_fault_buffer();
         void save_pipeline_cache() noexcept;
         void destroy_fault_buffer() noexcept;
 
+        bool owns_device_ = true;
         VkInstance instance_ = VK_NULL_HANDLE;
         VkDebugUtilsMessengerEXT debug_messenger_ = VK_NULL_HANDLE;
         VkPhysicalDevice physical_device_ = VK_NULL_HANDLE;
@@ -127,6 +163,7 @@ namespace lfs::core::internal {
         std::atomic<bool> device_loss_reported_{false};
         std::mutex queue_mutex_;
         std::mutex shutdown_mutex_;
+        std::unique_ptr<VulkanCudaImportRegistry> cuda_imports_;
         std::unique_ptr<VulkanMemory> memory_;
         std::unique_ptr<VulkanRecorderRegistry> recorders_;
         std::unique_ptr<VulkanPipelines> pipelines_;
@@ -139,6 +176,11 @@ namespace lfs::core::internal {
     [[nodiscard]] bool vulkan_backend_lost() noexcept;
     // True while a live, healthy context exists; never initializes one.
     [[nodiscard]] bool vulkan_backend_live() noexcept;
+
+    // Installs a context on an application device as the process context. Fails
+    // when a context already exists or the device lacks a required feature.
+    [[nodiscard]] lfs::Status adopt_vulkan_context(const AdoptedDevice& adopted);
+    [[nodiscard]] bool vulkan_context_adopted() noexcept;
     [[nodiscard]] std::shared_ptr<VulkanContext> acquire_vulkan_context();
     [[nodiscard]] std::shared_ptr<VulkanContext> try_live_vulkan_context() noexcept;
     void shutdown_vulkan_context();
@@ -150,6 +192,7 @@ namespace lfs::core::internal {
     [[nodiscard]] LFS_CORE_API std::vector<std::string> vulkan_validation_messages_for_testing();
     [[nodiscard]] LFS_CORE_API VkDeviceCaps vulkan_device_caps_for_testing();
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_live_vma_objects_for_testing() noexcept;
+    [[nodiscard]] LFS_CORE_API uint64_t vulkan_cuda_import_count_for_testing() noexcept;
     [[nodiscard]] LFS_CORE_API uint64_t vulkan_completed_timeline_for_testing();
     [[nodiscard]] LFS_CORE_API size_t vulkan_dead_recorder_count_for_testing();
 

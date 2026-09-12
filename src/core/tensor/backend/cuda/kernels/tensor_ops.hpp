@@ -26,7 +26,8 @@ namespace lfs::core {
 #ifdef __CUDACC__
 #include "tensor_generic_ops.cuh"
 #include <cfloat>
-#define CUDA_INFINITY FLT_MAX
+#include <cmath>
+#define CUDA_INFINITY INFINITY
 #else
 // Forward declaration for C++ files - implementation in tensor_ops.cu
 namespace lfs::core::tensor_ops {
@@ -195,10 +196,6 @@ namespace lfs::core::tensor_ops {
     template <typename T>
     struct div_op {
         __device__ T operator()(T a, T b) const { return a / b; }
-    };
-    template <typename T>
-    struct pow_op {
-        __device__ T operator()(T a, T b) const { return powf(a, b); }
     };
     template <typename T>
     struct eq_op {

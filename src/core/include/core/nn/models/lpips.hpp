@@ -36,7 +36,7 @@ namespace lfs::core::nn::models {
                                        InputScaling scaling = InputScaling::Identity,
                                        std::size_t activation_budget_bytes = 1536ULL * 1024ULL * 1024ULL);
 
-        // RGB fp32 [0,1] on CUDA, supplied as [3,H,W] or [1,3,H,W].
+        // RGB fp32 [0,1] on the model's GPU backend, as [3,H,W] or [1,3,H,W].
         lfs::Result<float> forward(const Tensor& pred, const Tensor& target,
                                    std::optional<InputScaling> scaling = std::nullopt);
 

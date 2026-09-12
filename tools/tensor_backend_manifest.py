@@ -47,6 +47,9 @@ INACTIVE_SOURCE_REGISTRATIONS = {
     ("tests/test_gsplat_rasterizer.cpp", "GsplatRasterizerTest", "CudaAllocationFailureAbortsAndRecovers"),
     ("tests/test_rml_path_utils.cpp", "RmlSystemInterfaceTest", "JoinsWindowsDrivePathsWithoutTreatingDriveAsUriScheme"),
     ("tests/test_user_paths.cpp", "UserPathsContractTest", "WindowsDefaultUsesProfileDotLichtfeld"),
+    ("tests/test_logger.cpp", "LoggerWindowsConsoleTest", "UnicodeUsesPrivateScreenBufferWithoutChangingConsoleSettings"),
+    ("tests/test_logger.cpp", "LoggerWindowsConsoleTest", "RedirectedStdoutAndStderrRetainUtf8Bytes"),
+    ("tests/test_logger.cpp", "LoggerWindowsConsoleTest", "InitializationWritesUnicodeProbeToLogFile"),
 }
 RAW_LITERAL_RE = re.compile(r'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(')
 
@@ -747,7 +750,7 @@ def generated_files(trace_path: Path | None = None) -> tuple[dict[Path, bytes], 
     inactive_seen = set()
     for reg in registrations:
         inactive_key = (str(reg.file.relative_to(ROOT)), reg.suite, reg.test)
-        if not registration_hits[reg] and inactive_key in INACTIVE_SOURCE_REGISTRATIONS:
+        if inactive_key in INACTIVE_SOURCE_REGISTRATIONS:
             if not reg.conditional:
                 failures.append(
                     f"inactive registration allowlist entry is no longer conditional: "

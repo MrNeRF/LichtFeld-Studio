@@ -343,6 +343,12 @@ set(TEST_FILES
     test_splat_data_clone.cpp
     test_tensor_reduction.cpp
     test_tensor_reduction_alignment.cpp
+    test_tensor_integer_and_reduce_policy.cpp
+    test_selection_attribute_ops.cpp
+    test_selection_screen_ops.cpp
+    test_export_band_pack.cpp
+    test_point_cloud_merge.cpp
+    test_display_tensors.cpp
     test_tensor_views.cpp
     test_tensor_advanced.cpp
     test_tensor_stress.cpp
@@ -530,6 +536,7 @@ set(TEST_FILES
     test_sequencer_regressions.cpp
     test_tensor_storage_version.cpp
     test_tensor_backend_selection.cpp
+    test_tensor_backend_selftest.cpp
     test_tensor_seam_regressions.cpp
     test_tensor_backend_facade.cpp
     test_tensor_backend_facade_c.cpp
@@ -600,12 +607,19 @@ if(LFS_TENSOR_VULKAN)
     list(APPEND TEST_FILES
         test_tensor_backend_validators.cpp
         test_tensor_vulkan_runtime.cpp
+        test_tensor_vulkan_adoption.cpp
         test_tensor_vulkan_pointwise.cpp
         test_tensor_vulkan_reduce.cpp
         test_tensor_vulkan_index.cpp
         test_tensor_vulkan_matrix_nn.cpp
         test_tensor_vulkan_random.cpp
+        test_tensor_vulkan_buffer.cpp
+        test_tensor_vulkan_cuda_bridge.cpp
         test_tensor_backend_parity.cpp
+        test_viewer_vulkan_load.cpp
+        test_viewer_no_cuda.cpp
+        test_selection_mask_ops.cpp
+        test_sh_quant_tensor_program.cpp
     )
 endif()
 list(APPEND TEST_FILES test_vksplat_input_packer.cpp)

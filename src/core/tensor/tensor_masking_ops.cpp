@@ -125,8 +125,8 @@ namespace lfs::core {
         }
 
         // §1.9 host entry: reject graph capture before checked index_select launch.
-        void reject_index_select_graph_capture(const cudaStream_t stream) {
-            if (internal::backend_ops(GpuBackend::CUDA).stream_is_capturing(internal::ExecContext{stream})) {
+        void reject_index_select_graph_capture(const Tensor& tensor, const cudaStream_t stream) {
+            if (internal::backend_ops_for(tensor).stream_is_capturing(internal::ExecContext{stream})) {
                 throw_device_fault_graph_capture_error(stream, LFS_SOURCE_SITE_CURRENT());
             }
         }
@@ -493,7 +493,7 @@ namespace lfs::core {
             // §1.9: host rejects graph capture at the checked-launch entry BEFORE
             // prepare_inputs_for_stream can enqueue dependency edges into a capture.
             if (device_fault_assert_path) {
-                reject_index_select_graph_capture(out.stream());
+                reject_index_select_graph_capture(*this, out.stream());
             }
 
             const cudaStream_t execution_stream =
@@ -501,7 +501,7 @@ namespace lfs::core {
 
             // Re-check after stream resolution (requested stream may differ).
             if (device_fault_assert_path) {
-                reject_index_select_graph_capture(execution_stream);
+                reject_index_select_graph_capture(*this, execution_stream);
             }
 
             internal::backend_ops_for(*this).index_select(

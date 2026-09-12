@@ -36,6 +36,7 @@ set(TENSOR_SOURCES
         tensor/lazy_ir.cpp
         tensor/lazy_executor.cpp
         tensor/tensor_backend.cpp
+        tensor/tensor_backend_selftest.cpp
         tensor/backend/backend_registry.cpp
         tensor/backend/facade_trace.cpp
         tensor/backend/cuda/cuda_ops_pointwise.cpp
@@ -75,6 +76,7 @@ if(LFS_TENSOR_VULKAN)
     list(APPEND TENSOR_SOURCES
         tensor/backend/vulkan/vk_context.cpp
         tensor/backend/vulkan/vk_memory.cpp
+        tensor/backend/vulkan/vk_cuda_bridge.cpp
         tensor/backend/vulkan/vk_recorder.cpp
         tensor/backend/vulkan/vk_pipelines.cpp
         tensor/backend/vulkan/vk_ops_pointwise.cpp
@@ -151,7 +153,7 @@ add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
 
 if(LFS_TENSOR_VULKAN)
     add_dependencies(lfs_core lfs_tensor_vulkan_shaders)
-    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE})
+    target_sources(lfs_core PRIVATE ${LFS_TENSOR_SHADER_TABLE} nn/vulkan_ops.cpp)
     target_compile_definitions(lfs_core PRIVATE LFS_TENSOR_VULKAN=1)
 endif()
 
@@ -216,6 +218,9 @@ endif()
 
 if(WIN32)
     target_link_libraries(lfs_core PRIVATE bcrypt)
+    # Public tensor headers use min/max names, so consumers must suppress the
+    # Windows macros before any transitive windows.h include is processed.
+    target_compile_definitions(lfs_core PUBLIC NOMINMAX)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 12)
@@ -230,7 +235,7 @@ if(MSVC)
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
         $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS -Xcompiler=/bigobj --diag-suppress=27>
     )
-    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX
+    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
     target_link_options(lfs_core PRIVATE /ignore:4217)

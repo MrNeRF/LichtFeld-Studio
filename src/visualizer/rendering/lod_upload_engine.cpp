@@ -6,6 +6,7 @@
 
 #include "core/logger.hpp"
 #include "core/tensor/backend/cuda/runtime/memory_pool.hpp"
+#include "core/tensor_backend.hpp"
 
 #include "lod_page_dequant_cuda.hpp"
 
@@ -81,7 +82,11 @@ namespace lfs::vis {
         layout_ = layout;
         timeline_ = timeline;
         if (stream_ == nullptr && layout_.valid()) {
-            if (cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking) != cudaSuccess) {
+            if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA) ||
+                cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking) != cudaSuccess) {
+                if (!lfs::core::gpu_backend_available(lfs::core::GpuBackend::CUDA)) {
+                    LOG_WARN("LOD upload engine is unavailable without a usable CUDA device");
+                }
                 stream_ = nullptr;
             }
         }
