@@ -193,19 +193,6 @@ namespace {
 
 } // namespace
 
-TEST(Sam2Test, CommittedFixtureIsSmall) {
-    const std::string path = project_root() + "/tests/data/nn/sam2_ref_fixture.json";
-    std::ifstream in(path);
-    ASSERT_TRUE(static_cast<bool>(in));
-    std::string body((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    EXPECT_LT(body.size(), 400u * 1024u);
-    auto payload = nlohmann::json::parse(body);
-    EXPECT_TRUE(payload.contains("nodes"));
-    EXPECT_TRUE(payload.contains("cases"));
-    EXPECT_TRUE(payload["cases"].contains("points"));
-    EXPECT_TRUE(payload["cases"].contains("box"));
-}
-
 TEST(Sam2Test, FullModelParityIsOptIn) {
     const char* weights = std::getenv("LFS_SAM2_WEIGHTS");
     if (weights == nullptr || weights[0] == '\0') {

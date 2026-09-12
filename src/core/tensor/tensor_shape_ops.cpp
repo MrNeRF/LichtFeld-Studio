@@ -388,25 +388,6 @@ namespace lfs::core {
         return view;
     }
 
-    bool Tensor::is_contiguous_slice(const std::vector<size_t>& starts,
-                                     const std::vector<size_t>& ends) const {
-        LFS_DEBUG_ASSERT_MSG(starts.size() == shape_.rank(),
-                             std::format("slice start count must match tensor rank "
-                                         "(start_count={}, tensor_rank={}, tensor_shape={})",
-                                         starts.size(), shape_.rank(), shape_.str()));
-        LFS_DEBUG_ASSERT_MSG(ends.size() == shape_.rank(),
-                             std::format("slice end count must match tensor rank "
-                                         "(end_count={}, tensor_rank={}, tensor_shape={})",
-                                         ends.size(), shape_.rank(), shape_.str()));
-        for (size_t i = 1; i < shape_.rank(); ++i) {
-            if (starts[i] != 0 || ends[i] != shape_[i]) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     size_t Tensor::calculate_offset(const std::vector<size_t>& indices) const {
         LFS_DEBUG_ASSERT_MSG(indices.size() <= strides_.size(),
                              std::format("offset index rank must not exceed stride rank "

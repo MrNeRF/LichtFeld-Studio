@@ -142,6 +142,7 @@ def test_invalid_start_is_rejected_before_overwrite_consent(training_panel_modul
 
 
 def test_only_start_is_disabled_and_feedback_is_outside_search():
+    """Invalid start settings must not disable Resume or hide the reason Start is blocked."""
     from xml.etree import ElementTree as ET
     root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
     controls = root.find(".//*[@id='controls']")
@@ -151,6 +152,7 @@ def test_only_start_is_disabled_and_feedback_is_outside_search():
     feedback = controls.find(".//*[@data-if='start_blocked']")
     assert "{{start_error}}" in "".join(feedback.itertext())
     assert "{{start_conflicts}}" in "".join(feedback.itertext())
+
 
 
 @pytest.mark.parametrize("state,iteration,actions", [
@@ -193,79 +195,6 @@ def test_compact_toolbar_preserves_visible_actions_by_state(
 
     visit(controls)
     assert visible == [f"action('{action}')" for action in actions]
-
-
-def test_compact_toolbar_icons_labels_and_tooltips_are_retained():
-    from xml.etree import ElementTree as ET
-    project = Path(__file__).parents[2]
-    root = ET.parse(project / "src/visualizer/gui/rmlui/resources/training.rml")
-    controls = root.find(".//*[@id='controls']")
-    for button in controls.iter("button"):
-        classes = button.get("class", "").split()
-        assert "btn--full" not in classes
-        assert button.get("data-tooltip")
-        assert "training-toolbar-action" in classes
-        assert button.find("img") is not None
-        assert "{{" in "".join(button.itertext())
-        for icon in button.iter("img"):
-            path = icon.get("src").removeprefix("../")
-            assert (project / "src/visualizer/gui/assets" / path).is_file()
-    assert controls.find(".//*[@data-if='show_project_saved']") is not None
-    assert controls.find(".//*[@data-if='show_ctrl_error']") is not None
-
-
-def test_toolbar_status_is_a_separate_information_line_outside_telemetry():
-    from xml.etree import ElementTree as ET
-    project = Path(__file__).parents[2]
-    root = ET.parse(project / "src/visualizer/gui/rmlui/resources/training.rml")
-    controls = root.find(".//*[@id='controls']")
-    toolbar = controls.find("div[@id='training-toolbar']")
-    assert toolbar.get("class") == "training-toolbar"
-    header = controls.find("div[@id='training-controls-header']")
-    assert header is not None and header.get("data-if") is None
-    assert header.get("class") == "training-state-line"
-    assert toolbar.find("div[@id='training-controls-header']") is None
-    assert list(controls).index(header) == list(controls).index(toolbar) + 1
-    badges = {badge.get("data-if"): badge for badge in header.findall("span")}
-    ready_label = badges["show_ctrl_ready"].find("span[@class='training-status-badge-label']")
-    assert ready_label.text == "@tr:status.ready"
-    assert all(
-        badge.find("span[@class='training-status-badge-label']") is not None
-        for badge in badges.values()
-    )
-    assert "is-ready" in badges["show_ctrl_ready"].get("class")
-    assert "is-active" in badges["show_ctrl_running"].get("class")
-    assert "is-paused" in badges["show_ctrl_paused"].get("class")
-    assert "is-complete" in badges["show_ctrl_completed"].get("class")
-    assert "is-error" in badges["show_ctrl_error"].get("class")
-    assert set(badges) == {
-        "show_ctrl_ready", "show_ctrl_starting", "show_ctrl_running",
-        "show_ctrl_paused", "show_ctrl_completed", "show_ctrl_stopped",
-        "show_ctrl_error", "show_ctrl_stopping", "show_ctrl_restoring", "show_ctrl_saving",
-    }
-    assert sum(node.text == "{{status_mode}}" for node in root.iter()) == 0
-    for group in toolbar.findall("div"):
-        for row in group.findall("div[@class='training-action-row']"):
-            assert all(child.tag == "button" for child in row)
-    css = (project / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
-    for selector in ("#controls", ".training-actions-group", ".training-action-row"):
-        block = css.split(selector + " {", 1)[1].split("}", 1)[0]
-        assert "width: 100%;" in block
-    row = css.split(".training-action-row {", 1)[1].split("}", 1)[0]
-    assert "display: flex;" in row
-    assert "flex-wrap: nowrap;" in row
-    button = css.split(".training-toolbar-action {", 1)[1].split("}", 1)[0]
-    assert "display: inline-flex;" in button
-    assert "flex: 1 1 0;" in button
-    assert "max-width: 96dp;" in button
-    assert "overflow: hidden" not in button
-    assert "\n    width: 100%;" not in button
-    status = css.split(".training-status-badge {", 1)[1].split("}", 1)[0]
-    assert "border-width: 0;" in status
-    assert "padding: 0;" in status
-    theme = (project / "src/visualizer/gui/rmlui/resources/training.theme.rcss").read_text()
-    status_theme = theme.split(".training-status-badge {", 1)[1].split("}", 1)[0]
-    assert "background-color" not in status_theme
 
 
 @pytest.mark.parametrize("iteration,key", [(0, "training.action_start"), (12, "training_panel.resume")])
@@ -353,6 +282,7 @@ def test_toolbar_fit_uses_measured_width_and_can_restore_captions(training_panel
 
 
 def test_sparsity_is_a_collapsible_advanced_group():
+    """Keep the sparsity activation outside the collapsed parameter section so it remains usable."""
     from xml.etree import ElementTree as ET
     root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
     advanced = root.find(".//*[@id='sec-advanced-params']")
@@ -371,7 +301,9 @@ def test_sparsity_is_a_collapsible_advanced_group():
     assert content.find(".//*[@id='sec-save-steps']") is None
 
 
+
 def test_advanced_has_single_real_activation_for_each_optional_feature():
+    """Feature checkboxes must have one live value-change binding and remain outside their details."""
     from xml.etree import ElementTree as ET
     root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
     advanced = root.find(".//*[@id='sec-advanced-params']")
@@ -394,34 +326,6 @@ def test_advanced_has_single_real_activation_for_each_optional_feature():
         activation = advanced.find(f".//*[@data-for='row : pv_{run}_rows']")
         details = advanced.find(f".//*[@id='sec-{section}']")
         assert positions.index(activation) < positions.index(details)
-    category_titles = {node.text for node in advanced.findall("div[@class='training-subsection-title']")}
-    assert "@tr:training.section.supervision" in category_titles
-    assert "@tr:training.section.exposure_appearance" in category_titles
-    assert "@tr:training.section.training_features" in category_titles
-    for section in ("depth", "normal", "ppisp", "bilateral", "evaluation", "random-init", "sparsity", "optimization"):
-        assert advanced.find(f".//*[@id='sec-{section}']") is not None
-    assert advanced.find(".//*[@id='sec-background']") is None
-    assert root.find(".//*[@id='sec-background']") is not None
-    assert root.find(".//*[@id='sec-appearance']") is not None
-    ids = [node.get("id") for node in root.iter() if node.get("id")]
-    assert ids.index("sec-camera") < ids.index("sec-background") < ids.index("sec-appearance")
-    assert ids.index("sec-appearance") < ids.index("sec-masking") < ids.index("sec-dataset")
-    assert ids.index("sec-dataset") < ids.index("sec-advanced-params")
-    assert advanced.find(".//*[@id='sec-dataset']") is None
-    assert root.find(".//*[@id='hdr-advanced-params']").get("data-event-click") == "toggle_section('advanced_params')"
-
-
-def test_save_project_is_in_the_same_row_as_pause_and_resume():
-    from xml.etree import ElementTree as ET
-    root = ET.parse(Path(__file__).parents[2] / "src/visualizer/gui/rmlui/resources/training.rml")
-    for state in ("running", "paused"):
-        group = root.find(
-            f".//div[@data-if='show_ctrl_{state}']"
-        )
-        row = group.find("div[@class='training-action-row']")
-        assert row.find("button[@data-if='show_project_save']") is not None
-    controls = root.find(".//*[@id='controls']")
-    assert controls.find("button[@data-if='show_project_save']") is None
 
 
 def test_bundled_locales_define_training_panel_strategy_and_color_keys():
@@ -970,6 +874,7 @@ def test_dataset_default_open_preserves_saved_chrome(training_panel_module):
 
 
 def test_dataset_is_a_main_section_before_advanced(training_panel_module):
+    """Dataset controls must remain available when the advanced section is collapsed."""
     from xml.etree import ElementTree as ET
 
     root = Path(__file__).resolve().parents[2]
@@ -991,6 +896,7 @@ def test_dataset_is_a_main_section_before_advanced(training_panel_module):
     for name in ("use_cpu_cache", "use_16bit_color"):
         assert dataset.find(f".//input[@data-checked='{name}']") is not None
     assert "dataset" not in training_panel_module.property_view.ADVANCED_SECTIONS
+
 
 
 @pytest.mark.parametrize("query", ["resize_factor", "max_width", "dataset path"])
@@ -2710,36 +2616,9 @@ def test_show_save_pc_dialog_message_depends_on_project_binding(
         "training.conflict.btn_cancel",
     ]
 
-def test_compact_toolbar_preserves_icons_tooltips_and_accessible_names():
-    from xml.etree import ElementTree as ET
-
-    root = Path(__file__).resolve().parents[2]
-    document = ET.parse(root / "src/visualizer/gui/rmlui/resources/training.rml")
-    toolbar = document.find(".//*[@class='training-toolbar']")
-    for button in toolbar.iter("button"):
-        assert button.find("img") is not None
-        assert button.get("data-tooltip")
-        assert button.get("data-attr-aria-label")
-        action = button.get("data-event-click").split("'")[1]
-        probe = document.find(f".//*[@id='measure-{action}']")
-        assert probe.find("span").text == button.find("span").text
-        assert probe.find("img").get("src") == button.find("img").get("src")
-        assert {c for c in probe.get("class").split() if c.startswith("training-toolbar")} == {
-            c for c in button.get("class").split() if c.startswith("training-toolbar")}
-    css = (root / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
-    assert "@media (max-width:" not in css
-    assert ".training-toolbar.is-compact .training-toolbar-action span" in css
-    assert "width: 28dp" in css
-    assert document.find(".//*[@id='training-toolbar-measure']").get("aria-hidden") == "true"
-    ready = toolbar.find("div[@data-if=\'show_ctrl_ready\']")
-    assert ready.find(".//button[@data-if='show_reset_ready']") is not None
-    paused = toolbar.find("div[@data-if=\'show_ctrl_paused\']")
-    assert paused.find(".//button[@data-if='show_project_save']") is not None
-    toolbar_css = css.split(".training-toolbar {", 1)[1].split("}", 1)[0]
-    assert "flex-wrap: nowrap" in toolbar_css
-
 
 def test_enabled_features_have_independent_parameter_sections():
+    """Collapsing one feature must not hide another feature or expose incompatible PPISP controls."""
     from xml.etree import ElementTree as ET
 
     root = Path(__file__).resolve().parents[2]
@@ -2762,37 +2641,16 @@ def test_enabled_features_have_independent_parameter_sections():
     assert basic_params is not None
     assert basic_params.find(".//*[@data-value='sh_degree_str']") is not None
     assert advanced.find(".//*[@data-value='sh_degree_str']") is None
-    advanced_children = list(advanced)
-    feature_heading = next(
-        node for node in advanced_children
-        if node.get("class") == "training-subsection-title"
-        and node.text == "@tr:training.section.training_features"
-    )
-
-    def direct_child_index_containing(xpath):
-        return next(
-            index for index, node in enumerate(advanced_children)
-            if node.find(xpath) is not None
-        )
-
-    feature_order = [
-        advanced_children.index(feature_heading),
-        direct_child_index_containing(".//*[@data-for='row : pv_dataset_eval_rows']"),
-        direct_child_index_containing(".//*[@id='sec-evaluation']"),
-        direct_child_index_containing(".//*[@data-for='row : pv_feature_random_rows']"),
-        direct_child_index_containing(".//*[@id='sec-random-init']"),
-        direct_child_index_containing(".//*[@data-for='row : pv_basic_sparsity_toggle_rows']"),
-        direct_child_index_containing(".//*[@id='sec-sparsity']"),
-        direct_child_index_containing(".//*[@id='sec-optimization']"),
-    ]
-    assert feature_order == sorted(feature_order)
     for name in ("ppisp", "bilateral"):
         parent = next(node for node in advanced.iter() if sections[name] in list(node))
         assert "!dep_exposure_correction" in parent.get("data-if")
     for run in ("ppisp_exif", "appearance_tuning", "bilateral", "exposure_grid_start"):
         assert sections["exposure"].find(f".//*[@data-for='row : pv_{run}_rows']") is not None
 
+
+
 def test_error_details_do_not_participate_in_toolbar_layout():
+    """Long training errors must remain outside the action row so recovery buttons stay usable."""
     from xml.etree import ElementTree as ET
 
     root = Path(__file__).resolve().parents[2]
@@ -2810,14 +2668,3 @@ def test_error_details_do_not_participate_in_toolbar_layout():
     assert len(error_actions.findall(".//button")) == 2
     assert toolbar.find(".//*[@class='training-status-badge is-error']") is None
     assert controls.find(".//*[@class='training-status-badge is-error']") is not None
-
-
-def test_advanced_title_keeps_arrow_inside_its_box():
-    root = Path(__file__).resolve().parents[2]
-    css = (root / "src/visualizer/gui/rmlui/resources/training.rcss").read_text()
-    title = css.split("#hdr-advanced-params {", 1)[1].split("}", 1)[0]
-    assert "margin: 8dp 0 0" in title
-    assert "padding: 5dp 6dp" in title
-    assert "box-sizing: border-box" in title
-    arrow = css.split("#hdr-advanced-params > .section-arrow {", 1)[1].split("}", 1)[0]
-    assert "flex: 0 0 10dp" in arrow

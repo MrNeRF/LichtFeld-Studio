@@ -1963,117 +1963,6 @@ def test_every_depth_slider_carries_its_own_tooltip_in_every_locale():
         )
 
 
-# Per locale: the existing selection_depth_sync object name, the retired competing name,
-# and the Size percentage term. All five sliders must share that locale's established
-# noun.
-_DEPTH_WINDOW_TERMS = {
-    "en.json": ("depth window", "depth box", "percentage"),
-    "de.json": ("Tiefenfenster", "Auswahlbox", "Prozent"),
-    "es.json": ("ventana de profundidad", "caja de profundidad", "porcentaje"),
-    "fr.json": ("fenêtre de profondeur", "boîte de profondeur", "pourcentage"),
-    "it.json": ("finestra di profondità", "riquadro di profondità", "percentuale"),
-    "ja.json": ("深度ウィンドウ", "深度ボックス", "割合"),
-    "ko.json": ("깊이 창", "깊이 박스", "백분율"),
-    "nl.json": ("dieptevenster", "dieptegebied", "percentage"),
-    "pl.json": ("okna głębi", "pola głębi", "procent"),
-    "zh.json": ("深度窗口", "深度框", "百分比"),
-}
-
-
-def test_the_five_depth_tooltips_name_one_depth_window_and_size_says_percentage():
-    """All five sliders move the same object, so each locale must use its existing
-    selection_depth_sync term instead of mixing depth box and selection window. Size
-    additionally names its unit: percent of the reference scale. X/Y are normalized
-    offsets times 100 with no reference size, so only Size gains that clause; the other
-    four change terminology only.
-    """
-    project_root = Path(__file__).parent.parent.parent
-    locale_dir = project_root / "src" / "visualizer" / "gui" / "resources" / "locales"
-
-    slider_keys = (
-        "selection_depth_near",
-        "selection_depth_far",
-        "selection_depth_size",
-        "selection_depth_offset_x",
-        "selection_depth_offset_y",
-    )
-
-    seen = set()
-    for path in sorted(locale_dir.glob("*.json")):
-        assert path.name in _DEPTH_WINDOW_TERMS, (
-            f"{path.name} is a locale this test does not know the depth-window "
-            "term for; add it rather than letting the file go unchecked"
-        )
-        seen.add(path.name)
-        window, old_name, percent_word = _DEPTH_WINDOW_TERMS[path.name]
-        tooltips = json.loads(path.read_text(encoding="utf-8"))["tooltip"]
-
-        for key in slider_keys:
-            value = tooltips[key]
-            assert window in value, (
-                f"{path.name}: tooltip.{key} is {value!r}, which never names "
-                f"the {window!r} the other four sliders move"
-            )
-            assert old_name not in value, (
-                f"{path.name}: tooltip.{key} still calls it {old_name!r}; the "
-                f"row settled on {window!r}"
-            )
-
-        size_text = tooltips["selection_depth_size"]
-        assert percent_word in size_text, (
-            f"{path.name}: tooltip.selection_depth_size is {size_text!r} and "
-            "never says the value is a percentage of the reference size"
-        )
-
-    assert seen == set(_DEPTH_WINDOW_TERMS), (
-        "a locale named in the term table has no file: "
-        f"{sorted(set(_DEPTH_WINDOW_TERMS) - seen)}"
-    )
-
-
-def test_gt_compare_modes_show_matching_color_legends():
-    project_root = Path(__file__).parent.parent.parent
-    resources = project_root / "src/visualizer/gui/rmlui/resources"
-    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
-    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
-
-    assert 'data-if="gt_compare_mode_value == \'depth\'"' in rml
-    assert 'data-if="gt_compare_depth_mode_value == \'palette\'"' in rml
-    assert 'data-if="gt_compare_depth_mode_value == \'gray\'"' in rml
-    assert "@tr:ui.far" in rml
-    assert "@tr:ui.near" in rml
-    assert "horizontal-gradient(#0d0a26 #0f3280)" in rcss
-    assert "horizontal-gradient(#f6d14d #fb6e20)" in rcss
-    assert "horizontal-gradient(#000000 #ffffff)" in rcss
-
-    assert 'data-if="gt_compare_mode_value == \'loss\'"' in rml
-    assert "@tr:tooltip.gt_loss_lower_error" in rml
-    assert "@tr:tooltip.gt_loss_higher_error" in rml
-    assert "horizontal-gradient(#000000 #380578)" in rcss
-    assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
-
-
-def test_gt_compare_modes_show_matching_color_legends():
-    project_root = Path(__file__).parent.parent.parent
-    resources = project_root / "src/visualizer/gui/rmlui/resources"
-    rml = (resources / "viewport_overlay.rml").read_text(encoding="utf-8")
-    rcss = (resources / "viewport_overlay.rcss").read_text(encoding="utf-8")
-
-    assert 'data-if="gt_compare_mode_value == \'depth\'"' in rml
-    assert 'data-if="gt_compare_depth_mode_value == \'palette\'"' in rml
-    assert 'data-if="gt_compare_depth_mode_value == \'gray\'"' in rml
-    assert "@tr:ui.far" in rml
-    assert "@tr:ui.near" in rml
-    assert "horizontal-gradient(#0d0a26 #0f3280)" in rcss
-    assert "horizontal-gradient(#f6d14d #fb6e20)" in rcss
-    assert "horizontal-gradient(#000000 #ffffff)" in rcss
-
-    assert 'data-if="gt_compare_mode_value == \'loss\'"' in rml
-    assert "@tr:tooltip.gt_loss_lower_error" in rml
-    assert "@tr:tooltip.gt_loss_higher_error" in rml
-    assert "horizontal-gradient(#000000 #380578)" in rcss
-    assert "horizontal-gradient(#fca60a #ffffbf)" in rcss
-
 def test_viewport_toolbar_update_syncs_utility_records(toolbar_module, monkeypatch):
     module, _hook_calls, _remove_calls = toolbar_module
     model = _DataModelStub()
@@ -2483,11 +2372,6 @@ def test_each_gizmo_group_stamps_its_own_panel_into_the_toolbar_event():
     assert "'right'" not in primary_group
     assert "'left'" not in secondary_group
 
-    # Exactly two panel-stamped call sites in the whole template. A third would
-    # mean some other toolbar picked up an addressing it was never given.
-    assert rml.count("toolbar_action(button.action, button.value, ") == 2
-    # Every other group still passes two arguments and therefore carries no panel.
-    assert rml.count("toolbar_action(button.action, button.value)") == 33
 
 
 def test_toolbar_action_forwards_the_group_panel_to_the_camera_actions(

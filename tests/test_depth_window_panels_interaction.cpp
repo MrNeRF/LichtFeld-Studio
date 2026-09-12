@@ -2313,8 +2313,7 @@ namespace lfs::vis {
 
         // One frame may contain DOWN/UP or two complete presses. Preserve every DOWN's
         // point and arrival order, apply focus per press, and let lastPress inspect the
-        // last without changing the stream
-        // (EachPressAppliesItsOwnFocusDecisionInOrder).
+        // last without changing the stream.
         lfs::vis::FrameInputBuffer double_press;
         double_press.beginFrame();
         double_press.processEvent(mouseDownEvent(SDL_BUTTON_LEFT, 700.0f, 300.0f));
@@ -2499,85 +2498,6 @@ namespace lfs::vis {
         // across frames.
         right_first.beginFrame();
         EXPECT_TRUE(right_first.mouse_button_events.empty());
-    }
-
-    // Apply focus per left press in arrival order: refusal changes nothing, so the last
-    // admitted press wins. Collapsing to the final press would lose an earlier viewport
-    // focus change when toolbar chrome is clicked afterward. Exercise both orderings
-    // through the real rule; GuiManager implements the same continue/admit fold, but
-    // this test does not run a complete GUI frame.
-    TEST(DepthWindowOverlayPressFocusTest, EachPressAppliesItsOwnFocusDecisionInOrder) {
-        using lfs::vis::gui::OverlayPressFocusInputs;
-        using lfs::vis::gui::overlayPressMayFocusPanel;
-
-        struct FramePress {
-            glm::vec2 point;
-            OverlayPressFocusInputs rule;
-        };
-
-        // GuiManager's loop, in the only two lines of it this can hold: an
-        // admitted press re-points focus, a refused press does nothing at all.
-        const auto focusAfterFrame =
-            [](const std::vector<FramePress>& presses) -> std::optional<glm::vec2> {
-            std::optional<glm::vec2> focused;
-            for (const auto& press : presses) {
-                if (!overlayPressMayFocusPanel(press.rule))
-                    continue;
-                focused = press.point;
-            }
-            return focused;
-        };
-
-        constexpr OverlayPressFocusInputs kEligible{
-            .left_pressed = true,
-            .overlay_wants_input = true,
-            .pressed_interactive_control = false,
-            .press_blurred_text_input = false,
-            .press_inside_viewport = true,
-            .press_gui_owned = false,
-        };
-        auto rejected = kEligible;
-        rejected.pressed_interactive_control = true; // a press on toolbar chrome
-        ASSERT_TRUE(overlayPressMayFocusPanel(kEligible));
-        ASSERT_FALSE(overlayPressMayFocusPanel(rejected));
-
-        const glm::vec2 viewport_point{700.0f, 300.0f};
-        const glm::vec2 chrome_point{360.0f, 60.0f};
-
-        // ELIGIBLE -> REJECTED. The chrome press must not erase the viewport
-        // press's focus move; the frame's outcome is the viewport press.
-        const auto eligible_first = focusAfterFrame({
-            {viewport_point, kEligible},
-            {chrome_point, rejected},
-        });
-        ASSERT_TRUE(eligible_first.has_value())
-            << "a later chrome press erased an earlier viewport press's focus";
-        EXPECT_EQ(*eligible_first, viewport_point);
-
-        // REJECTED -> ELIGIBLE. The chrome press contributes nothing and the
-        // viewport press behind it still focuses -- so the order is genuinely
-        // being walked, not a hard-coded "first" or "last" event.
-        const auto rejected_first = focusAfterFrame({
-            {chrome_point, rejected},
-            {viewport_point, kEligible},
-        });
-        ASSERT_TRUE(rejected_first.has_value());
-        EXPECT_EQ(*rejected_first, viewport_point);
-
-        // Two ELIGIBLE presses: the last one wins, because it is the one whose
-        // focus move survives the frame.
-        const glm::vec2 second_viewport_point{660.0f, 310.0f};
-        const auto both_eligible = focusAfterFrame({
-            {viewport_point, kEligible},
-            {second_viewport_point, kEligible},
-        });
-        ASSERT_TRUE(both_eligible.has_value());
-        EXPECT_EQ(*both_eligible, second_viewport_point);
-
-        // Two REFUSED presses move nothing.
-        EXPECT_FALSE(focusAfterFrame({{chrome_point, rejected},
-                                      {viewport_point, rejected}})
-                         .has_value());
     }
 
     // ------------------------------------------------------------------

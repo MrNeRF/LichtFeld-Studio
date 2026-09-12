@@ -436,7 +436,6 @@ private:
 
         void Free_Allocation(VmaVirtualAllocation allocation) noexcept;
         void Free_GeometryHandle(geometry_handle_t* p_valid_geometry_handle) noexcept;
-        void Free_GeometryHandle_ShaderDataOnly(geometry_handle_t* p_valid_geometry_handle) noexcept;
 
     private:
         VkDeviceSize m_memory_total_size;

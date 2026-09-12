@@ -47,17 +47,6 @@ namespace lfs::training {
             return row_size;
         }
 
-        [[nodiscard]] size_t tensor_allocated_elements(const lfs::core::Tensor& tensor) {
-            if (!tensor.is_valid() || tensor.ndim() == 0) {
-                return 0;
-            }
-            const size_t row_size = tensor_row_size(tensor);
-            if (row_size == 0) {
-                return 0;
-            }
-            return (tensor.capacity() > 0 ? tensor.capacity() : tensor.shape()[0]) * row_size;
-        }
-
     } // namespace
 
     void ensure_joint_bounds_capacity(lfs::core::Tensor& joint_bounds,

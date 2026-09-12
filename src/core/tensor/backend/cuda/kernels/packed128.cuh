@@ -128,36 +128,6 @@ namespace lfs::core {
         *reinterpret_cast<int4*>(target) = value.get_bits();
     }
 
-    /**
-     * @brief Streaming store (bypass L1 cache, only write to L2)
-     *
-     * Use this for:
-     * - Large activation outputs (forward pass)
-     * - Data that won't be read back soon
-     * - Write-once patterns
-     *
-     * This is the __stcs instruction: "store streaming"
-     */
-    template <typename ElementType>
-    __device__ inline void store128cs(ElementType* target, Packed128<ElementType> value) {
-        __stcs(reinterpret_cast<int4*>(target), value.get_bits());
-    }
-
-    /**
-     * @brief Cache-global store (bypass L1, write to L2 only)
-     *
-     * Use this for:
-     * - Gradients (computed once, read once in backward pass)
-     * - Intermediate results that won't be reused immediately
-     * - Reduces L1 cache pressure
-     *
-     * This is the __stcg instruction: "store cache global" (L2 only)
-     */
-    template <typename ElementType>
-    __device__ inline void store128cg(ElementType* target, Packed128<ElementType> value) {
-        __stcg(reinterpret_cast<int4*>(target), value.get_bits());
-    }
-
     // ============================================================================
     // Convenient Type Aliases
     // ============================================================================
@@ -200,14 +170,6 @@ namespace lfs::core {
     template <typename T>
     __host__ __device__ inline bool is_aligned_128(const T* ptr) {
         return (reinterpret_cast<uintptr_t>(ptr) % 16) == 0;
-    }
-
-    /**
-     * @brief Check if size is a multiple of Packed128::size
-     */
-    template <typename T>
-    __host__ __device__ inline bool is_size_aligned_128(size_t n) {
-        return (n % Packed128<T>::size) == 0;
     }
 
 } // namespace lfs::core

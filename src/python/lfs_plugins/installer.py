@@ -281,11 +281,6 @@ def write_plugin_source_metadata(plugin_dir: Path, info: PluginSourceInfo) -> No
         json.dump(info.to_dict(), f, indent=2, ensure_ascii=False)
 
 
-def is_git_available() -> bool:
-    """Return whether git is currently available on PATH."""
-    return shutil.which("git") is not None
-
-
 def github_repo_url(owner: str, repo: str) -> str:
     """Return the canonical GitHub repo URL for an owner/repo pair."""
     return f"https://github.com/{owner}/{repo}"

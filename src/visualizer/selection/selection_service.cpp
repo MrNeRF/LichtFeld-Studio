@@ -3221,14 +3221,6 @@ namespace lfs::vis {
         return true;
     }
 
-    std::optional<SelectionService::ViewportInfo> SelectionService::resolveViewportInfo() const {
-        const auto context = resolveViewerViewportContext();
-        if (!context || !context->info.valid()) {
-            return std::nullopt;
-        }
-        return context->info;
-    }
-
     bool SelectionService::buildSelectionMaskForInteractiveSession(core::Tensor& selection_out,
                                                                    const SelectionProjectionContext& projection_context,
                                                                    const bool include_polygon_cursor,

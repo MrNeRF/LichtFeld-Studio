@@ -388,28 +388,6 @@ namespace lfs::vis {
         }
     }
 
-    void RenderingManager::requestResizeTrainingPause(TrainerManager* const trainer_manager) {
-        if (resize_training_pause_active_ || !trainer_manager || !trainer_manager->isRunning()) {
-            return;
-        }
-
-        trainer_manager->pauseTrainingTemporary();
-        resize_training_pause_trainer_ = trainer_manager;
-        resize_training_pause_active_ = true;
-    }
-
-    void RenderingManager::releaseResizeTrainingPause() {
-        if (!resize_training_pause_active_) {
-            return;
-        }
-
-        if (resize_training_pause_trainer_) {
-            resize_training_pause_trainer_->resumeTrainingTemporary();
-        }
-        resize_training_pause_trainer_ = nullptr;
-        resize_training_pause_active_ = false;
-    }
-
     void RenderingManager::setLodAvailable(bool available) {
         lod_available_ = available;
         if (available) {

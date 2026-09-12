@@ -379,9 +379,6 @@ class Mesh2SplatPanel(Panel):
         self._dirty_model("effective_resolution")
         self._request_reconvert_if_needed()
 
-    def _on_parameter_commit(self, _event=None):
-        self._request_reconvert_if_needed()
-
     def _request_reconvert_if_needed(self):
         if self._has_initial_conversion and not self._conversion_active():
             self._start_conversion()

@@ -1866,21 +1866,6 @@ namespace lfs::io {
         return lines;
     }
 
-    std::vector<std::string> split_string(const std::string& s, char delimiter) {
-        std::vector<std::string> tokens;
-        size_t start = 0;
-        size_t end = s.find(delimiter);
-
-        while (end != std::string::npos) {
-            tokens.push_back(s.substr(start, end - start));
-            start = end + 1;
-            end = s.find(delimiter, start);
-        }
-        tokens.push_back(s.substr(start));
-
-        return tokens;
-    }
-
     bool parse_image_metadata_line(const std::string& line, ImageData& img) {
         std::istringstream iss(line);
         if (!(iss >> img.image_id >> img.qvec[0] >> img.qvec[1] >> img.qvec[2] >> img.qvec[3] >> img.tvec[0] >> img.tvec[1] >> img.tvec[2] >> img.camera_id)) {

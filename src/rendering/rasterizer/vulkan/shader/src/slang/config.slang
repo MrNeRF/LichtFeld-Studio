@@ -49,8 +49,6 @@
 #define NEAR_CLIP 0.01f
 
 
-#define EXPORT_MODE_VULKAN_FORWARD 0
-#define EXPORT_MODE_VULKAN_BACKWARD 1
 
 #define sortingKey_t uint32_t
 // #define sortingKey_t int64_t
@@ -96,27 +94,4 @@ static const float M_PI = 3.14159265358979;
 
 #ifndef USE_EMULATED_INT64
 #define USE_EMULATED_INT64 0
-#endif
-
-#ifndef USE_EMULATED_F32_ATOMIC
-#define USE_EMULATED_F32_ATOMIC 0
-#endif
-
-#if USE_EMULATED_F32_ATOMIC
-void AtomicAddFloat(RWByteAddressBuffer buffer, uint byteAddress, float valueToAdd) {
-    uint oldInt = buffer.Load(byteAddress);
-    uint newInt;
-    uint assumed;
-
-    do {
-        assumed = oldInt;
-        float fAssumed = asfloat(assumed);
-        float fNew = fAssumed + valueToAdd;
-        newInt = asuint(fNew);
-
-        uint resultInt;
-        buffer.InterlockedCompareExchange(byteAddress, assumed, newInt, resultInt);
-        oldInt = resultInt;
-    } while (assumed != oldInt);
-}
 #endif

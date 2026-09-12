@@ -775,8 +775,6 @@ namespace lfs::io {
         }
         [[nodiscard]] double currentTime() const { return current_time_; }
         [[nodiscard]] double duration() const { return duration_; }
-        [[nodiscard]] int64_t currentFrameNumber() const { return current_frame_; }
-        [[nodiscard]] int64_t totalFrames() const { return total_frames_; }
         [[nodiscard]] double fps() const { return fps_; }
 
     private:

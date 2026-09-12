@@ -168,10 +168,4 @@ namespace lfs::core {
         }
     };
 
-    // Helper function to allocate multiple device arrays at once
-    template <typename... Args>
-    bool cuda_multi_malloc(Args&... args) {
-        return ((args.valid()) && ...);
-    }
-
 } // namespace lfs::core

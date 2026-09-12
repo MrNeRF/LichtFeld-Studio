@@ -5641,9 +5641,7 @@ namespace lfs::vis {
             GTEST_SKIP() << "CUDA device unavailable";
         }
         const auto first_path = makeSplatFixture("bicycle_ref");
-        const auto second_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+        const auto second_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(first_path));
         ASSERT_TRUE(std::filesystem::exists(second_path));
 
@@ -6009,9 +6007,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+        const auto splat_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
         const auto project_path =
@@ -6088,9 +6084,7 @@ namespace lfs::vis {
         if (!cuda_device_available()) {
             GTEST_SKIP() << "CUDA device unavailable";
         }
-        const auto splat_path =
-            std::filesystem::path(PROJECT_ROOT_PATH) /
-            "tests/data/bike.ply";
+        const auto splat_path = makeSplatFixture("bike");
         ASSERT_TRUE(std::filesystem::exists(splat_path));
         const auto& temporary = temporary_.path;
         const auto project_path =

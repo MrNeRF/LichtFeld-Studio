@@ -117,56 +117,6 @@ namespace lfs::training {
             return bg_image.is_valid() && !bg_image.is_empty();
         }
 
-        void compose_background_in_place(
-            core::Tensor& image,
-            const core::Tensor& alpha,
-            const core::Tensor& bg_color,
-            const core::Tensor& bg_image,
-            int height,
-            int width,
-            cudaStream_t stream,
-            bool subtract_background) {
-            if (has_background_image(bg_image)) {
-                if (subtract_background) {
-                    kernels::launch_fused_background_unblend_with_image(
-                        image.ptr<float>(),
-                        alpha.ptr<float>(),
-                        bg_image.ptr<float>(),
-                        height,
-                        width,
-                        stream);
-                } else {
-                    kernels::launch_fused_background_blend_with_image(
-                        image.ptr<float>(),
-                        alpha.ptr<float>(),
-                        bg_image.ptr<float>(),
-                        image.ptr<float>(),
-                        height,
-                        width,
-                        stream);
-                }
-                return;
-            }
-
-            if (subtract_background) {
-                kernels::launch_fused_background_unblend(
-                    image.ptr<float>(),
-                    alpha.ptr<float>(),
-                    bg_color.ptr<float>(),
-                    height,
-                    width,
-                    stream);
-            } else {
-                kernels::launch_fused_background_blend(
-                    image.ptr<float>(),
-                    alpha.ptr<float>(),
-                    bg_color.ptr<float>(),
-                    image.ptr<float>(),
-                    height,
-                    width,
-                    stream);
-            }
-        }
     } // namespace
 
     /**

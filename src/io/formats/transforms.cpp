@@ -210,10 +210,6 @@ namespace lfs::io {
         return t;
     }
 
-    float fov_deg_to_focal_length(int resolution, float fov_deg) {
-        return 0.5f * (float)resolution / tanf(0.5f * fov_deg * static_cast<float>(std::numbers::pi) / 180.0f);
-    }
-
     float fov_rad_to_focal_length(int resolution, float fov_rad) {
         return 0.5f * (float)resolution / tanf(0.5f * fov_rad);
     }

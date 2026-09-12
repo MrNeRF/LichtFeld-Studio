@@ -299,7 +299,6 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<ViewerViewportContext> resolveViewerViewportContext(
             std::optional<glm::vec2> screen_point = std::nullopt,
             std::optional<SplitViewPanelId> panel_override = std::nullopt) const;
-        [[nodiscard]] std::optional<ViewportInfo> resolveViewportInfo() const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters,
                                                                          const SelectionProjectionContext& projection_context);
