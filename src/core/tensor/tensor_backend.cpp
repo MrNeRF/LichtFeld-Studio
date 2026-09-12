@@ -344,8 +344,11 @@ namespace lfs::core {
             if (!context || context->dead() || !context->cuda_imports()) {
                 return false;
             }
-            return context->memory().exports_memory() &&
-                   context->cuda_imports()->timeline_imported();
+            if (!context->memory().exports_memory() || !context->timeline_exportable()) {
+                return false;
+            }
+            context->cuda_imports()->import_timeline(context->timeline());
+            return context->cuda_imports()->timeline_imported();
         } catch (...) { // LFS-CENSUS-OK(empty-catch): export probe fails closed when CUDA import is absent
             return false;
         }

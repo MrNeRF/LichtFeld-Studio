@@ -370,11 +370,9 @@ namespace lfs::core::internal {
         vk_check(this,
                  vkCreateSemaphore(device_, &semaphore_info, nullptr, &timeline_),
                  "vkCreateSemaphore(timeline)");
-        if (export_timeline) {
-            if (cuda_imports_) {
-                cuda_imports_->import_timeline(timeline_);
-            }
-        }
+        // Export to CUDA only when a CUDA view is requested. Pure Vulkan
+        // consumers keep an internal semaphore with fully trackable dependencies.
+        timeline_exportable_ = export_timeline;
         create_pipeline_cache();
         recorders_ = std::make_unique<VulkanRecorderRegistry>(*this);
         memory_ = std::make_unique<VulkanMemory>(*this);

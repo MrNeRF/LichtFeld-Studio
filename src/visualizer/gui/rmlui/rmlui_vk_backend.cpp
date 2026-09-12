@@ -306,15 +306,24 @@ RenderInterface_VK::~RenderInterface_VK() {
 }
 
 std::string RenderInterface_VK::MakeExternalTextureSource(VkImageView image_view, VkSampler sampler,
-                                                          int width, int height) {
+                                                          int width, int height, std::uint64_t incarnation) {
     if (image_view == VK_NULL_HANDLE || sampler == VK_NULL_HANDLE || width <= 0 || height <= 0)
         return {};
-    char buf[160];
-    std::snprintf(buf, sizeof(buf),
-                  "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d",
-                  static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
-                  static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
-                  width, height);
+    char buf[192];
+    if (incarnation == 0) {
+        std::snprintf(buf, sizeof(buf),
+                      "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d",
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
+                      width, height);
+    } else {
+        std::snprintf(buf, sizeof(buf),
+                      "lfs-vk://?v=%llx&s=%llx&w=%d&h=%d&g=%llx",
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(image_view)),
+                      static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(sampler)),
+                      width, height,
+                      static_cast<unsigned long long>(incarnation));
+    }
     return std::string(buf);
 }
 

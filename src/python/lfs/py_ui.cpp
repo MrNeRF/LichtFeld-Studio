@@ -182,6 +182,7 @@ namespace lfs::python {
 
         // Dynamic texture tracking
         std::atomic<bool> g_texture_service_alive{true};
+        std::atomic<uint64_t> g_next_dynamic_texture_id{1};
         std::mutex g_dynamic_textures_mutex;
 
         class PyDynamicTexture;
@@ -226,28 +227,34 @@ namespace lfs::python {
 
             void update(const PyTensor& py_tensor) {
                 lfs::python::require_ui_texture_creation_thread();
-                auto t = py_tensor.tensor();
+                const auto t = py_tensor.tensor();
                 if (t.ndim() != 3)
                     throw std::invalid_argument("DynamicTexture requires 3D tensor [H, W, C]");
                 if (t.size(2) != 3 && t.size(2) != 4)
                     throw std::invalid_argument("DynamicTexture channels must be 3 (RGB) or 4 (RGBA)");
 
-                if (t.device() == core::Device::CPU)
-                    t = t.gpu();
                 const auto orig_dtype = t.dtype();
-                if (orig_dtype != core::DataType::Float32)
-                    t = t.to(core::DataType::Float32);
-                if (orig_dtype == core::DataType::UInt8)
-                    t = t / 255.0f;
+                const auto device_tensor = t.device() == core::Device::CPU ? t.gpu() : t;
+                const auto float_tensor = orig_dtype == core::DataType::Float32
+                                              ? device_tensor
+                                              : device_tensor.to(core::DataType::Float32);
+                const auto normalized = orig_dtype == core::DataType::UInt8
+                                            ? float_tensor / 255.0f
+                                            : float_tensor;
 
                 const int w = t.size(1);
                 const int h = t.size(0);
+                // This API is HWC. Resolve short images before the renderer's
+                // CHW-first inference mistakes their height for a channel axis.
+                const auto upload_tensor = (h == 1 || h == 3 || h == 4)
+                                               ? normalized.permute({2, 0, 1}).contiguous()
+                                               : normalized;
 
                 if (!texture_) {
                     texture_ = std::make_unique<lfs::vis::gui::VulkanUiTexture>();
                 }
 
-                if (!texture_->upload(t, w, h) || !texture_->valid())
+                if (!texture_->upload(upload_tensor, w, h) || !texture_->valid())
                     throw std::runtime_error("Failed to update UI texture");
                 width_ = w;
                 height_ = h;
@@ -273,7 +280,9 @@ namespace lfs::python {
             }
 
             uint64_t texture_id() const {
-                return texture_ ? static_cast<uint64_t>(texture_->textureId()) : 0;
+                // RmlUI resolves this token through the live texture registry.
+                // CUDA interop textures do not have an overlay descriptor set.
+                return valid() ? registry_id_ : 0;
             }
 
             std::string rml_src_url(const int width, const int height) const {
@@ -295,6 +304,8 @@ namespace lfs::python {
             }
 
         private:
+            const uint64_t registry_id_ =
+                g_next_dynamic_texture_id.fetch_add(1, std::memory_order_relaxed);
             std::unique_ptr<lfs::vis::gui::VulkanUiTexture> texture_;
             std::string plugin_name_;
             int width_ = 0;
