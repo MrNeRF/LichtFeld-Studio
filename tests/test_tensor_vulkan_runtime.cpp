@@ -66,11 +66,12 @@ namespace {
     }
 
     TEST_F(TensorVulkanRuntime, DeviceIndexOverrideAndCapsAreExposed) {
-#if defined(_WIN32)
-        _putenv_s("LFS_VULKAN_DEVICE", "0");
-#else
-        setenv("LFS_VULKAN_DEVICE", "0", 1);
-#endif
+        ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+        auto previous_options = tensor_backend_options();
+        internal::gpu_backend_reset_for_testing();
+        auto options = previous_options;
+        options.vulkan_device = "0";
+        ASSERT_TRUE(set_tensor_backend_options(options));
         const internal::VkDeviceCaps caps =
             internal::vulkan_device_caps_for_testing();
         EXPECT_EQ(caps.device_index, 0u);
@@ -83,11 +84,9 @@ namespace {
         const MemoryInfo memory = gpu_backend_memory_info(GpuBackend::Vulkan);
         EXPECT_GT(memory.total_bytes, 0u);
         EXPECT_EQ(memory.device_id, 0);
-#if defined(_WIN32)
-        _putenv_s("LFS_VULKAN_DEVICE", "");
-#else
-        unsetenv("LFS_VULKAN_DEVICE");
-#endif
+        ASSERT_TRUE(shutdown_gpu_backend(GpuBackend::Vulkan));
+        internal::gpu_backend_reset_for_testing();
+        ASSERT_TRUE(set_tensor_backend_options(previous_options));
     }
 
     TEST_F(TensorVulkanRuntime, UploadAndDownloadAreBitExactForEveryDtypeAndBoundarySize) {
@@ -512,22 +511,13 @@ namespace {
         EXPECT_EQ(shared.to_vector(), std::vector<float>(4099, 2.0f));
     }
 
-    TEST_F(TensorVulkanRuntime, EnvironmentSelectsVulkanForPublicFactories) {
+    TEST_F(TensorVulkanRuntime, ConfigurationSelectsVulkanForPublicFactories) {
         internal::gpu_backend_reset_for_testing();
-#if defined(_WIN32)
-        _putenv_s("LFS_TENSOR_BACKEND", "vulkan");
-#else
-        setenv("LFS_TENSOR_BACKEND", "vulkan", 1);
-#endif
+        ASSERT_TRUE(set_default_gpu_backend(GpuBackend::Vulkan));
         EXPECT_EQ(default_gpu_backend(), GpuBackend::Vulkan);
         const Tensor value = Tensor::full({7}, 4.0f, Device::CUDA);
         EXPECT_EQ(gpu_backend_of(value), GpuBackend::Vulkan);
         EXPECT_EQ(value.to_vector(), std::vector<float>(7, 4.0f));
-#if defined(_WIN32)
-        _putenv_s("LFS_TENSOR_BACKEND", "");
-#else
-        unsetenv("LFS_TENSOR_BACKEND");
-#endif
         internal::gpu_backend_reset_for_testing();
     }
 
