@@ -4,6 +4,7 @@
 
 #include "rendering/scene_upscaler_registry.hpp"
 
+#include "rendering/amd_fsr3_plugin.hpp"
 #include "rendering/nvidia_dlss_plugin.hpp"
 
 #include <algorithm>
@@ -69,6 +70,23 @@ namespace lfs::vis {
                 .input_scale = 0.50f,
             },
         };
+        constexpr std::array AMD_FSR3_PRESETS{
+            SceneUpscalerPreset{
+                .id = "quality",
+                .label_key = "preferences.scene_reconstruction_quality",
+                .input_scale = 2.0f / 3.0f,
+            },
+            SceneUpscalerPreset{
+                .id = "balanced",
+                .label_key = "preferences.scene_reconstruction_balanced",
+                .input_scale = 1.0f / 1.7f,
+            },
+            SceneUpscalerPreset{
+                .id = "performance",
+                .label_key = "preferences.scene_reconstruction_performance",
+                .input_scale = 0.50f,
+            },
+        };
         constexpr std::array DESCRIPTORS{
             SceneUpscalerDescriptor{
                 .backend = SceneUpscalerBackend::Native,
@@ -94,34 +112,50 @@ namespace lfs::vis {
                 .label_key = "preferences.scene_reconstruction_nvidia_dlss",
                 .presets = NVIDIA_DLSS_PRESETS,
             },
+            SceneUpscalerDescriptor{
+                .backend = SceneUpscalerBackend::AmdFsr3,
+                .id = "amd-fsr3",
+                .label_key = "preferences.scene_reconstruction_amd_fsr3",
+                .presets = AMD_FSR3_PRESETS,
+            },
         };
 
-        [[nodiscard]] constexpr std::size_t descriptorCountExcludingNvidiaDlss() {
-            std::size_t count = 0;
+        template <bool IncludeNvidiaDlss, bool IncludeAmdFsr3>
+        [[nodiscard]] constexpr auto makeAvailableDescriptors() {
+            constexpr std::size_t count =
+                DESCRIPTORS.size() - (IncludeNvidiaDlss ? 0u : 1u) -
+                (IncludeAmdFsr3 ? 0u : 1u);
+            std::array<SceneUpscalerDescriptor, count> filtered{};
+            std::size_t index = 0;
             for (const auto& descriptor : DESCRIPTORS) {
-                if (descriptor.backend != SceneUpscalerBackend::NvidiaDlss)
-                    ++count;
-            }
-            return count;
-        }
-
-        [[nodiscard]] constexpr auto makeDescriptorsWithoutNvidiaDlss() {
-            std::array<SceneUpscalerDescriptor, descriptorCountExcludingNvidiaDlss()> filtered{};
-            std::size_t count = 0;
-            for (const auto& descriptor : DESCRIPTORS) {
-                if (descriptor.backend != SceneUpscalerBackend::NvidiaDlss)
-                    filtered[count++] = descriptor;
+                if ((!IncludeNvidiaDlss &&
+                     descriptor.backend == SceneUpscalerBackend::NvidiaDlss) ||
+                    (!IncludeAmdFsr3 &&
+                     descriptor.backend == SceneUpscalerBackend::AmdFsr3)) {
+                    continue;
+                }
+                filtered[index++] = descriptor;
             }
             return filtered;
         }
 
-        constexpr auto DESCRIPTORS_WITHOUT_NVIDIA_DLSS = makeDescriptorsWithoutNvidiaDlss();
+        constexpr auto CORE_DESCRIPTORS = makeAvailableDescriptors<false, false>();
+        constexpr auto DESCRIPTORS_WITH_NVIDIA_DLSS =
+            makeAvailableDescriptors<true, false>();
+        constexpr auto DESCRIPTORS_WITH_AMD_FSR3 =
+            makeAvailableDescriptors<false, true>();
     } // namespace
 
     std::span<const SceneUpscalerDescriptor> sceneUpscalerDescriptors() {
-        if (nvidiaDlssPluginAvailable())
+        const bool nvidia_dlss_available = nvidiaDlssPluginAvailable();
+        const bool amd_fsr3_available = amdFsr3PluginAvailable();
+        if (nvidia_dlss_available && amd_fsr3_available)
             return DESCRIPTORS;
-        return DESCRIPTORS_WITHOUT_NVIDIA_DLSS;
+        if (nvidia_dlss_available)
+            return DESCRIPTORS_WITH_NVIDIA_DLSS;
+        if (amd_fsr3_available)
+            return DESCRIPTORS_WITH_AMD_FSR3;
+        return CORE_DESCRIPTORS;
     }
 
     const SceneUpscalerDescriptor& sceneUpscalerDescriptor(const SceneUpscalerBackend backend) {
@@ -179,7 +213,8 @@ namespace lfs::vis {
 
     SceneUpscalerSelection resolveSceneUpscalerSelection(
         const SceneUpscalerBackend requested,
-        const bool runtime_available) {
+        const bool runtime_available,
+        const SceneUpscalerFallback fallback) {
         if (requested == SceneUpscalerBackend::Native || runtime_available) {
             return {
                 .requested = requested,
@@ -190,7 +225,7 @@ namespace lfs::vis {
         return {
             .requested = requested,
             .effective = SceneUpscalerBackend::Native,
-            .fallback = SceneUpscalerFallback::RuntimeUnavailable,
+            .fallback = fallback,
         };
     }
 
@@ -200,6 +235,8 @@ namespace lfs::vis {
             return "none";
         case SceneUpscalerFallback::RuntimeUnavailable:
             return "runtime_unavailable";
+        case SceneUpscalerFallback::UnsupportedMode:
+            return "unsupported_mode";
         }
         return "unknown";
     }

@@ -1,0 +1,93 @@
+diff --git a/src/backends/vk/ffx_vk.cpp b/src/backends/vk/ffx_vk.cpp
+--- a/src/backends/vk/ffx_vk.cpp
++++ b/src/backends/vk/ffx_vk.cpp
+@@ -279,17 +279,22 @@
+     if (physicalDevice)
+         vkEnumerateDeviceExtensionProperties(physicalDevice, nullptr, &numExtensions, nullptr);
+ 
+-    uint32_t extensionPropArraySize = sizeof(VkExtensionProperties) * numExtensions;
+-    uint32_t gpuJobDescArraySize = FFX_ALIGN_UP(maxContexts * FFX_MAX_GPU_JOBS * sizeof(FfxGpuJobDescription), sizeof(uint32_t));
+-    uint32_t resourceViewArraySize = FFX_ALIGN_UP(((maxContexts * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2) + FFX_MAX_BINDLESS_DESCRIPTOR_COUNT) * sizeof(BackendContext_VK::VkResourceView), sizeof(uint32_t));
+-    uint32_t stagingRingBufferArraySize = FFX_ALIGN_UP(maxContexts * FFX_CONSTANT_BUFFER_RING_BUFFER_SIZE, sizeof(uint32_t));
+-    uint32_t pipelineArraySize = FFX_ALIGN_UP(maxContexts * FFX_MAX_PASS_COUNT * sizeof(BackendContext_VK::PipelineLayout), sizeof(uint32_t));
+-    uint32_t resourceArraySize = FFX_ALIGN_UP(maxContexts * FFX_MAX_RESOURCE_COUNT * sizeof(BackendContext_VK::Resource), sizeof(uint32_t));
+-    uint32_t contextArraySize = FFX_ALIGN_UP(maxContexts * sizeof(BackendContext_VK::EffectContext), sizeof(uint32_t));
+-    
+-    return FFX_ALIGN_UP(sizeof(BackendContext_VK) + extensionPropArraySize + gpuJobDescArraySize + resourceViewArraySize + stagingRingBufferArraySize +
+-                            pipelineArraySize + resourceArraySize + contextArraySize,
+-                        sizeof(uint64_t));
++    size_t scratchMemorySize = sizeof(BackendContext_VK);
++    const auto addAlignedArray = [&scratchMemorySize](size_t count, size_t elementSize, size_t alignment) {
++        // The caller's scratch pointer alignment is unknown; reserve worst-case padding.
++        scratchMemorySize = FFX_ALIGN_UP(scratchMemorySize, alignment) + (alignment - 1);
++        scratchMemorySize += count * elementSize;
++    };
++    addAlignedArray(maxContexts * FFX_MAX_GPU_JOBS, sizeof(FfxGpuJobDescription), alignof(FfxGpuJobDescription));
++    addAlignedArray((maxContexts * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2) + FFX_MAX_BINDLESS_DESCRIPTOR_COUNT,
++                    sizeof(BackendContext_VK::VkResourceView), alignof(BackendContext_VK::VkResourceView));
++    addAlignedArray(maxContexts * FFX_CONSTANT_BUFFER_RING_BUFFER_SIZE, sizeof(uint8_t), alignof(uint8_t));
++    addAlignedArray(maxContexts * FFX_MAX_PASS_COUNT, sizeof(BackendContext_VK::PipelineLayout), alignof(BackendContext_VK::PipelineLayout));
++    addAlignedArray(maxContexts * FFX_MAX_RESOURCE_COUNT, sizeof(BackendContext_VK::Resource), alignof(BackendContext_VK::Resource));
++    addAlignedArray(maxContexts, sizeof(BackendContext_VK::EffectContext), alignof(BackendContext_VK::EffectContext));
++    addAlignedArray(numExtensions, sizeof(VkExtensionProperties), alignof(VkExtensionProperties));
++
++    return FFX_ALIGN_UP(scratchMemorySize, sizeof(uint64_t));
+ }
+ 
+ // Create a FfxDevice from a VkDevice
+@@ -1402,6 +1407,9 @@
+         new (&backendContext->uniformBufferMutex) std::mutex();
+ 
+         // Map all of our pointers
++        const auto alignMemory = [](uint8_t* memory, size_t alignment) {
++            return reinterpret_cast<uint8_t*>(FFX_ALIGN_UP(reinterpret_cast<uintptr_t>(memory), alignment));
++        };
+         uint32_t gpuJobDescArraySize   = FFX_ALIGN_UP(backendContext->maxEffectContexts * FFX_MAX_GPU_JOBS * sizeof(FfxGpuJobDescription), sizeof(uint32_t));
+         uint32_t resourceViewArraySize = FFX_ALIGN_UP(((backendContext->maxEffectContexts * FFX_MAX_QUEUED_FRAMES * FFX_MAX_RESOURCE_COUNT * 2) + FFX_MAX_BINDLESS_DESCRIPTOR_COUNT) * sizeof(BackendContext_VK::VkResourceView), sizeof(uint32_t));
+         uint32_t stagingRingBufferArraySize = FFX_ALIGN_UP(backendContext->maxEffectContexts * FFX_CONSTANT_BUFFER_RING_BUFFER_SIZE, sizeof(uint32_t));
+@@ -1411,26 +1419,31 @@
+         uint8_t* pMem = (uint8_t*)((BackendContext_VK*)(backendContext + 1));
+ 
+         // Map gpu job array
++        pMem = alignMemory(pMem, alignof(FfxGpuJobDescription));
+         backendContext->pGpuJobs = (FfxGpuJobDescription*)pMem;
+         memset(backendContext->pGpuJobs, 0, gpuJobDescArraySize);
+         pMem += gpuJobDescArraySize;
+ 
+         // Map the resource view array
++        pMem = alignMemory(pMem, alignof(BackendContext_VK::VkResourceView));
+         backendContext->pResourceViews = (BackendContext_VK::VkResourceView*)(pMem);
+         memset(backendContext->pResourceViews, 0, resourceViewArraySize);
+         pMem += resourceViewArraySize;
+ 
+         // Map the staging ring buffer array
++        pMem = alignMemory(pMem, alignof(uint8_t));
+         backendContext->pStagingRingBuffer = (uint8_t*)pMem;
+         memset(backendContext->pStagingRingBuffer, 0, stagingRingBufferArraySize);
+         pMem += stagingRingBufferArraySize;
+ 
+         // Map pipeline array
++        pMem = alignMemory(pMem, alignof(BackendContext_VK::PipelineLayout));
+         backendContext->pPipelineLayouts = (BackendContext_VK::PipelineLayout*)pMem;
+         memset(backendContext->pPipelineLayouts, 0, pipelineArraySize);
+         pMem += pipelineArraySize;
+ 
+         // Map resource array
++        pMem = alignMemory(pMem, alignof(BackendContext_VK::Resource));
+         backendContext->pResources = (BackendContext_VK::Resource*)pMem;
+         memset(backendContext->pResources, 0, resourceArraySize);
+         pMem += resourceArraySize;
+@@ -1441,11 +1454,13 @@
+         }
+ 
+         // Map context array
++        pMem = alignMemory(pMem, alignof(BackendContext_VK::EffectContext));
+         backendContext->pEffectContexts = (BackendContext_VK::EffectContext*)pMem;
+         memset(backendContext->pEffectContexts, 0, contextArraySize);
+         pMem += contextArraySize;
+ 
+         // Map extension array
++        pMem = alignMemory(pMem, alignof(VkExtensionProperties));
+         backendContext->extensionProperties = (VkExtensionProperties*)pMem;
+ 
+         // if vkGetDeviceProcAddr is NULL, use the one from the vulkan header
