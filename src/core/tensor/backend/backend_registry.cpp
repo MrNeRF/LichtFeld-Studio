@@ -32,7 +32,7 @@ namespace lfs::core::internal {
 
     GpuBackendOps& backend_ops_for(const Tensor& tensor) {
         LFS_ASSERT_MSG(tensor.is_valid(), "backend_ops_for requires a valid tensor");
-        LFS_ASSERT_MSG(tensor.device() == Device::CUDA,
+        LFS_ASSERT_MSG(tensor.device() == Device::GPU,
                        "backend_ops_for requires GPU storage");
         return backend_ops(gpu_backend_of(tensor).value());
     }

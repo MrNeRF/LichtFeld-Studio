@@ -110,7 +110,7 @@ namespace {
     // | launch_multinomial | Tensor::multinomial |
     // | launch_strided_copy | Tensor::contiguous on rank 5 view |
     // | launch_strided_copy_immediate | Tensor::contiguous on rank 2 view |
-    // | launch_strided_upload | non-contiguous CPU Tensor::to(Device::CUDA) |
+    // | launch_strided_upload | non-contiguous CPU Tensor::to(Device::GPU) |
     // | launch_convert_type | Tensor::to(DataType) |
     // | launch_cat_last_dim | Tensor::cat(..., last dim) |
     // | launch_cat_middle_dim | Tensor::cat(..., middle dim) |
@@ -291,20 +291,20 @@ namespace {
             Tensor cpu = Tensor::from_vector(values, shape, Device::CPU);
             if (dtype != DataType::Float32)
                 cpu = cpu.to(dtype);
-            return cpu.to(Device::CUDA);
+            return cpu.to(Device::GPU);
         }
         if (dtype == DataType::Bool) {
             std::vector<bool> values(count);
             for (size_t i = 0; i < count; ++i)
                 values[i] = (generator() & 1U) != 0;
-            return Tensor::from_vector(values, shape, Device::CPU).to(Device::CUDA);
+            return Tensor::from_vector(values, shape, Device::CPU).to(Device::GPU);
         }
         std::vector<int> values(count);
         std::generate(values.begin(), values.end(), [&] { return int_dist(generator); });
         Tensor cpu = Tensor::from_vector(values, shape, Device::CPU);
         if (dtype != DataType::Int32)
             cpu = cpu.to(dtype);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     Tensor make_profile_tensor(const Profile& profile, DataType dtype, uint64_t seed,
@@ -322,7 +322,7 @@ namespace {
         for (size_t i = 0; i < count; ++i) {
             values[i] = static_cast<int>(duplicates ? (i % std::min<size_t>(bound, 17)) : (i % bound));
         }
-        return Tensor::from_vector(values, {count}, Device::CPU).to(Device::CUDA);
+        return Tensor::from_vector(values, {count}, Device::CPU).to(Device::GPU);
     }
 
     struct PreparedInputs {
@@ -360,7 +360,7 @@ namespace {
                                     size_t count) {
         inputs.destinations.reserve(count);
         for (size_t i = 0; i < count; ++i)
-            inputs.destinations.push_back(Tensor::empty(shape, Device::CUDA, dtype));
+            inputs.destinations.push_back(Tensor::empty(shape, Device::GPU, dtype));
     }
 
     PreparedInputs prepare(size_t entry_index, const Profile& profile, DataType dtype,
@@ -387,7 +387,7 @@ namespace {
             host[(inputs.a.numel() * 7 + 3) % inputs.a.numel()] =
                 name == "has_nan_gpu" ? std::numeric_limits<float>::quiet_NaN()
                                       : std::numeric_limits<float>::infinity();
-            inputs.rhs = Tensor::from_vector(host, inputs.a.shape(), Device::CPU).to(Device::CUDA);
+            inputs.rhs = Tensor::from_vector(host, inputs.a.shape(), Device::CPU).to(Device::GPU);
         }
         if (name == "launch_sort_1d" || name == "launch_sort_2d") {
             inputs.input = name == "launch_sort_1d" ? make_tensor({elements(profile)}, dtype, seed)
@@ -505,7 +505,7 @@ namespace {
             const size_t categories = std::max<size_t>(7, profile.cols);
             std::vector<float> host_weights(categories, 1.0f);
             inputs.input =
-                Tensor::from_vector(host_weights, {categories}, Device::CPU).to(Device::CUDA);
+                Tensor::from_vector(host_weights, {categories}, Device::CPU).to(Device::GPU);
         }
         if (name == "launch_strided_copy_immediate") {
             inputs.input = make_tensor({profile.cols, profile.rows}, dtype, seed).transpose(0, 1);
@@ -686,7 +686,7 @@ namespace {
         if (name == "launch_strided_copy_immediate")
             return {inputs.input.contiguous()};
         if (name == "launch_strided_upload")
-            return {inputs.input.to(Device::CUDA)};
+            return {inputs.input.to(Device::GPU)};
         if (name == "launch_convert_type") {
             const DataType target =
                 inputs.dtype == DataType::Float32 ? DataType::Int32 : DataType::Float32;
@@ -705,7 +705,7 @@ namespace {
             return {destination};
         }
         if (name == "launch_load_op")
-            return {Tensor::full(shape, 1.25f, Device::CUDA, inputs.dtype)};
+            return {Tensor::full(shape, 1.25f, Device::GPU, inputs.dtype)};
         if (name == "launch_clamp_scalar" || name == "launch_clamp_scalar_int") {
             auto& destination = next_destination(inputs);
             destination.clamp_(-1.0f, 1.0f);
@@ -847,7 +847,7 @@ namespace {
         for (const auto& output : outputs)
             (void)output.data_ptr();
         const bool has_cuda_output = std::ranges::any_of(outputs, [](const Tensor& output) {
-            return output.device() == Device::CUDA &&
+            return output.device() == Device::GPU &&
                    lfs::core::gpu_backend_of(output) == GpuBackend::CUDA;
         });
         if (has_cuda_output)

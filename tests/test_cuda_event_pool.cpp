@@ -122,7 +122,7 @@ TEST_F(CudaEventPoolTest, FreshStreamHandlesReuseRetiredValuesUntilTheyEnterTheA
     std::vector<cudaStream_t> seeds(8);
     for (auto& seed : seeds) {
         ASSERT_EQ(cudaStreamCreateWithFlags(&seed, cudaStreamNonBlocking), cudaSuccess);
-        auto touched = Tensor::empty({64}, Device::CUDA);
+        auto touched = Tensor::empty({64}, Device::GPU);
         touched.set_stream(seed);
         touched.fill_(1.0f);
     }

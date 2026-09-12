@@ -154,8 +154,8 @@ namespace {
 
             rgb_host_ = makeRgbChw();
             alpha_host_ = makeAlpha();
-            rgb_ = Tensor::from_vector(rgb_host_, {3, HEIGHT, WIDTH}, lfs::core::Device::CUDA);
-            alpha_ = Tensor::from_vector(alpha_host_, {HEIGHT, WIDTH}, lfs::core::Device::CUDA);
+            rgb_ = Tensor::from_vector(rgb_host_, {3, HEIGHT, WIDTH}, lfs::core::Device::GPU);
+            alpha_ = Tensor::from_vector(alpha_host_, {HEIGHT, WIDTH}, lfs::core::Device::GPU);
             ASSERT_TRUE(rgb_.is_valid());
             ASSERT_TRUE(alpha_.is_valid());
         }
@@ -230,7 +230,7 @@ namespace {
         }
         auto band = Tensor::from_blob(pixels.data(), {HEIGHT, WIDTH, 4},
                                       lfs::core::Device::CPU, lfs::core::DataType::UInt8)
-                        .cuda();
+                        .gpu();
 
         Tensor rgb_chw;
         Tensor alpha;

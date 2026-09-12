@@ -35,7 +35,7 @@ namespace {
         auto* p = t.ptr<uint8_t>();
         for (size_t i = 0; i < n; ++i)
             p[i] = values[i];
-        return (dev == Device::CUDA) ? t.cuda() : t;
+        return (dev == Device::GPU) ? t.cuda() : t;
     }
 
     Tensor make_bool_mask(const std::vector<uint8_t>& values, size_t n, Device dev) {
@@ -72,7 +72,7 @@ namespace {
                                            const std::string& ctx,
                                            float tol = 1e-5f) {
         constexpr int64_t N = 4096;
-        auto lfs_values = Tensor::zeros({static_cast<size_t>(N)}, Device::CUDA, lfs_dtype);
+        auto lfs_values = Tensor::zeros({static_cast<size_t>(N)}, Device::GPU, lfs_dtype);
         auto torch_values = torch::zeros(
             {N}, torch::TensorOptions().dtype(torch_dtype).device(torch::kCUDA));
 
@@ -80,7 +80,7 @@ namespace {
         for (int64_t i = 0; i < N; ++i)
             mask_vals[i] = (i % 7 == 0 || i % 11 == 0) ? 1 : 0;
 
-        auto lfs_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+        auto lfs_mask = make_bool_mask(mask_vals, N, Device::GPU);
         auto torch_mask = make_torch_bool_mask(mask_vals);
 
         lfs_values.masked_fill_(lfs_mask, fill_value);
@@ -96,7 +96,7 @@ protected:
     void SetUp() override {
         Tensor::manual_seed(42);
         torch::manual_seed(42);
-        ASSERT_TRUE(Tensor::zeros({1}, Device::CUDA).is_valid());
+        ASSERT_TRUE(Tensor::zeros({1}, Device::GPU).is_valid());
     }
 };
 
@@ -126,14 +126,14 @@ TEST_F(TensorUInt8MaskingTest, MaskedSelectUInt8_CPU) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedSelectUInt8_CUDA) {
     constexpr size_t N = 1000;
-    auto data = Tensor::randn({N}, Device::CUDA);
+    auto data = Tensor::randn({N}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N);
     for (size_t i = 0; i < N; ++i)
         mask_vals[i] = (i % 5 == 0) ? 1 : 0;
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
-    auto bool_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
+    auto bool_mask = make_bool_mask(mask_vals, N, Device::GPU);
 
     auto result_uint8 = data.masked_select(uint8_mask);
     auto result_bool = data.masked_select(bool_mask);
@@ -150,7 +150,7 @@ TEST_F(TensorUInt8MaskingTest, MaskedSelectUInt8_VsTorch_CUDA) {
     constexpr int64_t N = 500;
     auto t_data = torch::randn({N}, torch::kFloat32).cuda();
 
-    auto lfs_data = Tensor::zeros({static_cast<size_t>(N)}, Device::CUDA);
+    auto lfs_data = Tensor::zeros({static_cast<size_t>(N)}, Device::GPU);
     auto t_cpu = t_data.cpu().contiguous();
     cudaMemcpy(lfs_data.data_ptr(), t_cpu.data_ptr<float>(), N * sizeof(float), cudaMemcpyHostToDevice);
 
@@ -165,7 +165,7 @@ TEST_F(TensorUInt8MaskingTest, MaskedSelectUInt8_VsTorch_CUDA) {
         mask_acc[i] = mask_vals[i] != 0;
     t_bool_mask = t_mask_cpu.cuda();
 
-    auto lfs_uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
+    auto lfs_uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
 
     auto t_result = torch::masked_select(t_data, t_bool_mask);
     auto lfs_result = lfs_data.masked_select(lfs_uint8_mask);
@@ -199,8 +199,8 @@ TEST_F(TensorUInt8MaskingTest, EqualUInt8_VsTorch_CUDA) {
         rhs_vals[i] = static_cast<uint8_t>((i % 5 == 0) ? lhs_vals[i] : ((i * 11) % 13));
     }
 
-    const auto lfs_lhs = make_uint8_mask(lhs_vals, N, Device::CUDA);
-    const auto lfs_rhs = make_uint8_mask(rhs_vals, N, Device::CUDA);
+    const auto lfs_lhs = make_uint8_mask(lhs_vals, N, Device::GPU);
+    const auto lfs_rhs = make_uint8_mask(rhs_vals, N, Device::GPU);
     const auto torch_lhs = make_torch_uint8_tensor(lhs_vals, c10::kCUDA);
     const auto torch_rhs = make_torch_uint8_tensor(rhs_vals, c10::kCUDA);
 
@@ -271,15 +271,15 @@ TEST_F(TensorUInt8MaskingTest, MaskedFillInPlaceFloat16Target_VsTorch_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedFillInPlaceUInt8_CUDA) {
     constexpr size_t N = 1000;
-    auto data_uint8 = Tensor::randn({N}, Device::CUDA);
+    auto data_uint8 = Tensor::randn({N}, Device::GPU);
     auto data_bool = data_uint8.clone();
 
     std::vector<uint8_t> mask_vals(N);
     for (size_t i = 0; i < N; ++i)
         mask_vals[i] = (i % 3 == 0) ? 1 : 0;
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
-    auto bool_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
+    auto bool_mask = make_bool_mask(mask_vals, N, Device::GPU);
 
     data_uint8.masked_fill_(uint8_mask, 42.0f);
     data_bool.masked_fill_(bool_mask, 42.0f);
@@ -293,13 +293,13 @@ TEST_F(TensorUInt8MaskingTest, MaskedFillInPlaceUInt8_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedFillUInt8_CUDA) {
     constexpr size_t N = 500;
-    auto data = Tensor::randn({N}, Device::CUDA);
+    auto data = Tensor::randn({N}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N);
     for (size_t i = 0; i < N; ++i)
         mask_vals[i] = (i < N / 2) ? 1 : 0;
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
     auto result = data.masked_fill(uint8_mask, 0.0f);
 
     auto r_cpu = result.cpu();
@@ -339,14 +339,14 @@ TEST_F(TensorUInt8MaskingTest, IndexSelectBoolLikeUInt8_CPU) {
 
 TEST_F(TensorUInt8MaskingTest, IndexSelectBoolLikeUInt8_CUDA) {
     constexpr size_t N = 200;
-    auto data = Tensor::randn({N, 3}, Device::CUDA);
+    auto data = Tensor::randn({N, 3}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N);
     for (size_t i = 0; i < N; ++i)
         mask_vals[i] = (i % 7 == 0) ? 1 : 0;
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
-    auto bool_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
+    auto bool_mask = make_bool_mask(mask_vals, N, Device::GPU);
 
     auto result_uint8 = data.index_select(0, uint8_mask);
     auto result_bool = data.index_select(0, bool_mask);
@@ -365,15 +365,15 @@ TEST_F(TensorUInt8MaskingTest, IndexSelectBoolLikeUInt8_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedProxyScalarAssign_CUDA) {
     constexpr size_t N = 100;
-    auto data_uint8 = Tensor::ones({N}, Device::CUDA);
-    auto data_bool = Tensor::ones({N}, Device::CUDA);
+    auto data_uint8 = Tensor::ones({N}, Device::GPU);
+    auto data_bool = Tensor::ones({N}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N);
     for (size_t i = 0; i < N; ++i)
         mask_vals[i] = (i >= 50) ? 1 : 0;
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
-    auto bool_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
+    auto bool_mask = make_bool_mask(mask_vals, N, Device::GPU);
 
     data_uint8[uint8_mask] = 0.0f;
     data_bool[bool_mask] = 0.0f;
@@ -387,8 +387,8 @@ TEST_F(TensorUInt8MaskingTest, MaskedProxyScalarAssign_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedProxyTensorAssign_CUDA) {
     constexpr size_t N = 100;
-    auto data_uint8 = Tensor::zeros({N}, Device::CUDA);
-    auto data_bool = Tensor::zeros({N}, Device::CUDA);
+    auto data_uint8 = Tensor::zeros({N}, Device::GPU);
+    auto data_bool = Tensor::zeros({N}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N);
     size_t true_count = 0;
@@ -398,10 +398,10 @@ TEST_F(TensorUInt8MaskingTest, MaskedProxyTensorAssign_CUDA) {
             true_count++;
     }
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
-    auto bool_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
+    auto bool_mask = make_bool_mask(mask_vals, N, Device::GPU);
 
-    auto values = Tensor::ones({true_count}, Device::CUDA) * 7.0f;
+    auto values = Tensor::ones({true_count}, Device::GPU) * 7.0f;
 
     data_uint8[uint8_mask] = values;
     data_bool[bool_mask] = values;
@@ -448,10 +448,10 @@ TEST_F(TensorUInt8MaskingTest, CountNonzeroUInt8_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedSelectAllTrue_CUDA) {
     constexpr size_t N = 200;
-    auto data = Tensor::randn({N}, Device::CUDA);
+    auto data = Tensor::randn({N}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N, 1);
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
 
     auto result = data.masked_select(uint8_mask);
     ASSERT_EQ(result.numel(), N);
@@ -465,10 +465,10 @@ TEST_F(TensorUInt8MaskingTest, MaskedSelectAllTrue_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, MaskedSelectAllFalse_CUDA) {
     constexpr size_t N = 200;
-    auto data = Tensor::randn({N}, Device::CUDA);
+    auto data = Tensor::randn({N}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N, 0);
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
 
     auto result = data.masked_select(uint8_mask);
     ASSERT_EQ(result.numel(), 0);
@@ -476,22 +476,22 @@ TEST_F(TensorUInt8MaskingTest, MaskedSelectAllFalse_CUDA) {
 
 TEST_F(TensorUInt8MaskingTest, ConsistencyBoolVsUInt8_CUDA) {
     constexpr size_t N = 500;
-    auto data = Tensor::randn({N, 4}, Device::CUDA);
+    auto data = Tensor::randn({N, 4}, Device::GPU);
 
     std::vector<uint8_t> mask_vals(N);
     for (size_t i = 0; i < N; ++i)
         mask_vals[i] = (i * 7 + 3) % 11 < 5 ? 1 : 0;
 
-    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::CUDA);
-    auto bool_mask = make_bool_mask(mask_vals, N, Device::CUDA);
+    auto uint8_mask = make_uint8_mask(mask_vals, N, Device::GPU);
+    auto bool_mask = make_bool_mask(mask_vals, N, Device::GPU);
 
     // masked_select on flattened
     auto flat = data.flatten();
     std::vector<uint8_t> flat_mask(N * 4);
     for (size_t i = 0; i < N * 4; ++i)
         flat_mask[i] = mask_vals[i / 4];
-    auto flat_u8_mask = make_uint8_mask(flat_mask, N * 4, Device::CUDA);
-    auto flat_bool_mask = make_bool_mask(flat_mask, N * 4, Device::CUDA);
+    auto flat_u8_mask = make_uint8_mask(flat_mask, N * 4, Device::GPU);
+    auto flat_bool_mask = make_bool_mask(flat_mask, N * 4, Device::GPU);
 
     auto sel_u8 = flat.masked_select(flat_u8_mask);
     auto sel_bool = flat.masked_select(flat_bool_mask);

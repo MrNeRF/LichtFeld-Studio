@@ -51,7 +51,7 @@ namespace {
 TEST(AllocatorHygiene, EmptyCudaTensorDoesNotAllocateSlabBlock) {
     // Warm the pool so later zeros/empty of real sizes do not confound counts.
     {
-        auto warm = Tensor::zeros({256}, Device::CUDA, DataType::Float32);
+        auto warm = Tensor::zeros({256}, Device::GPU, DataType::Float32);
         ASSERT_TRUE(warm.is_valid());
         cuda_ok();
     }
@@ -60,7 +60,7 @@ TEST(AllocatorHygiene, EmptyCudaTensorDoesNotAllocateSlabBlock) {
         GPUSlabAllocator::instance().stats().alloc_count.load(std::memory_order_relaxed);
 
     {
-        auto empty = Tensor::empty({0}, Device::CUDA, DataType::Float32);
+        auto empty = Tensor::empty({0}, Device::GPU, DataType::Float32);
         EXPECT_TRUE(empty.is_valid());
         EXPECT_EQ(empty.numel(), 0u);
         EXPECT_EQ(empty.data_ptr(), nullptr);
@@ -71,7 +71,7 @@ TEST(AllocatorHygiene, EmptyCudaTensorDoesNotAllocateSlabBlock) {
         EXPECT_EQ(clone.data_ptr(), nullptr);
 
         // Multi-dim empty (e.g. {0, 3}) same rule
-        auto empty2d = Tensor::empty({0, 3}, Device::CUDA, DataType::Float32);
+        auto empty2d = Tensor::empty({0, 3}, Device::GPU, DataType::Float32);
         EXPECT_EQ(empty2d.numel(), 0u);
         EXPECT_EQ(empty2d.data_ptr(), nullptr);
     }
@@ -107,7 +107,7 @@ TEST(AllocatorHygiene, TrimCachedMemoryFreesFullyEmptySlabs) {
         hold.reserve(2048);
         for (int i = 0; i < 2048; ++i) {
             // 256 floats = 1 KiB → size class above 256 B, still in slab range.
-            hold.push_back(Tensor::zeros({256}, Device::CUDA, DataType::Float32));
+            hold.push_back(Tensor::zeros({256}, Device::GPU, DataType::Float32));
             ASSERT_TRUE(hold.back().is_valid());
         }
         cuda_ok();
@@ -136,7 +136,7 @@ TEST(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
     pool.trim_cached_memory();
     cuda_ok();
     {
-        auto tensor = Tensor::zeros({64}, Device::CUDA, DataType::Float32);
+        auto tensor = Tensor::zeros({64}, Device::GPU, DataType::Float32);
         ASSERT_TRUE(tensor.is_valid());
         cuda_ok();
     }
@@ -167,10 +167,10 @@ TEST(AllocatorHygiene, FailedSlabReclaimRestoresOwnershipAndAccounting) {
 TEST(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
     // Correctness after routing d_count through CudaMemoryPool instead of bare
     // cudaMalloc/cudaFree.
-    auto zeros = Tensor::zeros({128}, Device::CUDA, DataType::Float32);
+    auto zeros = Tensor::zeros({128}, Device::GPU, DataType::Float32);
     EXPECT_EQ(zeros.count_nonzero(), 0u);
 
-    auto ones = Tensor::ones({64}, Device::CUDA, DataType::Float32);
+    auto ones = Tensor::ones({64}, Device::GPU, DataType::Float32);
     EXPECT_EQ(ones.count_nonzero(), 64u);
 
     // Mixed: set a few nonzeros via host upload
@@ -178,7 +178,7 @@ TEST(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
     host[3] = 1.0f;
     host[7] = 2.0f;
     host[31] = -1.0f;
-    auto mixed = Tensor::from_vector(host, {32}, Device::CUDA);
+    auto mixed = Tensor::from_vector(host, {32}, Device::GPU);
     EXPECT_EQ(mixed.count_nonzero(), 3u);
 
     // Second call reuses the pooled d_count block (no extra driver growth once warm).
@@ -196,6 +196,6 @@ TEST(AllocatorHygiene, CountNonzeroPoolPathCorrectAndReusable) {
 }
 
 TEST(AllocatorHygiene, EmptyAndCountNonzeroCompose) {
-    auto empty = Tensor::empty({0}, Device::CUDA, DataType::Float32);
+    auto empty = Tensor::empty({0}, Device::GPU, DataType::Float32);
     EXPECT_EQ(empty.count_nonzero(), 0u);
 }

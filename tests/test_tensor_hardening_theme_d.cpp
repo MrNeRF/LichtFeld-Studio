@@ -34,7 +34,7 @@ TEST_F(CudaTest, D1_CloneWaitsForGatedProducer) {
     Tensor source;
     {
         CUDAStreamGuard guard(producer.get());
-        source = Tensor::zeros({1 << 20}, Device::CUDA);
+        source = Tensor::zeros({1 << 20}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     producer.close();
@@ -58,7 +58,7 @@ TEST_F(CudaTest, D1_ContiguousWaitsForGatedProducer) {
     Tensor base;
     {
         CUDAStreamGuard guard(producer.get());
-        base = Tensor::zeros({1024, 1024}, Device::CUDA);
+        base = Tensor::zeros({1024, 1024}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     const auto view = base.transpose(0, 1);
@@ -83,7 +83,7 @@ TEST_F(CudaTest, D1_DtypeConversionWaitsForGatedProducer) {
     Tensor source;
     {
         CUDAStreamGuard guard(producer.get());
-        source = Tensor::zeros({1 << 20}, Device::CUDA);
+        source = Tensor::zeros({1 << 20}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     producer.close();
@@ -109,11 +109,11 @@ TEST_F(CudaTest, D1_CopyFromWaitsForGatedProducer) {
     Tensor destination;
     {
         CUDAStreamGuard guard(producer.get());
-        source = Tensor::zeros({1 << 20}, Device::CUDA);
+        source = Tensor::zeros({1 << 20}, Device::GPU);
     }
     {
         CUDAStreamGuard guard(consumer);
-        destination = Tensor::zeros({1 << 20}, Device::CUDA);
+        destination = Tensor::zeros({1 << 20}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
@@ -139,11 +139,11 @@ TEST_F(CudaTest, D1_BinaryInPlaceWaitsForGatedProducer) {
     Tensor destination;
     {
         CUDAStreamGuard guard(producer.get());
-        source = Tensor::zeros({1 << 20}, Device::CUDA);
+        source = Tensor::zeros({1 << 20}, Device::GPU);
     }
     {
         CUDAStreamGuard guard(consumer);
-        destination = Tensor::ones({1 << 20}, Device::CUDA);
+        destination = Tensor::ones({1 << 20}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(consumer), cudaSuccess);
@@ -169,9 +169,9 @@ TEST_F(CudaTest, D2_MMWaitsForGatedProducer) {
     Tensor input;
     {
         CUDAStreamGuard guard(producer.get());
-        input = Tensor::zeros({size, size}, Device::CUDA);
+        input = Tensor::zeros({size, size}, Device::GPU);
     }
-    const auto identity = Tensor::eye(size, Device::CUDA);
+    const auto identity = Tensor::eye(size, Device::GPU);
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
     producer.close();
@@ -195,9 +195,9 @@ TEST_F(CudaTest, D2_DotWaitsForGatedProducer) {
     Tensor input;
     {
         CUDAStreamGuard guard(producer.get());
-        input = Tensor::zeros({count}, Device::CUDA);
+        input = Tensor::zeros({count}, Device::GPU);
     }
-    const auto ones = Tensor::ones({count}, Device::CUDA);
+    const auto ones = Tensor::ones({count}, Device::GPU);
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
     producer.close();
@@ -221,7 +221,7 @@ TEST_F(CudaTest, D2_DiagWaitsForGatedProducer) {
     Tensor input;
     {
         CUDAStreamGuard guard(producer.get());
-        input = Tensor::zeros({count}, Device::CUDA);
+        input = Tensor::zeros({count}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     producer.close();
@@ -244,7 +244,7 @@ TEST_F(CudaTest, D2_MultinomialWaitsForGatedProducer) {
     Tensor weights;
     {
         CUDAStreamGuard guard(producer.get());
-        weights = Tensor::zeros({2}, Device::CUDA);
+        weights = Tensor::zeros({2}, Device::GPU);
     }
     ASSERT_EQ(cudaStreamSynchronize(producer.get()), cudaSuccess);
     producer.close();
@@ -271,12 +271,12 @@ TEST_F(CudaTest, D3_WhereMetadataIsNotReusedAcrossConcurrentStreams) {
     cudaStream_t first_stream = make_consumer_stream();
     cudaStream_t second_stream = make_consumer_stream();
 
-    const auto first_condition = Tensor::ones({2048, 1}, Device::CUDA, DataType::Bool);
-    const auto first_x = Tensor::ones({1, 2048}, Device::CUDA);
-    const auto first_y = Tensor::zeros({2048, 2048}, Device::CUDA);
-    const auto second_condition = Tensor::zeros({1, 8, 1}, Device::CUDA, DataType::Bool);
-    const auto second_x = Tensor::ones({4, 1, 16}, Device::CUDA);
-    const auto second_y = Tensor::full({4, 8, 16}, 2.0f, Device::CUDA);
+    const auto first_condition = Tensor::ones({2048, 1}, Device::GPU, DataType::Bool);
+    const auto first_x = Tensor::ones({1, 2048}, Device::GPU);
+    const auto first_y = Tensor::zeros({2048, 2048}, Device::GPU);
+    const auto second_condition = Tensor::zeros({1, 8, 1}, Device::GPU, DataType::Bool);
+    const auto second_x = Tensor::ones({4, 1, 16}, Device::GPU);
+    const auto second_y = Tensor::full({4, 8, 16}, 2.0f, Device::GPU);
     ASSERT_EQ(cudaStreamSynchronize(nullptr), cudaSuccess);
 
     for (int iteration = 0; iteration < 20; ++iteration) {
@@ -315,7 +315,7 @@ TEST_F(CudaTest, D4_OverlappingTransposeCopyUsesSnapshotSemantics) {
                                        9, 10, 11, 12,
                                        13, 14, 15, 16};
     for (int iteration = 0; iteration < 100; ++iteration) {
-        auto ours = lfs_float_tensor(values, {4, 4}, Device::CUDA);
+        auto ours = lfs_float_tensor(values, {4, 4}, Device::GPU);
         auto destination = ours.transpose(0, 1);
         destination.copy_from(ours);
 
@@ -329,9 +329,9 @@ TEST_F(CudaTest, D4_OverlappingTransposeCopyUsesSnapshotSemantics) {
 }
 
 TEST_F(CudaTest, D4_OverlappingIndexSelectIntoUsesSnapshotSemantics) {
-    const auto index = lfs_int_tensor({1, 0}, {2}, Device::CUDA);
+    const auto index = lfs_int_tensor({1, 0}, {2}, Device::GPU);
     for (int iteration = 0; iteration < 100; ++iteration) {
-        auto ours = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CUDA);
+        auto ours = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::GPU);
         ours.index_select_into(ours, 0, index, BoundaryMode::Assert);
         const auto theirs = torch::tensor({3.0f, 4.0f, 1.0f, 2.0f},
                                           torch::TensorOptions().device(torch::kCUDA))
@@ -342,8 +342,8 @@ TEST_F(CudaTest, D4_OverlappingIndexSelectIntoUsesSnapshotSemantics) {
 }
 
 TEST_F(CudaTest, D5_AliasedScatterMatchesTorchOverlapContract) {
-    const auto index = lfs_int_tensor({1, 2, 0}, {3}, Device::CUDA);
-    auto ours = lfs_float_tensor({1, 2, 3}, {3}, Device::CUDA);
+    const auto index = lfs_int_tensor({1, 2, 0}, {3}, Device::GPU);
+    auto ours = lfs_float_tensor({1, 2, 3}, {3}, Device::GPU);
     bool ours_threw = false;
     try {
         ours.scatter_(0, index, ours);

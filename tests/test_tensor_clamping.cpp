@@ -270,14 +270,14 @@ TEST_F(TensorClampTest, ClampCUDA) {
 
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 2.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     auto result_custom = t_custom.clamp(-1.0f, 3.0f);
     auto result_torch = t_torch.clamp(-1.0f, 3.0f);
 
     ASSERT_TRUE(result_custom.is_valid());
-    EXPECT_EQ(result_custom.device(), Device::CUDA);
+    EXPECT_EQ(result_custom.device(), Device::GPU);
 
     compare_tensors(result_custom, result_torch, 1e-5f, 1e-7f, "ClampCUDA");
 }
@@ -289,7 +289,7 @@ TEST_F(TensorClampTest, ClampInPlaceCUDA) {
 
     std::vector<float> data = {-5.0f, -2.0f, 0.0f, 2.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {5}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {5}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     t_custom.clamp_(-1.0f, 3.0f);
@@ -305,7 +305,7 @@ TEST_F(TensorClampTest, ClampMinCUDA) {
 
     std::vector<float> data = {-5.0f, 0.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     auto result_custom = t_custom.clamp_min(0.0f);
@@ -321,7 +321,7 @@ TEST_F(TensorClampTest, ClampMaxCUDA) {
 
     std::vector<float> data = {-5.0f, 0.0f, 5.0f};
 
-    auto t_custom = Tensor::from_vector(data, {3}, Device::CUDA);
+    auto t_custom = Tensor::from_vector(data, {3}, Device::GPU);
     auto t_torch = torch::tensor(data, torch::kCUDA);
 
     auto result_custom = t_custom.clamp_max(3.0f);

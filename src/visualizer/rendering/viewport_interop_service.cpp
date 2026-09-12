@@ -178,7 +178,7 @@ namespace lfs::vis {
     bool ViewportInteropService::sourceOk(const Channel& channel) const {
         return channel.source_image &&
                channel.source_image->is_valid() &&
-               channel.source_image->device() == lfs::core::Device::CUDA &&
+               channel.source_image->device() == lfs::core::Device::GPU &&
                channel.source_size.x > 0 &&
                channel.source_size.y > 0;
     }

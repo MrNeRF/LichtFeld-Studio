@@ -31,7 +31,7 @@ protected:
 
     // Helper to create a simple binary mask
     Tensor create_binary_mask(size_t H, size_t W, float object_ratio = 0.5f) {
-        auto mask = Tensor::zeros({H, W}, Device::CUDA);
+        auto mask = Tensor::zeros({H, W}, Device::GPU);
         // Create a rectangular object region in the center
         size_t obj_h = static_cast<size_t>(H * std::sqrt(object_ratio));
         size_t obj_w = static_cast<size_t>(W * std::sqrt(object_ratio));
@@ -39,11 +39,11 @@ protected:
         size_t start_w = (W - obj_w) / 2;
 
         // Fill center with 1.0 (object)
-        auto ones = Tensor::ones({obj_h, obj_w}, Device::CUDA);
+        auto ones = Tensor::ones({obj_h, obj_w}, Device::GPU);
         // Use slice assignment
         auto mask_view = mask.slice(0, start_h, start_h + obj_h);
         // Note: We need to set values - for simplicity create full mask
-        mask = Tensor::zeros({H, W}, Device::CUDA);
+        mask = Tensor::zeros({H, W}, Device::GPU);
         for (size_t h = start_h; h < start_h + obj_h; ++h) {
             for (size_t w = start_w; w < start_w + obj_w; ++w) {
                 // This is inefficient but works for tests
@@ -56,7 +56,7 @@ protected:
                 mask_data[h * W + w] = 1.0f;
             }
         }
-        return Tensor::from_vector(mask_data, {H, W}, Device::CUDA);
+        return Tensor::from_vector(mask_data, {H, W}, Device::GPU);
     }
 
     // Helper to create soft mask with gradient values
@@ -71,7 +71,7 @@ protected:
                 mask_data[h * W + w] = std::max(0.0f, 1.0f - dist);
             }
         }
-        return Tensor::from_vector(mask_data, {H, W}, Device::CUDA);
+        return Tensor::from_vector(mask_data, {H, W}, Device::GPU);
     }
 };
 
@@ -83,11 +83,11 @@ TEST_F(MaskLossTest, OpacityPenaltyFormula) {
     constexpr float POWER = 2.0f;
 
     // Create uniform alpha and binary mask
-    auto alpha = Tensor::full({H, W}, 0.5f, Device::CUDA); // 50% opacity everywhere
-    auto mask = create_binary_mask(H, W, 0.25f);           // 25% is object
+    auto alpha = Tensor::full({H, W}, 0.5f, Device::GPU); // 50% opacity everywhere
+    auto mask = create_binary_mask(H, W, 0.25f);          // 25% is object
 
     // Compute inverted mask
-    auto ones = Tensor::full({H, W}, 1.0f, Device::CUDA);
+    auto ones = Tensor::full({H, W}, 1.0f, Device::GPU);
     auto inverted_mask = ones - mask;
 
     // Apply power: (1-mask)^power
@@ -111,12 +111,12 @@ TEST_F(MaskLossTest, UserMaskAndRoiWeightsComposeMultiplicatively) {
     const auto user_mask = Tensor::from_vector(
                                std::vector<float>{255.0f, 0.0f, 255.0f, 255.0f},
                                {size_t{2}, size_t{2}},
-                               Device::CUDA)
+                               Device::GPU)
                                .to(DataType::UInt8);
     const auto roi_weight = Tensor::from_vector(
         std::vector<float>{1.0f, 0.5f, 0.25f, 0.0f},
         {size_t{2}, size_t{2}},
-        Device::CUDA);
+        Device::GPU);
 
     const auto composed = lfs::training::losses::test_reference::compose_pixel_loss_weights_reference(
         user_mask, roi_weight);
@@ -130,15 +130,15 @@ TEST_F(MaskLossTest, RoiWeightedOpacityPenaltyKeepsGlobalPixelMean) {
     const auto alpha = Tensor::from_vector(
         std::vector<float>{0.2f, 0.4f, 0.6f, 0.8f},
         {size_t{2}, size_t{2}},
-        Device::CUDA);
+        Device::GPU);
     const auto penalty_weight = Tensor::from_vector(
         std::vector<float>{1.0f, 0.5f, 0.25f, 0.0f},
         {size_t{2}, size_t{2}},
-        Device::CUDA);
+        Device::GPU);
     const auto roi_weight = Tensor::from_vector(
         std::vector<float>{1.0f, 0.1f, 0.0f, 1.0f},
         {size_t{2}, size_t{2}},
-        Device::CUDA);
+        Device::GPU);
     constexpr float scale = 2.0f;
 
     const auto result = lfs::training::losses::test_reference::compute_mask_opacity_penalty_reference(
@@ -162,10 +162,10 @@ TEST_F(MaskLossTest, OpacityPenaltyZeroForFullMask) {
     constexpr size_t W = 32;
     constexpr float WEIGHT = 100.0f;
 
-    auto alpha = Tensor::full({H, W}, 1.0f, Device::CUDA);
-    auto mask = Tensor::ones({H, W}, Device::CUDA); // Full object coverage
+    auto alpha = Tensor::full({H, W}, 1.0f, Device::GPU);
+    auto mask = Tensor::ones({H, W}, Device::GPU); // Full object coverage
 
-    auto ones = Tensor::full({H, W}, 1.0f, Device::CUDA);
+    auto ones = Tensor::full({H, W}, 1.0f, Device::GPU);
     auto inverted_mask = ones - mask;
     auto penalty_weight_map = inverted_mask.pow(2.0f);
     auto penalty = (alpha * penalty_weight_map).mean() * WEIGHT;
@@ -182,16 +182,16 @@ TEST_F(MaskLossTest, OpacityPenaltyIncreasesWithBackgroundAlpha) {
     constexpr float POWER = 2.0f;
 
     auto mask = create_binary_mask(H, W, 0.5f);
-    auto ones = Tensor::full({H, W}, 1.0f, Device::CUDA);
+    auto ones = Tensor::full({H, W}, 1.0f, Device::GPU);
     auto inverted_mask = ones - mask;
     auto penalty_weight_map = inverted_mask.pow(POWER);
 
     // Low alpha
-    auto alpha_low = Tensor::full({H, W}, 0.1f, Device::CUDA);
+    auto alpha_low = Tensor::full({H, W}, 0.1f, Device::GPU);
     float penalty_low = (alpha_low * penalty_weight_map).mean().item<float>() * WEIGHT;
 
     // High alpha
-    auto alpha_high = Tensor::full({H, W}, 0.9f, Device::CUDA);
+    auto alpha_high = Tensor::full({H, W}, 0.9f, Device::GPU);
     float penalty_high = (alpha_high * penalty_weight_map).mean().item<float>() * WEIGHT;
 
     EXPECT_GT(penalty_high, penalty_low);
@@ -204,8 +204,8 @@ TEST_F(MaskLossTest, PowerFalloffBehavior) {
     constexpr size_t W = 32;
 
     auto soft_mask = create_soft_mask(H, W);
-    auto alpha = Tensor::full({H, W}, 1.0f, Device::CUDA);
-    auto ones = Tensor::full({H, W}, 1.0f, Device::CUDA);
+    auto alpha = Tensor::full({H, W}, 1.0f, Device::GPU);
+    auto ones = Tensor::full({H, W}, 1.0f, Device::GPU);
     auto inverted_mask = ones - soft_mask;
 
     // Power = 1 (linear)
@@ -233,8 +233,8 @@ TEST_F(MaskLossTest, MaskedL1Loss) {
     constexpr float EPSILON = 1e-8f;
 
     // Create rendered and GT images
-    auto rendered = Tensor::rand({C, H, W}, Device::CUDA);
-    auto gt = Tensor::rand({C, H, W}, Device::CUDA);
+    auto rendered = Tensor::rand({C, H, W}, Device::GPU);
+    auto gt = Tensor::rand({C, H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.5f);
 
     // Expand mask to match image channels
@@ -257,11 +257,11 @@ TEST_F(MaskLossTest, MaskedL1IgnoresBackgroundDifference) {
     constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
-    const auto gt = Tensor::zeros({C, H, W}, Device::CUDA);
+    const auto gt = Tensor::zeros({C, H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.25f);
     auto mask_expanded = mask_2d.unsqueeze(0).expand({C, H, W});
     auto mask_sum = mask_expanded.sum() + EPSILON;
-    const auto background = Tensor::ones({C, H, W}, Device::CUDA) - mask_expanded;
+    const auto background = Tensor::ones({C, H, W}, Device::GPU) - mask_expanded;
 
     const auto background_only_loss =
         (((background * 10.0f) - gt).abs() * mask_expanded).sum() / mask_sum;
@@ -279,8 +279,8 @@ TEST_F(MaskLossTest, MaskedL1Gradient) {
     constexpr size_t W = 16;
     constexpr float EPSILON = 1e-8f;
 
-    auto rendered = Tensor::rand({C, H, W}, Device::CUDA);
-    auto gt = Tensor::rand({C, H, W}, Device::CUDA);
+    auto rendered = Tensor::rand({C, H, W}, Device::GPU);
+    auto gt = Tensor::rand({C, H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.5f);
 
     auto mask_expanded = mask_2d.unsqueeze(0).expand({C, H, W});
@@ -291,7 +291,7 @@ TEST_F(MaskLossTest, MaskedL1Gradient) {
     auto grad = sign_diff * mask_expanded / mask_sum;
 
     // Gradient should be zero outside mask
-    auto bg_mask = Tensor::full({H, W}, 1.0f, Device::CUDA) - mask_2d;
+    auto bg_mask = Tensor::full({H, W}, 1.0f, Device::GPU) - mask_2d;
     auto bg_mask_expanded = bg_mask.unsqueeze(0).expand({C, H, W});
     auto grad_in_bg = (grad.abs() * bg_mask_expanded).sum();
 
@@ -308,13 +308,13 @@ TEST_F(MaskLossTest, MaskThresholdApplication) {
     auto soft_mask = create_soft_mask(H, W);
 
     // Apply threshold: >= threshold -> 1.0, < threshold -> keep original
-    auto ones = Tensor::ones({H, W}, Device::CUDA);
+    auto ones = Tensor::ones({H, W}, Device::GPU);
     auto threshold_mask = soft_mask.ge(THRESHOLD);
     auto thresholded = ones.where(threshold_mask, soft_mask);
 
     // All values >= threshold should be 1.0
     auto above_threshold = soft_mask.ge(THRESHOLD);
-    auto thresholded_values = thresholded.where(above_threshold, Tensor::zeros({H, W}, Device::CUDA));
+    auto thresholded_values = thresholded.where(above_threshold, Tensor::zeros({H, W}, Device::GPU));
     auto sum_above = thresholded_values.sum().item<float>();
     // Convert bool sum to float
     auto count_above = static_cast<float>(above_threshold.to(DataType::Int32).sum().item<int>());
@@ -357,9 +357,9 @@ TEST_F(MaskLossTest, SegmentModeLossIntegration) {
     constexpr float LAMBDA_DSSIM = 0.2f;
 
     // Create test data
-    auto rendered = Tensor::rand({C, H, W}, Device::CUDA);
-    auto gt = Tensor::rand({C, H, W}, Device::CUDA);
-    auto alpha = Tensor::rand({H, W}, Device::CUDA);
+    auto rendered = Tensor::rand({C, H, W}, Device::GPU);
+    auto gt = Tensor::rand({C, H, W}, Device::GPU);
+    auto alpha = Tensor::rand({H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.4f);
 
     // Expand mask
@@ -371,7 +371,7 @@ TEST_F(MaskLossTest, SegmentModeLossIntegration) {
     auto masked_l1 = (l1_diff * mask_expanded).sum() / mask_sum;
 
     // Compute opacity penalty
-    auto ones = Tensor::full({H, W}, 1.0f, Device::CUDA);
+    auto ones = Tensor::full({H, W}, 1.0f, Device::GPU);
     auto inverted_mask = ones - mask_2d;
     auto penalty_weight_map = inverted_mask.pow(POWER);
     auto penalty = (alpha * penalty_weight_map).mean() * WEIGHT;
@@ -394,7 +394,7 @@ TEST_F(MaskLossTest, AlphaConsistentLoss) {
     constexpr size_t W = 32;
     constexpr float ALPHA_WEIGHT = 10.0f;
 
-    auto alpha = Tensor::rand({H, W}, Device::CUDA);
+    auto alpha = Tensor::rand({H, W}, Device::GPU);
     auto mask = create_soft_mask(H, W);
 
     // L1 loss between alpha and mask
@@ -411,8 +411,8 @@ TEST_F(MaskLossTest, SSIMMapForward) {
     constexpr size_t H = 64;
     constexpr size_t W = 64;
 
-    auto img1 = Tensor::rand({1, C, H, W}, Device::CUDA);
-    auto img2 = Tensor::rand({1, C, H, W}, Device::CUDA);
+    auto img1 = Tensor::rand({1, C, H, W}, Device::GPU);
+    auto img2 = Tensor::rand({1, C, H, W}, Device::GPU);
 
     // Get SSIM map with "same" padding (no cropping)
     auto result = lfs::training::kernels::ssim_forward_map(img1, img2, false);
@@ -439,7 +439,7 @@ TEST_F(MaskLossTest, SSIMMapIdenticalImages) {
     constexpr size_t H = 32;
     constexpr size_t W = 32;
 
-    auto img = Tensor::rand({1, C, H, W}, Device::CUDA);
+    auto img = Tensor::rand({1, C, H, W}, Device::GPU);
 
     auto result = lfs::training::kernels::ssim_forward_map(img, img, false);
 
@@ -455,8 +455,8 @@ TEST_F(MaskLossTest, MaskedSSIMComputation) {
     constexpr size_t W = 64;
     constexpr float EPSILON = 1e-8f;
 
-    auto rendered = Tensor::rand({1, C, H, W}, Device::CUDA);
-    auto gt = Tensor::rand({1, C, H, W}, Device::CUDA);
+    auto rendered = Tensor::rand({1, C, H, W}, Device::GPU);
+    auto gt = Tensor::rand({1, C, H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.5f);
 
     // Get SSIM map
@@ -470,7 +470,7 @@ TEST_F(MaskLossTest, MaskedSSIMComputation) {
     // Compute masked SSIM (like legacy)
     auto masked_ssim_map = ssim_map_3d * mask_expanded;
     auto masked_ssim = masked_ssim_map.sum() / mask_sum;
-    auto ssim_loss = Tensor::full({}, 1.0f, Device::CUDA) - masked_ssim;
+    auto ssim_loss = Tensor::full({}, 1.0f, Device::GPU) - masked_ssim;
 
     float loss_val = ssim_loss.item<float>();
     EXPECT_GE(loss_val, 0.0f);
@@ -491,11 +491,11 @@ TEST_F(MaskLossTest, MaskedSSIMWeightsForegroundMoreThanFullImage) {
     constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
-    const auto base = Tensor::zeros({1, C, H, W}, Device::CUDA);
+    const auto base = Tensor::zeros({1, C, H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.25f); // 25% is object
     auto mask_expanded = mask_2d.unsqueeze(0).expand({C, H, W});
     auto mask_sum = mask_expanded.sum() + EPSILON;
-    const auto background = Tensor::ones({1, C, H, W}, Device::CUDA) - mask_expanded.unsqueeze(0);
+    const auto background = Tensor::ones({1, C, H, W}, Device::GPU) - mask_expanded.unsqueeze(0);
 
     const auto result = lfs::training::kernels::ssim_forward_map(base, background, false);
     auto ssim_map_3d = result.ssim_map.squeeze(0);
@@ -517,8 +517,8 @@ TEST_F(MaskLossTest, FullMaskedLossComputation) {
     constexpr float EPSILON = 1e-8f;
     constexpr float LAMBDA_DSSIM = 0.2f;
 
-    auto rendered = Tensor::rand({C, H, W}, Device::CUDA);
-    auto gt = Tensor::rand({C, H, W}, Device::CUDA);
+    auto rendered = Tensor::rand({C, H, W}, Device::GPU);
+    auto gt = Tensor::rand({C, H, W}, Device::GPU);
     auto mask_2d = create_binary_mask(H, W, 0.5f);
 
     auto mask_expanded = mask_2d.unsqueeze(0).expand({C, H, W});
@@ -535,7 +535,7 @@ TEST_F(MaskLossTest, FullMaskedLossComputation) {
     auto ssim_map_3d = ssim_result.ssim_map.squeeze(0);
     auto masked_ssim_map = ssim_map_3d * mask_expanded;
     auto masked_ssim = masked_ssim_map.sum() / mask_sum;
-    auto ssim_loss = Tensor::full({}, 1.0f, Device::CUDA) - masked_ssim;
+    auto ssim_loss = Tensor::full({}, 1.0f, Device::GPU) - masked_ssim;
 
     // Combined loss
     auto combined_loss = masked_l1 * (1.0f - LAMBDA_DSSIM) + ssim_loss * LAMBDA_DSSIM;
@@ -557,8 +557,8 @@ TEST_F(MaskLossTest, MaskedSSIMGradientNumerical) {
 
     const auto rendered_cpu = Tensor::rand({1, C, H, W}, Device::CPU) * 0.5f + 0.25f;
     const auto gt_cpu = Tensor::rand({1, C, H, W}, Device::CPU) * 0.5f + 0.25f;
-    const auto rendered = rendered_cpu.to(Device::CUDA);
-    const auto gt = gt_cpu.to(Device::CUDA);
+    const auto rendered = rendered_cpu.to(Device::GPU);
+    const auto gt = gt_cpu.to(Device::GPU);
     const auto mask_4d = create_soft_mask(H, W).unsqueeze(0).unsqueeze(0).expand({1, C, H, W});
     const auto mask_sum = mask_4d.sum() + EPSILON;
     const float mask_sum_val = mask_sum.item<float>();
@@ -566,7 +566,7 @@ TEST_F(MaskLossTest, MaskedSSIMGradientNumerical) {
     auto compute_loss = [&](const Tensor& img) {
         const auto result = lfs::training::kernels::ssim_forward_map(img, gt, false);
         const auto masked_ssim = (result.ssim_map * mask_4d).sum() / mask_sum;
-        return (Tensor::full({}, 1.0f, Device::CUDA) - masked_ssim).item<float>();
+        return (Tensor::full({}, 1.0f, Device::GPU) - masked_ssim).item<float>();
     };
 
     const auto result = lfs::training::kernels::ssim_forward_map(rendered, gt, false);
@@ -587,8 +587,8 @@ TEST_F(MaskLossTest, MaskedSSIMGradientNumerical) {
                 plus_cpu.ptr<float>()[idx] = rendered_data[idx] + DELTA;
                 minus_cpu.ptr<float>()[idx] = rendered_data[idx] - DELTA;
 
-                const float numerical = (compute_loss(plus_cpu.to(Device::CUDA)) -
-                                         compute_loss(minus_cpu.to(Device::CUDA))) /
+                const float numerical = (compute_loss(plus_cpu.to(Device::GPU)) -
+                                         compute_loss(minus_cpu.to(Device::GPU))) /
                                         (2.0f * DELTA);
                 const float analytical = analytical_data[idx];
                 const float denom = std::max(std::abs(numerical), std::abs(analytical));
@@ -609,15 +609,15 @@ TEST_F(MaskLossTest, PerPixelGradMapVsScalarGradient) {
     constexpr int C = 3, H = 32, W = 32;
     constexpr float EPSILON = 1e-8f;
 
-    const auto rendered = Tensor::rand({1, C, H, W}, Device::CUDA);
-    const auto gt = Tensor::rand({1, C, H, W}, Device::CUDA);
+    const auto rendered = Tensor::rand({1, C, H, W}, Device::GPU);
+    const auto gt = Tensor::rand({1, C, H, W}, Device::GPU);
 
     auto mask_cpu = Tensor::zeros({H, W}, Device::CPU);
     for (int h = 0; h < H / 2; ++h)
         for (int w = 0; w < W; ++w)
             mask_cpu.ptr<float>()[h * W + w] = 1.0f;
 
-    const auto mask_4d = mask_cpu.to(Device::CUDA).unsqueeze(0).unsqueeze(0).expand({1, C, H, W});
+    const auto mask_4d = mask_cpu.to(Device::GPU).unsqueeze(0).unsqueeze(0).expand({1, C, H, W});
     const float mask_sum_val = (mask_4d.sum() + EPSILON).item<float>();
     const auto result = lfs::training::kernels::ssim_forward_map(rendered, gt, false);
 

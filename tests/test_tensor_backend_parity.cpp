@@ -37,7 +37,7 @@ namespace {
                   const GpuBackend backend) {
         const Tensor cpu = Tensor::from_vector(values, shape, Device::CPU);
         GpuBackendScope scope(backend);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     uint32_t ordered_bits(const float value) {

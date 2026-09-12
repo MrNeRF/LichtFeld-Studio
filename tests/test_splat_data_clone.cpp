@@ -35,12 +35,12 @@ namespace {
 
     SplatData make_random_model(const size_t n, const int sh_degree, const uint32_t seed = 42) {
         const size_t rest = rest_coeffs_for_degree(sh_degree);
-        auto means = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto shN_can = Tensor::zeros({n, rest, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto scaling = Tensor::zeros({n, size_t{3}}, Device::CUDA, DataType::Float32);
-        auto rotation = Tensor::zeros({n, size_t{4}}, Device::CUDA, DataType::Float32);
-        auto opacity = Tensor::zeros({n, size_t{1}}, Device::CUDA, DataType::Float32);
+        auto means = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto sh0 = Tensor::zeros({n, size_t{1}, size_t{3}}, Device::GPU, DataType::Float32);
+        auto shN_can = Tensor::zeros({n, rest, size_t{3}}, Device::GPU, DataType::Float32);
+        auto scaling = Tensor::zeros({n, size_t{3}}, Device::GPU, DataType::Float32);
+        auto rotation = Tensor::zeros({n, size_t{4}}, Device::GPU, DataType::Float32);
+        auto opacity = Tensor::zeros({n, size_t{1}}, Device::GPU, DataType::Float32);
 
         {
             std::mt19937 rng(seed);
@@ -50,14 +50,14 @@ namespace {
                 auto* p = cpu.ptr<float>();
                 for (size_t i = 0; i < n * rest * 3; ++i)
                     p[i] = nd(rng);
-                shN_can = cpu.to(Device::CUDA);
+                shN_can = cpu.to(Device::GPU);
             }
 
             auto rcpu = rotation.cpu();
             auto* r = rcpu.ptr<float>();
             for (size_t i = 0; i < n; ++i)
                 r[i * 4] = 1.0f;
-            rotation = rcpu.to(Device::CUDA);
+            rotation = rcpu.to(Device::GPU);
         }
 
         return SplatData(sh_degree, means, sh0, shN_can, scaling, rotation, opacity, 1.0f);
@@ -137,7 +137,7 @@ TEST(SplatDataCloneTest, CloneCarriesDeletedMask) {
     deleted[1] = true;
     deleted[17] = true;
     deleted[63] = true;
-    model.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::CUDA);
+    model.deleted() = Tensor::from_vector(deleted, {deleted.size()}, Device::CPU).to(Device::GPU);
     model.refresh_deleted_count();
     ASSERT_TRUE(model.has_deleted_mask());
     ASSERT_EQ(model.deleted_count(), 3u);
@@ -201,12 +201,12 @@ TEST(SplatDataCloneTest, WritebackClearsQ16Pair) {
 
 TEST(SplatDataCloneTest, ReserveCapacityRebuildsCudaDirect) {
     const size_t n = 64;
-    auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto shN_can = Tensor::zeros_direct({n, size_t{15}, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto scaling = Tensor::zeros_direct({n, size_t{3}}, n, Device::CUDA, DataType::Float32);
-    auto rotation = Tensor::zeros_direct({n, size_t{4}}, n, Device::CUDA, DataType::Float32);
-    auto opacity = Tensor::zeros_direct({n, size_t{1}}, n, Device::CUDA, DataType::Float32);
+    auto means = Tensor::zeros_direct({n, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto sh0 = Tensor::zeros_direct({n, size_t{1}, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto shN_can = Tensor::zeros_direct({n, size_t{15}, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto scaling = Tensor::zeros_direct({n, size_t{3}}, n, Device::GPU, DataType::Float32);
+    auto rotation = Tensor::zeros_direct({n, size_t{4}}, n, Device::GPU, DataType::Float32);
+    auto opacity = Tensor::zeros_direct({n, size_t{1}}, n, Device::GPU, DataType::Float32);
     means.fill_(1.25f);
     shN_can.fill_(0.05f);
 

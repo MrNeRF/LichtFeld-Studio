@@ -17,7 +17,7 @@ namespace lfs::core {
     Tensor Tensor::linspace(float start, float end, size_t steps, Device device) {
         LFS_ASSERT_MSG(steps > 0,
                        "linspace steps must be positive");
-        LFS_ASSERT_MSG(device == Device::CPU || device == Device::CUDA,
+        LFS_ASSERT_MSG(device == Device::CPU || device == Device::GPU,
                        "linspace received an invalid device");
         LFS_ASSERT_MSG(std::isfinite(start) && std::isfinite(end),
                        "linspace endpoints must be finite");
@@ -37,7 +37,7 @@ namespace lfs::core {
                           : end - step * static_cast<float>(steps - i - 1);
         }
 
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             internal::backend_ops_for(t).copy_host_to_device(internal::CopyRequest{
                 .src = internal::raw_storage_ref(data.data(), DataType::Float32),
                 .dst = internal::storage_ref(t),
@@ -73,7 +73,7 @@ namespace lfs::core {
             return result;
         }
 
-        if (diagonal.device() == Device::CUDA) {
+        if (diagonal.device() == Device::GPU) {
             prepare_inputs_for_stream({&dense_diagonal}, result.stream());
             internal::backend_ops_for(dense_diagonal).diag(internal::storage_ref(dense_diagonal), internal::storage_ref(result), n, internal::ExecContext{result.stream()});
             // No sync - returns tensor
@@ -128,7 +128,7 @@ namespace lfs::core::functional {
                        "functional::map requires a callable");
         auto result = internal::allocate_like(input, input.shape(), input.dtype());
 
-        if (input.device() == Device::CUDA) {
+        if (input.device() == Device::GPU) {
             auto cpu_input = input.to(Device::CPU);
             const float* src = cpu_input.ptr<float>();
             std::vector<float> dst_data(input.numel());
@@ -188,7 +188,7 @@ namespace lfs::core::functional {
                        "functional::filter requires a callable");
         auto result = internal::allocate_like(input, input.shape(), input.dtype());
 
-        if (input.device() == Device::CUDA) {
+        if (input.device() == Device::GPU) {
             auto cpu_input = input.to(Device::CPU);
             const float* src = cpu_input.ptr<float>();
             std::vector<float> dst_data(input.numel());

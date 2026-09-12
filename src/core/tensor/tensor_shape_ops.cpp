@@ -431,7 +431,7 @@ namespace lfs::core {
                        "non-contiguous slice copying currently supports only Float32");
         auto result = internal::allocate_like(*this, TensorShape(new_shape), dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             auto cpu_copy = to(Device::CPU);
             auto cpu_result = cpu_copy.copy_slice(starts, ends, new_shape);
             return internal::copy_to_backend(

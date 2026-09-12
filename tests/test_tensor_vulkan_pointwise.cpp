@@ -25,7 +25,7 @@ namespace {
 
     Tensor upload_vulkan(const Tensor& cpu) {
         GpuBackendScope scope(GpuBackend::Vulkan);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     Tensor upload_float(const std::vector<float>& values, const TensorShape& shape) {
@@ -279,8 +279,8 @@ namespace {
             if (pair.input == DataType::UInt32 &&
                 pair.output == DataType::Int64) {
                 GpuBackendScope scope(GpuBackend::Vulkan);
-                const Tensor input = cpu_input.to(Device::CUDA);
-                Tensor actual = Tensor::empty(input.shape(), Device::CUDA,
+                const Tensor input = cpu_input.to(Device::GPU);
+                Tensor actual = Tensor::empty(input.shape(), Device::GPU,
                                               pair.output);
                 internal::backend_ops(GpuBackend::Vulkan)
                     .convert_type(internal::storage_ref(input),
@@ -301,9 +301,9 @@ namespace {
         const Tensor base = Tensor::from_vector(
             std::vector<float>{99.0f, -1.0f, 2.0f, -3.0f, 4.0f,
                                -5.0f, 6.0f, -7.0f, 8.0f},
-            {9}, Device::CUDA);
+            {9}, Device::GPU);
         const Tensor input = base.slice(0, 1, 9);
-        Tensor output = Tensor::empty({8}, Device::CUDA);
+        Tensor output = Tensor::empty({8}, Device::GPU);
         const auto program = internal::pointwise_program(
             DataType::Float32, DataType::Float32, ops::abs_op{});
         internal::backend_ops(GpuBackend::Vulkan).unary(program, internal::storage_ref(input), internal::storage_ref(output), output.numel(), {});
@@ -355,26 +355,26 @@ namespace {
     TEST_F(TensorVulkanPointwise, MovementEntriesCatchStridesCatPadAndFill) {
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor base = Tensor::from_vector(
-            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::CUDA);
+            std::vector<float>{1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU);
         EXPECT_EQ(base.transpose(0, 1).contiguous().to_vector(),
                   std::vector<float>({1, 4, 2, 5, 3, 6}));
 
-        Tensor destination = Tensor::zeros({2, 3}, Device::CUDA);
+        Tensor destination = Tensor::zeros({2, 3}, Device::GPU);
         destination.transpose(0, 1).copy_from(
             Tensor::from_vector(std::vector<float>{7, 8, 9, 10, 11, 12},
-                                {3, 2}, Device::CUDA));
+                                {3, 2}, Device::GPU));
         EXPECT_EQ(destination.to_vector(),
                   std::vector<float>({7, 9, 11, 8, 10, 12}));
 
         const Tensor rank5 = Tensor::from_vector(
             std::vector<float>{1, 2, 3, 4, 5, 6, 7, 8},
-            {1, 1, 1, 4, 2}, Device::CUDA);
+            {1, 1, 1, 4, 2}, Device::GPU);
         EXPECT_EQ(rank5.transpose(3, 4).contiguous().to_vector(),
                   std::vector<float>({1, 3, 5, 7, 2, 4, 6, 8}));
-        Tensor rank5_destination = Tensor::zeros({1, 1, 1, 4, 2}, Device::CUDA);
+        Tensor rank5_destination = Tensor::zeros({1, 1, 1, 4, 2}, Device::GPU);
         rank5_destination.transpose(3, 4).copy_from(
             Tensor::from_vector(std::vector<float>{8, 7, 6, 5, 4, 3, 2, 1},
-                                {1, 1, 1, 2, 4}, Device::CUDA));
+                                {1, 1, 1, 2, 4}, Device::GPU));
         EXPECT_EQ(rank5_destination.to_vector(),
                   std::vector<float>({8, 4, 7, 3, 6, 2, 5, 1}));
 
@@ -382,19 +382,19 @@ namespace {
             Tensor::from_vector(std::vector<float>{1, 2, 3, 4, 5, 6},
                                 {2, 3}, Device::CPU)
                 .transpose(0, 1);
-        EXPECT_EQ(host_view.to(Device::CUDA).to_vector(), host_view.to_vector());
+        EXPECT_EQ(host_view.to(Device::GPU).to_vector(), host_view.to_vector());
 
-        Tensor float_destination = Tensor::zeros({2, 3}, Device::CUDA);
+        Tensor float_destination = Tensor::zeros({2, 3}, Device::GPU);
         float_destination.transpose(0, 1).copy_from(
             Tensor::from_vector(std::vector<int>{1, 2, 3, 4, 5, 6},
-                                {3, 2}, Device::CUDA));
+                                {3, 2}, Device::GPU));
         EXPECT_EQ(float_destination.to_vector(),
                   std::vector<float>({1, 3, 5, 2, 4, 6}));
 
-        Tensor filled = Tensor::zeros({3, 2}, Device::CUDA);
+        Tensor filled = Tensor::zeros({3, 2}, Device::GPU);
         filled.transpose(0, 1).fill_(3.5f);
         EXPECT_EQ(filled.to_vector(), std::vector<float>(6, 3.5f));
-        EXPECT_EQ(Tensor::full({7}, -2.25f, Device::CUDA).to_vector(),
+        EXPECT_EQ(Tensor::full({7}, -2.25f, Device::GPU).to_vector(),
                   std::vector<float>(7, -2.25f));
 
         EXPECT_EQ(Tensor::cat({base, base}, 1).to_vector(),

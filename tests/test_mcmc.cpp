@@ -28,12 +28,12 @@ namespace {
             rotation_data[i * 4 + 0] = 1.0f;
         }
 
-        auto means = Tensor::from_vector(means_data, TensorShape({static_cast<size_t>(n_gaussians), 3}), Device::CUDA);
-        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({static_cast<size_t>(n_gaussians), 3}), Device::CUDA);
-        auto shN = Tensor::from_vector(shN_data, TensorShape({static_cast<size_t>(n_gaussians), 48}), Device::CUDA);
-        auto scaling = Tensor::from_vector(scaling_data, TensorShape({static_cast<size_t>(n_gaussians), 3}), Device::CUDA);
-        auto rotation = Tensor::from_vector(rotation_data, TensorShape({static_cast<size_t>(n_gaussians), 4}), Device::CUDA);
-        auto opacity = Tensor::from_vector(opacity_data, TensorShape({static_cast<size_t>(n_gaussians), 1}), Device::CUDA);
+        auto means = Tensor::from_vector(means_data, TensorShape({static_cast<size_t>(n_gaussians), 3}), Device::GPU);
+        auto sh0 = Tensor::from_vector(sh0_data, TensorShape({static_cast<size_t>(n_gaussians), 3}), Device::GPU);
+        auto shN = Tensor::from_vector(shN_data, TensorShape({static_cast<size_t>(n_gaussians), 48}), Device::GPU);
+        auto scaling = Tensor::from_vector(scaling_data, TensorShape({static_cast<size_t>(n_gaussians), 3}), Device::GPU);
+        auto rotation = Tensor::from_vector(rotation_data, TensorShape({static_cast<size_t>(n_gaussians), 4}), Device::GPU);
+        auto opacity = Tensor::from_vector(opacity_data, TensorShape({static_cast<size_t>(n_gaussians), 1}), Device::GPU);
 
         return SplatData(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
     }
@@ -44,7 +44,7 @@ namespace {
         for (int i = 0; i < count_true; ++i) {
             mask_ptr[i] = 1;
         }
-        return mask.to(Device::CUDA);
+        return mask.to(Device::GPU);
     }
 
 } // namespace
@@ -107,7 +107,7 @@ TEST(CropDampingStrategyTest, McmcRejectedRowsAreNeverSampledAtZeroScale) {
     opt_params.iterations = 100;
     opt_params.max_cap = 16;
     strategy.initialize(opt_params);
-    strategy._error_score_max = Tensor::ones({8}, Device::CUDA);
+    strategy._error_score_max = Tensor::ones({8}, Device::GPU);
 
     auto crop_mask = make_mask(8, 1);
     strategy.get_optimizer().set_crop_damping_mask(crop_mask);
@@ -145,7 +145,7 @@ TEST(CropDampingStrategyTest, IgsPlusRejectedRowsAreNeverSampledAtZeroScale) {
     auto crop_mask = make_mask(8, 1);
     strategy.get_optimizer().set_crop_damping_mask(crop_mask);
     strategy.get_optimizer().set_cropbox_lr_scale(0.0f);
-    const auto scores = Tensor::ones({8}, Device::CUDA);
+    const auto scores = Tensor::ones({8}, Device::GPU);
     const auto damped_scores = strategy.damp_densification_scores(scores);
     const auto damped_cpu = damped_scores.cpu().to_vector();
     ASSERT_EQ(damped_cpu.size(), 8u);
@@ -227,7 +227,7 @@ TEST(MCMCTest, AddNewGaussiansExtendsDeletedMask) {
     auto sampled_idxs = Tensor::from_vector(
         std::vector<int>{2, 3},
         TensorShape({2}),
-        Device::CUDA);
+        Device::GPU);
     const int added = strategy.add_new_gs_with_indices_test(sampled_idxs);
 
     EXPECT_EQ(added, 2);

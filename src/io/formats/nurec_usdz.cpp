@@ -746,17 +746,17 @@ namespace lfs::io {
             const size_t specular_coeffs = specular_shape->at(1) / 3;
             Tensor shN;
             if (specular_coeffs > 0) {
-                shN = Tensor::from_vector(*specular_data, {count, specular_coeffs, size_t{3}}, Device::CUDA);
+                shN = Tensor::from_vector(*specular_data, {count, specular_coeffs, size_t{3}}, Device::GPU);
             }
 
             return SplatData(
                 *active_features,
-                Tensor::from_vector(*means_data, {count, size_t{3}}, Device::CUDA),
-                Tensor::from_vector(*albedo_data, {count, size_t{1}, size_t{3}}, Device::CUDA),
+                Tensor::from_vector(*means_data, {count, size_t{3}}, Device::GPU),
+                Tensor::from_vector(*albedo_data, {count, size_t{1}, size_t{3}}, Device::GPU),
                 std::move(shN),
-                Tensor::from_vector(*scales_data, {count, size_t{3}}, Device::CUDA),
-                Tensor::from_vector(*rotations_data, {count, size_t{4}}, Device::CUDA),
-                Tensor::from_vector(*densities_data, {count, size_t{1}}, Device::CUDA),
+                Tensor::from_vector(*scales_data, {count, size_t{3}}, Device::GPU),
+                Tensor::from_vector(*rotations_data, {count, size_t{4}}, Device::GPU),
+                Tensor::from_vector(*densities_data, {count, size_t{1}}, Device::GPU),
                 1.0f);
         }
 

@@ -127,14 +127,14 @@ TEST_F(PipelinedImageLoaderTest, LoadsRealImageAndMaskWithExpectedContract) {
     EXPECT_TRUE(ready.error.empty()) << ready.error;
     EXPECT_EQ(ready.sequence_id, 7u);
     ASSERT_TRUE(ready.tensor.is_valid());
-    EXPECT_EQ(ready.tensor.device(), Device::CUDA);
+    EXPECT_EQ(ready.tensor.device(), Device::GPU);
     EXPECT_EQ(ready.tensor.dtype(), DataType::Float32);
     ASSERT_EQ(ready.tensor.shape().rank(), 3u);
     EXPECT_EQ(ready.tensor.shape()[0], 3u);
     EXPECT_LE(std::max(ready.tensor.shape()[1], ready.tensor.shape()[2]), 128u);
 
     ASSERT_TRUE(ready.mask.has_value());
-    EXPECT_EQ(ready.mask->device(), Device::CUDA);
+    EXPECT_EQ(ready.mask->device(), Device::GPU);
     EXPECT_EQ(ready.mask->dtype(), DataType::Float32);
     EXPECT_EQ(ready.mask->shape(),
               TensorShape({ready.tensor.shape()[1], ready.tensor.shape()[2]}));

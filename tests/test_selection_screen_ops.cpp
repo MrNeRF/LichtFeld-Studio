@@ -36,7 +36,7 @@ namespace {
 
     Tensor upload(const std::vector<float>& values, const TensorShape& shape, const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return Tensor::from_vector(values, shape, Device::CPU).to(Device::CUDA);
+        return Tensor::from_vector(values, shape, Device::CPU).to(Device::GPU);
     }
 
     std::vector<float> positions(const size_t count) {
@@ -62,7 +62,7 @@ TEST(SelectionScreenOps, RectangleSelectionAccumulatesAndSkipsInvalidPositions) 
         seed[5] = true;
         Tensor selection = [&] {
             GpuBackendScope scope(backend);
-            return Tensor::from_vector(seed, TensorShape{n}, Device::CPU).to(Device::CUDA);
+            return Tensor::from_vector(seed, TensorShape{n}, Device::CPU).to(Device::GPU);
         }();
         lfs::rendering::rect_select_tensor(screen, x0, y0, x1, y1, selection);
         const auto got = selection.to_vector_bool();

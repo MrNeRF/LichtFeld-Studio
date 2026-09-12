@@ -5303,14 +5303,14 @@ namespace lfs::vis {
         const auto& src = *gaussian_clipboard_;
         auto data = std::make_unique<lfs::core::SplatData>(
             src.get_max_sh_degree(),
-            src.means_raw().cuda(), src.sh0_raw().cuda(),
-            src.shN_raw().is_valid() ? src.shN_raw().cuda() : lfs::core::Tensor{},
-            src.scaling_raw().cuda(), src.rotation_raw().cuda(), src.opacity_raw().cuda(),
+            src.means_raw().gpu(), src.sh0_raw().gpu(),
+            src.shN_raw().is_valid() ? src.shN_raw().gpu() : lfs::core::Tensor{},
+            src.scaling_raw().gpu(), src.rotation_raw().gpu(), src.opacity_raw().gpu(),
             src.get_scene_scale(),
             lfs::core::SplatData::ShNLayout::Swizzled);
         data->set_active_sh_degree(
             src.get_active_sh_degree(),
-            src.shN_value_quantized() ? src.shN_value_bounds().cuda() : lfs::core::Tensor{});
+            src.shN_value_quantized() ? src.shN_value_bounds().gpu() : lfs::core::Tensor{});
 
         const std::string name = makeUniqueCounterNodeName(scene_, "Selection", clipboard_counter_);
         if (auto allocator = makeExternalSplatAllocator()) {
@@ -5455,14 +5455,14 @@ namespace lfs::vis {
                                 } else if (child.type == core::NodeType::SPLAT && child.data) {
                                     auto paste_data = std::make_unique<lfs::core::SplatData>(
                                         child.data->get_max_sh_degree(),
-                                        child.data->means_raw().cuda(), child.data->sh0_raw().cuda(),
-                                        child.data->shN_raw().is_valid() ? child.data->shN_raw().cuda() : lfs::core::Tensor{},
-                                        child.data->scaling_raw().cuda(), child.data->rotation_raw().cuda(),
-                                        child.data->opacity_raw().cuda(), child.data->get_scene_scale(),
+                                        child.data->means_raw().gpu(), child.data->sh0_raw().gpu(),
+                                        child.data->shN_raw().is_valid() ? child.data->shN_raw().gpu() : lfs::core::Tensor{},
+                                        child.data->scaling_raw().gpu(), child.data->rotation_raw().gpu(),
+                                        child.data->opacity_raw().gpu(), child.data->get_scene_scale(),
                                         lfs::core::SplatData::ShNLayout::Swizzled);
                                     paste_data->set_active_sh_degree(
                                         child.data->get_active_sh_degree(),
-                                        child.data->shN_value_quantized() ? child.data->shN_value_bounds().cuda()
+                                        child.data->shN_value_quantized() ? child.data->shN_value_bounds().gpu()
                                                                           : lfs::core::Tensor{});
                                     child_id = scene_.addSplat(child_name, std::move(paste_data), parent_id);
                                 } else if (child.type == core::NodeType::CROPBOX && child.cropbox) {
@@ -5516,14 +5516,14 @@ namespace lfs::vis {
                 name = makeUniqueCounterNodeName(scene_, "Pasted", clipboard_counter_);
                 auto paste_data = std::make_unique<lfs::core::SplatData>(
                     entry.data->get_max_sh_degree(),
-                    entry.data->means_raw().cuda(), entry.data->sh0_raw().cuda(),
-                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().cuda() : lfs::core::Tensor{},
-                    entry.data->scaling_raw().cuda(), entry.data->rotation_raw().cuda(), entry.data->opacity_raw().cuda(),
+                    entry.data->means_raw().gpu(), entry.data->sh0_raw().gpu(),
+                    entry.data->shN_raw().is_valid() ? entry.data->shN_raw().gpu() : lfs::core::Tensor{},
+                    entry.data->scaling_raw().gpu(), entry.data->rotation_raw().gpu(), entry.data->opacity_raw().gpu(),
                     entry.data->get_scene_scale(),
                     lfs::core::SplatData::ShNLayout::Swizzled);
                 paste_data->set_active_sh_degree(
                     entry.data->get_active_sh_degree(),
-                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().cuda()
+                    entry.data->shN_value_quantized() ? entry.data->shN_value_bounds().gpu()
                                                       : lfs::core::Tensor{});
 
                 if (auto allocator = makeExternalSplatAllocator()) {
@@ -6052,14 +6052,14 @@ namespace lfs::vis {
             const auto inverted_active = active.logical_xor(other_selected.logical_not());
 
             const auto group_tensor = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
-            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
+            const auto zeros = lfs::core::Tensor::zeros({total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             const auto active_values = group_tensor.where(inverted_active, zeros);
             new_mask = old_u8.where(other_selected, active_values);
         } else {
             // No active selection -> invert becomes select-all (into the active selection group).
             new_mask = lfs::core::Tensor::full(
-                {total}, static_cast<float>(group_id), lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                {total}, static_cast<float>(group_id), lfs::core::Device::GPU, lfs::core::DataType::UInt8);
         }
 
         scene_.setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(new_mask)));
@@ -6129,7 +6129,7 @@ namespace lfs::vis {
             const auto visible_values = visible_bool.to(lfs::core::DataType::UInt8) *
                                         lfs::core::Tensor::full(
                                             {visible_total}, static_cast<float>(group_id),
-                                            lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                                            lfs::core::Device::GPU, lfs::core::DataType::UInt8);
             lfs::core::Tensor full_mask;
             const auto visible_indices = scene_.getVisibleSelectionIndices();
             if (visible_values.numel() == full_total && !visible_indices) {
@@ -6137,7 +6137,7 @@ namespace lfs::vis {
             } else if (visible_indices && visible_indices->is_valid() &&
                        visible_indices->numel() == visible_values.numel()) {
                 full_mask = lfs::core::Tensor::zeros(
-                    {full_total}, lfs::core::Device::CUDA, lfs::core::DataType::UInt8);
+                    {full_total}, lfs::core::Device::GPU, lfs::core::DataType::UInt8);
                 full_mask.index_copy_(0, *visible_indices, visible_values);
             } else {
                 return;

@@ -87,7 +87,7 @@ namespace lfs::core::nn::models {
         std::array<float, 3> scaling_scale_{};
         ActivationArena arena_;
         bool weights_on_stream_ = false;
-        Device device_ = Device::CUDA;
+        Device device_ = Device::GPU;
         DataType compute_ = DataType::Float32;
         InputScaling scaling_ = InputScaling::Identity;
         std::size_t activation_budget_bytes_ = 1536ULL * 1024ULL * 1024ULL;

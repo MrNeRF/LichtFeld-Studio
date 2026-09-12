@@ -87,7 +87,7 @@ namespace lfs::core {
         const std::optional<cudaStream_t> requested_stream) {
         const Tensor* backend_reference = nullptr;
         for (const Tensor* input : inputs) {
-            if (input == nullptr || input->device() != Device::CUDA) {
+            if (input == nullptr || input->device() != Device::GPU) {
                 continue;
             }
             if (backend_reference == nullptr) {
@@ -105,7 +105,7 @@ namespace lfs::core {
             for (const Tensor* input : inputs) {
                 LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
                                "stream preparation requires valid tensor inputs");
-                if (input->device() == Device::CUDA) {
+                if (input->device() == Device::GPU) {
                     execution_stream = input->stream();
                     break;
                 }
@@ -115,7 +115,7 @@ namespace lfs::core {
         for (const Tensor* input : inputs) {
             LFS_ASSERT_MSG(input != nullptr && input->is_valid(),
                            "stream preparation requires valid tensor inputs");
-            if (input->device() == Device::CUDA) {
+            if (input->device() == Device::GPU) {
                 input->sync_to_stream(execution_stream);
             }
         }

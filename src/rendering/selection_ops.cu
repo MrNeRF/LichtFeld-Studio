@@ -100,7 +100,7 @@ namespace lfs::rendering {
             for (std::size_t i = 0; i < mask.size(); ++i) {
                 ptr[i] = mask[i] ? 1 : 0;
             }
-            return tensor.cuda();
+            return tensor.gpu();
         }
 
         [[nodiscard]] bool nodeMaskRestrictsSelection(const std::vector<bool>& mask) {
@@ -125,12 +125,12 @@ namespace lfs::rendering {
         void prepareSelectionGroupCountsScratch(Tensor& counts_scratch) {
             lfs::core::GpuBackendScope cuda_scope(lfs::core::GpuBackend::CUDA);
             if (!counts_scratch.is_valid() ||
-                counts_scratch.device() != lfs::core::Device::CUDA ||
+                counts_scratch.device() != lfs::core::Device::GPU ||
                 lfs::core::gpu_backend_of(counts_scratch) != lfs::core::GpuBackend::CUDA ||
                 counts_scratch.dtype() != lfs::core::DataType::Int32 ||
                 counts_scratch.numel() != kSelectionGroupScratchWords) {
                 counts_scratch = Tensor::zeros(
-                    {kSelectionGroupScratchWords}, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+                    {kSelectionGroupScratchWords}, lfs::core::Device::GPU, lfs::core::DataType::Int32);
             } else {
                 counts_scratch.zero_();
             }
@@ -842,7 +842,7 @@ namespace lfs::rendering {
         if (!means.is_valid() || means.size(0) == 0) {
             return {};
         }
-        if (means.device() != lfs::core::Device::CUDA ||
+        if (means.device() != lfs::core::Device::GPU ||
             means.dtype() != lfs::core::DataType::Float32 ||
             means.ndim() != 2 ||
             means.size(1) != 3) {
@@ -856,7 +856,7 @@ namespace lfs::rendering {
         const Tensor means_contig = means.is_contiguous() ? means : means.contiguous();
         Tensor output = Tensor::empty(
             {static_cast<std::size_t>(n), std::size_t{2}},
-            lfs::core::Device::CUDA,
+            lfs::core::Device::GPU,
             lfs::core::DataType::Float32);
 
         Tensor model_transforms_contig;
@@ -866,8 +866,8 @@ namespace lfs::rendering {
             if (model_transforms_contig.dtype() != lfs::core::DataType::Float32) {
                 model_transforms_contig = model_transforms_contig.to(lfs::core::DataType::Float32);
             }
-            if (model_transforms_contig.device() != lfs::core::Device::CUDA) {
-                model_transforms_contig = model_transforms_contig.cuda();
+            if (model_transforms_contig.device() != lfs::core::Device::GPU) {
+                model_transforms_contig = model_transforms_contig.gpu();
             }
             if (!model_transforms_contig.is_contiguous()) {
                 model_transforms_contig = model_transforms_contig.contiguous();
@@ -884,8 +884,8 @@ namespace lfs::rendering {
             if (transform_indices_contig.dtype() != lfs::core::DataType::Int32) {
                 transform_indices_contig = transform_indices_contig.to(lfs::core::DataType::Int32);
             }
-            if (transform_indices_contig.device() != lfs::core::Device::CUDA) {
-                transform_indices_contig = transform_indices_contig.cuda();
+            if (transform_indices_contig.device() != lfs::core::Device::GPU) {
+                transform_indices_contig = transform_indices_contig.gpu();
             }
             if (!transform_indices_contig.is_contiguous()) {
                 transform_indices_contig = transform_indices_contig.contiguous();
@@ -1161,7 +1161,7 @@ namespace lfs::rendering {
         if (!selection_mask.is_valid() || selection_mask.numel() == 0) {
             return;
         }
-        if (selection_mask.device() != lfs::core::Device::CUDA) {
+        if (selection_mask.device() != lfs::core::Device::GPU) {
             throw std::runtime_error("count_selection_groups_async requires a CUDA mask");
         }
         if (lfs::core::gpu_backend_of(selection_mask) == lfs::core::GpuBackend::Vulkan) {
@@ -1219,7 +1219,7 @@ namespace lfs::rendering {
         if (!selection_mask.is_valid() || selection_mask.numel() == 0) {
             return result;
         }
-        if (selection_mask.device() != lfs::core::Device::CUDA) {
+        if (selection_mask.device() != lfs::core::Device::GPU) {
             const auto mask_cpu = selection_mask.cpu();
             const auto* const data = mask_cpu.ptr<uint8_t>();
             const size_t n = mask_cpu.numel();
@@ -1240,7 +1240,7 @@ namespace lfs::rendering {
     SelectionGroupCountResult read_selection_group_count_result(const Tensor& counts_scratch) {
         SelectionGroupCountResult result{};
         if (!counts_scratch.is_valid() ||
-            counts_scratch.device() != lfs::core::Device::CUDA ||
+            counts_scratch.device() != lfs::core::Device::GPU ||
             counts_scratch.dtype() != lfs::core::DataType::Int32 ||
             counts_scratch.numel() != kSelectionGroupScratchWords) {
             return result;
@@ -1258,7 +1258,7 @@ namespace lfs::rendering {
     SelectionGroupDeltaResult read_selection_group_delta_result(const Tensor& counts_scratch) {
         SelectionGroupDeltaResult result{};
         if (!counts_scratch.is_valid() ||
-            counts_scratch.device() != lfs::core::Device::CUDA ||
+            counts_scratch.device() != lfs::core::Device::GPU ||
             counts_scratch.dtype() != lfs::core::DataType::Int32 ||
             counts_scratch.numel() != kSelectionGroupScratchWords) {
             return result;
@@ -1288,8 +1288,8 @@ namespace lfs::rendering {
             merge_selection_mask_or_program(accumulated_mask, delta_mask);
             return;
         }
-        if (accumulated_mask.device() != lfs::core::Device::CUDA ||
-            delta_mask.device() != lfs::core::Device::CUDA ||
+        if (accumulated_mask.device() != lfs::core::Device::GPU ||
+            delta_mask.device() != lfs::core::Device::GPU ||
             accumulated_mask.dtype() != lfs::core::DataType::Bool ||
             delta_mask.dtype() != lfs::core::DataType::Bool) {
             accumulated_mask = accumulated_mask | delta_mask;

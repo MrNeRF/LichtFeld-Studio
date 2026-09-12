@@ -51,7 +51,7 @@ namespace {
                   const DataType dtype,
                   const std::string_view name) {
             (void)capacity;
-            Tensor tensor = Tensor::empty(std::move(shape), Device::CUDA, dtype);
+            Tensor tensor = Tensor::empty(std::move(shape), Device::GPU, dtype);
             tensor.set_name(std::string{name});
             return tensor;
         };

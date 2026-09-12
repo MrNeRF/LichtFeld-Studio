@@ -64,7 +64,7 @@ namespace lfs::training {
             const void* key = nullptr;
             size_t n = 0;
             size_t ranges_fp = 0;
-            lfs::core::Device device = lfs::core::Device::CUDA;
+            lfs::core::Device device = lfs::core::Device::GPU;
             lfs::core::Tensor mask;
         };
         FrozenMaskCache g_frozen_mask_cache;
@@ -77,7 +77,7 @@ namespace lfs::training {
                 return;
             }
             const bool direct_cuda_storage =
-                device == lfs::core::Device::CUDA &&
+                device == lfs::core::Device::GPU &&
                 (scores.is_external_storage() || !scores.external_storage_kind().empty());
             if (!direct_cuda_storage) {
                 scores.reserve(desired_capacity);
@@ -109,7 +109,7 @@ namespace lfs::training {
     }
 
     void initialize_gaussians(lfs::core::SplatData& splat_data, int max_cap) {
-        // Tensors are already on GPU in the new framework (created with Device::CUDA by default)
+        // Tensors are already on GPU in the new framework (created with Device::GPU by default)
         // Gradients are now owned by AdamOptimizer, not SplatData
 
         // Pre-allocate tensor capacity to avoid reallocations during MCMC operations
@@ -310,7 +310,7 @@ namespace lfs::training {
             }
 
             const size_t n = static_cast<size_t>(splat_data.size());
-            auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::CUDA);
+            auto mask = make_frozen_mask(splat_data, n, lfs::core::Device::GPU);
             if (!mask.is_valid()) {
                 optimizer.set_frozen_mask({});
                 return;
@@ -376,7 +376,7 @@ namespace lfs::training {
         assert(rotations.ndim() == 2 && rotations.shape()[1] == 4);
         assert(rotations.shape()[0] == n);
 
-        auto dead_mask = Tensor::empty({n}, Device::CUDA, DataType::Bool);
+        auto dead_mask = Tensor::empty({n}, Device::GPU, DataType::Bool);
         pruning::launch_compute_dead_mask(
             flat_opacities.ptr<float>(),
             rotations.ptr<float>(),
@@ -393,7 +393,7 @@ namespace lfs::training {
         const size_t n = rotations.shape()[0];
         assert(rotations.ndim() == 2 && rotations.shape()[1] == 4);
 
-        auto near_zero_mask = Tensor::empty({n}, Device::CUDA, DataType::Bool);
+        auto near_zero_mask = Tensor::empty({n}, Device::GPU, DataType::Bool);
         pruning::launch_compute_near_zero_rotation_mask(
             rotations.ptr<float>(),
             near_zero_mask.ptr<uint8_t>(),

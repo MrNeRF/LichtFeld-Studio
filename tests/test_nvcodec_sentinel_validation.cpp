@@ -60,7 +60,7 @@ TEST(NvCodecSentinelValidatorTest, SkippedMemberIsRetriedOrFailsHardBeforeReturn
         spans, nullptr, true, true);
     ASSERT_EQ(recovered.size(), spans.size());
     ASSERT_TRUE(recovered[1].is_valid());
-    EXPECT_EQ(recovered[1].device(), lfs::core::Device::CUDA);
+    EXPECT_EQ(recovered[1].device(), lfs::core::Device::GPU);
     EXPECT_EQ(recovered[1].dtype(), lfs::core::DataType::UInt8);
     const auto recovered_values = recovered[1].cpu().to_vector();
     ASSERT_FALSE(recovered_values.empty());

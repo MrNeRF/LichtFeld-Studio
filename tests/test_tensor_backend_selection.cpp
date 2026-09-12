@@ -45,7 +45,7 @@ namespace {
         // Catches a thread scope freezing the otherwise untouched process default.
         if (gpu_backend_available(GpuBackend::Vulkan)) {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor tensor = Tensor::empty({1}, Device::CUDA);
+            const Tensor tensor = Tensor::empty({1}, Device::GPU);
             EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
         }
 
@@ -85,26 +85,26 @@ namespace {
         {
             GpuBackendScope outer(GpuBackend::Vulkan);
             std::thread other_thread([&] {
-                Tensor tensor = Tensor::empty({1}, Device::CUDA);
+                Tensor tensor = Tensor::empty({1}, Device::GPU);
                 other_thread_used_cuda = gpu_backend_of(tensor) == GpuBackend::CUDA;
             });
             other_thread.join();
 
-            const Tensor outer_tensor = Tensor::empty({1}, Device::CUDA);
+            const Tensor outer_tensor = Tensor::empty({1}, Device::GPU);
             EXPECT_EQ(gpu_backend_of(outer_tensor), GpuBackend::Vulkan);
 
             {
                 GpuBackendScope inner(GpuBackend::CUDA);
-                const Tensor tensor = Tensor::empty({1}, Device::CUDA);
+                const Tensor tensor = Tensor::empty({1}, Device::GPU);
                 EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::CUDA);
             }
 
-            const Tensor restored_tensor = Tensor::empty({1}, Device::CUDA);
+            const Tensor restored_tensor = Tensor::empty({1}, Device::GPU);
             EXPECT_EQ(gpu_backend_of(restored_tensor), GpuBackend::Vulkan);
         }
 
         EXPECT_TRUE(other_thread_used_cuda.load());
-        const Tensor after_scope = Tensor::empty({1}, Device::CUDA);
+        const Tensor after_scope = Tensor::empty({1}, Device::GPU);
         EXPECT_EQ(gpu_backend_of(after_scope), GpuBackend::CUDA);
     }
 
@@ -114,7 +114,7 @@ namespace {
         EXPECT_EQ(gpu_backend_of(cpu), std::nullopt);
         EXPECT_EQ(gpu_backend_of(Tensor{}), std::nullopt);
 
-        const Tensor gpu = Tensor::zeros({2, 2}, Device::CUDA);
+        const Tensor gpu = Tensor::zeros({2, 2}, Device::GPU);
         const Tensor view = gpu.slice(0, 0, 1);
         EXPECT_EQ(gpu_backend_of(gpu), GpuBackend::CUDA);
         EXPECT_EQ(gpu_backend_of(view), gpu_backend_of(gpu));
@@ -127,7 +127,7 @@ namespace {
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
             const Tensor tensor = Tensor::from_blob(
-                pointer, {1}, Device::CUDA, DataType::Float32);
+                pointer, {1}, Device::GPU, DataType::Float32);
             EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::CUDA);
         }
         ASSERT_EQ(cudaFree(pointer), cudaSuccess);
@@ -140,7 +140,7 @@ namespace {
         }
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            const Tensor tensor = Tensor::zeros({2}, Device::CUDA);
+            const Tensor tensor = Tensor::zeros({2}, Device::GPU);
             EXPECT_EQ(gpu_backend_of(tensor), GpuBackend::Vulkan);
             EXPECT_EQ(tensor.to_vector(), std::vector<float>({0.0f, 0.0f}));
         }
@@ -149,8 +149,8 @@ namespace {
 
     TEST(TensorBackendSelection, OperationsInheritInputBackendAgainstScope) {
         // Catches output, reduction, and lazy allocations that consult the active scope.
-        const Tensor a = Tensor::full({8}, 2.0f, Device::CUDA);
-        const Tensor b = Tensor::full({8}, 3.0f, Device::CUDA);
+        const Tensor a = Tensor::full({8}, 2.0f, Device::GPU);
+        const Tensor b = Tensor::full({8}, 3.0f, Device::GPU);
 
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_set_size_heuristic_override_for_testing(false);
@@ -174,7 +174,7 @@ namespace {
 
     TEST(TensorBackendSelection, CopyToBackendClonesAndConvertsCleanly) {
         // Catches same-backend aliasing and cross-backend CUDA fallthrough.
-        const Tensor source = Tensor::full({4}, 7.0f, Device::CUDA);
+        const Tensor source = Tensor::full({4}, 7.0f, Device::GPU);
         const Tensor clone = internal::copy_to_backend(source, GpuBackend::CUDA);
         ASSERT_EQ(gpu_backend_of(clone), GpuBackend::CUDA);
         EXPECT_NE(clone.data_ptr(), source.data_ptr());

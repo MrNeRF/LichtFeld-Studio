@@ -26,7 +26,7 @@ namespace {
         std::vector<float> values(16);
         for (size_t i = 0; i < values.size(); ++i)
             values[i] = static_cast<float>(i);
-        const Tensor matrix = Tensor::from_vector(values, {4, 4}, Device::CUDA);
+        const Tensor matrix = Tensor::from_vector(values, {4, 4}, Device::GPU);
         const Tensor columns = matrix.slice(1, 0, 2);
         ASSERT_EQ(columns.numel(), 8u);
         EXPECT_FLOAT_EQ(columns.at({3, 1}), 13.0f);
@@ -41,7 +41,7 @@ namespace {
         if (!has_cuda_device())
             GTEST_SKIP() << "CUDA device required";
         const std::vector<float> initial{1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
-        Tensor x = Tensor::from_vector(initial, {8}, Device::CUDA);
+        Tensor x = Tensor::from_vector(initial, {8}, Device::GPU);
         Tensor deferred = x.exp().mul(2.0f);
         x.add_(1.0f);
         const std::vector<float> observed = deferred.to_vector();
@@ -49,14 +49,14 @@ namespace {
         for (size_t i = 0; i < initial.size(); ++i)
             EXPECT_FLOAT_EQ(observed[i], 2.0f * std::exp(initial[i])) << "index " << i;
 
-        Tensor y = Tensor::from_vector(initial, {8}, Device::CUDA);
+        Tensor y = Tensor::from_vector(initial, {8}, Device::GPU);
         Tensor deferred_y = y.exp();
         y.clamp_(0.0f, 1.0f);
         const std::vector<float> observed_y = deferred_y.to_vector();
         for (size_t i = 0; i < initial.size(); ++i)
             EXPECT_FLOAT_EQ(observed_y[i], std::exp(initial[i])) << "index " << i;
 
-        Tensor z = Tensor::from_vector(initial, {8}, Device::CUDA);
+        Tensor z = Tensor::from_vector(initial, {8}, Device::GPU);
         Tensor deferred_z = z.exp();
         const Tensor mask = z.gt(4.0f);
         z.masked_fill_(mask, 0.0f);
@@ -70,7 +70,7 @@ namespace {
     TEST(TensorSeamRegressions, StaleViewsAreRejectedByFacadeOperations) {
         if (!has_cuda_device())
             GTEST_SKIP() << "CUDA device required";
-        Tensor base = Tensor::zeros({16}, Device::CUDA);
+        Tensor base = Tensor::zeros({16}, Device::GPU);
         const Tensor view = base.slice(0, 0, 8);
         base.reserve(1024);
         base.fill_(2.0f);

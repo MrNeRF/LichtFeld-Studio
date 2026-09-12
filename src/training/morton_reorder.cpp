@@ -113,10 +113,10 @@ namespace lfs::training::morton {
             const auto* perm_ptr = perm.ptr<std::int64_t>();
 
             Tensor dest_u16 = Tensor::zeros_direct(
-                TensorShape({n_cells}), n_cells, Device::CUDA, DataType::Float16);
+                TensorShape({n_cells}), n_cells, Device::GPU, DataType::Float16);
             dest_u16.set_stream(stream);
             Tensor dest_bounds = Tensor::zeros(
-                TensorShape({n_bound_floats}), Device::CUDA, DataType::Float32);
+                TensorShape({n_bound_floats}), Device::GPU, DataType::Float32);
             dest_bounds.set_stream(stream);
 
             auto* dest_codes = reinterpret_cast<std::uint16_t*>(
@@ -167,7 +167,7 @@ namespace lfs::training::morton {
                 throw std::runtime_error("Morton reorder: shN storage smaller than its logical size");
             }
             Tensor scratch = Tensor::zeros_direct(
-                TensorShape({logical}), logical, Device::CUDA, DataType::Float32);
+                TensorShape({logical}), logical, Device::GPU, DataType::Float32);
             scratch.set_stream(stream);
             if (live.stream() != stream) {
                 live.set_stream(stream);
@@ -261,13 +261,13 @@ namespace lfs::training::morton {
                 const std::size_t packed_cap =
                     std::max(state->exp_avg.capacity() > 0 ? state->exp_avg.capacity() : n, n);
                 Tensor dest_packed = Tensor::zeros_direct(
-                    state->exp_avg.shape(), packed_cap, Device::CUDA, DataType::UInt8);
+                    state->exp_avg.shape(), packed_cap, Device::GPU, DataType::UInt8);
                 dest_packed.set_stream(stream);
                 const std::size_t nb = joint_adam::n_bounds_for_prims(n);
                 const std::size_t nb_cap = std::max(
                     state->joint_bounds.capacity() > 0 ? state->joint_bounds.capacity() : nb, nb);
                 Tensor dest_bounds = Tensor::zeros_direct(
-                    TensorShape({nb, std::size_t{4}}), nb_cap, Device::CUDA, DataType::Float32);
+                    TensorShape({nb, std::size_t{4}}), nb_cap, Device::GPU, DataType::Float32);
                 dest_bounds.set_stream(stream);
                 kernels::launch_joint_permute_contiguous(
                     state->exp_avg.ptr<std::uint8_t>(),
@@ -306,7 +306,7 @@ namespace lfs::training::morton {
                 const std::size_t cap = std::max(
                     state->grad.capacity() > 0 ? state->grad.capacity() : logical, logical);
                 Tensor dest = Tensor::zeros_direct(
-                    TensorShape({logical}), cap, Device::CUDA, DataType::Float32);
+                    TensorShape({logical}), cap, Device::GPU, DataType::Float32);
                 dest.set_stream(stream);
                 core::shN_swizzled_gather_self_i64(
                     state->grad.ptr<float>(),
@@ -325,13 +325,13 @@ namespace lfs::training::morton {
             const std::size_t packed_cap = std::max(
                 state->exp_avg.capacity() > 0 ? state->exp_avg.capacity() : packed_n, packed_n);
             Tensor dest_packed = Tensor::zeros_direct(
-                state->exp_avg.shape(), packed_cap, Device::CUDA, DataType::UInt8);
+                state->exp_avg.shape(), packed_cap, Device::GPU, DataType::UInt8);
             dest_packed.set_stream(stream);
             const std::size_t nb = joint_adam::n_bounds_for_prims(n);
             const std::size_t nb_cap = std::max(
                 state->joint_bounds.capacity() > 0 ? state->joint_bounds.capacity() : nb, nb);
             Tensor dest_bounds = Tensor::zeros_direct(
-                TensorShape({nb, std::size_t{4}}), nb_cap, Device::CUDA, DataType::Float32);
+                TensorShape({nb, std::size_t{4}}), nb_cap, Device::GPU, DataType::Float32);
             dest_bounds.set_stream(stream);
             kernels::launch_joint_permute_shN(
                 state->exp_avg.ptr<std::uint8_t>(),

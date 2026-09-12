@@ -577,8 +577,8 @@ namespace lfs::training::mcmc {
         // stream-aware pool cannot recycle them before this work completes.
         const lfs::core::CUDAStreamGuard stream_guard(cuda_stream);
 
-        auto alive_probs = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-        auto cumsum_buf = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        auto alive_probs = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
+        auto cumsum_buf = lfs::core::Tensor::empty({n_alive}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
         thrust::transform(thrust::cuda::par_nosync.on(cuda_stream),
                           thrust::counting_iterator<int>(0),
@@ -691,7 +691,7 @@ namespace lfs::training::mcmc {
         // Home the scan temporary on the launch stream (see launch_multinomial_sample).
         const lfs::core::CUDAStreamGuard stream_guard(cuda_stream);
 
-        auto cumsum_buf = lfs::core::Tensor::empty({N}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        auto cumsum_buf = lfs::core::Tensor::empty({N}, lfs::core::Device::GPU, lfs::core::DataType::Float32);
 
         cuda_scratch::CubWorkspace cub_workspace(
             "cub::DeviceScan::InclusiveSum", cuda_stream,

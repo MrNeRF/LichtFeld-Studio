@@ -144,7 +144,7 @@ namespace lfs::core {
         void order_combined_build_outputs(Scene::CombinedModelBuild& build) {
             build.worker_stream = getCurrentCUDAStream();
             const auto order = [stream = build.worker_stream](const Tensor& tensor) {
-                if (tensor.is_valid() && tensor.device() == Device::CUDA) {
+                if (tensor.is_valid() && tensor.device() == Device::GPU) {
                     tensor.sync_to_stream(stream);
                 }
             };
@@ -975,7 +975,7 @@ namespace lfs::core {
 
         const cudaStream_t build_stream = getCurrentCUDAStream();
         const auto order_input = [build_stream](const Tensor& tensor) {
-            if (tensor.is_valid() && tensor.device() == Device::CUDA) {
+            if (tensor.is_valid() && tensor.device() == Device::GPU) {
                 tensor.sync_to_stream(build_stream);
             }
         };
@@ -1036,10 +1036,10 @@ namespace lfs::core {
             } else {
                 shN = Tensor::zeros_direct(TensorShape({shN_swizzled_floats}),
                                            shN_swizzled_floats,
-                                           Device::CUDA);
+                                           Device::GPU);
             }
         } else {
-            shN = Tensor::zeros({0}, Device::CUDA);
+            shN = Tensor::zeros({0}, Device::GPU);
         }
         Tensor opacity = alloc_param(TensorShape({total, 1}), total, "SplatData.opacity");
         Tensor scaling = alloc_param(TensorShape({total, 3}), total, "SplatData.scaling");
@@ -1115,7 +1115,7 @@ namespace lfs::core {
         }
 
         result.transform_indices = std::make_shared<Tensor>(
-            Tensor::from_vector(transform_indices_data, {total}, Device::CPU).cuda());
+            Tensor::from_vector(transform_indices_data, {total}, Device::CPU).gpu());
         if (total != full_selection_count) {
             std::vector<int> visible_indices(total);
             size_t visible_offset = 0;
@@ -1128,7 +1128,7 @@ namespace lfs::core {
                 visible_offset += size;
             }
             result.visible_selection_indices = std::make_shared<Tensor>(
-                Tensor::from_vector(visible_indices, {total}, Device::CPU).cuda());
+                Tensor::from_vector(visible_indices, {total}, Device::CPU).gpu());
         }
 
         result.model = std::make_shared<SplatData>(
@@ -1568,7 +1568,7 @@ namespace lfs::core {
                 shN = alloc(TensorShape({shN_floats}), shN_floats, DataType::Float32, "SplatData.shN");
                 shN.zero_();
             } else {
-                shN = Tensor::zeros_direct(TensorShape({shN_floats}), shN_floats, Device::CUDA);
+                shN = Tensor::zeros_direct(TensorShape({shN_floats}), shN_floats, Device::GPU);
             }
             for (const auto& range : live_ranges) {
                 lfs::core::shN_swizzled_copy_range(
@@ -1582,7 +1582,7 @@ namespace lfs::core {
                     shN.stream());
             }
         } else {
-            shN = Tensor::zeros({0}, Device::CUDA);
+            shN = Tensor::zeros({0}, Device::GPU);
         }
 
         auto compacted = std::make_shared<lfs::core::SplatData>(
@@ -1698,7 +1698,7 @@ namespace lfs::core {
                 transform_indices,
                 TensorShape({transform_indices.size()}),
                 Device::CPU)
-                .cuda());
+                .gpu());
     }
 
     std::vector<bool> Scene::getNodeVisibilityMask() const {
@@ -2513,7 +2513,7 @@ namespace lfs::core {
         if (!cached_transform_indices_ && single_node_model_) {
             const size_t n = static_cast<size_t>(single_node_model_->size());
             cached_transform_indices_ = std::make_shared<lfs::core::Tensor>(
-                lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
+                lfs::core::Tensor::zeros({n}, lfs::core::Device::GPU, lfs::core::DataType::Int32));
         }
         rebuildTransformCacheIfNeeded();
         return cached_transform_indices_;
@@ -2529,7 +2529,7 @@ namespace lfs::core {
                 visible_indices[i] = static_cast<int>(single_node_selection_offset_ + i);
             }
             cached_visible_selection_indices_ = std::make_shared<lfs::core::Tensor>(
-                lfs::core::Tensor::from_vector(visible_indices, {n}, lfs::core::Device::CPU).cuda());
+                lfs::core::Tensor::from_vector(visible_indices, {n}, lfs::core::Device::CPU).gpu());
         }
         return cached_visible_selection_indices_;
     }
@@ -2784,7 +2784,7 @@ namespace lfs::core {
 
         size_t selected_count = 0;
         auto normalized = normalizeSelectionMask(
-            std::make_shared<lfs::core::Tensor>(mask_cpu.cuda()),
+            std::make_shared<lfs::core::Tensor>(mask_cpu.gpu()),
             total,
             &selected_count);
 
@@ -4523,7 +4523,7 @@ namespace lfs::core {
                 shN = lfs::core::Tensor::zeros_direct(
                     lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(visible, layout_rest)}),
                     lfs::core::sh_swizzled_float_count(visible, layout_rest),
-                    lfs::core::Device::CUDA);
+                    lfs::core::Device::GPU);
                 lfs::core::shN_swizzled_gather_self(
                     src.shN_raw().ptr<float>(),
                     shN.ptr<float>(),
@@ -4617,7 +4617,7 @@ namespace lfs::core {
                                         ? lfs::core::Tensor::zeros_direct(
                                               lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_visible, dst_layout_rest)}),
                                               lfs::core::sh_swizzled_float_count(total_visible, dst_layout_rest),
-                                              lfs::core::Device::CUDA)
+                                              lfs::core::Device::GPU)
                                         : lfs::core::Tensor{};
 
             size_t offset = 0;
@@ -4731,7 +4731,7 @@ namespace lfs::core {
             merged_shN = lfs::core::Tensor::zeros_direct(
                 lfs::core::TensorShape({lfs::core::sh_swizzled_float_count(total_count, shN_coeffs)}),
                 lfs::core::sh_swizzled_float_count(total_count, shN_coeffs),
-                lfs::core::Device::CUDA);
+                lfs::core::Device::GPU);
 
             size_t offset = 0;
             for (size_t i = 0; i < shN_list.size(); ++i) {

@@ -35,7 +35,7 @@ namespace lfs::core::debug {
         constexpr size_t GPU_THRESHOLD = 10000;
         if (tensor.is_empty())
             return {};
-        if (tensor.device() == Device::CUDA && tensor.numel() > GPU_THRESHOLD) {
+        if (tensor.device() == Device::GPU && tensor.numel() > GPU_THRESHOLD) {
             return validate_tensor_gpu(tensor);
         }
         return validate_tensor_cpu(tensor);

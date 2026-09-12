@@ -138,15 +138,15 @@ TEST_F(StrideBugTest, TensorRowProxyAssignment_NonContiguousSlice) {
 }
 
 TEST_F(StrideBugTest, CUDA_IndexPut_NonContiguousSliceWithNonContiguousInt64Indices) {
-    auto tensor = Tensor::zeros({4, 4}, Device::CUDA, DataType::Float32);
+    auto tensor = Tensor::zeros({4, 4}, Device::GPU, DataType::Float32);
     auto slice = tensor.slice(0, 0, 3).slice(1, 0, 3);
     ASSERT_FALSE(slice.is_contiguous());
 
-    auto row_idx_full = Tensor::from_vector(std::vector<int>{0, 9, 1, 9, 2, 9}, {3, 2}, Device::CUDA)
+    auto row_idx_full = Tensor::from_vector(std::vector<int>{0, 9, 1, 9, 2, 9}, {3, 2}, Device::GPU)
                             .to(DataType::Int64);
-    auto col_idx_full = Tensor::from_vector(std::vector<int>{0, 9, 1, 9, 2, 9}, {3, 2}, Device::CUDA)
+    auto col_idx_full = Tensor::from_vector(std::vector<int>{0, 9, 1, 9, 2, 9}, {3, 2}, Device::GPU)
                             .to(DataType::Int64);
-    auto vals_full = Tensor::from_vector(std::vector<float>{10.0f, 0.0f, 20.0f, 0.0f, 30.0f, 0.0f}, {3, 2}, Device::CUDA);
+    auto vals_full = Tensor::from_vector(std::vector<float>{10.0f, 0.0f, 20.0f, 0.0f, 30.0f, 0.0f}, {3, 2}, Device::GPU);
 
     auto row_idx = row_idx_full.slice(1, 0, 1).squeeze(1);
     auto col_idx = col_idx_full.slice(1, 0, 1).squeeze(1);
@@ -312,7 +312,7 @@ TEST_F(StrideBugTest, Min_NonContiguousSlice) {
 // ============= CUDA versions =============
 
 TEST_F(StrideBugTest, CUDA_DirectAccess_NonContiguousSlice) {
-    auto cuda_tensor = base_tensor_.to(Device::CUDA);
+    auto cuda_tensor = base_tensor_.to(Device::GPU);
     auto slice = cuda_tensor.slice(0, 0, 3).slice(1, 0, 3);
 
     ASSERT_FALSE(slice.is_contiguous());
@@ -330,7 +330,7 @@ TEST_F(StrideBugTest, CUDA_DirectAccess_NonContiguousSlice) {
 }
 
 TEST_F(StrideBugTest, CUDA_Sum_NonContiguousSlice) {
-    auto cuda_tensor = base_tensor_.to(Device::CUDA);
+    auto cuda_tensor = base_tensor_.to(Device::GPU);
     auto slice = cuda_tensor.slice(0, 0, 3).slice(1, 0, 3);
 
     ASSERT_FALSE(slice.is_contiguous());
@@ -438,7 +438,7 @@ TEST_F(StrideBugTest, CalculateOffset_NonContiguousSlice) {
 }
 
 TEST_F(StrideBugTest, CUDA_BroadcastTo_NonContiguousSource) {
-    auto cuda_tensor = base_tensor_.to(Device::CUDA);
+    auto cuda_tensor = base_tensor_.to(Device::GPU);
     auto slice = cuda_tensor.slice(0, 0, 3).slice(1, 0, 3);
 
     ASSERT_FALSE(slice.is_contiguous());
@@ -461,11 +461,11 @@ TEST_F(StrideBugTest, CUDA_BroadcastTo_NonContiguousSource) {
 
 TEST_F(StrideBugTest, CUDA_Pad_NonContiguousInput) {
     // Test that CUDA Pad works directly on non-contiguous input (no CPU fallback)
-    auto cuda_tensor = base_tensor_.to(Device::CUDA);
+    auto cuda_tensor = base_tensor_.to(Device::GPU);
     auto slice = cuda_tensor.slice(0, 0, 3).slice(1, 0, 3);
 
     ASSERT_FALSE(slice.is_contiguous());
-    ASSERT_EQ(slice.device(), Device::CUDA);
+    ASSERT_EQ(slice.device(), Device::GPU);
 
     // Pad the 3x3 slice by 1 on all sides -> 5x5 result
     MovementArgs pad_args;
@@ -474,7 +474,7 @@ TEST_F(StrideBugTest, CUDA_Pad_NonContiguousInput) {
 
     ASSERT_EQ(result.shape()[0], 5);
     ASSERT_EQ(result.shape()[1], 5);
-    ASSERT_EQ(result.device(), Device::CUDA);
+    ASSERT_EQ(result.device(), Device::GPU);
 
     // Check corners are 0 (padding)
     EXPECT_FLOAT_EQ(static_cast<float>(result[0][0]), 0.0f);

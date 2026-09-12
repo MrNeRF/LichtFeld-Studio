@@ -37,7 +37,7 @@ namespace lfs::core {
 
         auto result = internal::allocate_like(*this, TensorShape{N, M}, dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&lhs, &rhs});
             const cudaStream_t execution_stream =
                 prepare_inputs_for_stream({&lhs, &rhs}, result.stream());
@@ -198,7 +198,7 @@ namespace lfs::core {
                 }
             }
 
-            if (input.device() == Device::CUDA) {
+            if (input.device() == Device::GPU) {
                 const GpuBackend backend = gpu_backend_of(input).value();
                 return {internal::copy_to_backend(values, backend),
                         internal::copy_to_backend(indices, backend)};
@@ -244,7 +244,7 @@ namespace lfs::core {
 
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
-            if (device_ == Device::CUDA) {
+            if (device_ == Device::GPU) {
                 internal::backend_ops_for(source).sort_1d(
                     internal::storage_ref(sorted), internal::storage_ref(indices), numel(),
                     internal::SortProgram{.dim_size = numel(), .descending = descending},
@@ -292,7 +292,7 @@ namespace lfs::core {
             inner_size *= size(i);
         }
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             internal::backend_ops_for(source).sort_2d(
                 internal::storage_ref(sorted), internal::storage_ref(indices),
                 internal::SortProgram{

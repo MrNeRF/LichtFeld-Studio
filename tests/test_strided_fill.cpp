@@ -32,7 +32,7 @@ protected:
 // ===== DynamicTexture exact repro: [H,W,4].slice(2,3,4).fill_(1.0f) =====
 
 TEST_F(StridedFillTest, Slice3D_AlphaChannel_256x256) {
-    auto t = Tensor::zeros({256, 256, 4}, Device::CUDA);
+    auto t = Tensor::zeros({256, 256, 4}, Device::GPU);
     auto alpha = t.slice(2, 3, 4); // [256, 256, 1]
     ASSERT_EQ(alpha.ndim(), 3u);
     ASSERT_EQ(alpha.size(0), 256u);
@@ -56,7 +56,7 @@ TEST_F(StridedFillTest, Slice3D_AlphaChannel_256x256) {
 }
 
 TEST_F(StridedFillTest, Slice3D_AlphaChannel_512x512) {
-    auto t = Tensor::zeros({512, 512, 4}, Device::CUDA);
+    auto t = Tensor::zeros({512, 512, 4}, Device::GPU);
     t.slice(2, 3, 4).fill_(1.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -71,7 +71,7 @@ TEST_F(StridedFillTest, Slice3D_AlphaChannel_512x512) {
 // ===== RGB channel slice fills =====
 
 TEST_F(StridedFillTest, Slice3D_RGBChannels) {
-    auto t = Tensor::zeros({64, 64, 4}, Device::CUDA);
+    auto t = Tensor::zeros({64, 64, 4}, Device::GPU);
 
     t.slice(2, 0, 1).fill_(0.25f); // R
     t.slice(2, 1, 2).fill_(0.50f); // G
@@ -94,8 +94,8 @@ TEST_F(StridedFillTest, Slice3D_RGBChannels) {
 // ===== 3D channel slice with copy_ (the other interop path) =====
 
 TEST_F(StridedFillTest, Slice3D_CopyToRGBChannels) {
-    auto rgba = Tensor::zeros({128, 128, 4}, Device::CUDA);
-    auto rgb = Tensor::full({128, 128, 3}, 0.5f, Device::CUDA);
+    auto rgba = Tensor::zeros({128, 128, 4}, Device::GPU);
+    auto rgb = Tensor::full({128, 128, 3}, 0.5f, Device::GPU);
 
     rgba.slice(2, 0, 3).copy_(rgb);
     rgba.slice(2, 3, 4).fill_(1.0f);
@@ -116,7 +116,7 @@ TEST_F(StridedFillTest, Slice3D_CopyToRGBChannels) {
 // ===== 2D strided fills (column slices) =====
 
 TEST_F(StridedFillTest, Slice2D_ColumnFill) {
-    auto t = Tensor::zeros({100, 4}, Device::CUDA);
+    auto t = Tensor::zeros({100, 4}, Device::GPU);
     t.slice(1, 3, 4).fill_(7.0f); // Last column
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -134,7 +134,7 @@ TEST_F(StridedFillTest, Slice2D_ColumnFill) {
 // ===== 1D strided fills (row from a 2D tensor) =====
 
 TEST_F(StridedFillTest, Slice1D_RowFill) {
-    auto t = Tensor::zeros({4, 256}, Device::CUDA);
+    auto t = Tensor::zeros({4, 256}, Device::GPU);
     t.slice(0, 2, 3).fill_(3.0f); // 3rd row -> [1, 256] which squeezes to [256]
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -152,7 +152,7 @@ TEST_F(StridedFillTest, Slice1D_RowFill) {
 // ===== 4D strided fills =====
 
 TEST_F(StridedFillTest, Slice4D_BatchChannelFill) {
-    auto t = Tensor::zeros({2, 3, 8, 8}, Device::CUDA);
+    auto t = Tensor::zeros({2, 3, 8, 8}, Device::GPU);
     t.slice(1, 2, 3).fill_(5.0f); // channel 2 for all batches
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -176,7 +176,7 @@ TEST_F(StridedFillTest, Slice4D_BatchChannelFill) {
 // ===== Edge cases =====
 
 TEST_F(StridedFillTest, Fill_SingleElement3D) {
-    auto t = Tensor::zeros({1, 1, 4}, Device::CUDA);
+    auto t = Tensor::zeros({1, 1, 4}, Device::GPU);
     t.slice(2, 3, 4).fill_(1.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -190,7 +190,7 @@ TEST_F(StridedFillTest, Fill_SingleElement3D) {
 }
 
 TEST_F(StridedFillTest, Fill_LargeTensor3D) {
-    auto t = Tensor::zeros({1024, 1024, 4}, Device::CUDA);
+    auto t = Tensor::zeros({1024, 1024, 4}, Device::GPU);
     t.slice(2, 3, 4).fill_(1.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -206,7 +206,7 @@ TEST_F(StridedFillTest, Fill_LargeTensor3D) {
 // ===== Expanded tensor fill (from DynamicTexture coordinate grid pattern) =====
 
 TEST_F(StridedFillTest, ExpandedView_Fill) {
-    auto col = Tensor::full({256, 1}, 0.0f, Device::CUDA);
+    auto col = Tensor::full({256, 1}, 0.0f, Device::GPU);
     auto expanded = col.expand({256, 256});
     // zero-stride expand views reject in-place mutation (shared cells).
     // Materialize first if a dense write is required.
@@ -221,7 +221,7 @@ TEST_F(StridedFillTest, ExpandedView_Fill) {
 // ===== Repeated fill (DynamicTexture updates every frame) =====
 
 TEST_F(StridedFillTest, RepeatedFill_NoErrorAccumulation) {
-    auto t = Tensor::zeros({256, 256, 4}, Device::CUDA);
+    auto t = Tensor::zeros({256, 256, 4}, Device::GPU);
     for (int frame = 0; frame < 100; ++frame) {
         t.slice(2, 0, 3).fill_(0.5f);
         t.slice(2, 3, 4).fill_(1.0f);
@@ -240,7 +240,7 @@ TEST_F(StridedFillTest, RepeatedFill_NoErrorAccumulation) {
 // ===== Int32 strided fill =====
 
 TEST_F(StridedFillTest, Int32_Slice3D_Fill) {
-    auto t = Tensor::zeros({64, 64, 4}, Device::CUDA, DataType::Int32);
+    auto t = Tensor::zeros({64, 64, 4}, Device::GPU, DataType::Int32);
     t.slice(2, 2, 3).fill_(42.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -255,7 +255,7 @@ TEST_F(StridedFillTest, Int32_Slice3D_Fill) {
 // ===== Bool strided fill =====
 
 TEST_F(StridedFillTest, Bool_Slice3D_Fill) {
-    auto t = Tensor::zeros({32, 32, 4}, Device::CUDA, DataType::Bool);
+    auto t = Tensor::zeros({32, 32, 4}, Device::GPU, DataType::Bool);
     t.slice(2, 1, 2).fill_(1.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -273,7 +273,7 @@ TEST_F(StridedFillTest, Bool_Slice3D_Fill) {
 // ===== Non-contiguous 2D general (not column slice) =====
 
 TEST_F(StridedFillTest, Slice2D_GeneralNonContiguous) {
-    auto t = Tensor::zeros({100, 100}, Device::CUDA);
+    auto t = Tensor::zeros({100, 100}, Device::GPU);
     auto sub = t.slice(0, 10, 50).slice(1, 10, 50); // [40, 40] non-contiguous
     ASSERT_FALSE(sub.is_contiguous());
     sub.fill_(9.0f);
@@ -291,7 +291,7 @@ TEST_F(StridedFillTest, Slice2D_GeneralNonContiguous) {
 }
 
 TEST_F(StridedFillTest, TransposedViewFillUpdatesOriginalStorage) {
-    auto tensor = Tensor::zeros({3, 5}, Device::CUDA);
+    auto tensor = Tensor::zeros({3, 5}, Device::GPU);
     auto transposed = tensor.t();
     ASSERT_FALSE(transposed.is_contiguous());
 
@@ -313,7 +313,7 @@ TEST_F(StridedFillTest, CpuColumnSliceFillPreservesOtherColumns) {
 // ===== Contiguous fill (should NOT hit strided path) =====
 
 TEST_F(StridedFillTest, Contiguous3D_Fill) {
-    auto t = Tensor::empty({256, 256, 3}, Device::CUDA);
+    auto t = Tensor::empty({256, 256, 3}, Device::GPU);
     ASSERT_TRUE(t.is_contiguous());
     t.fill_(0.42f);
     cudaError_t err = sync_and_check();
@@ -329,7 +329,7 @@ TEST_F(StridedFillTest, Contiguous3D_Fill) {
 
 TEST_F(StridedFillTest, LargeGrid_3D_Fill) {
     // Forces 2D grid path: 2048*2048*1 = 4M elements / 256 = 16384 blocks
-    auto t = Tensor::zeros({2048, 2048, 4}, Device::CUDA);
+    auto t = Tensor::zeros({2048, 2048, 4}, Device::GPU);
     t.slice(2, 0, 1).fill_(1.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);
@@ -342,7 +342,7 @@ TEST_F(StridedFillTest, LargeGrid_3D_Fill) {
 
 TEST_F(StridedFillTest, VeryLargeGrid_3D_Fill) {
     // Forces 2D grid path: 4096*4096*1 = 16M elements / 256 = 65536 blocks (exactly at boundary)
-    auto t = Tensor::zeros({4096, 4096, 4}, Device::CUDA);
+    auto t = Tensor::zeros({4096, 4096, 4}, Device::GPU);
     t.slice(2, 3, 4).fill_(1.0f);
     cudaError_t err = sync_and_check();
     ASSERT_EQ(err, cudaSuccess) << cudaGetErrorString(err);

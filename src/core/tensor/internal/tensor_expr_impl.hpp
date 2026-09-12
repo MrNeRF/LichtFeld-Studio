@@ -87,7 +87,7 @@ namespace lfs::core {
                 Tensor input_tensor = input.eval();
 
                 std::optional<CUDAStreamGuard> execution_guard;
-                if (device == Device::CUDA) {
+                if (device == Device::GPU) {
                     execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
                 }
 
@@ -100,7 +100,7 @@ namespace lfs::core {
                 if (input_tensor.dtype() == DataType::Int32) {
                     if constexpr (ops::supports_int32_v<UnaryOp>) {
                         // Int32 -> Int32 operations (abs, neg, sign, etc.)
-                        if (device == Device::CUDA) {
+                        if (device == Device::GPU) {
                             internal::run_pointwise_unary(
                                 input_tensor, result, op,
                                 internal::ExecContext{result.stream()});
@@ -115,7 +115,7 @@ namespace lfs::core {
                         }
                     } else {
                         // Float-only op on Int32 input: evaluate in Float32 and cast if needed.
-                        if (device == Device::CUDA) {
+                        if (device == Device::GPU) {
                             Tensor input_f = input_tensor.to(DataType::Float32);
 
                             if (dtype == DataType::Int32) {
@@ -150,7 +150,7 @@ namespace lfs::core {
                     }
                 } else {
                     // Float -> Float operations (default case)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         internal::run_pointwise_unary(
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
@@ -182,7 +182,7 @@ namespace lfs::core {
                 Tensor input_tensor = input.eval();
 
                 std::optional<CUDAStreamGuard> execution_guard;
-                if (device == Device::CUDA) {
+                if (device == Device::GPU) {
                     execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
                 }
 
@@ -192,7 +192,7 @@ namespace lfs::core {
                 // Check input dtype to determine correct template instantiation
                 if (input_tensor.dtype() == DataType::Bool) {
                     // Bool input -> Bool output (e.g., logical_not on Bool tensor)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         internal::run_pointwise_unary(
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
@@ -207,7 +207,7 @@ namespace lfs::core {
                     }
                 } else if (input_tensor.dtype() == DataType::UInt8) {
                     // UInt8 input -> Bool output (e.g., comparisons on UInt8 tensor)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         internal::run_pointwise_unary(
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
@@ -221,7 +221,7 @@ namespace lfs::core {
                     }
                 } else if (input_tensor.dtype() == DataType::Int32) {
                     // Int32 input -> Bool output (e.g., comparisons on Int32 tensor)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         internal::run_pointwise_unary(
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
@@ -235,7 +235,7 @@ namespace lfs::core {
                     }
                 } else {
                     // Float input -> Bool output (e.g., isnan, isinf, isfinite)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         internal::run_pointwise_unary(
                             input_tensor, result, op,
                             internal::ExecContext{result.stream()});
@@ -282,7 +282,7 @@ namespace lfs::core {
         Tensor base = innermost_input.eval();
 
         std::optional<CUDAStreamGuard> execution_guard;
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             execution_guard.emplace(prepare_inputs_for_stream({&base}));
         }
 
@@ -290,7 +290,7 @@ namespace lfs::core {
         Tensor result = internal::allocate_like(base, shape_, dtype_);
 
         // Apply fused operation in a single pass!
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             if constexpr (internal::pointwise_composition_is_fused_v<InnerOp, OuterOp>) {
                 internal::run_pointwise_unary(
                     base, result, fused_op,
@@ -339,7 +339,7 @@ namespace lfs::core {
                     left_tensor, right_tensor, "binary expression evaluation");
 
                 std::optional<CUDAStreamGuard> execution_guard;
-                if (device == Device::CUDA) {
+                if (device == Device::GPU) {
                     execution_guard.emplace(prepare_inputs_for_stream({&left_tensor, &right_tensor}));
                 }
 
@@ -353,7 +353,7 @@ namespace lfs::core {
                 // Check input dtypes to determine correct template instantiation
                 if (left_tensor.dtype() == DataType::Float16 && right_tensor.dtype() == DataType::Float16) {
                     // Float16,Float16 -> Float16 operations
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -401,7 +401,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::Int64 && right_tensor.dtype() == DataType::Int64) {
                     // Int64,Int64 -> Int64 operations
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -445,7 +445,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::UInt8 && right_tensor.dtype() == DataType::UInt8) {
                     // UInt8,UInt8 -> UInt8 operations
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -489,7 +489,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::Int32 && right_tensor.dtype() == DataType::Int32) {
                     // Int32,Int32 -> Int32 operations (add, sub, mul, div, etc.)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -533,7 +533,7 @@ namespace lfs::core {
                     }
                 } else {
                     // Float32,Float32 -> Float32 operations (default case)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             // Use broadcast binary kernel
                             pin_operands({&left_tensor, &right_tensor});
@@ -601,7 +601,7 @@ namespace lfs::core {
                     left_tensor, right_tensor, "binary expression evaluation");
 
                 std::optional<CUDAStreamGuard> execution_guard;
-                if (device == Device::CUDA) {
+                if (device == Device::GPU) {
                     execution_guard.emplace(prepare_inputs_for_stream({&left_tensor, &right_tensor}));
                 }
 
@@ -615,7 +615,7 @@ namespace lfs::core {
                 // Check input dtypes to determine correct template instantiation
                 if (left_tensor.dtype() == DataType::Bool && right_tensor.dtype() == DataType::Bool) {
                     // Bool,Bool -> Bool (logical operations: logical_and, logical_or, logical_xor)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -659,7 +659,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::Float16 && right_tensor.dtype() == DataType::Float16) {
                     // Float16,Float16 -> Bool (comparison operations on Float16 tensors)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -707,7 +707,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::Int64 && right_tensor.dtype() == DataType::Int64) {
                     // Int64,Int64 -> Bool (comparison operations on Int64 tensors)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -751,7 +751,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::Int32 && right_tensor.dtype() == DataType::Int32) {
                     // Int32,Int32 -> Bool (comparison operations on Int32 tensors)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -795,7 +795,7 @@ namespace lfs::core {
                     }
                 } else if (left_tensor.dtype() == DataType::UInt8 && right_tensor.dtype() == DataType::UInt8) {
                     // UInt8,UInt8 -> Bool (comparison operations on UInt8 tensors)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -839,7 +839,7 @@ namespace lfs::core {
                     }
                 } else {
                     // Float32,Float32 -> Bool (comparison operations: eq, ne, lt, le, gt, ge)
-                    if (device == Device::CUDA) {
+                    if (device == Device::GPU) {
                         if (needs_broadcast) {
                             pin_operands({&left_tensor, &right_tensor});
                             internal::run_pointwise_broadcast(
@@ -907,13 +907,13 @@ namespace lfs::core {
         Tensor input_tensor = input_.eval();
 
         std::optional<CUDAStreamGuard> execution_guard;
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             execution_guard.emplace(prepare_inputs_for_stream({&input_tensor}));
         }
 
         Tensor result = internal::allocate_like(input_tensor, shape_, dtype_);
 
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             internal::run_pointwise_unary(
                 input_tensor, result, op_,
                 internal::ExecContext{result.stream()});
@@ -978,7 +978,7 @@ namespace lfs::core {
         Tensor flat_input = input_tensor.flatten();
 
         std::optional<CUDAStreamGuard> execution_guard;
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             execution_guard.emplace(prepare_inputs_for_stream({&flat_input, &indices_tensor}));
         }
 
@@ -986,7 +986,7 @@ namespace lfs::core {
         Tensor result = internal::allocate_like(flat_input, shape_, dtype_);
 
         // OPTIMIZATION: Use fused gather+unary kernel!
-        if (device_ == Device::CUDA) {
+        if (device_ == Device::GPU) {
             pin_operands({&flat_input, &indices_tensor});
             internal::backend_ops_for(flat_input).gather_fused_unary(internal::storage_ref(flat_input), internal::storage_ref(indices_tensor), internal::storage_ref(result), internal::pointwise_op_of<std::remove_cvref_t<UnaryOp>>::value, internal::IndexProgram{
                                                                                                                                                                                                                                                   .input_size = flat_input.numel(),

@@ -97,7 +97,7 @@ namespace lfs::io {
             const size_t N = static_cast<size_t>(pc.size());
             assert(N > 0);
 
-            Tensor means = pc.means.to(Device::CUDA);
+            Tensor means = pc.means.to(Device::GPU);
             assert(means.shape()[0] == N && means.shape()[1] == 3);
 
             Tensor sh0 = (pc.colors.is_valid() && pc.colors.numel() > 0)
@@ -107,19 +107,19 @@ namespace lfs::io {
                                  0.5f) /
                                 ply_constants::SH_C0)
                                    .reshape({static_cast<int>(N), 1, 3})
-                                   .to(Device::CUDA)
-                             : Tensor::zeros({N, 1, 3}, Device::CUDA);
+                                   .to(Device::GPU)
+                             : Tensor::zeros({N, 1, 3}, Device::GPU);
 
-            Tensor shN = Tensor::zeros({N, 0, 3}, Device::CUDA);
-            Tensor scaling = Tensor::full({N, 3}, ply_constants::DEFAULT_LOG_SCALE, Device::CUDA);
+            Tensor shN = Tensor::zeros({N, 0, 3}, Device::GPU);
+            Tensor scaling = Tensor::full({N, 3}, ply_constants::DEFAULT_LOG_SCALE, Device::GPU);
 
             auto rot_cpu = Tensor::zeros({N, 4}, Device::CPU);
             float* const rot_ptr = rot_cpu.ptr<float>();
             for (size_t i = 0; i < N; ++i)
                 rot_ptr[i * 4] = 1.0f;
-            Tensor rotation = rot_cpu.to(Device::CUDA);
+            Tensor rotation = rot_cpu.to(Device::GPU);
 
-            Tensor opacity = Tensor::zeros({N, 1}, Device::CUDA);
+            Tensor opacity = Tensor::zeros({N, 1}, Device::GPU);
 
             return SplatData(
                 0,

@@ -23,7 +23,7 @@ namespace {
         auto ours = lfs_float_tensor(values, {4, 4}, device);
         auto theirs = torch::tensor(values, torch::TensorOptions().dtype(torch::kFloat32))
                           .reshape({4, 4});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             theirs = theirs.cuda();
         }
 
@@ -55,7 +55,7 @@ namespace {
 } // namespace
 
 TEST_F(CudaTest, A1_NonContiguousZeroFollowsViewStrides_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         check_view_mutation(
             device,
             [](Tensor& base) { base.slice(0, 0, 2).slice(1, 0, 2).zero_(); },
@@ -65,7 +65,7 @@ TEST_F(CudaTest, A1_NonContiguousZeroFollowsViewStrides_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A1_NonContiguousScalarInPlaceFollowsViewStrides_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         check_view_mutation(
             device,
             [](Tensor& base) { base.slice(1, 1, 2).squeeze(1).add_(10.0f); },
@@ -75,7 +75,7 @@ TEST_F(CudaTest, A1_NonContiguousScalarInPlaceFollowsViewStrides_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A1_NonContiguousBinaryInPlaceFollowsViewStrides_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         check_view_mutation(
             device,
             [device](Tensor& base) {
@@ -91,7 +91,7 @@ TEST_F(CudaTest, A1_NonContiguousBinaryInPlaceFollowsViewStrides_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A1_NonContiguousClampFollowsViewStrides_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         check_view_mutation(
             device,
             [](Tensor& base) { base.slice(1, 1, 2).squeeze(1).clamp_(6.0f, 10.0f); },
@@ -191,7 +191,7 @@ TEST(StridedTensorHardening, A6_CPUAllCloseComparesLogicalOrder) {
 
 TEST_F(CudaTest, A7_CUDASpecialValueScansFollowViewStrides) {
     const float nan = std::numeric_limits<float>::quiet_NaN();
-    auto base = lfs_float_tensor({0, 0, 0, 0, 0, 0, nan, 0, 0}, {3, 3}, Device::CUDA);
+    auto base = lfs_float_tensor({0, 0, 0, 0, 0, 0, nan, 0, 0}, {3, 3}, Device::GPU);
     auto view = base.slice(1, 0, 1).squeeze(1);
     auto torch_base = torch::tensor({0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, nan, 0.0f, 0.0f},
                                     torch::TensorOptions().device(torch::kCUDA))
@@ -201,7 +201,7 @@ TEST_F(CudaTest, A7_CUDASpecialValueScansFollowViewStrides) {
 
     auto inf_base = lfs_float_tensor(
         {0, 0, 0, 0, 0, 0, std::numeric_limits<float>::infinity(), 0, 0},
-        {3, 3}, Device::CUDA);
+        {3, 3}, Device::GPU);
     auto inf_view = inf_base.slice(1, 0, 1).squeeze(1);
     auto torch_inf = torch::tensor(
                          {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
@@ -223,10 +223,10 @@ TEST(StridedTensorHardening, A8_ReserveOnOffsetViewPreservesLogicalValues) {
 
 TEST_F(CudaTest, A9_CatReadsNonContiguousOperands_CPUAndCUDA) {
     const std::vector<float> values = {1, 2, 3, 4, 5, 6};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         const auto ours = lfs_float_tensor(values, {2, 3}, device).transpose(0, 1);
         auto theirs = torch::tensor(values).reshape({2, 3}).transpose(0, 1);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             theirs = theirs.cuda();
         }
         expect_float_values_match(Tensor::cat({ours, ours}, 0),
@@ -237,10 +237,10 @@ TEST_F(CudaTest, A9_CatReadsNonContiguousOperands_CPUAndCUDA) {
 
 TEST_F(CudaTest, A9_StackReadsNonContiguousOperands_CPUAndCUDA) {
     const std::vector<float> values = {1, 2, 3, 4, 5, 6};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         const auto ours = lfs_float_tensor(values, {2, 3}, device).transpose(0, 1);
         auto theirs = torch::tensor(values).reshape({2, 3}).transpose(0, 1);
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             theirs = theirs.cuda();
         }
         expect_float_values_match(Tensor::stack({ours, ours}, 0),
@@ -252,7 +252,7 @@ TEST_F(CudaTest, A9_StackReadsNonContiguousOperands_CPUAndCUDA) {
 TEST_F(CudaTest, A10_MaskedSelectReadsLogicalViewOrder_CPUAndCUDA) {
     const std::vector<float> values = {1, 2, 3, 4, 5, 6};
     const std::vector<bool> mask_values = {false, false, false, true, false, false};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         const auto ours = lfs_float_tensor(values, {2, 3}, device).transpose(0, 1);
         const auto mask = lfs_bool_tensor(mask_values, {3, 2}, device);
         auto theirs = torch::tensor(values).reshape({2, 3}).transpose(0, 1);
@@ -260,7 +260,7 @@ TEST_F(CudaTest, A10_MaskedSelectReadsLogicalViewOrder_CPUAndCUDA) {
                               {false, false, false, true, false, false},
                               torch::TensorOptions().dtype(torch::kBool))
                               .reshape({3, 2});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             theirs = theirs.cuda();
             torch_mask = torch_mask.cuda();
         }
@@ -272,7 +272,7 @@ TEST_F(CudaTest, A10_MaskedSelectReadsLogicalViewOrder_CPUAndCUDA) {
 TEST_F(CudaTest, A10_MaskedFillWritesLogicalViewCells_CPUAndCUDA) {
     const std::vector<float> values = {1, 2, 3, 4, 5, 6};
     const std::vector<bool> mask_values = {false, false, false, true, false, false};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         auto ours_base = lfs_float_tensor(values, {2, 3}, device);
         auto ours_view = ours_base.transpose(0, 1);
         const auto mask = lfs_bool_tensor(mask_values, {3, 2}, device);
@@ -283,7 +283,7 @@ TEST_F(CudaTest, A10_MaskedFillWritesLogicalViewCells_CPUAndCUDA) {
                               {false, false, false, true, false, false},
                               torch::TensorOptions().dtype(torch::kBool))
                               .reshape({3, 2});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             torch_base = torch_base.cuda();
             torch_mask = torch_mask.cuda();
         }
@@ -294,7 +294,7 @@ TEST_F(CudaTest, A10_MaskedFillWritesLogicalViewCells_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A11_IndexPutOnOffsetViewWritesLogicalCells_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         auto ours_base = Tensor::zeros({6}, device);
         auto ours_view = ours_base.slice(0, 2, 5);
         const auto index = lfs_int_tensor({1}, {1}, device);
@@ -302,7 +302,7 @@ TEST_F(CudaTest, A11_IndexPutOnOffsetViewWritesLogicalCells_CPUAndCUDA) {
         ours_view.index_put_(index, value);
 
         auto torch_base = torch::zeros({6}, torch::TensorOptions().device(
-                                                device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+                                                device == Device::GPU ? torch::kCUDA : torch::kCPU));
         auto torch_view = torch_base.slice(0, 2, 5);
         auto torch_index = torch::tensor({1}, torch::TensorOptions().dtype(torch::kInt64).device(torch_base.device()));
         torch_view.index_put_({torch_index}, torch::tensor({9.0f}, torch_base.options()));
@@ -312,9 +312,9 @@ TEST_F(CudaTest, A11_IndexPutOnOffsetViewWritesLogicalCells_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A12_LinearReadsStridedBias) {
-    const auto input = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CUDA);
-    const auto weight = lfs_float_tensor({1, 0, 0, 1}, {2, 2}, Device::CUDA);
-    const auto bias_base = lfs_float_tensor({10, 99, 20, 99}, {2, 2}, Device::CUDA);
+    const auto input = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::GPU);
+    const auto weight = lfs_float_tensor({1, 0, 0, 1}, {2, 2}, Device::GPU);
+    const auto bias_base = lfs_float_tensor({10, 99, 20, 99}, {2, 2}, Device::GPU);
     const auto bias = bias_base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
 
     const auto torch_input = torch::tensor({{1.0f, 2.0f}, {3.0f, 4.0f}}, torch::kCUDA);
@@ -327,10 +327,10 @@ TEST_F(CudaTest, A12_LinearReadsStridedBias) {
 }
 
 TEST_F(CudaTest, A13_LinearOutWritesLogicalOutputLayout) {
-    const auto input = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CUDA);
-    const auto weight = lfs_float_tensor({1, 0, 0, 1}, {2, 2}, Device::CUDA);
+    const auto input = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::GPU);
+    const auto weight = lfs_float_tensor({1, 0, 0, 1}, {2, 2}, Device::GPU);
     Tensor no_bias;
-    auto output_base = Tensor::zeros({2, 2}, Device::CUDA);
+    auto output_base = Tensor::zeros({2, 2}, Device::GPU);
     auto output_view = output_base.transpose(0, 1);
     input.linear_out(weight, no_bias, output_view);
 
@@ -340,8 +340,8 @@ TEST_F(CudaTest, A13_LinearOutWritesLogicalOutputLayout) {
 }
 
 TEST_F(CudaTest, A14_GatherReadsStridedInt32Indices) {
-    const auto input = lfs_float_tensor({10, 20, 30}, {3}, Device::CUDA);
-    const auto index_base = lfs_int_tensor({2, 0, 1, 0, 0, 0}, {3, 2}, Device::CUDA);
+    const auto input = lfs_float_tensor({10, 20, 30}, {3}, Device::GPU);
+    const auto index_base = lfs_int_tensor({2, 0, 1, 0, 0, 0}, {3, 2}, Device::GPU);
     const auto index = index_base.slice(1, 0, 1).squeeze(1);
 
     const auto torch_input = torch::tensor({10.0f, 20.0f, 30.0f}, torch::kCUDA);
@@ -353,9 +353,9 @@ TEST_F(CudaTest, A14_GatherReadsStridedInt32Indices) {
 }
 
 TEST_F(CudaTest, A15_IndexSelectReadsLogicalSourceAndIndices) {
-    const auto input = lfs_float_tensor({1, 2, 3, 4, 5, 6}, {2, 3}, Device::CUDA)
+    const auto input = lfs_float_tensor({1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU)
                            .transpose(0, 1);
-    const auto index_base = lfs_int_tensor({1, 0, 2, 0}, {2, 2}, Device::CUDA);
+    const auto index_base = lfs_int_tensor({1, 0, 2, 0}, {2, 2}, Device::GPU);
     const auto index = index_base.slice(1, 0, 1).squeeze(1);
 
     const auto torch_input = torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, torch::kCUDA)
@@ -368,9 +368,9 @@ TEST_F(CudaTest, A15_IndexSelectReadsLogicalSourceAndIndices) {
 }
 
 TEST_F(CudaTest, A15_TakeFlattensLogicalOrder) {
-    const auto input = lfs_float_tensor({1, 2, 3, 4, 5, 6}, {2, 3}, Device::CUDA)
+    const auto input = lfs_float_tensor({1, 2, 3, 4, 5, 6}, {2, 3}, Device::GPU)
                            .transpose(0, 1);
-    const auto index = lfs_int_tensor({1, 4}, {2}, Device::CUDA);
+    const auto index = lfs_int_tensor({1, 4}, {2}, Device::GPU);
     const auto torch_input = torch::tensor({{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}}, torch::kCUDA)
                                  .transpose(0, 1);
     const auto torch_index = torch::tensor({1, 4},
@@ -380,9 +380,9 @@ TEST_F(CudaTest, A15_TakeFlattensLogicalOrder) {
 }
 
 TEST_F(CudaTest, A15_IndexSelectIntoWritesLogicalOutputLayout) {
-    const auto input = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::CUDA);
-    const auto index = lfs_int_tensor({1, 0}, {2}, Device::CUDA);
-    auto output_base = Tensor::zeros({2, 2}, Device::CUDA);
+    const auto input = lfs_float_tensor({1, 2, 3, 4}, {2, 2}, Device::GPU);
+    const auto index = lfs_int_tensor({1, 0}, {2}, Device::GPU);
+    auto output_base = Tensor::zeros({2, 2}, Device::GPU);
     auto output_view = output_base.transpose(0, 1);
     input.index_select_into(output_view, 0, index, BoundaryMode::Assert);
 
@@ -394,10 +394,10 @@ TEST_F(CudaTest, A15_IndexSelectIntoWritesLogicalOutputLayout) {
 }
 
 TEST_F(CudaTest, A16_ScatterWritesStridedDestination) {
-    auto ours_base = Tensor::zeros({3, 2}, Device::CUDA);
+    auto ours_base = Tensor::zeros({3, 2}, Device::GPU);
     auto ours_view = ours_base.slice(1, 0, 1).squeeze(1);
-    const auto index = lfs_int_tensor({2, 0, 1}, {3}, Device::CUDA);
-    const auto source = lfs_float_tensor({7, 8, 9}, {3}, Device::CUDA);
+    const auto index = lfs_int_tensor({2, 0, 1}, {3}, Device::GPU);
+    const auto source = lfs_float_tensor({7, 8, 9}, {3}, Device::GPU);
     ours_view.scatter_(0, index, source);
 
     auto torch_base = torch::zeros({3, 2}, torch::TensorOptions().device(torch::kCUDA));
@@ -409,10 +409,10 @@ TEST_F(CudaTest, A16_ScatterWritesStridedDestination) {
 }
 
 TEST_F(CudaTest, A16_IndexCopyReadsAndWritesStridedOperands) {
-    auto ours_base = Tensor::zeros({3, 2}, Device::CUDA);
+    auto ours_base = Tensor::zeros({3, 2}, Device::GPU);
     auto ours_view = ours_base.slice(1, 0, 1).squeeze(1);
-    const auto index = lfs_int_tensor({2, 0, 1}, {3}, Device::CUDA);
-    const auto source_base = lfs_float_tensor({7, -1, 8, -1, 9, -1}, {3, 2}, Device::CUDA);
+    const auto index = lfs_int_tensor({2, 0, 1}, {3}, Device::GPU);
+    const auto source_base = lfs_float_tensor({7, -1, 8, -1, 9, -1}, {3, 2}, Device::GPU);
     const auto source = source_base.slice(1, 0, 1).squeeze(1);
     ours_view.index_copy_(0, index, source);
 
@@ -428,10 +428,10 @@ TEST_F(CudaTest, A16_IndexCopyReadsAndWritesStridedOperands) {
 }
 
 TEST_F(CudaTest, A16_IndexAddReadsAndWritesStridedOperands) {
-    auto ours_base = Tensor::zeros({3, 2}, Device::CUDA);
+    auto ours_base = Tensor::zeros({3, 2}, Device::GPU);
     auto ours_view = ours_base.slice(1, 0, 1).squeeze(1);
-    const auto index = lfs_int_tensor({2, 0, 1}, {3}, Device::CUDA);
-    const auto source_base = lfs_float_tensor({7, -1, 8, -1, 9, -1}, {3, 2}, Device::CUDA);
+    const auto index = lfs_int_tensor({2, 0, 1}, {3}, Device::GPU);
+    const auto source_base = lfs_float_tensor({7, -1, 8, -1, 9, -1}, {3, 2}, Device::GPU);
     const auto source = source_base.slice(1, 0, 1).squeeze(1);
     ours_view.index_add_(0, index, source);
 
@@ -447,13 +447,13 @@ TEST_F(CudaTest, A16_IndexAddReadsAndWritesStridedOperands) {
 }
 
 TEST_F(CudaTest, A17_UniformTouchesOnlyLogicalViewCells_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         auto ours_base = Tensor::zeros({3, 4}, device);
         auto ours_view = ours_base.slice(1, 1, 3);
         ours_view.uniform_(2.0f, 4.0f);
 
         auto torch_base = torch::zeros({3, 4}, torch::TensorOptions().device(
-                                                   device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+                                                   device == Device::GPU ? torch::kCUDA : torch::kCPU));
         torch_base.slice(1, 1, 3).uniform_(2.0, 4.0);
         EXPECT_EQ(changed_from_zero(ours_base), changed_from_zero(torch_base))
             << (device == Device::CPU ? "A17 uniform CPU" : "A17 uniform CUDA");
@@ -461,13 +461,13 @@ TEST_F(CudaTest, A17_UniformTouchesOnlyLogicalViewCells_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A17_NormalTouchesOnlyLogicalViewCells_CPUAndCUDA) {
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         auto ours_base = Tensor::zeros({3, 4}, device);
         auto ours_view = ours_base.slice(1, 1, 3);
         ours_view.normal_(10.0f, 0.01f);
 
         auto torch_base = torch::zeros({3, 4}, torch::TensorOptions().device(
-                                                   device == Device::CUDA ? torch::kCUDA : torch::kCPU));
+                                                   device == Device::GPU ? torch::kCUDA : torch::kCPU));
         torch_base.slice(1, 1, 3).normal_(10.0, 0.01);
         EXPECT_EQ(changed_from_zero(ours_base), changed_from_zero(torch_base))
             << (device == Device::CPU ? "A17 normal CPU" : "A17 normal CUDA");
@@ -475,8 +475,8 @@ TEST_F(CudaTest, A17_NormalTouchesOnlyLogicalViewCells_CPUAndCUDA) {
 }
 
 TEST_F(CudaTest, A18_RankOneGatherBroadcastsAcrossOuterDimensions) {
-    const auto ours = lfs_float_tensor({10, 11, 12, 20, 21, 22}, {2, 3}, Device::CUDA);
-    const auto index = lfs_int_tensor({2, 0}, {2}, Device::CUDA);
+    const auto ours = lfs_float_tensor({10, 11, 12, 20, 21, 22}, {2, 3}, Device::GPU);
+    const auto index = lfs_int_tensor({2, 0}, {2}, Device::GPU);
     const auto theirs = torch::tensor({{10.0f, 11.0f, 12.0f}, {20.0f, 21.0f, 22.0f}}, torch::kCUDA);
     const auto torch_index = torch::tensor({2, 0},
                                            torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
@@ -485,9 +485,9 @@ TEST_F(CudaTest, A18_RankOneGatherBroadcastsAcrossOuterDimensions) {
 }
 
 TEST_F(CudaTest, A19_MaskedScatterTreatsUInt8MaskAsTruthValues) {
-    auto ours = Tensor::zeros({2}, Device::CUDA);
-    const auto mask = lfs_int_tensor({2, 1}, {2}, Device::CUDA).to(DataType::UInt8);
-    const auto source = lfs_float_tensor({10, 20}, {2}, Device::CUDA);
+    auto ours = Tensor::zeros({2}, Device::GPU);
+    const auto mask = lfs_int_tensor({2, 1}, {2}, Device::GPU).to(DataType::UInt8);
+    const auto source = lfs_float_tensor({10, 20}, {2}, Device::GPU);
     ours[mask] = source;
 
     auto theirs = torch::zeros({2}, torch::TensorOptions().device(torch::kCUDA));
@@ -498,7 +498,7 @@ TEST_F(CudaTest, A19_MaskedScatterTreatsUInt8MaskAsTruthValues) {
 }
 
 TEST_F(CudaTest, A20_MultinomialSamplesLogicalStridedWeights) {
-    const auto base = lfs_float_tensor({1, 100, 0, 0}, {2, 2}, Device::CUDA);
+    const auto base = lfs_float_tensor({1, 100, 0, 0}, {2, 2}, Device::GPU);
     const auto weights = base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
     const auto torch_base = torch::tensor({{1.0f, 100.0f}, {0.0f, 0.0f}}, torch::kCUDA);
     const auto torch_weights = torch_base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
@@ -514,11 +514,11 @@ TEST_F(CudaTest, A20_MultinomialSamplesLogicalStridedWeights) {
 
 TEST_F(CudaTest, A21_DiagReadsRankOneStride_CPUAndCUDA) {
     const std::vector<float> values = {1, 2, 3, 4};
-    for (const Device device : {Device::CPU, Device::CUDA}) {
+    for (const Device device : {Device::CPU, Device::GPU}) {
         const auto base = lfs_float_tensor(values, {2, 2}, device);
         const auto diagonal = base.transpose(0, 1).slice(0, 0, 1).squeeze(0);
         auto torch_base = torch::tensor(values).reshape({2, 2});
-        if (device == Device::CUDA) {
+        if (device == Device::GPU) {
             torch_base = torch_base.cuda();
         }
         const auto torch_diagonal = torch_base.transpose(0, 1).slice(0, 0, 1).squeeze(0);

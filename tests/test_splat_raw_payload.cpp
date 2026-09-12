@@ -195,7 +195,7 @@ namespace {
         const auto count = static_cast<std::size_t>(model.size());
         ASSERT_GT(count, 0u);
         auto selection = lfs::core::Tensor::zeros(
-            {count}, lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+            {count}, lfs::core::Device::GPU, lfs::core::DataType::Bool);
         selection.slice(0, 0, std::min<std::size_t>(count, 64)).fill_(1.0f);
         model.soft_delete(selection);
         ASSERT_TRUE(model.deleted().is_valid());
@@ -221,7 +221,7 @@ namespace {
         auto loaded = lfs::io::load_ply(path);
         ASSERT_TRUE(loaded.has_value())
             << lfs::format_for_developer(loaded.error());
-        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+        if (loaded->value.means().device() != lfs::core::Device::GPU) {
             GTEST_SKIP() << "async capture requires a CUDA-backed splat";
         }
 
@@ -260,7 +260,7 @@ namespace {
         auto loaded = lfs::io::load_ply(path);
         ASSERT_TRUE(loaded.has_value())
             << lfs::format_for_developer(loaded.error());
-        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+        if (loaded->value.means().device() != lfs::core::Device::GPU) {
             GTEST_SKIP() << "async capture requires a CUDA-backed splat";
         }
         struct HeadroomGuard {
@@ -299,7 +299,7 @@ namespace {
         auto loaded = lfs::io::load_ply(path);
         ASSERT_TRUE(loaded.has_value())
             << lfs::format_for_developer(loaded.error());
-        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+        if (loaded->value.means().device() != lfs::core::Device::GPU) {
             GTEST_SKIP() << "async capture requires a CUDA-backed splat";
         }
         struct HeadroomGuard {
@@ -325,7 +325,7 @@ namespace {
         auto loaded = lfs::io::load_ply(path);
         ASSERT_TRUE(loaded.has_value())
             << lfs::format_for_developer(loaded.error());
-        if (loaded->value.means().device() != lfs::core::Device::CUDA) {
+        if (loaded->value.means().device() != lfs::core::Device::GPU) {
             GTEST_SKIP() << "async capture requires a CUDA-backed splat";
         }
 

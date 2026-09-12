@@ -460,7 +460,7 @@ namespace lfs::core::internal {
                 chain.ops[i].scalar = recipe.ops[i].scalar;
                 if (is_tensor_binary_kind(recipe.ops[i].kind)) {
                     chain.ops[i].rhs =
-                        rhs_storage[rhs_i].device() == Device::CUDA
+                        rhs_storage[rhs_i].device() == Device::GPU
                             ? internal::chain_operand_address(
                                   internal::storage_ref(rhs_storage[rhs_i]))
                             : rhs_storage[rhs_i].ptr<float>();
@@ -470,7 +470,7 @@ namespace lfs::core::internal {
                 }
             }
 
-            if (source.device() == Device::CUDA) {
+            if (source.device() == Device::GPU) {
                 const float* in_ptr = source.ptr<float>();
                 assert(in_ptr != nullptr);
                 // prepare_inputs_for_stream only takes initializer_list; pin source then each rhs.

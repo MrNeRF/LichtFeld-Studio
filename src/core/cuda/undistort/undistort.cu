@@ -786,7 +786,7 @@ namespace lfs::core {
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
         assert(src.is_valid());
         assert(src.ndim() == 3);
-        assert(src.device() == Device::CUDA);
+        assert(src.device() == Device::GPU);
 
         const int channels = static_cast<int>(src.shape()[0]);
         assert(static_cast<int>(src.shape()[1]) == params.src_height);
@@ -798,7 +798,7 @@ namespace lfs::core {
             {static_cast<size_t>(channels),
              static_cast<size_t>(params.dst_height),
              static_cast<size_t>(params.dst_width)},
-            Device::CUDA);
+            Device::GPU);
 
         const dim3 block(BLOCK_DIM, BLOCK_DIM);
         const dim3 grid(
@@ -818,7 +818,7 @@ namespace lfs::core {
     Tensor undistort_mask(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
         assert(src.is_valid());
         assert(src.ndim() == 2);
-        assert(src.device() == Device::CUDA);
+        assert(src.device() == Device::GPU);
         assert(static_cast<int>(src.shape()[0]) == params.src_height);
         assert(static_cast<int>(src.shape()[1]) == params.src_width);
 
@@ -827,7 +827,7 @@ namespace lfs::core {
         auto dst = Tensor::zeros(
             {static_cast<size_t>(params.dst_height),
              static_cast<size_t>(params.dst_width)},
-            Device::CUDA);
+            Device::GPU);
 
         const dim3 block(BLOCK_DIM, BLOCK_DIM);
         const dim3 grid(

@@ -33,34 +33,34 @@ namespace {
             std::memcpy(host.ptr<uint8_t>(), values.data(), values.size());
         }
         GpuBackendScope scope(backend);
-        return host.to(Device::CUDA);
+        return host.to(Device::GPU);
     }
 
     Tensor uploadBool(const std::vector<uint8_t>& values, const GpuBackend backend) {
         std::vector<bool> bits(values.begin(), values.end());
         GpuBackendScope scope(backend);
-        return Tensor::from_vector(bits, {bits.size()}, Device::CPU).to(Device::CUDA);
+        return Tensor::from_vector(bits, {bits.size()}, Device::CPU).to(Device::GPU);
     }
 
     Tensor uploadI32(const std::vector<int>& values, const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return Tensor::from_vector(values, {values.size()}, Device::CPU).to(Device::CUDA);
+        return Tensor::from_vector(values, {values.size()}, Device::CPU).to(Device::GPU);
     }
 
     Tensor uploadF32(const std::vector<float>& values, const lfs::core::TensorShape& shape,
                      const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return Tensor::from_vector(values, shape, Device::CPU).to(Device::CUDA);
+        return Tensor::from_vector(values, shape, Device::CPU).to(Device::GPU);
     }
 
     Tensor emptyU8(const std::size_t n, const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return Tensor::empty({n}, Device::CUDA, DataType::UInt8);
+        return Tensor::empty({n}, Device::GPU, DataType::UInt8);
     }
 
     Tensor emptyScratch(const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return Tensor::zeros({kScratchWords}, Device::CUDA, DataType::Int32);
+        return Tensor::zeros({kScratchWords}, Device::GPU, DataType::Int32);
     }
 
     std::array<uint32_t, kLockedWords> lockedHost(const std::vector<uint8_t>& groups) {

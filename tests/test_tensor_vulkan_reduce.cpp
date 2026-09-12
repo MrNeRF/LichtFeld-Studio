@@ -21,7 +21,7 @@ namespace {
 
     Tensor upload_vulkan(const Tensor& cpu) {
         GpuBackendScope scope(GpuBackend::Vulkan);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     // Asymmetric, non-dyadic pattern: sums do not cancel to zero, the mean stays

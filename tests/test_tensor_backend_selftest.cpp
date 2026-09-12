@@ -28,7 +28,7 @@ namespace {
 
         GpuBackendScope scope(GpuBackend::Vulkan);
         const Tensor input = Tensor::from_vector(std::vector<float>{1.0f, 4.0f, 9.0f},
-                                                 {3}, Device::CUDA);
+                                                 {3}, Device::GPU);
         const Tensor rooted = input.sqrt();
         EXPECT_EQ(gpu_backend_of(rooted), GpuBackend::Vulkan);
         EXPECT_EQ(rooted.to_vector(), (std::vector<float>{1.0f, 2.0f, 3.0f}));

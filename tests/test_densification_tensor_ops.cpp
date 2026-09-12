@@ -55,14 +55,14 @@ namespace {
         if (cpu_t.dtype() == torch::kFloat32) {
             std::vector<float> data(cpu_t.data_ptr<float>(),
                                     cpu_t.data_ptr<float>() + cpu_t.numel());
-            return Tensor::from_vector(data, TensorShape(shape), Device::CUDA);
+            return Tensor::from_vector(data, TensorShape(shape), Device::GPU);
         } else if (cpu_t.dtype() == torch::kBool) {
             auto uint8_tensor = cpu_t.to(torch::kUInt8);
             auto result = Tensor::zeros_bool(TensorShape(shape), Device::CPU);
             auto ptr = result.ptr<unsigned char>();
             std::copy(uint8_tensor.data_ptr<uint8_t>(),
                       uint8_tensor.data_ptr<uint8_t>() + uint8_tensor.numel(), ptr);
-            return result.to(Device::CUDA);
+            return result.to(Device::GPU);
         } else if (cpu_t.dtype() == torch::kInt64) {
             // Convert int64 to int32 (Tensor::from_vector doesn't support int64)
             auto int64_ptr = cpu_t.data_ptr<int64_t>();
@@ -70,12 +70,12 @@ namespace {
             for (int64_t i = 0; i < cpu_t.numel(); ++i) {
                 data[i] = static_cast<int>(int64_ptr[i]);
             }
-            auto result = Tensor::from_vector(data, TensorShape(shape), Device::CUDA);
+            auto result = Tensor::from_vector(data, TensorShape(shape), Device::GPU);
             return result.to(DataType::Int64); // Convert back to int64 on GPU
         } else if (cpu_t.dtype() == torch::kInt32) {
             std::vector<int32_t> data(cpu_t.data_ptr<int32_t>(),
                                       cpu_t.data_ptr<int32_t>() + cpu_t.numel());
-            return Tensor::from_vector(data, TensorShape(shape), Device::CUDA);
+            return Tensor::from_vector(data, TensorShape(shape), Device::GPU);
         }
         throw std::runtime_error("Unsupported dtype in from_torch");
     }
@@ -156,7 +156,7 @@ protected:
 
 TEST_F(DensificationTensorOpsTest, Zeros_Basic) {
     // Usage: _splat_data->_densification_info = Tensor::zeros({2, N}, device)
-    auto lfs_zeros = Tensor::zeros({2, 100}, Device::CUDA);
+    auto lfs_zeros = Tensor::zeros({2, 100}, Device::GPU);
     auto torch_zeros = torch::zeros({2, 100}, torch::kCUDA);
 
     EXPECT_TRUE(tensors_close(lfs_zeros, torch_zeros, 0, 0, "Zeros_Basic"));
@@ -164,7 +164,7 @@ TEST_F(DensificationTensorOpsTest, Zeros_Basic) {
 
 TEST_F(DensificationTensorOpsTest, ZerosBool_Basic) {
     // Usage: _free_mask = Tensor::zeros_bool({capacity}, device)
-    auto lfs_zeros = Tensor::zeros_bool({100}, Device::CUDA);
+    auto lfs_zeros = Tensor::zeros_bool({100}, Device::GPU);
     auto torch_zeros = torch::zeros({100}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     EXPECT_TRUE(tensors_close(lfs_zeros, torch_zeros, 0, 0, "ZerosBool_Basic"));
@@ -172,7 +172,7 @@ TEST_F(DensificationTensorOpsTest, ZerosBool_Basic) {
 
 TEST_F(DensificationTensorOpsTest, OnesBool_Basic) {
     // Usage: true_vals = Tensor::ones_bool({n}, device)
-    auto lfs_ones = Tensor::ones_bool({50}, Device::CUDA);
+    auto lfs_ones = Tensor::ones_bool({50}, Device::GPU);
     auto torch_ones = torch::ones({50}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
     EXPECT_TRUE(tensors_close(lfs_ones, torch_ones, 0, 0, "OnesBool_Basic"));
@@ -180,7 +180,7 @@ TEST_F(DensificationTensorOpsTest, OnesBool_Basic) {
 
 TEST_F(DensificationTensorOpsTest, Empty_Basic) {
     // Usage: second_positions = Tensor::empty({num_split, 3}, device)
-    auto lfs_empty = Tensor::empty({10, 3}, Device::CUDA);
+    auto lfs_empty = Tensor::empty({10, 3}, Device::GPU);
     auto torch_empty = torch::empty({10, 3}, torch::kCUDA);
 
     // Can't compare values (uninitialized), just check shape
@@ -195,7 +195,7 @@ TEST_F(DensificationTensorOpsTest, Randn_ShapeMatch) {
     torch::manual_seed(123);
     Tensor::manual_seed(123);
 
-    auto lfs_randn = Tensor::randn({2, 50, 3}, Device::CUDA);
+    auto lfs_randn = Tensor::randn({2, 50, 3}, Device::GPU);
     auto torch_randn = torch::randn({2, 50, 3}, torch::kCUDA);
 
     EXPECT_EQ(lfs_randn.shape()[0], 2);
@@ -212,7 +212,7 @@ TEST_F(DensificationTensorOpsTest, Randn_ShapeMatch) {
 TEST_F(DensificationTensorOpsTest, FromVector_Int) {
     // Usage: new_indices = Tensor::from_vector(new_indices_vec, shape, device)
     std::vector<int> data = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
-    auto lfs_tensor = Tensor::from_vector(data, TensorShape({10}), Device::CUDA);
+    auto lfs_tensor = Tensor::from_vector(data, TensorShape({10}), Device::GPU);
     auto torch_tensor = torch::tensor(std::vector<int64_t>(data.begin(), data.end()),
                                       torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
 
@@ -761,7 +761,7 @@ TEST_F(DensificationTensorOpsTest, RemovePattern_Full) {
     if (num_pruned > 0) {
         // Create zero rotation tensor
         auto torch_zero_rot = torch::zeros({num_pruned, 4}, torch::kCUDA);
-        auto lfs_zero_rot = Tensor::zeros({static_cast<size_t>(num_pruned), 4}, Device::CUDA);
+        auto lfs_zero_rot = Tensor::zeros({static_cast<size_t>(num_pruned), 4}, Device::GPU);
 
         // Apply in-place update
         torch_rotation.index_put_({torch_prune_indices}, torch_zero_rot);
@@ -850,8 +850,8 @@ TEST_F(DensificationTensorOpsTest, GrowGsCapEnforcement_Full) {
         auto torch_true_vals = torch::ones({available}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
         torch_limited.index_put_({torch_keep}, torch_true_vals);
 
-        auto lfs_limited = Tensor::zeros_bool({static_cast<size_t>(current_n)}, Device::CUDA);
-        auto lfs_true_vals = Tensor::ones_bool({static_cast<size_t>(available)}, Device::CUDA);
+        auto lfs_limited = Tensor::zeros_bool({static_cast<size_t>(current_n)}, Device::GPU);
+        auto lfs_true_vals = Tensor::ones_bool({static_cast<size_t>(available)}, Device::GPU);
         lfs_limited.index_put_(lfs_keep, lfs_true_vals);
 
         EXPECT_TRUE(tensors_close(lfs_limited, torch_limited, 0, 0, "GrowGs_Limited"));
@@ -911,7 +911,7 @@ TEST_F(DensificationTensorOpsTest, FillFreeSlotsPattern) {
         auto torch_false = torch::zeros({slots_to_fill}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
         torch_free_mask.index_put_({torch_target}, torch_false);
 
-        auto lfs_false = Tensor::zeros_bool({static_cast<size_t>(slots_to_fill)}, Device::CUDA);
+        auto lfs_false = Tensor::zeros_bool({static_cast<size_t>(slots_to_fill)}, Device::GPU);
         lfs_free_mask.index_put_(lfs_target, lfs_false);
 
         EXPECT_TRUE(tensors_close(lfs_free_mask, torch_free_mask, 0, 0, "FillSlots_Mask"));
@@ -1080,7 +1080,7 @@ TEST_F(DensificationTensorOpsTest, DensificationInfo_ResetAfterRefine) {
     // This resets the accumulator after refinement
 
     const int N = 50000;
-    auto device = Device::CUDA;
+    auto device = Device::GPU;
 
     auto lfs_dens_info = Tensor::zeros({2, static_cast<size_t>(N)}, device);
     auto torch_dens_info = torch::zeros({2, N}, torch::kCUDA);
@@ -1219,16 +1219,16 @@ TEST_F(DensificationTensorOpsTest, Pruning_RemoveAndZeroOptimizer) {
 
     // ===== LFS IMPLEMENTATION =====
     // Mark as free
-    auto lfs_true_vals = Tensor::ones_bool({static_cast<size_t>(num_pruned)}, Device::CUDA);
+    auto lfs_true_vals = Tensor::ones_bool({static_cast<size_t>(num_pruned)}, Device::GPU);
     lfs_free_mask.index_put_(lfs_prune_indices, lfs_true_vals);
 
     // Zero rotation
-    auto lfs_zero_rot = Tensor::zeros({static_cast<size_t>(num_pruned), 4}, Device::CUDA);
+    auto lfs_zero_rot = Tensor::zeros({static_cast<size_t>(num_pruned), 4}, Device::GPU);
     lfs_rotation.index_put_(lfs_prune_indices, lfs_zero_rot);
 
     // Zero optimizer states
-    auto lfs_zero_means = Tensor::zeros({static_cast<size_t>(num_pruned), 3}, Device::CUDA);
-    auto lfs_zero_opacity = Tensor::zeros({static_cast<size_t>(num_pruned)}, Device::CUDA);
+    auto lfs_zero_means = Tensor::zeros({static_cast<size_t>(num_pruned), 3}, Device::GPU);
+    auto lfs_zero_opacity = Tensor::zeros({static_cast<size_t>(num_pruned)}, Device::GPU);
     lfs_exp_avg_means.index_put_(lfs_prune_indices, lfs_zero_means);
     lfs_exp_avg_sq_means.index_put_(lfs_prune_indices, lfs_zero_means);
     lfs_exp_avg_opacity.index_put_(lfs_prune_indices, lfs_zero_opacity);
@@ -1349,7 +1349,7 @@ TEST_F(DensificationTensorOpsTest, Split_AppendZerosThenIndexPut) {
                                            torch::kCUDA);
     auto lfs_new_indices = Tensor::from_vector(new_indices_vec,
                                                TensorShape({static_cast<size_t>(n_remaining)}),
-                                               Device::CUDA);
+                                               Device::GPU);
 
     // Torch: cat then index_put (equivalent to append_zeros + index_put)
     auto torch_zeros = torch::zeros({n_remaining, 3}, torch::kCUDA);
@@ -1504,8 +1504,8 @@ TEST_F(DensificationTensorOpsTest, Remove_ZeroRotationAndOptimizerState) {
         auto torch_zero_rot = torch::zeros({num_pruned, 4}, torch::kCUDA);
         auto torch_zero_state = torch::zeros({num_pruned, 3}, torch::kCUDA);
 
-        auto lfs_zero_rot = Tensor::zeros({static_cast<size_t>(num_pruned), 4}, Device::CUDA);
-        auto lfs_zero_state = Tensor::zeros({static_cast<size_t>(num_pruned), 3}, Device::CUDA);
+        auto lfs_zero_rot = Tensor::zeros({static_cast<size_t>(num_pruned), 4}, Device::GPU);
+        auto lfs_zero_state = Tensor::zeros({static_cast<size_t>(num_pruned), 3}, Device::GPU);
 
         // Apply zero operations
         torch_rotation.index_put_({torch_prune_indices}, torch_zero_rot);
@@ -1585,8 +1585,8 @@ TEST_F(DensificationTensorOpsTest, MaxCapEnforcement_LimitMaskBySlice) {
         auto torch_true_vals = torch::ones({available}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
         torch_limited.index_put_({torch_keep}, torch_true_vals);
 
-        auto lfs_limited = Tensor::zeros_bool({static_cast<size_t>(N)}, Device::CUDA);
-        auto lfs_true_vals = Tensor::ones_bool({static_cast<size_t>(available)}, Device::CUDA);
+        auto lfs_limited = Tensor::zeros_bool({static_cast<size_t>(N)}, Device::GPU);
+        auto lfs_true_vals = Tensor::ones_bool({static_cast<size_t>(available)}, Device::GPU);
         lfs_limited.index_put_(lfs_keep, lfs_true_vals);
 
         EXPECT_TRUE(tensors_close(lfs_limited, torch_limited, 0, 0, "MaxCap_LimitedMask"));
@@ -1690,7 +1690,7 @@ TEST_F(DensificationTensorOpsTest, LargeScale_IndexPut) {
         << "Index conversion mismatch";
 
     // Create zero values
-    auto lfs_values = Tensor::zeros({static_cast<size_t>(num_put), 3}, Device::CUDA);
+    auto lfs_values = Tensor::zeros({static_cast<size_t>(num_put), 3}, Device::GPU);
 
     // Apply index_put on both
     torch_data.index_put_({torch_indices}, torch_values);

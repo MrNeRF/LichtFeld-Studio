@@ -77,7 +77,7 @@ namespace lfs::core {
         }
 
         lfs::Status run_pointwise_and_reduction(const std::vector<float>& host) {
-            const Tensor a = Tensor::from_vector(host, {host.size()}, Device::CUDA);
+            const Tensor a = Tensor::from_vector(host, {host.size()}, Device::GPU);
             const Tensor pointwise = (a * 2.0f + 1.0f).sqrt();
 
             std::vector<float> expected_pointwise(host.size());
@@ -106,7 +106,7 @@ namespace lfs::core {
                 return status;
             }
 
-            const Tensor a = Tensor::from_vector(host, {host.size()}, Device::CUDA);
+            const Tensor a = Tensor::from_vector(host, {host.size()}, Device::GPU);
 
             const auto [sorted_values, sorted_indices] = a.sort(0, false);
             std::vector<size_t> order(host.size());
@@ -154,7 +154,7 @@ namespace lfs::core {
             }
 
             const std::vector<int> index_host{0, 1, 17, static_cast<int>(kN - 1)};
-            const Tensor indices = Tensor::from_vector(index_host, {index_host.size()}, Device::CUDA);
+            const Tensor indices = Tensor::from_vector(index_host, {index_host.size()}, Device::GPU);
             const Tensor selected = a.index_select(0, indices);
             std::vector<float> expected_selected;
             expected_selected.reserve(index_host.size());

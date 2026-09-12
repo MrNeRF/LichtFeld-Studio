@@ -67,7 +67,7 @@ TEST_F(MemoryPressureCudaUnavailableTest, LatchedAllocationFailsFastTyped) {
     ASSERT_TRUE(latch_cuda_unavailable(cudaErrorInitializationError));
     const uint64_t episodes_before = pressure.episode_count();
 
-    EXPECT_THROW(Tensor::zeros({1024}, Device::CUDA), MemoryAllocationError);
+    EXPECT_THROW(Tensor::zeros({1024}, Device::GPU), MemoryAllocationError);
     EXPECT_EQ(pressure.episode_count(), episodes_before);
 }
 
@@ -327,11 +327,11 @@ TEST_F(MemoryPressureTest, InjectedFailureThrowsTypedErrorFromTensorPath) {
     // 128 MiB of Float32 storage: over the injected threshold, so both the
     // initial attempt and the post-reclaim retry fail, surfacing a typed error
     // with no null pointer reaching a kernel.
-    EXPECT_THROW(Tensor::zeros({32 * 1024 * 1024}, Device::CUDA), MemoryAllocationError);
+    EXPECT_THROW(Tensor::zeros({32 * 1024 * 1024}, Device::GPU), MemoryAllocationError);
 
     coordinator().set_allocation_probe(nullptr);
     EXPECT_NO_THROW({
-        Tensor recovered = Tensor::zeros({32 * 1024 * 1024}, Device::CUDA);
+        Tensor recovered = Tensor::zeros({32 * 1024 * 1024}, Device::GPU);
         EXPECT_EQ(recovered.numel(), 32u * 1024 * 1024);
     });
 }

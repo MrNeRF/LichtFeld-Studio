@@ -134,7 +134,7 @@ namespace lfs::io {
                 return input;
             }
 
-            const Tensor source = input.device() == Device::CUDA && !input.is_contiguous()
+            const Tensor source = input.device() == Device::GPU && !input.is_contiguous()
                                       ? input.contiguous()
                                       : input;
             Tensor result = Tensor::empty_pageable_host(source.shape(), source.dtype());
@@ -1396,7 +1396,7 @@ namespace lfs::io {
                                    name, shape.elements(), data.size()));
         Tensor tensor;
         if (data.empty()) {
-            tensor = Tensor::zeros(std::move(shape), Device::CUDA, DataType::Float32);
+            tensor = Tensor::zeros(std::move(shape), Device::GPU, DataType::Float32);
         } else if (options.splat_tensor_allocator) {
             const size_t row_capacity = capacity != 0
                                             ? capacity
@@ -1404,7 +1404,7 @@ namespace lfs::io {
             tensor = options.splat_tensor_allocator(
                 shape, row_capacity, DataType::Float32, name);
         } else {
-            tensor = Tensor::empty(shape, Device::CUDA, DataType::Float32);
+            tensor = Tensor::empty(shape, Device::GPU, DataType::Float32);
         }
         tensor.set_name(std::string{name});
         return tensor;
@@ -1450,7 +1450,7 @@ namespace lfs::io {
                 return;
             }
 
-            if (tensor.device() == Device::CUDA) {
+            if (tensor.device() == Device::GPU) {
                 const cudaError_t status = cudaMemcpyAsync(
                     tensor.data_ptr(),
                     data.data(),
@@ -1866,7 +1866,7 @@ namespace lfs::io {
             CudaStreamOwner encode_stream;
             const cudaStream_t stream = encode_stream.stream;
             Tensor staging = Tensor::empty(
-                TensorShape({staging_floats}), Device::CUDA, DataType::Float32, false);
+                TensorShape({staging_floats}), Device::GPU, DataType::Float32, false);
             staging.set_name("ply.shN_q16_staging");
 
             auto* const codes_u16 = static_cast<std::uint16_t*>(

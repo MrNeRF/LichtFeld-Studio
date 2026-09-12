@@ -43,7 +43,7 @@ namespace {
 
     Tensor upload(const Tensor& cpu, const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     Tensor upload_int(const std::vector<int>& values, const GpuBackend backend) {

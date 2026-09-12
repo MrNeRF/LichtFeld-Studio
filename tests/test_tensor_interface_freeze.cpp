@@ -32,11 +32,13 @@ namespace {
 
     using namespace lfs::core;
 
+    static_assert(Device::CUDA == Device::GPU);
+
     // The category counts are frozen to lane A section 2.1. Constructors,
     // destructors, deleted functions, internal orchestration, and macros are not
     // callables under that report's counting rule.
     // Creation/factory: 33
-    // Shape/view/movement: 45
+    // Shape/view/movement: 46
     // Pointwise unary: 42
     // Pointwise binary/broadcast: 51
     // Reductions/scans: 54
@@ -46,14 +48,14 @@ namespace {
     // NN: 19
     // Serialization: 8
     // Sync/stream/event: 19
-    // Memory/allocator/pool stats: 45
+    // Memory/allocator/pool stats: 47
     // Debug/trace/label: 61
     // Lazy/fused expression: 57
     // Row proxy/accessor: 38
     constexpr std::array<size_t, 15> kCategoryCounts{
-        33, 45, 42, 51, 54, 5, 34, 18, 19, 8, 19, 45, 61, 57, 38};
-    constexpr std::array<unsigned char, 529> kFrozenCallableSlots{};
-    static_assert(kFrozenCallableSlots.size() == 529);
+        33, 46, 42, 51, 54, 5, 34, 18, 19, 8, 19, 47, 61, 57, 38};
+    constexpr std::array<unsigned char, 532> kFrozenCallableSlots{};
+    static_assert(kFrozenCallableSlots.size() == 532);
     static_assert([] {
         size_t total = 0;
         for (size_t count : kCategoryCounts)
@@ -114,7 +116,7 @@ namespace {
     LFS_FREEZE(shutdown_gpu_backend, lfs::Status (*)(GpuBackend));
     LFS_FREEZE(gpu_backend_of, std::optional<GpuBackend> (*)(const T&));
 #undef LFS_FREEZE
-    constexpr size_t kExactSignatureCount = 40 + 263;
+    constexpr size_t kExactSignatureCount = 40 + 266;
     [[maybe_unused]] constexpr auto kSelectorAnchors = std::tuple{
         &default_gpu_backend, &set_default_gpu_backend, &gpu_backend_available,
         &gpu_backend_memory_info, &shutdown_gpu_backend, &gpu_backend_of};
@@ -376,6 +378,9 @@ namespace {
     LFS_FREEZE(T::movement, T (T::*)(MovementOp, const MovementArgs&) const);
     LFS_FREEZE(T::to_pageable_host, T (T::*)(cudaStream_t) const);
     LFS_FREEZE(T::cuda, T (T::*)() const);
+    LFS_FREEZE(T::gpu, T (T::*)() const);
+    LFS_FREEZE(T::is_gpu, bool (T::*)() const);
+    LFS_FREEZE(T::is_cuda, bool (T::*)() const);
     LFS_FREEZE(T::unsqueeze, T (T::*)(int) const);
     LFS_FREEZE(T::flatten, T (T::*)(int, int) const);
     LFS_FREEZE(T::transpose, T (T::*)(int, int) const);
@@ -607,7 +612,7 @@ namespace {
     LFS_FREEZE(MP::operator Tensor, T (MP::*)() const);
     LFS_FREEZE(TI::operator Tensor, T (TI::*)() const);
 #undef LFS_FREEZE
-    constexpr size_t kMoreExactSignatureCount = 263;
+    constexpr size_t kMoreExactSignatureCount = 266;
     static_assert(kExactSignatureCount == 40 + kMoreExactSignatureCount);
 
     template <typename X>
@@ -659,6 +664,7 @@ namespace {
         ct.to(DataType::Float32);
         ct.cpu();
         ct.cuda();
+        ct.gpu();
         ct.reshape(dims);
         ct.reshape(shape);
         ct.view_as(DataType::UInt8);
@@ -1020,6 +1026,8 @@ namespace {
         ct.storage_ptr();
         ct.shape();
         ct.device();
+        ct.is_gpu();
+        ct.is_cuda();
         ct.dtype();
         ct.owns_memory();
         ct.is_view();

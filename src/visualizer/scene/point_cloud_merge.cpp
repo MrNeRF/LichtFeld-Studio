@@ -14,7 +14,7 @@ namespace lfs::vis {
         using lfs::core::Tensor;
 
         Tensor on_gpu_float(const Tensor& tensor) {
-            const Tensor gpu = tensor.device() == Device::CUDA ? tensor : tensor.to(Device::CUDA);
+            const Tensor gpu = tensor.device() == Device::GPU ? tensor : tensor.to(Device::GPU);
             return gpu.to(DataType::Float32).contiguous();
         }
     } // namespace
@@ -34,8 +34,8 @@ namespace lfs::vis {
             }
         }
         const std::vector<float> translation{world_transform[3][0], world_transform[3][1], world_transform[3][2]};
-        const Tensor rotation = Tensor::from_vector(rotation_transposed, {size_t{3}, size_t{3}}, Device::CPU).to(Device::CUDA);
-        const Tensor offset = Tensor::from_vector(translation, {size_t{1}, size_t{3}}, Device::CPU).to(Device::CUDA);
+        const Tensor rotation = Tensor::from_vector(rotation_transposed, {size_t{3}, size_t{3}}, Device::CPU).to(Device::GPU);
+        const Tensor offset = Tensor::from_vector(translation, {size_t{1}, size_t{3}}, Device::CPU).to(Device::GPU);
         return on_gpu_float(means).matmul(rotation).add(offset).cpu().contiguous();
     }
 

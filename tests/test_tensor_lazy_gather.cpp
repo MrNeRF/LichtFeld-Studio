@@ -11,9 +11,9 @@ using namespace lfs::core;
 
 TEST(TensorLazyGatherTest, MatchesTakeForDuplicatesAndNegativeIndices) {
     const auto input = Tensor::from_vector(
-        std::vector<float>{-4.0f, 2.0f, -3.0f, 8.0f}, {4}, Device::CUDA);
+        std::vector<float>{-4.0f, 2.0f, -3.0f, 8.0f}, {4}, Device::GPU);
     const auto indices = Tensor::from_vector(
-        std::vector<int>{3, 1, 3, -1, 0}, {5}, Device::CUDA);
+        std::vector<int>{3, 1, 3, -1, 0}, {5}, Device::GPU);
 
     const auto eager = input.take(indices);
     const auto lazy = input.gather_lazy(indices).eval();
@@ -28,9 +28,9 @@ TEST(TensorLazyGatherTest, MatchesTakeForDuplicatesAndNegativeIndices) {
 
 TEST(TensorLazyGatherTest, FusedUnaryMatchesEagerComposition) {
     const auto input = Tensor::from_vector(
-        std::vector<float>{-4.0f, 2.0f, -3.0f, 8.0f}, {4}, Device::CUDA);
+        std::vector<float>{-4.0f, 2.0f, -3.0f, 8.0f}, {4}, Device::GPU);
     const auto indices = Tensor::from_vector(
-        std::vector<int>{2, -4, 1, 2}, {2, 2}, Device::CUDA);
+        std::vector<int>{2, -4, 1, 2}, {2, 2}, Device::GPU);
 
     const auto eager = input.take(indices).abs();
     const auto fused = input.gather_lazy(indices).map(ops::abs_op{}).eval();
@@ -43,15 +43,15 @@ TEST(TensorLazyGatherTest, FusedUnaryMatchesEagerComposition) {
 
 TEST(TensorLazyGatherTest, RejectsInvalidContractsBeforeDereference) {
     const auto input = Tensor::from_vector(
-        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::CUDA);
+        std::vector<float>{1.0f, 2.0f, 3.0f}, {3}, Device::GPU);
     const auto valid_indices = Tensor::from_vector(
-        std::vector<int>{0}, {1}, Device::CUDA);
+        std::vector<int>{0}, {1}, Device::GPU);
     const auto float_indices = Tensor::from_vector(
-        std::vector<float>{0.0f}, {1}, Device::CUDA);
+        std::vector<float>{0.0f}, {1}, Device::GPU);
     const auto cpu_indices = valid_indices.cpu();
     const auto too_large = Tensor::from_vector(
-        std::vector<int>{3}, {1}, Device::CUDA);
-    const auto empty = Tensor::empty({0}, Device::CUDA, DataType::Float32);
+        std::vector<int>{3}, {1}, Device::GPU);
+    const auto empty = Tensor::empty({0}, Device::GPU, DataType::Float32);
 
     EXPECT_THROW((void)input.gather_lazy(float_indices), std::runtime_error);
     EXPECT_THROW((void)input.gather_lazy(cpu_indices), std::runtime_error);

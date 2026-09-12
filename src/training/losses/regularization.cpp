@@ -14,14 +14,14 @@ namespace lfs::training::losses {
         const Params& params) {
         try {
             if (params.weight <= 0.0f) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
 
             // Validate inputs
-            if (scaling_raw.device() != lfs::core::Device::CUDA) {
+            if (scaling_raw.device() != lfs::core::Device::GPU) {
                 return std::unexpected("scaling_raw must be on CUDA device");
             }
-            if (scaling_raw_grad.device() != lfs::core::Device::CUDA) {
+            if (scaling_raw_grad.device() != lfs::core::Device::GPU) {
                 return std::unexpected("scaling_raw_grad must be on CUDA device");
             }
             if (scaling_raw.shape() != scaling_raw_grad.shape()) {
@@ -30,13 +30,13 @@ namespace lfs::training::losses {
 
             size_t n = scaling_raw.numel();
             if (n == 0) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
 
             // Allocate temporary buffers
             size_t num_blocks = std::min((n + 255) / 256, size_t(1024));
-            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::CUDA);
-            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
+            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
             // Launch LibTorch-free fused kernel with warp reductions
             lfs::training::kernels::launch_fused_scale_regularization(
@@ -61,20 +61,20 @@ namespace lfs::training::losses {
         const Params& params) {
         try {
             if (params.weight <= 0.0f) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
-            if (scaling_raw.device() != lfs::core::Device::CUDA) {
+            if (scaling_raw.device() != lfs::core::Device::GPU) {
                 return std::unexpected("scaling_raw must be on CUDA device");
             }
 
             size_t n = scaling_raw.numel();
             if (n == 0) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
 
             size_t num_blocks = std::min((n + 255) / 256, size_t(1024));
-            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::CUDA);
-            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
+            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
             lfs::training::kernels::launch_fused_scale_regularization(
                 scaling_raw.ptr<float>(),
@@ -97,14 +97,14 @@ namespace lfs::training::losses {
         const Params& params) {
         try {
             if (params.weight <= 0.0f) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
 
             // Validate inputs
-            if (opacity_raw.device() != lfs::core::Device::CUDA) {
+            if (opacity_raw.device() != lfs::core::Device::GPU) {
                 return std::unexpected("opacity_raw must be on CUDA device");
             }
-            if (opacity_raw_grad.device() != lfs::core::Device::CUDA) {
+            if (opacity_raw_grad.device() != lfs::core::Device::GPU) {
                 return std::unexpected("opacity_raw_grad must be on CUDA device");
             }
             if (opacity_raw.shape() != opacity_raw_grad.shape()) {
@@ -113,13 +113,13 @@ namespace lfs::training::losses {
 
             size_t n = opacity_raw.numel();
             if (n == 0) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
 
             // Allocate temporary buffers
             size_t num_blocks = std::min((n + 255) / 256, size_t(1024));
-            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::CUDA);
-            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
+            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
             // Launch LibTorch-free fused kernel with warp reductions
             lfs::training::kernels::launch_fused_opacity_regularization(
@@ -144,20 +144,20 @@ namespace lfs::training::losses {
         const Params& params) {
         try {
             if (params.weight <= 0.0f) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
-            if (opacity_raw.device() != lfs::core::Device::CUDA) {
+            if (opacity_raw.device() != lfs::core::Device::GPU) {
                 return std::unexpected("opacity_raw must be on CUDA device");
             }
 
             size_t n = opacity_raw.numel();
             if (n == 0) {
-                return lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
+                return lfs::core::Tensor::zeros({1}, lfs::core::Device::GPU);
             }
 
             size_t num_blocks = std::min((n + 255) / 256, size_t(1024));
-            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::CUDA);
-            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::CUDA);
+            auto temp_buffer = lfs::core::Tensor::empty({num_blocks}, lfs::core::Device::GPU);
+            auto loss_tensor = lfs::core::Tensor::empty({1}, lfs::core::Device::GPU);
 
             lfs::training::kernels::launch_fused_opacity_regularization(
                 opacity_raw.ptr<float>(),

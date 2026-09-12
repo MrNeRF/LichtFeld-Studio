@@ -87,8 +87,8 @@ namespace lfs::training::kernels {
 
         void ensure_size(const std::vector<size_t>& shape) {
             if (allocated_shape != shape) {
-                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
-                cs_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
+                ssim_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::GPU);
+                cs_map = lfs::core::Tensor::empty(lfs::core::TensorShape(shape), lfs::core::Device::GPU);
                 allocated_shape = shape;
             }
         }

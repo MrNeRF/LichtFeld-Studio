@@ -110,7 +110,7 @@ namespace lfs::vis::gui {
             lfs::core::Tensor formatted = (layout == lfs::rendering::ImageLayout::HWC)
                                               ? image
                                               : image.permute({1, 2, 0}).contiguous();
-            if (formatted.device() == lfs::core::Device::CUDA) {
+            if (formatted.device() == lfs::core::Device::GPU) {
                 formatted = formatted.cpu();
             }
             if (formatted.dtype() != lfs::core::DataType::UInt8) {
@@ -815,7 +815,7 @@ namespace lfs::vis::gui {
                                                 const int expected_width,
                                                 const int expected_height,
                                                 const bool flip_y) {
-            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::CUDA) {
+            if (!tensor.is_valid() || tensor.device() != lfs::core::Device::GPU) {
                 return false;
             }
             VulkanContext* const ctx = getVulkanUiTextureContext();
@@ -1250,7 +1250,7 @@ namespace lfs::vis::gui {
         if (!impl_) {
             impl_ = new Impl();
         }
-        if (image.is_valid() && image.device() == lfs::core::Device::CUDA &&
+        if (image.is_valid() && image.device() == lfs::core::Device::GPU &&
             impl_->mode != Impl::Mode::Cpu) {
             if (impl_->uploadCudaTensorImpl(image, expected_width, expected_height, flip_y))
                 return true;

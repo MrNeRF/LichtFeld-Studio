@@ -37,7 +37,7 @@ namespace {
 
     Tensor upload(const std::vector<float>& values, const TensorShape& shape, const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        return Tensor::from_vector(values, shape, Device::CPU).to(Device::CUDA);
+        return Tensor::from_vector(values, shape, Device::CPU).to(Device::GPU);
     }
 
     float pattern(const size_t i, const float low, const float high) {
@@ -128,8 +128,8 @@ TEST(SelectionAttributeOps, ColorThresholdMatchesTheDecodedReferenceOnBothLayout
 }
 
 TEST(SelectionAttributeOps, EmptyInputsProduceEmptyMasks) {
-    const Tensor none = Tensor::empty({0}, Device::CUDA, DataType::Float32);
+    const Tensor none = Tensor::empty({0}, Device::GPU, DataType::Float32);
     EXPECT_EQ(cuda::select_by_opacity(none, 0.0f, 1.0f, kGroup).numel(), 0u);
-    EXPECT_EQ(cuda::select_by_scale(Tensor::empty({0, 3}, Device::CUDA, DataType::Float32), 1.0f, kGroup).numel(), 0u);
-    EXPECT_EQ(cuda::select_by_color(Tensor::empty({0, 3}, Device::CUDA, DataType::Float32), 0.0f, 0.0f, 0.0f, 0.1f, kGroup).numel(), 0u);
+    EXPECT_EQ(cuda::select_by_scale(Tensor::empty({0, 3}, Device::GPU, DataType::Float32), 1.0f, kGroup).numel(), 0u);
+    EXPECT_EQ(cuda::select_by_color(Tensor::empty({0, 3}, Device::GPU, DataType::Float32), 0.0f, 0.0f, 0.0f, 0.1f, kGroup).numel(), 0u);
 }

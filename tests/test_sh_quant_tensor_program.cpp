@@ -90,11 +90,11 @@ namespace {
                             const size_t n,
                             const std::uint32_t rest) {
         GpuBackendScope scope(GpuBackend::CUDA);
-        Tensor src = Tensor::from_vector(host, TensorShape{host.size()}, Device::CPU).to(Device::CUDA);
+        Tensor src = Tensor::from_vector(host, TensorShape{host.size()}, Device::CPU).to(Device::GPU);
         const size_t n_cells = sh_value_quant::sh_value_u16_count(n, rest);
         const size_t n_bounds = sh_value_quant::n_bounds_for_prims(n) * 2;
-        Tensor codes = Tensor::empty(TensorShape{n_cells}, Device::CUDA, DataType::Float16);
-        Tensor bounds = Tensor::empty(TensorShape{n_bounds}, Device::CUDA, DataType::Float32);
+        Tensor codes = Tensor::empty(TensorShape{n_cells}, Device::GPU, DataType::Float16);
+        Tensor bounds = Tensor::empty(TensorShape{n_bounds}, Device::GPU, DataType::Float32);
         codes.zero_();
         bounds.zero_();
         sh_value_quant::encode_shN_float4_to_u16(
@@ -113,7 +113,7 @@ namespace {
                              const std::uint32_t rest,
                              const GpuBackend backend) {
         GpuBackendScope scope(backend);
-        Tensor src = Tensor::from_vector(host, TensorShape{host.size()}, Device::CPU).to(Device::CUDA);
+        Tensor src = Tensor::from_vector(host, TensorShape{host.size()}, Device::CPU).to(Device::GPU);
         Tensor codes;
         Tensor bounds;
         sh_value_quant::encode_shN_float4_to_u16_tensor(

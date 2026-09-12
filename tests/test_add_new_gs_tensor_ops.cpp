@@ -36,7 +36,7 @@ TEST_F(AddNewGsTensorOpsTest, Zeros_LibTorchComparison) {
     // Test Float32
     {
         const size_t N = 100;
-        auto zeros_lfs = Tensor::zeros({N}, Device::CUDA, DataType::Float32);
+        auto zeros_lfs = Tensor::zeros({N}, Device::GPU, DataType::Float32);
         auto result_lfs = zeros_lfs.cpu().to_vector();
 
         auto zeros_torch = torch::zeros({static_cast<long>(N)}, torch::kFloat32).cuda();
@@ -52,7 +52,7 @@ TEST_F(AddNewGsTensorOpsTest, Zeros_LibTorchComparison) {
     // Test Int32
     {
         const size_t N = 100;
-        auto zeros_lfs = Tensor::zeros({N}, Device::CUDA, DataType::Int32);
+        auto zeros_lfs = Tensor::zeros({N}, Device::GPU, DataType::Int32);
         auto result_lfs = zeros_lfs.cpu().to_vector_int();
 
         auto zeros_torch = torch::zeros({static_cast<long>(N)}, torch::kInt32).cuda();
@@ -80,9 +80,9 @@ TEST_F(AddNewGsTensorOpsTest, IndexAddFloat32_LibTorchComparison) {
     std::vector<float> values(10, 1.0f);
 
     // LFS
-    auto base_lfs = Tensor::from_vector(base_data, TensorShape{N}, Device::CUDA);
-    auto indices_lfs = Tensor::from_vector(indices, TensorShape{10}, Device::CUDA);
-    auto values_lfs = Tensor::from_vector(values, TensorShape{10}, Device::CUDA);
+    auto base_lfs = Tensor::from_vector(base_data, TensorShape{N}, Device::GPU);
+    auto indices_lfs = Tensor::from_vector(indices, TensorShape{10}, Device::GPU);
+    auto values_lfs = Tensor::from_vector(values, TensorShape{10}, Device::GPU);
 
     auto result_lfs_tensor = base_lfs.index_add_(0, indices_lfs, values_lfs);
     auto result_lfs = result_lfs_tensor.cpu().to_vector();
@@ -133,9 +133,9 @@ TEST_F(AddNewGsTensorOpsTest, CountOccurrencesPattern_LibTorchComparison) {
     };
 
     // LFS: zeros -> index_add_ -> index_select -> add ones -> clamp -> to(Int32)
-    auto ratios_lfs = Tensor::zeros({N}, Device::CUDA, DataType::Float32);
-    auto sampled_idxs_lfs = Tensor::from_vector(sampled_indices, TensorShape{static_cast<size_t>(n_samples)}, Device::CUDA);
-    auto ones_lfs = Tensor::ones({static_cast<size_t>(n_samples)}, Device::CUDA, DataType::Float32);
+    auto ratios_lfs = Tensor::zeros({N}, Device::GPU, DataType::Float32);
+    auto sampled_idxs_lfs = Tensor::from_vector(sampled_indices, TensorShape{static_cast<size_t>(n_samples)}, Device::GPU);
+    auto ones_lfs = Tensor::ones({static_cast<size_t>(n_samples)}, Device::GPU, DataType::Float32);
 
     ratios_lfs = ratios_lfs.index_add_(0, sampled_idxs_lfs, ones_lfs);
     ratios_lfs = ratios_lfs.index_select(0, sampled_idxs_lfs);
@@ -203,7 +203,7 @@ TEST_F(AddNewGsTensorOpsTest, OpacityLogitCalculation_LibTorchComparison) {
     };
 
     // LFS: clamp -> logit
-    auto opacities_lfs = Tensor::from_vector(opacities, TensorShape{10}, Device::CUDA);
+    auto opacities_lfs = Tensor::from_vector(opacities, TensorShape{10}, Device::GPU);
     auto clamped_lfs = opacities_lfs.clamp(min_opacity, max_opacity);
     auto logit_lfs = (clamped_lfs / (Tensor::ones_like(clamped_lfs) - clamped_lfs)).log();
     auto result_lfs = logit_lfs.cpu().to_vector();
@@ -239,7 +239,7 @@ TEST_F(AddNewGsTensorOpsTest, ScaleLogConversion_LibTorchComparison) {
         0.001f, 0.01f, 0.1f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 100.0f};
 
     // LFS
-    auto scales_lfs = Tensor::from_vector(scales, TensorShape{9}, Device::CUDA);
+    auto scales_lfs = Tensor::from_vector(scales, TensorShape{9}, Device::GPU);
     auto log_scales_lfs = scales_lfs.log();
     auto result_lfs = log_scales_lfs.cpu().to_vector();
 
@@ -272,7 +272,7 @@ TEST_F(AddNewGsTensorOpsTest, UnsqueezeSqueeze_LibTorchComparison) {
 
     // Test unsqueeze(-1): [5] -> [5, 1]
     {
-        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5}, Device::CUDA);
+        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5}, Device::GPU);
         auto unsqueezed_lfs = tensor_lfs.unsqueeze(-1);
 
         EXPECT_EQ(unsqueezed_lfs.ndim(), 2);
@@ -299,7 +299,7 @@ TEST_F(AddNewGsTensorOpsTest, UnsqueezeSqueeze_LibTorchComparison) {
 
     // Test squeeze(-1): [5, 1] -> [5]
     {
-        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5, 1}, Device::CUDA);
+        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5, 1}, Device::GPU);
         auto squeezed_lfs = tensor_lfs.squeeze(-1);
 
         EXPECT_EQ(squeezed_lfs.ndim(), 1);
@@ -343,9 +343,9 @@ TEST_F(AddNewGsTensorOpsTest, MultipleIndexSelect_LibTorchComparison) {
     std::vector<int32_t> indices = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90};
 
     // LFS
-    auto opacities_lfs = Tensor::from_vector(opacities, TensorShape{N}, Device::CUDA);
-    auto scales_lfs = Tensor::from_vector(scales, TensorShape{N, 3}, Device::CUDA);
-    auto indices_lfs = Tensor::from_vector(indices, TensorShape{n_samples}, Device::CUDA);
+    auto opacities_lfs = Tensor::from_vector(opacities, TensorShape{N}, Device::GPU);
+    auto scales_lfs = Tensor::from_vector(scales, TensorShape{N, 3}, Device::GPU);
+    auto indices_lfs = Tensor::from_vector(indices, TensorShape{n_samples}, Device::GPU);
 
     auto sampled_opacities_lfs = opacities_lfs.index_select(0, indices_lfs);
     auto sampled_scales_lfs = scales_lfs.index_select(0, indices_lfs);
@@ -419,7 +419,7 @@ TEST_F(AddNewGsTensorOpsTest, MultinomialSampling_LibTorchComparison) {
     }
 
     // LFS
-    auto probs_lfs = Tensor::from_vector(probs, TensorShape{N}, Device::CUDA);
+    auto probs_lfs = Tensor::from_vector(probs, TensorShape{N}, Device::GPU);
     auto sampled_lfs = Tensor::multinomial(probs_lfs, n_samples, true); // with replacement
     auto result_lfs = sampled_lfs.cpu().to_vector_int();
 
@@ -473,7 +473,7 @@ TEST_F(AddNewGsTensorOpsTest, Flatten_LibTorchComparison) {
     {
         std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
 
-        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5}, Device::CUDA);
+        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5}, Device::GPU);
         auto flattened_lfs = tensor_lfs.flatten();
 
         EXPECT_EQ(flattened_lfs.ndim(), 1);
@@ -501,7 +501,7 @@ TEST_F(AddNewGsTensorOpsTest, Flatten_LibTorchComparison) {
     {
         std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
 
-        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5, 1}, Device::CUDA);
+        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5, 1}, Device::GPU);
         auto flattened_lfs = tensor_lfs.flatten();
 
         EXPECT_EQ(flattened_lfs.ndim(), 1);
@@ -532,8 +532,8 @@ TEST_F(AddNewGsTensorOpsTest, TensorAddition_LibTorchComparison) {
     std::vector<float> data2 = {0.5f, 1.5f, 2.5f, 3.5f, 4.5f};
 
     // LFS
-    auto tensor1_lfs = Tensor::from_vector(data1, TensorShape{5}, Device::CUDA);
-    auto tensor2_lfs = Tensor::from_vector(data2, TensorShape{5}, Device::CUDA);
+    auto tensor1_lfs = Tensor::from_vector(data1, TensorShape{5}, Device::GPU);
+    auto tensor2_lfs = Tensor::from_vector(data2, TensorShape{5}, Device::GPU);
     auto result_lfs_tensor = tensor1_lfs + tensor2_lfs;
     auto result_lfs = result_lfs_tensor.cpu().to_vector();
 
@@ -590,17 +590,17 @@ TEST_F(AddNewGsTensorOpsTest, FullAddNewWorkflow_LibTorchComparison) {
     }
 
     // === LFS Workflow ===
-    auto opacities_lfs = Tensor::from_vector(opacities, TensorShape{N}, Device::CUDA);
-    auto scales_lfs = Tensor::from_vector(scales, TensorShape{N, 3}, Device::CUDA);
-    auto sampled_idxs_lfs = Tensor::from_vector(sampled_indices, TensorShape{static_cast<size_t>(n_new)}, Device::CUDA);
+    auto opacities_lfs = Tensor::from_vector(opacities, TensorShape{N}, Device::GPU);
+    auto scales_lfs = Tensor::from_vector(scales, TensorShape{N, 3}, Device::GPU);
+    auto sampled_idxs_lfs = Tensor::from_vector(sampled_indices, TensorShape{static_cast<size_t>(n_new)}, Device::GPU);
 
     // 1. Get sampled opacities and scales
     auto sampled_opacities_lfs = opacities_lfs.index_select(0, sampled_idxs_lfs);
     auto sampled_scales_lfs = scales_lfs.index_select(0, sampled_idxs_lfs);
 
     // 2. Count occurrences
-    auto ratios_lfs = Tensor::zeros({N}, Device::CUDA, DataType::Float32);
-    ratios_lfs = ratios_lfs.index_add_(0, sampled_idxs_lfs, Tensor::ones({static_cast<size_t>(n_new)}, Device::CUDA));
+    auto ratios_lfs = Tensor::zeros({N}, Device::GPU, DataType::Float32);
+    ratios_lfs = ratios_lfs.index_add_(0, sampled_idxs_lfs, Tensor::ones({static_cast<size_t>(n_new)}, Device::GPU));
     ratios_lfs = ratios_lfs.index_select(0, sampled_idxs_lfs) + Tensor::ones_like(ratios_lfs.index_select(0, sampled_idxs_lfs));
     ratios_lfs = ratios_lfs.clamp(1.0f, static_cast<float>(n_max));
 
@@ -697,7 +697,7 @@ TEST_F(AddNewGsTensorOpsTest, OnesLikeDifferentDtypes_LibTorchComparison) {
 
     // Float32
     {
-        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5}, Device::CUDA);
+        auto tensor_lfs = Tensor::from_vector(data, TensorShape{5}, Device::GPU);
         auto ones_lfs = Tensor::ones_like(tensor_lfs);
         auto result_lfs = ones_lfs.cpu().to_vector();
 
@@ -721,7 +721,7 @@ TEST_F(AddNewGsTensorOpsTest, OnesLikeDifferentDtypes_LibTorchComparison) {
     // Int32
     {
         std::vector<int32_t> int_data = {1, 2, 3, 4, 5};
-        auto tensor_lfs = Tensor::from_vector(int_data, TensorShape{5}, Device::CUDA);
+        auto tensor_lfs = Tensor::from_vector(int_data, TensorShape{5}, Device::GPU);
         auto ones_lfs = Tensor::ones_like(tensor_lfs);
         auto result_lfs = ones_lfs.cpu().to_vector_int();
 
@@ -751,7 +751,7 @@ TEST_F(AddNewGsTensorOpsTest, Contiguous_LibTorchComparison) {
     }
 
     // Create tensor and make it non-contiguous via transpose
-    auto tensor_lfs = Tensor::from_vector(data, TensorShape{4, 5}, Device::CUDA);
+    auto tensor_lfs = Tensor::from_vector(data, TensorShape{4, 5}, Device::GPU);
     auto transposed_lfs = tensor_lfs.transpose(0, 1); // [5, 4] - non-contiguous
     auto contiguous_lfs = transposed_lfs.contiguous();
 

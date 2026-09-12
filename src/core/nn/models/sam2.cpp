@@ -151,7 +151,7 @@ namespace lfs::core::nn::models {
 
     lfs::Result<Sam2> Sam2::load(const std::filesystem::path& weights, Device device,
                                  std::optional<DataType> compute) {
-        if (device != Device::CUDA) {
+        if (device != Device::GPU) {
             return sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 requires a GPU device");
         }
         auto file = WeightFile::open(weights);
@@ -572,7 +572,7 @@ namespace lfs::core::nn::models {
                 sam_error(lfs::ErrorCode::InvalidArgument,
                           "SAM2 image must be NCHW with 3 channels"));
         }
-        if (image.device() != Device::CUDA) {
+        if (image.device() != Device::GPU) {
             return lfs::Result<void>::failure(
                 sam_error(lfs::ErrorCode::InvalidArgument, "SAM2 image must be on the GPU"));
         }

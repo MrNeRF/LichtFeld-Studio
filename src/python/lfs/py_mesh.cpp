@@ -25,7 +25,7 @@ namespace lfs::python {
     namespace OM = OpenMesh;
 
     PyMeshData PyMeshData::to_device(const std::string& device) const {
-        const auto target = (device == "cuda" || device == "gpu") ? core::Device::CUDA : core::Device::CPU;
+        const auto target = (device == "cuda" || device == "gpu") ? core::Device::GPU : core::Device::CPU;
         return PyMeshData(std::make_shared<core::MeshData>(data_->to(target)));
     }
 

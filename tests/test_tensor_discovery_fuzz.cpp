@@ -238,7 +238,7 @@ namespace {
 
     torch::Tensor make_torch_base(const FuzzProgram& program) {
         auto result = make_torch_base_cpu(program);
-        return program.device == Device::CUDA ? result.cuda() : result;
+        return program.device == Device::GPU ? result.cuda() : result;
     }
 
     Tensor make_lfs_base(const FuzzProgram& program) {
@@ -247,7 +247,7 @@ namespace {
         if (program.dtype != DataType::Float32) {
             result = result.to(program.dtype);
         }
-        return program.device == Device::CUDA ? result.cuda() : result;
+        return program.device == Device::GPU ? result.cuda() : result;
     }
 
     torch::Tensor apply_view(torch::Tensor tensor, const ViewStep& step) {
@@ -351,7 +351,7 @@ namespace {
             data[i] = static_cast<float>(static_cast<int>(i % 7) - 3);
         }
         auto result = Tensor::from_vector(data, {rows, columns}, Device::CPU);
-        return input.device() == Device::CUDA ? result.cuda() : result;
+        return input.device() == Device::GPU ? result.cuda() : result;
     }
 
     torch::Tensor make_torch_rhs(const torch::Tensor& input,
@@ -441,7 +441,7 @@ namespace {
                 }
                 auto index = Tensor::from_vector(indices, {indices.size()}, Device::CPU)
                                  .to(DataType::Int64);
-                if (input.device() == Device::CUDA) {
+                if (input.device() == Device::GPU) {
                     index = index.cuda();
                 }
                 return {{input.index_select(program.dim, index)}, {}};
@@ -673,7 +673,7 @@ namespace {
 
     std::optional<std::string> mismatch_for(const FuzzProgram& program) {
         auto actual = run_lfs(program);
-        if (program.device == Device::CUDA) {
+        if (program.device == Device::GPU) {
             const cudaError_t status = cudaDeviceSynchronize();
             const cudaError_t launch_status = cudaGetLastError();
             const cudaError_t failure = status != cudaSuccess ? status : launch_status;
@@ -851,7 +851,7 @@ namespace {
             }
         }
 
-        if (program.device == Device::CUDA && attempts < kMaxAttempts) {
+        if (program.device == Device::GPU && attempts < kMaxAttempts) {
             auto candidate = program;
             candidate.device = Device::CPU;
             if (still_fails(candidate)) {
@@ -883,9 +883,9 @@ namespace {
         if (device_mode == "cpu") {
             program.device = Device::CPU;
         } else if (device_mode == "cuda") {
-            program.device = Device::CUDA;
+            program.device = Device::GPU;
         } else {
-            program.device = random_bool(generator) ? Device::CPU : Device::CUDA;
+            program.device = random_bool(generator) ? Device::CPU : Device::GPU;
         }
 
         const int shape_class = std::uniform_int_distribution<int>(0, 9)(generator);

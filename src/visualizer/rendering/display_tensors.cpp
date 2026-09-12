@@ -39,7 +39,7 @@ namespace lfs::vis {
         }};
 
         Tensor on_gpu(const Tensor& tensor) {
-            return tensor.device() == Device::CUDA ? tensor.contiguous() : tensor.to(Device::CUDA).contiguous();
+            return tensor.device() == Device::GPU ? tensor.contiguous() : tensor.to(Device::GPU).contiguous();
         }
 
         Tensor smoothstep(const Tensor& x, const float edge0, const float edge1) {

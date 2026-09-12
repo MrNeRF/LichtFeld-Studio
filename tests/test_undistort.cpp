@@ -33,7 +33,7 @@ namespace {
     void run_image_undistort(const UndistortParams& params) {
         auto src = Tensor::randn(
             {3, static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
-            Device::CUDA);
+            Device::GPU);
 
         auto dst = undistort_image(src, params, nullptr);
         cudaDeviceSynchronize();
@@ -47,7 +47,7 @@ namespace {
     void run_mask_undistort(const UndistortParams& params) {
         auto src = Tensor::ones(
             {static_cast<size_t>(params.src_height), static_cast<size_t>(params.src_width)},
-            Device::CUDA);
+            Device::GPU);
 
         auto dst = undistort_mask(src, params, nullptr);
         cudaDeviceSynchronize();
@@ -426,8 +426,8 @@ TEST(UndistortConsistency, MaskAndImageSameDimensions) {
         TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
         radial, tangential, CameraModelType::PINHOLE);
 
-    auto img_src = Tensor::randn({3, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
-    auto mask_src = Tensor::ones({static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
+    auto img_src = Tensor::randn({3, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::GPU);
+    auto mask_src = Tensor::ones({static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::GPU);
 
     auto img_dst = undistort_image(img_src, params, nullptr);
     auto mask_dst = undistort_mask(mask_src, params, nullptr);
@@ -447,13 +447,13 @@ TEST(UndistortCenter, CenterPixelPreserved) {
         Tensor::from_vector({-0.1f, 0.01f}, TensorShape({2}), Device::CPU),
         Tensor(), CameraModelType::PINHOLE);
 
-    auto src = Tensor::zeros({1, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::CUDA);
+    auto src = Tensor::zeros({1, static_cast<size_t>(TEST_H), static_cast<size_t>(TEST_W)}, Device::GPU);
     auto src_cpu = src.cpu();
     auto acc = src_cpu.accessor<float, 3>();
     int cx = static_cast<int>(TEST_CX);
     int cy = static_cast<int>(TEST_CY);
     acc(0, cy, cx) = 1.0f;
-    src = src_cpu.to(Device::CUDA);
+    src = src_cpu.to(Device::GPU);
 
     auto dst = undistort_image(src, params, nullptr);
     cudaDeviceSynchronize();

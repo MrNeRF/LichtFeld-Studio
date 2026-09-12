@@ -20,7 +20,7 @@ namespace {
 
     Tensor upload_vulkan(const Tensor& cpu) {
         GpuBackendScope scope(GpuBackend::Vulkan);
-        return cpu.to(Device::CUDA);
+        return cpu.to(Device::GPU);
     }
 
     // Positive values in [0.05, 1] so accumulations never cancel and a relative
@@ -147,7 +147,7 @@ namespace {
         Tensor output;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            output = Tensor::zeros({batch, out_features}, Device::CUDA);
+            output = Tensor::zeros({batch, out_features}, Device::GPU);
         }
         x.linear_bias_relu_out(w, b, output);
         expect_matrix(output, rectified, in_features, "linear_bias_relu_out");
@@ -197,7 +197,7 @@ namespace {
             Tensor output;
             {
                 GpuBackendScope scope(GpuBackend::Vulkan);
-                output = Tensor::zeros({1, test.channels_out, test.height, test.width}, Device::CUDA);
+                output = Tensor::zeros({1, test.channels_out, test.height, test.width}, Device::GPU);
             }
             x.conv1x1_bias_relu_out(w, b, output);
             std::vector<double> expected =
@@ -243,7 +243,7 @@ namespace {
             Tensor identity;
             {
                 GpuBackendScope scope(GpuBackend::Vulkan);
-                identity = Tensor::eye(test.rows, test.columns, Device::CUDA);
+                identity = Tensor::eye(test.rows, test.columns, Device::GPU);
             }
             EXPECT_EQ(gpu_backend_of(identity), GpuBackend::Vulkan);
             const std::vector<float> values = identity.cpu().to_vector();
@@ -394,7 +394,7 @@ namespace {
         Tensor output;
         {
             GpuBackendScope scope(GpuBackend::Vulkan);
-            output = Tensor::zeros({4099}, Device::CUDA);
+            output = Tensor::zeros({4099}, Device::GPU);
         }
         x.relu_out(output);
         const std::vector<float> result = output.cpu().to_vector();

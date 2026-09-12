@@ -158,7 +158,7 @@ namespace lfs::core {
     }
 
     std::optional<GpuBackend> gpu_backend_of(const Tensor& tensor) {
-        if (!tensor.is_valid() || tensor.device_ != Device::CUDA) {
+        if (!tensor.is_valid() || tensor.device_ != Device::GPU) {
             return std::nullopt;
         }
         return internal::gpu_backend_tag(tensor);
@@ -436,7 +436,7 @@ namespace lfs::core {
                            block->allocation_offset + storage.byte_offset;
         register_cuda_address_range(data, tensor.bytes(), "vulkan.cuda_view");
         owner->registered = data;
-        return Tensor::from_external_owner(data, tensor.shape(), Device::CUDA, tensor.dtype(),
+        return Tensor::from_external_owner(data, tensor.shape(), Device::GPU, tensor.dtype(),
                                            std::move(owner), 0, stream, "vulkan.cuda_view");
 #else
         (void)tensor;
@@ -453,14 +453,14 @@ namespace lfs::core {
     namespace internal {
 
         void order_legacy_after_home(const Tensor& tensor) {
-            if (tensor.device() != Device::CUDA || tensor.stream() == nullptr) {
+            if (tensor.device() != Device::GPU || tensor.stream() == nullptr) {
                 return;
             }
             backend_ops_for(tensor).bridge(ExecContext{tensor.stream()}, ExecContext{nullptr});
         }
 
         void order_home_after_legacy(const Tensor& tensor) {
-            if (tensor.device() != Device::CUDA || tensor.stream() == nullptr) {
+            if (tensor.device() != Device::GPU || tensor.stream() == nullptr) {
                 return;
             }
             backend_ops_for(tensor).bridge(ExecContext{nullptr}, ExecContext{tensor.stream()});
@@ -502,7 +502,7 @@ namespace lfs::core {
 
             const GpuBackend backend = gpu_backend_of(input).value();
             GpuBackendScope scope(backend);
-            return Tensor::empty(shape, Device::CUDA, dtype);
+            return Tensor::empty(shape, Device::GPU, dtype);
         }
 
         Tensor allocate_like(const Tensor& input,
@@ -516,7 +516,7 @@ namespace lfs::core {
 
             const GpuBackend backend = gpu_backend_of(input).value();
             GpuBackendScope scope(backend);
-            return Tensor::full(shape, value, Device::CUDA, dtype);
+            return Tensor::full(shape, value, Device::GPU, dtype);
         }
 
         Tensor allocate_zeros_like(const Tensor& input,
@@ -528,7 +528,7 @@ namespace lfs::core {
             }
 
             GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::zeros(shape, Device::CUDA, dtype);
+            return Tensor::zeros(shape, Device::GPU, dtype);
         }
 
         Tensor allocate_ones_like(const Tensor& input,
@@ -540,7 +540,7 @@ namespace lfs::core {
             }
 
             GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::ones(shape, Device::CUDA, dtype);
+            return Tensor::ones(shape, Device::GPU, dtype);
         }
 
         Tensor allocate_rand_like(const Tensor& input,
@@ -552,7 +552,7 @@ namespace lfs::core {
             }
 
             GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::rand(shape, Device::CUDA, dtype);
+            return Tensor::rand(shape, Device::GPU, dtype);
         }
 
         Tensor allocate_randn_like(const Tensor& input,
@@ -564,7 +564,7 @@ namespace lfs::core {
             }
 
             GpuBackendScope scope(gpu_backend_of(input).value());
-            return Tensor::randn(shape, Device::CUDA, dtype);
+            return Tensor::randn(shape, Device::GPU, dtype);
         }
 
         Tensor copy_to_backend(const Tensor& source, const GpuBackend target) {
@@ -575,9 +575,9 @@ namespace lfs::core {
 
             GpuBackendScope scope(target);
             if (source.device() == Device::CPU) {
-                return source.to(Device::CUDA);
+                return source.to(Device::GPU);
             }
-            return source.to(Device::CPU).to(Device::CUDA);
+            return source.to(Device::CPU).to(Device::GPU);
         }
 
         void throw_gpu_backend_mismatch(const Tensor& reference,

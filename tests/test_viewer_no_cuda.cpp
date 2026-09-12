@@ -59,7 +59,7 @@ TEST(ViewerNoCuda, HoverGroupCountTensorProgramMatchesCpu) {
 
     Tensor cpu_mask = Tensor::empty({n}, Device::CPU, DataType::UInt8);
     std::memcpy(cpu_mask.ptr<std::uint8_t>(), host.data(), n);
-    Tensor mask = cpu_mask.to(Device::CUDA);
+    Tensor mask = cpu_mask.to(Device::GPU);
     ASSERT_TRUE(mask.is_valid());
     EXPECT_EQ(gpu_backend_of(mask), GpuBackend::Vulkan);
 

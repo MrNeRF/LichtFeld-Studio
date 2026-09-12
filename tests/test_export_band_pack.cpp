@@ -26,7 +26,7 @@ namespace {
             values[i] = static_cast<int>((i * 97 + 13) % 256);
         return Tensor::from_vector(values, TensorShape{kHeight, kWidth, channels}, Device::CPU)
             .to(DataType::UInt8)
-            .to(Device::CUDA);
+            .to(Device::GPU);
     }
 
     uint8_t reference_byte(const float value) {
@@ -68,8 +68,8 @@ TEST(ExportBandPack, PackRoundsClampsAndRoundTripsBytes) {
     std::vector<float> alpha_values(kHeight * kWidth);
     for (size_t i = 0; i < alpha_values.size(); ++i)
         alpha_values[i] = static_cast<float>(i % 257) / 256.0f;
-    const Tensor rgb = Tensor::from_vector(rgb_values, TensorShape{size_t{3}, kHeight, kWidth}, Device::CPU).to(Device::CUDA);
-    const Tensor alpha = Tensor::from_vector(alpha_values, TensorShape{kHeight, kWidth}, Device::CPU).to(Device::CUDA);
+    const Tensor rgb = Tensor::from_vector(rgb_values, TensorShape{size_t{3}, kHeight, kWidth}, Device::CPU).to(Device::GPU);
+    const Tensor alpha = Tensor::from_vector(alpha_values, TensorShape{kHeight, kWidth}, Device::CPU).to(Device::GPU);
     for (const bool with_alpha : {false, true}) {
         SCOPED_TRACE(with_alpha);
         Tensor band;
