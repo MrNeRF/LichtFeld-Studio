@@ -705,7 +705,9 @@ class Tensor:
 
     @property
     def device(self) -> str:
-        """Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend"""
+        """
+        Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend
+        """
 
     @property
     def backend(self) -> str:
