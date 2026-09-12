@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2026 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/crash_handler.hpp"
 #include "core/tensor.hpp"
 #include "core/tensor/backend/cuda/kernels/tensor_ops.hpp"
 #include "core/tensor/backend/facade_trace.hpp"
@@ -1534,7 +1535,7 @@ namespace {
 
 } // namespace
 
-int main(int argc, char** argv) {
+static int run_corpus(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
         const auto configuration_status = lfs::core::set_tensor_backend_options(options.backend_options);
@@ -1587,4 +1588,13 @@ int main(int argc, char** argv) {
         std::cerr << "tensor_backend_corpus: unknown failure\n";
         return 1;
     }
+}
+
+int main(int argc, char** argv) {
+    const int result = run_corpus(argc, argv);
+    // Destroy local tensors and close output files before unloading GPU drivers.
+    lfs::core::teardown_gpu_before_exit();
+    std::cout.flush();
+    std::cerr.flush();
+    lfs::core::flush_and_exit(result);
 }

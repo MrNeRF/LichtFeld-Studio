@@ -684,7 +684,9 @@ def on_training_end(callback: Callable) -> Callable:
     """Decorator for training end handler"""
 
 def tensor_backend_selftest(backend: str) -> None:
-    """Allocate, dispatch a small corpus, read back, shut the backend down, and reinitialize"""
+    """
+    Allocate, dispatch a small corpus, read back, shut the backend down, and reinitialize
+    """
 
 class Tensor:
     def __init__(self) -> None: ...
@@ -703,7 +705,9 @@ class Tensor:
 
     @property
     def device(self) -> str:
-        """Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend"""
+        """
+        Device: 'cpu' or 'cuda'; 'cuda' is the GPU device whichever backend drives it, see backend
+        """
 
     @property
     def backend(self) -> str:
