@@ -775,6 +775,8 @@
     "zoom": "ズーム"
   },
   "preferences": {
+    "tensor_cuda": "CUDA",
+    "tensor_vulkan": "Vulkan",
     "tensor_backend": "Tensor backend",
     "tensor_restart": "Changes apply after restarting LichtFeld Studio. Vulkan supports viewing and inference; training requires CUDA.",
     "tensor_device": "Vulkan device",
